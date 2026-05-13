@@ -228,11 +228,33 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # Missing ``amount`` here defaults to 0 (same convention as
         # ``gain_life`` / ``damage_each_opponent``) so partial
         # fixtures don't crash the translator.
+        #
+        # **Optional-slot flag** (Pinnacle Kill-Ship extension).
+        # ``optional=True`` flips the Python slot's ``count_min`` to 0
+        # — "up to one target" semantics (CR 601.2c "up to N targets"
+        # reading: the spell/ability can be cast with zero targets
+        # chosen and will not fizzle for lack of a legal target).
+        # Missing ``optional`` defaults to False (the bare "any
+        # target" 1..1 form Nebula Dragon / Debris Field Crusher use).
+        # The Rust ``Effect::DealDamageAnyTarget`` variant remains
+        # amount-only — its deterministic at-apply-time pick (scan
+        # defender's bf for first creature, fall back to defender-
+        # player) is observably equivalent to Python's optional-
+        # target "no-target-chosen fizzle" on probes that drive a
+        # single opponent creature on bf: both engines pick that
+        # creature, neither path exercises the no-creature fallback.
+        # Probes whose scenario exposes the divergent fallback case
+        # (Rust damages defender-player; Python optional=True
+        # fizzles with no slot chosen) need a stricter creature-
+        # only Rust variant — out of scope for this bridge extension.
+        # The Rust parser tolerates the ``optional`` key as an
+        # ignored extra field for round-trip dict-shape consistency.
         from mtg_bot.effects.generic.damage import (
             DealDamageAnyTarget,
         )
         return DealDamageAnyTarget(
             amount=eff_dict.get("amount", 0),
+            optional=bool(eff_dict.get("optional", False)),
         )
     if kind == "deal_damage_to_opponent_creature":
         # Targeted "deals N damage to target creature an opponent

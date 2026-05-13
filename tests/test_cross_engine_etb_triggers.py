@@ -505,3 +505,110 @@ def test_rust_parser_accepts_deal_damage_to_opponent_creature_in_triggered_abili
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+def test_bridge_deal_damage_any_target_optional_flag_translates_to_python():
+    """Phase 5 bridge extension (Pinnacle Kill-Ship slice): Rust
+    ``{"kind": "deal_damage_any_target", "amount": N, "optional": true}``
+    translates to Python
+    ``DealDamageAnyTarget(amount=N, optional=True)``, and the
+    Python class threads ``optional=True`` through to a
+    ``TargetSpec`` with ``count_min=0`` ("up to one target" — CR
+    601.2c "up to N targets" reading).
+
+    Mirrors the ``DealDamageToTargetCreature`` optional-slot
+    pattern already in ``effects/generic/damage.py`` for the
+    creature-restricted "up to one target creature" shape; this
+    pin extends the same shape to the wider "any target" filter
+    used by Pinnacle Kill-Ship ("deals 10 damage to up to one
+    target creature" — observably indistinguishable from the
+    "any target" filter on probes that drive a single opponent
+    creature on bf).
+    """
+    from mtg_bot.effects.generic.damage import DealDamageAnyTarget
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "deal_damage_any_target",
+            "amount": 10,
+            "optional": True,
+        }
+    )
+    assert isinstance(e, DealDamageAnyTarget)
+    assert e.amount == 10
+    assert e.optional is True
+    # The TargetSpec's count_min flipped to 0 — "up to one target"
+    # semantics. count_max stays at 1.
+    assert len(e.targets) == 1
+    spec = e.targets[0]
+    assert spec.count_min == 0
+    assert spec.count_max == 1
+
+
+def test_bridge_deal_damage_any_target_optional_default_false():
+    """Missing ``optional`` defaults to ``False`` — the bare 1..1
+    "any target" form Nebula Dragon / Debris Field Crusher already
+    use stays bit-identical to its pre-extension shape.
+
+    Defense-in-depth: the pre-existing
+    ``test_bridge_deal_damage_any_target_translates_to_python``
+    pin tests the bare shape's translation; this pin tests the
+    same shape's ``optional`` field is ``False`` and the slot
+    keeps ``count_min=1`` (the strict "any target" reading where
+    the spell fizzles if no legal target exists at push time).
+    """
+    from mtg_bot.effects.generic.damage import DealDamageAnyTarget
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_any_target", "amount": 3}
+    )
+    assert isinstance(e, DealDamageAnyTarget)
+    assert e.amount == 3
+    assert e.optional is False
+    assert len(e.targets) == 1
+    spec = e.targets[0]
+    assert spec.count_min == 1
+    assert spec.count_max == 1
+
+
+def test_rust_parser_accepts_optional_key_on_deal_damage_any_target():
+    """Pin the Rust parser surface for the ``optional`` key on the
+    ``deal_damage_any_target`` arm. The Rust ``Effect::DealDamage
+    AnyTarget`` variant remains amount-only (no ``optional`` field
+    on the variant), but the parse_effect arm SILENTLY DROPS the
+    extra ``optional`` key per the broader silent-drop convention
+    for unrecognized fields (cards.rs:3039 destroy_all_creatures
+    arm comment). Both engines accept the same dict shape — the
+    Python side observes ``optional`` and threads it to a 0..1
+    slot, while the Rust side observes it as an ignored extra
+    field and keeps its deterministic at-apply-time pick.
+
+    The dict-shape round-trip contract is what this pin protects:
+    a probe's ``triggered_abilities`` dict registers cleanly on
+    BOTH engines without per-engine forking.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Any Target Optional",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 7},
+        "power": 7,
+        "toughness": 7,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_any_target",
+                    "amount": 10,
+                    "optional": True,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
