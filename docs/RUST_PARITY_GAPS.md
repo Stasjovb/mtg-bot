@@ -4208,6 +4208,73 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I79. `Effect::ExileTargetCreatureUntilSourceLeaves` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player`; `exiled_with_source` link + owner re-scan preserved (ExileTargetCreatureUntilSourceLeaves defender divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_exile_target_creature_until_source_leaves_*`
+    regression pins covering cross-controller spell resolution
+    (1: p1-controlled All-Fates-Stalker-shape Creature on p0's
+    turn → exiles p0's first Creature, NOT p1's; also pins
+    `return_paired_exiles_for(src_id)` brings the target back),
+    same-controller back-compat (1: p0-controlled source still
+    exiles p1's first Creature), pause-variant parity (1), and
+    empty-defender fizzle (1).
+
+- **Rule**. CR 119.5 / 608.2 — sibling closure to I70 / I75 /
+  I76 / I78. Same `defender = 1 - controller` shape; differs in
+  destination zone (exile-with-source-link vs exile / graveyard /
+  hand / library bottom) and in the round-28
+  `exiled_with_source = Some(source_obj_id)` bookkeeping that
+  enables manual return via `return_paired_exiles_for(source_id)`.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::ExileTargetCreatureUntilSourceLeaves` arm at
+  `state_ops_resolve.rs:5229` (pre-fix line) computed
+  `let defender = (1 - state.active_player) as usize`. Wrong when
+  the resolving spell / triggered ability has a controller !=
+  active_player. Example: on p0's turn, p1's All-Fates-Stalker-
+  shape Creature has an ETB that exiles a target creature until
+  the source leaves. Pre-fix it self-exiled p1's own first
+  Creature (defender = 1 - active_player = 1 - 0 = 1); post-fix
+  it correctly exiles p0's first Creature (the source's
+  controller's opponent — the standard Banisher-Priest /
+  Fiend-Hunter ETB-exile shape).
+
+- **Bookkeeping invariants preserved.** The
+  `exiled_with_source = Some(source_obj_id)` stamp (which enables
+  `return_paired_exiles_for`) is unchanged — the controller fix
+  only changes the defender from which the target is picked,
+  never the pairing semantics. The owner-on-re-scan (target's
+  controller == owner in first-slice synthetic states) continues
+  to route the exiled object onto its owner's exile zone. CR
+  400.7 zone-change reset (tapped, summoning_sick=true, damage,
+  counters, attached_to) preserved. LTB fan-out via
+  `pending_leaves_dispatches` preserved.
+
+- **Reuses I59 substrate**. Identical to I60 / I65 / I70 / I71 /
+  I72 / I73 / I74 / I75 / I76 / I77 / I78 — same preamble:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let defender = 1 - controller;`. The target-pick site
+  (first Creature on `state.players[defender].battlefield`), the
+  owner re-scan, the link stamp, and the exile-zone push all
+  read the resolved `defender` unchanged.
+
+- **Real target-choice plumbing remains deferred.** First-slice
+  still picks the first eligible Creature on the source-
+  controller's opponent's bf deterministically. A future slice
+  that surfaces multi-target / choice-callback semantics will
+  need to thread an explicit target parameter through the arm.
+
+- **Forward inventory (post-I79 remaining defender-shape
+  `(1 - state.active_player)` sites in `state_ops_resolve.rs`):**
+  - `Effect::ExileOpponentsNonlandPermanentUntilLeaves` (~5293)
+    — same defender-swap shape; broader filter ("not a Land"
+    instead of "is a Creature"), but otherwise identical to I79
+    (same `exiled_with_source` bookkeeping, same owner re-scan,
+    same LTB fan-out). Queued as the next slice.
+
 ### I78. `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary defender divergence closure)
 
 - **Pinned by**:

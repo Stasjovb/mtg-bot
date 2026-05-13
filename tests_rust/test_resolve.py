@@ -13933,3 +13933,167 @@ def test_owner_puts_target_aoc_empty_source_controllers_opponent_bf_fizzles(engi
     assert state.graveyard_sizes[1] == p1_grave_before + 1
     # P0's library untouched — no spurious bottom-of-library push.
     assert state.library_sizes[0] == p0_lib_before
+
+
+# ====================================================================
+# ExileTargetCreatureUntilSourceLeaves controller-of-effect fix —
+# regression pins (I79).
+#
+# Pre-fix `defender = (1 - state.active_player) as usize`. Wrong when
+# the resolving spell / triggered ability has a controller !=
+# active_player — example: on p0's turn, p1's All-Fates-Stalker-
+# shape Creature has an ETB that exiles a target creature until
+# the source leaves. Pre-fix it self-exiled p1's own first Creature
+# (defender = 1 - active_player = 1 - 0 = 1); post-fix it correctly
+# exiles p0's first Creature (the source's controller's opponent —
+# standard Banisher-Priest / Fiend-Hunter ETB-exile shape).
+#
+# Sibling closure to I70 / I75 / I76 / I78 — same defender-swap
+# shape; differs in destination zone (exile-with-source-link) and
+# in the `exiled_with_source = Some(source_obj_id)` bookkeeping
+# that enables manual return via return_paired_exiles_for. The
+# controller fix only changes WHICH player the target is picked
+# from, never the bookkeeping.
+#
+# Synthetic seed: each player's bf is 5 Forests then 5 Bears, so
+# the first Creature on p0's bf is id 5 and on p1's bf is id 72.
+# ====================================================================
+
+
+ZONE_EXILE_I79 = 5
+
+
+def _all_fates_stalker_dict_for_i79():
+    """An All-Fates-Stalker-shape Creature whose ETB exiles a target
+    creature until the source leaves. Used by I79 regression pins."""
+    return {
+        "name": "Test All-Fates Stalker I79",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3},
+        "power": 3,
+        "toughness": 3,
+        "etb_effects": [
+            {"kind": "exile_target_creature_until_source_leaves"}
+        ],
+    }
+
+
+def test_exile_target_creature_until_source_leaves_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the ExileTargetCreatureUntilSourceLeaves
+    controller-of-effect fix (I79).**
+
+    On p0's turn (active_player=0), an All-Fates-Stalker-shape
+    Creature whose controller is p1 must exile a p0 Creature
+    (p0's bf[5] = Bears, id 5), NOT a p1 Creature (p1's bf[5] =
+    Bears, id 72). Pre-fix `defender = 1 - active_player = 1 - 0
+    = 1` => p1's own Bears self-exiled. Post-fix `defender =
+    1 - controller = 1 - 1 = 0` => correctly hits p0's Bears.
+
+    Drains TWO stack pops: spell resolves (Creature ETBs onto
+    bf), then the on-stack ETB trigger exiles the target.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_first_creature_id = 5  # p0's bf[5] (Bears, controller=0)
+    p1_first_creature_id = 72  # p1's bf[5] (Bears, controller=1)
+
+    src_id = state.register_and_inject_object(
+        _all_fates_stalker_dict_for_i79(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()  # Creature enters bf, ETB triggers
+    state.resolve_top_of_stack()  # ETB trigger resolves
+
+    # Post-fix: p0's Bears exiled with source link.
+    assert state.find_object_zone(p0_first_creature_id) == ZONE_EXILE_I79
+    # P1's Bears untouched (no self-exile).
+    assert state.find_object_zone(p1_first_creature_id) == ZONE_BATTLEFIELD
+    # Source All-Fates Stalker is on p1's bf.
+    assert state.find_object_zone(src_id) == ZONE_BATTLEFIELD
+
+    # `exiled_with_source` link enables manual return via
+    # return_paired_exiles_for(src_id).
+    returned = state.return_paired_exiles_for(src_id)
+    assert returned == 1
+    assert state.find_object_zone(p0_first_creature_id) == ZONE_BATTLEFIELD
+
+
+def test_exile_target_creature_until_source_leaves_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** An All-Fates-Stalker-shape Creature
+    cast by the active player must still exile the opponent's
+    first Creature — bug never fired in this case pre-fix because
+    controller == active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_first_creature_id = 5
+    p1_first_creature_id = 72
+
+    src_id = state.register_and_inject_object(
+        _all_fates_stalker_dict_for_i79(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()  # Creature enters
+    state.resolve_top_of_stack()  # ETB trigger resolves
+
+    # P1's Bears exiled (p0's opponent's first Creature).
+    assert state.find_object_zone(p1_first_creature_id) == ZONE_EXILE_I79
+    # P0's Bears untouched.
+    assert state.find_object_zone(p0_first_creature_id) == ZONE_BATTLEFIELD
+
+
+def test_exile_target_creature_until_source_leaves_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for
+    ExileTargetCreatureUntilSourceLeaves.** Mirrors the I64 / I67
+    / I68 / I69 / I70 / I71 / I72 / I73 / I74 / I75 / I76 / I77 /
+    I78 pause-variant pins."""
+    state = engine.make_synthetic_state()
+
+    p0_first_creature_id = 5
+    p1_first_creature_id = 72
+
+    src_id = state.register_and_inject_object(
+        _all_fates_stalker_dict_for_i79(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()  # Creature enters
+    state.resolve_top_of_stack_pause()  # ETB trigger resolves
+
+    # Post-fix: p0's Bears exiled.
+    assert state.find_object_zone(p0_first_creature_id) == ZONE_EXILE_I79
+    assert state.find_object_zone(p1_first_creature_id) == ZONE_BATTLEFIELD
+
+
+def test_exile_target_creature_until_source_leaves_empty_source_controllers_opponent_bf_fizzles(engine):
+    """**Empty-defender fizzle pin for I79.** When the source-
+    controller's opponent has no Creature on bf, the ETB trigger
+    fizzles silently. Build a state where both bfs start empty,
+    cast a p1-controlled All-Fates-Stalker — Creature enters,
+    ETB looks at defender=0 (p1's opponent = p0)'s bf, finds no
+    Creature, fizzles.
+
+    We pin: source still on bf (no source-leaves trigger because
+    ETB fizzled, not because of an SBA), p0's exile size unchanged.
+    """
+    state = engine.make_synthetic_state(num_battlefield=0)
+    p0_exile_before = len(state.exile_snapshot(0))
+
+    src_id = state.register_and_inject_object(
+        _all_fates_stalker_dict_for_i79(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()  # Creature enters bf
+    # The ETB trigger queued: resolve it
+    state.resolve_top_of_stack()  # ETB trigger fizzles silently
+
+    # Source still on p1's bf.
+    assert state.find_object_zone(src_id) == ZONE_BATTLEFIELD
+    # P0's exile size untouched.
+    assert len(state.exile_snapshot(0)) == p0_exile_before

@@ -5269,7 +5269,51 @@ fn apply_effect(
         // per-object state. The link enables manual return via
         // `return_paired_exiles_for(source_id)`.
         Effect::ExileTargetCreatureUntilSourceLeaves => {
-            let defender = (1 - state.active_player) as usize;
+            // **Controller resolution (I79 follow-up to the
+            // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 / I69 /
+            // I70 / I71 / I72 / I73 / I74 / I75 / I76 / I77 / I78
+            // controller-of-effect substrate).** CR 119.5 / 608.2:
+            // an effect resolves under its source's controller.
+            // ExileTargetCreatureUntilSourceLeaves's first-slice
+            // target picker chooses the SOURCE'S controller's
+            // opponent's first Creature, where defender =
+            // 1 - controller. Sibling closure to I70 / I75 / I76 /
+            // I78 — identical defender-swap shape; differs in
+            // destination zone (exile-with-source-link vs exile /
+            // graveyard / hand / library bottom) and in the
+            // round-28 `exiled_with_source` bookkeeping that
+            // enables manual return via
+            // `return_paired_exiles_for(source_id)`.
+            //
+            // **Why the fix.** Pre-fix this arm computed
+            // `defender = 1 - state.active_player`. Wrong when the
+            // resolving spell / triggered ability has a controller
+            // != active_player. Example: on p0's turn, p1's
+            // All-Fates-Stalker-shape Creature has an ETB that
+            // exiles a target creature until the source leaves.
+            // Pre-fix it self-exiled p1's own first Creature
+            // (defender = 1 - active_player = 1 - 0 = 1). Post-fix
+            // it correctly exiles p0's first Creature (the
+            // source's controller's opponent — the standard
+            // Banisher-Priest / Fiend-Hunter ETB-exile shape).
+            //
+            // **Bookkeeping invariants preserved.** The
+            // `exiled_with_source = Some(source_obj_id)` stamp
+            // (which enables `return_paired_exiles_for`) is
+            // unchanged — the controller fix only changes the
+            // defender from which the target is picked, never the
+            // pairing semantics. The owner-on-re-scan (target's
+            // controller == owner in first-slice synthetic states)
+            // continues to route the exiled object onto its
+            // owner's exile zone. CR 400.7 zone-change reset
+            // (tapped, summoning_sick=true, damage, counters,
+            // attached_to) preserved. LTB fan-out via
+            // `pending_leaves_dispatches` preserved.
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let defender = 1 - controller;
             let target_id: Option<u32> = {
                 let bf = &state.players[defender].battlefield;
                 let registry = &state.registry;
