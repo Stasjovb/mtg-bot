@@ -1428,6 +1428,105 @@ gameplay surface. Perf neutral.
 
 ---
 
+## Rust port — `Effect::DealDamageAnyTarget` optional-target empty-bf player-fallback divergence
+
+**Location**:
+`rust/src/state_ops_resolve.rs:3893-3979`
+(`Effect::DealDamageAnyTarget` resolver),
+`src/mtg_bot/effects/generic/damage.py:264-299`
+(`DealDamageAnyTarget` Python class with `optional` flag),
+`src/mtg_bot/parity/cross_engine.py:233-258`
+(`_ta_dict_to_python_effect` `deal_damage_any_target` arm —
+documents the `optional` flag's silent-drop on the Rust side and
+the bounded equivalence on creature-on-bf scenarios).
+
+Pinned by:
+`tests/test_parity_smoke.py::test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_optional_empty_bf_divergence_pin`
+(the per-engine divergence assertion test landed in
+`feature/phase5-ce-bridge-empty-bf-optional-damage-divergence`).
+
+**What we do today**: Rust's `Effect::DealDamageAnyTarget` arm
+performs a deterministic at-apply-time target pick: scan the
+defender's bf for the first object whose `card_types` contains
+"Creature"; if none, **fall back to defender-as-player and
+subtract `amount` from defender life**. This fallback is
+unconditional — the variant carries no `optional` field on the
+Rust side, so even when the bridge dict carries `"optional":
+true` the parser silently drops the flag (per the broader
+`silent-drop convention; cross_engine.py:250-252) and Rust still
+deals damage to defender-player on an empty defender bf.
+
+Python's `DealDamageAnyTarget(optional=True)` flips
+`count_min=0` on the targeting slot. With no agent seated (or
+an agent that returns `None` from `choose_target`), the trigger
+pushes onto the stack with an EMPTY `targets` tuple, and
+`DealDamage.resolve` (damage.py:58) hits `if not targets: return`
+— a silent fizzle. NO damage is dealt to anyone on Python.
+
+**Why this diverges from CR**: CR 601.2c "up to one target" should
+let the controller decline targeting altogether — Python's
+behavior matches the rule. Rust's player-fallback is only
+correct for the `optional=False` shape (CR 701.4 Lightning-Bolt-
+style "any target"); folding the player-fallback into the
+optional-shape via the same effect arm conflates the two
+semantics.
+
+**Failure mode**: silent damage to defender-player on Rust when
+the source's controller would have declined the optional target
+on Python. Pool-bounded: today the only EoE consumer of
+`deal_damage_any_target` with `optional=True` is **Pinnacle
+Kill-Ship** (per `docs/EOE_PROBE_READINESS_AUDIT.md`'s damage-
+arm inventory). The rest of the consumers
+(Nebula Dragon, Debris Field Crusher) carry `optional=False`,
+where Python's `count_min=1` requires a chosen target and the
+trigger fizzles altogether on an empty pool — different
+divergence shape, not in scope of this entry.
+
+**Cross-engine smoke surfacing**: pinned by the per-engine
+assertion in
+`test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_optional_empty_bf_divergence_pin`.
+The probe asserts Rust drops p1 life by 10 AND Python leaves
+p1 life unchanged AND the two values are NOT equal. If the
+Rust gap closes (or Python's silent-fizzle path changes), the
+probe flags the regression immediately.
+
+**Why it's OK for now**: the divergence is observable only on
+the empty-defender-bf intersection of `optional=True`
+deal-damage-any-target consumers. The single EoE consumer
+(Pinnacle Kill-Ship) costs 7 mana and arrives mid-game when the
+opponent typically has at least one creature on bf — the
+empty-bf case is rare in practice. The bridge arm's docstring
+already calls the gap out in code; this entry adds the doc
+backstop and the regression pin.
+
+**Fix scope when prioritized**: medium.
+1. Add a new Rust effect variant
+   `Effect::DealDamageToTargetCreatureOptional { amount: i32 }`
+   (or extend `Effect::DealDamageAnyTarget` with an `optional:
+   bool` field and gate the player-fallback on `!optional`).
+2. The resolver fans out exactly the existing creature-scan
+   loop but DROPS the `else` branch (no player-fallback;
+   resolve to a no-op when no creature found).
+3. Update `cards.rs::parse_effect` to thread the `optional`
+   field into the variant rather than dropping it.
+4. Update `cross_engine.py::_ta_dict_to_python_effect` to drop
+   the "silent drop" comment block (the gap closes).
+5. Flip the divergence-pin probe to a cross-engine parity
+   assertion (both engines: p1 life unchanged on empty bf;
+   delete the per-engine docstring's "this pin documents the
+   gap" framing).
+6. Remove THIS SEARCH_LIMITATIONS entry.
+
+**Impact estimate**: bounded to the single `optional=True`
+EoE consumer × empty-defender-bf scenarios — a tiny slice of
+the gameplay surface. Strength cost is the rare case where the
+bot's policy would prefer the silent-fizzle outcome (e.g.,
+declining the optional target to avoid triggering an opponent's
+"whenever a player loses life" shape) but Rust forces the
+damage. Perf neutral.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:

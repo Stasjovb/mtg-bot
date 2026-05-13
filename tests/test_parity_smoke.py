@@ -21600,6 +21600,355 @@ def test_cross_engine_synthetic_etb_return_creature_from_graveyard_to_battlefiel
     assert rust_p1_gy_after == py_p1_gy_after
 
 
+def test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_optional_empty_bf_divergence_pin(
+    parity_smoke,
+):
+    """Probe: Pinnacle Kill-Ship (EoE) ETB ``deals 10 damage to up to
+    one target creature`` on an EMPTY opponent battlefield -- PINS
+    the documented Rust-vs-Python divergence on the optional-target
+    no-creature-fallback case.
+
+    Per the worklog forward-note for the
+    ``feature/phase5-ce-bridge-damage-any-target-optional`` slice:
+    "the empty-bf-with-optional=True case is 'Rust damages defender-
+    player; Python optional=True fizzles with no slot chosen' --
+    needs a stricter creature-only Rust variant to fix; this is a
+    probe to PIN the divergence and add an xfail or skip-with-doc
+    until the Rust extension lands". This probe lands the pin via
+    per-engine assertions: it asserts the EXPECTED divergent
+    behavior on each side, so the test is GREEN today and would only
+    flag if either engine's behavior changed (at which point the
+    engineer fixing the Rust gap should flip this probe to a
+    cross-engine parity assertion).
+
+    Sibling of
+    ``test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_optional_target_creature_parity``
+    (tests/test_parity_smoke.py:13601), which drives a NON-EMPTY p1
+    bf with a single bait Bear -- both engines pick the Bear,
+    converge cleanly. THIS probe drives an EMPTY p1 bf -- the bridge
+    arm's docstring at cross_engine.py:233-249 spells the divergence
+    out:
+
+      Rust's deterministic at-apply-time pick (scan defender's bf
+      for first creature, fall back to defender-player) is observably
+      equivalent to Python's optional-target "no-target-chosen
+      fizzle" on probes that drive a single opponent creature on bf:
+      both engines pick that creature, neither path exercises the
+      no-creature fallback.
+
+      Probes whose scenario exposes the divergent fallback case
+      (Rust damages defender-player; Python optional=True fizzles
+      with no slot chosen) need a stricter creature-only Rust
+      variant -- out of scope for this bridge extension.
+
+    Predicate / effect (identical to the Pinnacle Kill-Ship sibling):
+
+        SourceIsSelf
+        deal_damage_any_target(amount=10, optional=True)
+
+    Engine-specific expected behavior on EMPTY p1 bf:
+
+    * Rust: ``Effect::DealDamageAnyTarget`` deterministic at-apply
+      pick scans p1's bf for the first creature; finds NONE; falls
+      back to defender-player (player 1). Rust deals 10 damage to
+      the p1 PLAYER. Post-resolve life: p1 = 20 - 10 = 10.
+    * Python: with no agent seated on p0 (the source's controller),
+      ``push_triggered_ability`` (actions.py:3247) hits the
+      ``controller.agent is None`` branch and breaks out of the
+      slot-pick loop with an empty ``chosen_list``. Because
+      ``optional=True`` flips ``count_min=0`` (damage.py:296),
+      ``len(chosen_list) >= min_t`` holds and the trigger STILL
+      pushes onto the stack with EMPTY ``targets``. At resolve
+      time, ``DealDamage.resolve`` (damage.py:58) hits
+      ``if not targets: return`` and silently no-ops. Python deals
+      NO damage; p1 life stays at 20.
+
+    Closure path (when this divergence is fixed): the worklog notes
+    "needs a stricter creature-only Rust variant" -- a Rust
+    ``Effect::DealDamageToTargetCreatureOptional`` arm whose pick
+    skips the player-fallback would observe the same NO-DAMAGE
+    behavior as Python on this scenario, and this probe should be
+    flipped to assert cross-engine parity (both engines: p1 life ==
+    20; Bait creature still absent from bf; no damage dealt). Until
+    that arm lands, this probe documents the gap so the bridge
+    arm's existing comment block has a regression test backing up
+    the "out of scope for this bridge extension" claim.
+
+    Probe shape:
+
+      1. Inject Pinnacle Kill-Ship onto p0's bf (with the
+         optional=True ``deal_damage_any_target`` ETB trigger).
+         CRITICAL: do NOT inject any creature onto p1's bf -- the
+         empty p1 bf is the SCENARIO under test.
+      2. Do NOT seat any agent on p0's Python side -- the no-agent
+         branch in push_triggered_ability is the path that exposes
+         the divergence cleanly. (An agent that returns the p1
+         player target would observably converge on Python with
+         Rust's player-fallback, masking the gap; an agent that
+         returns None would behave identically to no agent for our
+         purposes -- both yield empty chosen_list. The no-agent
+         shape is the simpler / canonical observation.)
+      3. Drain both stacks.
+      4. Assert per-engine expected behavior:
+         - Rust: p1 life dropped to 10 (player-fallback fired).
+         - Python: p1 life stayed at 20 (silent fizzle).
+      5. NO cross-engine equivalence assertion -- the assertion
+         that DOCUMENTS the divergence is the per-engine pair.
+
+    Out of scope:
+
+      * Cross-engine parity -- THE PROBE DOCUMENTS A KNOWN
+        DIVERGENCE; the lack of a parity assertion is intentional.
+        See docs/SEARCH_LIMITATIONS.md entry "Rust port -
+        DealDamageAnyTarget optional-target empty-bf player-fallback
+        divergence" for the closure plan.
+      * Same-side bf injection -- Rust's deterministic pick scans
+        DEFENDER's bf only; injecting a creature on p0's bf would
+        not satisfy the scan filter (the ``defender`` is the
+        opponent of the source's controller).
+      * Stack residual -- both engines pop the trigger off the
+        stack cleanly; the divergence is purely on the LIFE TOTAL
+        delta, not on stack discipline.
+
+    Expected post-dispatch + post-drain state:
+
+      * Rust: Pinnacle Kill-Ship on p0's bf; p1 life = 10 (took 10
+        damage); p0 life = 20; no residual stack.
+      * Python: Pinnacle Kill-Ship on p0's bf; p1 life = 20 (no
+        damage dealt); p0 life = 20; no residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    pinnacle_kill_ship = CardDef(
+        name="Pinnacle Kill-Ship",
+        card_type="Artifact",
+        mana_cost_generic=7,
+        mana_cost_colored=(),
+        power=7,
+        toughness=7,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_any_target",
+                    "amount": 10,
+                    "optional": True,
+                },
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(pinnacle_kill_ship,),
+        # Both libraries empty. p1's bf will also be empty (no
+        # creature injection on p1) -- THE scenario under test.
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_pks_dict = {
+        "name": "Pinnacle Kill-Ship",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 7},
+        "effects": [],
+        "power": 7,
+        "toughness": 7,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_any_target",
+                    "amount": 10,
+                    "optional": True,
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_life_before == 20
+    assert rust_p1_life_before == 20
+    # Confirm p1 bf is empty BEFORE injection so the scenario is
+    # well-formed (no stale creatures from the build_rust_state
+    # default fixture would mask the empty-bf divergence).
+    rust_p1_bf_before = [
+        e for e in rust_state.battlefield_snapshot()
+        if int(e.get("controller", -1)) == 1
+    ]
+    assert len(rust_p1_bf_before) == 0, (
+        f"Rust: p1 bf should be empty pre-injection for the "
+        f"divergence-pin scenario; got {rust_p1_bf_before}"
+    )
+    rust_state.register_and_inject_object(
+        rust_pks_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Pinnacle Kill-Ship's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land DealDamageAnyTarget "
+        f"on the stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import DealDamageAnyTarget
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    pks_printing = CardPrinting(
+        name="Pinnacle Kill-Ship",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=7),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=7,
+        toughness=7,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DealDamageAnyTarget(amount=10, optional=True),
+            ),
+        ),
+    )
+
+    # Confirm p1 bf is empty on Python pre-injection too -- the
+    # divergence requires both engines to share the empty-bf
+    # scenario; otherwise we'd be measuring a different shape.
+    py_p1_bf_before = [
+        o for o in py_state.battlefield if o.controller_id == 1
+    ]
+    assert len(py_p1_bf_before) == 0, (
+        f"Python: p1 bf should be empty pre-injection for the "
+        f"divergence-pin scenario; got {py_p1_bf_before}"
+    )
+
+    # IMPORTANT: do NOT seat any agent on p0. The no-agent branch in
+    # push_triggered_ability (actions.py:3247) is the path that
+    # exposes the divergence cleanly with optional=True. The default
+    # state has p0.agent = None; we leave it that way.
+    assert py_state.players[0].agent is None, (
+        "Python: probe assumes p0.agent is None to drive the "
+        "no-target-chosen branch via the agent-is-None short-circuit "
+        "at actions.py:3247"
+    )
+
+    py_pks = py_state.new_object(
+        pks_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_pks.summoning_sick = False
+    py_pks.tapped = False
+    py_pks.damage = 0
+    py_pks.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_pks)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p0_life_before == 20
+    assert py_p1_life_before == 20
+    _trigger_etb_abilities(py_state, py_pks)
+    assert len(py_state.stack) == 1, (
+        "Python: Pinnacle Kill-Ship's own arrival should fire the "
+        "IsSelf ENTERS trigger and land DealDamageAnyTarget on the "
+        "stack -- with optional=True (count_min=0) the empty "
+        f"chosen_list still pushes. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+
+    # ---- Per-engine divergence assertions ----
+    # Rust: player-fallback fired; p1 life dropped from 20 -> 10.
+    assert rust_state.get_life(1) == rust_p1_life_before - 10, (
+        f"Rust: empty-bf optional-target damage should fall back to "
+        f"defender-player and deal 10 damage to p1 (pinned "
+        f"divergent behavior; see SEARCH_LIMITATIONS.md "
+        f'"DealDamageAnyTarget optional-target empty-bf '
+        f'player-fallback divergence"). '
+        f"before={rust_p1_life_before} "
+        f"after={rust_state.get_life(1)}"
+    )
+    assert rust_state.get_life(0) == rust_p0_life_before, (
+        f"Rust: p0 life should be unchanged (damage routed to p1, "
+        f"not back to source controller): before={rust_p0_life_before} "
+        f"after={rust_state.get_life(0)}"
+    )
+
+    # Python: silent fizzle; both lives unchanged.
+    assert py_state.players[1].life == py_p1_life_before, (
+        f"Python: empty-bf optional-target damage with NO agent "
+        f"seated should silently fizzle (DealDamage.resolve hits "
+        f"`if not targets: return` at damage.py:58 because "
+        f"chosen_list is empty and optional=True allows that). "
+        f"p1 life should be unchanged. "
+        f"before={py_p1_life_before} "
+        f"after={py_state.players[1].life}"
+    )
+    assert py_state.players[0].life == py_p0_life_before, (
+        f"Python: p0 life should be unchanged (no damage dealt at "
+        f"all on the silent-fizzle path): "
+        f"before={py_p0_life_before} "
+        f"after={py_state.players[0].life}"
+    )
+
+    # ---- Stack discipline parity ----
+    # The divergence is purely on the LIFE delta; both engines pop
+    # the trigger off the stack cleanly.
+    assert rust_state.stack_size() == 0, (
+        f"Rust: stack should be empty post-drain (the divergence is "
+        f"on the life delta, not on stack discipline). Got "
+        f"stack_size={rust_state.stack_size()}"
+    )
+    assert len(py_state.stack) == 0, (
+        f"Python: stack should be empty post-drain. Got "
+        f"stack size={len(py_state.stack)}"
+    )
+
+    # Pinnacle Kill-Ship should still be on each engine's bf
+    # (Artifact -- not lethal-damaged, no SBA flip).
+    rust_bf_names = [
+        e.get("printing_name") for e in rust_state.battlefield_snapshot()
+    ]
+    assert "Pinnacle Kill-Ship" in rust_bf_names, (
+        f"Rust: Pinnacle Kill-Ship should remain on bf "
+        f"(Artifact -- no SBA on the source itself). Got "
+        f"bf names={rust_bf_names}"
+    )
+    py_bf_names = [o.printing.name for o in py_state.battlefield]
+    assert "Pinnacle Kill-Ship" in py_bf_names, (
+        f"Python: Pinnacle Kill-Ship should remain on bf. Got "
+        f"bf names={py_bf_names}"
+    )
+
+    # CROSS-ENGINE NON-PARITY documentation: assert the divergence
+    # on life deltas. This assertion would FLIP if the Rust
+    # creature-only variant landed and Rust no longer fell back to
+    # defender-player on the empty-bf case. When that happens, the
+    # fix is to change THIS probe to assert parity (both engines:
+    # p1 life == 20) and remove the divergence-pin docstring +
+    # SEARCH_LIMITATIONS entry.
+    assert rust_state.get_life(1) != py_state.players[1].life, (
+        f"Cross-engine: this probe PINS a known divergence -- "
+        f"Rust should drop p1 life by 10 (player-fallback) while "
+        f"Python's silent fizzle leaves it at 20. If both engines "
+        f"now agree on p1 life, the Rust gap has been closed and "
+        f"this probe should be flipped to assert parity. "
+        f"rust_p1_life={rust_state.get_life(1)} "
+        f"py_p1_life={py_state.players[1].life}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
