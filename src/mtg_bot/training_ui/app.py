@@ -408,48 +408,79 @@ def _force_kill_matched_spawn(
     target_run_id: str,
     conn: sqlite3.Connection,
 ) -> dict[str, Any]:
-    """Look up the spawn record that plausibly belongs to
-    ``target_run_id`` via timestamp proximity (see
-    :func:`mtg_bot.training_ui.launcher.find_spawn_for_run`) and
-    OS-kill the process tree. Returns a dict of fields to merge into
-    the force_kill response so the frontend can surface what happened:
+    """Look up every PID that plausibly belongs to ``target_run_id``
+    and OS-kill its process tree. Two PID sources are consulted in
+    order, both best-effort:
 
-    - ``os_kill_attempted`` (bool)
-    - ``os_kill_ok`` (bool)
-    - ``os_killed_pid`` (int or None)
-    - ``os_kill_errors`` (list[str])
-    - ``matched_launch_id`` (str or None) — for log/audit trail
+    1. ``runs.pid`` from the target's runs.db row — iterate writes
+       its OWN master PID via runs.lifecycle, which is the most
+       reliable handle on the live process (post any venv/stub
+       re-exec chain). Present once iterate has reached the
+       cycle-start point (~5-15s after spawn).
+    2. ``launched.json``'s ``pid`` from the spawn record matched by
+       ``spawned_at`` proximity to ``started_at``. Covers spawns
+       that died before reaching iterate's own start_run call. May
+       refer to a transient Windows venv stub that's already exited;
+       kill_process_tree handles that case as soft-success.
 
-    Any failure (no matching spawn, kill error) is reported as
-    data, NOT raised — the DB-write side of force_kill is the
-    authoritative status; OS-kill is best-effort cleanup.
+    Returns a dict the force_kill handler merges into its response.
     """
     target_row = conn.execute(
-        "SELECT started_at FROM runs WHERE run_id = ?",
+        "SELECT started_at, pid FROM runs WHERE run_id = ?",
         (target_run_id,),
     ).fetchone()
     target_started = (
         target_row["started_at"] if target_row is not None else None
     )
-    match = find_spawn_for_run(
+    iterate_recorded_pid = (
+        target_row["pid"] if target_row is not None else None
+    )
+
+    killed_pids: list[int] = []
+    all_errors: list[str] = []
+    sources: list[str] = []
+    matched_launch_id: Optional[str] = None
+
+    # Source 1: iterate's self-reported master PID (most reliable).
+    if iterate_recorded_pid:
+        outcome = kill_process_tree(int(iterate_recorded_pid))
+        if outcome["ok"]:
+            killed_pids.extend(outcome["killed_pids"])
+            sources.append(f"runs.pid={iterate_recorded_pid}")
+        all_errors.extend(outcome["errors"])
+
+    # Source 2: launched.json spawn PID (initial Popen, may be stub).
+    spawn_match = find_spawn_for_run(
         progress_dir, run_id=target_run_id,
         run_started_at=target_started,
     )
-    if match is None:
-        return {
-            "os_kill_attempted": False,
-            "os_kill_ok": False,
-            "os_killed_pid": None,
-            "os_kill_errors": [],
-            "matched_launch_id": None,
-        }
-    outcome = kill_process_tree(match["pid"])
+    if spawn_match is not None:
+        matched_launch_id = spawn_match.get("launch_id")
+        # Skip the dup kill if iterate's PID == spawn's PID (unlikely
+        # on Windows due to the stub re-exec, but cheap to check).
+        spawn_pid = spawn_match["pid"]
+        if spawn_pid != iterate_recorded_pid:
+            outcome = kill_process_tree(int(spawn_pid))
+            if outcome["ok"]:
+                killed_pids.extend(outcome["killed_pids"])
+                sources.append(f"launched.json={spawn_pid}")
+            all_errors.extend(outcome["errors"])
+
+    attempted = bool(iterate_recorded_pid) or spawn_match is not None
     return {
-        "os_kill_attempted": True,
-        "os_kill_ok": outcome["ok"],
-        "os_killed_pid": match["pid"],
-        "os_kill_errors": outcome["errors"],
-        "matched_launch_id": match.get("launch_id"),
+        "os_kill_attempted": attempted,
+        "os_kill_ok": (
+            attempted and not all_errors
+            or (attempted and bool(killed_pids))
+        ),
+        "os_killed_pid": (
+            iterate_recorded_pid
+            or (spawn_match["pid"] if spawn_match else None)
+        ),
+        "os_killed_pids": killed_pids,
+        "os_kill_sources": sources,
+        "os_kill_errors": all_errors,
+        "matched_launch_id": matched_launch_id,
     }
 
 

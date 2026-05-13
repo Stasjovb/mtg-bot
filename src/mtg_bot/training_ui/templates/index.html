@@ -735,12 +735,12 @@ forceKillModalConfirm.addEventListener('click', async () => {
         lines.push('Row flipped to status=killed.');
       }
       if (j.os_kill_attempted) {
+        const sources = (j.os_kill_sources || []).join(' + ');
         if (j.os_kill_ok) {
-          lines.push('OS-killed PID ' + j.os_killed_pid
-            + ' (launched via UI as ' + (j.matched_launch_id || '?')
-            + ').');
+          lines.push('OS-killed via ' + (sources || 'tracked PID') + '.');
         } else {
-          lines.push('Tried to OS-kill PID ' + j.os_killed_pid
+          lines.push('Tried to OS-kill via '
+            + (sources || 'tracked PID')
             + ' but: ' + (j.os_kill_errors || []).join('; '));
         }
       } else if (j.forced === false) {
