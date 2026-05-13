@@ -780,6 +780,91 @@ pub enum Effect {
     /// matches the round-28 CE1 universal-true default for hand-zone
     /// objects.
     ReturnCreatureFromYourGraveyardToHand,
+    /// **Phase 5 rider-widened return-to-hand (Option B — additive
+    /// bespoke arm).** Return the first creature OR artifact card
+    /// from the source-controller's graveyard to that player's hand.
+    /// Mirrors Python's
+    /// `ReturnCreatureFromYourGraveyardToHand(or_artifact=True)`
+    /// (`bounce.py:356`) — the rider widens the legal-target pool
+    /// to admit artifact cards alongside creatures.
+    ///
+    /// **EoE consumer (audit).** Interceptor Mechan (EoE): "When this
+    /// creature enters, return target artifact or creature card from
+    /// your graveyard to your hand."
+    ///
+    /// **Filter contract.** A graveyard card qualifies iff its
+    /// printing's `card_types` contains "Creature" OR "Artifact".
+    /// (CR 400 / 506 — type predicates read off the printing's
+    /// static card_types; the Rust registry stores card_types as
+    /// the Scryfall type-line components on the LHS of the em-dash.)
+    /// Sister artifact-creatures (printing carrying BOTH "Artifact"
+    /// AND "Creature") match the disjunction at the first hit and
+    /// are pulled. Cards with neither type are skipped. The scan
+    /// preserves the unit-variant's iterator order
+    /// (state.players[controller_idx].graveyard.iter().find_map),
+    /// so test predictability matches the existing arm exactly.
+    ///
+    /// **Controller-of-effect.** Mirrors the I82 fix: source/dest
+    /// derive from `current_resolve_source_controller`
+    /// (falls back to active_player for direct apply_effect_pub
+    /// callers). On p0's turn, p1's controlled trigger scans p1's
+    /// graveyard and pushes to p1's hand.
+    ///
+    /// **Zone-change reset (CR 400.7).** Same as the bare unit
+    /// variant: `tapped`, `summoning_sick`, `damage`, `counters`,
+    /// `attached_to`, `exiled_with_source` all reset on move to hand.
+    /// summoning_sick=true matches the round-28 CE1 universal-true
+    /// default for hand-zone objects.
+    ///
+    /// **Schema simplification vs Python.** Drops `max_mv` and the
+    /// other rider flags (`or_spacecraft`, `or_enchantment`,
+    /// untargeted_all, plus_one_counter, log_suffix). The current
+    /// EoE consumer pool needs the bare `or_artifact` widening only;
+    /// richer Python axes re-enter as separate parametric Rust
+    /// variants when their first real consumer arrives.
+    ReturnArtifactOrCreatureFromYourGraveyardToHand,
+    /// **Phase 5 rider-widened return-to-hand (Option B — additive
+    /// bespoke arm).** Return the first creature OR Spacecraft card
+    /// from the source-controller's graveyard to that player's hand.
+    /// Mirrors Python's
+    /// `ReturnCreatureFromYourGraveyardToHand(or_spacecraft=True)`
+    /// (`bounce.py:356`) — the rider widens the legal-target pool
+    /// to admit Spacecraft cards alongside creatures.
+    ///
+    /// **EoE consumer (audit).** Fell Gravship (EoE) suffix: "...
+    /// then return a creature or Spacecraft card from your graveyard
+    /// to your hand." (Composed inside a Sequence with mill-3 today;
+    /// the bare arm here is the leaf-effect substrate.)
+    ///
+    /// **Filter contract.** A graveyard card qualifies iff EITHER
+    /// its printing's `card_types` contains "Creature" OR its
+    /// printing's `subtypes` contains "Spacecraft". Spacecraft is a
+    /// SUBTYPE (an artifact subtype on the type line, e.g.
+    /// "Artifact — Spacecraft"), not a card type — Python's
+    /// `printing.is_spacecraft` reads off `"Spacecraft" in subtypes`
+    /// at `cards.py` (Subtypes substrate). The Rust mirror reads
+    /// `printing.subtypes.iter().any(|s| s == "Spacecraft")` directly
+    /// off the static registry, matching the existing subject-has-
+    /// subtype helpers at `cards.rs:2141`. No effective_subtypes
+    /// layer yet (CR 613 layer 4 — type-modifying continuous
+    /// effects). The disjunction is short-circuit: a creature-but-
+    /// not-Spacecraft card pulls on the creature side; a Spacecraft-
+    /// but-not-creature (e.g. an unactivated artifact-Spacecraft
+    /// like Fell Gravship itself before Station) pulls on the
+    /// Spacecraft side.
+    ///
+    /// **Controller-of-effect.** Mirrors the I82 fix: source/dest
+    /// derive from `current_resolve_source_controller`. Same
+    /// behavior as the bare unit variant and the
+    /// or-artifact-rider variant.
+    ///
+    /// **Zone-change reset (CR 400.7).** Same as the sibling
+    /// variants.
+    ///
+    /// **Schema simplification vs Python.** Drops `max_mv` and other
+    /// rider flags (`or_artifact`, `or_enchantment`, untargeted_all,
+    /// plus_one_counter, log_suffix). Bare `or_spacecraft` only.
+    ReturnCreatureOrSpacecraftFromYourGraveyardToHand,
     /// **Round 28 coverage extension.** Put `amount` +1/+1 counter(s)
     /// on each creature the source's controller controls. Mirrors
     /// Python's `PutPlusOneCounterOnEachCreatureYouControl(amount: int = 1)`
@@ -3149,6 +3234,25 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // Unit variant; no fields beyond `kind`.
             Ok(Effect::ReturnCreatureFromYourGraveyardToHand)
         }
+        "return_artifact_or_creature_from_your_graveyard_to_hand" => {
+            // **Phase 5 rider-widened parse arm.** Unit variant; the
+            // disjunction (artifact OR creature) is baked into the
+            // variant identity itself, so no fields beyond `kind`.
+            // Mirrors Python's
+            // `ReturnCreatureFromYourGraveyardToHand(or_artifact=True)`
+            // — extra dict fields are silently ignored for round-trip
+            // dict-shape consistency.
+            Ok(Effect::ReturnArtifactOrCreatureFromYourGraveyardToHand)
+        }
+        "return_creature_or_spacecraft_from_your_graveyard_to_hand" => {
+            // **Phase 5 rider-widened parse arm.** Unit variant; the
+            // disjunction (creature OR Spacecraft subtype) is baked
+            // into the variant identity itself, so no fields beyond
+            // `kind`. Mirrors Python's
+            // `ReturnCreatureFromYourGraveyardToHand(or_spacecraft=True)`
+            // — extra dict fields are silently ignored.
+            Ok(Effect::ReturnCreatureOrSpacecraftFromYourGraveyardToHand)
+        }
         "put_plus_one_counter_on_each_creature_you_control" => {
             // Python's PutPlusOneCounterOnEachCreatureYouControl
             // dataclass has amount: int = 1. Mirror that.
@@ -4886,6 +4990,18 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::ReturnCreatureFromYourGraveyardToHand => {
             d.set_item("kind", "return_creature_from_your_graveyard_to_hand")?;
+        }
+        Effect::ReturnArtifactOrCreatureFromYourGraveyardToHand => {
+            d.set_item(
+                "kind",
+                "return_artifact_or_creature_from_your_graveyard_to_hand",
+            )?;
+        }
+        Effect::ReturnCreatureOrSpacecraftFromYourGraveyardToHand => {
+            d.set_item(
+                "kind",
+                "return_creature_or_spacecraft_from_your_graveyard_to_hand",
+            )?;
         }
         Effect::PutPlusOneCounterOnEachCreatureYouControl { amount } => {
             d.set_item("kind", "put_plus_one_counter_on_each_creature_you_control")?;

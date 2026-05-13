@@ -16625,3 +16625,308 @@ def test_cross_engine_real_eoe_rayblade_trooper_etb_plus_one_counter_parity(
     assert rust_state.get_life(1) == 20
     assert py_state.players[0].life == 20
     assert py_state.players[1].life == 20
+
+
+def test_cross_engine_real_eoe_interceptor_mechan_etb_return_artifact_or_creature_parity(
+    parity_smoke,
+):
+    """Probe: Interceptor Mechan (EoE) ETB ``return target artifact
+    or creature card from your graveyard to your hand`` parity --
+    FIRST real-EoE cross-engine probe with a rider-widened
+    return-to-hand ETB trigger.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "Flying
+         When this creature enters, return target artifact or
+         creature card from your graveyard to your hand.
+         Void -- At the beginning of your end step, if a nonland
+         permanent left the battlefield this turn or a spell was
+         warped this turn, put a +1/+1 counter on this creature."
+
+    Bridges the
+    ``return_artifact_or_creature_from_your_graveyard_to_hand``
+    effect kind end-to-end on a real EoE card. The audit lists
+    Interceptor Mechan as the unique consumer of the or_artifact
+    rider widening; the leaf effect composes directly off the
+    bare-arm + or_artifact=True (no Sequence / IfYouDo nesting),
+    so it is end-to-end probeable from the rider arm alone.
+
+    The Void end-step ability and the Flying static keyword are
+    OUT OF SCOPE for this probe -- only the ETB return trigger is
+    exercised. Both engines see the same minimal trigger surface.
+
+    Predicate decomposition:
+
+        SourceIsSelf
+
+    Effect:
+    ``return_artifact_or_creature_from_your_graveyard_to_hand``
+    -- NEW on the bridge as of the companion commits on this
+    branch. The Rust effect variant carries the I82 controller-of-
+    effect contract (``controller_idx`` derives from
+    ``current_resolve_source_controller``); the Python side
+    translates to
+    ``ReturnCreatureFromYourGraveyardToHand(or_artifact=True)``.
+
+    **Rider-widening discriminator.** The bare unit-variant arm
+    would skip an artifact-only graveyard (no creatures match
+    the filter). The or_artifact rider widens the filter to admit
+    artifacts; this probe seeds the graveyard with a
+    NON-CREATURE artifact so the rider is the load-bearing
+    path -- if the bridge ever regressed to the bare unit
+    variant, the artifact would not qualify and the trigger
+    would fizzle.
+
+    Probe shape (inject-and-fire-ENTERS):
+
+      1. Pre-seed p0's graveyard with a vanilla Artifact card.
+         Load-bearing test datum: only the or_artifact rider
+         admits it.
+      2. Inject Interceptor Mechan on p0's battlefield. Trigger
+         fires; one
+         ReturnArtifactOrCreatureFromYourGraveyardToHand lands
+         on the stack with its target deterministically picked.
+      3. Drain both stacks. Both engines: artifact moves from
+         p0's graveyard to p0's hand.
+      4. Cross-engine assert: empty p0 graveyard, single
+         Mechan Recur Bait Artifact in p0's hand, Interceptor
+         Mechan still on p0's bf.
+
+    Out of scope: Flying / Void / cast cost / multi-card
+    graveyard pick / empty-graveyard silent-skip.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Interceptor Mechan on p0's battlefield.
+      * Mechan Recur Bait Artifact in p0's hand.
+      * p0 graveyard empty.
+      * No residual stack.
+      * Life totals unchanged.
+    """
+    from mtg_bot.agents import Agent
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    recur_bait_artifact = CardDef(
+        name="Mechan Recur Bait Artifact",
+        card_type="Artifact",
+        mana_cost_generic=2,
+    )
+    interceptor_mechan = CardDef(
+        name="Interceptor Mechan",
+        card_type="Creature",
+        mana_cost_generic=4,
+        power=2,
+        toughness=3,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "return_artifact_or_creature_from_your_graveyard_to_hand"
+                    ),
+                },
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(recur_bait_artifact, interceptor_mechan),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    ZONE_GRAVEYARD = 3
+    rust_artifact_dict = {
+        "name": "Mechan Recur Bait Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+    }
+    rust_mechan_dict = {
+        "name": "Interceptor Mechan",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 4},
+        "effects": [],
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "return_artifact_or_creature_from_your_graveyard_to_hand"
+                    ),
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_state.register_and_inject_object(
+        rust_artifact_dict, 0, ZONE_GRAVEYARD
+    )
+    rust_state.register_and_inject_object(
+        rust_mechan_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Interceptor Mechan's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "ReturnArtifactOrCreatureFromYourGraveyardToHand on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    artifact_printing = CardPrinting(
+        name="Mechan Recur Bait Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=()),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+    )
+    mechan_printing = CardPrinting(
+        name="Interceptor Mechan",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=4, colored=()),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ReturnCreatureFromYourGraveyardToHand(
+                    or_artifact=True
+                ),
+            ),
+        ),
+    )
+
+    class _PickFirstLegalTargetAgent(Agent):
+        """Pick ``legal_targets[0]``. Mirrors Rust's iterator-
+        order graveyard scan for the or_artifact rider arm.
+        """
+
+        def choose_target(self, state, player_id, legal_targets):
+            if not legal_targets:
+                return None
+            return legal_targets[0]
+
+    py_state.players[0].agent = _PickFirstLegalTargetAgent()
+
+    # Seed p0's graveyard with the artifact bait.
+    py_bait = py_state.new_object(
+        artifact_printing, owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    py_state.players[0].graveyard.append(py_bait)
+
+    py_mechan = py_state.new_object(
+        mechan_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_mechan.summoning_sick = False
+    py_mechan.tapped = False
+    py_mechan.damage = 0
+    py_mechan.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_mechan)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_mechan)
+    assert len(py_state.stack) == 1, (
+        "Python: Interceptor Mechan's arrival should fire the "
+        "IsSelf ENTERS trigger and land "
+        "ReturnCreatureFromYourGraveyardToHand(or_artifact=True) "
+        f"on the stack. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain: artifact moved from p0's gy to p0's hand on both
+    # engines.
+    assert rust_state.hand_sizes[0] == 1, (
+        f"Rust: p0 hand should contain the recurred artifact; "
+        f"got hand_size={rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == 0, (
+        f"Rust: p0 graveyard should be empty after the return; "
+        f"got graveyard_size={rust_state.graveyard_sizes[0]}"
+    )
+    assert rust_state.battlefield_sizes[0] == 1, (
+        f"Rust: p0 bf should still hold Interceptor Mechan; "
+        f"got bf_size={rust_state.battlefield_sizes[0]}"
+    )
+
+    assert len(py_state.players[0].hand) == 1, (
+        f"Python: p0 hand should contain the recurred artifact; "
+        f"got hand_size={len(py_state.players[0].hand)}"
+    )
+    py_hand_name = py_state.players[0].hand[0].printing.name
+    assert py_hand_name == "Mechan Recur Bait Artifact", (
+        f"Python: p0 hand should contain the bait artifact; "
+        f"got {py_hand_name}"
+    )
+    assert len(py_state.players[0].graveyard) == 0, (
+        f"Python: p0 graveyard should be empty after the return; "
+        f"got graveyard_size={len(py_state.players[0].graveyard)}"
+    )
+    py_bf_p0 = [
+        o for o in py_state.battlefield if o.controller_id == 0
+    ]
+    assert len(py_bf_p0) == 1, (
+        f"Python: p0 bf should still hold Interceptor Mechan; "
+        f"got bf_size={len(py_bf_p0)}"
+    )
+    assert py_bf_p0[0].printing.name == "Interceptor Mechan", (
+        f"Python: p0 bf survivor should be Interceptor Mechan; "
+        f"got {py_bf_p0[0].printing.name}"
+    )
+
+    # Cross-engine: lives unchanged on both sides.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine: hand / graveyard / bf sizes match.
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0

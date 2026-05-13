@@ -1054,3 +1054,149 @@ def test_rust_parser_accepts_put_plus_one_counter_on_creature_you_control_in_tri
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+# ===== Phase 5 rider-widened return-to-hand bridge pins =====
+#
+# Two new Rust Effect variants extend the unit-variant
+# return_creature_from_your_graveyard_to_hand with the EoE riders:
+#
+#   * return_artifact_or_creature_from_your_graveyard_to_hand
+#     (Interceptor Mechan)
+#   * return_creature_or_spacecraft_from_your_graveyard_to_hand
+#     (Fell Gravship suffix)
+#
+# Both translate to Python's
+# ``ReturnCreatureFromYourGraveyardToHand`` with the matching
+# rider flag set (``or_artifact=True`` or ``or_spacecraft=True``).
+# The Python class is unified — the rider flags flow through
+# ``_gy_card_matches`` to admit the widened types alongside the
+# creature primary.
+
+
+def test_bridge_return_artifact_or_creature_translates_to_python():
+    """Phase 5 rider bridge: Rust
+    ``{"kind": "return_artifact_or_creature_from_your_graveyard_to_hand"}``
+    translates to Python
+    ``ReturnCreatureFromYourGraveyardToHand(or_artifact=True)``.
+
+    Unblocks Interceptor Mechan (EoE): "When this creature enters,
+    return target artifact or creature card from your graveyard to
+    your hand."
+    """
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "return_artifact_or_creature_from_your_graveyard_to_hand"}
+    )
+    assert isinstance(e, ReturnCreatureFromYourGraveyardToHand)
+    # Primary type stays creature; or_artifact widens the pool to
+    # admit Artifact cards alongside Creature.
+    assert e.creature is True
+    assert e.destination == "hand"
+    assert e.or_artifact is True
+    # Other riders stay off — this variant only widens by artifact.
+    assert e.or_spacecraft is False
+    assert e.or_enchantment is False
+    assert e.max_mv == 0
+    assert e.min_n == 1
+    assert e.max_n == 1
+    assert e.target_kind == "graveyard_creature"
+
+
+def test_bridge_return_creature_or_spacecraft_translates_to_python():
+    """Phase 5 rider bridge: Rust
+    ``{"kind": "return_creature_or_spacecraft_from_your_graveyard_to_hand"}``
+    translates to Python
+    ``ReturnCreatureFromYourGraveyardToHand(or_spacecraft=True)``.
+
+    Unblocks Fell Gravship (EoE) suffix: "...then return a creature
+    or Spacecraft card from your graveyard to your hand."
+
+    Discriminator vs the or_artifact arm: Spacecraft is a SUBTYPE,
+    not a card_type. Python's ``_gy_card_matches`` honors the
+    ``or_spacecraft`` flag specifically (graveyard.py:46) which
+    reads ``printing.is_spacecraft`` -> ``"Spacecraft" in subtypes``.
+    """
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "return_creature_or_spacecraft_from_your_graveyard_to_hand"}
+    )
+    assert isinstance(e, ReturnCreatureFromYourGraveyardToHand)
+    assert e.creature is True
+    assert e.destination == "hand"
+    assert e.or_spacecraft is True
+    # or_artifact stays off — discriminator. A plain Artifact card
+    # is NOT admitted by this rider.
+    assert e.or_artifact is False
+    assert e.or_enchantment is False
+    assert e.max_mv == 0
+    assert e.min_n == 1
+    assert e.max_n == 1
+    assert e.target_kind == "graveyard_creature"
+
+
+def test_rust_parser_accepts_return_artifact_or_creature_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the rider-
+    widened kind in a triggered_ability dict. Mirrors the existing
+    parser-surface pin for the unit variant.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Return Artifact Or Creature",
+        "card_types": ["Artifact", "Creature"],
+        "subtypes": ["Robot"],
+        "mana_cost": {"generic": 4},
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "return_artifact_or_creature_from_your_graveyard_to_hand"
+                    ),
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_accepts_return_creature_or_spacecraft_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    or_spacecraft rider-widened kind in a triggered_ability dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Return Creature Or Spacecraft",
+        "card_types": ["Artifact"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 5},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "return_creature_or_spacecraft_from_your_graveyard_to_hand"
+                    ),
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
