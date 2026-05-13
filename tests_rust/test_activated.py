@@ -2481,3 +2481,727 @@ def test_equip_resolve_uses_payload_target_not_first_eligible(
         f"Resolver should use payload target_b ({target_b}), not "
         f"first-eligible target_a ({target_a}); got {equip['attached_to']}"
     )
+
+
+# -------------------------------------------------------------------
+# CE20 Slice 6 — targeted-sacrifice variants
+#
+# Tests for `sacrifice_another_creature_or_artifact`, `sacrifice_a_land`,
+# and `sacrifice_another_artifact` cost shapes. Rides on the Slice 4
+# target-pick substrate but uses a SEPARATE `sacrifice_target_id` field
+# on the action dict so equip's effect-target and a sac-cost target
+# don't collide.
+# -------------------------------------------------------------------
+
+
+def _sac_another_creature_or_artifact_dict():
+    """`{0}, Sacrifice another creature or artifact: gain 1 life`. A
+    minimal Umbral Collar Zealot-shape source for testing the
+    sacrifice_another_creature_or_artifact cost variant. Free mana
+    cost so tests can isolate the sac-target machinery.
+    """
+    return {
+        "name": "Umbral Collar Zealot (synthetic)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "activated_abilities": [
+            {
+                "cost": {
+                    "sacrifice_another_creature_or_artifact": True,
+                },
+                "effect": {"kind": "gain_life", "amount": 1},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+
+
+def _sac_a_land_dict():
+    """`{2}, {T}, Sacrifice a land: gain 1 life`. Dust-Bowl-shape source
+    — no "another" qualifier, so the source itself is eligible when
+    the source is a land. This synthetic uses a non-land artifact
+    source to keep self-sac out of the picture for most tests; a
+    separate fixture covers the self-eligible-land case.
+    """
+    return {
+        "name": "Dust Bowl (synthetic, non-land)",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "activated_abilities": [
+            {
+                "cost": {"sacrifice_a_land": True},
+                "effect": {"kind": "gain_life", "amount": 1},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+
+
+def _sac_a_land_self_eligible_dict():
+    """A LAND source with a `sacrifice_a_land` ability. Per the printed
+    text reading "a land" (no "another"), the source itself is
+    eligible as the sacrifice target.
+    """
+    return {
+        "name": "Self-Sac Land (synthetic)",
+        "card_types": ["Land"],
+        "mana_cost": {},
+        "effects": [],
+        "activated_abilities": [
+            {
+                "cost": {"sacrifice_a_land": True},
+                "effect": {"kind": "gain_life", "amount": 1},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+
+
+def _sac_another_artifact_dict():
+    """`{0}, Sacrifice another artifact: gain 1 life`. Memorial
+    Vault-shape source.
+    """
+    return {
+        "name": "Memorial Vault (synthetic)",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "activated_abilities": [
+            {
+                "cost": {"sacrifice_another_artifact": True},
+                "effect": {"kind": "gain_life", "amount": 1},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+
+
+def _vanilla_land_dict(name: str = "Plains"):
+    """A non-mana-producing vanilla land for sac-target eligibility
+    tests. Uses no mana_produced so it doesn't fan out an unrelated
+    mana ability that would crowd the legal_decisions output.
+    """
+    return {
+        "name": name,
+        "card_types": ["Land"],
+        "effects": [],
+    }
+
+
+def _vanilla_artifact_dict(name: str = "Junk Artifact"):
+    return {
+        "name": name,
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+    }
+
+
+# --- parser surface ---------------------------------------------------
+
+
+def test_sacrifice_another_creature_or_artifact_parses(empty_registry):
+    """`sacrifice_another_creature_or_artifact: True` parses."""
+    pid = empty_registry.register_printing(
+        _sac_another_creature_or_artifact_dict()
+    )
+    assert pid == 0
+
+
+def test_sacrifice_a_land_parses(empty_registry):
+    """`sacrifice_a_land: True` parses."""
+    pid = empty_registry.register_printing(_sac_a_land_dict())
+    assert pid == 0
+
+
+def test_sacrifice_another_artifact_parses(empty_registry):
+    """`sacrifice_another_artifact: True` parses."""
+    pid = empty_registry.register_printing(_sac_another_artifact_dict())
+    assert pid == 0
+
+
+def test_sacrifice_another_creature_or_artifact_invalid_bool_raises(
+    empty_registry,
+):
+    """Bad type on `sacrifice_another_creature_or_artifact` raises
+    loud."""
+    d = _sac_another_creature_or_artifact_dict()
+    d["activated_abilities"][0]["cost"][
+        "sacrifice_another_creature_or_artifact"
+    ] = "yes"
+    with pytest.raises(
+        ValueError,
+        match=r"sacrifice_another_creature_or_artifact must be a bool",
+    ):
+        empty_registry.register_printing(d)
+
+
+def test_sacrifice_a_land_invalid_bool_raises(empty_registry):
+    d = _sac_a_land_dict()
+    d["activated_abilities"][0]["cost"]["sacrifice_a_land"] = 1
+    with pytest.raises(
+        ValueError, match=r"sacrifice_a_land must be a bool"
+    ):
+        empty_registry.register_printing(d)
+
+
+def test_sacrifice_another_artifact_invalid_bool_raises(empty_registry):
+    d = _sac_another_artifact_dict()
+    d["activated_abilities"][0]["cost"]["sacrifice_another_artifact"] = []
+    with pytest.raises(
+        ValueError, match=r"sacrifice_another_artifact must be a bool"
+    ):
+        empty_registry.register_printing(d)
+
+
+# --- emission target fan-out ------------------------------------------
+
+
+def test_sac_another_creature_or_artifact_emits_one_per_legal_target(
+    synthetic_state,
+):
+    """Source + injected creatures + injected artifact on activator's
+    bf => legal_decisions emits one ActivateAbility dict per non-self
+    creature/artifact. The source itself is NOT a legal target. The
+    synthetic state's default Grizzly Bears on p0's bf also contribute
+    as legal targets; we assert PRESENCE of injected ids rather than
+    an exact count (matches the Equipment-equip test convention).
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_creature_or_artifact_dict(),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    c1 = synthetic_state.register_and_inject_object(
+        _creature_dict("C1"), 0, ZONE_BATTLEFIELD,
+    )
+    c2 = synthetic_state.register_and_inject_object(
+        _creature_dict("C2"), 0, ZONE_BATTLEFIELD,
+    )
+    a1 = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict("A1"), 0, ZONE_BATTLEFIELD,
+    )
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    target_ids = {d["sacrifice_target_id"] for d in sac_acts}
+    # The 3 injected ids must all be legal targets.
+    assert c1 in target_ids
+    assert c2 in target_ids
+    assert a1 in target_ids
+    # CR rule: source itself MUST NOT be a legal target.
+    assert src_id not in target_ids
+    # All carry None for target_creature_id (sac target ≠ equip
+    # target).
+    for d in sac_acts:
+        assert d["target_creature_id"] is None
+    # Unique-target invariant: no double-emit.
+    assert len(target_ids) == len(sac_acts)
+
+
+def test_sac_another_creature_or_artifact_excludes_source_self(
+    synthetic_state,
+):
+    """The source's own id is NOT a legal sac target."""
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_creature_or_artifact_dict(),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    c1 = synthetic_state.register_and_inject_object(
+        _creature_dict("C1"), 0, ZONE_BATTLEFIELD,
+    )
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_targets = [
+        d["sacrifice_target_id"]
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    assert src_id not in sac_targets
+    assert c1 in sac_targets
+
+
+def test_sac_a_land_includes_self_when_source_is_land(synthetic_state):
+    """Dust-Bowl-style: when the source IS a land, the source itself
+    is a legal sac target (printed text "a land" with no "another").
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_a_land_self_eligible_dict(),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    l2 = synthetic_state.register_and_inject_object(
+        _vanilla_land_dict("Plains2"), 0, ZONE_BATTLEFIELD,
+    )
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_targets = sorted(
+        d["sacrifice_target_id"]
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    )
+    # Both the source itself and the other land are eligible.
+    assert src_id in sac_targets
+    assert l2 in sac_targets
+
+
+def test_sac_a_land_excludes_non_lands(synthetic_state):
+    """A creature on bf is NOT a legal sac-a-land target."""
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_a_land_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    creature = synthetic_state.register_and_inject_object(
+        _creature_dict("Just A Creature"), 0, ZONE_BATTLEFIELD,
+    )
+    land = synthetic_state.register_and_inject_object(
+        _vanilla_land_dict("Plains2"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+    # Source must be untapped (its cost includes {T}). force tap state.
+    synthetic_state.force_set_summoning_sick(src_id, False)
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_targets = [
+        d["sacrifice_target_id"]
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    assert creature not in sac_targets
+    assert land in sac_targets
+
+
+def test_sac_another_artifact_excludes_creatures_and_self(synthetic_state):
+    """sacrifice_another_artifact: strict artifact-only filter, NOT
+    self.
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_artifact_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    creature = synthetic_state.register_and_inject_object(
+        _creature_dict("C"), 0, ZONE_BATTLEFIELD,
+    )
+    art = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict("A2"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_targets = [
+        d["sacrifice_target_id"]
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    assert creature not in sac_targets
+    assert src_id not in sac_targets
+    assert art in sac_targets
+
+
+def test_sac_excludes_opponent_permanents(synthetic_state):
+    """Sac target must be on the ACTIVATOR's bf, not the opponent's
+    (you can only sac permanents you control).
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_creature_or_artifact_dict(),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    # Opponent's creature.
+    opp_c = synthetic_state.register_and_inject_object(
+        _creature_dict("Opp"), 1, ZONE_BATTLEFIELD,
+    )
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_targets = [
+        d["sacrifice_target_id"]
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    assert opp_c not in sac_targets
+
+
+def test_sac_no_legal_targets_no_emission(synthetic_state):
+    """sacrifice_another_artifact source with no OTHER artifacts on
+    bf: no emission. (CR 601.2c — can't begin to activate without a
+    legal target.)
+
+    The synthetic state's default p0 battlefield has only Forests
+    (lands) and Grizzly Bears (creatures) — neither is an artifact,
+    so a sacrifice_another_artifact source has NO legal targets and
+    emits zero ActivateAbility dicts.
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_artifact_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    assert len(sac_acts) == 0, (
+        f"Expected 0 emissions when no legal sac targets; got "
+        f"{len(sac_acts)}"
+    )
+
+
+# --- apply-arm target validation -------------------------------------
+
+
+def test_sac_apply_moves_chosen_target_to_graveyard(synthetic_state):
+    """Apply sacrifice_another_creature_or_artifact with a chosen
+    target: target moves to controller's gy, source stays on bf.
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_creature_or_artifact_dict(),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    victim = synthetic_state.register_and_inject_object(
+        _creature_dict("Victim"), 0, ZONE_BATTLEFIELD,
+    )
+
+    gy_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": src_id,
+            "ability_index": 0,
+            "sacrifice_target_id": victim,
+        }
+    )
+
+    bf_ids = [o["id"] for o in synthetic_state.battlefield_snapshot()]
+    assert victim not in bf_ids
+    assert src_id in bf_ids
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 1
+
+
+def test_sac_apply_raises_when_target_missing(synthetic_state):
+    """sacrifice_target_id missing => raise BEFORE any commit."""
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_creature_or_artifact_dict(),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    _victim = synthetic_state.register_and_inject_object(
+        _creature_dict("V"), 0, ZONE_BATTLEFIELD,
+    )
+
+    gy_before = synthetic_state.graveyard_sizes[0]
+    with pytest.raises(
+        ValueError, match=r"requires a sacrifice target"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": src_id,
+                "ability_index": 0,
+            }
+        )
+    # No state mutation.
+    assert synthetic_state.graveyard_sizes[0] == gy_before
+
+
+def test_sac_apply_raises_on_self_target_when_another_required(
+    synthetic_state,
+):
+    """sacrifice_another_creature_or_artifact: passing the source's own
+    id as the target raises loud. (Source is not a legal target — the
+    cost reads "another".)
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_creature_or_artifact_dict(),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    _victim = synthetic_state.register_and_inject_object(
+        _creature_dict("V"), 0, ZONE_BATTLEFIELD,
+    )
+
+    with pytest.raises(
+        ValueError, match=r"not a legal sacrifice target"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": src_id,
+                "ability_index": 0,
+                "sacrifice_target_id": src_id,
+            }
+        )
+
+
+def test_sac_apply_raises_on_opponent_target(synthetic_state):
+    """Trying to sac the opponent's creature raises (not on
+    activator's bf).
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_creature_or_artifact_dict(),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    opp_v = synthetic_state.register_and_inject_object(
+        _creature_dict("Opp"), 1, ZONE_BATTLEFIELD,
+    )
+
+    with pytest.raises(
+        ValueError, match=r"not a legal sacrifice target"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": src_id,
+                "ability_index": 0,
+                "sacrifice_target_id": opp_v,
+            }
+        )
+
+
+def test_sac_apply_raises_on_wrong_type_for_filter(synthetic_state):
+    """sacrifice_another_artifact: passing a creature (not artifact)
+    as the target raises.
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_artifact_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    creature = synthetic_state.register_and_inject_object(
+        _creature_dict("C"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    with pytest.raises(
+        ValueError, match=r"not a legal sacrifice target"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": src_id,
+                "ability_index": 0,
+                "sacrifice_target_id": creature,
+            }
+        )
+
+
+def test_sac_a_land_apply_self_target_succeeds(synthetic_state):
+    """sacrifice_a_land on a land source with target=source: succeeds
+    (source moves to gy).
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_a_land_self_eligible_dict(),
+        0,
+        ZONE_BATTLEFIELD,
+    )
+
+    gy_before = synthetic_state.graveyard_sizes[0]
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": src_id,
+            "ability_index": 0,
+            "sacrifice_target_id": src_id,
+        }
+    )
+    bf_ids = [o["id"] for o in synthetic_state.battlefield_snapshot()]
+    assert src_id not in bf_ids
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 1
+
+
+def test_sac_apply_credits_controller_graveyard(synthetic_state):
+    """Sacrificed target moves to the SOURCE's controller's gy (which
+    is the activator since the target is on the activator's bf).
+    Player-1-controlled source sacrifices a player-1 creature -> p1 gy
+    grows, p0 gy doesn't.
+    """
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_creature_or_artifact_dict(),
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(src_id, False)
+    victim = synthetic_state.register_and_inject_object(
+        _creature_dict("V"), 1, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(1)
+    synthetic_state.add_mana(1, "C", 0)
+
+    p0_gy_before = synthetic_state.graveyard_sizes[0]
+    p1_gy_before = synthetic_state.graveyard_sizes[1]
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": src_id,
+            "ability_index": 0,
+            "sacrifice_target_id": victim,
+        }
+    )
+    assert synthetic_state.graveyard_sizes[0] == p0_gy_before
+    assert synthetic_state.graveyard_sizes[1] == p1_gy_before + 1
+
+
+# --- back-compat: existing non-sac ActivateAbility dicts -------------
+
+
+def test_back_compat_pre_slice_6_dict_without_sac_target_works(
+    synthetic_state,
+):
+    """A pre-Slice-6 ActivateAbility dict (no sacrifice_target_id key)
+    on a non-sacrifice cost still works — Forest tap-for-mana is the
+    canonical example.
+    """
+    # synthetic_state has Forests baked in. Find one untapped non-sick.
+    forest_id = None
+    for o in synthetic_state.battlefield_snapshot():
+        if o["printing_name"] == "Forest" and not o["tapped"]:
+            forest_id = o["id"]
+            break
+    assert forest_id is not None
+    synthetic_state.empty_mana_pool(0)
+
+    # Pre-Slice-6 dict shape: no sacrifice_target_id key.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": forest_id,
+            "ability_index": 0,
+        }
+    )
+    # Mana pool got +G.
+    assert synthetic_state.get_mana_pool(0)["G"] >= 1
+
+
+# --- non-sac activation stray sacrifice_target_id ignored -----------
+
+
+def test_non_sac_activation_ignores_stray_sacrifice_target_id(
+    synthetic_state,
+):
+    """A non-sac activation (Forest tap-for-mana) with a stray
+    sacrifice_target_id field is permissively accepted (mirrors Phase
+    2.5's stray-target_creature_id handling).
+    """
+    forest_id = None
+    for o in synthetic_state.battlefield_snapshot():
+        if o["printing_name"] == "Forest" and not o["tapped"]:
+            forest_id = o["id"]
+            break
+    assert forest_id is not None
+    synthetic_state.empty_mana_pool(0)
+
+    # Stray sacrifice_target_id is silently ignored.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": forest_id,
+            "ability_index": 0,
+            "sacrifice_target_id": 99999,  # bogus id, ignored.
+        }
+    )
+    assert synthetic_state.get_mana_pool(0)["G"] >= 1
+
+
+# --- action dict round-trip -----------------------------------------
+
+
+def test_activate_ability_dict_carries_sacrifice_target_id_in_emission(
+    synthetic_state,
+):
+    """legal_decisions emission for a targeted-sac source carries
+    sacrifice_target_id (not None) and target_creature_id=None.
+
+    Uses sacrifice_another_artifact (no default artifacts on
+    synthetic state's bf) so the injected artifact is the sole legal
+    target.
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    src_id = synthetic_state.register_and_inject_object(
+        _sac_another_artifact_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    victim = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict("V"), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    decisions = synthetic_state.legal_decisions(0)
+    sac_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == src_id
+    ]
+    assert len(sac_acts) == 1
+    d = sac_acts[0]
+    assert d["sacrifice_target_id"] == victim
+    assert d["target_creature_id"] is None
+    assert d["ability_index"] == 0
+
+
+# --- unknown-key paranoia rolled into Slice 6 -----------------------
+
+
+def test_targeted_sac_unknown_cost_key_raises(empty_registry):
+    """Adding an unknown key to the cost dict still raises loud. Pins
+    the parser's loud-fail contract — a typo'd "sacrifice_another"
+    (missing the "_creature_or_artifact" suffix) doesn't silently
+    no-op.
+    """
+    d = _sac_another_creature_or_artifact_dict()
+    d["activated_abilities"][0]["cost"]["sacrifice_another"] = True
+    with pytest.raises(
+        ValueError,
+        match=r"unknown activation_cost key",
+    ):
+        empty_registry.register_printing(d)

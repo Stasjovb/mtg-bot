@@ -142,10 +142,25 @@ pub enum Action {
     /// requires a target and the field is `None`, OR if the target
     /// fails the legality check (must be a creature on the
     /// activator's bf and not the source itself).
+    ///
+    /// **CE20 follow-up Slice 6 (targeted-sacrifice variants).** The
+    /// optional `sacrifice_target_id` carries the chosen sacrifice
+    /// target for activations whose cost flags one of:
+    /// `sacrifice_another_creature_or_artifact`, `sacrifice_a_land`,
+    /// `sacrifice_another_artifact`. Default `None` for every
+    /// non-sacrifice activation. The two target fields are
+    /// independent: equip's `target_creature_id` is the
+    /// activation's effect target (the creature the equipment attaches
+    /// to), while `sacrifice_target_id` is a COST target (the
+    /// permanent that pays the cost). Future ability shapes could
+    /// in principle carry BOTH (a target-creature ability that costs
+    /// "sacrifice an artifact" — no EoE printing does this today).
+    /// The bridge round-trips both shapes losslessly.
     ActivateAbility {
         source_id: u32,
         ability_index: u32,
         target_creature_id: Option<u32>,
+        sacrifice_target_id: Option<u32>,
     },
     /// Cast a spell from hand (CR 601). `card_id` is the GameObject
     /// id in the priority player's hand. The 5 optional fields carry
@@ -387,10 +402,20 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
                     Some(v) if !v.is_none() => Some(v.extract()?),
                     _ => None,
                 };
+            // CE20 Slice 6: optional `sacrifice_target_id` carries the
+            // chosen sacrifice target for targeted-sac cost variants.
+            // Same shape as `target_creature_id` — missing key OR
+            // explicit None maps to None.
+            let sacrifice_target_id: Option<u32> =
+                match dict.get_item("sacrifice_target_id")? {
+                    Some(v) if !v.is_none() => Some(v.extract()?),
+                    _ => None,
+                };
             Ok(Action::ActivateAbility {
                 source_id,
                 ability_index,
                 target_creature_id,
+                sacrifice_target_id,
             })
         }
         "cast_spell" => {
@@ -531,6 +556,7 @@ pub fn action_to_pydict<'py>(
             source_id,
             ability_index,
             target_creature_id,
+            sacrifice_target_id,
         } => {
             d.set_item("kind", "activate_ability")?;
             d.set_item("source_id", *source_id)?;
@@ -548,6 +574,9 @@ pub fn action_to_pydict<'py>(
             // `Some(id)` → Python int via PyO3's `IntoPy` impl on
             // `Option<T>`.
             d.set_item("target_creature_id", *target_creature_id)?;
+            // CE20 Slice 6: always emit `sacrifice_target_id` for the
+            // same round-trip-symmetric reason.
+            d.set_item("sacrifice_target_id", *sacrifice_target_id)?;
         }
         Action::CastSpell {
             card_id,
