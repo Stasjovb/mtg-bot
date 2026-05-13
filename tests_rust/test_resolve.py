@@ -12584,3 +12584,155 @@ def test_search_library_for_basic_land_tapped_count_two_threads_controller(
     # P0 untouched.
     assert state.library_sizes[0] == lib_p0_before
     assert state.battlefield_sizes[0] == bf_p0_before
+
+
+# ====================================================================
+# ExileTarget controller-of-effect fix — regression pins (I70).
+#
+# Pre-fix `defender = (1 - state.active_player) as usize`. Wrong
+# when the resolving spell / triggered ability has a controller !=
+# active_player — example: on p0's turn, p1 casts an Exile-target-
+# creature instant. Pre-fix it self-exiled p1's own first bf object
+# (defender = 1 - active_player = 1 - 0 = 1); post-fix it correctly
+# exiles p0's first bf object (the source's controller's opponent).
+#
+# Sibling closure to I64 DealDamage / I67 DealDamageAnyTarget —
+# same `defender = 1 - controller` shape, same transient-slot
+# lookup substrate.
+#
+# Note: the AnyCreature first-slice target shortcut picks
+# `bf[0]` regardless of card type (no creature-type filter at this
+# layer). Synthetic-state bf[0] for the default num_battlefield=10
+# is a Forest — fine for the regression pin since the test pins
+# WHICH SIDE got hit, not which TYPE.
+# ====================================================================
+
+
+def _exile_creature_dict_for_i70():
+    """A Swords-to-Plowshares-shape instant whose only effect is
+    ExileTarget(AnyCreature). Used by I70 regression pins."""
+    return {
+        "name": "Test Path I70",
+        "card_types": ["Instant"],
+        "mana_cost": {"W": 1},
+        "effects": [
+            {
+                "kind": "exile_target",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def test_exile_target_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the ExileTarget controller-of-effect
+    fix (I70).**
+
+    On p0's turn (active_player=0), an Exile-target-creature instant
+    whose controller is p1 must exile a P0 bf[0] object, NOT a p1
+    bf[0] object. Pre-fix `defender = 1 - active_player = 1 - 0 =
+    1` => p1's own bf[0] got exiled (self-exiling, sibling closure
+    to I64 / I67). Post-fix `defender = 1 - controller = 1 - 1 = 0`
+    => correctly hits p0's bf[0].
+
+    Synthetic seed: each player's bf[0] is a Forest (the first
+    half of `num_battlefield` are Forests in `make_player`). p0's
+    bf[0] id = 0, p1's bf[0] id = num_battlefield + num_hand +
+    num_library = 10 + 7 + 50 = 67 (default seed).
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_bf_first_id = 0  # p0's bf[0] (Forest, controller=0)
+    p1_bf_first_id = 67  # p1's bf[0] (Forest, controller=1)
+
+    src_id = state.register_and_inject_object(
+        _exile_creature_dict_for_i70(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player is still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Post-fix: p0's bf[0] got exiled (p1's opponent's bf).
+    assert state.find_object_zone(p0_bf_first_id) == ZONE_EXILE
+    # P1's bf[0] untouched (no self-exile).
+    assert state.find_object_zone(p1_bf_first_id) == ZONE_BATTLEFIELD
+
+
+def test_exile_target_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** An Exile-target-creature instant cast by
+    the active player must still exile the opponent's bf[0] — bug
+    never fired in this case pre-fix because controller ==
+    active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+
+    src_id = state.register_and_inject_object(
+        _exile_creature_dict_for_i70(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # P1's bf[0] got exiled (p0's opponent's bf).
+    assert state.find_object_zone(p1_bf_first_id) == ZONE_EXILE
+    # P0's bf[0] untouched.
+    assert state.find_object_zone(p0_bf_first_id) == ZONE_BATTLEFIELD
+
+
+def test_exile_target_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for ExileTarget.**
+    Mirrors the I64 / I67 / I68 / I69 pause-variant pins."""
+    state = engine.make_synthetic_state()
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+
+    src_id = state.register_and_inject_object(
+        _exile_creature_dict_for_i70(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Post-fix: p0's bf[0] got exiled (p1's opponent).
+    assert state.find_object_zone(p0_bf_first_id) == ZONE_EXILE
+    assert state.find_object_zone(p1_bf_first_id) == ZONE_BATTLEFIELD
+
+
+def test_exile_target_empty_source_controllers_opponent_bf_fizzles(engine):
+    """**Empty-defender fizzle pin for I70.** When the source-
+    controller's opponent has no creatures (bf empty), the effect
+    fizzles silently. Build a state where p0 has no bf objects and
+    cast a p1-controlled Exile-target-creature instant — post-fix
+    defender=0 (p1's opponent = p0), bf empty → fizzle.
+
+    Uses `num_battlefield=0` shape — both players start with empty
+    bfs. P0's bf is empty (the divergent direction), so the effect
+    fizzles. We pin: source moved to graveyard, p0's exile size
+    unchanged (no spurious exile push).
+    """
+    state = engine.make_synthetic_state(num_battlefield=0)
+    p0_exile_before = state.exile_sizes[0]
+    p0_grave_before = state.graveyard_sizes[0]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _exile_creature_dict_for_i70(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Stack popped, source instant moved to p1's graveyard.
+    assert state.is_stack_empty() is True
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+    # P0's zones untouched — no spurious exile push, no graveyard
+    # touch.
+    assert state.exile_sizes[0] == p0_exile_before
+    assert state.graveyard_sizes[0] == p0_grave_before
