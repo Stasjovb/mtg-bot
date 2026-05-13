@@ -3461,19 +3461,15 @@ the forked branch.
     `false` pushes a `StackItem::new_trigger`-shaped slot whose
     payload effect fires on the next `resolve_top_of_stack` pop.
 
-  The legacy `mana_produced: Option<Vec<String>>` field stays as the
+  ~~The legacy `mana_produced: Option<Vec<String>>` field stays as the
   free-mana-ability hatch (`{T}: Add {color(s)}`) and remains the
   source-of-truth for Forest / Mountain / Llanowar Elves shapes.
-  Both paths coexist:
-  - `state_ops_legal.rs` emits ActivateAbility for `mana_produced.is_some()`
-    sources (legacy path, ability_index=0) AND walks every
-    `activated_abilities[i]` entry (new path) gating each on its
-    own affordability + tap-self state.
-  - `state_ops_actions.rs` `ActivateAbility` apply arm dispatches
-    `printing.activated_abilities[ability_index]` first; if the
-    index is out of range AND `ability_index = 0` AND
-    `mana_produced.is_some()`, falls back to the legacy free-mana-
-    ability behavior; otherwise raises `"has no ability at index N"`.
+  Both paths coexist...~~ **CLOSED by I51** — the bridge slice
+  synthesizes one ActivatedAbility entry per printing with
+  `mana_produced.is_some()` at parse time and retires the dual-path
+  emission + dual-path apply-dispatch. The `mana_produced` field
+  stays as I50's auto-tap composer input but is no longer a runtime
+  path. See I51 for the bridge invariant.
 
 - **Affordability gate**:
   - **Emission** (`legal.rs`): pool + auto-tap-from-lands headroom
@@ -3517,10 +3513,10 @@ the forked branch.
     `sacrifice_a_land`, `sacrifice_food`).
   - Tap-an-untapped-permanent-you-control (Gene Pollinator shape).
   - Activation-gate predicates (`requires_*` Bonders' Enclave).
-  - Bridging legacy `mana_produced` into a synthesized
+  - ~~Bridging legacy `mana_produced` into a synthesized
     `ActivatedAbility { is_mana_ability: true, cost: { tap_self:
     true }, effect: AddManaToPool(...) }` entry (retires the
-    side-channel).
+    side-channel).~~ **CLOSED by I51** — see below.
   - ~~Auto-tap-from-lands composer to match Python's `can_pay_cost`
     headroom accounting on the Rust side.~~ **CLOSED by I50** —
     see below.
@@ -3592,6 +3588,112 @@ the forked branch.
   whatever iteration order `battlefield.iter()` produces yields the
   same `ManaPool`. The CE5 bf-walk-order invariant isn't a
   load-bearing input here.
+
+### I51. Legacy `CardPrinting.mana_produced: Option<Vec<String>>` bridged to a synthesized `ActivatedAbility` entry at parse time + the legacy emission block / legacy apply-dispatch branch retired (CE20 follow-up closure)
+
+- **Pinned by**:
+  - 11 `tests_rust/test_activated.py` regression pins (`test_bridge_*`)
+    covering: Forest emission / apply (back-compat for every
+    pre-bridge caller); Mountain apply (non-Green colors); double-
+    green land aggregation (same-color pip summation); hybrid dual-
+    land Sequence wrap; creature summoning sickness gate on the
+    synthesized tap_self cost; tapped-source emission skip; bridge
+    prepended-before-explicit-entries ordering invariant; bridged
+    ability is `is_mana_ability=true` (stack bypass); invalid
+    ability index raises the unified `has no ability at index` error.
+  - `tests_rust/test_mana.py::test_activate_ability_credits_source_controller_not_active_player`
+    (the source-controller-vs-active-player parity pin — bridge's
+    apply dispatch swaps `state.active_player` temporarily so
+    `AddManaToPool` credits the right pool).
+  - `tests_rust/test_actions.py::test_apply_action_activate_ability_opponent_source_is_allowed_by_dispatcher`
+    (same parity pin from the actions surface).
+  - The 17 pre-bridge `test_activated.py` smoke tests + 5 auto-tap
+    headroom tests stay green unchanged (the synthesized entry is
+    observably equivalent to the legacy free-mana-ability behavior).
+
+- **Invariant.** `cards::apply_mana_produced_bridge(mana_produced,
+  existing) -> Vec<ActivatedAbility>` synthesizes ONE
+  ActivatedAbility from a `mana_produced: Some(vec!["G", ...])`
+  field and PREPENDS it to the existing `activated_abilities` Vec:
+
+  ```text
+  cost:   ManaCost::default() (free) + tap_self=true
+  effect: AddManaToPool { color, amount } per color in mana_produced
+          (aggregated by color: ["G","G"] → one AddManaToPool with
+          amount=2; ["G","U"] → Sequence of two AddManaToPool entries).
+  is_mana_ability: true (CR 605.1)
+  ```
+
+  PREPENDED so `ability_index=0` continues to refer to the free
+  mana ability — every pre-bridge caller of
+  `ActivateAbility(forest_id, 0)` keeps working bit-equal.
+
+- **Two consumers, one helper.** The bridge function is called from
+  TWO sites:
+  1. `cards.rs::parse_printing` for dict-input registry callers
+     (real-card registry path).
+  2. `state.rs::make_synthetic_state` for the test-fixture Forest +
+     Llanowar Elves printings (direct `CardPrinting` literal
+     construction, bypasses `parse_printing`).
+
+  Sharing the helper guarantees the synthetic state's mana sources
+  emit identically to dict-registered mana sources — the bug a
+  parse-time-only bridge would have introduced was that every test
+  using the synthetic state's pre-seeded Forests would see ZERO
+  ActivateAbility emissions because the synthetic Forest had no
+  synthesized entry on its `activated_abilities` Vec.
+
+- **Legacy emission block retired.** The pre-bridge
+  `state_ops_legal.rs` emission filter walked two paths
+  side-by-side: a legacy `mana_produced.is_some()` one-shot at
+  `ability_index=0` AND the new-substrate `activated_abilities`
+  walk. The bridge collapses both into the single
+  `activated_abilities` walk — no double-emit risk (the legacy
+  one-shot is gone, no other consumer reads `mana_produced.is_some()`
+  for emission).
+
+- **Legacy apply-dispatch branch retired.** The pre-bridge
+  `state_ops_actions.rs::ActivateAbility` apply arm carried an
+  `is_legacy_mana_produced` fallback that ran a saturating-u8 pool
+  credit loop on the source's `printing.mana_produced` symbols.
+  Post-bridge: the apply arm dispatches uniformly into
+  `printing.activated_abilities[ability_index]` — every mana-only
+  source's `ability_index=0` resolves to the synthesized
+  `AddManaToPool` effect via `state_ops_resolve::apply_effect_pub`.
+
+- **Source-controller parity pin.** `apply_effect` for
+  `AddManaToPool` reads `state.active_player` as the implicit
+  controller (CE20-substrate-shape; consistent with every other
+  apply_effect arm). The bridge's apply dispatch temporarily swaps
+  `state.active_player = controller_idx` around the mana-ability
+  resolve so a Forest on player 1's bf activated during player 0's
+  turn correctly credits player 1's pool — matches the pre-bridge
+  legacy path's explicit `controller_idx` debit. Pinned by
+  `test_activate_ability_credits_source_controller_not_active_player`.
+  The swap is restored before the apply arm returns; safe for the
+  CR 605.1 mana-only effect surface (no other side effects observe
+  `active_player` mid-dispatch).
+
+- **`mana_produced` field stays.** The legacy `Option<Vec<String>>`
+  field on `CardPrinting` is NOT removed — `auto_tap_headroom_pool`
+  (I50) still reads it for the emission-side speculative pool
+  composition. The field is now the SYNTHESIS SOURCE, not the
+  runtime path: bridge synthesis at parse-time + auto-tap headroom
+  composition at emission-time both consume it; the actual cost-pay
+  + effect-apply pipeline never touches it post-bridge.
+
+- **Out of scope of this slice (deferred to future follow-ups):**
+  - Removing the `mana_produced` field entirely. It's the
+    auto-tap composer's input today (I50); migrating I50 to read
+    the synthesized `ActivatedAbility` entry's effect tree is
+    larger than this slice. The field stays as a hatch for now.
+  - Multi-`mana_produced`-entry-per-printing shapes ("Tap for {G}
+    or {W}" choose-one mana abilities). Today `mana_produced:
+    Some(vec!["G"])` is interpreted as "Tap to add {G}";
+    `Some(vec!["G", "W"])` is interpreted as "Tap to add {G} AND
+    {W}" (a hybrid producer). The CHOOSE-ONE variant has no Rust
+    representation today — needs a richer Effect shape (mode
+    selection) and is a separate slice.
 
 ### I49. Legacy `etb_effects: Vec<Effect>` bridged to `triggered_abilities` at parse time + cross_engine.py `printing_dict` wires `triggered_abilities` through to Rust's `register_and_inject_object` (Slice 3 of ETB-trigger closure)
 

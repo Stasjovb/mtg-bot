@@ -1453,19 +1453,34 @@ pub fn make_synthetic_state(
     // in state_ops_mana.rs and the `SEARCH_LIMITATIONS.md` entry
     // referenced from this slice's commit).
     let mut builder = Registry::default();
+    // CE20 follow-up — bridge `mana_produced` into the synthesized
+    // `activated_abilities` Vec via the shared
+    // `cards::apply_mana_produced_bridge` helper. The
+    // synthetic-state Forest / Llanowar Elves printings go through
+    // the same bridge synthesis as dict-input registry-parsed
+    // printings, so the activated-abilities emission path covers
+    // them uniformly post-bridge.
+    let forest_mana_produced = Some(vec!["G".to_string()]);
+    let forest_activated = crate::cards::apply_mana_produced_bridge(
+        &forest_mana_produced,
+        Vec::new(),
+    )
+    .expect("bridge synthesis for Forest");
     let forest_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Forest"),
         mana_cost: ManaCost::default(),
         effects: Vec::new(),
         power: None,
         toughness: None,
-        mana_produced: Some(vec!["G".to_string()]),
+        mana_produced: forest_mana_produced,
         card_types: vec!["Land".to_string()],
         keywords: Vec::new(),
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
-        activated_abilities: Vec::new(),
+        activated_abilities: forest_activated,
     });
+    // Grizzly Bears: no mana_produced → bridge is a no-op (returns
+    // Vec::new() unchanged).
     let bears_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Grizzly Bears"),
         mana_cost: ManaCost {
@@ -1483,6 +1498,20 @@ pub fn make_synthetic_state(
         triggered_abilities: Vec::new(),
         activated_abilities: Vec::new(),
     });
+    // Oversimplification: real Llanowar Elves has the activated
+    // ability "{T}: Add {G}". The synthetic state's first-slice
+    // shim treats `mana_produced` on a creature the same way as on
+    // a land — the bridge synthesis now produces the same shape
+    // for both (a synthesized ActivatedAbility with tap_self=true,
+    // AddManaToPool effect, is_mana_ability=true). The creature
+    // sickness gate (CR 302.1) on the new path correctly rejects
+    // sick Llanowar Elves emissions.
+    let elves_mana_produced = Some(vec!["G".to_string()]);
+    let elves_activated = crate::cards::apply_mana_produced_bridge(
+        &elves_mana_produced,
+        Vec::new(),
+    )
+    .expect("bridge synthesis for Llanowar Elves");
     let elves_pid = builder.push_printing(CardPrinting {
         name: Arc::from("Llanowar Elves"),
         mana_cost: ManaCost {
@@ -1492,19 +1521,12 @@ pub fn make_synthetic_state(
         effects: Vec::new(),
         power: Some(1),
         toughness: Some(1),
-        // Oversimplification: real Llanowar Elves has the activated
-        // ability "{T}: Add {G}". Until the ability schema lands
-        // we treat `mana_produced` on a creature the same way we
-        // treat it on a land — `tap_for_mana` succeeds for either.
-        // The cast slice will use card_types to correctly reject
-        // play_land(llanowar) — the previous mana_produced.is_some()
-        // check produced a documented false-positive.
-        mana_produced: Some(vec!["G".to_string()]),
+        mana_produced: elves_mana_produced,
         card_types: vec!["Creature".to_string()],
         keywords: Vec::new(),
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
-        activated_abilities: Vec::new(),
+        activated_abilities: elves_activated,
     });
     let registry = builder.snapshot();
 

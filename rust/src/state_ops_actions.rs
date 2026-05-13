@@ -441,23 +441,20 @@ impl GameState {
                 source_id,
                 ability_index,
             } => {
-                // CE20 Slice 1 dispatch: now covers BOTH legacy
-                // mana-only printings (`mana_produced.is_some()`,
-                // `ability_index = 0`) AND the new cost-paying
-                // `printing.activated_abilities` substrate (any
-                // ability_index in range). Mirrors Python's
-                // `actions._activate_ability` at
+                // CE20 Slice 1 + bridge follow-up dispatch: single
+                // unified path through `printing.activated_abilities`.
+                // The bridge synthesis in `cards.rs::parse_printing`
+                // pre-populates a free mana-ability entry at
+                // `ability_index = 0` for every printing with
+                // `mana_produced.is_some()`, so the dispatch arm no
+                // longer needs a separate `mana_produced` fallback.
+                // Mirrors Python's `actions._activate_ability` at
                 // `src/mtg_bot/actions.py:1928-2002`:
                 //
                 //   1. Locate the source on a battlefield.
-                //   2. Resolve the ability:
-                //      - `ability_index = 0` AND
-                //        `printing.activated_abilities` is empty AND
-                //        `printing.mana_produced.is_some()` → legacy
-                //        free-mana-ability path (back-compat with
-                //        every pre-Slice-1 caller).
-                //      - Otherwise dispatch into
-                //        `printing.activated_abilities[ability_index]`.
+                //   2. Resolve the ability: dispatch into
+                //      `printing.activated_abilities[ability_index]`
+                //      (loud raise on out-of-range index).
                 //   3. Cost-pay phase: check tap-self gate (untapped
                 //      + non-sick for creatures) + mana affordability,
                 //      then commit (tap source, debit pool).
@@ -466,17 +463,6 @@ impl GameState {
                 //      abilities bypass the stack); `is_mana_ability=false`
                 //      → push a `StackItem::new_trigger`-shaped slot
                 //      so the next `resolve_top_of_stack` fires it.
-                //
-                // **The legacy mana_produced path stays.** The Slice
-                // 1 emission loop in `state_ops_legal.rs` still emits
-                // ActivateAbility for `mana_produced.is_some()`
-                // permanents under `ability_index = 0`, so the
-                // dispatcher must continue to honor that shape. A
-                // future slice will bridge `mana_produced` into a
-                // synthesized `ActivatedAbility { is_mana_ability:
-                // true, cost: { tap_self: true }, effect:
-                // AddManaToPool(...) }` entry and retire the side-
-                // channel; until then both paths coexist.
                 let mut binding = slf.borrow_mut();
                 let state: &mut GameState = &mut *binding;
                 // Phase 1: locate the source on a battlefield (either
@@ -520,14 +506,6 @@ impl GameState {
                     effect: crate::cards::Effect,
                     /// Mana ability (CR 605.3a — bypass stack)?
                     is_mana_ability: bool,
-                    /// True iff this came from the legacy
-                    /// `mana_produced` side-channel (we don't carry
-                    /// a `ManaCost` for those; the effect arm builds
-                    /// the AddManaToPool sequence inline).
-                    is_legacy_mana_produced: bool,
-                    /// For legacy mana_produced: the color symbols.
-                    /// Empty for the new activated_abilities path.
-                    legacy_mana_symbols: Vec<String>,
                     /// Whether the source's printing has the "Creature"
                     /// card_type — gated below by summoning sickness
                     /// when combined with `tap_self`.
@@ -542,8 +520,13 @@ impl GameState {
                     })?;
                     let is_creature =
                         printing.card_types.iter().any(|t| t == "Creature");
-                    // New path: ability_index falls inside
-                    // printing.activated_abilities.
+                    // Bridge follow-up: the legacy `mana_produced`
+                    // side-channel has been retired — every printing
+                    // with `mana_produced.is_some()` carries a
+                    // synthesized ActivatedAbility at ability_index=0
+                    // (see `cards.rs::parse_printing` bridge synthesis).
+                    // ability_index must fall inside the
+                    // activated_abilities Vec.
                     if (ability_index as usize) < printing.activated_abilities.len() {
                         let ab = &printing.activated_abilities[ability_index as usize];
                         ResolvedAbility {
@@ -551,51 +534,18 @@ impl GameState {
                             tap_self: ab.cost.tap_self,
                             effect: ab.effect.clone(),
                             is_mana_ability: ab.is_mana_ability,
-                            is_legacy_mana_produced: false,
-                            legacy_mana_symbols: Vec::new(),
-                            is_creature,
-                        }
-                    } else if ability_index == 0 && printing.mana_produced.is_some() {
-                        // Legacy free-mana-ability path: implicit
-                        // `{T}: Add {color(s)}`. Zero mana cost,
-                        // tap_self=true, is_mana_ability=true.
-                        ResolvedAbility {
-                            mana_cost: crate::cards::ManaCost::default(),
-                            tap_self: true,
-                            // Effect.clone-able dummy — the legacy
-                            // path's effect commit goes through the
-                            // `legacy_mana_symbols` add-mana loop
-                            // below, not `apply_effect`. We use a
-                            // GainLife(0) sentinel so the field is
-                            // populated; it's never read because
-                            // `is_legacy_mana_produced=true` routes
-                            // around `apply_effect`.
-                            effect: crate::cards::Effect::GainLife { amount: 0 },
-                            is_mana_ability: true,
-                            is_legacy_mana_produced: true,
-                            legacy_mana_symbols: printing
-                                .mana_produced
-                                .clone()
-                                .unwrap_or_default(),
                             is_creature,
                         }
                     } else {
-                        // ability_index out of range AND no legacy
-                        // mana_produced fallback. Loud fail — the
-                        // emission gate in legal_decisions never
+                        // ability_index out of range. Loud fail —
+                        // the emission gate in legal_decisions never
                         // produces this shape; a direct caller built
                         // a malformed dict.
                         return Err(PyValueError::new_err(format!(
                             "ActivateAbility: source {source_id} has no \
                              ability at index {ability_index} \
-                             (printing has {} activated_abilities and \
-                             mana_produced={})",
+                             (printing has {} activated_abilities)",
                             printing.activated_abilities.len(),
-                            if printing.mana_produced.is_some() {
-                                "Some(...)"
-                            } else {
-                                "None"
-                            }
                         )));
                     }
                 };
@@ -655,36 +605,46 @@ impl GameState {
                     bf_mut[bf_pos].tapped = true;
                 }
                 // Phase 6: dispatch the effect.
-                if resolved.is_legacy_mana_produced {
-                    // Legacy free-mana-ability fast path: credit the
-                    // controller's pool with the listed pips. Same
-                    // saturating-u8 convention as before.
-                    let pool = &mut state.players[controller_idx].mana_pool;
-                    for sym in &resolved.legacy_mana_symbols {
-                        match sym.as_str() {
-                            "W" => pool.white = pool.white.saturating_add(1),
-                            "U" => pool.blue = pool.blue.saturating_add(1),
-                            "B" => pool.black = pool.black.saturating_add(1),
-                            "R" => pool.red = pool.red.saturating_add(1),
-                            "G" => pool.green = pool.green.saturating_add(1),
-                            "C" => pool.colorless = pool.colorless.saturating_add(1),
-                            other => {
-                                return Err(PyValueError::new_err(format!(
-                                    "ActivateAbility: unknown mana symbol \
-                                     {other:?} in mana_produced (valid: \
-                                     W, U, B, R, G, C)"
-                                )))
-                            }
-                        }
-                    }
-                } else if resolved.is_mana_ability {
+                if resolved.is_mana_ability {
                     // New-substrate mana ability: bypass the stack
-                    // and resolve immediately.
-                    crate::state_ops_resolve::apply_effect_pub(
+                    // and resolve immediately (CR 605.3a).
+                    //
+                    // **Controller-of-effect contract.** Mana abilities
+                    // credit the SOURCE'S CONTROLLER's pool, not
+                    // `state.active_player`'s — a Forest on player 1's
+                    // bf activated during player 0's turn must add G
+                    // to player 1's pool. `apply_effect_pub` for
+                    // `AddManaToPool` reads `state.active_player` as
+                    // the implicit controller (CE20-substrate-shape;
+                    // every other apply_effect arm does the same), so
+                    // we temporarily swap `active_player` to the
+                    // source's controller for the duration of the
+                    // mana-ability dispatch. This is the bridge
+                    // follow-up's parity fix — the pre-bridge legacy
+                    // path explicitly debited `controller_idx`; the
+                    // post-bridge new path inherits the same semantics
+                    // via the swap. Restored after the apply.
+                    //
+                    // Safe vs other-side-effects: a mana ability is
+                    // CR 605.1 "produces mana, doesn't target", so
+                    // its effect is exclusively `AddManaToPool` or
+                    // (rarely) a Sequence of them. Other arms of
+                    // `apply_effect` that read `state.active_player`
+                    // for non-mana purposes (PumpCreaturesYouControl,
+                    // DealDamage, etc.) are NOT reachable via a
+                    // mana ability — registry-input validation would
+                    // mark them as non-mana abilities, and the
+                    // synthetic state's bridge synthesis only ever
+                    // produces AddManaToPool / Sequence(AddManaToPool).
+                    let saved_active = state.active_player;
+                    state.active_player = controller_idx as u8;
+                    let dispatch_result = crate::state_ops_resolve::apply_effect_pub(
                         state,
                         &resolved.effect,
                         source_id,
-                    )?;
+                    );
+                    state.active_player = saved_active;
+                    dispatch_result?;
                 } else {
                     // Non-mana ability: push a stack item carrying
                     // the effect payload so a subsequent

@@ -633,3 +633,368 @@ def test_auto_tap_headroom_pool_only_path_still_works(synthetic_state):
         f"Pool-only affordability path still emits: pool covers "
         f"{{1}}{{G}} directly. Got {len(bear_emits)} emissions."
     )
+
+
+# --- mana_produced -> activated_abilities bridge (CE20 follow-up) ----
+#
+# The legacy `CardPrinting.mana_produced` side-channel has been bridged
+# into `activated_abilities` at parse time. Every printing with
+# `mana_produced.is_some()` carries a synthesized ActivatedAbility at
+# `ability_index=0` with `tap_self=true`, free mana cost,
+# `is_mana_ability=true`, and an effect that adds the listed pips to the
+# controller's pool. The legacy emission block in `state_ops_legal.rs`
+# is gone; the legacy `is_legacy_mana_produced` branch in
+# `state_ops_actions.rs` is gone — a single unified
+# `activated_abilities` walk handles everything.
+#
+# These tests pin the BRIDGE INVARIANT: pre-bridge tests must continue
+# to pass bit-equal post-bridge (Forest emission, Forest apply, sickness
+# gates). Plus a multi-pip hybrid shape exercises the Sequence wrapper.
+
+
+def _mountain_dict():
+    """A second basic-land shape — tap for {R}. Used for bridge tests
+    that want to assert the synthesis works for non-Forest colors.
+    """
+    return {
+        "name": "Mountain",
+        "card_types": ["Land"],
+        "mana_produced": ["R"],
+    }
+
+
+def _hybrid_dual_land_dict():
+    """A synthetic dual land that produces TWO different colors on a
+    single activation. `mana_produced=["G", "U"]` mirrors a (hypothetical)
+    "{T}: Add {G}{U}" land — exercises the bridge's multi-color Sequence
+    wrapping. Cost stays at free + tap_self.
+    """
+    return {
+        "name": "Sim Dual Land",
+        "card_types": ["Land"],
+        "mana_produced": ["G", "U"],
+    }
+
+
+def _double_green_land_dict():
+    """A synthetic land that produces TWO of the same color on a single
+    activation. `mana_produced=["G", "G"]` mirrors a "{T}: Add {G}{G}"
+    land — exercises the bridge's same-color aggregation (one
+    AddManaToPool with amount=2, not two amount=1 entries).
+    """
+    return {
+        "name": "Sim Green Geyser",
+        "card_types": ["Land"],
+        "mana_produced": ["G", "G"],
+    }
+
+
+def test_bridge_forest_emission_unchanged(synthetic_state):
+    """Forest on p0 bf emits exactly ONE ActivateAbility at
+    `ability_index=0`. Pre-bridge: emitted by the legacy
+    `mana_produced.is_some()` block. Post-bridge: emitted by the
+    activated_abilities walk on the synthesized entry. Same observable
+    result.
+    """
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    forest_id = synthetic_state.register_and_inject_object(
+        _forest_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    forest_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == forest_id
+    ]
+    assert len(forest_emits) == 1, (
+        f"Forest should emit exactly one ActivateAbility post-bridge "
+        f"(via synthesized activated_abilities[0]). Got {forest_emits}"
+    )
+    assert forest_emits[0]["ability_index"] == 0, (
+        f"Synthesized mana ability lives at ability_index=0 "
+        f"(prepended). Got {forest_emits[0]}"
+    )
+
+
+def test_bridge_forest_apply_unchanged(synthetic_state):
+    """Apply ActivateAbility(forest, 0): forest tapped, pool +1 G.
+    Bit-equal observable behavior to the legacy free-mana-ability path.
+    """
+    forest_id = synthetic_state.register_and_inject_object(
+        _forest_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    pool_before = synthetic_state.get_mana_pool(0)
+    assert pool_before["G"] == 0
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": forest_id,
+            "ability_index": 0,
+        }
+    )
+
+    assert synthetic_state.is_tapped(forest_id) is True, (
+        "Forest should be tapped after the synthesized tap_self cost fires"
+    )
+    pool_after = synthetic_state.get_mana_pool(0)
+    assert pool_after["G"] == 1, (
+        f"Pool should carry +1 G post-activation; got {pool_after}"
+    )
+    # Mana ability bypasses the stack (CR 605.3a, is_mana_ability=true).
+    assert synthetic_state.stack_size() == 0, (
+        f"Bridged mana ability is is_mana_ability=true; stack should "
+        f"stay empty. Got stack_size={synthetic_state.stack_size()}"
+    )
+
+
+def test_bridge_mountain_apply_adds_red(synthetic_state):
+    """Bridge synthesizes correctly for non-Green colors too. Mountain
+    on p0 bf, apply: Mountain tapped, pool +1 R.
+    """
+    mountain_id = synthetic_state.register_and_inject_object(
+        _mountain_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": mountain_id,
+            "ability_index": 0,
+        }
+    )
+
+    pool_after = synthetic_state.get_mana_pool(0)
+    assert pool_after["R"] == 1, (
+        f"Mountain's bridged ability should add {{R}}; got {pool_after}"
+    )
+
+
+def test_bridge_double_green_land_aggregates(synthetic_state):
+    """`mana_produced=["G","G"]` synthesizes one AddManaToPool with
+    amount=2 (aggregated by color), not two entries. Observable: a
+    single activation adds 2 G to the pool, taps the source once.
+    """
+    land_id = synthetic_state.register_and_inject_object(
+        _double_green_land_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": land_id,
+            "ability_index": 0,
+        }
+    )
+
+    assert synthetic_state.is_tapped(land_id) is True
+    pool_after = synthetic_state.get_mana_pool(0)
+    assert pool_after["G"] == 2, (
+        f"Double-green land should add 2 G in one activation; got {pool_after}"
+    )
+
+
+def test_bridge_hybrid_dual_land_sequence(synthetic_state):
+    """`mana_produced=["G","U"]` synthesizes a Sequence with two
+    AddManaToPool entries (one per color). One activation, one tap, two
+    colors landed in the pool.
+    """
+    land_id = synthetic_state.register_and_inject_object(
+        _hybrid_dual_land_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": land_id,
+            "ability_index": 0,
+        }
+    )
+
+    assert synthetic_state.is_tapped(land_id) is True
+    pool_after = synthetic_state.get_mana_pool(0)
+    assert pool_after["G"] == 1 and pool_after["U"] == 1, (
+        f"Hybrid dual land should add G+U in one activation; got {pool_after}"
+    )
+
+
+def test_bridge_creature_summoning_sick_still_gated(synthetic_state):
+    """A sick creature mana source (Llanowar Elves shape) still skips
+    emission. The bridge synthesizes the ability with `tap_self=true`,
+    which fires the existing creature-sickness gate (CR 302.1) at the
+    activated_abilities-walk emission filter.
+    """
+    elf_dict = {
+        "name": "Llanowar Elves",
+        "card_types": ["Creature"],
+        "mana_produced": ["G"],
+        "power": 1,
+        "toughness": 1,
+    }
+    elf_id = synthetic_state.register_and_inject_object(
+        elf_dict, 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(elf_id, True)
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    elf_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == elf_id
+    ]
+    assert elf_emits == [], (
+        f"Sick creature mana source should not emit (CR 302.1 gate "
+        f"on tap_self cost). Got {elf_emits}"
+    )
+
+
+def test_bridge_creature_non_sick_emits(synthetic_state):
+    """Non-sick Llanowar Elves emits its bridged mana ability at
+    `ability_index=0`. Confirms the sickness gate doesn't over-fire on
+    creatures that have shed it.
+    """
+    elf_dict = {
+        "name": "Llanowar Elves",
+        "card_types": ["Creature"],
+        "mana_produced": ["G"],
+        "power": 1,
+        "toughness": 1,
+    }
+    elf_id = synthetic_state.register_and_inject_object(
+        elf_dict, 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(elf_id, False)
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    elf_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == elf_id
+    ]
+    assert len(elf_emits) == 1 and elf_emits[0]["ability_index"] == 0
+
+
+def test_bridge_tapped_source_no_emission(synthetic_state):
+    """Tapped Forest doesn't emit. The bridge synthesizes `tap_self=true`
+    on the ability, which the new-path emission filter rejects when the
+    source is already tapped.
+    """
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    forest_id = synthetic_state.register_and_inject_object(
+        _forest_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.tap_object(forest_id)
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    forest_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == forest_id
+    ]
+    assert forest_emits == [], (
+        f"Tapped Forest should not emit. Got {forest_emits}"
+    )
+
+
+def test_bridge_prepended_before_explicit_activated_abilities(
+    synthetic_state,
+):
+    """If a printing carries BOTH `mana_produced` AND an explicit
+    `activated_abilities` entry, the synthesized mana ability is
+    PREPENDED (lives at ability_index=0), the explicit entries land
+    at ability_index=1+. Pin: existing `ActivateAbility(land, 0)`
+    callers keep working bit-equal.
+
+    Synthetic shape: a Forest that ALSO carries `{T}, Pay 1 life: gain
+    1 life` — clearly distinct from its mana ability. The bridge
+    must put the mana ability first.
+    """
+    # NOTE: ActivationCost in CE20 Slice 1 only supports mana + tap_self
+    # — pay_life as a cost variant doesn't ship until a future slice. We
+    # use a free + tap_self ability as the explicit entry instead; the
+    # SHAPE under test is "explicit-entries get bumped to index >= 1".
+    composite_land = {
+        "name": "Composite Land",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+        "activated_abilities": [
+            {
+                "cost": {"tap_self": True},
+                "effect": {"kind": "gain_life", "amount": 1},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+    land_id = synthetic_state.register_and_inject_object(
+        composite_land, 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    life_before = synthetic_state.life_totals[0]
+
+    # ability_index=0 is the BRIDGED mana ability (adds G).
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": land_id,
+            "ability_index": 0,
+        }
+    )
+    assert synthetic_state.is_tapped(land_id) is True
+    assert synthetic_state.get_mana_pool(0)["G"] == 1
+    # The is_mana_ability=true bridged effect didn't push a stack item.
+    assert synthetic_state.stack_size() == 0
+    # Life unchanged — the explicit gain_life entry didn't fire.
+    assert synthetic_state.life_totals[0] == life_before
+
+
+def test_bridge_synthesizes_is_mana_ability_true(synthetic_state):
+    """The bridge synthesizes `is_mana_ability=true` — apply does NOT
+    push a stack item, the mana is added immediately (CR 605.3a). This
+    matches the legacy `mana_produced` semantics (legacy resolved the
+    pool credit inline, not through the stack).
+    """
+    forest_id = synthetic_state.register_and_inject_object(
+        _forest_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.empty_mana_pool(0)
+    stack_before = synthetic_state.stack_size()
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": forest_id,
+            "ability_index": 0,
+        }
+    )
+    # Stack size unchanged — mana ability bypassed the stack.
+    assert synthetic_state.stack_size() == stack_before
+
+
+def test_bridge_apply_with_invalid_ability_index_raises(synthetic_state):
+    """A Forest has ONE bridged ability at index 0. ability_index=1
+    raises with the unified "has no ability at index" error — the
+    legacy `mana_produced` fallback for invalid indices is gone.
+    """
+    forest_id = synthetic_state.register_and_inject_object(
+        _forest_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    with pytest.raises(ValueError, match=r"has no ability at index 1"):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": forest_id,
+                "ability_index": 1,
+            }
+        )

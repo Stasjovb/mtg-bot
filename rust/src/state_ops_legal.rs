@@ -1057,29 +1057,23 @@ impl GameState {
                 continue;
             };
             let is_creature = printing.card_types.iter().any(|t| t == "Creature");
-            // Legacy free-mana-ability emission (back-compat with
-            // CE20 Slice 1 — `mana_produced` stays as the hatch
-            // for "{T}: Add {color}" until a future slice bridges
-            // it into a synthesized ActivatedAbility entry).
+            // **Bridge follow-up (post-CE20-Slice-1).** The legacy
+            // `mana_produced.is_some()` emission block that USED to
+            // live here is gone — `parse_printing` now synthesizes a
+            // single ActivatedAbility at `ability_index=0` for every
+            // printing with `mana_produced.is_some()` (see
+            // `cards.rs` bridge synthesis), so the walk below covers
+            // both the new-substrate cost-paying abilities AND the
+            // bridged mana-only ability uniformly. No more dual-
+            // path complexity at emission.
             //
-            // CR 302.1 — summoning sickness applies ONLY to creatures
-            // tapping for tap-cost abilities. Lands (Forests,
-            // Mountains, etc.) can tap for mana the turn they enter
-            // the battlefield, even though every new permanent
-            // carries `summoning_sick = true` (the CE1 universal
-            // default). The gate is
-            // `is_creature && summoning_sick && requires_tap_cost`;
-            // every legacy mana ability has an implicit `{T}` cost
-            // (CR 605.1a), so `is_creature && summoning_sick` is
-            // sufficient here. Mirrors Python's `legal.py:661-663`.
-            if !obj.tapped
-                && printing.mana_produced.is_some()
-                && !(is_creature && obj.summoning_sick)
-            {
-                actions.push(activate_ability_dict(py, obj.id, 0)?);
-            }
-            // CE20 Slice 1 + auto-tap follow-up: walk the new
-            // activated_abilities Vec. Per-ability:
+            // CR 302.1 (creature summoning sickness for tap-cost
+            // abilities) is still enforced per-ability on the
+            // `cost.tap_self` branch.
+            // CE20 Slice 1 + auto-tap follow-up + bridge follow-up:
+            // walk the activated_abilities Vec (which now includes
+            // the synthesized mana-ability entry for any printing
+            // that had legacy `mana_produced`). Per-ability:
             //   - tap_self abilities skip a tapped source AND a
             //     summoning-sick creature source (CR 302.1 narrows
             //     the sickness gate to abilities whose cost requires
