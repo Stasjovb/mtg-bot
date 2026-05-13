@@ -741,6 +741,157 @@ def test_structured_concurrent_workers_get_batched(
 # ---------- structured + flat coexistence (regression) -----------------------
 
 
+def test_structured_batch_value_only_terminal_winner_branches(
+    tmp_path: Path, fake_tokenizer,
+):
+    """batch_evaluate covers each terminal-winner branch (viewer-wins
+    / opponent-wins / draw) on the structured value-only path —
+    mirrors the with-policy terminal coverage above."""
+    server, _, _ = _make_structured_server(
+        tmp_path, n_slots=2, batch_size=1, batch_wait_ms=0.0,
+    )
+    states = [
+        _FakeAdapter(terminal=True, winner_id=0),     # viewer wins → +1
+        _FakeAdapter(terminal=True, winner_id=1),     # opponent wins → -1
+        _FakeAdapter(terminal=True, winner_id=None),  # draw → 0
+    ]
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        values = client.batch_evaluate(states, player_id=0)
+    assert values == [1.0, -1.0, 0.0]
+    # No request hit the server.
+    assert server.requests_served == 0
+
+
+def test_structured_evaluate_with_policy_terminal_short_circuit(
+    tmp_path: Path, fake_tokenizer,
+):
+    """Terminal-state short-circuit on the structured client must
+    bypass the tokenizer (matches the legacy MLP path's contract)
+    — verifies +1 / -1 / 0 covering both winner branches."""
+    server, _, _ = _make_structured_server(
+        tmp_path, n_slots=2, batch_size=1, batch_wait_ms=0.0,
+    )
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        # Win: viewer == winner → +1.
+        v_win, p_win = client.evaluate_with_policy(
+            _FakeAdapter(terminal=True, winner_id=0), player_id=0,
+        )
+        assert v_win == 1.0
+        np.testing.assert_array_equal(
+            p_win, np.zeros(ACTION_VOCAB_SIZE, dtype=np.float32),
+        )
+        # Loss: opponent wins → -1.
+        v_loss, p_loss = client.evaluate_with_policy(
+            _FakeAdapter(terminal=True, winner_id=1), player_id=0,
+        )
+        assert v_loss == -1.0
+        # Draw: winner is None → 0.
+        v_draw, p_draw = client.evaluate_with_policy(
+            _FakeAdapter(terminal=True, winner_id=None), player_id=0,
+        )
+        assert v_draw == 0.0
+    # None of the terminals hit the server.
+    assert server.requests_served == 0
+
+
+def test_structured_dispatcher_failure_wakes_workers(
+    tmp_path: Path, monkeypatch, patched_legal_mask,
+):
+    """If the dispatcher's forward throws (e.g. corrupted weights /
+    out-of-range embedding id from a buggy tokenizer), the worker
+    in ``_await_response`` must wake with a clear ``server stopped``
+    RuntimeError instead of hanging forever. Catches the
+    dispatcher-swallowed-exception deadlock that bit production
+    eval cleanup before the dispatch try/except landed."""
+    state = _FakeAdapter()
+    # Force the tokenizer to emit a printing id outside the model's
+    # n_printings_cap (32). The forward will IndexError inside the
+    # embedding lookup; the dispatcher's try/except must wake the
+    # worker via ``server_stopped`` rather than leave it hanging.
+    mod = types.ModuleType("mtg_bot.training.state_tokenizer")
+
+    def tokenize_state(state, viewer_id, recent_actions, n=32, *,
+                       n_printings_cap=320):
+        d = _make_token_dict(seq_len=4, seed=42, n_printings_cap=32)
+        # Inject an out-of-range printing id.
+        d["token_emb_ids"][0, EMB_FIELD_PRINTING] = 9999
+        return d
+
+    mod.tokenize_state = tokenize_state
+    monkeypatch.setitem(
+        sys.modules, "mtg_bot.training.state_tokenizer", mod,
+    )
+    monkeypatch.setattr(
+        nn_evaluator_mod, "_STATE_TOKENIZER_MODULE", None,
+    )
+
+    server, _, _ = _make_structured_server(
+        tmp_path, n_slots=2, batch_size=1, batch_wait_ms=0.0,
+    )
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        # The dispatcher's forward raises IndexError; the wrapper
+        # signals ``server_stopped``; the client wakes and raises
+        # RuntimeError with "stopped" in the message.
+        with pytest.raises(RuntimeError, match="stopped"):
+            client.evaluate_with_policy(state, player_id=0)
+
+
+def test_structured_client_close_is_noop(tmp_path: Path):
+    """Client.close() is a no-op (no per-worker resources to release).
+    Same contract as the flat-path client; pin it so a future change
+    that adds a resource doesn't silently regress shutdown."""
+    server, _, _ = _make_structured_server(
+        tmp_path, n_slots=2, batch_size=1, batch_wait_ms=0.0,
+    )
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        client.close()
+
+
+def test_structured_chunked_internal_empty_short_circuit(
+    tmp_path: Path,
+):
+    """``_call_chunked_structured`` with empty input returns
+    ``([], [])`` without acquiring slots — pins the trivial
+    short-circuit so a future refactor can't drop it."""
+    server, _, _ = _make_structured_server(
+        tmp_path, n_slots=2, batch_size=1, batch_wait_ms=0.0,
+    )
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        values, policies = client._call_chunked_structured(
+            token_dicts=[], masks=[],
+        )
+        assert values == []
+        assert policies == []
+
+
+def test_structured_engine_state_fallthrough_accepts_raw_state(
+    tmp_path: Path, fake_tokenizer, patched_legal_mask,
+):
+    """``_engine_state`` returns the input unchanged when there's no
+    ``engine_state`` attribute. The structured client accepts both an
+    adapter (with engine_state) and a raw state-like object."""
+
+    class _RawState:
+        """Duck-types ``GameState`` minus the ``engine_state`` attr."""
+        def is_terminal(self): return False
+        def winner(self): return None
+
+    server, _, _ = _make_structured_server(
+        tmp_path, n_slots=2, batch_size=1, batch_wait_ms=0.0,
+    )
+    state = _RawState()
+    with server:
+        client = SharedTensorNNEvalClient(server.handle())
+        value, policy = client.evaluate_with_policy(state, player_id=0)
+        assert isinstance(value, float)
+        assert policy.shape == (ACTION_VOCAB_SIZE,)
+
+
 def test_flat_path_still_works_when_structured_module_imported(tmp_path: Path):
     """Smoke: a flat-feature server built in the same process as a
     structured one still services flat requests. Catches the
