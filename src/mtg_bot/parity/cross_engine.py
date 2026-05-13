@@ -234,6 +234,60 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return DealDamageAnyTarget(
             amount=eff_dict.get("amount", 0),
         )
+    if kind == "deal_damage_to_opponent_creature":
+        # Targeted "deals N damage to target creature an opponent
+        # controls" — restricted to the
+        # ``IsCreature() & ControlledByOpponent()`` subset of any-
+        # target, so neither players nor source-controller creatures
+        # are legal targets. Rust's
+        # ``Effect::DealDamageToOpponentCreature`` (cards.rs:1690)
+        # carries the I67 controller-of-effect contract intrinsically:
+        # the resolve arm at
+        # ``state_ops_resolve.rs:6271-6342`` performs a 5-zone walk
+        # (with stack-scan fallback) to recover the source's
+        # controller, iterates the OPPONENT seats in ascending
+        # player order, scans each opponent's battlefield top-to-
+        # bottom for the FIRST ``"Creature"`` printing, and applies
+        # the damage. No eligible target → silent fizzle (mirrors
+        # Python's ``DealDamage.resolve`` empty-targets short-circuit).
+        # Distinct from ``DealDamageAnyTarget`` in TWO ways:
+        # (a) the filter rules players out, and (b) the source-
+        # controller resolution is INTRINSIC (Rust walks zones
+        # directly rather than reading
+        # ``current_resolve_source_controller``).
+        #
+        # Python's ``DealDamageToOpponentCreature`` is constructor
+        # sugar over ``DealDamage`` carrying the
+        # ``IsCreature() & ControlledByOpponent()`` filter
+        # (effects/generic/damage.py:569-587). The
+        # ``ControlledByOpponent`` predicate reads
+        # ``state.resolving_controller_id`` (pinned by
+        # ``Effect._enumerate_for_filter``) so the legal-target pool
+        # is restricted to creatures the spell's caster doesn't
+        # control. Like ``DealDamageAnyTarget``, Python picks at
+        # PUSH time via ``push_triggered_ability``
+        # (actions.py:3172); end-to-end probes set an agent on the
+        # source's controller that returns the first opponent-side
+        # creature target (matching Rust's defender-bf scan). The
+        # ``_PickFirstOpponentTargetAgent`` shim from the
+        # Nebula-Dragon probe is reusable — for this effect kind
+        # the slot filter already restricts ``legal_targets`` to
+        # opponent-controlled creatures, so the agent's opponent-
+        # filter step is a no-op and the first entry is always the
+        # right pick.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3877-3890)
+        # which requires an explicit non-negative ``amount`` field.
+        # Missing ``amount`` here defaults to 0 (same convention as
+        # ``gain_life`` / ``damage_each_opponent`` /
+        # ``deal_damage_any_target``) so partial fixtures don't
+        # crash the translator.
+        from mtg_bot.effects.generic.damage import (
+            DealDamageToOpponentCreature,
+        )
+        return DealDamageToOpponentCreature(
+            amount=eff_dict.get("amount", 0),
+        )
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "

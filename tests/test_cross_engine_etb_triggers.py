@@ -417,3 +417,91 @@ def test_rust_parser_accepts_deal_damage_any_target_in_triggered_ability():
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+def test_bridge_deal_damage_to_opponent_creature_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "deal_damage_to_opponent_creature", "amount": N}``
+    translates to Python ``DealDamageToOpponentCreature(amount=N)``.
+
+    Unblocks Nova-Hellkite-shape ETB triggers that "deal N damage to
+    target creature an opponent controls" on the cross-engine bridge.
+    Distinct from the ``deal_damage_any_target`` arm in two ways:
+    (a) the slot filter restricts legal targets to creatures
+    ``IsCreature() & ControlledByOpponent()`` so players are never
+    eligible, and (b) the Rust resolve arm
+    (state_ops_resolve.rs:6271-6342) resolves the source's controller
+    INTRINSICALLY via a 5-zone walk rather than reading
+    ``current_resolve_source_controller`` — the controller-of-effect
+    fix is wired in by the resolve arm's own scan, not by the I67
+    transient swap.
+    """
+    from mtg_bot.effects.generic.damage import DealDamageToOpponentCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature", "amount": 1}
+    )
+    assert isinstance(e, DealDamageToOpponentCreature)
+    assert e.amount == 1
+    # The IsCreature() & ControlledByOpponent() filter is intrinsic
+    # to the subclass; verify the constructor sugar's __post_init__
+    # wired the TargetSpec slot (used by ``effect.legal_targets`` at
+    # push time).
+    assert len(e.targets) == 1
+
+
+def test_bridge_deal_damage_to_opponent_creature_amount_default_zero():
+    """Missing ``amount`` defaults to 0 (mirrors the gain_life /
+    damage_each_opponent / deal_damage_any_target arms' default-zero
+    convention -- bridge consumers are required to be explicit, but a
+    missing key shouldn't crash the translator). Rust's parse_effect
+    is STRICTER (raises ``KeyError`` on missing ``amount``); the
+    Python bridge's lenient default exists for partial test fixtures
+    only and is out-of-band relative to the production parser path.
+    """
+    from mtg_bot.effects.generic.damage import DealDamageToOpponentCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature"}
+    )
+    assert isinstance(e, DealDamageToOpponentCreature)
+    assert e.amount == 0
+
+
+def test_rust_parser_accepts_deal_damage_to_opponent_creature_in_triggered_ability():
+    """Pin the Rust parser surface for the matched effect kind. The
+    bridge's dict shape must register cleanly on the Rust side too;
+    this lockstep gate keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Mirrors the existing ``deal_damage_any_target`` parser-surface
+    pin. Required field is ``amount`` (non-negative i32); the
+    predicate-path triggered-ability wrapper is just a carrier — the
+    substrate being pinned is parse_effect's
+    ``deal_damage_to_opponent_creature`` arm
+    (cards.rs:3877-3890).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Opponent Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "R": 2},
+        "power": 4,
+        "toughness": 5,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_to_opponent_creature",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
