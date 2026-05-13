@@ -12173,3 +12173,326 @@ def test_cross_engine_real_eoe_haliya_guided_by_light_or_predicate_self_inclusiv
     assert py_state.players[1].life == 20
     assert rust_state.get_life(0) == py_state.players[0].life
     assert rust_state.get_life(1) == py_state.players[1].life
+
+
+def test_cross_engine_real_eoe_alpharael_dreaming_acolyte_etb_draw_two_parity(
+    parity_smoke,
+):
+    """Probe: Alpharael, Dreaming Acolyte (EoE) ETB ``draw 2`` parity.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When Alpharael enters, draw two cards. Then discard two
+         cards unless you discard an artifact card.
+         During your turn, Alpharael has deathtouch."
+
+    The discard rider and deathtouch clauses are out of scope -- this
+    probe exclusively exercises the ETB-trigger surface
+    (``SourceIsSelf`` + ``DrawCards(2)``). It is the **first** real-
+    EoE probe to drive ``draw_cards`` with ``count > 1``: Quantum
+    Riddler (the prior draw-shape probe) used ``count: 1``, so the
+    ``DrawCards.amount`` value plumbing -- both the Rust
+    ``parse_effect`` arm and ``_ta_dict_to_python_effect``'s
+    ``count -> amount`` translation -- has only ever been exercised
+    on the degenerate value=1 case end-to-end.
+
+    Predicate decomposition (same shape as Quantum Riddler /
+    Germinating Wurm):
+
+        SourceIsSelf
+
+    Effect: ``draw_cards(count=2)`` -- already on the cross-engine
+    bridge.
+
+    Probe shape (inject-and-fan-out with two arms):
+
+      1. Pre-place Alpharael in p0's hand, then cast via direct
+         stack-push (mirroring the Quantum Riddler harness). On
+         resolve, Alpharael lands on p0's bf and his ETB trigger
+         pushes. Drain -> p0 hand size unchanged (-1 for the
+         Acolyte leaving hand, +2 for the draws, +1 for the
+         pre-cast snapshot baseline -> net +1 vs pre-cast snapshot);
+         library shrinks by 2 (the two draws).
+
+      2. **NEW axis vs Quantum Riddler:** inject a vanilla creature
+         for p0's bf via ``register_and_inject_object`` (no cast --
+         direct ETB-stamping harness, same shape as Haliya / Tannuk).
+         Alpharael's trigger does NOT fire because
+         ``SourceIsSelf`` rejects when the event subject is some
+         other object. Pins the negative arm of ``SourceIsSelf`` on
+         the draw-2 effect shape -- Quantum Riddler only pinned it
+         on draw-1.
+
+    Out of scope:
+
+      * "Then discard two cards unless you discard an artifact card"
+        -- the discard rider is not on the cross-engine effect
+        bridge (the ``discard_card`` arm is on an unmerged review-
+        gated branch as of this commit), and modeling the
+        conditional "unless you discard an artifact" branch is a
+        separate effect shape from the draw-2 contract this probe
+        targets. Folding the partial trigger on the test predicate
+        keeps the probe focused.
+      * "During your turn, Alpharael has deathtouch" -- a static
+        ability, not an ETB-trigger; not in this probe lane.
+      * Legendary uniqueness on the battlefield -- the harness
+        injects only one Alpharael, so the state-based "legend
+        rule" sacrifice never triggers.
+
+    Expected post-cast + post-drain state on BOTH engines:
+
+      * Alpharael on p0's bf.
+      * Vanilla creature on p0's bf (injected; no fire).
+      * p0 hand size: pre-cast snapshot included Alpharael in hand;
+        post-resolve he's on bf and 2 cards were drawn from library
+        -> hand grew by 1 vs pre-cast snapshot (-1 + 2 = +1).
+      * p0 library: shrunk by exactly 2 (the two draws).
+      * p1 hand / library unchanged.
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    alpharael = CardDef(
+        name="Alpharael, Dreaming Acolyte",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("U", 1), ("B", 1)),
+        power=2,
+        toughness=3,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 2},
+            },
+        ),
+    )
+    # Two library fixtures so the draw has something to pull. Using
+    # a distinct printing (Germinating Wurm) keeps the drawn-card
+    # name distinguishable from the cast spell so a library-vs-hand
+    # confusion bug would surface as a name divergence.
+    germinating_wurm = CardDef(
+        name="Germinating Wurm",
+        card_type="Creature",
+        mana_cost_generic=4,
+        mana_cost_colored=(("G", 1),),
+        power=5,
+        toughness=5,
+        # Same self-only ETB as in the prior wurm probe; the wurm
+        # itself doesn't enter on the draw path (DrawCards moves it
+        # from library to hand, not to bf), so its own ETB does NOT
+        # fire here.
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "gain_life", "amount": 2},
+            },
+        ),
+    )
+    bait_creature = CardDef(
+        name="Bait Creature",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    spec = DeckSpec(
+        card_defs=(alpharael, germinating_wurm, bait_creature),
+        p0_library=("Germinating Wurm", "Germinating Wurm"),
+        p1_library=("Germinating Wurm", "Germinating Wurm"),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    rust_alpharael_dict = {
+        "name": "Alpharael, Dreaming Acolyte",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "U": 1, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 2},
+            }
+        ],
+    }
+    rust_alpharael_id = rust_state.register_and_inject_object(
+        rust_alpharael_dict, 0, ZONE_HAND
+    )
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_state.push_to_stack(rust_alpharael_id, 0)
+    rust_state.resolve_top_of_stack()
+    assert (
+        rust_state.find_object_zone(rust_alpharael_id)
+        == ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Alpharael's ETB DrawCards(2) trigger should be on the "
+        "stack post-resolve. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    rust_p0_hand_after_self = rust_state.hand_sizes[0]
+    rust_p0_lib_after_self = rust_state.library_sizes[0]
+    # Net hand delta vs pre-cast: -1 (Alpharael leaves hand) +2
+    # (draws) = +1.
+    assert rust_p0_hand_after_self == rust_p0_hand_before + 1, (
+        f"Rust p0 hand should be +1 vs pre-cast (Alpharael "
+        f"leaves hand to bf, ETB draws 2): "
+        f"before={rust_p0_hand_before} "
+        f"after_self={rust_p0_hand_after_self}"
+    )
+    assert rust_p0_lib_after_self == rust_p0_lib_before - 2, (
+        f"Rust p0 library should shrink by exactly 2 (the two ETB "
+        f"draws): before={rust_p0_lib_before} "
+        f"after_self={rust_p0_lib_after_self}"
+    )
+
+    # Second arm: inject a vanilla creature for p0 on bf -- direct
+    # ETB-stamp, no cast. SourceIsSelf rejects because the trigger
+    # source is Alpharael but the event subject is the bait
+    # creature. No fire.
+    rust_bait_creature_dict = {
+        "name": "Bait Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_state.register_and_inject_object(
+        rust_bait_creature_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: SourceIsSelf should reject a non-self subject; "
+        "Alpharael's ETB must NOT fire on someone else's arrival. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    # Library + hand unchanged from the self-arm endpoint.
+    assert rust_state.hand_sizes[0] == rust_p0_hand_after_self
+    assert rust_state.library_sizes[0] == rust_p0_lib_after_self
+
+    # ---- Python side ----
+    from mtg_bot.actions import (
+        _trigger_etb_abilities,
+        resolve_top_of_stack as py_resolve,
+    )
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import StackItem, Zone
+
+    alpharael_printing = CardPrinting(
+        name="Alpharael, Dreaming Acolyte",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1), ("B", 1))),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DrawCards(amount=2),
+            ),
+        ),
+    )
+    py_alpharael = py_state.new_object(
+        alpharael_printing, owner_id=0, zone=Zone.HAND,
+    )
+    py_state.players[0].hand.append(py_alpharael)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p0_lib_before = len(py_state.players[0].library)
+    # Direct stack push (bypass mana cost), same shape as the
+    # Quantum Riddler probe.
+    py_alpharael.zone = Zone.STACK
+    py_state.players[0].hand.remove(py_alpharael)
+    py_state.stack.append(
+        StackItem(source=py_alpharael, controller_id=0)
+    )
+    py_resolve(py_state)
+    assert any(
+        o.printing.name == "Alpharael, Dreaming Acolyte"
+        for o in py_state.battlefield
+    ), "Python: Alpharael should be on bf after cast resolves"
+    assert len(py_state.stack) == 1, (
+        "Python: Alpharael's ETB DrawCards(2) trigger should be on "
+        "the stack post-resolve"
+    )
+    while py_state.stack:
+        py_resolve(py_state)
+    py_p0_hand_after_self = len(py_state.players[0].hand)
+    py_p0_lib_after_self = len(py_state.players[0].library)
+    assert py_p0_hand_after_self == py_p0_hand_before + 1, (
+        f"Python p0 hand should be +1 vs pre-cast (Alpharael "
+        f"leaves hand to bf, ETB draws 2): "
+        f"before={py_p0_hand_before} "
+        f"after_self={py_p0_hand_after_self}"
+    )
+    assert py_p0_lib_after_self == py_p0_lib_before - 2, (
+        f"Python p0 library should shrink by exactly 2 (the two "
+        f"ETB draws): before={py_p0_lib_before} "
+        f"after_self={py_p0_lib_after_self}"
+    )
+
+    # Second arm: vanilla creature directly onto p0's bf.
+    bait_creature_printing = CardPrinting(
+        name="Bait Creature",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_creature_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = True
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    _trigger_etb_abilities(py_state, py_bait)
+    assert len(py_state.stack) == 0, (
+        "Python: SourceIsSelf should reject a non-self subject; "
+        "Alpharael's ETB must NOT fire on someone else's arrival"
+    )
+    assert len(py_state.players[0].hand) == py_p0_hand_after_self
+    assert len(py_state.players[0].library) == py_p0_lib_after_self
+
+    # ---- Cross-engine parity ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+    assert rust_state.library_sizes[1] == len(py_state.players[1].library)
+    # Concrete cross-engine endpoint: p0 library was 2 (just the
+    # two wurm fixtures) and ETB drew both -> 0 left.
+    assert rust_state.library_sizes[0] == 0
+    assert len(py_state.players[0].library) == 0
+    # Lives unchanged on both sides.
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
