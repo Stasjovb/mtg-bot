@@ -5377,7 +5377,62 @@ fn apply_effect(
         // enchantments, planeswalkers, and creatures are all
         // eligible. Defender = 1 - active_player.
         Effect::ExileOpponentsNonlandPermanentUntilLeaves => {
-            let defender = (1 - state.active_player) as usize;
+            // **Controller resolution (I80 follow-up to the
+            // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 / I69 /
+            // I70 / I71 / I72 / I73 / I74 / I75 / I76 / I77 / I78 /
+            // I79 controller-of-effect substrate).** CR 119.5 /
+            // 608.2: an effect resolves under its source's
+            // controller. ExileOpponentsNonlandPermanentUntilLeaves's
+            // first-slice target picker chooses the SOURCE'S
+            // controller's opponent's first non-land permanent,
+            // where defender = 1 - controller. Sibling closure to
+            // I79 — same broader-shape "until source leaves" exile;
+            // differs from I79 only in the target filter ("not a
+            // Land" instead of "is a Creature").
+            //
+            // **Why the fix.** Pre-fix this arm computed
+            // `defender = 1 - state.active_player`. Wrong when the
+            // resolving spell / triggered ability has a controller
+            // != active_player. Example: on p0's turn, p1's
+            // Hardlight-Containment-shape Enchantment has an ETB
+            // that exiles an opponent's non-land permanent until
+            // the source leaves. Pre-fix it self-exiled p1's own
+            // first non-land permanent (defender =
+            // 1 - active_player = 1 - 0 = 1); post-fix it correctly
+            // exiles p0's first non-land permanent (the source's
+            // controller's opponent — the standard
+            // Hardlight-Containment shape, where "opponent's" in
+            // the card text actually means the source-controller's
+            // opponent, not the active-player's opponent).
+            //
+            // **Bookkeeping invariants preserved (sibling to I79
+            // gotcha-list #7).** The
+            // `exiled_with_source = Some(source_obj_id)` stamp
+            // (which enables `return_paired_exiles_for`) is
+            // unchanged — the controller fix only changes the
+            // defender from which the target is picked, never the
+            // pairing semantics. The owner-on-re-scan (target's
+            // controller == owner in first-slice synthetic states)
+            // continues to route the exiled object onto its
+            // owner's exile zone. CR 400.7 zone-change reset
+            // preserved. LTB fan-out via
+            // `pending_leaves_dispatches` preserved.
+            //
+            // **Closes the post-I77 forward inventory of
+            // defender-shape `(1 - state.active_player)` sites in
+            // state_ops_resolve.rs.** The remaining single-target
+            // first-slice defender-swap inventory is empty after
+            // I80. Remaining candidates (CreateToken,
+            // ReturnCreatureFromYourGraveyard family, Site at
+            // ~5626) need audit — they don't fit the
+            // defender-swap shape and require per-arm
+            // investigation. See `docs/RUST_PARITY_GAPS.md` I80
+            // forward notes.
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let defender = 1 - controller;
             let target_id: Option<u32> = {
                 let bf = &state.players[defender].battlefield;
                 let registry = &state.registry;

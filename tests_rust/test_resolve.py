@@ -14097,3 +14097,174 @@ def test_exile_target_creature_until_source_leaves_empty_source_controllers_oppo
     assert state.find_object_zone(src_id) == ZONE_BATTLEFIELD
     # P0's exile size untouched.
     assert len(state.exile_snapshot(0)) == p0_exile_before
+
+
+# ====================================================================
+# ExileOpponentsNonlandPermanentUntilLeaves controller-of-effect fix —
+# regression pins (I80).
+#
+# Pre-fix `defender = (1 - state.active_player) as usize`. Wrong when
+# the resolving spell / triggered ability has a controller !=
+# active_player — example: on p0's turn, p1's Hardlight-Containment-
+# shape Enchantment has an ETB that exiles an opponent's non-land
+# permanent until the source leaves. Pre-fix it self-exiled p1's own
+# first non-land permanent (defender = 1 - active_player = 1 - 0
+# = 1); post-fix it correctly exiles p0's first non-land permanent
+# (the source's controller's opponent — the standard Hardlight-
+# Containment shape, where "opponent's" in the card text means the
+# source-controller's opponent).
+#
+# Sibling closure to I79 — same broader-shape "until source leaves"
+# exile; differs from I79 only in the target filter ("not a Land"
+# instead of "is a Creature"). Same `exiled_with_source` bookkeeping,
+# same owner re-scan, same LTB fan-out. Closes the post-I77 forward
+# inventory of defender-shape `(1 - state.active_player)` sites in
+# state_ops_resolve.rs.
+#
+# Synthetic seed: each player's bf is 5 Forests (Land) then 5 Bears
+# (Creature, non-Land), so the first non-land permanent on p0's bf
+# is id 5 (Bears) and on p1's bf is id 72 (Bears).
+# ====================================================================
+
+
+ZONE_EXILE_I80 = 5
+
+
+def _hardlight_containment_dict_for_i80():
+    """A Hardlight-Containment-shape Enchantment whose ETB exiles
+    an opponent's non-land permanent until the source leaves. Used
+    by I80 regression pins."""
+    return {
+        "name": "Test Hardlight Containment I80",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"W": 1, "generic": 1},
+        "etb_effects": [
+            {"kind": "exile_opponents_nonland_permanent_until_leaves"}
+        ],
+    }
+
+
+def test_exile_opps_nonland_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the ExileOpponentsNonlandPermanent-
+    UntilLeaves controller-of-effect fix (I80).**
+
+    On p0's turn (active_player=0), a Hardlight-Containment-shape
+    Enchantment whose controller is p1 must exile a p0 non-land
+    permanent (p0's bf[5] = Bears, id 5, the first non-land),
+    NOT a p1 non-land permanent (p1's bf[5] = Bears, id 72).
+    Pre-fix `defender = 1 - active_player = 1 - 0 = 1` => p1's
+    own Bears self-exiled. Post-fix `defender = 1 - controller
+    = 1 - 1 = 0` => correctly hits p0's Bears.
+
+    Drains TWO stack pops: spell resolves (Enchantment ETBs onto
+    bf), then the on-stack ETB trigger exiles the target.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_first_nonland_id = 5  # p0's bf[5] (Bears, controller=0)
+    p1_first_nonland_id = 72  # p1's bf[5] (Bears, controller=1)
+
+    src_id = state.register_and_inject_object(
+        _hardlight_containment_dict_for_i80(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()  # Enchantment enters bf, ETB triggers
+    state.resolve_top_of_stack()  # ETB trigger resolves
+
+    # Post-fix: p0's Bears exiled with source link.
+    assert state.find_object_zone(p0_first_nonland_id) == ZONE_EXILE_I80
+    # P1's Bears untouched (no self-exile).
+    assert state.find_object_zone(p1_first_nonland_id) == ZONE_BATTLEFIELD
+    # Source Hardlight Containment is on p1's bf.
+    assert state.find_object_zone(src_id) == ZONE_BATTLEFIELD
+
+    # `exiled_with_source` link enables manual return via
+    # return_paired_exiles_for(src_id).
+    returned = state.return_paired_exiles_for(src_id)
+    assert returned == 1
+    assert state.find_object_zone(p0_first_nonland_id) == ZONE_BATTLEFIELD
+
+
+def test_exile_opps_nonland_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** A Hardlight-Containment-shape source
+    cast by the active player must still exile the opponent's
+    first non-land permanent — bug never fired in this case pre-
+    fix because controller == active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_first_nonland_id = 5
+    p1_first_nonland_id = 72
+
+    src_id = state.register_and_inject_object(
+        _hardlight_containment_dict_for_i80(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()  # Enchantment enters
+    state.resolve_top_of_stack()  # ETB trigger resolves
+
+    # P1's Bears exiled (p0's opponent's first non-land permanent).
+    assert state.find_object_zone(p1_first_nonland_id) == ZONE_EXILE_I80
+    # P0's Bears untouched.
+    assert state.find_object_zone(p0_first_nonland_id) == ZONE_BATTLEFIELD
+
+
+def test_exile_opps_nonland_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for
+    ExileOpponentsNonlandPermanentUntilLeaves.** Mirrors the I64
+    / I67 / I68 / I69 / I70 / I71 / I72 / I73 / I74 / I75 / I76 /
+    I77 / I78 / I79 pause-variant pins."""
+    state = engine.make_synthetic_state()
+
+    p0_first_nonland_id = 5
+    p1_first_nonland_id = 72
+
+    src_id = state.register_and_inject_object(
+        _hardlight_containment_dict_for_i80(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()  # Enchantment enters
+    state.resolve_top_of_stack_pause()  # ETB trigger resolves
+
+    # Post-fix: p0's Bears exiled.
+    assert state.find_object_zone(p0_first_nonland_id) == ZONE_EXILE_I80
+    assert state.find_object_zone(p1_first_nonland_id) == ZONE_BATTLEFIELD
+
+
+def test_exile_opps_nonland_only_lands_on_source_controllers_opponent_fizzles(engine):
+    """**Lands-only fizzle pin for I80.** When the source-
+    controller's opponent has ONLY Lands on bf, the ETB trigger
+    fizzles silently (the "not a Land" filter rejects every
+    permanent). Build a synthetic state, then move all of p0's
+    non-land permanents to p0's graveyard before casting the
+    p1-controlled Hardlight Containment.
+
+    We pin: source still on bf, p0's exile size unchanged.
+    """
+    state = engine.make_synthetic_state()
+    snap = state.battlefield_snapshot()
+    # Move all of p0's non-Forest permanents to p0's graveyard,
+    # leaving only Forests (lands) on p0's bf.
+    for d in snap:
+        if d["controller_id"] == 0 and d["printing_name"] != "Forest":
+            state.move_object(d["id"], 3, 0)
+    p0_exile_before = len(state.exile_snapshot(0))
+
+    src_id = state.register_and_inject_object(
+        _hardlight_containment_dict_for_i80(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()  # Enchantment enters bf
+    state.resolve_top_of_stack()  # ETB trigger fizzles silently
+
+    # Source still on p1's bf.
+    assert state.find_object_zone(src_id) == ZONE_BATTLEFIELD
+    # P0's exile size untouched (no non-land on p0's bf -> fizzle).
+    assert len(state.exile_snapshot(0)) == p0_exile_before
