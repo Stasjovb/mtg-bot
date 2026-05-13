@@ -1411,3 +1411,349 @@ def test_sacrifice_self_no_emission_when_mana_unaffordable(synthetic_state):
     assert card_emits == [], (
         f"Unaffordable sacrifice-self should not emit. Got {card_emits}"
     )
+
+
+# --- Tier-threshold (Spacecraft station-charge, CE20 Slice 3) --------
+#
+# `ActivatedAbility.tier_threshold: i32 = 0` extends the substrate with
+# a usability gate (NOT a cost). The source's `GameObject.charge_counters`
+# (new field, default 0) must be `>= tier_threshold` for the ability
+# to be emitted from `legal_decisions` AND for `apply_action` to
+# accept the dispatch. Sub-tier sources are outright inert — no mana
+# / tap / sacrifice cost is evaluated when the tier gate fails.
+#
+# 28 EoE Spacecraft printings carry this shape (Lumen-Class Frigate,
+# Eternity Elevator, Rescue Skiff, ...). Slice 3 ships the gate + the
+# charge_counters field + test-helpers to seed/read counters; the
+# station-as-cost mechanic that ACCRUES charge counters is a future
+# slice (no EoE printing pays counters; only accrues them via station).
+
+
+def _spacecraft_tier3_draw_dict():
+    """A synthetic Spacecraft-shape: `tier_threshold=3`, cost
+    `{2}, {T}`, effect `Draw a card`. The shape mirrors Lumen-Class
+    Frigate's tier-3 station ability.
+    """
+    return {
+        "name": "Synthetic Frigate",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        # power / toughness OMITTED — non-creature artifact (Spacecraft).
+        "activated_abilities": [
+            {
+                "cost": {"mana": {"generic": 2}, "tap_self": True},
+                "effect": {"kind": "draw_cards", "count": 1},
+                "is_mana_ability": False,
+                "tier_threshold": 3,
+            }
+        ],
+    }
+
+
+def _spacecraft_multi_tier_dict():
+    """A synthetic Spacecraft with TWO tiered abilities at tier=3
+    and tier=10. Each gates independently — Eternity Elevator's
+    multi-tier shape.
+    """
+    return {
+        "name": "Synthetic Multi Tier",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        # power / toughness OMITTED — non-creature artifact (Spacecraft).
+        "activated_abilities": [
+            {
+                "cost": {"tap_self": True},
+                "effect": {"kind": "draw_cards", "count": 1},
+                "is_mana_ability": False,
+                "tier_threshold": 3,
+            },
+            {
+                "cost": {"tap_self": True},
+                "effect": {"kind": "draw_cards", "count": 2},
+                "is_mana_ability": False,
+                "tier_threshold": 10,
+            },
+        ],
+    }
+
+
+def test_tier_threshold_parses(empty_registry):
+    """A printing with `tier_threshold: 3` parses without raising."""
+    pid = empty_registry.register_printing(_spacecraft_tier3_draw_dict())
+    assert pid == 0
+
+
+def test_tier_threshold_negative_raises(empty_registry):
+    """`tier_threshold` must be non-negative; -1 raises loud."""
+    d = {
+        "name": "Bad Tier Card",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "activated_abilities": [
+            {
+                "cost": {"tap_self": True},
+                "effect": {"kind": "gain_life", "amount": 0},
+                "is_mana_ability": False,
+                "tier_threshold": -1,
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match=r"tier_threshold must be"):
+        empty_registry.register_printing(d)
+
+
+def test_tier_threshold_defaults_to_zero(empty_registry):
+    """Missing `tier_threshold` key defaults to 0 — back-compat with
+    every pre-Slice-3 caller. Bear Caster's pre-existing fixture (no
+    tier_threshold key) parses with tier=0.
+    """
+    pid = empty_registry.register_printing(_bear_caster_dict())
+    assert pid == 0
+
+
+def test_tier_gate_emission_below_threshold_skips(synthetic_state):
+    """Source with `tier_threshold=3` but `charge_counters=2`:
+    emission MUST skip. Even with mana paid + non-sick + untapped,
+    the tier gate blocks.
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _spacecraft_tier3_draw_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.set_charge_counters(card_id, 2)
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 2)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    card_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == card_id
+    ]
+    assert card_emits == [], (
+        f"Sub-tier source should not emit. Got {card_emits}"
+    )
+
+
+def test_tier_gate_emission_at_threshold_emits(synthetic_state):
+    """`tier_threshold=3` AND `charge_counters=3`: emits (gate is
+    `>=`, not `==` or `>`).
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _spacecraft_tier3_draw_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.set_charge_counters(card_id, 3)
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 2)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    card_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == card_id
+    ]
+    assert len(card_emits) == 1
+
+
+def test_tier_gate_emission_above_threshold_emits(synthetic_state):
+    """`tier_threshold=3` AND `charge_counters=99`: emits."""
+    card_id = synthetic_state.register_and_inject_object(
+        _spacecraft_tier3_draw_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.set_charge_counters(card_id, 99)
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 2)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    card_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == card_id
+    ]
+    assert len(card_emits) == 1
+
+
+def test_tier_gate_apply_below_threshold_raises(synthetic_state):
+    """Direct apply (bypassing emission) of a sub-tier activation
+    raises with `below tier threshold`. No state mutation.
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _spacecraft_tier3_draw_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.set_charge_counters(card_id, 2)
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 2)
+
+    with pytest.raises(ValueError, match=r"below tier threshold"):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": card_id,
+                "ability_index": 0,
+            }
+        )
+
+    # No mutation.
+    assert synthetic_state.is_tapped(card_id) is False
+    assert synthetic_state.get_mana_pool(0)["C"] == 2
+
+
+def test_tier_gate_apply_at_threshold_succeeds(synthetic_state):
+    """At-threshold activation commits: mana drained, source tapped,
+    stack carries the draw effect.
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _spacecraft_tier3_draw_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.set_charge_counters(card_id, 3)
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 2)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": card_id,
+            "ability_index": 0,
+        }
+    )
+
+    assert synthetic_state.is_tapped(card_id) is True
+    assert synthetic_state.get_mana_pool(0)["C"] == 0
+    assert synthetic_state.stack_size() == 1
+    # Tier gate does NOT decrement charge_counters.
+    assert synthetic_state.get_charge_counters(card_id) == 3
+
+
+def test_tier_gate_does_not_decrement_charge_counters(synthetic_state):
+    """Pin: tier_threshold is a USABILITY GATE, not a cost. The
+    charge_counters value is unchanged after activation.
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _spacecraft_tier3_draw_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.set_charge_counters(card_id, 5)
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 2)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": card_id,
+            "ability_index": 0,
+        }
+    )
+
+    assert synthetic_state.get_charge_counters(card_id) == 5
+
+
+def test_tier_gate_multi_tier_independent_gating(synthetic_state):
+    """Source with tier=3 + tier=10 abilities, `charge_counters=5`:
+    emits ONLY the tier-3 ability (5 >= 3, 5 < 10).
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _spacecraft_multi_tier_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.set_charge_counters(card_id, 5)
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    card_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == card_id
+    ]
+    assert len(card_emits) == 1
+    assert card_emits[0]["ability_index"] == 0
+
+
+def test_tier_gate_multi_tier_above_both_emits_both(synthetic_state):
+    """Same multi-tier shape with `charge_counters=20`: emits both
+    abilities.
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _spacecraft_multi_tier_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.set_charge_counters(card_id, 20)
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    card_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == card_id
+    ]
+    assert len(card_emits) == 2
+    indices = sorted([a["ability_index"] for a in card_emits])
+    assert indices == [0, 1]
+
+
+def test_tier_gate_zero_default_does_not_gate(synthetic_state):
+    """Bear Caster-shape with `tier_threshold=0` (default) emits
+    regardless of charge_counters (which defaults to 0 — gate is
+    `0 >= 0` which passes). Back-compat regression.
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _bear_caster_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+    synthetic_state.add_mana(0, "G", 1)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    card_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == card_id
+    ]
+    assert len(card_emits) == 1
+
+
+def test_charge_counters_field_independent_of_plus_one_counters(
+    synthetic_state,
+):
+    """G8 pin: `charge_counters` is DISTINCT from `counters` (+1/+1).
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _spacecraft_tier3_draw_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.set_charge_counters(card_id, 5)
+    for obj in synthetic_state.battlefield_snapshot():
+        if obj["id"] == card_id:
+            assert obj.get("counters", 0) == 0, (
+                f"+1/+1 slot should be 0 after seeding charge_counters; "
+                f"got {obj.get('counters')}"
+            )
+            break
+    assert synthetic_state.get_charge_counters(card_id) == 5
+
+
+def test_set_charge_counters_returns_false_on_no_change(synthetic_state):
+    """Test-helper returns False when value didn't change."""
+    card_id = synthetic_state.register_and_inject_object(
+        _spacecraft_tier3_draw_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    assert synthetic_state.set_charge_counters(card_id, 5) is True
+    assert synthetic_state.set_charge_counters(card_id, 5) is False
+    assert synthetic_state.set_charge_counters(card_id, 7) is True
+
+
+def test_get_charge_counters_returns_none_for_unknown_obj(synthetic_state):
+    """Reading charge_counters on an unknown id returns None."""
+    assert synthetic_state.get_charge_counters(99999) is None

@@ -40,6 +40,26 @@ pub struct GameObject {
     pub summoning_sick: bool,
     pub damage: i16,
     pub counters: i32,
+    /// **CE20 follow-up — Spacecraft station-charge.** Charge
+    /// counters tracked per-object, distinct from the `counters`
+    /// field above (which is the +1/+1 slot). Defaults to 0;
+    /// Spacecraft printings accrue charge counters via the
+    /// "station" mechanic (out of scope of this slice — station-as-
+    /// cost is a future cost-pay extension) and gate their tiered
+    /// activated abilities via `ActivatedAbility.tier_threshold`.
+    ///
+    /// **Why a distinct field** (vs overloading `counters`): G8
+    /// (multi-kind counter open gap, `RUST_PARITY_GAPS.md`) flags
+    /// the +1/+1 slot's single-kind ambiguity as a separate issue.
+    /// Spacecraft + Walker loyalty + +1/+1 each need their own
+    /// counter slot to track independently; overloading the
+    /// existing field would have to also resolve G8 in lockstep.
+    /// New field keeps the slices disjoint.
+    ///
+    /// Cleared (reset to `0`) on every zone change (CR 400.7
+    /// per-object state reset) via the same field-reset shape
+    /// `Effect::Sacrifice` and friends use.
+    pub charge_counters: i32,
     /// Round-28 attach foundation — when this object is an Aura /
     /// Equipment that is currently attached to another permanent,
     /// `attached_to` holds the target permanent's GameObject `id`.
@@ -1385,6 +1405,7 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         summoning_sick: false,
         damage: 0,
         counters: 0,
+        charge_counters: 0,
         attached_to: None,
         exiled_with_source: None,
         // CE4 closure: synthetic-state fixtures pre-populate the

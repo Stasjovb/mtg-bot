@@ -2234,6 +2234,25 @@ pub struct ActivatedAbility {
     /// `mana_produced` field into a synthesized `is_mana_ability=true`
     /// ActivatedAbility, retiring the separate `mana_produced` path.
     pub is_mana_ability: bool,
+    /// **CE20 follow-up — Spacecraft station-charge.** Minimum
+    /// `GameObject.charge_counters` the source must have for this
+    /// ability to be activatable. Defaults to `0` (no tier gate);
+    /// Spacecraft printings stamp this to their printed tier value
+    /// (e.g. Lumen-Class Frigate's level-3 station ability stamps
+    /// `tier_threshold: 3`).
+    ///
+    /// **Usability gate, not a cost.** The source's
+    /// `charge_counters` is COMPARED against this value at
+    /// `legal_decisions` emission AND at apply-time precheck; the
+    /// activation does NOT decrement charge counters (sub-tier
+    /// activations are simply unavailable). The cost-pay charge-
+    /// counter shape (`Pay N charge counters: ...`) has no EoE
+    /// printings and is deferred — search the EoE pool's oracle
+    /// text for `Pay [0-9]+ charge counter` returns zero hits.
+    ///
+    /// Mirrors Python's `ActivatedAbility.tier_threshold: int = 0`
+    /// at `effects/base.py:447`.
+    pub tier_threshold: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -3756,6 +3775,7 @@ pub fn apply_mana_produced_bridge(
         },
         effect: bridge_effect,
         is_mana_ability: true,
+        tier_threshold: 0,
     };
     // Prepend so ability_index=0 still refers to the bridged mana
     // ability — every pre-bridge ActivateAbility(forest, 0) caller
@@ -3983,10 +4003,31 @@ fn parse_activated_ability(
         })?,
         None => false,
     };
+    // CE20 follow-up — Spacecraft station-charge. Optional
+    // `tier_threshold: int >= 0`. Missing key defaults to 0 (no
+    // gate — back-compat with every pre-Slice-3 caller).
+    let tier_threshold = match dict.get_item("tier_threshold")? {
+        Some(v) => {
+            let n: i32 = v.extract().map_err(|_| {
+                PyValueError::new_err(
+                    "activated_ability.tier_threshold must be a non-negative int",
+                )
+            })?;
+            if n < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "activated_ability.tier_threshold must be \
+                     non-negative, got {n}"
+                )));
+            }
+            n
+        }
+        None => 0,
+    };
     Ok(ActivatedAbility {
         cost,
         effect,
         is_mana_ability,
+        tier_threshold,
     })
 }
 

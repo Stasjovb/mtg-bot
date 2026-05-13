@@ -513,6 +513,10 @@ impl GameState {
                     /// card_type — gated below by summoning sickness
                     /// when combined with `tap_self`.
                     is_creature: bool,
+                    /// Minimum `GameObject.charge_counters` the source
+                    /// must have to be eligible (CE20 follow-up Slice 3
+                    /// Spacecraft station-charge). 0 = no gate.
+                    tier_threshold: i32,
                 }
                 let resolved: ResolvedAbility = {
                     let printing = state.registry.lookup(printing_id).ok_or_else(|| {
@@ -539,6 +543,7 @@ impl GameState {
                             effect: ab.effect.clone(),
                             is_mana_ability: ab.is_mana_ability,
                             is_creature,
+                            tier_threshold: ab.tier_threshold,
                         }
                     } else {
                         // ability_index out of range. Loud fail —
@@ -553,6 +558,25 @@ impl GameState {
                         )));
                     }
                 };
+                // Phase 3a: CE20 follow-up Slice 3 tier gate. The
+                // source must have at least `tier_threshold` charge
+                // counters for the ability to be usable. This is a
+                // usability gate (NOT a cost) — failing the gate
+                // raises BEFORE any mana / tap / sacrifice commit.
+                // Mirrors the emission filter's tier check at
+                // `state_ops_legal.rs` so a direct (bypass-emission)
+                // caller gets the same rejection shape.
+                if resolved.tier_threshold > 0 {
+                    let obj = &state.players[controller_idx].battlefield[bf_pos];
+                    if obj.charge_counters < resolved.tier_threshold {
+                        return Err(PyValueError::new_err(format!(
+                            "ActivateAbility: source {source_id} below \
+                             tier threshold (charge_counters={} < \
+                             tier_threshold={})",
+                            obj.charge_counters, resolved.tier_threshold,
+                        )));
+                    }
+                }
                 // Phase 3: cost-pay precheck. tap_self requires the
                 // source untapped and non-sick (creature-only —
                 // CR 302.1, see I17).
