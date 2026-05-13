@@ -4208,6 +4208,86 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I78. `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary defender divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_owner_puts_target_aoc_*` regression pins covering
+    cross-controller spell resolution (1: p1-controlled
+    Lost-in-Space-shape sorcery on p0's turn → moves p0's first
+    Artifact-or-Creature to p0's library bottom, NOT p1's),
+    same-controller back-compat (1: p0-controlled source still
+    moves p1's first eligible permanent to p1's library bottom),
+    pause-variant parity (1), and empty-defender fizzle (1).
+
+- **Rule**. CR 119.5 / 608.2 — sibling closure to I70 / I75 / I76.
+  All share the `defender = 1 - controller` shape; differ only in
+  destination zone (owner's library bottom for I78 vs exile /
+  graveyard / defender's hand for I70 / I75 / I76).
+
+- **Pre-fix Rust behavior**. The
+  `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary`
+  arm at `state_ops_resolve.rs:4909` (pre-fix line) computed
+  `let defender = (1 - state.active_player) as usize`. Wrong when
+  the resolving spell / triggered ability has a controller !=
+  active_player. Example: on p0's turn, p1 casts a Lost-in-Space-
+  shape sorcery. Pre-fix it self-targeted p1's own first
+  Artifact-or-Creature (defender = 1 - active_player = 1 - 0 = 1);
+  post-fix it correctly targets p0's first Artifact-or-Creature
+  (the source's controller's opponent — standard Lost-in-Space
+  removal shape).
+
+- **Owner-as-controller convention preserved.** Owner is captured
+  from the target object's `controller` field on re-scan AFTER
+  target identification; first-slice synthetic states never split
+  owner vs controller, so `owner_idx == defender == 1 - controller`.
+  The library destination remains the OWNER's library (CR 401.1
+  "into its owner's library"); the controller fix only changes
+  which side the target is picked from, never the owner-of-target
+  → owner's-library destination wiring.
+
+- **Reuses I59 substrate**. Identical to I60 / I65 / I70 / I71 /
+  I72 / I73 / I74 / I75 / I76 / I77 — same preamble:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let defender = 1 - controller;`. The target-pick site
+  (first Artifact-or-Creature on `state.players[defender]
+  .battlefield`), the owner-re-scan, the CR 400.7 zone-change
+  reset (tapped / damage / counters / attached_to /
+  exiled_with_source), the library-bottom push (`lib_mut.push(obj)`
+  post-CE3: bottom = tail of Vec), and the LTB fan-out via
+  `pending_leaves_dispatches` are all unchanged.
+
+- **First-slice deterministic-bottom preserved.** Python prompts
+  the owner's agent for top vs bottom; Rust still has no
+  decision-callback substrate, so the post-fix arm continues to
+  pick bottom (= lib[len-1] per the post-CE3 bottom-is-tail
+  convention). The controller fix is orthogonal to the top-vs-
+  bottom choice.
+
+- **`summoning_sick = true` per r28 CE1 universal-true default
+  preserved.** This Effect arm differs from the destroy / bounce
+  arms (which preserve summoning_sick per CR 302.1 / I35) — it
+  moves the target to the LIBRARY, where summoning_sick is
+  re-asserted to true so the object will re-acquire sickness on
+  re-entry via a future ETB. Mirrors Python's zone-move reset.
+
+- **Real target-choice plumbing remains deferred.** First-slice
+  still picks the first eligible permanent on the source-
+  controller's opponent's bf deterministically. A future slice
+  that surfaces multi-target / choice-callback semantics will
+  need to thread an explicit target parameter through the arm.
+
+- **Forward inventory (post-I78 remaining defender-shape
+  `(1 - state.active_player)` sites in `state_ops_resolve.rs`):**
+  - `Effect::ExileTargetCreatureUntilSourceLeaves` (~5229) and
+    `Effect::ExileOpponentsNonlandPermanentUntilLeaves` (~5293)
+    — same defender-swap shape for round-28 "until source
+    leaves" exile. Bookkeeping (`exiled_with_source = Some(
+    source_obj_id)`, `pending_leaves_dispatches` queue, owner-
+    re-scan) is identical to I78; only the destination zone
+    differs (exile-with-link vs library bottom).
+
 ### I77. `Effect::MillTargetPlayer { count }` controller-of-effect fix — reuses I59 transient slot; target_idx computed as `1 - controller` instead of `1 - active_player` (MillTargetPlayer defender divergence closure)
 
 - **Pinned by**:
