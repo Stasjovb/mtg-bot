@@ -425,6 +425,61 @@ def test_structured_batch_evaluate_logits_empty_input(fake_tokenizer):
 # ---------------------------------------------------------------------
 
 
+def test_structured_terminal_state_draw_short_circuits(fake_tokenizer):
+    """A drawn terminal short-circuits to value=0.0 with all-zeros
+    policy / logits across every entry point — covers the
+    ``winner is None`` arm of each public method's terminal branch.
+    """
+    ev = NNEvaluator(**SMALL_KWARGS)
+    draw = _FakeAdapter(terminal=True, winner_id=None)
+    # evaluate
+    assert ev.evaluate(draw, player_id=0) == 0.0
+    # evaluate_with_policy
+    val, pol = ev.evaluate_with_policy(draw, player_id=0)
+    assert val == 0.0
+    np.testing.assert_array_equal(
+        pol, np.zeros(ACTION_VOCAB_SIZE, dtype=np.float32),
+    )
+    # evaluate_logits
+    val_l, logits = ev.evaluate_logits(draw, player_id=0)
+    assert val_l == 0.0
+    np.testing.assert_array_equal(
+        logits, np.zeros(ACTION_VOCAB_SIZE, dtype=np.float32),
+    )
+
+
+def test_structured_no_legal_actions_returns_zero_policy(
+    fake_tokenizer, monkeypatch,
+):
+    """Defensive: if ``legal_action_mask`` returns all-False (no
+    legal slot), the masked softmax would be NaN. Both single and
+    batched ``with_policy`` paths must instead return an all-zeros
+    policy without calling softmax. Same convention as the legacy
+    MLP path."""
+    ae = nn_evaluator_mod._action_encoding()
+    monkeypatch.setattr(
+        ae, "legal_action_mask",
+        lambda s, v, version="positional_v1": np.zeros(
+            ACTION_VOCAB_SIZE, dtype=bool,
+        ),
+    )
+    ev = NNEvaluator(**SMALL_KWARGS)
+    state = _FakeAdapter()
+    # Single-state path.
+    val, pol = ev.evaluate_with_policy(state, player_id=0)
+    assert isinstance(val, float)
+    np.testing.assert_array_equal(
+        pol, np.zeros(ACTION_VOCAB_SIZE, dtype=np.float32),
+    )
+    # Batched path.
+    out = ev.batch_evaluate_with_policy([state, state], player_id=0)
+    for v, p in out:
+        assert isinstance(v, float)
+        np.testing.assert_array_equal(
+            p, np.zeros(ACTION_VOCAB_SIZE, dtype=np.float32),
+        )
+
+
 def test_structured_terminal_state_does_not_call_tokenizer(monkeypatch):
     """``evaluate_with_policy`` on a terminal state must short-circuit
     without invoking the tokenizer — terminals have a known +1/-1/0
