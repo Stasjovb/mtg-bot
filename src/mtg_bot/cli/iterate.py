@@ -111,45 +111,38 @@ _STATE_FILENAME = "iterate_state.json"
 _VERSION_DIR_RE = re.compile(r"^v(\d+)$")
 
 
-def _write_cycle_progress(
+def _push_cycle_stage_progress(
     *,
-    progress_dir: Path,
     cycle_id: str,
     iter_idx_one_based: int,
     n_iterations: int,
-    started_iso: str,
     started_perf: float,
     stage: str,
-    status: str = "running",
-    ended: bool = False,
     notes: str = "",
 ) -> None:
-    """Write a cycle-level progress JSON the UI can render and target
-    with a Stop click. Distinct ``kind="cycle"`` so the UI can choose
-    to render a compact "iter N of M, stage=<self_play|train|eval>"
-    card; the back-end stop endpoint matches on the run_id field
-    regardless of kind.
+    """Push cycle-level progress to the runs DB. Carries the iter
+    index / stage / elapsed in ``extra_json`` for the UI's compact
+    "iter N of M, stage=<self_play|train|eval>" card.
+
+    Replaces the pre-Phase-3 ``_write_cycle_progress`` JSON writer:
+    the UI now reads pure DB, so the cycle's state lives in
+    ``run_progress`` (counters + extra_json) alongside the
+    structured ``runs`` row's ``status`` (managed via
+    ``client.finish_run`` at cycle end).
     """
-    from datetime import datetime, timezone
-    from mtg_bot.training.progress import atomic_write_json
     elapsed = max(time.perf_counter() - started_perf, 0.0)
-    payload = {
-        "run_id": cycle_id,
-        "kind": "cycle",
-        "status": status,
+    extra = {
         "iter_idx": iter_idx_one_based,
         "n_iterations": n_iterations,
         "stage": stage,
-        "started_at": started_iso,
-        "ended_at": (
-            datetime.now(timezone.utc).isoformat(timespec="seconds")
-            if ended else None
-        ),
-        "elapsed_seconds": float(elapsed),
-        "notes": notes,
     }
-    progress_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(progress_dir / f"{cycle_id}.json", payload)
+    if notes:
+        extra["notes"] = notes
+    _runs_client.push_progress(
+        cycle_id,
+        elapsed_seconds=float(elapsed),
+        extra=extra,
+    )
 
 
 def _cycle_config_dict(
@@ -1841,29 +1834,16 @@ def main(argv=None) -> None:  # pragma: no cover
             )
             user_stopped = True
             break
-        _write_cycle_progress(
-            progress_dir=progress_dir,
-            cycle_id=cycle_id,
-            iter_idx_one_based=n_done + 1,
-            n_iterations=state["iterations_completed"]
-            + args.n_iterations,
-            started_iso=cycle_started_iso,
-            started_perf=cycle_started_perf,
-            stage="self_play",
-        )
-
-        # Phase 1 dual-write: register the cycle in the SQLite run DB
-        # alongside the existing JSON. Multiple early-break paths
-        # (stop-sentinel detected after self-play / train / eval) need
-        # to mark the row ``killed`` rather than ``completed``, which
-        # the ``run_lifecycle`` CM can't express (its else-clause
-        # always overwrites mid-body finish_run calls with ``completed``).
-        # So we use the lower-level ``start_run`` / ``finish_run``
-        # primitives directly and replicate lifecycle's status mapping
-        # in the surrounding try/except. The run is a no-op when the
-        # env vars ``MTG_BOT_RUN_DB_PATH`` / ``MTG_BOT_RUN_DB_URL`` are
-        # unset (Phase 1 invariant — caller's JSON writes already
-        # provide visibility).
+        # Register the cycle in the SQLite run DB. Multiple early-break
+        # paths (stop-sentinel detected after self-play / train / eval)
+        # need to mark the row ``killed`` rather than ``completed``,
+        # which the ``run_lifecycle`` CM can't express (its else-clause
+        # always overwrites mid-body finish_run calls with
+        # ``completed``). So we use the lower-level ``start_run`` /
+        # ``finish_run`` primitives directly and replicate lifecycle's
+        # status mapping in the surrounding try/except. The run is a
+        # no-op when neither ``MTG_BOT_RUN_DB_PATH`` nor
+        # ``MTG_BOT_RUN_DB_URL`` is set.
         cycle_config = _cycle_config_dict(
             args=args,
             iter_idx_one_based=n_done + 1,
@@ -1878,6 +1858,10 @@ def main(argv=None) -> None:  # pragma: no cover
             label=iter_label,
         )
         _in_flight_cycle["id"] = cycle_id
+        # Register the (now-no-longer-written) cycle JSON path as an
+        # artifact for historical compatibility — the artifact row
+        # records "this is where the JSON used to live" even though
+        # Phase 3 stops writing the file.
         _lifecycle.register_progress_artifact(cycle_id, cycle_json_path)
         _runs_client.push_event(
             cycle_id, "cycle_started",
@@ -1885,6 +1869,17 @@ def main(argv=None) -> None:  # pragma: no cover
                 "iter_idx": n_done + 1,
                 "best_version": best_version,
             },
+        )
+        # Push the initial cycle-progress row carrying iter_idx + stage
+        # so the UI's compact "iter N of M, stage=self_play" card has
+        # something to render before any per-stage progress lands.
+        _push_cycle_stage_progress(
+            cycle_id=cycle_id,
+            iter_idx_one_based=n_done + 1,
+            n_iterations=state["iterations_completed"]
+            + args.n_iterations,
+            started_perf=cycle_started_perf,
+            stage="self_play",
         )
         cycle_finished = False
 
@@ -2063,19 +2058,6 @@ def main(argv=None) -> None:  # pragma: no cover
                 f"[iterate]   stop sentinel detected after "
                 f"self-play; aborting cycle {cycle_id}"
             )
-            _write_cycle_progress(
-                progress_dir=progress_dir,
-                cycle_id=cycle_id,
-                iter_idx_one_based=n_done + 1,
-                n_iterations=state["iterations_completed"]
-                + args.n_iterations,
-                started_iso=cycle_started_iso,
-                started_perf=cycle_started_perf,
-                stage="self_play",
-                status="stopped",
-                ended=True,
-                notes="stopped via UI sentinel",
-            )
             _finish_cycle("killed", notes="stopped via UI sentinel (self_play)")
             user_stopped = True
             break
@@ -2162,19 +2144,6 @@ def main(argv=None) -> None:  # pragma: no cover
                 f"[iterate]   stop sentinel detected after train; "
                 f"keeping trained weights {new_version} but skipping "
                 f"eval/promote for cycle {cycle_id}"
-            )
-            _write_cycle_progress(
-                progress_dir=progress_dir,
-                cycle_id=cycle_id,
-                iter_idx_one_based=n_done + 1,
-                n_iterations=state["iterations_completed"]
-                + args.n_iterations,
-                started_iso=cycle_started_iso,
-                started_perf=cycle_started_perf,
-                stage="train",
-                status="stopped",
-                ended=True,
-                notes="stopped via UI sentinel",
             )
             _finish_cycle("killed", notes="stopped via UI sentinel (train)")
             user_stopped = True
@@ -2411,25 +2380,19 @@ def main(argv=None) -> None:  # pragma: no cover
             },
         )
 
-        # Cycle complete: finalize the cycle progress JSON so the UI
-        # flips the parent card out of 'running'. Stage boundaries
-        # above already short-circuit on a stop sentinel, so reaching
-        # here means the cycle ran to completion.
-        _write_cycle_progress(
-            progress_dir=progress_dir,
+        # Cycle complete: stage-progress -> completed so the UI's
+        # stage indicator advances, then flip the row terminal. Stage
+        # boundaries above already short-circuit on a stop sentinel,
+        # so reaching here means the cycle ran to completion.
+        _push_cycle_stage_progress(
             cycle_id=cycle_id,
             iter_idx_one_based=n_done + 1,
             n_iterations=state["iterations_completed"]
             + args.n_iterations - 1,
-            started_iso=cycle_started_iso,
             started_perf=cycle_started_perf,
             stage="completed",
-            status="completed",
-            ended=True,
         )
-        # Phase 1 dual-write: mirror the cycle JSON's terminal status
-        # into the run DB so the UI's runs.db query agrees with the
-        # JSON-side card. ``cycle_finished`` is the idempotency guard.
+        # ``cycle_finished`` is the idempotency guard.
         _finish_cycle("completed")
     except (KeyboardInterrupt, SystemExit):
         # User-triggered abort (Ctrl-C, SystemExit from a stop signal

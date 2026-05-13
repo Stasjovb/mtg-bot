@@ -609,10 +609,12 @@ def test_iterate_main_no_op_when_env_unset(
     cli_iterate.main(argv)
     # No DB file landed.
     assert not (tmp_path / "runs.db").exists()
-    # The cycle JSON did land (Phase 1 dual-write preserves the
-    # existing JSON path).
+    # Phase 3 removed the cycle JSON dual-write — iterate is fully
+    # DB-only now. Without ``MTG_BOT_RUN_DB_*`` env vars set, the run
+    # is invisible (no JSON, no DB). The cycle did execute, though:
+    # the trained weights landed.
     assert (
-        tmp_path / "training_progress" / "iter_001_cycle.json"
+        tmp_path / "trained_weights" / "v2" / "weights.pt"
     ).exists()
 
 
