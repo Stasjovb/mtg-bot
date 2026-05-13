@@ -12496,3 +12496,323 @@ def test_cross_engine_real_eoe_alpharael_dreaming_acolyte_etb_draw_two_parity(
     assert rust_state.get_life(1) == 20
     assert py_state.players[0].life == 20
     assert py_state.players[1].life == 20
+
+
+def test_cross_engine_real_eoe_cryogen_relic_etb_draw_parity(
+    parity_smoke,
+):
+    """Probe: Cryogen Relic (EoE) ETB ``draw a card`` parity --
+    FIRST real-EoE cross-engine probe with an ARTIFACT-typed
+    trigger carrier.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this artifact enters or leaves the battlefield, draw
+         a card.
+         {1}{U}, Sacrifice this artifact: Put a stun counter on up
+         to one target tapped creature. ..."
+
+    Every prior cross-engine ETB-trigger probe (Germinating Wurm,
+    Quantum Riddler, Eumidian Terrabotanist, Mechan Assembler,
+    Tannuk, Kav Landseeker, Weftstalker, Haliya, Susurian Voidborn,
+    Alpharael) used a CREATURE-typed trigger carrier. Artifact-
+    typed cards have only ever appeared as BAIT SUBJECTS (e.g.
+    Haliya's bait artifact in Probe I, Mechan Assembler's other-
+    artifact-enters fan-out targets). This is the first probe to
+    register an Artifact-typed CARRIER with a triggered ability on
+    the cross-engine bridge: it exercises the
+    ``register_printing`` + ``register_and_inject_object`` path for
+    a ``card_types=["Artifact"]`` carrier carrying a
+    ``triggered_abilities`` entry, plus the resolve-path identity
+    check on an Artifact-typed source.
+
+    Predicate decomposition (same shape as Quantum Riddler /
+    Germinating Wurm / Alpharael):
+
+        SourceIsSelf
+
+    Effect: ``draw_cards(count=1)`` -- already on the bridge.
+
+    Probe shape (inject-and-fan-out with two arms):
+
+      1. Pre-place Cryogen Relic in p0's hand. Cast via direct
+         stack-push (same harness as Quantum Riddler / Alpharael --
+         lets us probe the cast-onto-bf -> ETB path on an Artifact
+         carrier). On resolve, the relic lands on p0's bf, ETB
+         triggers, drain -> p0 hand net 0 vs pre-cast (-1 leaves
+         hand, +1 draws); library -1.
+
+      2. **NEW axis vs prior probes:** inject a vanilla Artifact
+         for p0 on bf via ``register_and_inject_object`` (no cast).
+         The relic's ETB does NOT fire (``SourceIsSelf`` rejects
+         the non-self subject) even though the new subject is the
+         SAME card type (Artifact) as the trigger carrier. Pins
+         the negative arm of ``SourceIsSelf`` on an Artifact-vs-
+         Artifact subject/source pair -- prior negative-arm probes
+         used a Creature vs (Creature carrier / Artifact subject)
+         pair (Alpharael's bait creature on a Creature carrier;
+         Quantum Riddler had no second arrival).
+
+    Out of scope:
+
+      * "or leaves the battlefield" half of the trigger -- LEAVES
+        dispatch is gated on the unmerged ``feature/dies-event-
+        harness`` branch as of this commit; folding only the ETB
+        half keeps the probe focused on the already-bridged
+        surface. This probe registers the trigger as a single
+        ENTERS entry; the LEAVES entry can be added later once
+        the dies-event-harness lands.
+      * ``{1}{U}, Sacrifice this artifact: Put a stun counter ...``
+        -- an activated ability with target / sacrifice cost /
+        counter-add effect; none of the three pieces are on the
+        cross-engine bridge today.
+
+    Expected post-cast + post-drain state on BOTH engines:
+
+      * Cryogen Relic on p0's bf.
+      * Vanilla Artifact on p0's bf (injected; no fire).
+      * p0 hand size: net 0 vs pre-cast (relic leaves, +1 draw).
+      * p0 library: -1 (the draw).
+      * p1 hand / library unchanged.
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    cryogen_relic = CardDef(
+        name="Cryogen Relic",
+        card_type="Artifact",
+        mana_cost_generic=1,
+        mana_cost_colored=(("U", 1),),
+        # No power/toughness -- pure Artifact, not Artifact Creature.
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            },
+        ),
+    )
+    # Library draw fixture -- a distinct printing keeps the drawn
+    # card distinguishable from the cast spell.
+    germinating_wurm = CardDef(
+        name="Germinating Wurm",
+        card_type="Creature",
+        mana_cost_generic=4,
+        mana_cost_colored=(("G", 1),),
+        power=5,
+        toughness=5,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "gain_life", "amount": 2},
+            },
+        ),
+    )
+    bait_artifact = CardDef(
+        name="Bait Artifact",
+        card_type="Artifact",
+        mana_cost_generic=1,
+    )
+    spec = DeckSpec(
+        card_defs=(cryogen_relic, germinating_wurm, bait_artifact),
+        p0_library=("Germinating Wurm",),
+        p1_library=("Germinating Wurm",),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    rust_relic_dict = {
+        "name": "Cryogen Relic",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1, "U": 1},
+        "effects": [],
+        # No power/toughness -- this is a pure Artifact, not an
+        # Artifact Creature.
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    rust_relic_id = rust_state.register_and_inject_object(
+        rust_relic_dict, 0, ZONE_HAND
+    )
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_state.push_to_stack(rust_relic_id, 0)
+    rust_state.resolve_top_of_stack()
+    assert (
+        rust_state.find_object_zone(rust_relic_id) == ZONE_BATTLEFIELD
+    ), "Rust: Cryogen Relic should be on bf after cast resolves"
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cryogen Relic's ETB DrawCards(1) trigger should be on "
+        "the stack post-resolve. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    rust_p0_hand_after_self = rust_state.hand_sizes[0]
+    rust_p0_lib_after_self = rust_state.library_sizes[0]
+    # Net hand delta vs pre-cast: -1 (relic leaves hand to bf) +1
+    # (the draw) = 0.
+    assert rust_p0_hand_after_self == rust_p0_hand_before, (
+        f"Rust p0 hand should be unchanged vs pre-cast (relic "
+        f"leaves hand to bf, ETB draws 1): "
+        f"before={rust_p0_hand_before} "
+        f"after_self={rust_p0_hand_after_self}"
+    )
+    assert rust_p0_lib_after_self == rust_p0_lib_before - 1, (
+        f"Rust p0 library should shrink by exactly 1 (the ETB "
+        f"draw): before={rust_p0_lib_before} "
+        f"after_self={rust_p0_lib_after_self}"
+    )
+
+    # Second arm: inject a vanilla Artifact for p0 -- direct ETB-
+    # stamp, no cast. SourceIsSelf rejects the non-self subject
+    # even though it shares the trigger carrier's card_type.
+    rust_bait_artifact_dict = {
+        "name": "Bait Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+    }
+    rust_state.register_and_inject_object(
+        rust_bait_artifact_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: SourceIsSelf should reject a non-self subject even "
+        "when it shares the carrier's card_type (Artifact); "
+        "Cryogen Relic's ETB must NOT fire on someone else's "
+        "arrival. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    assert rust_state.hand_sizes[0] == rust_p0_hand_after_self
+    assert rust_state.library_sizes[0] == rust_p0_lib_after_self
+
+    # ---- Python side ----
+    from mtg_bot.actions import (
+        _trigger_etb_abilities,
+        resolve_top_of_stack as py_resolve,
+    )
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import StackItem, Zone
+
+    relic_printing = CardPrinting(
+        name="Cryogen Relic",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1),)),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DrawCards(amount=1),
+            ),
+        ),
+    )
+    py_relic = py_state.new_object(
+        relic_printing, owner_id=0, zone=Zone.HAND,
+    )
+    py_state.players[0].hand.append(py_relic)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_relic.zone = Zone.STACK
+    py_state.players[0].hand.remove(py_relic)
+    py_state.stack.append(
+        StackItem(source=py_relic, controller_id=0)
+    )
+    py_resolve(py_state)
+    assert any(
+        o.printing.name == "Cryogen Relic"
+        for o in py_state.battlefield
+    ), "Python: Cryogen Relic should be on bf after cast resolves"
+    assert len(py_state.stack) == 1, (
+        "Python: Cryogen Relic's ETB DrawCards(1) trigger should "
+        "be on the stack post-resolve"
+    )
+    while py_state.stack:
+        py_resolve(py_state)
+    py_p0_hand_after_self = len(py_state.players[0].hand)
+    py_p0_lib_after_self = len(py_state.players[0].library)
+    assert py_p0_hand_after_self == py_p0_hand_before, (
+        f"Python p0 hand should be unchanged vs pre-cast (relic "
+        f"leaves hand to bf, ETB draws 1): "
+        f"before={py_p0_hand_before} "
+        f"after_self={py_p0_hand_after_self}"
+    )
+    assert py_p0_lib_after_self == py_p0_lib_before - 1, (
+        f"Python p0 library should shrink by exactly 1 (the ETB "
+        f"draw): before={py_p0_lib_before} "
+        f"after_self={py_p0_lib_after_self}"
+    )
+
+    # Second arm: vanilla Artifact directly onto p0's bf.
+    bait_artifact_printing = CardPrinting(
+        name="Bait Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_artifact_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    # Artifacts have no summoning_sick/tapped/damage semantics the
+    # same way creatures do, but the ETB-stamp pattern still wants
+    # these set (see the Haliya / Probe-I bait_artifact stamping
+    # for the established shape).
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    _trigger_etb_abilities(py_state, py_bait)
+    assert len(py_state.stack) == 0, (
+        "Python: SourceIsSelf should reject a non-self subject "
+        "even when it shares the carrier's card_type (Artifact); "
+        "Cryogen Relic's ETB must NOT fire on someone else's "
+        "arrival"
+    )
+    assert len(py_state.players[0].hand) == py_p0_hand_after_self
+    assert (
+        len(py_state.players[0].library) == py_p0_lib_after_self
+    )
+
+    # ---- Cross-engine parity ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+    assert rust_state.library_sizes[1] == len(py_state.players[1].library)
+    # Concrete cross-engine endpoint: p0 library was 1 wurm
+    # fixture and ETB drew it -> 0 left.
+    assert rust_state.library_sizes[0] == 0
+    assert len(py_state.players[0].library) == 0
+    # Lives unchanged on both sides.
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
