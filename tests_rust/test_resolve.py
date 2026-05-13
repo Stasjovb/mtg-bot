@@ -14268,3 +14268,200 @@ def test_exile_opps_nonland_only_lands_on_source_controllers_opponent_fizzles(en
     assert state.find_object_zone(src_id) == ZONE_BATTLEFIELD
     # P0's exile size untouched (no non-land on p0's bf -> fizzle).
     assert len(state.exile_snapshot(0)) == p0_exile_before
+
+
+# ====================================================================
+# CreateToken controller-of-effect fix — regression pins (I81).
+#
+# Pre-fix `active = state.active_player`. Wrong when the resolving
+# spell / triggered ability has a controller != active_player —
+# example: on p0's turn, p1 casts a Servo-Schematic-shape instant.
+# Pre-fix the tokens entered under p0's control on p0's battlefield
+# (active_player=0); post-fix they correctly enter under p1's control
+# on p1's battlefield. Mirrors Python's `CreateToken.resolve(state,
+# controller_id, targets)` at `effects/generic/tokens.py:202`, which
+# builds the `recipients` list from `[controller_id]`.
+#
+# Distinct from the defender-shape I59-I80 sites: CreateToken routes
+# to the SOURCE'S CONTROLLER directly (not 1 - controller — the
+# tokens belong to the player who controlled the spell that made
+# them). Sibling closure to I65 (Mill — self-mill) and I59 (DrawCards
+# — controller draws) where controller-keyed positive arms were
+# migrated to read the transient slot.
+#
+# Same transient-slot lookup preamble as I59-I80; only the post-
+# resolve consumer differs — the controller value is both the
+# token's `controller` byte AND the recipient-battlefield index.
+# ====================================================================
+
+
+def _conscript_dict_for_i81(count, token_printing_id):
+    """A create-token spell — Conscript-shaped (sorcery, makes N
+    tokens of the named printing). Used by I81 regression pins."""
+    return {
+        "name": "Test Conscript I81",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"W": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": "create_token",
+                "count": count,
+                "token_printing_id": token_printing_id,
+            }
+        ],
+    }
+
+
+def _soldier_token_dict_for_i81():
+    """A 1/1 white Soldier token printing — used by I81 regression
+    pins. Same shape as ``_soldier_token_dict`` at the top of the
+    CreateToken section."""
+    return {
+        "name": "Soldier Token I81",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+    }
+
+
+def _register_soldier_token_for_i81(state):
+    """Register the Soldier token printing into the state's registry.
+    Mirrors ``_register_soldier_token`` but is self-contained so the
+    I81 section doesn't depend on the round-19 helper's exact
+    signature (which uses a different fixture)."""
+    token_pid = state.registry_size  # next free printing_id
+    dummy_obj_id = state.register_and_inject_object(
+        _soldier_token_dict_for_i81(), 1, ZONE_LIBRARY
+    )
+    return token_pid, dummy_obj_id
+
+
+def test_create_token_routes_to_source_controllers_battlefield(engine):
+    """**Regression pin for the CreateToken controller-of-effect
+    fix (I81).**
+
+    On p0's turn (active_player=0), a Servo-Schematic-shape sorcery
+    whose controller is p1 must place the tokens on p1's battlefield
+    under p1's control, NOT p0's battlefield. Pre-fix
+    `active = state.active_player = 0` => tokens spawned on p0's bf.
+    Post-fix `active = controller = 1` => tokens correctly spawn on
+    p1's bf.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    token_pid, _ = _register_soldier_token_for_i81(state)
+    src_id = state.register_and_inject_object(
+        _conscript_dict_for_i81(count=2, token_printing_id=token_pid),
+        1,
+        ZONE_HAND,
+    )
+
+    bf_before = list(state.battlefield_sizes)
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    bf_after = list(state.battlefield_sizes)
+
+    # Post-fix: p1's bf grew by 2 (the 2 created tokens). The
+    # resolved sorcery moves to p1's graveyard (owner=1), not p1's
+    # bf — so the +2 on p1's bf is exactly the tokens.
+    assert bf_after[1] == bf_before[1] + 2
+    # P0's bf untouched.
+    assert bf_after[0] == bf_before[0]
+
+    # The tokens' `controller` field is 1 (p1). Re-scan p1's bf
+    # snapshot for the newly-spawned ids (max-id+1 allocator).
+    snap = state.battlefield_snapshot()
+    new_token_dicts = [d for d in snap if d["printing_name"] == "Soldier Token I81"]
+    assert len(new_token_dicts) == 2
+    for d in new_token_dicts:
+        assert d["controller_id"] == 1
+
+
+def test_create_token_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** A Conscript-shape source cast by the
+    active player must still place tokens on the active player's
+    battlefield — bug never fired in this case pre-fix because
+    controller == active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    token_pid, _ = _register_soldier_token_for_i81(state)
+    src_id = state.register_and_inject_object(
+        _conscript_dict_for_i81(count=3, token_printing_id=token_pid),
+        0,
+        ZONE_HAND,
+    )
+
+    bf_before = list(state.battlefield_sizes)
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    bf_after = list(state.battlefield_sizes)
+
+    # P0's bf grew by 3 (tokens). P1's bf untouched.
+    assert bf_after[0] == bf_before[0] + 3
+    assert bf_after[1] == bf_before[1]
+
+    # Controller stamp = 0 on every fresh token.
+    snap = state.battlefield_snapshot()
+    new_token_dicts = [d for d in snap if d["printing_name"] == "Soldier Token I81"]
+    assert len(new_token_dicts) == 3
+    for d in new_token_dicts:
+        assert d["controller_id"] == 0
+
+
+def test_create_token_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for CreateToken.**
+    Mirrors the I64 / I67 / I68 / I69 / I70 / I71 / I72 / I73 / I74 /
+    I75 / I76 / I77 / I78 / I79 / I80 pause-variant pins."""
+    state = engine.make_synthetic_state()
+
+    token_pid, _ = _register_soldier_token_for_i81(state)
+    src_id = state.register_and_inject_object(
+        _conscript_dict_for_i81(count=1, token_printing_id=token_pid),
+        1,
+        ZONE_HAND,
+    )
+
+    bf_before = list(state.battlefield_sizes)
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    bf_after = list(state.battlefield_sizes)
+
+    # Post-fix: p1's bf grew by 1 (the token spawned under p1's
+    # control). P0's bf untouched.
+    assert bf_after[1] == bf_before[1] + 1
+    assert bf_after[0] == bf_before[0]
+
+
+def test_create_token_zero_count_under_cross_controller_still_no_ops(engine):
+    """**Zero-count no-op pin for I81.** count=0 is a legal no-op
+    even when controller != active_player — the resolve completes,
+    stack pops, no tokens spawn anywhere."""
+    state = engine.make_synthetic_state()
+
+    token_pid, _ = _register_soldier_token_for_i81(state)
+    src_id = state.register_and_inject_object(
+        _conscript_dict_for_i81(count=0, token_printing_id=token_pid),
+        1,
+        ZONE_HAND,
+    )
+
+    bf_before = list(state.battlefield_sizes)
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # No tokens spawned on either player's bf — count=0 short-
+    # circuits before the recipient resolution.
+    bf_after = list(state.battlefield_sizes)
+    assert bf_after == bf_before
+    assert state.is_stack_empty() is True
