@@ -14271,6 +14271,197 @@ def test_exile_opps_nonland_only_lands_on_source_controllers_opponent_fizzles(en
 
 
 # ====================================================================
+# ReturnCreatureFromYourGraveyardToHand controller-of-effect fix —
+# regression pins (I82).
+#
+# Pre-fix `controller_idx = state.active_player as usize`, used for
+# both the source graveyard scan AND the destination hand push.
+# Wrong when the resolving spell / triggered ability has a controller
+# != active_player — example: on p0's turn, p1 casts a Disentomb-
+# shape sorcery. Pre-fix it scanned p0's graveyard for a creature
+# and pushed that creature to p0's hand (active_player=0); post-fix
+# it correctly scans p1's graveyard and returns the creature to
+# p1's hand.
+#
+# Mirrors Python's
+# `ReturnFromGraveyard.resolve(state, controller_id, targets)` at
+# `effects/generic/graveyard.py:195`, which uses
+# `state.player_by_id(controller_id)` for both source and
+# destination zones.
+#
+# Sibling closure to I81 (CreateToken — positive-controller arm).
+# Same transient-slot lookup preamble. Distinct from the defender-
+# shape I59-I80 sites: ReturnCreatureFromYourGraveyardToHand routes
+# both endpoints to the SOURCE'S CONTROLLER directly (not the
+# opponent).
+# ====================================================================
+
+
+def _disentomb_dict_for_i82():
+    """A Disentomb-shape sorcery — single-effect 'return target
+    creature card from your graveyard to your hand'. Used by I82
+    regression pins."""
+    return {
+        "name": "Test Disentomb I82",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {"kind": "return_creature_from_your_graveyard_to_hand"}
+        ],
+    }
+
+
+def _vanilla_creature_dict_for_i82():
+    """A vanilla 2/2 creature printing for graveyard injection.
+    Self-contained so the I82 section doesn't depend on the round-
+    27 helper's exact shape."""
+    return {
+        "name": "Test Creature I82",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+        "mana_cost": {"generic": 2},
+    }
+
+
+def test_return_creature_to_hand_routes_to_source_controllers_graveyard(engine):
+    """**Regression pin for the ReturnCreatureFromYourGraveyard-
+    ToHand controller-of-effect fix (I82).**
+
+    On p0's turn (active_player=0), a Disentomb-shape sorcery
+    whose controller is p1 must scan p1's graveyard for a
+    creature and return it to p1's hand, NOT p0's graveyard /
+    hand. Pre-fix `controller_idx = active_player = 0` => the
+    arm scanned p0's graveyard and moved a creature to p0's hand.
+    Post-fix `controller_idx = controller = 1` => correctly
+    scans p1's graveyard and moves to p1's hand.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    # Inject a vanilla creature into EACH player's graveyard, so
+    # the pre-fix and post-fix targets are distinct ids.
+    p0_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i82(), 0, ZONE_GRAVEYARD
+    )
+    p1_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i82(), 1, ZONE_GRAVEYARD
+    )
+
+    src_id = state.register_and_inject_object(
+        _disentomb_dict_for_i82(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Post-fix: p1's creature moved to p1's hand.
+    assert state.find_object_zone(p1_creature_id) == ZONE_HAND
+    # P0's creature untouched (still in p0's graveyard).
+    assert state.find_object_zone(p0_creature_id) == ZONE_GRAVEYARD
+
+
+def test_return_creature_to_hand_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** A Disentomb-shape source cast by the
+    active player must still scan the active player's graveyard
+    and return to the active player's hand — bug never fired in
+    this case pre-fix because controller == active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i82(), 0, ZONE_GRAVEYARD
+    )
+    p1_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i82(), 1, ZONE_GRAVEYARD
+    )
+
+    src_id = state.register_and_inject_object(
+        _disentomb_dict_for_i82(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # P0's creature moved to p0's hand.
+    assert state.find_object_zone(p0_creature_id) == ZONE_HAND
+    # P1's creature untouched.
+    assert state.find_object_zone(p1_creature_id) == ZONE_GRAVEYARD
+
+
+def test_return_creature_to_hand_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for
+    ReturnCreatureFromYourGraveyardToHand.** Mirrors the I64 / I67
+    / I68 / I69 / I70 / I71 / I72 / I73 / I74 / I75 / I76 / I77 /
+    I78 / I79 / I80 / I81 pause-variant pins."""
+    state = engine.make_synthetic_state()
+
+    p0_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i82(), 0, ZONE_GRAVEYARD
+    )
+    p1_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i82(), 1, ZONE_GRAVEYARD
+    )
+
+    src_id = state.register_and_inject_object(
+        _disentomb_dict_for_i82(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Post-fix: p1's creature moved to p1's hand.
+    assert state.find_object_zone(p1_creature_id) == ZONE_HAND
+    # P0's creature untouched.
+    assert state.find_object_zone(p0_creature_id) == ZONE_GRAVEYARD
+
+
+def test_return_creature_to_hand_empty_source_controllers_graveyard_fizzles(engine):
+    """**Empty source-controller's graveyard no-op pin for I82.**
+    When the source-controller's graveyard has no creature, the
+    spell fizzles silently (no creature in p1's graveyard => no
+    target found => return early). Pin: p0's creature stays in
+    p0's graveyard — the post-fix `controller_idx = 1` scan
+    ignores p0's graveyard (which contains the only creature),
+    so the spell finds no target and returns early. Pre-fix it
+    would have scanned p0's graveyard and pulled p0's creature
+    into p0's hand.
+
+    Build a state where ONLY p0 has a creature in graveyard, then
+    cast a p1-controlled disentomb.
+    """
+    state = engine.make_synthetic_state()
+    p0_creature_id = state.register_and_inject_object(
+        _vanilla_creature_dict_for_i82(), 0, ZONE_GRAVEYARD
+    )
+    # No creature in p1's graveyard at this point.
+
+    src_id = state.register_and_inject_object(
+        _disentomb_dict_for_i82(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # P0's creature still in p0's graveyard (post-fix doesn't scan
+    # p0's graveyard — would have been a self-target pre-fix).
+    assert state.find_object_zone(p0_creature_id) == ZONE_GRAVEYARD
+    # The src itself ended up in p1's graveyard (post-resolve
+    # routing for a sorcery, CR 608.2m). No reanimation landed
+    # because the spell fizzled silently on the empty p1 graveyard.
+    assert state.find_object_zone(src_id) == ZONE_GRAVEYARD
+    # Final pin: the src's owner is p1 (it's in p1's graveyard,
+    # not p0's). Confirms the fizzle path didn't accidentally
+    # route the source through active_player's zones.
+    snap_p0_gy_ids = {c["id"] for c in state.graveyard_snapshot(0)}
+    snap_p1_gy_ids = {c["id"] for c in state.graveyard_snapshot(1)}
+    assert src_id in snap_p1_gy_ids
+    assert src_id not in snap_p0_gy_ids
+
+
+# ====================================================================
 # CreateToken controller-of-effect fix — regression pins (I81).
 #
 # Pre-fix `active = state.active_player`. Wrong when the resolving

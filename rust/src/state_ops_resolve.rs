@@ -2952,9 +2952,42 @@ fn apply_effect(
         // same CR 400.7 zone-change reset (tapped/damage/counters
         // zeroed). summoning_sick set to true per the r28 CE1
         // universal-true default (gameplay-irrelevant in hand zone).
+        //
+        // **Controller resolution (I82 follow-up to the
+        // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 / I69 /
+        // I70 / I71 / I72 / I73 / I74 / I75 / I76 / I77 / I78 /
+        // I79 / I80 / I81 controller-of-effect substrate).**
+        // "Your graveyard" in oracle text means the source-
+        // controller's graveyard, NOT the active player's
+        // graveyard. CR 119.5 / 608.2 — an effect resolves under
+        // its source's controller; "your" pronouns in oracle text
+        // are bound to that controller, not to whichever player
+        // happens to have priority at resolve time.
+        //
+        // **Why the fix.** Pre-fix this arm computed
+        // `controller_idx = state.active_player as usize`, used
+        // for both the source graveyard scan AND the destination
+        // hand push. Wrong when the resolving spell / triggered
+        // ability has a controller != active_player. Example:
+        // on p0's turn, p1 casts a Bone-Plate-Skeleton-shape
+        // instant — pre-fix it scanned p0's graveyard for a
+        // creature and returned that creature to p0's hand
+        // (active_player=0); post-fix it correctly scans p1's
+        // graveyard and returns the creature to p1's hand.
+        // Mirrors Python's
+        // `ReturnFromGraveyard.resolve(state, controller_id, targets)`
+        // at `effects/generic/graveyard.py:195` and its
+        // `_move_one(state, controller_id, card)` helper, which
+        // both pin the "your graveyard"/"your hand" zones to
+        // `state.player_by_id(controller_id)`.
+        //
+        // Sibling closure to I81 (CreateToken — positive-
+        // controller arm). Same transient-slot lookup preamble.
         Effect::ReturnCreatureFromYourGraveyardToHand => {
             let _ = source_obj_id;
-            let controller_idx = state.active_player as usize;
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
             let target_obj_id: Option<u32> = state.players[controller_idx]
                 .graveyard
                 .iter()
