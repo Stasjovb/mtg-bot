@@ -4208,6 +4208,90 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I83. `Effect::ReturnCreatureFromYourGraveyardToBattlefield` controller-of-effect fix — reuses I59 transient slot; source graveyard scan + destination battlefield push + walker starting-loyalty pre-read + GameObject.controller stamp all routed to SOURCE'S CONTROLLER (not active_player); third POSITIVE-controller closure (Zombify-shape reanimation divergence)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_return_creature_to_bf_*` regression pins covering
+    cross-controller spell resolution (1: p1-controlled
+    Zombify-shape sorcery on p0's turn → scans p1's graveyard
+    and reanimates onto p1's battlefield with `controller_id ==
+    1`, NOT p0's graveyard / bf), same-controller back-compat
+    (1: p0-controlled source still scans p0's graveyard and
+    reanimates onto p0's bf with `controller_id == 0`),
+    pause-variant parity (1), and empty-source-controller's-
+    graveyard fizzle (1).
+
+- **Rule**. CR 119.5 / 608.2 — sibling closure to I82. Same
+  "your graveyard" reanimation shape; differs from I82 only in
+  destination zone (battlefield vs hand). All other invariants
+  (CR 400.7 zone-change reset, summoning sickness, ETB-trigger
+  dispatch, walker starting-loyalty reset per CR 613.x) are
+  identical to the pre-fix Rust arm.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::ReturnCreatureFromYourGraveyardToBattlefield` arm at
+  `state_ops_resolve.rs:2990` (pre-fix line) computed
+  `let controller_idx = state.active_player as usize`, used for
+  FIVE downstream readers: (1) the source graveyard scan
+  (`state.players[controller_idx].graveyard.iter().find_map`),
+  (2) the post-find Vec position re-scan (planeswalker pre-
+  read), (3) the planeswalker `starting_loyalty` registry pre-
+  read, (4) the graveyard-pop (`graveyard_mut.remove(pos)`),
+  and (5) the destination battlefield push
+  (`state.players[controller_idx].battlefield`). Wrong when
+  the resolving spell / triggered ability has a controller
+  != active_player. Example: on p0's turn, p1 casts a
+  Zombify-shape sorcery — pre-fix scanned p0's graveyard for
+  a creature and reanimated it on p0's battlefield under
+  p0's control (active_player=0); post-fix correctly scans
+  p1's graveyard and reanimates on p1's battlefield under
+  p1's control.
+
+- **Distinct from the defender-shape I59-I80 sites.**
+  ReturnCreatureFromYourGraveyardToBattlefield routes BOTH
+  source AND destination zones to the SOURCE'S CONTROLLER
+  directly. Sibling closure to I81 (CreateToken) and I82
+  (ReturnCreatureFromYourGraveyardToHand).
+
+- **GameObject.controller stamp.** I83 also stamps the
+  reanimated permanent's `controller` byte to `controller_idx`
+  (`obj.controller = controller_idx as u8`) before the bf-
+  push. CR 110.2 / 614.x — when an object enters the
+  battlefield from another zone, its controller becomes the
+  player whose effect moved it (or the player who put it
+  there). Pre-fix the byte was left at the pre-move value
+  (owner-keyed in graveyard); for the typical "creature in
+  your-graveyard reanimated to your-bf" case that already
+  matched the active player, but only when controller ==
+  active_player AND the original owner was the active player.
+  Post-fix the stamp is unconditional, so corner cases where
+  the obj.controller byte differs from `controller_idx`
+  (e.g. a creature that died under temporary control then
+  was reanimated by a different player's spell) resolve to
+  the CR-correct value.
+
+- **Reuses I59 substrate**. Identical preamble shape to
+  I59 / I60 / I65 / I77 / I81 / I82: `let controller_idx = state
+  .current_resolve_source_controller.unwrap_or(state.active_player)
+  as usize;`. All five downstream readers (scan, position
+  re-scan, walker pre-read, graveyard-pop, bf-push) consume the
+  resolved `controller_idx` unchanged. The
+  `pending_etb_dispatches` push uses the reanimated id
+  regardless of recipient bf — ETB-trigger fan-out shape
+  unaffected.
+
+- **Closes the post-I81/I82 positive-controller forward
+  inventory.** After I83, the three known positive-controller
+  divergences flagged by the I77 / I78 / I80 / I81 worker
+  notes (CreateToken at ~1924; ReturnCreatureFromYour-
+  Graveyard{ToHand, ToBattlefield} at ~2912 / ~2945) are all
+  closed. The site at ~5626 (`PumpTargetArtifactOrCreature-
+  UntilEOT`) was audit-confirmed already correct via the
+  5-zone source-finder pattern at I81. No remaining
+  active_player vs source-controller divergences known in
+  state_ops_resolve.rs.
+
 ### I82. `Effect::ReturnCreatureFromYourGraveyardToHand` controller-of-effect fix — reuses I59 transient slot; source graveyard scan + destination hand push both routed to SOURCE'S CONTROLLER (not active_player); second POSITIVE-controller closure ("your graveyard"/"your hand" divergence)
 
 - **Pinned by**:
