@@ -13156,3 +13156,149 @@ def test_add_counters_empty_source_controllers_opponent_bf_fizzles(engine):
     # to assert (both bfs empty).
     assert state.is_stack_empty() is True
     assert state.graveyard_sizes[1] == p1_grave_before + 1
+
+
+# ====================================================================
+# DiscardCard controller-of-effect fix — regression pins (I74).
+#
+# Pre-fix `defender = (1 - state.active_player) as usize`. Wrong
+# when the resolving spell / triggered ability has a controller !=
+# active_player — example: on p0's turn, p1 casts a Mind-Rot-shape
+# instant. Pre-fix it self-discarded p1's own hand[0] (defender =
+# 1 - active_player = 1 - 0 = 1); post-fix it correctly discards
+# p0's hand[0] (the source's controller's opponent — matching the
+# AnyPlayer-on-discard "target opponent discards" first-slice
+# approximation of the real target-player choice surface).
+#
+# Sibling closure to I64 / I67 / I70 / I71 / I72 / I73 — same
+# `defender = 1 - controller` shape, same transient-slot lookup
+# substrate. Diverges from those arms only in mutating
+# `players[defender].hand` instead of `players[defender].battlefield`.
+# ====================================================================
+
+
+def _discard_dict_for_i74():
+    """A Mind-Rot-shape instant whose only effect is
+    DiscardCard(AnyPlayer). Used by I74 regression pins."""
+    return {
+        "name": "Test Mind Rot I74",
+        "card_types": ["Instant"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": "discard_card",
+                "target": {"kind": "any_player"},
+            }
+        ],
+    }
+
+
+def test_discard_card_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the DiscardCard controller-of-effect
+    fix (I74).**
+
+    On p0's turn (active_player=0), a Mind-Rot-shape instant whose
+    controller is p1 must discard a card from p0's hand, NOT from
+    p1's own hand. Pre-fix `defender = 1 - active_player = 1 - 0
+    = 1` => p1 self-discarded; post-fix `defender = 1 -
+    controller = 1 - 1 = 0` => correctly discards p0's hand[0].
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    # Snapshot hand[0] IDs for both players BEFORE injecting the
+    # src spell into p1's hand (inject appends to the end of hand,
+    # so hand[0] is unchanged).
+    p0_first_hand_id = state.hand_snapshot(0)[0]["id"]
+    p1_first_hand_id = state.hand_snapshot(1)[0]["id"]
+
+    src_id = state.register_and_inject_object(
+        _discard_dict_for_i74(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Post-fix: p0's hand[0] (the discard target — the source's
+    # controller's opponent's hand[0]) lands in p0's graveyard.
+    # P1's hand[0] (p1's own first card) is untouched.
+    assert state.find_object_zone(p0_first_hand_id) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p1_first_hand_id) == ZONE_HAND
+    # Source instant moved to p1's graveyard (owner's graveyard).
+    assert state.find_object_zone(src_id) == ZONE_GRAVEYARD
+    assert state.is_stack_empty() is True
+
+
+def test_discard_card_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** A Mind-Rot-shape instant cast by the
+    active player must still discard from the opponent's hand —
+    bug never fired in this case pre-fix because controller ==
+    active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_first_hand_id = state.hand_snapshot(0)[0]["id"]
+    p1_first_hand_id = state.hand_snapshot(1)[0]["id"]
+
+    src_id = state.register_and_inject_object(
+        _discard_dict_for_i74(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # P1's hand[0] got discarded (p0's opponent's hand).
+    assert state.find_object_zone(p1_first_hand_id) == ZONE_GRAVEYARD
+    # P0's hand[0] untouched.
+    assert state.find_object_zone(p0_first_hand_id) == ZONE_HAND
+
+
+def test_discard_card_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for DiscardCard.**
+    Mirrors the I64 / I67 / I68 / I69 / I70 / I71 / I72 / I73
+    pause-variant pins."""
+    state = engine.make_synthetic_state()
+
+    p0_first_hand_id = state.hand_snapshot(0)[0]["id"]
+    p1_first_hand_id = state.hand_snapshot(1)[0]["id"]
+
+    src_id = state.register_and_inject_object(
+        _discard_dict_for_i74(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Post-fix: p0's hand[0] got discarded (p1's opponent).
+    assert state.find_object_zone(p0_first_hand_id) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p1_first_hand_id) == ZONE_HAND
+
+
+def test_discard_card_empty_source_controllers_opponent_hand_fizzles(engine):
+    """**Empty-defender fizzle pin for I74.** When the source-
+    controller's opponent has an empty hand, the discard fizzles
+    silently. Build a state where p0's hand starts empty, then p1
+    casts a Mind-Rot at p0.
+
+    The synthetic seed gives both players a non-empty hand; we
+    pop p0's hand down to empty via discard-by-zone-edit before
+    casting.
+    """
+    state = engine.make_synthetic_state(num_hand=0)
+    p1_grave_before = state.graveyard_sizes[1]
+    assert state.hand_sizes[0] == 0
+
+    src_id = state.register_and_inject_object(
+        _discard_dict_for_i74(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Stack popped, source moved to p1's graveyard. P0's hand
+    # untouched (was already empty), p0's graveyard untouched.
+    assert state.is_stack_empty() is True
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+    assert state.hand_sizes[0] == 0
