@@ -17769,6 +17769,1159 @@ def test_cross_engine_real_eoe_fell_gravship_etb_sequence_mill_return_parity(
     assert len(py_state.stack) == 0
 
 
+def test_cross_engine_synthetic_etb_pump_creatures_opponents_control_until_eot_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ``ETB Mass Debuff Ogre`` exercising the freshly
+    landed ``pump_creatures_opponents_control_until_eot`` bridge arm
+    end-to-end.
+
+    Why synthetic rather than a real EoE card: the only EoE consumer
+    of this effect-shape is Mouth of the Storm (``creatures your
+    opponents control get -3/-0 UNTIL YOUR NEXT TURN``). The "until
+    your next turn" extended duration routes through Python's
+    ``until_caster_next_turn=True`` flag which has NO Rust counterpart
+    -- Rust's ``Effect::PumpCreaturesOpponentsControlUntilEOT`` variant
+    only carries ``power_bonus`` / ``toughness_bonus`` fields, no
+    extended-duration field. Translating Mouth of the Storm to the
+    bare arm would observably diverge at the start of the controller's
+    NEXT turn (Python keeps the debuff; Rust has already cleared it
+    at the casting turn's cleanup). The bare ``until end of turn``
+    shape has no real-EoE consumer with matching fields today; a
+    synthetic creature card with the bare-EOT trigger is the canonical
+    way to exercise this substrate end-to-end on the bridge until a
+    parametric extended-duration Rust variant lands.
+
+    Trigger shape:
+
+        Event: enters
+        Predicate: source_is_self
+        Effect: pump_creatures_opponents_control_until_eot
+                power_bonus=-3, toughness_bonus=-3
+
+    **Rust resolve semantics.** Rust's
+    ``Effect::PumpCreaturesOpponentsControlUntilEOT`` arm
+    (state_ops_resolve.rs:4514-4577) is UNTARGETED -- it walks
+    ``state.players[1 - controller].battlefield`` (the source-
+    controller's opponent's bf, two-player simplification) and
+    pushes a ``UeotModifier::PowerToughnessBonus { power: -3,
+    toughness: -3 }`` onto every creature object's ``ueot_modifiers``
+    Vec. The source controller derives from the standard 5-zone
+    walk for ``source_obj_id``; ``(0, 0)`` short-circuits;
+    no-creatures-on-opponent-bf fizzles silently.
+
+    **Python resolve semantics.** Python's
+    ``PumpCreaturesOpponentsControlUntilEOT`` (effects/generic/
+    pump.py:779) walks ``state.battlefield`` and stamps
+    ``grant_pt_pump_ueot`` onto every creature whose
+    ``controller_id != controller_id`` (the source controller's id).
+    No ``legal_targets`` method -- the targeting pipeline never
+    picks; the trigger lands on the stack with empty targets and
+    resolves in one pass. Same observable: each opponent creature
+    on the bf gets a ``-3/-3`` UEOT bonus.
+
+    **Untargeted -- no agent shim required.** Unlike the
+    ``pump_target_creature_until_eot`` family which needs a
+    ``_PickFirstControlledCreatureAgent`` shim, this probe drives
+    the trigger with empty targets on both engines and observes the
+    en-masse delta on every opponent creature.
+
+    Probe shape (inject-and-fire-ENTERS):
+
+      1. Inject TWO 4/4 Bait Bears onto p1's battlefield BEFORE
+         injecting the Ogre. Printed P/T 4/4 so the -3/-3 debuff
+         leaves them at observable 1/1 (positive toughness, no
+         SBA-death after cleanup, no disambiguation against a
+         dies-trigger path).
+
+      2. Inject ALSO one 4/4 Bait Bear on p0's battlefield. Same
+         controller as the Ogre, so this bear must NOT receive the
+         debuff (it's the source-controller's OWN creature, on the
+         wrong side of the opponent-only filter). Pin that the
+         filter direction is correct on both engines.
+
+      3. Inject ``ETB Mass Debuff Ogre`` directly onto p0's
+         battlefield via ``register_and_inject_object`` (Rust) /
+         new_object + bf append + manual ``_trigger_etb_abilities``
+         (Python). Both engines dispatch ENTERS for the just-arrived
+         Ogre; the SourceIsSelf predicate matches; one
+         ``PumpCreaturesOpponentsControlUntilEOT(-3, -3)`` trigger
+         lands on the stack with empty targets.
+
+      4. Drain both stacks. Resolve walk: each of p1's two bait
+         bears gets a ``-3/-3`` UEOT modifier. p0's bear and the
+         Ogre itself are untouched.
+
+      5. Cross-engine assert: both p1 bears at effective P/T 1/1;
+         p0's bear at effective P/T 4/4 (unchanged); the Ogre
+         itself at its printed P/T (also unchanged -- it's on the
+         caster's side).
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- inject-and-dispatch-ENTERS
+        bypasses the mana pipeline.
+      * Cleanup-step expiry -- not driven here. Both engines record
+        the UEOT modifier on the affected objects; cleanup-step
+        removal is already pinned by other tests.
+      * Mouth of the Storm's "until your next turn" extended
+        duration -- documented Rust substrate gap; out of scope of
+        the bare-EOT bridge arm.
+      * Three-or-more-player engine -- the Rust resolve at
+        ``state_ops_resolve.rs:4549`` uses the two-player
+        simplification ``opponent_idx = 1 - controller``; both
+        engines are two-player today, observably identical.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * ETB Mass Debuff Ogre on p0's bf at printed P/T (unchanged).
+      * Bait Bear on p0's bf at effective P/T 4/4 (unchanged --
+        it's on the caster's side, filter direction is opponent).
+      * Both Bait Bears on p1's bf at effective P/T 1/1 (printed
+        4/4 + (-3, -3) UEOT modifier).
+      * No life changes (the ETB doesn't touch life totals).
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    ogre = CardDef(
+        name="ETB Mass Debuff Ogre",
+        card_type="Creature",
+        mana_cost_generic=6,
+        mana_cost_colored=(("U", 1),),
+        power=6,
+        toughness=6,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_creatures_opponents_control_until_eot",
+                    "power_bonus": -3,
+                    "toughness_bonus": -3,
+                },
+            },
+        ),
+    )
+    # Bait Bear: vanilla 4/4 with no triggered abilities. Two copies
+    # land on p1's bf (the debuff targets) and one copy lands on p0's
+    # bf (the same-side control: must NOT receive the debuff).
+    bait_bear = CardDef(
+        name="Mass Debuff Bait Bear (4/4)",
+        card_type="Creature",
+        mana_cost_generic=3,
+        mana_cost_colored=(("G", 1),),
+        power=4,
+        toughness=4,
+    )
+    spec = DeckSpec(
+        card_defs=(ogre, bait_bear),
+        # Empty libraries -- probe injects directly onto bf.
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Mass Debuff Bait Bear (4/4)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "G": 1},
+        "effects": [],
+        "power": 4,
+        "toughness": 4,
+    }
+    # Two p1-side bears (will get the -3/-3 debuff).
+    rust_p1_bear_a_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD,
+    )
+    rust_p1_bear_b_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD,
+    )
+    # One p0-side bear (must NOT get the debuff -- same controller as
+    # the Ogre).
+    rust_p0_bear_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # None of the bears have triggered abilities, so no stack growth.
+    assert rust_state.stack_size() == 0
+
+    # Capture pre-debuff effective P/T for each bear.
+    assert rust_state.effective_power(rust_p1_bear_a_id) == 4
+    assert rust_state.effective_toughness(rust_p1_bear_a_id) == 4
+    assert rust_state.effective_power(rust_p1_bear_b_id) == 4
+    assert rust_state.effective_toughness(rust_p1_bear_b_id) == 4
+    assert rust_state.effective_power(rust_p0_bear_id) == 4
+    assert rust_state.effective_toughness(rust_p0_bear_id) == 4
+
+    rust_ogre_dict = {
+        "name": "ETB Mass Debuff Ogre",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 6, "U": 1},
+        "effects": [],
+        "power": 6,
+        "toughness": 6,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_creatures_opponents_control_until_eot",
+                    "power_bonus": -3,
+                    "toughness_bonus": -3,
+                },
+            }
+        ],
+    }
+    rust_ogre_id = rust_state.register_and_inject_object(
+        rust_ogre_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # ENTERS dispatch via deferred-dispatch queue; SourceIsSelf
+    # matches the just-arrived Ogre -> one
+    # PumpCreaturesOpponentsControlUntilEOT(-3, -3) trigger lands on
+    # the stack with empty targets (untargeted mass-debuff).
+    assert rust_state.stack_size() == 1, (
+        "Rust: ETB Mass Debuff Ogre's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "PumpCreaturesOpponentsControlUntilEOT(-3, -3) on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+
+    bait_printing = CardPrinting(
+        name="Mass Debuff Bait Bear (4/4)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=4,
+        toughness=4,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    ogre_printing = CardPrinting(
+        name="ETB Mass Debuff Ogre",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=6, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=6,
+        toughness=6,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=PumpCreaturesOpponentsControlUntilEOT(
+                    power_bonus=-3, toughness_bonus=-3,
+                ),
+            ),
+        ),
+    )
+
+    def _inject_bf(printing, owner_id):
+        obj = py_state.new_object(
+            printing, owner_id=owner_id, zone=Zone.BATTLEFIELD,
+        )
+        obj.summoning_sick = False
+        obj.tapped = False
+        obj.damage = 0
+        obj.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(obj)
+        return obj
+
+    # Inject the bait bears in the same order as Rust.
+    py_p1_bear_a = _inject_bf(bait_printing, owner_id=1)
+    py_p1_bear_b = _inject_bf(bait_printing, owner_id=1)
+    py_p0_bear = _inject_bf(bait_printing, owner_id=0)
+    # Pre-debuff sanity check.
+    assert effective_power(py_state, py_p1_bear_a) == 4
+    assert effective_toughness(py_state, py_p1_bear_a) == 4
+    assert effective_power(py_state, py_p1_bear_b) == 4
+    assert effective_toughness(py_state, py_p1_bear_b) == 4
+    assert effective_power(py_state, py_p0_bear) == 4
+    assert effective_toughness(py_state, py_p0_bear) == 4
+
+    # Inject the Ogre, then manually dispatch ENTERS.
+    py_ogre = _inject_bf(ogre_printing, owner_id=0)
+    _trigger_etb_abilities(py_state, py_ogre)
+    assert len(py_state.stack) == 1, (
+        "Python: ETB Mass Debuff Ogre's arrival should fire the "
+        "IsSelf ENTERS trigger and land "
+        "PumpCreaturesOpponentsControlUntilEOT(-3, -3) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: each p1 bear's effective P/T is 1/1
+    # (printed 4/4 + (-3, -3) UEOT modifier). The p0 bear and the
+    # Ogre itself are unchanged (filter direction = opponent-only).
+    assert rust_state.effective_power(rust_p1_bear_a_id) == 1, (
+        "Rust p1 bear A effective power should be 1 after the -3 "
+        "debuff (printed 4 + (-3) UEOT); got "
+        f"{rust_state.effective_power(rust_p1_bear_a_id)}"
+    )
+    assert rust_state.effective_toughness(rust_p1_bear_a_id) == 1, (
+        "Rust p1 bear A effective toughness should be 1 after the "
+        "-3 debuff; got "
+        f"{rust_state.effective_toughness(rust_p1_bear_a_id)}"
+    )
+    assert rust_state.effective_power(rust_p1_bear_b_id) == 1
+    assert rust_state.effective_toughness(rust_p1_bear_b_id) == 1
+    # p0 bear unchanged (caster-side, opponent filter excludes it).
+    assert rust_state.effective_power(rust_p0_bear_id) == 4, (
+        "Rust p0 bear should be UNAFFECTED by the opponent-only "
+        "debuff (caster-side filter); got effective power "
+        f"{rust_state.effective_power(rust_p0_bear_id)}"
+    )
+    assert rust_state.effective_toughness(rust_p0_bear_id) == 4
+    # Ogre unchanged (also caster-side).
+    assert rust_state.effective_power(rust_ogre_id) == 6
+    assert rust_state.effective_toughness(rust_ogre_id) == 6
+
+    # Python: same shape on the equivalent objects.
+    assert effective_power(py_state, py_p1_bear_a) == 1, (
+        "Python p1 bear A effective power should be 1 after the -3 "
+        f"debuff; got {effective_power(py_state, py_p1_bear_a)}"
+    )
+    assert effective_toughness(py_state, py_p1_bear_a) == 1
+    assert effective_power(py_state, py_p1_bear_b) == 1
+    assert effective_toughness(py_state, py_p1_bear_b) == 1
+    # p0 bear unchanged on Python too.
+    assert effective_power(py_state, py_p0_bear) == 4, (
+        "Python p0 bear should be UNAFFECTED by the opponent-only "
+        f"debuff; got {effective_power(py_state, py_p0_bear)}"
+    )
+    assert effective_toughness(py_state, py_p0_bear) == 4
+    # Ogre unchanged.
+    assert effective_power(py_state, py_ogre) == 6
+    assert effective_toughness(py_state, py_ogre) == 6
+
+    # Cross-engine: every per-object effective P/T agrees.
+    assert (
+        rust_state.effective_power(rust_p1_bear_a_id)
+        == effective_power(py_state, py_p1_bear_a)
+    )
+    assert (
+        rust_state.effective_toughness(rust_p1_bear_a_id)
+        == effective_toughness(py_state, py_p1_bear_a)
+    )
+    assert (
+        rust_state.effective_power(rust_p1_bear_b_id)
+        == effective_power(py_state, py_p1_bear_b)
+    )
+    assert (
+        rust_state.effective_toughness(rust_p1_bear_b_id)
+        == effective_toughness(py_state, py_p1_bear_b)
+    )
+    assert (
+        rust_state.effective_power(rust_p0_bear_id)
+        == effective_power(py_state, py_p0_bear)
+    )
+    assert (
+        rust_state.effective_toughness(rust_p0_bear_id)
+        == effective_toughness(py_state, py_p0_bear)
+    )
+    assert (
+        rust_state.effective_power(rust_ogre_id)
+        == effective_power(py_state, py_ogre)
+    )
+    assert (
+        rust_state.effective_toughness(rust_ogre_id)
+        == effective_toughness(py_state, py_ogre)
+    )
+
+    # Lives unchanged -- the ETB debuff doesn't touch life totals.
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
+def test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opponent_sacrifices_parity(
+    parity_smoke,
+):
+    """Probe: Susurian Dirgecraft (EoE Spacecraft) ETB ``each opponent
+    sacrifices a nontoken creature of their choice`` parity -- FIRST
+    real-EoE cross-engine probe with an
+    ``each_opponent_sacrifices_creature`` ETB trigger.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this Spacecraft enters, each opponent sacrifices a
+         nontoken creature of their choice.
+         Station (Tap another creature you control: Put charge counters
+         equal to its power on this Spacecraft. Station only as a
+         sorcery. It's an artifact creature at 7+.)
+         7+ | Flying"
+
+    The Station mechanic + 7+ "becomes a creature with Flying" rider
+    are out of scope -- this probe exclusively exercises the ETB-
+    trigger surface, the substrate sweet-spot:
+
+      * Event: ``enters``
+      * Predicate: ``source_is_self`` (only the just-entered
+        Spacecraft's own ETB fires)
+      * Effect: ``each_opponent_sacrifices_creature`` -- NEW on the
+        bridge as of the companion commit on this branch.
+
+    First real-EoE cross-engine probe to exercise the
+    ``Effect::EachOpponentSacrificesCreature`` arm + Python's
+    ``EachOpponentSacrificesCreature`` class end-to-end. Also the
+    FIRST EoE probe carried by an Artifact - Spacecraft source
+    (prior probes were Creatures, Artifacts (Dubious Delicacy), or
+    Artifact - Food). The probe pins that ENTERS-event dispatch is
+    type-agnostic on both engines (Spacecraft enters as an
+    Artifact; the trigger fires regardless).
+
+    Predicate decomposition (same as Virus Beetle / Germinating Wurm
+    / Quantum Riddler / Nebula Dragon):
+
+        SourceIsSelf
+
+    Effect: ``each_opponent_sacrifices_creature`` -- the bridge arm
+    translates the unit-variant Rust kind to
+    ``EachOpponentSacrificesCreature()``.
+
+    **Cross-engine sacrifice-pick contract.** Both engines pick the
+    sacrifice from the OPPONENT's bf (the sacrificing player's
+    perspective; the source's controller doesn't pick for them).
+    Rust at state_ops_resolve.rs:6529-6539 picks the FIRST creature
+    on opponent's bf via ``bf.iter().find_map``. Python at
+    opponent_punishers.py:46-58 calls
+    ``p.agent.choose_sacrifice(state, p.id, [o.id for o in legal])``
+    where ``legal`` is the opponent's bf creatures (also nontoken-
+    filtered on the Python side). The harness's default Player has
+    ``agent=None`` -- Python silently SKIPS opponents with no agent
+    (opponent_punishers.py:53). To observe the cross-engine pick
+    parity end-to-end we seat a deterministic-bf-first agent on p1
+    (the sacrificing opponent) mirroring Rust's at-resolve
+    bf-first-creature pick. Each engine then sacrifices the same
+    creature.
+
+    **Filter-divergence note.** Rust does NOT enforce a nontoken
+    filter (bf.iter().find_map picks the first creature regardless
+    of token status); Python does (the resolve filters
+    ``not o.printing.is_token``). For probes that seat only nontoken
+    creatures on the opponent's bf, both engines pick the same
+    creature observably; the divergence only surfaces with a token
+    AND a nontoken creature with the token at index 0 (Rust would
+    pick the token, Python would skip it). This probe seats only
+    nontoken creatures.
+
+    Probe shape (inject-and-fire-ENTERS, mirrors Virus Beetle):
+
+      1. Pre-seed p1's bf with TWO distinct vanilla bait creatures
+         (one destined to sacrifice, one to survive) so a single-swap
+         or single-sac divergence between engines surfaces as a
+         per-card name divergence in p1's graveyard / bf rather than
+         a count-only divergence.
+
+      2. Seat ``_SacrificeFirstAgent`` on p1 (Python side only;
+         Rust's pick is intrinsic and doesn't read agent).
+
+      3. Inject Susurian Dirgecraft on p0's battlefield via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + ``_trigger_etb_abilities`` (Python). Both engines
+         dispatch ENTERS for the just-arrived Spacecraft; the
+         predicate (SourceIsSelf) matches; the trigger lands on the
+         stack with the EachOpponentSacrificesCreature() effect.
+
+      4. Drain both stacks.
+
+      5. Cross-engine assert: post-drain, p1's bf[0] (Sac Bait Alpha)
+         is gone, in p1's graveyard. Sac Bait Beta remains on p1's
+         bf. Same shape on both engines.
+
+    Out of scope:
+
+      * Driving the empty-bf short-circuit branch -- the audit's
+        explicit unblock is "each opponent sacrifices a nontoken
+        creature of their choice", which means the non-empty path
+        is the load-bearing case for Susurian Dirgecraft. The
+        empty-bf-no-creature parity (silent fizzle on both engines)
+        is covered by the Rust resolve arm's mid-loop guard at
+        state_ops_resolve.rs:6541 + Python's matching guard at
+        opponent_punishers.py:53-54.
+      * Multi-opponent fanout -- the 2-player harness reduces "each
+        opponent" to "the one opponent". The N-player per-seat-
+        iteration shape is exercised by the Rust resolve arm's loop
+        body directly.
+      * Token-vs-nontoken filter divergence -- documented Rust
+        shortcut; out of scope of this probe.
+      * Station / 7+ activated abilities -- mana + tap costs +
+        charge-counter substrate; none on the bridge today.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Susurian Dirgecraft on p0's battlefield (Artifact -- Spacecraft).
+      * p1 bf: Sac Bait Beta only (Alpha was sacrificed).
+      * p1 graveyard: Sac Bait Alpha.
+      * p0 bf / hand / library / graveyard: unchanged.
+      * Lives unchanged on both seats (the ETB doesn't touch life).
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _SacrificeFirstAgent
+
+    susurian_dirgecraft = CardDef(
+        name="Susurian Dirgecraft",
+        # Artifact - Spacecraft. Not a creature on entry (Spacecraft
+        # only becomes a creature at 7+ charge counters). The bare
+        # Artifact card_type is enough for the ETB-trigger dispatch
+        # to fire.
+        card_type="Artifact",
+        mana_cost_generic=4,
+        mana_cost_colored=(("B", 1),),
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_sacrifices_creature",
+                },
+            },
+        ),
+    )
+    # Two distinct vanilla creatures on p1's bf so a single-swap
+    # (alternate-target divergence) between engines surfaces as a
+    # per-card name divergence rather than a count-only divergence.
+    sac_bait_a = CardDef(
+        name="Sac Bait Alpha",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    sac_bait_b = CardDef(
+        name="Sac Bait Beta",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(susurian_dirgecraft, sac_bait_a, sac_bait_b),
+        # Libraries empty for symmetry; the probe injects directly
+        # onto p0/p1's bf so libraries aren't observed.
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_a_dict = {
+        "name": "Sac Bait Alpha",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_bait_b_dict = {
+        "name": "Sac Bait Beta",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    # Inject the two bait creatures onto p1's bf FIRST. Order matters:
+    # Sac Bait Alpha at bf-iter index 0 so the bf-iter-first-creature
+    # deterministic-pick (Rust) and the legal_object_ids[0] agent
+    # pick (Python) both pick Alpha specifically.
+    rust_bait_a_id = rust_state.register_and_inject_object(
+        rust_bait_a_dict, 1, ZONE_BATTLEFIELD,
+    )
+    rust_bait_b_id = rust_state.register_and_inject_object(
+        rust_bait_b_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0
+    rust_p1_bf_size_before = rust_state.battlefield_sizes[1]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+
+    rust_dirgecraft_dict = {
+        "name": "Susurian Dirgecraft",
+        "card_types": ["Artifact"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 4, "B": 1},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_sacrifices_creature",
+                },
+            }
+        ],
+    }
+    rust_dirgecraft_id = rust_state.register_and_inject_object(
+        rust_dirgecraft_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # ENTERS dispatch via deferred-dispatch queue; SourceIsSelf
+    # matches the just-arrived Dirgecraft -> one
+    # EachOpponentSacrificesCreature() trigger lands on the stack.
+    assert rust_state.stack_size() == 1, (
+        "Rust: Susurian Dirgecraft's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "EachOpponentSacrificesCreature() on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacrificesCreature,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_a_printing = CardPrinting(
+        name="Sac Bait Alpha",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+    )
+    bait_b_printing = CardPrinting(
+        name="Sac Bait Beta",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    dirgecraft_printing = CardPrinting(
+        name="Susurian Dirgecraft",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=4, colored=(("B", 1),)),
+        type_line="Artifact -- Spacecraft",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=("Spacecraft",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=EachOpponentSacrificesCreature(),
+            ),
+        ),
+    )
+
+    def _inject_bf(printing, owner_id):
+        obj = py_state.new_object(
+            printing, owner_id=owner_id, zone=Zone.BATTLEFIELD,
+        )
+        obj.summoning_sick = False
+        obj.tapped = False
+        obj.damage = 0
+        obj.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(obj)
+        return obj
+
+    # Inject the two bait creatures onto p1's bf FIRST. Same order as
+    # Rust so the bf-iter-first-creature pick lands on Alpha on both
+    # engines.
+    py_bait_a = _inject_bf(bait_a_printing, owner_id=1)
+    py_bait_b = _inject_bf(bait_b_printing, owner_id=1)
+
+    # Custom agent for p1: mirror Rust's bf-iter-first-creature pick.
+    # Python's EachOpponentSacrificesCreature.resolve passes the
+    # filtered legal-creatures list (in opponent's bf-iter order) to
+    # ``choose_sacrifice``; returning ``legal_object_ids[0]`` matches
+    # Rust's at-resolve bf-iter pick. The pick is seated on p1 (the
+    # sacrificing player), NOT on p0 (the source's controller) --
+    # "each opponent sacrifices [...] of their choice" lets each
+    # opponent pick. Shim hoisted to tests/parity/_picker_shims.py.
+    py_state.players[1].agent = _SacrificeFirstAgent()
+
+    py_p1_bf_size_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+
+    py_dirgecraft = _inject_bf(dirgecraft_printing, owner_id=0)
+    _trigger_etb_abilities(py_state, py_dirgecraft)
+    assert len(py_state.stack) == 1, (
+        "Python: Susurian Dirgecraft's arrival should fire the "
+        "IsSelf ENTERS trigger and land "
+        "EachOpponentSacrificesCreature() on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Post-drain: p1's bf shrank by 1 (Alpha sacrificed), p1's
+    # graveyard grew by 1 (Alpha landed there). Sac Bait Beta
+    # remains on p1's bf.
+    assert rust_state.battlefield_sizes[1] == rust_p1_bf_size_before - 1, (
+        f"Rust p1 bf size should be {rust_p1_bf_size_before - 1} "
+        f"after sacrifice; got {rust_state.battlefield_sizes[1]}"
+    )
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_size_before + 1, (
+        f"Rust p1 graveyard size should be "
+        f"{rust_p1_gy_size_before + 1} after sacrifice; got "
+        f"{rust_state.graveyard_sizes[1]}"
+    )
+    rust_p1_gy_names = [
+        e["printing_name"] for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert "Sac Bait Alpha" in rust_p1_gy_names, (
+        f"Rust: expected Sac Bait Alpha in p1 gy "
+        f"(bf-iter-first deterministic pick); got {rust_p1_gy_names}"
+    )
+    assert "Sac Bait Beta" not in rust_p1_gy_names, (
+        f"Rust: Sac Bait Beta should NOT have been sacrificed "
+        f"(only the bf-iter-first creature was picked); got "
+        f"{rust_p1_gy_names}"
+    )
+    rust_p1_bf_names = [
+        e["printing_name"]
+        for e in rust_state.battlefield_snapshot()
+        if e["controller_id"] == 1
+    ]
+    assert "Sac Bait Beta" in rust_p1_bf_names, (
+        f"Rust: Sac Bait Beta should remain on p1 bf; "
+        f"got {rust_p1_bf_names}"
+    )
+
+    # Python: same shape on the equivalent zones.
+    py_p1_bf_now = [
+        o for o in py_state.battlefield if o.controller_id == 1
+    ]
+    assert len(py_p1_bf_now) == py_p1_bf_size_before - 1, (
+        f"Python p1 bf size should be {py_p1_bf_size_before - 1} "
+        f"after sacrifice; got {len(py_p1_bf_now)}"
+    )
+    assert (
+        len(py_state.players[1].graveyard) == py_p1_gy_size_before + 1
+    ), (
+        f"Python p1 graveyard size should be "
+        f"{py_p1_gy_size_before + 1} after sacrifice; got "
+        f"{len(py_state.players[1].graveyard)}"
+    )
+    py_p1_gy_names = [
+        o.printing.name for o in py_state.players[1].graveyard
+    ]
+    assert "Sac Bait Alpha" in py_p1_gy_names, (
+        f"Python: expected Sac Bait Alpha in p1 gy; got {py_p1_gy_names}"
+    )
+    assert "Sac Bait Beta" not in py_p1_gy_names, (
+        f"Python: Sac Bait Beta should NOT have been sacrificed; "
+        f"got {py_p1_gy_names}"
+    )
+    py_p1_bf_names = [o.printing.name for o in py_p1_bf_now]
+    assert "Sac Bait Beta" in py_p1_bf_names, (
+        f"Python: Sac Bait Beta should remain on p1 bf; "
+        f"got {py_p1_bf_names}"
+    )
+
+    # Cross-engine: hand / graveyard / bf sizes match between engines
+    # on both seats.
+    assert rust_state.battlefield_sizes[1] == len(py_p1_bf_now)
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+
+    # Lives unchanged on both seats (the ETB sacrifice doesn't touch
+    # life totals).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
+def test_cross_engine_synthetic_etb_each_opponent_mills_cards_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ``ETB Mill Bear`` exercising the freshly
+    landed ``each_opponent_mills_cards`` bridge arm end-to-end.
+
+    Why synthetic rather than a real EoE card: the audit lists
+    ``each_opponent_mills_cards`` as USED by Specimen Freighter (an
+    attack-trigger 2-player simplification of "defending player mills
+    four cards"), NOT as an ETB trigger. No EoE card in the current
+    pool prints ``When this enters, each opponent mills N cards``;
+    a synthetic creature card with the bare-arm trigger is the
+    canonical end-to-end driver until a future EoE printing matches
+    the shape.
+
+    Trigger shape:
+
+        Event: enters
+        Predicate: source_is_self
+        Effect: each_opponent_mills_cards (count=2)
+
+    **Rust resolve semantics.** Rust's
+    ``Effect::EachOpponentMillsCards { count }`` arm
+    (state_ops_resolve.rs:6580-6634) is UNTARGETED -- it derives
+    ``source_controller`` via the standard 5-zone walk + stack
+    fallback for ``source_obj_id``, then for the (single 2-player)
+    opponent runs ``count`` iterations of "remove top of library
+    (lib[0]); push to opponent's graveyard". Empty library mid-loop
+    stops silently (CR 704.5b mill != draw -- no loss-condition
+    check).
+
+    **Python resolve semantics.** Python's ``EachOpponentMillsCards``
+    (effects/generic/draw_mill.py:30) walks ``state.players``,
+    skipping the controller and any has_lost player, and pops the
+    top ``self.amount`` cards off each opponent's library into their
+    graveyard. Same observable: each opponent's library shrinks by
+    up-to-N from the top, with the same N popped cards landing in
+    their graveyard in pop order.
+
+    **Untargeted -- no agent shim required.** Mill is a pure top-N
+    library pop with no per-card decision. The harness's default
+    Player has ``agent=None`` and that's fine -- the mill walks
+    purely on the source-controller's id.
+
+    Probe shape (inject-and-fire-ENTERS):
+
+      1. Pre-seed p1's library with TWO distinct vanilla bait cards
+         (Mill Bait Alpha, Mill Bait Beta) so a single-swap or
+         single-mill divergence between engines surfaces as a
+         per-card name divergence in p1's graveyard / library
+         rather than a count-only divergence.
+
+      2. Inject ``ETB Mill Bear`` directly onto p0's battlefield via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + manual ``_trigger_etb_abilities`` (Python). Both
+         engines dispatch ENTERS for the just-arrived bear; the
+         SourceIsSelf predicate matches; one
+         ``EachOpponentMillsCards(count=2)`` trigger lands on the
+         stack with empty targets.
+
+      3. Drain both stacks. Resolve walk: p1's library shrinks by
+         2 from the top; both bait cards land in p1's graveyard in
+         library-top-down order (Alpha first, then Beta).
+
+      4. Cross-engine assert: post-drain, BOTH engines have an
+         empty p1 library AND p1 graveyard contains both Alpha and
+         Beta (Alpha as the older entry). p0's library / graveyard
+         unchanged.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- inject-and-dispatch-ENTERS
+        bypasses the mana pipeline.
+      * Driving the empty-library short-circuit branch -- the
+        substrate's silent-stop guard at state_ops_resolve.rs:6627
+        + Python's matching ``if not p.library: break`` at
+        draw_mill.py:49-50 are both pinned by their unit tests
+        already in the suite. The non-empty path is the load-
+        bearing parity case for the bridge arm.
+      * Multi-opponent fanout -- the 2-player harness reduces "each
+        opponent" to "the one opponent". The N-player per-seat-
+        iteration shape is exercised by the Rust resolve arm's
+        loop body directly.
+      * Self-loss-condition (decking) -- mill on Magic does NOT
+        trigger CR 704.5b (loss for empty library); the next draw
+        would. The probe doesn't drive a draw step so no loss-
+        condition fires.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * ETB Mill Bear on p0's battlefield.
+      * p1 library: empty (both Alpha and Beta milled).
+      * p1 graveyard: [Mill Bait Alpha, Mill Bait Beta] in that order.
+      * p0 library / graveyard: unchanged.
+      * Lives unchanged on both seats (mill doesn't touch life).
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    mill_bear = CardDef(
+        name="ETB Mill Bear",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("B", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_mills_cards",
+                    "count": 2,
+                },
+            },
+        ),
+    )
+    # Two distinct vanilla cards on p1's library so a single-swap
+    # divergence between engines surfaces as a per-card name
+    # divergence rather than a count-only divergence.
+    mill_bait_a = CardDef(
+        name="Mill Bait Alpha",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    mill_bait_b = CardDef(
+        name="Mill Bait Beta",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(mill_bear, mill_bait_a, mill_bait_b),
+        # p0 library empty -- only p1 gets milled.
+        p0_library=(),
+        # Library top-down: Alpha first (popped first by mill),
+        # Beta second. Both engines' build_*_state honor the
+        # spec's library order; the mill-resolve pops in this
+        # order on both sides.
+        p1_library=("Mill Bait Alpha", "Mill Bait Beta"),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_p1_lib_size_before = rust_state.library_sizes[1]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+    rust_p0_lib_size_before = rust_state.library_sizes[0]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    # The deckspec already wired Alpha + Beta into p1's library;
+    # confirm.
+    assert rust_p1_lib_size_before == 2, (
+        "Rust p1 library should hold the two seeded bait cards; "
+        f"got library_size={rust_p1_lib_size_before}"
+    )
+
+    rust_mill_bear_dict = {
+        "name": "ETB Mill Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_mills_cards",
+                    "count": 2,
+                },
+            }
+        ],
+    }
+    rust_state.register_and_inject_object(
+        rust_mill_bear_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # ENTERS dispatch via deferred-dispatch queue; SourceIsSelf
+    # matches the just-arrived Mill Bear -> one
+    # EachOpponentMillsCards(count=2) trigger lands on the stack.
+    assert rust_state.stack_size() == 1, (
+        "Rust: ETB Mill Bear's arrival should fire the SourceIsSelf "
+        "ENTERS trigger and land EachOpponentMillsCards(count=2) on "
+        f"the stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    mill_bear_printing = CardPrinting(
+        name="ETB Mill Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=EachOpponentMillsCards(amount=2),
+            ),
+        ),
+    )
+
+    py_p1_lib_size_before = len(py_state.players[1].library)
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+    py_p0_lib_size_before = len(py_state.players[0].library)
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    # The deckspec already wired Alpha + Beta into p1's library;
+    # confirm.
+    assert py_p1_lib_size_before == 2, (
+        "Python p1 library should hold the two seeded bait cards; "
+        f"got library_size={py_p1_lib_size_before}"
+    )
+
+    py_mill_bear = py_state.new_object(
+        mill_bear_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_mill_bear.summoning_sick = False
+    py_mill_bear.tapped = False
+    py_mill_bear.damage = 0
+    py_mill_bear.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_mill_bear)
+    _trigger_etb_abilities(py_state, py_mill_bear)
+    assert len(py_state.stack) == 1, (
+        "Python: ETB Mill Bear's arrival should fire the IsSelf "
+        "ENTERS trigger and land EachOpponentMillsCards(amount=2) "
+        f"on the stack. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: p1 library shrank by 2, p1 graveyard
+    # grew by 2; p0 unchanged.
+    assert rust_state.library_sizes[1] == rust_p1_lib_size_before - 2, (
+        f"Rust p1 library should shrink by 2; expected "
+        f"{rust_p1_lib_size_before - 2}, got "
+        f"{rust_state.library_sizes[1]}"
+    )
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_size_before + 2, (
+        f"Rust p1 graveyard should grow by 2; expected "
+        f"{rust_p1_gy_size_before + 2}, got "
+        f"{rust_state.graveyard_sizes[1]}"
+    )
+    assert rust_state.library_sizes[0] == rust_p0_lib_size_before, (
+        "Rust p0 library should be unchanged (mill is opponent-only)"
+    )
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_size_before, (
+        "Rust p0 graveyard should be unchanged"
+    )
+    rust_p1_gy_names = [
+        e["printing_name"] for e in rust_state.graveyard_snapshot(1)
+    ]
+    # Mill pops library top-down; both bait cards land in graveyard
+    # in pop order. Alpha was top of library so Alpha lands FIRST in
+    # the graveyard (older entry), Beta lands SECOND (newer entry).
+    assert rust_p1_gy_names == ["Mill Bait Alpha", "Mill Bait Beta"], (
+        f"Rust p1 graveyard should be [Alpha, Beta] in pop order; "
+        f"got {rust_p1_gy_names}"
+    )
+
+    # Python: same shape on the equivalent zones.
+    assert (
+        len(py_state.players[1].library) == py_p1_lib_size_before - 2
+    )
+    assert (
+        len(py_state.players[1].graveyard) == py_p1_gy_size_before + 2
+    )
+    assert (
+        len(py_state.players[0].library) == py_p0_lib_size_before
+    )
+    assert (
+        len(py_state.players[0].graveyard) == py_p0_gy_size_before
+    )
+    py_p1_gy_names = [
+        o.printing.name for o in py_state.players[1].graveyard
+    ]
+    assert py_p1_gy_names == ["Mill Bait Alpha", "Mill Bait Beta"], (
+        f"Python p1 graveyard should be [Alpha, Beta] in pop order; "
+        f"got {py_p1_gy_names}"
+    )
+
+    # Cross-engine: same per-zone sizes on both seats.
+    assert (
+        rust_state.library_sizes[1]
+        == len(py_state.players[1].library)
+    )
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+    assert (
+        rust_state.library_sizes[0]
+        == len(py_state.players[0].library)
+    )
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+
+    # Lives unchanged on both seats (mill doesn't touch life).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

@@ -878,6 +878,180 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         do_action = _ta_dict_to_python_effect(eff_dict["do_action"])
         then_action = _ta_dict_to_python_effect(eff_dict["then_action"])
         return IfYouDo(do_action=do_action, then_action=then_action)
+    if kind == "pump_creatures_opponents_control_until_eot":
+        # Mass-debuff "creatures your opponents control get +X/+Y until
+        # end of turn" (CR 702.x layer-7c additive bonus, expires at
+        # cleanup; controller-of-effect is the SOURCE's controller, and
+        # the bonus lands on every creature the SOURCE's controller's
+        # OPPONENTS control). Rust's
+        # ``Effect::PumpCreaturesOpponentsControlUntilEOT { power_bonus,
+        # toughness_bonus }`` (cards.rs:982) is the opponent-side
+        # mirror of ``PumpCreaturesYouControlUntilEOT``; its resolve
+        # arm at ``state_ops_resolve.rs:4514-4577`` walks
+        # ``state.players[1 - controller].battlefield`` (two-player
+        # simplification) and pushes a ``UeotModifier::PowerToughness
+        # Bonus { power, toughness }`` onto every creature object's
+        # ``ueot_modifiers`` Vec. ``(0, 0)`` short-circuits before the
+        # walk; empty opponent bf or no creatures fizzles silently
+        # (``return Ok(())``).
+        #
+        # **Untargeted -- no agent shim required.** Unlike
+        # ``pump_target_creature_until_eot``, this arm does NOT pick a
+        # target; it hits every opponent creature en masse. Python's
+        # ``PumpCreaturesOpponentsControlUntilEOT`` (effects/generic/
+        # pump.py:779) carries the same shape: its ``resolve`` walks
+        # ``state.battlefield`` and stamps ``grant_pt_pump_ueot`` onto
+        # every creature whose ``controller_id != controller_id``
+        # (the source controller's id). No ``legal_targets`` method --
+        # the targeting pipeline never picks; the trigger lands on the
+        # stack with empty targets and resolves in one pass.
+        #
+        # **Negative bonuses model debuffs.** The bridge accepts
+        # negative ``power_bonus`` / ``toughness_bonus`` on both engines
+        # (Rust's parse_effect at cards.rs:3844-3862 imposes no sign
+        # constraint). The canonical EoE shape is ``-3/-0`` /  ``-2/-2``
+        # debuffs on opponent creatures.
+        #
+        # **EoE consumer gap (substrate-side).** Mouth of the Storm
+        # (EoE) has the ETB ``creatures your opponents control get
+        # -3/-0 UNTIL YOUR NEXT TURN``, NOT the bare ``until end of
+        # turn`` form. The "until your next turn" extended duration
+        # routes through Python's ``until_caster_next_turn=True`` flag
+        # which has no Rust counterpart (Rust's
+        # ``Effect::PumpCreaturesOpponentsControlUntilEOT`` variant has
+        # only ``power_bonus`` / ``toughness_bonus`` fields -- no
+        # extended-duration field). Rust does not currently ship any
+        # parametric extension of this variant for "until your next
+        # turn". Translating Mouth of the Storm to the bare arm would
+        # observably diverge at the start of the controller's NEXT turn
+        # (Python keeps the debuff; Rust has already cleared it at the
+        # casting turn's cleanup). The bare-EOT arm has no real-EoE
+        # consumer with matching shape today; the synthetic mass-debuff
+        # probe in test_parity_smoke.py exercises this substrate
+        # end-to-end with the bare ``until end of turn`` shape until
+        # the parametric extended-duration variant lands.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3844-3862)
+        # which tolerates missing ``power_bonus`` / ``toughness_bonus``
+        # (defaults to 0 in the bridge -- Rust's parse REQUIRES the
+        # keys present, so end-to-end Rust callers must supply both
+        # explicitly; the bridge default is a translator robustness
+        # backstop for direct-call unit tests).
+        from mtg_bot.effects.generic.pump import (
+            PumpCreaturesOpponentsControlUntilEOT,
+        )
+        return PumpCreaturesOpponentsControlUntilEOT(
+            power_bonus=eff_dict.get("power_bonus", 0),
+            toughness_bonus=eff_dict.get("toughness_bonus", 0),
+        )
+    if kind == "each_opponent_sacrifices_creature":
+        # "Each opponent sacrifices a [nontoken] creature [of their
+        # choice]." Sister arm to ``each_opponent_discards`` --
+        # untargeted, source-controller-of-effect resolution, per-
+        # opponent loop. Rust's
+        # ``Effect::EachOpponentSacrificesCreature`` (cards.rs:1425)
+        # is a UNIT VARIANT -- no fields beyond ``kind``. The
+        # parse_effect arm at cards.rs:3391-3393 accepts the dict
+        # shape ``{"kind": "each_opponent_sacrifices_creature"}`` with
+        # no companion fields. The resolve arm at
+        # ``state_ops_resolve.rs:6496-6580`` walks the source-
+        # controller-of-effect (5-zone walk + stack fallback for the
+        # source_obj_id), then for the source-controller's opponent's
+        # battlefield picks the FIRST creature deterministically and
+        # routes it to that opponent's graveyard via the standard
+        # CR 400.7 zone-change reset.
+        #
+        # **Filter divergence -- Rust's no-token filter.** Rust's
+        # arm picks ``the first object whose card_types contains
+        # 'Creature'`` (state_ops_resolve.rs:6534), with NO nontoken
+        # filter. Python's ``EachOpponentSacrificesCreature``
+        # (effects/generic/opponent_punishers.py:30) DOES filter
+        # ``not o.printing.is_token`` -- closer to the printed oracle
+        # text. For probes that seat only nontoken creatures on the
+        # opponent's bf, both engines pick the same creature
+        # observably; the divergence only surfaces when the opponent's
+        # bf has a token AND a nontoken creature with the token at
+        # index 0 (Rust would pick the token, Python would skip it).
+        # This is a documented Rust shortcut (search_limitations.md
+        # already records the Rust effect cluster's nontoken-filter
+        # gap).
+        #
+        # **Per-opponent pick contract.** Both engines pick the
+        # opponent's sacrifice from the OPPONENT's bf (the
+        # sacrificing player's perspective; the source's controller
+        # doesn't pick for them). Rust at state_ops_resolve.rs:6532
+        # picks bf.iter().find first-creature deterministically.
+        # Python at opponent_punishers.py:55-56 calls
+        # ``p.agent.choose_sacrifice(state, p.id, [o.id for o in legal])``
+        # and removes whatever id the agent returns (defaulting to
+        # ``legal[0]`` if the agent's return id isn't found). The
+        # harness's default Player has ``agent=None``; Python silently
+        # SKIPS opponents with no agent (opponent_punishers.py:53).
+        # Probes that exercise this end-to-end MUST seat an agent on
+        # the sacrificing opponent; the canonical shim is
+        # ``_SacrificeFirstAgent`` from
+        # ``tests/parity/_picker_shims.py`` which returns
+        # ``legal_object_ids[0]`` -- observably equivalent to Rust's
+        # bf-iter-first-creature pick when both engines see the same
+        # bf composition in the same order.
+        #
+        # **Real EoE consumer.** Susurian Dirgecraft (EoE Spacecraft):
+        # "When this Spacecraft enters, each opponent sacrifices a
+        # nontoken creature of their choice." The audit lists Susurian
+        # Dirgecraft as the SOLE EoE consumer of this bridge arm
+        # today; the effect composes directly off the bare arm (no
+        # Sequence / IfYouDo nesting), end-to-end probeable from the
+        # leaf arm alone.
+        from mtg_bot.effects.generic.opponent_punishers import (
+            EachOpponentSacrificesCreature,
+        )
+        return EachOpponentSacrificesCreature()
+    if kind == "each_opponent_mills_cards":
+        # "Each opponent puts the top N cards of their library into
+        # their graveyard." Sister arm to ``each_opponent_discards`` /
+        # ``each_opponent_sacrifices_creature`` -- untargeted, source-
+        # controller-of-effect resolution, per-opponent loop. Rust's
+        # ``Effect::EachOpponentMillsCards { count }`` (cards.rs:1390)
+        # carries one ``count: i32`` field. The parse_effect arm at
+        # cards.rs:3592-3608 requires the ``count`` key explicitly and
+        # rejects negative values; the resolve arm at
+        # ``state_ops_resolve.rs:6580-6634`` does the source-controller
+        # lookup (5-zone walk + stack fallback for source_obj_id) and
+        # mills the (single 2-player) opponent's library top N cards
+        # via a fixed-iteration Vec::remove(0) loop. Empty library
+        # stops the inner loop silently (CR 704.5b mill ≠ draw -- no
+        # loss-condition check).
+        #
+        # **Field-name translation: count -> amount.** Rust uses
+        # ``count``; Python's ``EachOpponentMillsCards`` (effects/
+        # generic/draw_mill.py:30) uses ``amount`` (matches the
+        # Effect::Mill / SelfMill / Surveil family which uses
+        # ``amount``). The bridge does the rename inline. The
+        # ``count`` default of 1 mirrors the Python class default;
+        # Rust's parse REQUIRES the key present so end-to-end Rust
+        # callers must supply it explicitly.
+        #
+        # **Untargeted -- no agent shim required.** Both engines
+        # silently iterate over each opponent. No discard / sacrifice
+        # / surveil decision is made (mill is purely a top-N library
+        # pop with no per-card choice). The harness's default Player
+        # has ``agent=None`` and that's fine -- the resolve walks
+        # opponents purely on the source-controller's id.
+        #
+        # **EoE consumer note (substrate-side).** The audit lists
+        # ``each_opponent_mills_cards`` as USED by Specimen
+        # Freighter (an attack-trigger 2-player simplification of
+        # "defending player mills four cards"), NOT as an ETB
+        # trigger. No EoE card in the current pool prints
+        # ``When this enters, each opponent mills N cards`` -- so
+        # the bare-arm end-to-end exercise is via a synthetic ETB
+        # probe (test_parity_smoke.py companion to this commit).
+        from mtg_bot.effects.generic.draw_mill import (
+            EachOpponentMillsCards,
+        )
+        return EachOpponentMillsCards(
+            amount=eff_dict.get("count", 1),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

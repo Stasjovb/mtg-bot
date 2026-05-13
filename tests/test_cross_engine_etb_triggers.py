@@ -1425,5 +1425,289 @@ def test_rust_parser_accepts_if_you_do_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_pump_creatures_opponents_control_until_eot_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "pump_creatures_opponents_control_until_eot",
+    "power_bonus": N, "toughness_bonus": M}`` translates to Python
+    ``PumpCreaturesOpponentsControlUntilEOT(power_bonus=N,
+    toughness_bonus=M)``.
+
+    Mass-debuff "creatures your opponents control get +X/+Y UEOT"
+    on the cross-engine bridge -- the opponent-side mirror of the
+    (not-yet-on-the-bridge) ``pump_creatures_you_control_until_eot``
+    arm. EoE consumer Mouth of the Storm uses the extended
+    ``until your next turn`` duration which has no Rust counterpart;
+    the bare ``until end of turn`` arm has no real-EoE consumer
+    today and is exercised end-to-end via a synthetic probe.
+    """
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_creatures_opponents_control_until_eot",
+            "power_bonus": -3,
+            "toughness_bonus": 0,
+        }
+    )
+    assert isinstance(e, PumpCreaturesOpponentsControlUntilEOT)
+    assert e.power_bonus == -3
+    assert e.toughness_bonus == 0
+    # The Python-only ``until_caster_next_turn`` extended-duration
+    # flag stays at its default False (the Rust variant has no
+    # equivalent field; the bridge mirrors Rust's bare-EOT shape).
+    assert e.until_caster_next_turn is False
+    # Granted-keywords rider stays at its empty default (Rust's
+    # variant has no equivalent field).
+    assert e.granted_keywords == frozenset()
+
+
+def test_bridge_pump_creatures_opponents_control_until_eot_positive_bonus_translates():
+    """Positive-bonus arm -- ``+2/+2`` round-trips. Same shape as the
+    debuff form; the Rust parse_effect arm imposes no sign constraint
+    (cards.rs:3844-3862)."""
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_creatures_opponents_control_until_eot",
+            "power_bonus": 2,
+            "toughness_bonus": 2,
+        }
+    )
+    assert isinstance(e, PumpCreaturesOpponentsControlUntilEOT)
+    assert e.power_bonus == 2
+    assert e.toughness_bonus == 2
+
+
+def test_bridge_pump_creatures_opponents_control_until_eot_defaults_to_zero():
+    """Missing ``power_bonus`` / ``toughness_bonus`` default to 0 in
+    the bridge translator (translator-robustness backstop for direct
+    unit-test calls; Rust's parse_effect REQUIRES both keys present so
+    end-to-end Rust callers must supply them explicitly)."""
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "pump_creatures_opponents_control_until_eot"}
+    )
+    assert isinstance(e, PumpCreaturesOpponentsControlUntilEOT)
+    assert e.power_bonus == 0
+    assert e.toughness_bonus == 0
+
+
+def test_rust_parser_accepts_pump_creatures_opponents_control_until_eot_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``pump_creatures_opponents_control_until_eot`` effect kind in a
+    triggered_ability dict. Rust's parse_effect at cards.rs:3844-3862
+    requires both ``power_bonus`` and ``toughness_bonus`` keys
+    explicitly.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- PumpCreaturesOpponentsControlUntilEOT",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 6, "U": 1},
+        "power": 6,
+        "toughness": 6,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_creatures_opponents_control_until_eot",
+                    "power_bonus": -3,
+                    "toughness_bonus": 0,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_bridge_each_opponent_sacrifices_creature_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "each_opponent_sacrifices_creature"}`` translates to
+    Python ``EachOpponentSacrificesCreature()``.
+
+    Rust's variant is a UNIT VARIANT -- no fields beyond ``kind``.
+    Bridges Susurian Dirgecraft (EoE Spacecraft) end-to-end.
+    """
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacrificesCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_sacrifices_creature"}
+    )
+    assert isinstance(e, EachOpponentSacrificesCreature)
+
+
+def test_bridge_each_opponent_sacrifices_creature_ignores_extra_fields():
+    """Unit-variant arm tolerates extra fields on the dict (mirrors
+    every other unit-variant arm on the bridge -- the kind alone
+    determines the translation; extra keys are inert)."""
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacrificesCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "each_opponent_sacrifices_creature",
+            "spurious_field": 42,
+        }
+    )
+    assert isinstance(e, EachOpponentSacrificesCreature)
+
+
+def test_bridge_each_opponent_sacrifices_creature_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``{"kind": "sequence", "effects": [{"kind":
+    "each_opponent_sacrifices_creature"}, {"kind": "draw_cards",
+    "count": 1}]}`` translates to ``Sequence(effects=(
+    EachOpponentSacrificesCreature(), DrawCards(amount=1)))``."""
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacrificesCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "each_opponent_sacrifices_creature"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], EachOpponentSacrificesCreature)
+
+
+def test_rust_parser_accepts_each_opponent_sacrifices_creature_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``each_opponent_sacrifices_creature`` effect kind in a
+    triggered_ability dict. Rust's parse_effect at cards.rs:3391-3393
+    accepts the bare kind with no companion fields.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- EachOpponentSacrificesCreature",
+        "card_types": ["Artifact", "Creature"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 4, "B": 1},
+        "power": 4,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_sacrifices_creature",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_bridge_each_opponent_mills_cards_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "each_opponent_mills_cards", "count": N}`` translates
+    to Python ``EachOpponentMillsCards(amount=N)``.
+
+    Field-name translation: Rust ``count`` -> Python ``amount``.
+    Mirrors the field-name divergence between Rust's count-keyed
+    arms (each_opponent_mills_cards, surveil) and Python's amount-
+    keyed effect family.
+    """
+    from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_mills_cards", "count": 3}
+    )
+    assert isinstance(e, EachOpponentMillsCards)
+    assert e.amount == 3
+
+
+def test_bridge_each_opponent_mills_cards_count_default_one():
+    """Missing ``count`` defaults to 1 in the bridge translator
+    (mirrors the Python class's ``amount: int = 1`` default).
+    Rust's parse_effect REQUIRES the key present so direct Rust
+    callers must supply it explicitly; the bridge default is a
+    translator-robustness backstop for direct unit-test calls.
+    """
+    from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_mills_cards"}
+    )
+    assert isinstance(e, EachOpponentMillsCards)
+    assert e.amount == 1
+
+
+def test_bridge_each_opponent_mills_cards_zero_count_translates():
+    """``count=0`` translates to ``amount=0`` (a no-op on both
+    engines but a legal field value -- Rust's parse_effect at
+    cards.rs:3604-3605 rejects only NEGATIVE counts, not zero)."""
+    from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_mills_cards", "count": 0}
+    )
+    assert isinstance(e, EachOpponentMillsCards)
+    assert e.amount == 0
+
+
+def test_rust_parser_accepts_each_opponent_mills_cards_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``each_opponent_mills_cards`` effect kind in a triggered_ability
+    dict. Rust's parse_effect at cards.rs:3592-3608 requires the
+    ``count`` key explicitly.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- EachOpponentMillsCards",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_mills_cards",
+                    "count": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

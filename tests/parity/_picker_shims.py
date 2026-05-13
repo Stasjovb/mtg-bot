@@ -157,6 +157,28 @@ class _PickFirstLegalTargetAgent(Agent):
         return legal_targets[0]
 
 
+class _SacrificeFirstAgent(Agent):
+    """Pick the first legal sacrifice id.
+
+    Mirrors Rust's ``Effect::EachOpponentSacrificesCreature``
+    deterministic opponent-bf-first-creature pick
+    (state_ops_resolve.rs:6529-6539). Python's
+    ``EachOpponentSacrificesCreature`` calls
+    ``p.agent.choose_sacrifice(state, p.id, [o.id for o in legal])``
+    where ``legal`` is the opponent's bf filtered to creatures (and
+    nontoken on the Python side). Returning ``legal_object_ids[0]``
+    matches Rust's bf-iter-first-creature pick exactly when both
+    engines see the same bf composition in the same order.
+
+    Used by: Susurian Dirgecraft probe (seated on p1, the
+    sacrificing opponent -- not on the source's controller).
+    """
+
+    def choose_sacrifice(self, state, player_id, legal_object_ids):
+        assert legal_object_ids, "agent called with empty legal pool"
+        return legal_object_ids[0]
+
+
 class _DiscardFirstAgent(Agent):
     """Pick the first card in hand to discard.
 
