@@ -4208,7 +4208,7 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
-### I62. `Effect::DamageEachOpponent` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (DamageEachOpponent controller divergence closure)
+### I63. `Effect::DamageEachOpponent` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (DamageEachOpponent controller divergence closure)
 
 - **Pinned by**:
   - 4 new `tests_rust/test_resolve.py` `test_damage_each_opponent_*`
@@ -4262,14 +4262,14 @@ the forked branch.
     "the opponent of the active player" coincidentally equals
     "the source's controller". The semantic intent for DealDamage
     is "the opponent of the SOURCE'S controller" — same direction
-    as I62. End-state is identical in 2-player today, so the
+    as I63. End-state is identical in 2-player today, so the
     only behavioral difference would appear in 3+-player formats
     or if some later AnyTarget refinement makes the SOURCE-vs-
     active distinction observable. Migrate when a real-card
     divergence surfaces.
   - **`Effect::PumpCreaturesYouControl` "your" semantics.** Same
     shape — "your creatures" = source-controller's creatures.
-    Per-arm parity decision + pin. (I64-candidate.)
+    Per-arm parity decision + pin. (I65-candidate.)
   - **Search-zone resolvers' "your library" semantics.**
     SearchLibraryFor* / Mill / etc — pending per-arm review.
   - **DamageEachOpponent + EachOpponentLosesLife shape
@@ -4284,14 +4284,14 @@ the forked branch.
     stack resolver, it must either set the transient slot OR
     fall back to the source-finder. Inventory note.
 
-- **Forward inventory (post-I62 remaining `active_player`-keyed
+- **Forward inventory (post-I63 remaining `active_player`-keyed
   arms in `state_ops_resolve.rs`):**
   - **`Effect::DealDamage` defender** (line ~960): see Out of
-    Scope above. Same direction as I62, end-state identical in
-    2-player. Defer.
+    Scope above. Same direction as I63, end-state identical in
+    2-player. Defer to I64.
   - **`Effect::PumpCreaturesYouControl`**: pumps "your"
     creatures, today reads `state.active_player`. Per-arm pin
-    required (I64-candidate).
+    required (I65-candidate).
   - **`Effect::SearchLibraryFor*` / `Mill*` "your" resolvers**:
     pending audit.
 
