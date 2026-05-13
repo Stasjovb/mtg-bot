@@ -3199,14 +3199,13 @@ def test_ltb_fires_on_return_to_hand_effect_arm(engine):
     `return_to_hand`'s `any_creature` target picks from the
     defender's bf), and the spell is on p0's hand.
 
-    Resolution divergence note: Rust's `Effect::DrawCards` resolves
-    using `state.active_player`, NOT the stack item's controller —
-    this is a pre-existing engine divergence (see
-    `state_ops_resolve.rs:737`). So when the trigger fires for the
-    p1-controlled creature, the draw lands on p0 (the active
-    player). The test asserts the LIBRARY-SHRINK on p0 to verify
-    the trigger resolved, separate from the controller-of-effect
-    bug.
+    Controller-of-effect (post-DrawCards-fix): the LTB trigger's
+    controller is p1 (the creature's controller). When the trigger
+    fires its DrawCards effect, the resolver swaps in p1 as the
+    source controller for `apply_effect`, so the draw lands on p1's
+    library / hand. Pre-fix this was wrongly routed to p0
+    (state.active_player); the feature/drawcards-controller-fix
+    branch closed the divergence.
     """
     state = engine.make_synthetic_state(
         num_battlefield=0, num_hand=0, num_library=5
@@ -3230,6 +3229,7 @@ def test_ltb_fires_on_return_to_hand_effect_arm(engine):
         ZONE_HAND,
     )
     p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
 
     state.push_to_stack(spell_obj_id, 0)
     state.resolve_top_of_stack()
@@ -3247,10 +3247,11 @@ def test_ltb_fires_on_return_to_hand_effect_arm(engine):
     # Stack item carries the source's controller (p1).
     assert top["controller"] == 1
 
-    # Resolve the trigger: the draw lands on `state.active_player`
-    # = p0 per the pre-existing controller-of-effect divergence.
+    # Resolve the trigger: post-fix the draw lands on p1 (the
+    # trigger's controller), NOT p0 (active_player).
     state.resolve_top_of_stack()
-    assert state.library_sizes[0] == p0_lib_before - 1
+    assert state.library_sizes[0] == p0_lib_before  # p0 unaffected
+    assert state.library_sizes[1] == p1_lib_before - 1  # p1 drew 1
 
 
 def test_ltb_fires_on_destroy_target_creature_effect_arm(engine):
@@ -3258,9 +3259,9 @@ def test_ltb_fires_on_destroy_target_creature_effect_arm(engine):
     `destroy_target_creature` Effect arm (line ~2931 in
     state_ops_resolve.rs). Pre-Slice-10 silent miss; Slice 10 closure.
 
-    Same DrawCards controller-of-effect note as the return_to_hand
-    test above: the trigger fires on p1's creature but the draw
-    lands on `state.active_player` = p0.
+    Same controller-of-effect (post-DrawCards-fix) shape as the
+    return_to_hand test above: draw lands on the trigger's
+    controller (p1), not state.active_player (p0).
     """
     state = engine.make_synthetic_state(
         num_battlefield=0, num_hand=0, num_library=5
@@ -3287,6 +3288,7 @@ def test_ltb_fires_on_destroy_target_creature_effect_arm(engine):
         ZONE_HAND,
     )
     p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
     grave_before = state.graveyard_sizes[1]
 
     state.push_to_stack(spell_obj_id, 0)
@@ -3303,9 +3305,11 @@ def test_ltb_fires_on_destroy_target_creature_effect_arm(engine):
     top = state.peek_top_of_stack()
     assert top["source_obj_id"] == victim_id
 
-    # Resolve the trigger: draw lands on active_player = p0.
+    # Resolve the trigger: post-fix draw lands on p1 (the trigger's
+    # controller).
     state.resolve_top_of_stack()
-    assert state.library_sizes[0] == p0_lib_before - 1
+    assert state.library_sizes[0] == p0_lib_before
+    assert state.library_sizes[1] == p1_lib_before - 1
 
 
 def test_ltb_observer_fires_on_destroy_target_artifact_effect_arm(engine):
@@ -3395,8 +3399,9 @@ def test_ltb_fires_on_exile_target_effect_arm(engine):
     state_ops_resolve.rs). LTB fires for ALL bf-exits regardless of
     destination zone (graveyard / exile / hand / library).
 
-    DrawCards controller-of-effect note: same as the bounce /
-    destroy tests above — draw lands on active_player = p0.
+    Controller-of-effect (post-DrawCards-fix): same as the bounce /
+    destroy tests above — draw lands on the trigger's controller
+    (p1), not state.active_player (p0).
     """
     state = engine.make_synthetic_state(
         num_battlefield=0, num_hand=0, num_library=5
@@ -3420,6 +3425,7 @@ def test_ltb_fires_on_exile_target_effect_arm(engine):
         ZONE_HAND,
     )
     p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
 
     state.push_to_stack(spell_obj_id, 0)
     state.resolve_top_of_stack()
@@ -3437,7 +3443,8 @@ def test_ltb_fires_on_exile_target_effect_arm(engine):
     assert top["source_obj_id"] == crt_id
 
     state.resolve_top_of_stack()
-    assert state.library_sizes[0] == p0_lib_before - 1
+    assert state.library_sizes[0] == p0_lib_before
+    assert state.library_sizes[1] == p1_lib_before - 1
 
 
 def test_ltb_fires_on_destroy_target_land_effect_arm(engine):

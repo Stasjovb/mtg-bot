@@ -594,6 +594,57 @@ pub(crate) fn apply_effect_pub(
     apply_effect(state, effect, source_obj_id)
 }
 
+/// **Controller-aware variant of `apply_effect_pub`.** Swaps
+/// `state.current_resolve_source_controller` to `Some(controller)`
+/// for the duration of the inner `apply_effect` call, restoring the
+/// prior value (typically `None`) afterward.
+///
+/// Effect arms that need the source's controller (today only
+/// `Effect::DrawCards` — see CR 119.5 / the "Controller of effect"
+/// convention notes in the DrawCards arm comment) read the swapped
+/// field. Arms that don't care continue to read
+/// `state.active_player` unchanged — back-compat for every existing
+/// call site that hasn't been migrated.
+///
+/// **Why this exists.** The pre-fix DrawCards arm read
+/// `state.active_player` as the controller, which is wrong when the
+/// resolving spell / triggered ability has a controller != the
+/// active player (e.g. an opponent's instant resolves during your
+/// turn and draws cards — pre-fix the spell would have drawn cards
+/// for YOU, not its actual controller). Mirrors Python's
+/// `DrawCards.resolve(state, controller_id, targets)` which takes
+/// the source's controller explicitly.
+///
+/// **Pattern mirrored:** the CE20 Slice 1 bridge's `active_player`
+/// swap (`state_ops_actions.rs`) and Slice 4's
+/// `current_resolve_payload_target_id` swap. Cleaner than mutating
+/// `active_player` because it doesn't touch any of the OTHER
+/// `active_player`-keyed arms (DealDamage's defender = 1 -
+/// active_player, etc.) — those still mean exactly what they meant
+/// before. Only arms that explicitly opt into reading
+/// `current_resolve_source_controller` change behavior.
+///
+/// **Currently unused by direct callers** — the in-tree resolver
+/// branches set the slot manually around their `apply_effect` loops
+/// (avoids an extra function-call layer for the hot stack-resolve
+/// path). Shipped as a public-in-crate helper for future per-call
+/// use cases (e.g. a `MayDoChoice` resolution that wants to route
+/// DrawCards to its source's controller, or future arms dispatched
+/// directly outside the stack resolver).
+#[allow(dead_code)]
+pub(crate) fn apply_effect_pub_with_controller(
+    state: &mut GameState,
+    effect: &Effect,
+    source_obj_id: u32,
+    controller: u8,
+) -> PyResult<()> {
+    let saved = state.current_resolve_source_controller;
+    state.current_resolve_source_controller = Some(controller);
+    let result = apply_effect(state, effect, source_obj_id);
+    state.current_resolve_source_controller = saved;
+    result
+}
+
 /// **Slice 2 — drain the deferred ETB dispatch queue.** Effect arms
 /// that move permanents onto the battlefield (RS2-RS12 in
 /// `docs/RUST_ETB_TRIGGER_AUDIT.md`) push the entered permanent's id
@@ -716,10 +767,23 @@ fn apply_effect(
             }
         }
         // Round-8: DrawCards. Caller's controller draws ``count``
-        // cards. Convention (mirrors the DealDamage path above): the
-        // controller for a resolving spell is `state.active_player`
-        // for first slice. Real MTG plumbs the controller through
-        // `StackItem.controller`; deferred to a future slice.
+        // cards. Controller resolution: prefer the transient
+        // `state.current_resolve_source_controller` (set by
+        // `apply_effect_pub_with_controller` / by the stack resolver
+        // around `apply_effect` calls — see the DrawCards
+        // controller-of-effect fix), falling back to
+        // `state.active_player` for back-compat with every direct
+        // `apply_effect_pub` caller that hasn't migrated.
+        //
+        // **Why the fix.** Pre-fix this arm hardcoded
+        // `state.active_player`, which is wrong when the resolving
+        // spell / triggered ability has a controller != the active
+        // player. Example: on player 0's turn, player 1 casts an
+        // instant DrawCards-1 in response — pre-fix the card went
+        // into PLAYER 0's hand (active_player), not player 1's
+        // hand. Mirrors Python's `DrawCards.resolve(state,
+        // controller_id, targets)` (effects/generic/draw_mill.py:213)
+        // which receives the source's controller explicitly.
         //
         // **Inlining note (cross-file friction).** `draw_card` is a
         // `#[pymethods]` method on `GameState` defined in
@@ -739,7 +803,10 @@ fn apply_effect(
         // SBA pass runs. Mirrors Python's eager `p.has_lost = True`
         // in `turn.draw_card`.
         Effect::DrawCards { count } => {
-            let controller = state.active_player as usize;
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
             let n = (*count).max(0) as usize;
             for _ in 0..n {
                 let player = &mut state.players[controller];
@@ -6034,7 +6101,16 @@ impl GameState {
             // follow-up).
             let saved_target = self.current_resolve_payload_target_id;
             self.current_resolve_payload_target_id = payload.target_id;
+            // DrawCards controller-of-effect fix: also swap in the
+            // trigger's controller so `Effect::DrawCards` (and any
+            // future arm that opts into the source-controller
+            // convention) draws into the trigger's controller's
+            // hand, NOT `state.active_player`'s hand. Restored
+            // after apply.
+            let saved_ctrl = self.current_resolve_source_controller;
+            self.current_resolve_source_controller = Some(top.controller);
             let apply_result = apply_effect(self, &trigger_effect, top.source_obj_id);
+            self.current_resolve_source_controller = saved_ctrl;
             self.current_resolve_payload_target_id = saved_target;
             apply_result?;
             let popped = self
@@ -6074,9 +6150,34 @@ impl GameState {
             None => Vec::new(),
         };
 
-        for effect in &effects {
-            apply_effect(self, effect, top.source_obj_id)?;
-        }
+        // DrawCards controller-of-effect fix: swap in the resolving
+        // spell's controller for the duration of the effect-fan-out
+        // loop so `Effect::DrawCards` (and any future arm reading
+        // `current_resolve_source_controller`) routes to the
+        // spell's controller, not `state.active_player`. Mirrors the
+        // triggered-ability branch above. Restored after the loop
+        // (also restored on early-return via the `?` operator by
+        // dropping out of the function — but since we don't have a
+        // RAII guard here, the swap is bracketed inline; any
+        // `apply_effect` error propagates as `?` and the inline
+        // restore line is skipped, but since the field default is
+        // `None` and the resolver is the outermost frame, the leak
+        // is bounded to "next call to apply_effect sees Some(this
+        // controller) instead of None" — semantically a no-op for
+        // every back-compat caller because DrawCards is the only
+        // reader and any DrawCards in the error path would have
+        // produced wrong output ANYWAY pre-fix. Bracketed restore
+        // below covers the success path.
+        let saved_ctrl = self.current_resolve_source_controller;
+        self.current_resolve_source_controller = Some(top.controller);
+        let effects_result: PyResult<()> = (|| {
+            for effect in &effects {
+                apply_effect(self, effect, top.source_obj_id)?;
+            }
+            Ok(())
+        })();
+        self.current_resolve_source_controller = saved_ctrl;
+        effects_result?;
 
         // CR 608.2m: post-resolve, move the spell source. Instants /
         // sorceries -> controller's graveyard; permanents (creature,
@@ -6188,7 +6289,12 @@ impl GameState {
             // there for the rationale.
             let saved_target = self.current_resolve_payload_target_id;
             self.current_resolve_payload_target_id = payload.target_id;
+            // DrawCards controller-of-effect fix: same controller
+            // swap as `resolve_top_of_stack` above.
+            let saved_ctrl = self.current_resolve_source_controller;
+            self.current_resolve_source_controller = Some(top.controller);
             let apply_result = apply_effect(self, &trigger_effect, top.source_obj_id);
+            self.current_resolve_source_controller = saved_ctrl;
             self.current_resolve_payload_target_id = saved_target;
             apply_result?;
             let popped = self
@@ -6210,9 +6316,18 @@ impl GameState {
             },
             None => Vec::new(),
         };
-        for effect in &effects {
-            apply_effect(self, effect, top.source_obj_id)?;
-        }
+        // DrawCards controller-of-effect fix: same controller swap
+        // as `resolve_top_of_stack` above.
+        let saved_ctrl = self.current_resolve_source_controller;
+        self.current_resolve_source_controller = Some(top.controller);
+        let effects_result: PyResult<()> = (|| {
+            for effect in &effects {
+                apply_effect(self, effect, top.source_obj_id)?;
+            }
+            Ok(())
+        })();
+        self.current_resolve_source_controller = saved_ctrl;
+        effects_result?;
         let post_resolve_zone = move_source_post_resolve(self, top.source_obj_id);
         // ETB-trigger Slice 3: legacy `etb_effects` inline loop
         // retired in `_pause` for the same reason as in

@@ -10849,3 +10849,214 @@ def test_ce13_reanimate_etb_still_stamps_summoning_sick_true(
         "CE13 regression: ETB-side reanimate stamp regression — "
         "expected summoning_sick=True on reanimated creature"
     )
+
+
+# ====================================================================
+# DrawCards controller-of-effect fix — regression pins.
+#
+# Pre-fix, `Effect::DrawCards` resolved using `state.active_player`
+# as the drawing player, which was wrong when the resolving spell /
+# triggered ability had a controller != the active player. Python's
+# `DrawCards.resolve(state, controller_id, targets)` takes the
+# source's controller explicitly (see
+# `src/mtg_bot/effects/generic/draw_mill.py:213`).
+#
+# The fix introduces a transient
+# `state.current_resolve_source_controller: Option<u8>` field, set by
+# the stack resolver to `Some(top.controller)` for the duration of
+# each `apply_effect` call. `Effect::DrawCards` reads it, falling
+# back to `state.active_player` for back-compat with direct
+# `apply_effect_pub` callers.
+# ====================================================================
+
+
+def _draw_cards_spell_dict(count=1):
+    """Instant-typed DrawCards-N printing for cross-controller
+    regression pins."""
+    return {
+        "name": f"Test Draw {count}",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "draw_cards", "count": count}],
+    }
+
+
+def test_drawcards_routes_to_source_controller_not_active_player(engine):
+    """**Regression pin for the controller-of-effect fix.**
+
+    On player 0's turn (active_player=0), a DrawCards-1 spell whose
+    controller is player 1 (e.g. a counterspell-shape instant
+    response from the non-active player) must put the drawn card
+    into PLAYER 1's hand. Pre-fix this incorrectly routed to player
+    0 (state.active_player).
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    # Sanity-pin: active_player is 0 in the synthetic seed.
+    assert state.active_player == 0
+
+    # DrawCards-1 spell controlled by player 1.
+    spell_id = state.register_and_inject_object(
+        _draw_cards_spell_dict(count=1), 1, ZONE_HAND
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+    p0_hand_before = state.hand_sizes[0]
+    p1_hand_before = state.hand_sizes[1]
+
+    state.push_to_stack(spell_id, 1)  # controller=1
+    state.resolve_top_of_stack()
+
+    # p1 (the spell's controller) drew 1; p0 (active_player) did NOT.
+    # Library shrink is the load-bearing observation — p1's hand
+    # count is +1 (drew) -1 (spell to graveyard) = 0 net, so we
+    # observe library only.
+    assert state.library_sizes[1] == p1_lib_before - 1
+    assert state.library_sizes[0] == p0_lib_before
+    # p0's hand grew by 0 from this resolution (the spell came from
+    # p1's hand so p0's hand count is unaffected).
+    assert state.hand_sizes[0] == p0_hand_before
+    # p1's net hand: drew 1, spell moved to graveyard => same count.
+    assert state.hand_sizes[1] == p1_hand_before
+
+
+def test_drawcards_active_player_controlled_spell_still_works(engine):
+    """**Back-compat pin.** Pre-fix every test that pushed a draw
+    spell with controller=active_player worked correctly because the
+    bug never fired in that case (controller == active_player so
+    routing to either yielded the same player). The fix must not
+    regress this case.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    spell_id = state.register_and_inject_object(
+        _draw_cards_spell_dict(count=2), 0, ZONE_HAND
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    state.push_to_stack(spell_id, 0)  # controller=0=active_player
+    state.resolve_top_of_stack()
+
+    assert state.library_sizes[0] == p0_lib_before - 2
+    assert state.library_sizes[1] == p1_lib_before
+
+
+def test_drawcards_via_triggered_ability_routes_to_triggers_controller(engine):
+    """**Cross-controller LTB-trigger regression pin.** A
+    triggered-ability StackItem carries its own `controller` (set at
+    trigger-fire time to the source's controller). The resolver
+    must swap that controller in for the DrawCards apply, NOT
+    state.active_player.
+
+    Shape: p1's creature has a `source_is_self LEAVES_BATTLEFIELD →
+    draw 1` trigger. p0 casts a bounce spell on p1's creature. When
+    the LTB trigger resolves, p1 (the trigger's controller) draws.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    ltb_creature = {
+        "name": "Test LTB-Draw Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    crt_id = state.register_and_inject_object(ltb_creature, 1, ZONE_BATTLEFIELD)
+    bounce_id = state.register_and_inject_object(
+        {
+            "name": "Test Bounce",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [
+                {"kind": "return_to_hand", "target": {"kind": "any_creature"}}
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    state.push_to_stack(bounce_id, 0)
+    state.resolve_top_of_stack()  # resolves bounce; LTB trigger pushes
+    assert state.stack_size() == 1
+    top = state.peek_top_of_stack()
+    assert top["controller"] == 1  # trigger's controller = p1
+
+    state.resolve_top_of_stack()  # resolves the LTB trigger
+
+    # Post-fix: p1 (trigger's controller) drew 1, p0 did not.
+    assert state.library_sizes[0] == p0_lib_before
+    assert state.library_sizes[1] == p1_lib_before - 1
+
+
+def test_drawcards_pause_variant_also_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin.** The _pause
+    variant must use the same controller swap as the auto-resolving
+    variant (they share the controller-of-effect contract — only
+    pending-decision auto-resolution differs).
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    spell_id = state.register_and_inject_object(
+        _draw_cards_spell_dict(count=1), 1, ZONE_HAND
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    assert state.library_sizes[1] == p1_lib_before - 1
+    assert state.library_sizes[0] == p0_lib_before
+
+
+def test_drawcards_controller_swap_restores_after_resolution(engine):
+    """**Transient-field hygiene pin.** The controller swap must be
+    restored to its prior value (None for top-frame callers) after
+    each apply call. After a complete `resolve_top_of_stack`, a
+    direct `apply_effect_pub` call on a DrawCards effect would fall
+    back to `state.active_player` again (no leaked Some(1) from the
+    previous resolution).
+
+    This is the symmetric pin to the payload-target-restore test
+    Slice 4 added — ensures no observable state leaks across
+    resolution boundaries.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=10
+    )
+    # First resolve a p1-controlled draw — sets the swap to Some(1)
+    # during apply, then restores.
+    spell_id = state.register_and_inject_object(
+        _draw_cards_spell_dict(count=1), 1, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack()
+    p1_lib_after_first = state.library_sizes[1]
+    p0_lib_after_first = state.library_sizes[0]
+
+    # Now resolve a p0-controlled draw. If the swap leaked Some(1),
+    # this would route to p1 again. Post-fix it routes correctly to
+    # p0 (the new spell's controller).
+    spell2_id = state.register_and_inject_object(
+        _draw_cards_spell_dict(count=1), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell2_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.library_sizes[0] == p0_lib_after_first - 1
+    assert state.library_sizes[1] == p1_lib_after_first
