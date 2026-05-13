@@ -701,3 +701,95 @@ def test_rust_parser_accepts_surveil_in_triggered_ability():
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+def test_bridge_discard_self_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "discard_self", "amount": N}`` translates to Python
+    ``DiscardSelf(amount=N)``.
+
+    Unblocks the discard_self leaf in the EoE-pool sub-graph that
+    feeds Uthros Scanship's ``Sequence{[DrawCards{2}, DiscardSelf{1}]}``
+    and Melded Moxite's ``IfYouDo{cost=DiscardSelf, then=DrawCards{2}}``
+    composite effects. Both composites also need their respective
+    composer arms (sequence / if_you_do) wired in the bridge; this
+    pin gates the LEAF translation that those composers will recurse
+    into once they land in a follow-on slice.
+
+    The Rust effect variant exists at ``rust/src/cards.rs:412``
+    (``Effect::DiscardSelf { amount: i32 }``) since the I61
+    controller-of-effect substrate landed; its parse_effect arm at
+    ``cards.rs:2931-2952`` accepts ``amount`` (mirrors Python's
+    class field name); the resolve arm at
+    ``state_ops_resolve.rs:2875-2948`` walks all 5 zones (with
+    stack-scan fallback) to recover the source's controller and
+    discards from THAT player's hand — cross-controller cases
+    (opponent's trigger resolves on your turn) discard from the
+    SOURCE's controller's hand, not active_player's.
+
+    Python's class exists at
+    ``src/mtg_bot/effects/generic/discard.py:30`` as
+    ``DiscardSelf(amount: int = 1)``. The dict-key here is ``amount``
+    (same spelling on both sides; no rename like surveil's
+    count/amount or draw_cards's count/amount).
+    """
+    from mtg_bot.effects.generic.discard import DiscardSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "discard_self", "amount": 2})
+    assert isinstance(e, DiscardSelf)
+    assert e.amount == 2
+
+
+def test_bridge_discard_self_amount_default_one():
+    """Missing ``amount`` defaults to 1 (mirrors Python's DiscardSelf
+    class default of 1, AND mirrors Rust's parse_effect default at
+    ``cards.rs:2945`` — both engines agree on 1 as the default).
+
+    Mirrors the lenient-default convention every prior bridge arm
+    uses for partial test fixtures (draw_cards's count default,
+    gain_life's amount default, surveil's count default).
+    """
+    from mtg_bot.effects.generic.discard import DiscardSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "discard_self"})
+    assert isinstance(e, DiscardSelf)
+    assert e.amount == 1
+
+
+def test_rust_parser_accepts_discard_self_in_triggered_ability():
+    """Pin the Rust parser surface for the matched effect kind. The
+    bridge's dict shape must register cleanly on the Rust side too;
+    this lockstep gate keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Mirrors the existing ``surveil`` /
+    ``deal_damage_any_target`` parser-surface pins. Required field
+    is ``amount`` (non-negative i32; missing is fine — defaults to
+    1 in both engines). The predicate-path triggered-ability
+    wrapper is just a carrier — the substrate being pinned is
+    parse_effect's ``discard_self`` arm (cards.rs:2931-2952).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Discard Self",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "discard_self",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0

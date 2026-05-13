@@ -321,6 +321,70 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # ``draw_cards`` arm's count default of 1).
         from mtg_bot.effects.generic.library_lookat import Surveil
         return Surveil(amount=eff_dict.get("count", 1))
+    if kind == "discard_self":
+        # ``DiscardSelf N`` — the SOURCE's controller discards
+        # ``amount`` cards from their hand; each discard is the
+        # discarding-player's choice via ``agent.choose_discard``
+        # (Python: effects/generic/discard.py:30-64). Rust's
+        # ``Effect::DiscardSelf { amount: i32 }`` variant
+        # (cards.rs:412) has existed since the I61 controller-of-
+        # effect substrate landed; its resolve arm
+        # (state_ops_resolve.rs:2875-2948) performs a 5-zone walk
+        # (with stack-scan fallback) to recover the source's
+        # controller, then pops up to ``amount`` cards off the
+        # head of that player's hand into their graveyard with the
+        # CR 400.7 zone-change reset applied. Unlike most other
+        # bridge-arm effects, the resolve arm intrinsically derives
+        # the source-controller (it does NOT read
+        # ``current_resolve_source_controller``) so cross-controller
+        # cases (opponent's trigger resolves on your turn after a
+        # flicker re-ETB) discard from the trigger SOURCE's
+        # controller's hand, not active_player's.
+        #
+        # Python's ``DiscardSelf(amount: int = 1)`` walks the same
+        # loop: up to ``amount`` iterations, break on empty hand,
+        # each iteration calls ``p.agent.choose_discard`` on the
+        # source-controller and moves the chosen card to graveyard.
+        #
+        # **Empty-hand contract** (gotcha #3 from this slice's
+        # planning notes). Both engines AGREE that an empty hand is
+        # a silent no-op (mid-loop short-circuit: Rust at
+        # state_ops_resolve.rs:2930 ``hand.is_empty() {{ break }}``,
+        # Python at discard.py:53 ``if not p.hand: break``). A probe
+        # that drives discard_self on an empty hand observes no
+        # state change on either engine — same library, same hand
+        # (empty), same graveyard (unchanged). The "no agent on
+        # controller" case is asymmetric, though: Rust's resolve
+        # picks hand[0] DETERMINISTICALLY (Vec::remove(0)); Python
+        # calls ``p.agent.choose_discard`` and would crash on
+        # ``None.choose_discard``. Probes that drive the non-empty-
+        # hand path MUST seat an agent on the source's controller
+        # (any agent whose ``choose_discard`` returns hand[0].id
+        # mirrors Rust's deterministic pick).
+        #
+        # **Sequence / IfYouDo composability** (forward note). The
+        # two EoE cards listed against this gap — Uthros Scanship
+        # (Sequence{[DrawCards{2}, DiscardSelf{1}]}) and Melded
+        # Moxite (IfYouDo{cost=DiscardSelf, then=DrawCards{2}}) —
+        # are NOT directly probeable from THIS bridge arm alone;
+        # they also need the ``sequence`` or ``if_you_do`` bridge
+        # arm. The Rust parser already accepts both nested kinds,
+        # so once the composer bridge arms land in a future slice,
+        # those EoE probes can fan-out off this discard_self arm
+        # without re-touching this file.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:2931-2952)
+        # which uses ``amount`` (not ``count`` — distinct from
+        # surveil/draw_cards). Missing ``amount`` defaults to 1
+        # (mirrors Python's class default of 1, AND Rust's
+        # parse_effect default at cards.rs:2945). Negative amount
+        # would raise in both engines (Python via the resolve
+        # loop's range semantics, Rust via the explicit register-
+        # time check); the bridge translator is lenient here and
+        # passes through whatever amount the dict carries — same
+        # convention as every other bridge arm.
+        from mtg_bot.effects.generic.discard import DiscardSelf
+        return DiscardSelf(amount=eff_dict.get("amount", 1))
     if kind == "deal_damage_to_opponent_creature":
         # Targeted "deals N damage to target creature an opponent
         # controls" — restricted to the
