@@ -13302,3 +13302,158 @@ def test_discard_card_empty_source_controllers_opponent_hand_fizzles(engine):
     assert state.is_stack_empty() is True
     assert state.graveyard_sizes[1] == p1_grave_before + 1
     assert state.hand_sizes[0] == 0
+
+
+# ====================================================================
+# DestroyTarget controller-of-effect fix — regression pins (I75).
+#
+# Pre-fix `defender = (1 - state.active_player) as usize`. Wrong
+# when the resolving spell / triggered ability has a controller !=
+# active_player — example: on p0's turn, p1 casts a Doom-Blade-shape
+# instant. Pre-fix it self-destroyed p1's own bf[0] (defender =
+# 1 - active_player = 1 - 0 = 1); post-fix it correctly destroys
+# p0's bf[0] (the source's controller's opponent — the standard
+# Murder / Doom Blade / Naturalize removal shape).
+#
+# Sibling closure to I70 ExileTarget — same `defender = 1 -
+# controller` shape, same target selection (bf[0] of defender),
+# same indestructible suppress gate (CR 702.12), same LTB fan-out
+# via `pending_leaves_dispatches`. Differs from I70 only in
+# destination zone (graveyard vs exile).
+#
+# Note: the AnyCreature first-slice target shortcut picks `bf[0]`
+# regardless of card type (no creature-type filter at this layer).
+# Synthetic-state bf[0] for the default num_battlefield=10 is a
+# Forest — fine for the regression pin since the test pins WHICH
+# SIDE got hit (and WHICH ZONE it landed in), not which type.
+# ====================================================================
+
+
+def _destroy_creature_dict_for_i75():
+    """A Doom-Blade-shape instant whose only effect is
+    DestroyTarget(AnyCreature). Used by I75 regression pins."""
+    return {
+        "name": "Test Doom Blade I75",
+        "card_types": ["Instant"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": "destroy_target",
+                "target": {"kind": "any_creature"},
+            }
+        ],
+    }
+
+
+def test_destroy_target_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the DestroyTarget controller-of-effect
+    fix (I75).**
+
+    On p0's turn (active_player=0), a Doom-Blade-shape instant whose
+    controller is p1 must destroy a p0 bf[0] object, NOT a p1 bf[0]
+    object. Pre-fix `defender = 1 - active_player = 1 - 0 = 1` =>
+    p1's own bf[0] got destroyed (self-destroying, sibling closure
+    to I70). Post-fix `defender = 1 - controller = 1 - 1 = 0` =>
+    correctly hits p0's bf[0].
+
+    Synthetic seed: each player's bf[0] is a Forest (the first
+    half of `num_battlefield` are Forests in `make_player`). p0's
+    bf[0] id = 0, p1's bf[0] id = num_battlefield + num_hand +
+    num_library = 10 + 7 + 50 = 67 (default seed).
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_bf_first_id = 0  # p0's bf[0] (Forest, controller=0)
+    p1_bf_first_id = 67  # p1's bf[0] (Forest, controller=1)
+
+    src_id = state.register_and_inject_object(
+        _destroy_creature_dict_for_i75(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player is still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Post-fix: p0's bf[0] got destroyed (p1's opponent's bf) —
+    # landed in p0's graveyard (defender's graveyard, since
+    # owner == controller for first-slice destroys).
+    assert state.find_object_zone(p0_bf_first_id) == ZONE_GRAVEYARD
+    # P1's bf[0] untouched (no self-destroy).
+    assert state.find_object_zone(p1_bf_first_id) == ZONE_BATTLEFIELD
+    # Source instant moved to p1's graveyard (owner's graveyard).
+    assert state.find_object_zone(src_id) == ZONE_GRAVEYARD
+
+
+def test_destroy_target_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** A Doom-Blade-shape instant cast by the
+    active player must still destroy the opponent's bf[0] — bug
+    never fired in this case pre-fix because controller ==
+    active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+
+    src_id = state.register_and_inject_object(
+        _destroy_creature_dict_for_i75(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # P1's bf[0] got destroyed (p0's opponent's bf).
+    assert state.find_object_zone(p1_bf_first_id) == ZONE_GRAVEYARD
+    # P0's bf[0] untouched.
+    assert state.find_object_zone(p0_bf_first_id) == ZONE_BATTLEFIELD
+
+
+def test_destroy_target_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for DestroyTarget.**
+    Mirrors the I64 / I67 / I68 / I69 / I70 / I71 / I72 / I73 / I74
+    pause-variant pins."""
+    state = engine.make_synthetic_state()
+
+    p0_bf_first_id = 0
+    p1_bf_first_id = 67
+
+    src_id = state.register_and_inject_object(
+        _destroy_creature_dict_for_i75(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Post-fix: p0's bf[0] got destroyed (p1's opponent).
+    assert state.find_object_zone(p0_bf_first_id) == ZONE_GRAVEYARD
+    assert state.find_object_zone(p1_bf_first_id) == ZONE_BATTLEFIELD
+
+
+def test_destroy_target_empty_source_controllers_opponent_bf_fizzles(engine):
+    """**Empty-defender fizzle pin for I75.** When the source-
+    controller's opponent has no creatures (bf empty), the effect
+    fizzles silently. Build a state where both bfs start empty and
+    cast a p1-controlled Doom-Blade — post-fix defender=0 (p1's
+    opponent = p0), bf empty -> fizzle.
+
+    We pin: source moved to p1's graveyard, p0's graveyard size
+    unchanged (no spurious graveyard push).
+    """
+    state = engine.make_synthetic_state(num_battlefield=0)
+    p0_grave_before = state.graveyard_sizes[0]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _destroy_creature_dict_for_i75(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Stack popped, source instant moved to p1's graveyard.
+    assert state.is_stack_empty() is True
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+    # P0's graveyard untouched — no spurious destroy push.
+    assert state.graveyard_sizes[0] == p0_grave_before

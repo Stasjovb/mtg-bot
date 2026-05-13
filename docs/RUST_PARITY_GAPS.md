@@ -4208,6 +4208,82 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I75. `Effect::DestroyTarget { AnyCreature }` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (DestroyTarget defender divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_destroy_target_*` regression pins covering cross-
+    controller spell resolution (1: p1-controlled Doom-Blade-shape
+    instant on p0's turn → destroys p0's bf[0], NOT p1's),
+    same-controller back-compat (1: p0-controlled source still
+    destroys p1's bf[0]), pause-variant parity (1), and empty-
+    defender fizzle (1).
+
+- **Rule**. CR 119.5 / 608.2 — sibling closure to I70 ExileTarget.
+  Same `defender = 1 - controller` shape, same transient-slot
+  lookup substrate, same target-selection path (`bf[0]` of
+  defender). Differs from I70 only in destination zone (graveyard
+  vs exile) and in carrying the indestructible suppress gate
+  (CR 702.12). The LTB fan-out path
+  (`pending_leaves_dispatches.push(leaving_obj_id)`) is unchanged
+  by the controller fix — the leaving id is still queued after
+  the resolved defender's bf has been mutated.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::DestroyTarget { AnyCreature }` arm at
+  `state_ops_resolve.rs:1687` (pre-fix line) computed
+  `let defender = (1 - state.active_player) as usize`. Wrong when
+  the resolving spell / triggered ability has a controller !=
+  active_player. Example: p1's Doom-Blade-shape instant on p0's
+  turn pre-fix self-destroyed p1's own bf[0]; post-fix it
+  correctly destroys p0's bf[0] (the source's controller's
+  opponent — the standard Murder / Doom Blade / Naturalize
+  removal shape).
+
+- **Indestructible gate preserved** (CR 702.12). The keyword
+  check runs on the RESOLVED defender's `bf[0]` and still short-
+  circuits silently when the target has `indestructible`. The
+  controller fix only changes which side's `bf[0]` gets peeked —
+  it does NOT bypass the gate.
+
+- **LTB fan-out preserved.** `pending_leaves_dispatches` still
+  receives the leaving id after the destroy mutation, so the
+  drain runs in `resolve_top_of_stack` AFTER the resolving slot
+  pops. Mirrors the `pending_etb_dispatches` deferral shape —
+  draining here would push the LTB trigger ABOVE the still-
+  present resolving spell.
+
+- **Reuses I59 substrate**. Identical to I70 / I71 / I72 / I73 /
+  I74 — same preamble:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let defender = 1 - controller;`. The destroy site
+  (`Arc::make_mut(&mut state.players[defender].battlefield)`,
+  `bf_mut.remove(pos)`, CR 400.7 reset block,
+  `Arc::make_mut(&mut state.players[defender].graveyard).push(obj)`,
+  `mark_left_battlefield_if_nonland(...)`,
+  `pending_leaves_dispatches.push(leaving_obj_id)`) reads the
+  resolved `defender` unchanged.
+
+- **Object-state reset on zone change preserved** (CR 400.7) —
+  tapped / damage / counters / attached_to / exiled_with_source
+  all reset on the way to graveyard. `summoning_sick` deliberately
+  NOT reset (CR 302.1 — battlefield-only state, mirrors CE13 /
+  I35 closure).
+
+- **Forward inventory (post-I75 remaining defender-shape
+  `(1 - state.active_player)` sites in `state_ops_resolve.rs`):**
+  - Mass arms (DestroyAllCreatures ~4638, ExileAll subarms
+    ~4958/5022) — per-arm audit pending. Likely iterate-both-bf
+    pattern (à la I71 DamageEachCreature precedent — NOT
+    defender-swap shape). AUDIT each carefully; if iterating both
+    bfs without an active_player ref, the controller fix does
+    not apply.
+  - CreateToken (~1924) — docstring marks "first-slice already
+    correct"; audit pending.
+  - ReturnCreatureFromYourGraveyard family (~2643/2676, ~5626) —
+    positive-controller candidates needing audit.
+
 ### I74. `Effect::DiscardCard { AnyPlayer }` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (DiscardCard defender divergence closure)
 
 - **Pinned by**:

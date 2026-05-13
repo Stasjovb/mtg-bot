@@ -1684,7 +1684,45 @@ fn apply_effect(
                 ));
             }
             TargetFilter::AnyCreature => {
-                let defender = (1 - state.active_player) as usize;
+                // **Controller resolution (I75 follow-up to the
+                // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 /
+                // I69 / I70 / I71 / I72 / I73 / I74 controller-of-
+                // effect substrate).** CR 119.5 / 608.2: an effect
+                // resolves under its source's controller.
+                // DestroyTarget's first-slice AnyCreature shortcut
+                // picks the SOURCE'S controller's opponent's bf[0],
+                // where defender = 1 - controller. Sibling closure
+                // to I70 ExileTarget — identical target selection
+                // path (bf[0] of defender), identical indestructible-
+                // suppress gate, identical LTB fan-out via
+                // pending_leaves_dispatches. Differs from I70 only
+                // in destination zone (graveyard vs exile).
+                //
+                // **Why the fix.** Pre-fix this arm computed
+                // `defender = 1 - state.active_player`. Wrong when
+                // the resolving spell / triggered ability has a
+                // controller != active_player. Example: on p0's
+                // turn, p1 casts a Doom-Blade-shape instant —
+                // pre-fix it self-destroyed p1's own bf[0]
+                // (defender = 1 - active_player = 1 - 0 = 1).
+                // Post-fix it correctly destroys p0's bf[0] (the
+                // source's controller's opponent — the standard
+                // Murder / Doom Blade / Naturalize removal shape).
+                //
+                // **Indestructible gate preserved** — the keyword
+                // check runs on the resolved defender's bf[0] and
+                // still short-circuits silently per CR 702.12.
+                //
+                // **LTB fan-out preserved** — the leaving id still
+                // pushes onto `pending_leaves_dispatches` so the
+                // drain runs in `resolve_top_of_stack` AFTER the
+                // resolving slot pops, mirroring the
+                // pending_etb_dispatches deferral shape.
+                let controller = state
+                    .current_resolve_source_controller
+                    .map(|c| c as usize)
+                    .unwrap_or(state.active_player as usize);
+                let defender = 1 - controller;
                 let bf = &state.players[defender].battlefield;
                 if bf.is_empty() {
                     return Ok(()); // fizzle silently
