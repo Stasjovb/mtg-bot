@@ -17265,3 +17265,354 @@ def test_cross_engine_real_eoe_uthros_scanship_etb_sequence_draw_discard_parity(
     # Stacks empty on both sides.
     assert rust_state.stack_size() == 0
     assert len(py_state.stack) == 0
+
+
+def test_cross_engine_real_eoe_melded_moxite_etb_if_you_do_discard_draw_parity(
+    parity_smoke,
+):
+    """Probe: Melded Moxite (EoE) ETB ``discard a card. If you do,
+    draw two cards.`` parity (success path) -- FIRST real-EoE
+    cross-engine probe with an IfYouDo-composer ETB trigger.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this artifact enters, you may discard a card. If you
+         do, draw two cards.
+         {3}, Sacrifice this artifact: Create a tapped 2/2 colorless
+         Robot artifact creature token."
+
+    The Sacrifice activated ability is OUT OF SCOPE for this probe
+    -- only the ETB IfYouDo trigger is exercised. Both engines see
+    the same minimal trigger surface.
+
+    The literal oracle has a "you MAY discard" optional gate, but
+    the IfYouDo bridge spec for Melded Moxite (per the audit) drops
+    the may-wrapping in favor of the bare ``IfYouDo{cost=DiscardSelf,
+    then=DrawCards{2}}`` shape -- the success path observably
+    matches the may-then-yes case (agent commits to discard) which
+    is what this probe drives.
+
+    First real-EoE cross-engine probe to exercise the
+    ``Effect::IfYouDo`` arm + Python ``IfYouDo`` class end-to-end.
+
+    Predicate decomposition: ``SourceIsSelf`` (only the just-arrived
+    artifact's own trigger fires).
+
+    Effect: ``IfYouDo{do_action=DiscardSelf{1},
+    then_action=DrawCards{2}}`` -- NEW composer on the bridge as of
+    the companion commits on this branch. Both engines:
+    - Rust resolve arm walks ``do_action`` first under
+      ``apply_effect``, observes its "did something" signal, and
+      conditionally fires ``then_action`` under ``apply_effect``.
+    - Python's ``IfYouDo.resolve`` calls ``do_action.resolve``,
+      checks the boolean signal (False → skip), and runs
+      ``then_action.resolve``.
+
+    **Cross-engine signal contract.** ``DiscardSelf`` on a non-empty
+    hand returns True on both engines (Rust's resolve arm pushes
+    the discarded card to graveyard and the IfYouDo gate observes
+    the success; Python's ``DiscardSelf.resolve`` returns True
+    after the discard). The success path therefore fires
+    ``then_action`` on both sides.
+
+    Probe shape (success path -- non-empty hand pre-trigger):
+
+      1. Pre-seed p0's hand with ONE bait creature (the discard
+         target -- hand[0]-deterministic pick).
+      2. Pre-seed p0's library top with TWO distinct bait
+         creatures (the draw-2 result).
+      3. Inject Melded Moxite onto p0's bf via
+         ``register_and_inject_object``; ENTERS fires; SourceIsSelf
+         matches; the IfYouDo trigger lands on the stack.
+      4. Seat a deterministic-hand[0] discard agent on p0
+         (Python only).
+      5. Drain both stacks. Both engines: p0 discards bait at
+         hand[0] (Discard Bait), then draws 2 (Draw Bait Alpha,
+         Draw Bait Beta).
+      6. Cross-engine assert:
+         * p0 hand: 1 → 1 - 1 + 2 = 2 (the two draws).
+         * p0 graveyard: 0 → 1 (the discarded bait).
+         * p0 library: 2 → 0 (drained by the draws).
+
+    Out of scope: empty-hand fork (would skip the draw -- a future
+    probe slice can pin that branch separately), Sacrifice ability,
+    cast cost.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Melded Moxite on p0's battlefield.
+      * p0 hand: ["Draw Bait Alpha", "Draw Bait Beta"] (in some
+        order — the comparison is set-ish via sorted()).
+      * p0 graveyard: ["Discard Bait"] (the just-discarded).
+      * p0 library empty.
+      * p1 untouched.
+      * Lives unchanged.
+      * No residual stack.
+    """
+    from mtg_bot.agents import Agent
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    melded_moxite = CardDef(
+        name="Melded Moxite",
+        card_type="Artifact",
+        mana_cost_generic=1,
+        mana_cost_colored=(("R", 1),),
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "if_you_do",
+                    "do_action": {
+                        "kind": "discard_self", "amount": 1,
+                    },
+                    "then_action": {
+                        "kind": "draw_cards", "count": 2,
+                    },
+                },
+            },
+        ),
+    )
+    discard_bait = CardDef(
+        name="Discard Bait",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    draw_bait_a = CardDef(
+        name="Draw Bait Alpha",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    draw_bait_b = CardDef(
+        name="Draw Bait Beta",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(melded_moxite, discard_bait, draw_bait_a, draw_bait_b),
+        # Top-of-library = Alpha then Beta (drawn in that order).
+        p0_library=("Draw Bait Alpha", "Draw Bait Beta"),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    rust_discard_bait_dict = {
+        "name": "Discard Bait",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_state.register_and_inject_object(
+        rust_discard_bait_dict, 0, ZONE_HAND
+    )
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p0_gy_before = rust_state.graveyard_sizes[0]
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_lib_before == 2
+    assert rust_p0_hand_before == 1
+    assert rust_p0_gy_before == 0
+
+    rust_moxite_dict = {
+        "name": "Melded Moxite",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1, "R": 1},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "if_you_do",
+                    "do_action": {
+                        "kind": "discard_self", "amount": 1,
+                    },
+                    "then_action": {
+                        "kind": "draw_cards", "count": 2,
+                    },
+                },
+            }
+        ],
+    }
+    rust_state.register_and_inject_object(
+        rust_moxite_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Melded Moxite's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        f"IfYouDo(DiscardSelf, DrawCards(2)) on the stack. Got "
+        f"stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.combinators import IfYouDo
+    from mtg_bot.effects.generic.discard import DiscardSelf
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    discard_bait_printing = CardPrinting(
+        name="Discard Bait",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+    )
+    moxite_printing = CardPrinting(
+        name="Melded Moxite",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("R", 1),)),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=IfYouDo(
+                    do_action=DiscardSelf(amount=1),
+                    then_action=DrawCards(amount=2),
+                ),
+            ),
+        ),
+    )
+
+    class _DiscardFirstAgent(Agent):
+        """Pick hand[0] for discard. Mirrors Rust's deterministic
+        ``DiscardSelf`` hand[0] pick.
+        """
+
+        def choose_discard(self, state, player_id, hand_ids):
+            assert hand_ids, "agent called with empty hand"
+            return hand_ids[0]
+
+    py_state.players[0].agent = _DiscardFirstAgent()
+
+    # Pre-seed p0's hand with the discard bait.
+    py_discard_bait = py_state.new_object(
+        discard_bait_printing, owner_id=0, zone=Zone.HAND,
+    )
+    py_state.players[0].hand.append(py_discard_bait)
+
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p0_gy_before = len(py_state.players[0].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p0_lib_before == 2
+    assert py_p0_hand_before == 1
+
+    py_moxite = py_state.new_object(
+        moxite_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_moxite.summoning_sick = False
+    py_moxite.tapped = False
+    py_moxite.damage = 0
+    py_moxite.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_moxite)
+    _trigger_etb_abilities(py_state, py_moxite)
+    assert len(py_state.stack) == 1, (
+        "Python: Melded Moxite's own arrival should fire the "
+        "IsSelf ENTERS trigger and land IfYouDo(DiscardSelf, "
+        f"DrawCards(2)) on the stack. Got "
+        f"stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Net hand: 1 - 1 + 2 = 2 on both engines (success path).
+    expected_hand_after = 2
+    assert rust_state.hand_sizes[0] == expected_hand_after, (
+        f"Rust p0 hand should be {expected_hand_after} after "
+        f"if-you-do (-1 discard + 2 draw); got "
+        f"{rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.library_sizes[0] == 0, (
+        f"Rust p0 library should be drained (2 → 0); got "
+        f"{rust_state.library_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == 1, (
+        f"Rust p0 graveyard should hold the discarded bait (0 → 1); "
+        f"got {rust_state.graveyard_sizes[0]}"
+    )
+
+    assert len(py_state.players[0].hand) == expected_hand_after
+    assert len(py_state.players[0].library) == 0
+    assert len(py_state.players[0].graveyard) == 1
+
+    # Strongest pin: per-card identities.
+    rust_p0_gy_names = [
+        e["printing_name"] for e in rust_state.graveyard_snapshot(0)
+    ]
+    py_p0_gy_names = [o.printing.name for o in py_state.players[0].graveyard]
+    assert rust_p0_gy_names == ["Discard Bait"], (
+        f"Rust p0 gy should hold the discarded Discard Bait; "
+        f"got {rust_p0_gy_names}"
+    )
+    assert py_p0_gy_names == ["Discard Bait"], (
+        f"Python p0 gy should hold the discarded Discard Bait; "
+        f"got {py_p0_gy_names}"
+    )
+    rust_p0_hand_names = sorted(
+        e["printing_name"] for e in rust_state.hand_snapshot(0)
+    )
+    py_p0_hand_names = sorted(
+        o.printing.name for o in py_state.players[0].hand
+    )
+    expected_hand_names = sorted(["Draw Bait Alpha", "Draw Bait Beta"])
+    assert rust_p0_hand_names == expected_hand_names, (
+        f"Rust p0 hand should hold the two draws; "
+        f"got {rust_p0_hand_names}"
+    )
+    assert py_p0_hand_names == expected_hand_names, (
+        f"Python p0 hand should hold the two draws; "
+        f"got {py_p0_hand_names}"
+    )
+
+    # Cross-engine: per-zone parity.
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+    assert rust_state.graveyard_sizes[0] == len(py_state.players[0].graveyard)
+    assert rust_p0_gy_names == py_p0_gy_names
+    assert rust_p0_hand_names == py_p0_hand_names
+
+    # Lives unchanged.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
