@@ -20497,17 +20497,22 @@ def test_cross_engine_synthetic_etb_create_token_cross_controller_routes_to_sour
     end-to-end, which is the flicker the cross-engine observable
     is supposed to pin.
 
-    **Why no bridge arm for ``create_token``.** The bridge
-    translator at ``_ta_dict_to_python_effect`` doesn't carry an
-    arm for ``create_token`` -- it would need a printing-id-to-
-    Python-CardPrinting lookup that has no obvious source-of-
-    truth at translation time (the dict ships only a ``u32``
-    ``token_printing_id`` keyed to the Rust registry). The probe
-    sidesteps that by KEEPING Token Maker Bear OUT of
-    ``DeckSpec.card_defs`` entirely; both sides build their
-    printings + inject manually, mirroring the empty-graveyard
-    silent-skip probe's pattern of constructing the trigger-bearing
-    card outside the bridge.
+    **Bridge arm for ``create_token``.** The bridge translator at
+    ``_ta_dict_to_python_effect`` carries a ``create_token`` arm
+    (added in ``feature/phase5-ce-bridge-create-token``). The pid
+    -> Python-CardPrinting lookup is resolved via a probe-time
+    registry: this probe registers the matching Python token
+    printing against the Rust registry's pid via
+    ``register_token_printing(rust_token_pid, py_soldier_token)``
+    BEFORE building the Token Maker Bear's Python printing. The
+    bridge then materializes ``CreateToken(token_printing=
+    py_soldier_token, count=1)`` from the same dict shape Rust
+    consumes. Token Maker Bear stays OUT of ``DeckSpec.card_defs``
+    (registered manually on Rust via ``register_and_inject_object``
+    + on Python via ``new_object`` with a printing assembled
+    in-place) because the inject-and-fire-ENTERS pattern bypasses
+    the deckspec / library / cast-from-hand machinery; both
+    triggered-ability shapes flow through the bridge regardless.
 
     Probe shape (cross-controller inject-and-fire-ENTERS):
 
@@ -20657,22 +20662,37 @@ def test_cross_engine_synthetic_etb_create_token_cross_controller_routes_to_sour
         rust_token_maker_dict, 1, ZONE_BATTLEFIELD,
     )
 
-    # ---- Python side: build Soldier token printing + Token Maker
-    # Bear printing manually, then inject onto P1's bf. ----
+    # ---- Python side: build the Soldier token printing, register
+    # it against Rust's pid via the bridge, then assemble Token
+    # Maker Bear's printing using the bridge's
+    # `_ta_dict_to_python_triggered_ability` translator on the SAME
+    # trigger-dict shape Rust consumed. ----
     from mtg_bot.actions import _trigger_etb_abilities
     from mtg_bot.cards.base import (
         CardPrinting, ManaCost, make_token_creature,
     )
-    from mtg_bot.effects.base import TriggeredAbility
-    from mtg_bot.effects.generic.tokens import CreateToken
-    from mtg_bot.effects.predicates import Event, IsSelf
     from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings, register_token_printing,
+    )
 
     py_soldier_token = make_token_creature(
         name="Soldier Token I81 Probe",
         power=1,
         toughness=1,
         subtypes=("Soldier",),
+    )
+    # Register the Python token printing against Rust's pid so the
+    # `create_token` bridge arm in `_ta_dict_to_python_effect` can
+    # look it up at translation time. `clear_token_printings()`
+    # first defends against stale state from any prior probe in the
+    # same pytest worker that registered a different printing under
+    # the same numeric pid.
+    clear_token_printings()
+    register_token_printing(rust_token_pid, py_soldier_token)
+    py_token_maker_trigger = _ta_dict_to_python_triggered_ability(
+        rust_token_maker_dict["triggered_abilities"][0]
     )
     py_token_maker_printing = CardPrinting(
         name="Token Maker Bear (I81 cross-controller probe)",
@@ -20685,13 +20705,7 @@ def test_cross_engine_synthetic_etb_create_token_cross_controller_routes_to_sour
         power=2,
         toughness=2,
         produces=frozenset(),
-        triggered_abilities=(
-            TriggeredAbility(
-                event=Event.ENTERS,
-                predicate=IsSelf(),
-                effect=CreateToken(token_printing=py_soldier_token, count=1),
-            ),
-        ),
+        triggered_abilities=(py_token_maker_trigger,),
     )
     py_p0_life_before = py_state.players[0].life
     py_p1_life_before = py_state.players[1].life
