@@ -3378,7 +3378,36 @@ fn apply_effect(
                     "DealDamageAnyTarget amount must be non-negative, got {amount}"
                 )));
             }
-            let defender_idx = (1 - state.active_player) as usize;
+            // **Controller resolution (I67 follow-up to the I59 /
+            // I60 / I63 / I64 / I65 / I66 controller-of-effect
+            // substrate).** Prefer the transient
+            // `state.current_resolve_source_controller` (set by the
+            // stack resolver around each `apply_effect` call),
+            // falling back to `state.active_player` for back-compat
+            // with direct `apply_effect_pub` callers. Same pattern
+            // as `Effect::DealDamage` / `Effect::DamageEachOpponent`
+            // — CR 119.5 / 608.2: an effect resolves under its
+            // source's controller. For DealDamageAnyTarget, "any
+            // target" defaulting to "the defender" means "the
+            // SOURCE'S controller's opponent", not "the active
+            // player's opponent".
+            //
+            // **Why the fix.** Pre-fix this arm computed
+            // `defender_idx = 1 - state.active_player`. Wrong when
+            // the resolving spell / triggered ability has a
+            // controller != active_player. Worst-case example: p1's
+            // creature has an ETB "deal 2 damage to any target"
+            // trigger that fires on p0's turn (a p0 flicker
+            // re-ETBs p1's creature). Pre-fix the trigger self-
+            // damaged p1's first creature / life (defender_idx =
+            // 1 - 0 = 1). Post-fix it correctly targets p0's first
+            // creature / life (the trigger's controller's
+            // opponent).
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let defender_idx = 1 - controller;
             let amount_i16 = (*amount).min(i16::MAX as i32) as i16;
             // First-slice deterministic choice: prefer defender's
             // first creature (mirrors the AnyCreature arm's
