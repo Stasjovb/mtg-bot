@@ -634,6 +634,19 @@ class ShardConfig:
     # (the script's own default, currently cpu_count() - 2).
     n_workers: Optional[int] = None
 
+    # Per-shard device override for the NN evaluator. ``None`` (default)
+    # lets each shard's worker resolve device via ``auto_device()``
+    # locally — master + Win10 pick CUDA, Mac picks CPU. Set to
+    # ``"cpu"`` to force this shard's workers off the GPU even when
+    # CUDA is available — useful when the structured-model trunk is
+    # small enough that per-call GPU dispatch overhead dominates
+    # compute and N workers contending on one device is slower than
+    # N workers each running independent CPU forwards. Empirical
+    # finding 2026-05-12: at emb_dim=128 / n_layers=2, local with 8
+    # CUDA-contending workers ran 1.7-2x slower per-worker than Win10
+    # with 4 (and ~2x slower than Mac with 14 CPU workers).
+    device: Optional[str] = None
+
     # ---- remote-only fields (ignored when host == "local") ----
     # SSH user. Required for remote shards.
     user: Optional[str] = None
@@ -661,6 +674,7 @@ class ShardConfig:
             "label": self.label,
             "seed_offset": self.seed_offset,
             "n_workers": self.n_workers,
+            "device": self.device,
             "user": self.user,
             "repo_path": self.repo_path,
             "venv_python": self.venv_python,
@@ -688,6 +702,7 @@ class ShardConfig:
             label=d.get("label", ""),
             seed_offset=int(d.get("seed_offset", 0)),
             n_workers=d.get("n_workers"),
+            device=d.get("device"),
             user=d.get("user"),
             repo_path=d.get("repo_path"),
             venv_python=d.get("venv_python"),
@@ -2140,6 +2155,7 @@ def run_distributed_self_play(
                     stamp=stamp,
                     iter_total_games=total_games,
                     progress_dir=progress_dir,
+                    device_override=shard.device,
                 )
             return ShardSelfPlayReport(
                 shard_label=label, success=True,
@@ -2517,6 +2533,7 @@ def run_distributed_eval(
                     label=label,
                     iter_total_games=total_games,
                     progress_dir=progress_dir,
+                    device_override=shard.device,
                 )
             return ShardEvalReport(
                 shard_label=label, success=True,
@@ -2984,6 +3001,7 @@ def run_shard_pull(
     progress_dir: Optional[Path] = None,
     worker_id: Optional[str] = None,
     heartbeat_interval: Optional[float] = None,
+    device_override: Optional[str] = None,
 ) -> list[Path]:
     """Continuously feed ``n_workers`` worker processes from the
     master's pull-queue. Each worker plays one game, returns its
@@ -3040,8 +3058,12 @@ def run_shard_pull(
         # ``"auto"`` defers the auto_device() call into NNPimcConfig.build,
         # which runs in the mp.Pool worker. Calling auto_device() here
         # in run_shard_pull's parent thread would prime CUDA and break
-        # Linux fork() in the worker pool below.
-        device="auto",
+        # Linux fork() in the worker pool below. ``device_override`` lets
+        # the local-shard caller force ``"cpu"`` (see ShardConfig.device)
+        # — useful when GPU per-call overhead dominates compute at the
+        # current model scale and N workers contending on one device is
+        # slower than N workers each doing independent CPU forwards.
+        device=device_override or "auto",
         batch_size=32,
         with_policy=spec.with_policy,
         puct=True,
@@ -3674,6 +3696,7 @@ def run_shard_eval_pull(
     progress_dir: Optional[Path] = None,
     worker_id: Optional[str] = None,
     heartbeat_interval: Optional[float] = None,
+    device_override: Optional[str] = None,
 ) -> dict[str, int]:
     """Eval counterpart to ``run_shard_pull``: continuously feeds
     n_workers worker processes from the master's pull-queue, where
@@ -3703,6 +3726,7 @@ def run_shard_eval_pull(
     # which runs in the mp.Pool worker. Calling auto_device() here in
     # run_shard_eval_pull's parent thread would prime CUDA and break
     # Linux fork() in the worker pool below.
+    eval_device = device_override or "auto"
     new_cfg = NNPimcConfig(
         weights_path=spec.new_weights_path,
         samples=spec.samples, inner_nodes=spec.inner_nodes,
@@ -3713,7 +3737,7 @@ def run_shard_eval_pull(
         action_encoding_version=spec.new_action_encoding_version,
         use_ismcts=spec.use_ismcts,
         use_belief_weighted=spec.use_belief_weighted,
-        device="auto",
+        device=eval_device,
     )
     if spec.old_weights_path is not None:
         old_cfg = NNPimcConfig(
@@ -3726,7 +3750,7 @@ def run_shard_eval_pull(
             action_encoding_version=spec.old_action_encoding_version,
             use_ismcts=spec.use_ismcts,
             use_belief_weighted=spec.use_belief_weighted,
-            device="auto",
+            device=eval_device,
         )
         p1_factory = old_cfg.build
     else:

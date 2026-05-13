@@ -91,6 +91,21 @@ def test_legacy_n_games_field_rejected_with_pointer():
         ShardConfig.from_dict({"host": "local", "n_games": 100})
 
 
+def test_device_round_trips_through_dict():
+    """ShardConfig.device round-trips through to_dict / from_dict so
+    the per-shard device override survives JSON config-file loads. The
+    field is optional (``None`` default) so existing shards-config
+    files without it keep working."""
+    shard = ShardConfig(host="local", device="cpu")
+    assert shard.device == "cpu"
+    rt = ShardConfig.from_dict(shard.to_dict())
+    assert rt.device == "cpu"
+
+    # No device field → None (default), back-compat with old configs.
+    no_device = ShardConfig.from_dict({"host": "local"})
+    assert no_device.device is None
+
+
 def test_seed_offset_must_be_non_negative():
     with pytest.raises(ValueError, match="seed_offset"):
         ShardConfig(host="local", seed_offset=-1)
