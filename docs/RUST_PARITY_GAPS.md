@@ -4207,6 +4207,132 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I59. `Effect::DrawCards` controller-of-effect fix — `state.current_resolve_source_controller: Option<u8>` transient + `apply_effect_pub_with_controller` variant + stack-resolver swap on both spell + trigger branches (DrawCards controller divergence closure)
+
+- **Pinned by**:
+  - 5 new `tests_rust/test_resolve.py` `test_drawcards_*`
+    regression pins covering cross-controller spell resolution
+    (1: p1-controlled DrawCards on p0's turn routes draw to p1),
+    same-controller back-compat (1: p0-controlled DrawCards on
+    p0's turn still routes to p0), cross-controller LTB-trigger
+    resolution (1: p1's LTB→draw trigger resolves to p1, not
+    active_player), `resolve_top_of_stack_pause` parity (1: pause
+    variant uses the same swap), and transient-field-restore
+    hygiene (1: a second resolution after the first sees the
+    field restored to None / its prior value, not leaked Some(1)).
+  - 3 pre-existing `tests_rust/test_triggers.py` LTB tests
+    (`test_ltb_fires_on_return_to_hand_effect_arm`,
+    `test_ltb_fires_on_destroy_target_creature_effect_arm`,
+    `test_ltb_fires_on_exile_target_effect_arm`) updated from
+    the pre-fix "draw lands on state.active_player = p0" pinning
+    to the post-fix "draw lands on the trigger's controller =
+    p1" pinning. The pre-fix assertions explicitly carried
+    "controller-of-effect divergence" comments documenting the
+    bug they were pinning.
+
+- **Rule**. CR 119.5 / 608.2: an effect resolves under its
+  source's controller. The drawing player for a DrawCards effect
+  is the EFFECT's controller — for a spell, the spell's
+  controller; for a triggered ability, the triggered ability's
+  controller. Mirrors Python's
+  `DrawCards.resolve(state, controller_id, targets)` at
+  `src/mtg_bot/effects/generic/draw_mill.py:213` which receives
+  the source's controller explicitly.
+
+- **Pre-fix Rust behavior** (the divergence). The
+  `Effect::DrawCards` arm at `state_ops_resolve.rs` resolved
+  using `state.active_player` as the drawing player. Wrong when
+  the resolving spell / triggered ability had a controller !=
+  active_player. Example: on p0's turn, p1 casts a DrawCards-1
+  instant in response → pre-fix the card went into p0's hand,
+  not p1's hand. Same divergence applied to LTB triggers
+  controlled by p1 (the cross-controller bounce / destroy / exile
+  shape covered by Slice 10's tests, which explicitly pinned the
+  bug behavior pending this closure).
+
+- **Transient slot**. `GameState.current_resolve_source_controller: Option<u8>`,
+  set by the stack resolver to `Some(top.controller)` BEFORE
+  each `apply_effect` call, restored to its prior value (typically
+  `None`) AFTER. Mirrors the
+  `current_resolve_payload_target_id` swap pattern (Slice 4) and
+  the Slice 1 bridge `active_player` swap pattern — additive
+  transient field, no signature changes to the ~90 apply_effect
+  arms.
+
+- **Reader**. `Effect::DrawCards` arm:
+  `state.current_resolve_source_controller.map(|c| c as usize)
+  .unwrap_or(state.active_player as usize)`. Falls back to
+  `active_player` when None, preserving back-compat with every
+  direct `apply_effect_pub` caller that hasn't migrated. Future
+  arms that need the source-controller convention opt in by
+  reading the same field.
+
+- **Helper**. `apply_effect_pub_with_controller(state, effect,
+  source_obj_id, controller) -> PyResult<()>` at
+  `state_ops_resolve.rs:626`. Swaps in `Some(controller)` for the
+  duration of an inner `apply_effect` call, restores afterward.
+  Currently unused by direct callers (the resolver branches set
+  the slot manually around their `apply_effect` loops); shipped
+  for future per-call use cases (e.g. a `MayDoChoice` resolution
+  that wants to route DrawCards to its source's controller, or a
+  future arm dispatched directly outside the stack resolver).
+
+- **Swap sites wired**:
+  - `resolve_top_of_stack` triggered-ability branch
+    (`state_ops_resolve.rs:6037`): sets `Some(top.controller)`
+    alongside the existing `current_resolve_payload_target_id`
+    swap, restored after `apply_effect`.
+  - `resolve_top_of_stack` spell branch
+    (`state_ops_resolve.rs:6162`): sets `Some(top.controller)`
+    around the for-loop iterating `effects`; bracket-restored
+    after the loop (closure-based to handle `?`-propagation cleanly).
+  - `resolve_top_of_stack_pause` triggered-ability branch (mirror
+    of the auto-resolve variant).
+  - `resolve_top_of_stack_pause` spell branch (mirror).
+
+- **Swap sites NOT wired** (deferred / not applicable):
+  - The CE20 Slice 1 mana-ability bridge at
+    `state_ops_actions.rs` calls `apply_effect_pub` with an
+    explicit `state.active_player` swap. Mana abilities don't
+    dispatch DrawCards (mana-only effects), so the slot stays
+    None there and DrawCards's fallback would route to
+    active_player — which IS the source's controller in that
+    branch by construction (the swap already aligned them).
+    Wiring the new slot here would be redundant; left as-is.
+  - The `state_ops_decisions.rs` `MayDo` / `IfYouDo` /
+    `ChooseMode` apply_effect_pub call sites pass DrawCards
+    through without a controller swap. Today these decisions
+    auto-resolve at `state.active_player` priority, so the
+    fallback semantics match what callers expect. A future
+    follow-up could migrate them to
+    `apply_effect_pub_with_controller(pd.controller)` if a
+    cross-controller MayDo + DrawCards parity bug surfaces.
+
+- **Not serialized into the fingerprint**. Transient like
+  `current_resolve_payload_target_id` — set and restored within
+  a single `resolve_top_of_stack` call, the resolver is the
+  outermost frame, and no two states reached via different
+  histories produce different fingerprints from this field
+  (post-resolve it's None on both sides).
+
+- **CoW**. `Option<u8>` is `Copy`; clone is bit-trivial.
+
+- **Out of scope (deferred to future slices)**:
+  - Migrating `apply_effect_pub` callers in
+    `state_ops_decisions.rs` to the `_with_controller` variant.
+    Today's MayDo / IfYouDo / ChooseMode auto-resolve at
+    active_player priority, which happens to match the source's
+    controller for every current EoE printing. A cross-controller
+    MayDo + DrawCards parity bug would surface as a divergence in
+    the smoke and motivate the migration.
+  - Generalizing the swap to other Effect arms (GainLife,
+    PumpCreaturesYouControl, AddManaToPool, etc.) that read
+    `state.active_player`. Each is its own per-arm parity
+    decision — GainLife in particular has the same shape as
+    DrawCards (controller-of-effect resolves to the source's
+    controller) but is left for a future slice so each arm gets
+    its own pinning + parity validation.
+
 ### I55. `ActivationCost.sacrifice_another_creature_or_artifact / sacrifice_a_land / sacrifice_another_artifact: bool` extend the cost shape; emission target fan-out + apply-arm sacrifice-target validation + Phase 5c targeted-sacrifice commit (CE20 follow-up Slice 6 targeted-sacrifice variants closure)
 
 - **Pinned by**:

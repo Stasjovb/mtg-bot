@@ -1370,6 +1370,34 @@ pub struct GameState {
     /// will surface as a legal_decisions emission shape change at
     /// the priority point that uses the ledger.
     pub loyalty_activated_this_turn: std::collections::HashSet<(u8, u32)>,
+    /// **DrawCards controller-of-effect fix — transient resolve-time
+    /// source controller.** Set by the stack resolver
+    /// (`resolve_top_of_stack` / `_pause`) and by the cost-pay path
+    /// for mana abilities (`state_ops_actions.rs`) BEFORE
+    /// `apply_effect` fires, restored to its prior value after.
+    /// `Effect::DrawCards` (and any future arm that resolves to the
+    /// SOURCE's controller, NOT the active player) reads this field
+    /// to credit the right player; absent the swap (every pre-fix
+    /// caller / direct apply_effect_pub user) the field stays `None`
+    /// and DrawCards falls back to `state.active_player` for back-
+    /// compat. New apply_effect_pub_with_controller(state, effect,
+    /// source_id, controller_idx) helper sets+restores around a
+    /// single apply call so direct callers don't have to remember
+    /// the swap.
+    ///
+    /// **Why a transient field instead of threading through
+    /// apply_effect?** Same rationale as
+    /// `current_resolve_payload_target_id`: apply_effect has ~90
+    /// arms, threading an `Option<u8>` through every signature is
+    /// invasive for surfaces that don't care. Mirror the existing
+    /// payload-target swap pattern (Slice 4) and the
+    /// `state.active_player` swap pattern (CE20 Slice 1 bridge).
+    ///
+    /// **Not serialized into the fingerprint.** Transient like
+    /// `current_resolve_payload_target_id` — same observable game
+    /// state pre- and post-resolve produces the same digest
+    /// regardless of intermediate controller swaps.
+    pub current_resolve_source_controller: Option<u8>,
 }
 
 impl Clone for GameState {
@@ -1412,6 +1440,9 @@ impl Clone for GameState {
             // clone is O(n) where n is the number of distinct walker
             // activations this turn (typically 0 or 1 in EoE).
             loyalty_activated_this_turn: self.loyalty_activated_this_turn.clone(),
+            // DrawCards controller-of-effect fix: transient resolve-
+            // time source controller. Cloned as Option<u8> (Copy).
+            current_resolve_source_controller: self.current_resolve_source_controller,
         }
     }
 }
@@ -1880,5 +1911,9 @@ pub fn make_synthetic_state(
         // once-per-turn-per-walker ledger at construction; reset
         // each turn at cleanup.
         loyalty_activated_this_turn: std::collections::HashSet::new(),
+        // DrawCards controller-of-effect fix: transient slot, None
+        // until the resolver swaps in `top.controller` for the
+        // duration of an apply_effect call.
+        current_resolve_source_controller: None,
     }
 }
