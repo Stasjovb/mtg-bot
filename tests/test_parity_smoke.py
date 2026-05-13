@@ -13359,3 +13359,337 @@ def test_cross_engine_real_eoe_debris_field_crusher_etb_damage_any_target_parity
     # Stacks empty on both sides.
     assert rust_state.stack_size() == 0
     assert len(py_state.stack) == 0
+
+
+def test_cross_engine_real_eoe_nova_hellkite_etb_damage_to_opponent_creature_parity(
+    parity_smoke,
+):
+    """Probe: Nova Hellkite (EoE) ETB ``deal 1 damage to target creature
+    an opponent controls`` parity -- FIRST real-EoE cross-engine probe
+    with a TARGETED-damage ETB trigger that requires the stricter
+    ``deal_damage_to_opponent_creature`` filter.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "Flying, haste
+         When this creature enters, it deals 1 damage to target creature
+         an opponent controls.
+         Warp {2}{R} (...)"
+
+    Bridges the ``deal_damage_to_opponent_creature`` effect kind
+    end-to-end on a real EoE card. Distinct from the Nebula Dragon /
+    Debris Field Crusher cross-engine probes (which exercise
+    ``deal_damage_any_target``) in TWO ways:
+
+      * Slot filter: ``IsCreature() & ControlledByOpponent()`` instead
+        of ``any_target_filter()``. Players are NEVER legal targets;
+        the source's controller's own creatures are never legal
+        targets. The probe MUST place a bait creature on the
+        opponent's bf for the trigger to have a valid target -- with
+        an empty p1 bf the trigger silently fizzles on both engines
+        (which would be a degenerate parity match; not what we want
+        to pin here).
+      * Source-controller resolution: Rust's
+        ``Effect::DealDamageToOpponentCreature`` resolve arm
+        (state_ops_resolve.rs:6271-6342) performs an INTRINSIC 5-zone
+        walk + stack-scan fallback to recover the source's
+        controller, then iterates opponents in ascending player order
+        and picks the first ``"Creature"`` on each opponent's bf. The
+        I67 ``current_resolve_source_controller`` transient swap is
+        NOT used by this arm (the resolve walks the zones directly).
+
+    Predicate decomposition (same as Nebula Dragon / Germinating Wurm
+    / Quantum Riddler / Cryogen Relic):
+
+        SourceIsSelf
+
+    Effect: ``deal_damage_to_opponent_creature(amount=1)`` -- NEW on
+    the bridge as of the companion commit on this branch. The Rust
+    effect variant has existed since the round-28 Glassworks //
+    Shattered Yard slice; the Python side translates to
+    ``DealDamageToOpponentCreature(amount=1)`` (constructor sugar
+    over ``DealDamage`` with the
+    ``IsCreature() & ControlledByOpponent()`` slot filter).
+
+    **Target-pick parity contract.** Rust's resolve arm scans
+    opponent bf top-to-bottom for the first ``"Creature"`` printing
+    and applies the damage. Python's targeting pipeline picks at
+    PUSH time via the controller's agent in
+    ``push_triggered_ability`` (actions.py:3172). With exactly ONE
+    bait creature on p1's bf, Rust's deterministic scan picks the
+    one creature; Python's agent (the
+    ``_PickFirstOpponentTargetAgent`` shim mirrored from the
+    Nebula Dragon probe) returns the only legal_target -- which is
+    the same bait creature, since the slot's filter has already
+    restricted the pool to opponent-controlled creatures. Both
+    engines therefore deal the 1 damage to the same bait creature.
+
+    Probe shape (inject-and-fire-ENTERS):
+
+      1. Inject a vanilla 2/2 bait creature ("Bait Bear") onto p1's
+         bf -- both engines see one opponent-controlled creature.
+         The 2/2 toughness is comfortably above 1 damage so no SBA
+         flip is triggered after the burn lands (the probe pins the
+         damage delta, not lethal-damage handling).
+      2. Inject Nova Hellkite onto p0's bf via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + ``_trigger_etb_abilities`` (Python). Both engines
+         dispatch ENTERS; the SourceIsSelf predicate matches; one
+         DealDamageToOpponentCreature lands on the stack with its
+         target pre-chosen (Python at push time, Rust intrinsically
+         at apply_effect time).
+      3. Both engines: stack carries ONE pending
+         DealDamageToOpponentCreature trigger. Drain. Resolve walk:
+         the bait creature takes 1 damage.
+      4. Cross-engine assert: BOTH p0 and p1 life are unchanged
+         (the effect can never target a player); the bait creature
+         carries 1 damage on its GameObject; neither engine
+         flipped the bait to graveyard (2 toughness > 1 damage).
+
+    Out of scope:
+
+      * Flying / Haste keywords (static evasion + summon-sickness
+        bypass) -- irrelevant to the ETB-trigger contract; no combat
+        in this probe.
+      * Cast-from-hand mana cost ({3}{R}{R}) -- the
+        inject-and-dispatch-ENTERS pattern bypasses the mana
+        pipeline (same treatment every prior real-EoE probe gives
+        the cast-cost, for the same reason).
+      * Warp alt-cast clause -- separate from the ETB trigger and
+        not on the bridge today.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Nova Hellkite on p0's battlefield.
+      * Bait Bear on p1's battlefield, with damage=1 (not lethal).
+      * p0 life: unchanged at 20.
+      * p1 life: unchanged at 20 (effect targets a creature, never
+        a player).
+      * No residual stack.
+    """
+    from mtg_bot.agents import Agent
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    nova_hellkite = CardDef(
+        name="Nova Hellkite",
+        card_type="Creature",
+        mana_cost_generic=3,
+        mana_cost_colored=(("R", 2),),
+        power=4,
+        toughness=5,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_to_opponent_creature",
+                    "amount": 1,
+                },
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(nova_hellkite,),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    # Inject the bait creature on p1's bf FIRST -- the order matters
+    # for the resolve arm's deterministic scan (top-to-bottom of the
+    # opponent's bf). With only one creature, ordering is moot, but
+    # the convention is established for follow-up probes that might
+    # add multiple bait creatures.
+    rust_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    rust_nova_dict = {
+        "name": "Nova Hellkite",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "R": 2},
+        "effects": [],
+        "power": 4,
+        "toughness": 5,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_to_opponent_creature",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_nova_id = rust_state.register_and_inject_object(
+        rust_nova_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Nova Hellkite's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "DealDamageToOpponentCreature on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreature,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    # Inject the bait creature on p1's bf via the same Python pattern
+    # the existing Bear Sage / Plain Bears probes use.
+    bait_printing = CardPrinting(
+        name="Bait Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+
+    nova_printing = CardPrinting(
+        name="Nova Hellkite",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("R", 2),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=4,
+        toughness=5,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DealDamageToOpponentCreature(amount=1),
+            ),
+        ),
+    )
+
+    # Reusing the same _PickFirstOpponentTargetAgent shape as the
+    # Nebula Dragon / Debris Field Crusher probes. The slot's
+    # IsCreature() & ControlledByOpponent() filter already restricts
+    # legal_targets to opponent-side creatures, so the opponent-
+    # filter step in the agent is a no-op for this effect kind --
+    # but the shim's first-opponent-target pick still matches Rust's
+    # bf-scan-first-creature behavior. Three call sites of this same
+    # shim shape now (Nebula Dragon + Debris Field Crusher + Nova
+    # Hellkite) is right at the hoist threshold; a follow-up cleanup
+    # slice can lift this to a shared helper in cross_engine.py if
+    # the count grows further.
+    class _PickFirstOpponentTargetAgent(Agent):
+        """Pick the first opponent-controlled / opponent-player target.
+
+        Mirrors Rust's defender-anchored deterministic target
+        selection. For the DealDamageToOpponentCreature variant,
+        the slot filter has already restricted legal_targets to
+        opponent-controlled creatures; the agent's opponent-filter
+        is then a no-op and the first entry is returned.
+        """
+
+        def choose_target(self, state, player_id, legal_targets):
+            if not legal_targets:
+                return None
+            for kind, target_id in legal_targets:
+                if kind == "player":
+                    if target_id != player_id:
+                        return (kind, target_id)
+                else:
+                    obj = next(
+                        (
+                            o
+                            for o in state.battlefield
+                            if o.id == target_id
+                        ),
+                        None,
+                    )
+                    if obj is not None and obj.controller_id != player_id:
+                        return (kind, target_id)
+            return legal_targets[0]
+
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+
+    py_nova = py_state.new_object(
+        nova_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_nova.summoning_sick = False
+    py_nova.tapped = False
+    py_nova.damage = 0
+    py_nova.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_nova)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_nova)
+    assert len(py_state.stack) == 1, (
+        "Python: Nova Hellkite's own arrival should fire the IsSelf "
+        "ENTERS trigger and land DealDamageToOpponentCreature on "
+        f"the stack. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain: life unchanged on both seats (effect targets a
+    # creature, never a player). Bait Bear carries 1 damage on
+    # both engines.
+    assert rust_state.get_life(0) == rust_p0_life_before, (
+        f"Rust p0 life should be unchanged ({rust_p0_life_before}); "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before, (
+        f"Rust p1 life should be unchanged ({rust_p1_life_before}) "
+        "-- DealDamageToOpponentCreature can never target a player; "
+        f"got {rust_state.get_life(1)}"
+    )
+    assert rust_state.get_damage(rust_bait_id) == 1, (
+        "Rust: Bait Bear should carry 1 damage after the ETB burn; "
+        f"got {rust_state.get_damage(rust_bait_id)}"
+    )
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert py_bait.damage == 1, (
+        "Python: Bait Bear should carry 1 damage after the ETB burn; "
+        f"got {py_bait.damage}"
+    )
+    # Cross-engine: same post-drain life totals + same damage on the
+    # bait creature.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    assert rust_state.get_damage(rust_bait_id) == py_bait.damage
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
