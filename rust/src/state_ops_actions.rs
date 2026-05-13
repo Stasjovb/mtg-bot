@@ -761,6 +761,7 @@ impl GameState {
                     obj.attached_to = None;
                     obj.exiled_with_source = None;
                     let sac_printing_id = obj.printing_id;
+                    let sac_obj_id = obj.id;
                     Arc::make_mut(
                         &mut state.players[controller_idx].graveyard,
                     )
@@ -773,6 +774,15 @@ impl GameState {
                         state,
                         sac_printing_id,
                     );
+                    // Slice 10: LTB fan-out at the sacrifice-cost
+                    // bf-exit. Mirrors the Effect-arm bf-exit pattern
+                    // in state_ops_resolve.rs: queue the sac'd id
+                    // and drain so the LEAVES trigger lands on the
+                    // stack before the cost-pay phase returns.
+                    state.pending_leaves_dispatches.push(sac_obj_id);
+                    crate::state_ops_resolve::drain_pending_leaves_dispatches(
+                        state,
+                    )?;
                 }
                 // Phase 6: dispatch the effect.
                 if resolved.is_mana_ability {

@@ -43,6 +43,7 @@ ZONE_HAND = 0
 ZONE_LIBRARY = 1
 ZONE_BATTLEFIELD = 2
 ZONE_GRAVEYARD = 3
+ZONE_EXILE = 5
 
 
 # --- registry-dict shapes used by the substrate tests ---------------
@@ -3161,3 +3162,425 @@ def test_blocks_event_parses_via_cross_engine_bridge():
     }
     ta = _ta_dict_to_python_triggered_ability(ta_dict)
     assert ta.event is Event.BLOCKS
+
+
+# ====================================================================
+# Slice 10 — LTB fan-out to Effect-arm bf-exit sites in
+# state_ops_resolve.rs.
+#
+# Slice 8 wired Event::LeavesBattlefield at the two central
+# primitives (move_object + apply_sbas). Slice 10 extends fan-out to
+# the 13 Effect-arm bf-exit sites in state_ops_resolve.rs (and the
+# sacrifice-cost path in state_ops_actions.rs) that bypass
+# move_object — calling `mark_left_battlefield_if_nonland` directly
+# after a manual `Arc::make_mut(...).push(obj)`. Each gets a
+# matching `pending_leaves_dispatches.push(leaving_obj_id) +
+# drain_pending_leaves_dispatches` call.
+#
+# Pre-Slice-10, an LTB observer would silently miss bounces / exiles
+# / destroys / sacrifices originating from these Effect arms — the
+# bypass paths fire LTB at their Effect arm inline rather than
+# routing through move_object's already-wired drain.
+#
+# These tests pin a representative subset of the 13 sites (one per
+# major Effect family) so a future agent who refactors the
+# bf-exit primitives doesn't accidentally regress the LTB fan-out
+# silently.
+# ====================================================================
+
+
+def test_ltb_fires_on_return_to_hand_effect_arm(engine):
+    """A `source_is_self` LEAVES trigger fires when a creature is
+    bounced via the `return_to_hand` Effect arm (line ~819 in
+    state_ops_resolve.rs). The Effect-arm bf-exit bypasses
+    move_object, so this would silently miss pre-Slice-10.
+
+    Setup: the LTB creature is on p1's bf (DEFENDER side, since
+    `return_to_hand`'s `any_creature` target picks from the
+    defender's bf), and the spell is on p0's hand.
+
+    Resolution divergence note: Rust's `Effect::DrawCards` resolves
+    using `state.active_player`, NOT the stack item's controller —
+    this is a pre-existing engine divergence (see
+    `state_ops_resolve.rs:737`). So when the trigger fires for the
+    p1-controlled creature, the draw lands on p0 (the active
+    player). The test asserts the LIBRARY-SHRINK on p0 to verify
+    the trigger resolved, separate from the controller-of-effect
+    bug.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    crt_id = state.register_and_inject_object(
+        _leaves_self_draw_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        {
+            "name": "Test LTB-Bounce Spell",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [
+                {
+                    "kind": "return_to_hand",
+                    "target": {"kind": "any_creature"},
+                }
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_lib_before = state.library_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Creature is now in p1's hand (its owner).
+    assert state.find_object_zone(crt_id) == ZONE_HAND
+    # The LTB trigger landed on the stack — pre-Slice-10 this
+    # would have been 0.
+    assert state.stack_size() == 1, (
+        "expected the source_is_self LEAVES trigger to fire from "
+        "the return_to_hand Effect arm"
+    )
+    top = state.peek_top_of_stack()
+    assert top["source_obj_id"] == crt_id
+    # Stack item carries the source's controller (p1).
+    assert top["controller"] == 1
+
+    # Resolve the trigger: the draw lands on `state.active_player`
+    # = p0 per the pre-existing controller-of-effect divergence.
+    state.resolve_top_of_stack()
+    assert state.library_sizes[0] == p0_lib_before - 1
+
+
+def test_ltb_fires_on_destroy_target_creature_effect_arm(engine):
+    """LEAVES observer fires when a creature is destroyed via the
+    `destroy_target_creature` Effect arm (line ~2931 in
+    state_ops_resolve.rs). Pre-Slice-10 silent miss; Slice 10 closure.
+
+    Same DrawCards controller-of-effect note as the return_to_hand
+    test above: the trigger fires on p1's creature but the draw
+    lands on `state.active_player` = p0.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    # Victim creature on p1's bf with self-LTB-draw trigger.
+    victim_id = state.register_and_inject_object(
+        _leaves_self_draw_dict(), 1, ZONE_BATTLEFIELD
+    )
+    # Destroy-target spell in p0's hand (`destroy_target` with
+    # `any_creature` filter — the same Doom Blade-shaped effect).
+    spell_obj_id = state.register_and_inject_object(
+        {
+            "name": "Test LTB-Destroy Spell",
+            "card_types": ["Instant"],
+            "mana_cost": {"B": 1, "generic": 1},
+            "effects": [
+                {
+                    "kind": "destroy_target",
+                    "target": {"kind": "any_creature"},
+                }
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_lib_before = state.library_sizes[0]
+    grave_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Victim is in p1's graveyard.
+    assert state.find_object_zone(victim_id) == ZONE_GRAVEYARD
+    assert state.graveyard_sizes[1] == grave_before + 1
+    # The LTB trigger landed on the stack.
+    assert state.stack_size() == 1, (
+        "expected the source_is_self LEAVES trigger to fire from "
+        "the destroy_target_creature Effect arm"
+    )
+    top = state.peek_top_of_stack()
+    assert top["source_obj_id"] == victim_id
+
+    # Resolve the trigger: draw lands on active_player = p0.
+    state.resolve_top_of_stack()
+    assert state.library_sizes[0] == p0_lib_before - 1
+
+
+def test_ltb_observer_fires_on_destroy_target_artifact_effect_arm(engine):
+    """A subject_is_creature LEAVES observer wired on p0's bf fires
+    when ANY bf-exit happens — including via the
+    `destroy_target_artifact` Effect arm (line ~2978). Verifies the
+    observer-side dispatch path on a non-self trigger shape (the
+    observer outlives the bf-exit).
+
+    Note: destroy_target_artifact destroys an artifact, not a
+    creature. The observer's `subject_is_creature` predicate rejects
+    when the subject is a pure-Artifact. So the assertion is that
+    the trigger does NOT fire (the predicate gates out). This pins
+    that the dispatch IS happening — the predicate would never get
+    a chance to filter if dispatch were silently skipped.
+
+    To verify dispatch actually fires, we use a wider-net observer:
+    `subject_is_artifact` (Slice 4 predicate) which matches the
+    destroyed artifact.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    # Artifact observer with `subject_is_artifact` LEAVES trigger.
+    observer = {
+        "name": "Test LTB Artifact Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "subject_is_artifact"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    observer_id = state.register_and_inject_object(observer, 0, ZONE_BATTLEFIELD)
+
+    # Vanilla artifact victim on p1's bf.
+    artifact_id = state.register_and_inject_object(
+        {
+            "name": "Test Junk Artifact (Slice 10)",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    # Destroy-target-artifact spell in p0's hand.
+    spell_obj_id = state.register_and_inject_object(
+        {
+            "name": "Test LTB-DestroyArtifact Spell",
+            "card_types": ["Instant"],
+            "mana_cost": {"B": 1, "generic": 2},
+            "effects": [{"kind": "destroy_target_artifact"}],
+        },
+        0,
+        ZONE_HAND,
+    )
+    library_before = state.library_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Artifact destroyed → graveyard.
+    assert state.find_object_zone(artifact_id) == ZONE_GRAVEYARD
+    # Observer fires on the artifact's LTB.
+    assert state.stack_size() == 1, (
+        "expected the subject_is_artifact LEAVES observer to fire "
+        "from the destroy_target_artifact Effect arm"
+    )
+    top = state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+    # Resolve the trigger: p0 (observer's controller) draws 1.
+    state.resolve_top_of_stack()
+    assert state.library_sizes[0] == library_before - 1
+
+
+def test_ltb_fires_on_exile_target_effect_arm(engine):
+    """A `source_is_self` LEAVES trigger fires when a creature is
+    exiled via the `exile_target` Effect arm (line ~982 in
+    state_ops_resolve.rs). LTB fires for ALL bf-exits regardless of
+    destination zone (graveyard / exile / hand / library).
+
+    DrawCards controller-of-effect note: same as the bounce /
+    destroy tests above — draw lands on active_player = p0.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    crt_id = state.register_and_inject_object(
+        _leaves_self_draw_dict(), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        {
+            "name": "Test LTB-Exile Spell",
+            "card_types": ["Instant"],
+            "mana_cost": {"W": 1, "generic": 1},
+            "effects": [
+                {
+                    "kind": "exile_target",
+                    "target": {"kind": "any_creature"},
+                }
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_lib_before = state.library_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Creature is now in p1's exile.
+    assert state.find_object_zone(crt_id) == ZONE_EXILE
+    # The LTB trigger landed on the stack — extra-observer pattern
+    # (5-zone walk) finds the exiled creature for SourceIsSelf
+    # matching.
+    assert state.stack_size() == 1, (
+        "expected the source_is_self LEAVES trigger to fire from "
+        "the exile_target Effect arm"
+    )
+    top = state.peek_top_of_stack()
+    assert top["source_obj_id"] == crt_id
+
+    state.resolve_top_of_stack()
+    assert state.library_sizes[0] == p0_lib_before - 1
+
+
+def test_ltb_fires_on_destroy_target_land_effect_arm(engine):
+    """A SubjectIsLand (Slice 4) LEAVES observer fires on Strip Mine-
+    shape land destruction (line ~3026 — `destroy_target_land`).
+    Verifies LTB fans out from the land-destroy Effect arm too.
+    LTB fires for lands (unlike the void-flag, which gates on
+    non-land).
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    # Land observer with `subject_is_land` LEAVES trigger.
+    observer = {
+        "name": "Test LTB Land Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "subject_is_land"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    observer_id = state.register_and_inject_object(observer, 0, ZONE_BATTLEFIELD)
+    # Vanilla land victim on p1's bf.
+    land_id = state.register_and_inject_object(
+        {
+            "name": "Test Plains (Slice 10)",
+            "card_types": ["Land"],
+            "mana_cost": {},
+            "effects": [],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    # Destroy-target-land spell.
+    spell_obj_id = state.register_and_inject_object(
+        {
+            "name": "Test LTB-DestroyLand Spell",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"R": 1},
+            "effects": [{"kind": "destroy_target_land"}],
+        },
+        0,
+        ZONE_HAND,
+    )
+    library_before = state.library_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Land destroyed → graveyard.
+    assert state.find_object_zone(land_id) == ZONE_GRAVEYARD
+    # Observer fires.
+    assert state.stack_size() == 1, (
+        "expected the subject_is_land LEAVES observer to fire from "
+        "the destroy_target_land Effect arm (LTB fires for lands)"
+    )
+    top = state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+    state.resolve_top_of_stack()
+    assert state.library_sizes[0] == library_before - 1
+
+
+def test_ltb_fires_on_sacrifice_self_cost_path(engine):
+    """A `source_is_self` LEAVES trigger fires when its host is
+    sacrificed via the `sacrifice_self` activation-cost path in
+    state_ops_actions.rs (not the Effect-arm). Pins that the
+    cost-path bf-exit also fans out LTB.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    # Creature with a free activated ability whose cost is
+    # `sacrifice_self`. The LTB trigger fires when the host hits
+    # the graveyard via the cost-payment path. Effect of the
+    # activation is a no-op DrawCards(0) — we only care that the
+    # cost-side bf-exit fires LTB. (The activated-ability path is
+    # the recent CE20 Slice 2 work — sacrifice_self + tap_self
+    # variants.)
+    host_dict = {
+        "name": "Test LTB-on-Sac Host",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+        "activated_abilities": [
+            {
+                "cost": {"sacrifice_self": True},
+                "effect": {"kind": "draw_cards", "count": 0},
+            }
+        ],
+    }
+    host_id = state.register_and_inject_object(host_dict, 0, ZONE_BATTLEFIELD)
+    library_before = state.library_sizes[0]
+
+    # Activate: cost = sacrifice_self → host hits the graveyard.
+    # LTB fires; resolving it draws 1 card.
+    activate_action = {
+        "kind": "activate_ability",
+        "source_id": host_id,
+        "ability_index": 0,
+    }
+    state.apply_action(activate_action)
+
+    # Host is in p0's graveyard.
+    assert state.find_object_zone(host_id) == ZONE_GRAVEYARD
+    # The LTB trigger landed on the stack (the sacrifice-self
+    # activation effect is a no-op DrawCards(0) that itself does
+    # not push onto the stack — only the LTB trigger does).
+    stack_n = state.stack_size()
+    # The mana-ability bypass would resolve the effect immediately
+    # without pushing onto the stack, but sacrifice_self is NOT a
+    # mana ability (is_mana_ability is false unless the effect
+    # produces mana). The activation's effect is a DrawCards(0)
+    # which IS on the stack — so the stack has both the activation
+    # effect AND the LTB trigger.
+    assert stack_n >= 1, (
+        f"expected at least 1 stack entry post-sacrifice-self "
+        f"activation (got {stack_n}); the source_is_self LEAVES "
+        f"trigger should have fired"
+    )
+    # Resolve the entire stack and assert library shrank by 1
+    # (the LTB trigger drew 1 card; the activation effect's
+    # DrawCards(0) is a no-op).
+    while state.stack_size() > 0:
+        state.resolve_top_of_stack()
+    assert state.library_sizes[0] == library_before - 1, (
+        "expected p0's library to shrink by exactly 1 (the LTB "
+        "trigger's draw); got "
+        f"{state.library_sizes[0]} vs {library_before}"
+    )

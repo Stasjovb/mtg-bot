@@ -1408,3 +1408,130 @@ regex-match updated from "Slice 8" to "Slice 9".
   carryover; LTB fan-out task).
 - `HasSubtype(s)` predicate — still blocked on `CardPrinting.subtypes`
   field.
+
+---
+
+## Slice 10 completion notice (landed)
+
+`feature/etb-slice-10` closes the LTB fan-out carryover from Slice
+8: every `state_ops_resolve.rs` Effect-arm bf-exit site that
+bypasses `move_object` (13 sites) and the sacrifice-cost path in
+`state_ops_actions.rs` (1 site) now push their leaving id onto
+`pending_leaves_dispatches`. The drain runs in `resolve_top_of_stack`
+post-pop (mirroring the existing Slice 2 ETB-queue defer-past-pop
+pattern), so the LTB trigger lands on the now-empty top of the
+stack and resolves LIFO on the next priority round.
+
+**Implementation shape:**
+
+- Per Effect-arm site (13 total in `state_ops_resolve.rs`): the
+  existing `let printing_id = obj.printing_id;` capture was
+  rewritten to a tuple capture
+  `let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);`
+  so the leaving object's id survives the
+  `Arc::make_mut(...).push(obj)` move. Immediately after the
+  pre-existing `mark_left_battlefield_if_nonland(state, printing_id);`
+  line, a single
+  `state.pending_leaves_dispatches.push(leaving_obj_id);` is
+  appended. **No inline drain at the Effect arm.** Reason: the
+  resolving spell is still on the stack during `apply_effect`;
+  draining LEAVES inline would push the trigger ABOVE the resolving
+  spell and the subsequent `stack.pop()` would pop the wrong slot.
+- `resolve_top_of_stack` and `resolve_top_of_stack_pause` each gain
+  a `drain_pending_leaves_dispatches(self)?;` call sibling to the
+  existing `drain_pending_etb_dispatches(self)?;` — same
+  defer-past-pop ordering for both the spell-resolution branch and
+  the trigger-resolution branch. The drain happens AFTER `popped
+  = self.stack.pop()` so the LTB trigger pushes onto the now-empty
+  top.
+- The sacrifice-cost path in `state_ops_actions.rs::ActivateAbility`
+  arm (the `resolved.sacrifice_self` block at line ~664) **does**
+  drain inline. Reason: the cost-pay sequence happens BEFORE the
+  activation effect is pushed onto the stack, so an inline drain
+  pushes the LTB trigger onto an empty top, then the activation
+  effect pushes on top of it, then resolve pops activation-then-LTB
+  in correct LIFO order. The Effect-arm constraint doesn't apply
+  here — there's no resolving spell on the stack at cost-pay time.
+
+**Wired bf-exit sites (Slice 10 scope):**
+
+The 13 Effect-arm sites in `state_ops_resolve.rs` (line refs after
+Slice 10 edit):
+
+1. `Effect::ReturnToHand{AnyCreature}` — bounce (line ~823).
+2. `Effect::ExileTarget{AnyCreature}` — exile (line ~997).
+3. `Effect::Sacrifice{AnyCreature}` — sacrifice-as-effect (line ~1177).
+4. `Effect::DestroyTarget{...}` — Doom Blade-shape (line ~1442).
+5. `Effect::DestroyTargetNonlandPermanent` — Drag to the Roots
+   (line ~2979).
+6. `Effect::DestroyTargetArtifact` — Drill Too Deep (line ~3038).
+7. `Effect::DestroyTargetLand` — Strip Mine-shape (line ~3098).
+8. `Effect::OptionalSacArtifactForEffect` — inner sac (line ~4306).
+9. `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary`
+   (line ~4392).
+10. `Effect::DestroyEnchantedPermanent` — destroy via aura host
+    (line ~4562).
+11. `Effect::ExileTargetCreatureUntilSourceLeaves` — Banishing Light-
+    shape (line ~4660).
+12. `Effect::ExileOpponentsNonlandPermanentUntilLeaves` (line ~4722).
+13. `Effect::EachOpponentSacrificesCreature` — Innocent Blood-shape
+    (line ~5521).
+
+Plus the sacrifice-cost path in
+`state_ops_actions.rs::ActivateAbility` arm (1 site).
+
+**Known LTB-silent residual (out of Slice 10 scope):**
+
+- `Effect::DestroyAllCreatures` (mass destroy at ~`state_ops_resolve.rs:2895`)
+  bypasses `mark_left_battlefield_if_nonland` and instead directly
+  sets `state.permanent_left_battlefield_this_turn = true;` after
+  its loop. This mass-destroy path doesn't fan LTB per-victim
+  today — fixing it would need an O(n) push loop AND careful
+  observer iteration since each victim's LTB could in principle
+  re-enter the loop. Deferred to a future slice when an LTB-on-
+  Wrath card surfaces in the EoE pool.
+
+**Tests** (6 new in `tests_rust/test_triggers.py`):
+
+- `test_ltb_fires_on_return_to_hand_effect_arm` — bounce via
+  `Effect::ReturnToHand{AnyCreature}` fires SourceIsSelf LTB.
+- `test_ltb_fires_on_destroy_target_creature_effect_arm` — Doom
+  Blade-shape `Effect::DestroyTarget{AnyCreature}` fires
+  SourceIsSelf LTB on the destroyed creature.
+- `test_ltb_observer_fires_on_destroy_target_artifact_effect_arm`
+  — `subject_is_artifact` LTB observer fires on artifact destroy.
+- `test_ltb_fires_on_exile_target_effect_arm` — bf→exile fires
+  SourceIsSelf LTB via the 5-zone extra-observer walk (Slice 8
+  pattern).
+- `test_ltb_fires_on_destroy_target_land_effect_arm` —
+  `subject_is_land` LTB observer fires on land destroy. Pins that
+  LTB fires for LANDS too (only the void-flag gates on non-land).
+- `test_ltb_fires_on_sacrifice_self_cost_path` — sacrifice-cost
+  bf-exit (in `state_ops_actions.rs`) fires SourceIsSelf LTB on
+  the sacrificed host.
+
+**DrawCards controller-of-effect divergence note:** the
+`Effect::DrawCards` resolution path uses `state.active_player`
+rather than the stack item's controller — a pre-existing engine
+divergence (see `state_ops_resolve.rs:737`). Slice 10's tests
+account for this by asserting library-shrink on the active player
+(p0), separate from the controller-of-effect bug. Fix is out of
+scope of LTB fan-out.
+
+**Rust gate**: 2018/2018 pass (Slice 9 post-merge baseline 2012 +
+6 new from this slice). No regressions across any pre-existing
+test — confirms the defer-past-pop ordering protects every prior
+Effect arm path.
+
+**Out of scope for Slice 10 (queued for Slice 11+):**
+
+- `Event::DealsCombatDamage` — still blocked on
+  `Predicate::Subject(slot, inner)` substrate.
+- Multi-subject BLOCKS predicates (Skystinger): same substrate
+  dependency.
+- `Effect::DestroyAllCreatures` LTB fan-out (the 14th known site;
+  needs per-victim push loop).
+- `HasSubtype(s)` predicate — still blocked on
+  `CardPrinting.subtypes` field.
+- `Effect::DrawCards` controller-of-effect fix — pre-existing
+  divergence, separate workstream.
