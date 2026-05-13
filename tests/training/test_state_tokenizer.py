@@ -693,6 +693,467 @@ def test_printing_id_caps_to_vocab_size() -> None:
 # ---------------------------------------------------------------------
 
 
+def test_zones_populated_emit_their_tokens() -> None:
+    """Cards in the viewer's graveyard / exile and the opponent's
+    graveyard / exile each produce one token of the appropriate
+    type."""
+    from mtg_bot.training.structured_model import (
+        TOKEN_TYPE_EXILE_OPPONENT, TOKEN_TYPE_EXILE_VIEWER,
+        TOKEN_TYPE_GRAVEYARD_OPPONENT, TOKEN_TYPE_GRAVEYARD_VIEWER,
+    )
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    sample = next(iter(printings.values()))
+    # Viewer graveyard + exile.
+    state.players[0].graveyard.append(GameObject(
+        id=100, printing=sample, owner_id=0, controller_id=0,
+        zone=Zone.GRAVEYARD,
+    ))
+    state.players[0].exile.append(GameObject(
+        id=101, printing=sample, owner_id=0, controller_id=0,
+        zone=Zone.EXILE,
+    ))
+    # Opponent graveyard + exile.
+    state.players[1].graveyard.append(GameObject(
+        id=200, printing=sample, owner_id=1, controller_id=1,
+        zone=Zone.GRAVEYARD,
+    ))
+    state.players[1].exile.append(GameObject(
+        id=201, printing=sample, owner_id=1, controller_id=1,
+        zone=Zone.EXILE,
+    ))
+    out = tokenize_state(state, viewer_id=0)
+    types = out["token_type"].tolist()
+    assert TOKEN_TYPE_GRAVEYARD_VIEWER in types
+    assert TOKEN_TYPE_EXILE_VIEWER in types
+    assert TOKEN_TYPE_GRAVEYARD_OPPONENT in types
+    assert TOKEN_TYPE_EXILE_OPPONENT in types
+
+
+def test_cast_spell_token_records_mana_cost_scalar() -> None:
+    """CastSpell's source_printing.mana_cost.total / 10 lands in the
+    mana_cost_paid scalar slot."""
+    from mtg_bot.training.structured_model import SCALAR_FIELD_MANA_COST_PAID
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    # Pick a non-land card with a known CMC > 0.
+    spell_printing = next(
+        p for name, p in printings.items()
+        if "Land" not in p.card_types and p.mana_cost.total > 0
+    )
+    spell_card = GameObject(
+        id=55, printing=spell_printing, owner_id=0, controller_id=0,
+        zone=Zone.HAND,
+    )
+    state.players[0].hand.append(spell_card)
+    ev = ActionEvent(
+        action=CastSpell(card_id=55),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    action_rows = out["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    mana_paid = out["token_scalars"][action_rows, SCALAR_FIELD_MANA_COST_PAID][0]
+    assert mana_paid > 0
+
+
+def test_cast_spell_variants() -> None:
+    """Each CastSpell modifier (kicked / warp / impending / free /
+    room half) maps to a distinct variant id."""
+    from mtg_bot.training.state_tokenizer import (
+        VARIANT_CAST_FOR_FREE, VARIANT_IMPENDING, VARIANT_KICKED,
+        VARIANT_NORMAL, VARIANT_ROOM_HALF_0, VARIANT_ROOM_HALF_1,
+        VARIANT_WARP, _cast_variant,
+    )
+    assert _cast_variant(CastSpell(card_id=1)) == VARIANT_NORMAL
+    assert _cast_variant(CastSpell(card_id=1, kicked=True)) == VARIANT_KICKED
+    assert _cast_variant(CastSpell(card_id=1, use_warp=True)) == VARIANT_WARP
+    assert _cast_variant(
+        CastSpell(card_id=1, use_impending=True),
+    ) == VARIANT_IMPENDING
+    assert _cast_variant(
+        CastSpell(card_id=1, cast_for_free=True),
+    ) == VARIANT_CAST_FOR_FREE
+    # Room half — output is either half-0 or half-1, deterministic.
+    cv = _cast_variant(CastSpell(card_id=1, cast_room_half="X"))
+    assert cv in (VARIANT_ROOM_HALF_0, VARIANT_ROOM_HALF_1)
+
+
+def test_unlock_room_half_records_variant() -> None:
+    """UnlockRoomHalf picks a room-half variant id deterministically."""
+    from mtg_bot.actions import UnlockRoomHalf as _U
+    from mtg_bot.training.state_tokenizer import (
+        VARIANT_ROOM_HALF_0, VARIANT_ROOM_HALF_1,
+    )
+    state = _empty_state()
+    ev = ActionEvent(
+        action=_U(card_id=10, half_name="South Door"),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = out["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    v = out["token_emb_ids"][rows, EMB_FIELD_VARIANT][0]
+    assert v in (VARIANT_ROOM_HALF_0, VARIANT_ROOM_HALF_1)
+
+
+def test_activate_ability_non_mana_is_kept() -> None:
+    """Non-land sources don't trigger the mana-ability filter."""
+    from mtg_bot.actions import ActivateAbility
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    non_land = next(
+        p for name, p in printings.items() if "Land" not in p.card_types
+    )
+    state.battlefield.append(GameObject(
+        id=33, printing=non_land,
+        owner_id=0, controller_id=0, zone=Zone.BATTLEFIELD,
+    ))
+    ev = ActionEvent(
+        action=ActivateAbility(source_id=33, ability_index=0),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    types = out["token_type"].tolist()
+    assert TOKEN_TYPE_ACTION_EVENT in types
+
+
+def test_activate_station_records_crew_target() -> None:
+    """ActivateStation puts the crew creature's printing in the
+    target slot."""
+    from mtg_bot.actions import ActivateStation
+    from mtg_bot.training.state_tokenizer import TARGET_KIND_PERMANENT
+    from mtg_bot.training.structured_model import EMB_FIELD_TARGET_KIND
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    sample = next(iter(printings.values()))
+    state.battlefield.append(GameObject(
+        id=44, printing=sample, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    ))
+    state.battlefield.append(GameObject(
+        id=45, printing=sample, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    ))
+    ev = ActionEvent(
+        action=ActivateStation(spacecraft_id=44, crew_id=45),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = out["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    assert (
+        out["token_emb_ids"][rows, EMB_FIELD_TARGET_KIND][0]
+        == TARGET_KIND_PERMANENT
+    )
+
+
+def test_turn_face_up_action() -> None:
+    from mtg_bot.actions import TurnFaceUp
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    sample = next(iter(printings.values()))
+    state.battlefield.append(GameObject(
+        id=77, printing=sample, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    ))
+    ev = ActionEvent(
+        action=TurnFaceUp(card_id=77),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = out["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    kind = out["token_emb_ids"][rows, EMB_FIELD_ACTION_KIND][0]
+    assert kind == ACTION_KIND_VOCAB["TurnFaceUp"]
+
+
+def test_resolution_x_decision_records_x_in_mana_scalar() -> None:
+    from mtg_bot.search.resolution_decisions import ResolutionXDecision
+    from mtg_bot.training.structured_model import SCALAR_FIELD_MANA_COST_PAID
+    state = _empty_state()
+    ev = ActionEvent(
+        action=ResolutionXDecision(x_value=5),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = out["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    paid = out["token_scalars"][rows, SCALAR_FIELD_MANA_COST_PAID][0]
+    assert paid == 0.5
+
+
+def test_resolution_discard_finds_card_in_hand() -> None:
+    """ResolutionDiscardDecision looks up the discarded card via id
+    and records its printing as the target."""
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionDiscardDecision,
+    )
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    sample = next(iter(printings.values()))
+    state.players[0].hand.append(GameObject(
+        id=88, printing=sample, owner_id=0, controller_id=0,
+        zone=Zone.HAND,
+    ))
+    ev = ActionEvent(
+        action=ResolutionDiscardDecision(card_id=88),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = out["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    target = out["token_emb_ids"][rows, EMB_FIELD_TARGET_PRINTING][0]
+    assert target != PRINTING_NA
+
+
+def test_resolution_sacrifice_records_target() -> None:
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionSacrificeDecision,
+    )
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    sample = next(iter(printings.values()))
+    state.battlefield.append(GameObject(
+        id=300, printing=sample, owner_id=0, controller_id=0,
+        zone=Zone.BATTLEFIELD,
+    ))
+    ev = ActionEvent(
+        action=ResolutionSacrificeDecision(object_id=300),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = out["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    assert out["token_emb_ids"][rows, EMB_FIELD_TARGET_PRINTING][0] != PRINTING_NA
+
+
+def test_resolution_mode_yes_no_shock_devour_emit_action_tokens() -> None:
+    """Mode / YesNo / ShockLife / DevourLands resolutions all emit a
+    token with their action_kind. These mostly carry no target
+    information; we just exercise the branches."""
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionDevourLandsDecision, ResolutionModeDecision,
+        ResolutionShockLifeDecision, ResolutionYesNoDecision,
+    )
+    state = _empty_state()
+    actions = [
+        ResolutionModeDecision(mode_index=0),
+        ResolutionYesNoDecision(yes=True),
+        ResolutionYesNoDecision(yes=False),
+        ResolutionShockLifeDecision(pay=True),
+        ResolutionDevourLandsDecision(land_ids=()),
+    ]
+    events = [
+        ActionEvent(action=a, state_snapshot=state, turn=1,
+                    step=Step.PRECOMBAT_MAIN, actor_player_id=0)
+        for a in actions
+    ]
+    out = tokenize_state(state, viewer_id=0, recent_actions=events)
+    n_action = int((out["token_type"] == TOKEN_TYPE_ACTION_EVENT).sum())
+    assert n_action == len(events)
+
+
+def test_resolution_card_from_opponent_hand_records_target() -> None:
+    """Thoughtseize-style pick is public to both seats."""
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionCardFromOpponentHandDecision,
+    )
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    sample = next(iter(printings.values()))
+    state.players[1].hand.append(GameObject(
+        id=999, printing=sample, owner_id=1, controller_id=1,
+        zone=Zone.HAND,
+    ))
+    ev = ActionEvent(
+        action=ResolutionCardFromOpponentHandDecision(card_id=999),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = out["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    assert out["token_emb_ids"][rows, EMB_FIELD_TARGET_PRINTING][0] != PRINTING_NA
+    # And from the opposite viewer.
+    out2 = tokenize_state(state, viewer_id=1, recent_actions=[ev])
+    rows2 = out2["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    assert out2["token_emb_ids"][rows2, EMB_FIELD_TARGET_PRINTING][0] != PRINTING_NA
+
+
+def test_stack_with_target_records_target_kind() -> None:
+    """Stack item with a target ``(kind, id)`` records the kind."""
+    from mtg_bot.training.state_tokenizer import TARGET_KIND_PLAYER
+    from mtg_bot.training.structured_model import EMB_FIELD_TARGET_KIND
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    sample = next(iter(printings.values()))
+    spell_obj = GameObject(
+        id=99, printing=sample, owner_id=0, controller_id=0,
+        zone=Zone.STACK,
+    )
+    state.stack.append(StackItem(
+        source=spell_obj, controller_id=0,
+        targets=(("player", 1),),
+    ))
+    out = tokenize_state(state, viewer_id=0)
+    # Stack token is the last one (after global).
+    stack_row_idx = out["token_type"].tolist().index(TOKEN_TYPE_STACK_ITEM)
+    assert (
+        out["token_emb_ids"][stack_row_idx, EMB_FIELD_TARGET_KIND]
+        == TARGET_KIND_PLAYER
+    )
+
+
+def test_pass_priority_token_via_make_action_token_is_tolerated() -> None:
+    """The action-token builder's defensive PassPriority branch — the
+    filter normally strips these, but the builder must not crash if
+    called directly with one."""
+    from mtg_bot.actions import PassPriority
+    from mtg_bot.training.state_tokenizer import _make_action_token
+    state = _empty_state()
+    tt, emb, sc = _make_action_token(
+        action=PassPriority(),
+        state_at_action=state,
+        action_turn=1, current_turn=1,
+        viewer_id=0, actor_player_id=0,
+        state_step=Step.PRECOMBAT_MAIN,
+        n_printings_cap=320,
+    )
+    assert tt == TOKEN_TYPE_ACTION_EVENT
+
+
+def test_step_id_for_none_returns_na() -> None:
+    from mtg_bot.training.state_tokenizer import STEP_NA, _step_id
+    assert _step_id(None) == STEP_NA
+
+
+def test_step_id_unknown_step_returns_na() -> None:
+    """An object that isn't an engine Step falls into ValueError path
+    on STEP_ORDER.index → returns NA."""
+    from mtg_bot.training.state_tokenizer import STEP_NA, _step_id
+    assert _step_id("nonexistent-step") == STEP_NA
+
+
+def test_mana_ability_filter_missing_source_keeps_action() -> None:
+    """If the ActivateAbility's source_id isn't on the battlefield,
+    we can't confirm it's a mana ability — keep the token."""
+    from mtg_bot.actions import ActivateAbility
+    from mtg_bot.training.state_tokenizer import _is_mana_ability
+    state = _empty_state()
+    action = ActivateAbility(source_id=9999, ability_index=0)
+    assert _is_mana_ability(action, state) is False
+
+
+def test_printing_id_unknown_name_returns_na() -> None:
+    """A printing whose name isn't in the active source returns NA."""
+    from mtg_bot.cards.base import ManaCost
+    from mtg_bot.cards.base import CardPrinting as CP
+    fake = CP(
+        name="UNKNOWN-PRINTING-FOR-TEST",
+        mana_cost_str="", mana_cost=ManaCost(),
+        type_line="", supertypes=(), card_types=(), subtypes=(),
+    )
+    assert printing_id(fake) == PRINTING_NA
+
+
+def test_declare_blockers_with_no_assignments_emits_one_token() -> None:
+    """DeclareBlockers with no assignments doesn't go through the
+    per-blocker expander — it lands as one defensive token."""
+    from mtg_bot.actions import DeclareBlockers
+    state = _empty_state()
+    ev = ActionEvent(
+        action=DeclareBlockers(assignments=()),
+        state_snapshot=state, turn=1, step=Step.DECLARE_BLOCKERS,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = (out["token_type"] == TOKEN_TYPE_ACTION_EVENT).sum()
+    assert rows == 1
+
+
+def test_declare_attackers_with_no_attackers_emits_one_token() -> None:
+    """Same defensive path for empty DeclareAttackers."""
+    from mtg_bot.actions import DeclareAttackers
+    state = _empty_state()
+    ev = ActionEvent(
+        action=DeclareAttackers(attacker_ids=frozenset()),
+        state_snapshot=state, turn=1, step=Step.DECLARE_ATTACKERS,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = (out["token_type"] == TOKEN_TYPE_ACTION_EVENT).sum()
+    assert rows == 1
+
+
+def test_resolution_discard_finds_card_in_graveyard() -> None:
+    """When the discarded card has already been moved to graveyard
+    (post-effect snapshot), the fallback lookup still resolves the
+    printing."""
+    from mtg_bot.search.resolution_decisions import (
+        ResolutionDiscardDecision,
+    )
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    sample = next(iter(printings.values()))
+    state.players[0].graveyard.append(GameObject(
+        id=4242, printing=sample, owner_id=0, controller_id=0,
+        zone=Zone.GRAVEYARD,
+    ))
+    ev = ActionEvent(
+        action=ResolutionDiscardDecision(card_id=4242),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = out["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    assert out["token_emb_ids"][rows, EMB_FIELD_TARGET_PRINTING][0] != PRINTING_NA
+
+
+def test_cast_spell_from_stack_falls_back_to_stack_lookup() -> None:
+    """When the cast spell's id isn't in any hand (already moved to
+    stack), the fallback _find_object_printing finds it."""
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    sample = next(iter(printings.values()))
+    spell_obj = GameObject(
+        id=1234, printing=sample, owner_id=0, controller_id=0,
+        zone=Zone.STACK,
+    )
+    state.stack.append(
+        StackItem(source=spell_obj, controller_id=0, targets=()),
+    )
+    ev = ActionEvent(
+        action=CastSpell(card_id=1234),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = out["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    assert out["token_emb_ids"][rows, EMB_FIELD_PRINTING][0] != PRINTING_NA
+
+
+def test_play_land_from_stack_falls_back_to_stack_lookup() -> None:
+    state = _empty_state()
+    printings = get_active_source().get_printings()
+    sample = next(iter(printings.values()))
+    land_obj = GameObject(
+        id=5555, printing=sample, owner_id=0, controller_id=0,
+        zone=Zone.STACK,
+    )
+    state.stack.append(
+        StackItem(source=land_obj, controller_id=0, targets=()),
+    )
+    ev = ActionEvent(
+        action=PlayLand(card_id=5555),
+        state_snapshot=state, turn=1, step=Step.PRECOMBAT_MAIN,
+        actor_player_id=0,
+    )
+    out = tokenize_state(state, viewer_id=0, recent_actions=[ev])
+    rows = out["token_type"] == TOKEN_TYPE_ACTION_EVENT
+    assert out["token_emb_ids"][rows, EMB_FIELD_PRINTING][0] != PRINTING_NA
+
+
 def test_tokenize_real_engine_state_after_a_few_moves() -> None:
     """Plays a couple of decisions through MtgGameStateAdapter and
     confirms the tokenizer handles the resulting state shape."""
