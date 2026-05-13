@@ -147,7 +147,13 @@ def test_activated_abilities_default_mana_cost_is_zero(empty_registry):
 
 
 def test_activated_abilities_unknown_cost_key_raises(empty_registry):
-    """Unknown activation_cost keys raise loudly at register time."""
+    """Unknown activation_cost keys raise loudly at register time.
+
+    CE20 Slice 2 added `sacrifice_self` to the allow-list; this test
+    now uses `pay_life` (a still-unmodeled cost variant) as the
+    canonical "unknown" key. Future cost-variant slices that ship
+    `pay_life` will update this test in lockstep.
+    """
     d = {
         "name": "Bad Cost Card",
         "card_types": ["Creature"],
@@ -157,7 +163,7 @@ def test_activated_abilities_unknown_cost_key_raises(empty_registry):
         "toughness": 1,
         "activated_abilities": [
             {
-                "cost": {"mana": {"G": 1}, "sacrifice_self": True},
+                "cost": {"mana": {"G": 1}, "pay_life": 1},
                 "effect": {"kind": "draw_cards", "count": 1},
                 "is_mana_ability": False,
             }
@@ -998,3 +1004,410 @@ def test_bridge_apply_with_invalid_ability_index_raises(synthetic_state):
                 "ability_index": 1,
             }
         )
+
+
+# --- SacrificeSelf cost (CE20 follow-up Slice 2) ---------------------
+#
+# `ActivationCost.sacrifice_self: bool` extends the cost shape with a
+# "sacrifice this permanent" portion. Dispatch order on activation:
+#   1. Locate source on a battlefield.
+#   2. Resolve ability shape.
+#   3. tap_self precheck (CR 302.1 sickness gate for creatures).
+#   4. pay_mana_cost on controller's pool.
+#   5a. commit tap_self.
+#   5b. commit sacrifice_self: move source to its controller's
+#       graveyard via the existing move_object primitive shape (zero
+#       damage/counters/attached_to on the way out, preserve
+#       summoning_sick per CE13 I35). LTB void-flag stamps via
+#       `mark_left_battlefield_if_nonland` (CE13 / I29).
+#   6. dispatch the effect (stack push for non-mana abilities).
+#
+# 35 EoE printings carry this shape. Slice 2 covers ONLY
+# sacrifice_self; targeted sacrifice variants ride on Equipment-equip
+# Slice 4's target-pick substrate.
+
+
+def _illvoi_galeblade_dict():
+    """A 2-mana sacrifice-self draw-a-card shape — mirrors the EoE
+    printing "Illvoi Galeblade" (`{2}, Sacrifice this creature: Draw
+    a card.`). Slice 2 simplification: no tap_self on the cost (the
+    real card has just the mana + sac). is_mana_ability=False so the
+    draw goes through the stack.
+    """
+    return {
+        "name": "Illvoi Galeblade",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 1,
+        "activated_abilities": [
+            {
+                "cost": {
+                    "mana": {"generic": 2},
+                    "sacrifice_self": True,
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+
+
+def _free_sacrifice_self_dict():
+    """A degenerate "free sacrifice for nothing" shape — zero mana
+    cost + sacrifice_self + GainLife(0). Useful for isolating the
+    sacrifice commit without mana / draw confounders.
+    """
+    return {
+        "name": "Free Sac Token",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "activated_abilities": [
+            {
+                "cost": {"sacrifice_self": True},
+                "effect": {"kind": "gain_life", "amount": 0},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+
+
+def _tap_and_sac_self_dict():
+    """`{T}, Sacrifice this: Draw a card` — composes both cost
+    primitives. Pins the dispatch ordering tap → sac.
+    """
+    return {
+        "name": "Tap And Sac",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "activated_abilities": [
+            {
+                "cost": {"tap_self": True, "sacrifice_self": True},
+                "effect": {"kind": "draw_cards", "count": 1},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+
+
+def test_sacrifice_self_parses(empty_registry):
+    """`sacrifice_self: True` parses without raising; lands on the
+    printing's cost shape.
+    """
+    pid = empty_registry.register_printing(_illvoi_galeblade_dict())
+    assert pid == 0
+
+
+def test_sacrifice_self_parses_with_zero_mana(empty_registry):
+    """Free-cost sacrifice-self is legal — no mana key, just
+    `sacrifice_self: True`.
+    """
+    pid = empty_registry.register_printing(_free_sacrifice_self_dict())
+    assert pid == 0
+
+
+def test_sacrifice_self_parses_with_tap_and_sac(empty_registry):
+    """`tap_self: True` AND `sacrifice_self: True` co-compose.
+    Both keys parse together; the dispatcher commits tap first, then
+    sacrifice.
+    """
+    pid = empty_registry.register_printing(_tap_and_sac_self_dict())
+    assert pid == 0
+
+
+def test_sacrifice_self_invalid_bool_raises(empty_registry):
+    """`sacrifice_self` must be a bool — string raises loud."""
+    d = {
+        "name": "Bad Card",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "activated_abilities": [
+            {
+                "cost": {"sacrifice_self": "yes"},
+                "effect": {"kind": "gain_life", "amount": 0},
+                "is_mana_ability": False,
+            }
+        ],
+    }
+    with pytest.raises(
+        ValueError, match=r"sacrifice_self must be a bool"
+    ):
+        empty_registry.register_printing(d)
+
+
+def test_sacrifice_self_apply_moves_source_to_graveyard(synthetic_state):
+    """**Load-bearing Slice 2 smoke.** Apply ActivateAbility on an
+    Illvoi Galeblade-shape source: cost pays (2 generic), source moves
+    to controller's graveyard, stack carries the draw effect waiting
+    to resolve. After resolve, hand grows by 1 / library shrinks by 1.
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _illvoi_galeblade_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    # Pay 2 generic from pool (no colored cost). Colorless counts.
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 2)
+
+    gy_before = synthetic_state.graveyard_sizes[0]
+    bf_before_has_card = any(
+        o["id"] == card_id for o in synthetic_state.battlefield_snapshot()
+    )
+    assert bf_before_has_card
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": card_id,
+            "ability_index": 0,
+        }
+    )
+
+    # Source moved to graveyard.
+    bf_after_has_card = any(
+        o["id"] == card_id for o in synthetic_state.battlefield_snapshot()
+    )
+    assert not bf_after_has_card, (
+        "Source should be off the battlefield after sacrifice_self"
+    )
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 1, (
+        f"Controller's graveyard should grow by 1; got "
+        f"{synthetic_state.graveyard_sizes[0]} vs {gy_before + 1}"
+    )
+    # Mana pool drained.
+    assert synthetic_state.get_mana_pool(0)["C"] == 0
+    # Stack has the draw effect (is_mana_ability=False).
+    assert synthetic_state.stack_size() == 1
+
+
+def test_sacrifice_self_pays_before_effect_resolves(synthetic_state):
+    """CR 117.10 / 119 — costs pay BEFORE effects resolve. After the
+    activate apply, the effect is on the stack but hasn't fired yet.
+    Hand is unchanged; the source is already in the graveyard. After
+    resolve_top_of_stack, hand grows.
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _illvoi_galeblade_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 2)
+
+    hand_before = synthetic_state.hand_sizes[0]
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": card_id,
+            "ability_index": 0,
+        }
+    )
+
+    # Source sac'd, draw waiting on stack.
+    assert synthetic_state.hand_sizes[0] == hand_before, (
+        "Hand should not grow until the trigger resolves"
+    )
+    assert synthetic_state.stack_size() == 1
+
+    resolved = synthetic_state.resolve_top_of_stack()
+    assert resolved is not None
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+
+
+def test_sacrifice_self_raises_when_mana_insufficient(synthetic_state):
+    """If mana can't be paid, the sacrifice DOES NOT happen — source
+    stays on bf, pool unchanged, no stack push. Apply raises with the
+    affordability error.
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _illvoi_galeblade_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.empty_mana_pool(0)
+    # No mana — cost is unaffordable.
+
+    gy_before = synthetic_state.graveyard_sizes[0]
+    stack_before = synthetic_state.stack_size()
+
+    with pytest.raises(
+        ValueError, match=r"unaffordable from controller's mana pool"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": card_id,
+                "ability_index": 0,
+            }
+        )
+
+    # No mutation.
+    bf_still_has_card = any(
+        o["id"] == card_id for o in synthetic_state.battlefield_snapshot()
+    )
+    assert bf_still_has_card, (
+        "Source should stay on bf when mana cost fails"
+    )
+    assert synthetic_state.graveyard_sizes[0] == gy_before
+    assert synthetic_state.stack_size() == stack_before
+
+
+def test_sacrifice_self_tap_and_sac_composes(synthetic_state):
+    """`tap_self: True` + `sacrifice_self: True`: source taps first
+    (Phase 5), then sacrifices (Phase 5b). Net observable result:
+    source is in graveyard (already moved off bf, so the tap state
+    only matters for any in-flight trigger between phases — out of
+    scope of this slice).
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _tap_and_sac_self_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    gy_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": card_id,
+            "ability_index": 0,
+        }
+    )
+
+    # Source moved to graveyard despite the tap-self cost having
+    # committed first (Phase 5 wrote tapped=true, then Phase 5b moved
+    # the object to gy).
+    bf_after_has_card = any(
+        o["id"] == card_id for o in synthetic_state.battlefield_snapshot()
+    )
+    assert not bf_after_has_card
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 1
+
+
+def test_sacrifice_self_tap_gate_rejects_already_tapped(synthetic_state):
+    """If `tap_self=True` AND `sacrifice_self=True`, the tap precheck
+    fires FIRST (Phase 3) — an already-tapped source rejects the
+    activation BEFORE any mana / sacrifice commit. No state mutation.
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _tap_and_sac_self_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.tap_object(card_id)
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    gy_before = synthetic_state.graveyard_sizes[0]
+
+    with pytest.raises(ValueError, match=r"already tapped"):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": card_id,
+                "ability_index": 0,
+            }
+        )
+
+    # Pool unchanged, source on bf still tapped, gy unchanged.
+    assert synthetic_state.get_mana_pool(0)["C"] == 1
+    bf_has = any(
+        o["id"] == card_id for o in synthetic_state.battlefield_snapshot()
+    )
+    assert bf_has
+    assert synthetic_state.graveyard_sizes[0] == gy_before
+
+
+def test_sacrifice_self_credits_correct_controller_graveyard(synthetic_state):
+    """A sacrifice-self source on player 1's bf activated by player 1
+    moves to player 1's graveyard, not player 0's. Pins the
+    controller-resolution invariant from the bridge slice.
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _illvoi_galeblade_dict(), 1, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.empty_mana_pool(1)
+    synthetic_state.add_mana(1, "C", 2)
+
+    p0_gy_before = synthetic_state.graveyard_sizes[0]
+    p1_gy_before = synthetic_state.graveyard_sizes[1]
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": card_id,
+            "ability_index": 0,
+        }
+    )
+
+    assert synthetic_state.graveyard_sizes[0] == p0_gy_before, (
+        "Player 0's gy should NOT grow"
+    )
+    assert synthetic_state.graveyard_sizes[1] == p1_gy_before + 1, (
+        "Player 1's gy should grow by 1"
+    )
+
+
+def test_sacrifice_self_no_emission_when_already_tapped_with_tap_self(
+    synthetic_state,
+):
+    """When BOTH `tap_self=True` AND `sacrifice_self=True`, the
+    emission filter still gates on tap state — a tapped source
+    doesn't emit. Sacrifice-self alone (no tap_self) would emit
+    regardless of tap state (covered by the next test).
+    """
+    card_id = synthetic_state.register_and_inject_object(
+        _tap_and_sac_self_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.tap_object(card_id)
+    synthetic_state.empty_mana_pool(0)
+    synthetic_state.add_mana(0, "C", 1)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    card_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == card_id
+    ]
+    assert card_emits == [], (
+        f"Tapped tap+sac source should not emit. Got {card_emits}"
+    )
+
+
+def test_sacrifice_self_no_emission_when_mana_unaffordable(synthetic_state):
+    """Sacrifice-self with a {2} mana cost doesn't emit when the pool
+    + auto-tap headroom can't cover 2 generic. Pool-gating still
+    fires per I50.
+    """
+    # Tap out the synthetic state's default Forests so the headroom
+    # composer can't cover the cost.
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    card_id = synthetic_state.register_and_inject_object(
+        _illvoi_galeblade_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(card_id, False)
+    synthetic_state.empty_mana_pool(0)
+
+    synthetic_state.set_phase(3)
+    actions = synthetic_state.legal_decisions(0)
+    card_emits = [
+        a for a in actions
+        if a.get("kind") == "activate_ability"
+        and a.get("source_id") == card_id
+    ]
+    assert card_emits == [], (
+        f"Unaffordable sacrifice-self should not emit. Got {card_emits}"
+    )

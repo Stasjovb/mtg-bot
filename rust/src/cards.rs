@@ -2175,6 +2175,33 @@ pub struct ActivationCost {
     /// the activation. Mirrors Python's
     /// `ActivationCost.tap_self`.
     pub tap_self: bool,
+    /// "Sacrifice this permanent" portion of the cost. When `true`,
+    /// the dispatcher moves the source from its current battlefield
+    /// to its controller's graveyard AFTER mana + tap costs commit
+    /// successfully. Mirrors Python's
+    /// `ActivationCost.sacrifice_self`. 35 EoE printings carry this
+    /// shape — `Honored Knight-Captain`, `Illvoi Galeblade`,
+    /// `Cryogen Relic`, every Lander token, etc.
+    ///
+    /// **Composes with `tap_self`.** `tap_self=true` AND
+    /// `sacrifice_self=true` is legal — the source taps before it
+    /// dies (observable for triggers that fire on tap state if any).
+    /// The dispatch commits in order: mana → tap → sacrifice.
+    ///
+    /// **Self-only Slice 1 scope.** Targeted sacrifice shapes
+    /// (`sacrifice_another_creature`, `sacrifice_a_land`,
+    /// `sacrifice_food`, etc.) need target fan-out at
+    /// `legal_decisions` emission and a new optional
+    /// `target_creature_id` key on the ActivateAbility dict; deferred
+    /// to a follow-up slice once Equipment-equip ships the target
+    /// substrate.
+    ///
+    /// **LTB void-flag** (CE13 / I29 closure): the dispatch routes
+    /// the sacrificed object through `mark_left_battlefield_if_nonland`
+    /// so the existing void-tracking flag stamps correctly. No new
+    /// wiring needed — sacrifice rides on the same LTB primitive
+    /// every other bf-exit uses.
+    pub sacrifice_self: bool,
 }
 
 /// An activated ability on a `CardPrinting`. Mirrors a strict subset
@@ -3725,6 +3752,7 @@ pub fn apply_mana_produced_bridge(
         cost: ActivationCost {
             mana: ManaCost::default(),
             tap_self: true,
+            sacrifice_self: false,
         },
         effect: bridge_effect,
         is_mana_ability: true,
@@ -3964,6 +3992,7 @@ fn parse_activated_ability(
 
 /// Parse one `ActivationCost` from a registry dict. Slice 1 supports
 /// `mana` (optional ManaCost dict) + `tap_self` (optional bool).
+/// CE20 follow-up Slice 2 adds `sacrifice_self` (optional bool).
 /// Unknown keys raise so future field additions surface as parser
 /// errors rather than silent drops.
 fn parse_activation_cost(
@@ -3973,11 +4002,11 @@ fn parse_activation_cost(
     for (key_obj, _) in dict.iter() {
         let key: String = key_obj.extract()?;
         match key.as_str() {
-            "mana" | "tap_self" => {}
+            "mana" | "tap_self" | "sacrifice_self" => {}
             other => {
                 return Err(PyValueError::new_err(format!(
                     "unknown activation_cost key {other:?}; \
-                     valid (Slice 1): mana, tap_self"
+                     valid: mana, tap_self, sacrifice_self"
                 )));
             }
         }
@@ -3991,6 +4020,13 @@ fn parse_activation_cost(
     if let Some(tap_any) = dict.get_item("tap_self")? {
         cost.tap_self = tap_any.extract::<bool>().map_err(|_| {
             PyValueError::new_err("activation_cost.tap_self must be a bool")
+        })?;
+    }
+    if let Some(sac_any) = dict.get_item("sacrifice_self")? {
+        cost.sacrifice_self = sac_any.extract::<bool>().map_err(|_| {
+            PyValueError::new_err(
+                "activation_cost.sacrifice_self must be a bool",
+            )
         })?;
     }
     Ok(cost)
