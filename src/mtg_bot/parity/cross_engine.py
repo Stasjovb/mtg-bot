@@ -534,6 +534,13 @@ def build_rust_state(spec: DeckSpec):
             printing_dict["power"] = card.power
         if card.toughness is not None:
             printing_dict["toughness"] = card.toughness
+        # Subtypes substrate: pass through to Rust so subtype-anchored
+        # consumers (Predicate::HasSubtype follow-up; subtype-filtered
+        # sacrifice variants) see the same subtype tuple on both engines.
+        # Pre-substrate fixtures default to an empty tuple — Rust's
+        # parser maps a missing ``subtypes`` key to an empty Vec.
+        if card.subtypes:
+            printing_dict["subtypes"] = list(card.subtypes)
         # ETB-trigger Slice 3: pass triggered_abilities through to the
         # Rust registry so CE19-shape probes (predicate-path ENTERS
         # triggers) can drive both engines from the same DeckSpec.

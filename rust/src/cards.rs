@@ -2412,6 +2412,33 @@ pub struct CardPrinting {
     /// for first-slice synthetic test cards but real cards always
     /// have at least one.
     pub card_types: Vec<String>,
+    /// MTG card subtypes (the post-em-dash portion of the type line):
+    /// creature subtypes ("Bear", "Goblin", "Kavu"), basic-land subtypes
+    /// ("Forest", "Island", "Plains"), artifact subtypes ("Equipment",
+    /// "Food"), enchantment subtypes ("Aura", "Saga"), etc.
+    ///
+    /// **Mixed semantics by design.** MTG conflates basic-land subtypes
+    /// (Forest, Mountain, ...) with creature/artifact/enchantment
+    /// subtypes into a single comprehensive-rules "subtype" namespace
+    /// (CR 205.3). The Rust mirror follows Python's
+    /// `CardPrinting.subtypes: tuple[str, ...]` — one flat field
+    /// holding every subtype regardless of which card-type slot it
+    /// belongs to. Consumers that need land-type-only semantics gate
+    /// on `card_types.contains("Land")` first.
+    ///
+    /// Empty Vec when the type line has no subtypes (vanilla
+    /// instants/sorceries, generic artifacts). Stored exactly as
+    /// printed — Title Case, ASCII (the EoE pool has no
+    /// non-ASCII-named subtypes). Case-sensitive comparison via
+    /// `subtypes.iter().any(|s| s == "Forest")` is the canonical
+    /// consumer pattern.
+    ///
+    /// Mirrors Python's `CardPrinting.subtypes: tuple[str, ...]` at
+    /// `src/mtg_bot/cards/base.py:501`. Registry-dict input under the
+    /// `subtypes` key; missing key parses to empty Vec (the
+    /// `#[serde(default)]`-equivalent shape — keeps every pre-substrate
+    /// registry-dict caller working without modification).
+    pub subtypes: Vec<String>,
     /// Static keyword abilities printed on the card. Stored as
     /// lowercase strings ("flying", "vigilance", "trample",
     /// "first strike", "double strike", "deathtouch", "lifelink",
@@ -4002,6 +4029,28 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    // Subtypes substrate (Slice 1): `subtypes` defaults to empty Vec
+    // when absent (back-compat — every pre-substrate registry dict
+    // implicitly omits the key). Stored as Title Case strings exactly
+    // as printed; the consumer side does case-sensitive `contains`.
+    let subtypes = match dict.get_item("subtypes")? {
+        Some(st_any) => {
+            let iter = st_any.try_iter().map_err(|_| {
+                PyValueError::new_err(
+                    "subtypes must be an iterable of subtype strings",
+                )
+            })?;
+            let mut out = Vec::new();
+            for item in iter {
+                let s: String = item?.extract().map_err(|_| {
+                    PyValueError::new_err("subtypes entries must be strings")
+                })?;
+                out.push(s);
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     let keywords = match dict.get_item("keywords")? {
         Some(kw_any) => {
             let iter = kw_any.try_iter().map_err(|_| {
@@ -4127,6 +4176,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         toughness,
         mana_produced,
         card_types,
+        subtypes,
         keywords,
         etb_effects,
         triggered_abilities,
@@ -4931,6 +4981,14 @@ impl Registry {
     /// MTG card types: "Creature", "Land", "Instant", etc.
     fn get_printing_card_types(&self, id: u32) -> PyResult<Vec<String>> {
         Ok(self.lookup(id)?.card_types.clone())
+    }
+
+    /// MTG card subtypes: "Forest", "Bear", "Equipment", "Aura", etc.
+    /// Empty when the type line has no subtypes (vanilla
+    /// instants/sorceries). Mirrors Python's
+    /// `CardPrinting.subtypes: tuple[str, ...]`.
+    fn get_printing_subtypes(&self, id: u32) -> PyResult<Vec<String>> {
+        Ok(self.lookup(id)?.subtypes.clone())
     }
 
     /// Static printed keywords (lowercase): "flying", "vigilance",
