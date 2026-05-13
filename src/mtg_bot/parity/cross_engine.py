@@ -385,6 +385,66 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # convention as every other bridge arm.
         from mtg_bot.effects.generic.discard import DiscardSelf
         return DiscardSelf(amount=eff_dict.get("amount", 1))
+    if kind == "each_opponent_discards":
+        # ``EachOpponentDiscards N`` — each opponent of the source's
+        # controller discards ``count`` cards from their hand;
+        # untargeted; each discarding player chooses their OWN
+        # discard via ``agent.choose_discard`` (the ability's
+        # controller doesn't pick for them). Rust's
+        # ``Effect::EachOpponentDiscards { count: i32 }`` variant
+        # (cards.rs:531) and its parse_effect arm at
+        # cards.rs:3010-3031 already accept this dict shape; its
+        # resolve arm at state_ops_resolve.rs:3438-3502 performs
+        # the same 5-zone source-controller walk used by
+        # ``DiscardSelf`` then iterates the 2-player-game opposite
+        # seat, popping hand[0] cards deterministically (same shape
+        # as DiscardSelf's per-discard pick).
+        #
+        # Python's ``EachOpponentDiscards(count: int = 1)``
+        # (effects/generic/discard.py:132-168) walks every player
+        # whose ``id != controller_id and not has_lost``, and for
+        # each one calls ``p.agent.choose_discard`` and moves the
+        # chosen card to graveyard. The 2-player ETB-probe case
+        # reduces to "the one opponent's agent picks one of its
+        # own hand cards", and Rust's deterministic hand[0] pick
+        # is observably matched by a Python agent whose
+        # ``choose_discard`` returns the first hand id passed in.
+        #
+        # **Empty-hand contract**. Both engines agree: opponent
+        # with empty hand is a silent no-op (mid-loop short-
+        # circuit on either side — Rust at
+        # state_ops_resolve.rs:3482, Python at discard.py:152).
+        # Probes that drive the empty-hand path can omit the
+        # opponent-side agent entirely (Python's
+        # ``agent.choose_discard`` is never invoked when the loop
+        # body short-circuits on empty hand). Probes that drive
+        # the non-empty path MUST seat an agent on the OPPONENT
+        # (not the source's controller — the discarding player
+        # picks their own discard) whose ``choose_discard``
+        # mirrors Rust's hand[0] pick.
+        #
+        # **No composer required**. Unlike the audit's two
+        # ``discard_self`` consumers (Uthros Scanship via Sequence,
+        # Melded Moxite via IfYouDo), the ``each_opponent_discards``
+        # consumer Virus Beetle's effect is the BARE arm: oracle
+        # text "When this creature enters, each opponent discards
+        # a card." composes directly off this bridge arm with no
+        # nesting. Virus Beetle is end-to-end probeable today.
+        #
+        # Mirrors Rust's parse_effect arm (cards.rs:3010-3031)
+        # which uses ``count`` (not ``amount`` — matches Python's
+        # class field name on this variant; mirrors surveil /
+        # draw_cards's count-shape rather than DiscardSelf's
+        # amount-shape). Missing ``count`` defaults to 1 (mirrors
+        # Python's class default AND Rust's parse_effect default
+        # at cards.rs:3024). The dict-key is ``count`` on both
+        # engines (no rename).
+        from mtg_bot.effects.generic.discard import (
+            EachOpponentDiscards,
+        )
+        return EachOpponentDiscards(
+            count=eff_dict.get("count", 1),
+        )
     if kind == "deal_damage_to_opponent_creature":
         # Targeted "deals N damage to target creature an opponent
         # controls" — restricted to the

@@ -793,3 +793,91 @@ def test_rust_parser_accepts_discard_self_in_triggered_ability():
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+def test_bridge_each_opponent_discards_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "each_opponent_discards", "count": N}`` translates
+    to Python ``EachOpponentDiscards(count=N)``.
+
+    Unblocks Virus Beetle (EoE) -- the only EoE consumer of this
+    bridge arm per the audit. Oracle text: "When this creature
+    enters, each opponent discards a card." The effect composes
+    directly off this arm with no Sequence / IfYouDo nesting, so
+    Virus Beetle is end-to-end probeable today (the companion
+    probe lands in test_parity_smoke.py on this branch).
+
+    The Rust effect variant exists at ``rust/src/cards.rs:531``
+    (``Effect::EachOpponentDiscards { count: i32 }``) and its
+    parse_effect arm at ``cards.rs:3010-3031``; the resolve arm
+    at ``state_ops_resolve.rs:3438-3502`` performs the same 5-
+    zone source-controller walk used by DiscardSelf then iterates
+    the 2-player-game opposite seat, popping hand[0] cards
+    deterministically.
+
+    Python's class exists at
+    ``src/mtg_bot/effects/generic/discard.py:132`` as
+    ``EachOpponentDiscards(count: int = 1)``. The dict-key here
+    is ``count`` (same spelling on both sides; mirrors surveil /
+    draw_cards's count-shape, NOT DiscardSelf's amount-shape).
+    """
+    from mtg_bot.effects.generic.discard import (
+        EachOpponentDiscards,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_discards", "count": 2}
+    )
+    assert isinstance(e, EachOpponentDiscards)
+    assert e.count == 2
+
+
+def test_bridge_each_opponent_discards_count_default_one():
+    """Missing ``count`` defaults to 1 (mirrors Python's
+    EachOpponentDiscards class default of 1 AND Rust's parse_effect
+    default at ``cards.rs:3024`` — both engines agree on 1 as the
+    default). Same lenient-default convention used by every prior
+    bridge arm.
+    """
+    from mtg_bot.effects.generic.discard import (
+        EachOpponentDiscards,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "each_opponent_discards"})
+    assert isinstance(e, EachOpponentDiscards)
+    assert e.count == 1
+
+
+def test_rust_parser_accepts_each_opponent_discards_in_triggered_ability():
+    """Pin the Rust parser surface for the matched effect kind.
+    Mirrors the existing ``discard_self`` / ``surveil`` parser-
+    surface pins. Required field is ``count`` (non-negative i32;
+    missing is fine — defaults to 1 in both engines). The
+    predicate-path triggered-ability wrapper is just a carrier —
+    the substrate being pinned is parse_effect's
+    ``each_opponent_discards`` arm (cards.rs:3010-3031).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Each Opponent Discards",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "B": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_discards",
+                    "count": 1,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
