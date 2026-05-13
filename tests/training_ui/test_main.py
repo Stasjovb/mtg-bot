@@ -42,10 +42,12 @@ def test_main_invokes_create_app_and_app_run(tmp_path: Path):
             "--port", "5099",
             "--progress-dir", str(progress_dir),
             "--registry-root", str(tmp_path / "trained_weights"),
+            "--deck-pool-dir", str(tmp_path / "data" / "17lands"),
         ])
     create.assert_called_once_with(
         progress_dir.resolve(),
         registry_root=(tmp_path / "trained_weights").resolve(),
+        deck_pool_dir=(tmp_path / "data" / "17lands").resolve(),
     )
     fake_app.run.assert_called_once_with(
         host="127.0.0.1", port=5099, debug=False,

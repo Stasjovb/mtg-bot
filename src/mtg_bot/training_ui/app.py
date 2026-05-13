@@ -406,6 +406,7 @@ def create_app(
     progress_dir: Path,
     *,
     registry_root: Optional[Path] = None,
+    deck_pool_dir: Optional[Path] = None,
 ) -> Flask:
     """Build the Flask app. ``progress_dir`` is the directory that
     holds both the per-run progress JSON files (legacy + producer
@@ -417,12 +418,15 @@ def create_app(
 
     ``registry_root`` (optional) is the trained-weights registry root
     used by the launch-iterate form to populate the bootstrap-version
-    dropdown. When ``None``, the dropdown shows empty choices and
-    the user can still type any string (which iterate itself
-    validates at spawn time)."""
+    dropdown. ``deck_pool_dir`` is the corresponding source for the
+    deck-pool dropdown. When either is ``None``, the matching
+    dropdown shows empty choices and the user can still type any
+    string (which iterate itself validates at spawn time)."""
     progress_dir = Path(progress_dir).resolve()
     if registry_root is not None:
         registry_root = Path(registry_root).resolve()
+    if deck_pool_dir is not None:
+        deck_pool_dir = Path(deck_pool_dir).resolve()
 
     template_dir = Path(__file__).parent / "templates"
     static_dir = Path(__file__).parent / "static"
@@ -433,6 +437,7 @@ def create_app(
     )
     app.config["PROGRESS_DIR"] = progress_dir
     app.config["REGISTRY_ROOT"] = registry_root
+    app.config["DECK_POOL_DIR"] = deck_pool_dir
 
     @app.route("/")
     def index():  # noqa: D401 - Flask view
@@ -761,6 +766,7 @@ def create_app(
         """
         schema = build_iterate_schema(
             registry_root=app.config.get("REGISTRY_ROOT"),
+            deck_pool_dir=app.config.get("DECK_POOL_DIR"),
         )
         return jsonify({"schema": schema})
 

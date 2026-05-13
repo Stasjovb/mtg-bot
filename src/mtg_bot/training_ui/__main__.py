@@ -75,6 +75,16 @@ def main(argv: Optional[list[str]] = None) -> None:
         ),
     )
     parser.add_argument(
+        "--deck-pool-dir", type=Path,
+        default=Path("data/17lands"),
+        help=(
+            "Directory holding deck-pool JSON files (default "
+            "./data/17lands). Used to populate the deck-pool "
+            "dropdown in the Launch-iterate form. The "
+            "production pool ``eoe_decks.json.gz`` lives here."
+        ),
+    )
+    parser.add_argument(
         "--debug", action="store_true",
         help="Run Flask with debug=True (auto-reload on edit).",
     )
@@ -83,8 +93,13 @@ def main(argv: Optional[list[str]] = None) -> None:
     progress_dir = args.progress_dir.resolve()
     progress_dir.mkdir(parents=True, exist_ok=True)
     registry_root = args.registry_root.resolve()
+    deck_pool_dir = args.deck_pool_dir.resolve()
 
-    app = create_app(progress_dir, registry_root=registry_root)
+    app = create_app(
+        progress_dir,
+        registry_root=registry_root,
+        deck_pool_dir=deck_pool_dir,
+    )
 
     print(f"Training-progress UI watching: {progress_dir}")
     print("Reachable at:")

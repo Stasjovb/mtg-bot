@@ -467,6 +467,106 @@ def test_build_schema_missing_registry_is_defensive(
     assert spec["default"] is None
 
 
+# ---------------------------------------------------------------------
+# deck-pool dropdown population.
+# ---------------------------------------------------------------------
+
+def test_build_schema_no_deck_pool_dir_returns_empty_choices() -> None:
+    """``deck_pool_dir=None`` is the test/fallback path. The deck-pool
+    spec stays a ``choice`` type with empty choices and a default
+    that mirrors iterate's CLI default."""
+    schema = build_iterate_schema(deck_pool_dir=None)
+    flat = {a["name"]: a for s in schema for a in s["args"]}
+    spec = flat["deck-pool"]
+    assert spec["type"] == "choice"
+    assert spec["choices"] == []
+    assert spec["default"] == "data/17lands/eoe_decks.json.gz"
+    assert spec["required"] is True
+
+
+def test_build_schema_populates_deck_pools(tmp_path: Path) -> None:
+    """Deck pool files in the dir populate the dropdown with size
+    labels. Files are sorted newest-first by mtime."""
+    pool_dir = tmp_path / "decks"
+    pool_dir.mkdir()
+    (pool_dir / "eoe_decks.json.gz").write_bytes(b"a" * 1024 * 100)
+    (pool_dir / "duskmourn_decks.json").write_bytes(b"b" * 1024 * 50)
+    (pool_dir / "ignored.txt").write_text("not a pool")
+    schema = build_iterate_schema(deck_pool_dir=pool_dir)
+    spec = next(a for s in schema for a in s["args"]
+                if a["name"] == "deck-pool")
+    assert len(spec["choices"]) == 2
+    assert all(c.endswith(".json") or c.endswith(".json.gz")
+               for c in spec["choices"])
+    # Size suffix is in each label.
+    for path, label in spec["choice_labels"].items():
+        assert "KB" in label or "MB" in label or "B" in label
+
+
+def test_build_schema_deck_pool_default_prefers_production(
+    tmp_path: Path,
+) -> None:
+    """When the canonical production pool path
+    ``data/17lands/eoe_decks.json.gz`` is in the listing (relative
+    or absolute via Path.cwd resolution), it pre-selects regardless
+    of mtime. When absent, fall through to the newest file."""
+    # We can't easily place the production pool relative to cwd in a
+    # tmp_path test, so just confirm the fallback newest-first
+    # behavior when production isn't present.
+    pool_dir = tmp_path / "decks"
+    pool_dir.mkdir()
+    older = pool_dir / "old_decks.json"
+    newer = pool_dir / "new_decks.json.gz"
+    older.write_bytes(b"o")
+    older_mtime = older.stat().st_mtime
+    newer.write_bytes(b"n")
+    # Force newer to have a later mtime than older even on fast
+    # filesystems where two consecutive write_bytes share a tick.
+    import os
+    os.utime(newer, (older_mtime + 10.0, older_mtime + 10.0))
+    schema = build_iterate_schema(deck_pool_dir=pool_dir)
+    spec = next(a for s in schema for a in s["args"]
+                if a["name"] == "deck-pool")
+    assert spec["default"] == spec["choices"][0]
+    assert "new_decks" in spec["default"]
+
+
+def test_build_schema_missing_deck_pool_dir_is_defensive(
+    tmp_path: Path,
+) -> None:
+    """A non-existent deck-pool dir yields an empty dropdown with the
+    iterate-CLI-default still set as the default — the user can type
+    the path manually if needed (the JS-side empty-dropdown hint
+    surfaces this case)."""
+    schema = build_iterate_schema(
+        deck_pool_dir=tmp_path / "does-not-exist",
+    )
+    spec = next(a for s in schema for a in s["args"]
+                if a["name"] == "deck-pool")
+    assert spec["choices"] == []
+    assert spec["default"] == "data/17lands/eoe_decks.json.gz"
+
+
+def test_build_command_rejects_unknown_deck_pool_with_choices(
+    tmp_path: Path,
+) -> None:
+    """When the schema has populated deck-pool choices, submitting a
+    path that isn't in the listing raises rather than spawning
+    iterate just to fail on missing file."""
+    pool_dir = tmp_path / "decks"
+    pool_dir.mkdir()
+    (pool_dir / "real.json.gz").write_bytes(b"x")
+    schema = build_iterate_schema(deck_pool_dir=pool_dir)
+    with pytest.raises(ValueError, match="not in choices"):
+        build_iterate_command(
+            {
+                "bootstrap-version": "v_test",
+                "deck-pool": "data/17lands/no_such.json.gz",
+            },
+            schema=schema,
+        )
+
+
 def test_build_command_rejects_unknown_version_with_choices(
     tmp_path: Path,
 ) -> None:

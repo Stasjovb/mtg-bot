@@ -70,6 +70,83 @@ def _default_per_game_eval() -> float:
     return _common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC
 
 
+def _format_file_size(n_bytes: int) -> str:
+    """Render a byte count as a short human-readable suffix
+    (``9.8 MB``, ``246 KB``). Used in the deck-pool dropdown labels
+    so the user can tell a small smoke pool from a big production one
+    at a glance."""
+    for unit, scale in (("GB", 1024 ** 3), ("MB", 1024 ** 2),
+                        ("KB", 1024)):
+        if n_bytes >= scale:
+            return f"{n_bytes / scale:.1f} {unit}"
+    return f"{n_bytes} B"
+
+
+def _list_deck_pools(
+    deck_pool_dir: Path,
+) -> tuple[list[str], dict[str, str]]:
+    """Return ``(paths, labels)`` for every deck pool JSON file in
+    ``deck_pool_dir``.
+
+    Paths are returned as POSIX-style relative paths if the dir is
+    relative (mirrors the iterate CLI's argparse default
+    ``data/17lands/eoe_decks.json.gz``), absolute otherwise. Labels
+    pin the filename + file size so the user can tell a small smoke
+    pool from a big production one at a glance.
+
+    Defensive: a missing or unreadable directory yields ``([], {})``
+    rather than raising — the UI still loads with the empty-choices
+    hint.
+    """
+    deck_pool_dir = Path(deck_pool_dir)
+    if not deck_pool_dir.is_dir():
+        return [], {}
+    paths: list[str] = []
+    labels: dict[str, str] = {}
+    # Sort newest-first so a freshly-downloaded pool is the top
+    # option. Within the same mtime we sort by name for determinism.
+    entries: list[tuple[float, str, Path]] = []
+    for child in deck_pool_dir.iterdir():
+        if not child.is_file():
+            continue
+        if not (child.name.endswith(".json")
+                or child.name.endswith(".json.gz")):
+            continue
+        try:
+            entries.append((child.stat().st_mtime, child.name, child))
+        except OSError:
+            continue
+    entries.sort(key=lambda e: (-e[0], e[1]))
+    for _, _, path in entries:
+        # POSIX-style path string keeps the iterate CLI's default
+        # form (``data/17lands/eoe_decks.json.gz``) working on
+        # Windows hosts — argparse just hands the string to
+        # ``Path()`` and Python normalizes either separator.
+        rel = (
+            path.relative_to(Path.cwd()).as_posix()
+            if path.is_absolute() and _is_under(path, Path.cwd())
+            else path.as_posix()
+        )
+        try:
+            size = _format_file_size(path.stat().st_size)
+        except OSError:
+            size = "?"
+        paths.append(rel)
+        labels[rel] = f"{path.name} ({size})"
+    return paths, labels
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    """``True`` when ``path`` is a subpath of ``root``. We can't use
+    ``Path.is_relative_to`` because it was added in 3.9 but raises
+    on some Windows path-equality edge cases we want to swallow."""
+    try:
+        path.relative_to(root)
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def _list_registered_versions(
     registry_root: Path,
 ) -> tuple[list[str], dict[str, str], Optional[str]]:
@@ -140,11 +217,13 @@ def _list_registered_versions(
 
 def build_iterate_schema(
     registry_root: Optional[Path] = None,
+    *,
+    deck_pool_dir: Optional[Path] = None,
 ) -> list[dict[str, Any]]:
     """Return the iterate-form schema with defaults resolved at call
     time.
 
-    Two layers of dynamism:
+    Three layers of dynamism:
 
     - ``EVAL_GATE_THRESHOLD`` and the per-game-timeout defaults are
       read from live Python constants every call, so changing them
@@ -152,10 +231,17 @@ def build_iterate_schema(
     - ``--bootstrap-version`` becomes a ``choice`` type with the
       ``choices`` populated from ``<registry_root>``'s complete
       version dirs (newest first). The ``default`` is the
-      ``current_best`` from ``iterate_state.json`` when present. Pass
-      ``registry_root=None`` to render the form without any choices
-      (tests use this; iterate's CLI default ``trained_weights/`` is
-      passed by the production endpoint).
+      ``current_best`` from ``iterate_state.json`` when present.
+    - ``--deck-pool`` becomes a ``choice`` type with the ``choices``
+      populated from ``<deck_pool_dir>``'s ``*.json`` / ``*.json.gz``
+      files (newest first). The default tracks iterate's CLI default
+      (``data/17lands/eoe_decks.json.gz``) when present in the
+      listing, otherwise the newest file.
+
+    Pass ``registry_root=None`` / ``deck_pool_dir=None`` to render
+    the form without any choices (tests use this; iterate's CLI
+    defaults ``trained_weights/`` and ``data/17lands/`` are passed
+    by the production endpoint).
     """
     if registry_root is None:
         bootstrap_choices: list[str] = []
@@ -167,6 +253,26 @@ def build_iterate_schema(
             bootstrap_labels,
             bootstrap_default,
         ) = _list_registered_versions(registry_root)
+
+    _PRODUCTION_DECK_POOL = "data/17lands/eoe_decks.json.gz"
+    if deck_pool_dir is None:
+        deck_pool_choices: list[str] = []
+        deck_pool_labels: dict[str, str] = {}
+    else:
+        deck_pool_choices, deck_pool_labels = _list_deck_pools(
+            deck_pool_dir,
+        )
+    if _PRODUCTION_DECK_POOL in deck_pool_choices:
+        deck_pool_default = _PRODUCTION_DECK_POOL
+    elif deck_pool_choices:
+        deck_pool_default = deck_pool_choices[0]
+    else:
+        # Empty listing (no dir / dir missing / no JSONs in dir) →
+        # fall back to iterate's CLI default so the form still
+        # carries a sensible value; the user can override with a
+        # free-form path via the empty-dropdown text-input fallback
+        # if needed.
+        deck_pool_default = _PRODUCTION_DECK_POOL
 
     bootstrap_spec: dict[str, Any] = {
         "name": "bootstrap-version",
@@ -184,23 +290,26 @@ def build_iterate_schema(
             "structurally consistent."
         ),
     }
+    deck_pool_spec: dict[str, Any] = {
+        "name": "deck-pool",
+        "type": "choice",
+        "required": True,
+        "default": deck_pool_default,
+        "choices": deck_pool_choices,
+        "choice_labels": deck_pool_labels,
+        "help": (
+            "Deck-pool JSON to sample game-pairings from. Every "
+            "self-play and eval game picks two distinct archetypes "
+            "from this pool deterministically per (seed, game_idx)."
+        ),
+    }
     return [
         {
             "section": "Required",
             "open": True,
             "args": [
                 bootstrap_spec,
-                {
-                    "name": "deck-pool",
-                    "type": "path",
-                    "required": True,
-                    "default": "data/17lands/eoe_decks.json.gz",
-                    "help": (
-                        "Path to a deck-pool JSON; every self-play and "
-                        "eval game samples two distinct archetypes "
-                        "deterministically per (seed, game_idx)."
-                    ),
-                },
+                deck_pool_spec,
             ],
         },
         {
