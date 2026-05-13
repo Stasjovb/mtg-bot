@@ -335,6 +335,47 @@ def main(argv=None) -> None:
             "v-chain break — old weights cannot be reused."
         ),
     )
+    # Structured-architecture (Step 1) hyperparameters. Only consumed
+    # when ``--architecture structured``; the flat-feature path
+    # ignores them. Defaults mirror
+    # :class:`StructuredModelConfig`'s defaults so the structured
+    # trunk built here matches the skeleton called out in the
+    # roadmap.
+    parser.add_argument(
+        "--emb-dim", type=int, default=None,
+        help=(
+            "Structured-trunk: per-token embedding dimension. "
+            "Default None defers to StructuredModelConfig (128)."
+        ),
+    )
+    parser.add_argument(
+        "--n-heads", type=int, default=None,
+        help=(
+            "Structured-trunk: transformer attention heads. "
+            "Default None defers to StructuredModelConfig (4)."
+        ),
+    )
+    parser.add_argument(
+        "--n-layers", type=int, default=None,
+        help=(
+            "Structured-trunk: encoder layer count. "
+            "Default None defers to StructuredModelConfig (2)."
+        ),
+    )
+    parser.add_argument(
+        "--hidden-dim", type=int, default=None,
+        help=(
+            "Structured-trunk: MLP hidden dim inside the encoder. "
+            "Default None defers to StructuredModelConfig (256)."
+        ),
+    )
+    parser.add_argument(
+        "--action-history-n", type=int, default=None,
+        help=(
+            "Structured-trunk: last-N action-history window. "
+            "Default None defers to StructuredModelConfig (32)."
+        ),
+    )
     args = parser.parse_args(argv)
     # Structured architecture has a different data pipeline + model
     # + loss shape from the flat-feature MLP trainers; dispatch
@@ -837,7 +878,21 @@ def _main_structured(args, parser) -> None:
     if progress_path is not None:
         print(f"# Progress JSON: {progress_path}")
 
-    structured_config = StructuredModelConfig()
+    # Apply any explicit hyperparam overrides from the CLI; defaults
+    # of ``None`` defer to StructuredModelConfig's own defaults (the
+    # roadmap-pinned 128/4/2/256/32 set).
+    structured_overrides: dict = {}
+    if args.emb_dim is not None:
+        structured_overrides["emb_dim"] = args.emb_dim
+    if args.n_heads is not None:
+        structured_overrides["n_heads"] = args.n_heads
+    if args.n_layers is not None:
+        structured_overrides["n_layers"] = args.n_layers
+    if args.hidden_dim is not None:
+        structured_overrides["hidden_dim"] = args.hidden_dim
+    if args.action_history_n is not None:
+        structured_overrides["action_history_n"] = args.action_history_n
+    structured_config = StructuredModelConfig(**structured_overrides)
 
     train_config = {
         "kind": "training",
