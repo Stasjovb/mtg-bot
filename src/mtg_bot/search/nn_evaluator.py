@@ -271,8 +271,14 @@ class _ValuePolicyMLPSeparate(nn.Module):
 # ``metadata.json`` so loaders can route weights to the right class.
 ARCHITECTURE_SHARED = "shared"
 ARCHITECTURE_SEPARATE = "separate"
+# ``structured`` selects the per-object-token transformer trunk
+# (``mtg_bot.training.structured_model.StructuredModel``) — the Step 1
+# NN-representation rewrite. Loader-side support lands with the
+# inference slice; ``train`` / ``trainer`` recognize the value here so
+# trained weights get a ``metadata.json`` that dispatches correctly.
+ARCHITECTURE_STRUCTURED = "structured"
 SUPPORTED_ARCHITECTURES: tuple[str, ...] = (
-    ARCHITECTURE_SHARED, ARCHITECTURE_SEPARATE,
+    ARCHITECTURE_SHARED, ARCHITECTURE_SEPARATE, ARCHITECTURE_STRUCTURED,
 )
 
 
@@ -293,6 +299,19 @@ def _build_dual_head_model(
         return _ValuePolicyMLPSeparate(
             hidden_sizes=hidden_sizes,
             policy_hidden_sizes=policy_hidden_sizes,
+        )
+    if architecture == ARCHITECTURE_STRUCTURED:
+        # The structured trunk is the StructuredModel transformer; it
+        # does NOT consume the flat 51-dim feature vector this builder
+        # is meant for. The training dispatch routes around this
+        # function via train_structured_model. Surfacing the wrong path
+        # as a hard error here keeps a future caller from accidentally
+        # instantiating an MLP trunk for a structured-architecture
+        # version.
+        raise ValueError(
+            "architecture='structured' uses StructuredModel, not the "
+            "flat-feature MLP — route through train_structured_model "
+            "instead of _build_dual_head_model."
         )
     raise ValueError(
         f"unknown architecture {architecture!r}; "

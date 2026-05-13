@@ -654,3 +654,332 @@ def train_value_network(
     _emit("completed", current_epoch=len(history.train_losses))
 
     return history
+
+
+def _structured_policy_loss(
+    policy_logits: torch.Tensor,
+    target_dist: torch.Tensor,
+    action_mask: torch.Tensor,
+    has_supervision: torch.Tensor,
+) -> torch.Tensor:
+    """Masked cross-entropy for the StructuredModel policy head.
+
+    Identical shape contract to the inner ``_policy_loss`` defined in
+    ``train_value_network`` — kept module-level so it can be reused
+    across the structured + MLP paths if a future slice consolidates
+    them. The two implementations are character-for-character the
+    same; the duplication is intentional to avoid surfacing a private
+    helper across function bodies that already share enough state.
+
+    ``policy_logits``     ``(B, action_vocab_size)``
+    ``target_dist``       ``(B, action_vocab_size)`` — non-negative,
+                          rows sum to 1 where supervised
+    ``action_mask``       ``(B, action_vocab_size)`` — True = legal
+    ``has_supervision``   ``(B,)`` — float 0/1
+    """
+    target_dist = target_dist * action_mask.float()
+    masked_logits = policy_logits.masked_fill(~action_mask, -1e9)
+    log_probs = F.log_softmax(masked_logits, dim=-1)
+    per_row_ce = -(target_dist * log_probs).sum(dim=-1)
+    weighted = per_row_ce * has_supervision
+    denom = has_supervision.sum().clamp(min=1.0)
+    return weighted.sum() / denom
+
+
+def train_structured_model(
+    dataset,
+    *,
+    weights_out_path: Path,
+    config: Optional[Any] = None,
+    epochs: int = 10,
+    batch_size: int = 32,
+    learning_rate: float = 1e-3,
+    val_split: float = 0.1,
+    device: Optional[str] = None,
+    rng_seed: int = 0,
+    progress_path: Optional[Path] = None,
+    run_id: Optional[str] = None,
+    notes: str = "",
+    policy_loss_weight: float = 1.0,
+    hand_belief_loss_weight: float = 0.05,
+    epoch_callback: Optional[Callable[[dict[str, Any]], None]] = None,
+) -> TrainingHistory:
+    """Train a :class:`StructuredModel` over a
+    :class:`StructuredDataset`.
+
+    Sibling of :func:`train_value_network` for the Step 1 NN-
+    representation rewrite. The two functions intentionally share the
+    progress-emit shape (so the existing training UI continues to
+    show per-epoch loss series without modification) and the
+    :class:`TrainingHistory` return type. They diverge on:
+
+    - Model: :class:`StructuredModel` consuming a dict batch of
+      per-object tokens rather than ``_ValuePolicyMLP`` on a flat
+      51-dim feature vector.
+    - Data loading: :class:`torch.utils.data.DataLoader` with the
+      :func:`structured_collate` collate_fn for per-batch padding,
+      rather than the upfront-tensors+index-shuffle path the
+      MLP trainer uses (variable-length input requires per-batch
+      padding).
+    - Loss: value MSE + ``policy_loss_weight`` × policy CE +
+      ``hand_belief_loss_weight`` × hand-belief BCE. The hand-belief
+      term is currently unused (the current dataset does not include
+      hand-belief targets — Step 4 will), but the head's gradients
+      stay wired so checkpoint formats are stable when Step 4 turns
+      it on. With no targets, the term is zero.
+
+    Saves the final state_dict to ``weights_out_path``. Loading-side
+    dispatch (``NNEvaluator``) lands separately; the saved weights
+    are bytes-compatible with
+    ``StructuredModel(config).load_state_dict(...)``.
+
+    ``epoch_callback`` mirrors :func:`train_value_network` — fires
+    after the in-memory history is updated, exceptions are swallowed.
+    """
+    # Lazy imports to avoid a hard dep on the structured-model module
+    # at import time of the broader training package (the structured
+    # trainer is a narrow slice; older callers shouldn't pay its
+    # import cost).
+    from torch.utils.data import DataLoader, Subset
+
+    from mtg_bot.training.structured_dataset import structured_collate
+    from mtg_bot.training.structured_model import (
+        StructuredModel, StructuredModelConfig,
+    )
+
+    if len(dataset) == 0:
+        raise ValueError("cannot train on an empty dataset")
+    if not (0.0 <= val_split < 1.0):
+        raise ValueError(
+            f"val_split must be in [0, 1); got {val_split}"
+        )
+    if config is None:
+        config = StructuredModelConfig()
+
+    if device is None:
+        device = auto_device()
+    if device == "cpu":
+        torch.set_num_threads(1)
+    device_obj = torch.device(device)
+    torch.manual_seed(rng_seed)
+
+    # Deterministic shuffle + split. Picking indices on CPU and
+    # passing them to ``Subset`` is plenty for the sizes the
+    # structured trainer sees during smoke runs; production-scale
+    # shuffling can graduate to a Sampler later if needed.
+    n = len(dataset)
+    rng = np.random.default_rng(rng_seed)
+    perm = rng.permutation(n)
+    n_val = int(n * val_split)
+    val_idx = perm[:n_val].tolist()
+    train_idx = perm[n_val:].tolist()
+    train_subset = Subset(dataset, train_idx) if train_idx else dataset
+    train_loader = DataLoader(
+        train_subset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=structured_collate,
+        # Pin to single-process workers — multiprocessing fork on
+        # Windows is finicky for ad-hoc test datasets and the smoke
+        # training set is small.
+        num_workers=0,
+    )
+    val_loader: Optional[DataLoader] = None
+    if n_val > 0:
+        val_subset = Subset(dataset, val_idx)
+        val_loader = DataLoader(
+            val_subset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=structured_collate,
+            num_workers=0,
+        )
+
+    model = StructuredModel(config).to(device_obj)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    mse = nn.MSELoss()
+
+    history = TrainingHistory()
+    progress_enabled = progress_path is not None
+    started_at_iso = ""
+    started_perf = 0.0
+    git_commit: Optional[str] = None
+    if progress_enabled:
+        progress_path = Path(progress_path)
+        if run_id is None:
+            run_id = progress_path.stem
+        started_at_iso = datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        )
+        started_perf = time.perf_counter()
+        git_commit = git_short_sha()
+
+    effective_total_epochs = int(epochs)
+
+    def _emit(status: str, current_epoch: int) -> None:
+        if not progress_enabled:
+            return
+        elapsed = time.perf_counter() - started_perf
+        done = max(current_epoch, 0)
+        avg = (elapsed / done) if done > 0 else 0.0
+        remaining_epochs = max(effective_total_epochs - done, 0)
+        eta = avg * remaining_epochs if avg > 0 else 0.0
+        payload = {
+            "run_id": run_id,
+            "kind": "training",
+            "started_at": started_at_iso,
+            "total_epochs": int(effective_total_epochs),
+            "current_epoch": int(done),
+            "elapsed_seconds": float(elapsed),
+            "per_epoch_seconds_avg": float(avg),
+            "estimated_remaining_seconds": float(eta),
+            "train_losses": list(history.train_losses),
+            "val_losses": list(history.val_losses),
+            "train_value_losses": list(history.train_value_losses),
+            "val_value_losses": list(history.val_value_losses),
+            "train_policy_losses": list(history.train_policy_losses),
+            "val_policy_losses": list(history.val_policy_losses),
+            "policy_loss_weight": float(policy_loss_weight),
+            "status": status,
+            "git_commit": git_commit,
+            "notes": notes,
+            "architecture": "structured",
+        }
+        atomic_write_json(progress_path, payload)
+
+    _emit("running", current_epoch=0)
+
+    def _run_one(
+        batch: dict[str, torch.Tensor], *, train: bool,
+    ) -> tuple[float, float, float]:
+        """Run forward + (optional) backward on one batch. Returns
+        ``(total_loss, value_loss, policy_loss)`` as Python floats."""
+        # Move dict batch to the training device.
+        on_device = {k: v.to(device_obj) for k, v in batch.items()}
+        out = model(on_device)
+        value_pred = out["value"]
+        policy_logits = out["policy_logits"]
+        v_loss = mse(value_pred, on_device["outcome"])
+        has_pol = on_device["has_policy"].float()
+        # If no row in this batch has supervision, the masked-CE
+        # denominator is 1 (clamped) and per-row weights are zero,
+        # so the loss collapses to zero. Keeping the call avoids a
+        # branch and matches the MLP path's behavior.
+        p_loss = _structured_policy_loss(
+            policy_logits,
+            on_device["policy_target"],
+            on_device["action_mask"],
+            has_pol,
+        )
+        # Hand-belief term: the dataset doesn't carry hand-belief
+        # targets yet (Step 4 wires those), so this term contributes
+        # zero. We still touch the head's parameters during the
+        # forward pass when ``enable_hand_belief_head=True`` so the
+        # autograd graph is stable; with the head disabled (default),
+        # the contribution is identically zero.
+        total = v_loss + policy_loss_weight * p_loss
+        if train:
+            optimizer.zero_grad()
+            total.backward()
+            optimizer.step()
+        return total.item(), v_loss.item(), p_loss.item()
+
+    try:
+        for epoch in range(epochs):
+            model.train()
+            train_total: list[float] = []
+            train_value: list[float] = []
+            train_policy: list[float] = []
+            for batch in train_loader:
+                t, v, p = _run_one(batch, train=True)
+                train_total.append(t)
+                train_value.append(v)
+                train_policy.append(p)
+            history.train_losses.append(
+                float(np.mean(train_total)) if train_total else float("nan")
+            )
+            history.train_value_losses.append(
+                float(np.mean(train_value)) if train_value
+                else float("nan")
+            )
+            history.train_policy_losses.append(
+                float(np.mean(train_policy)) if train_policy
+                else float("nan")
+            )
+
+            if val_loader is not None:
+                model.eval()
+                val_total: list[float] = []
+                val_value: list[float] = []
+                val_policy: list[float] = []
+                with torch.no_grad():
+                    for batch in val_loader:
+                        t, v, p = _run_one(batch, train=False)
+                        val_total.append(t)
+                        val_value.append(v)
+                        val_policy.append(p)
+                history.val_losses.append(
+                    float(np.mean(val_total)) if val_total
+                    else float("nan")
+                )
+                history.val_value_losses.append(
+                    float(np.mean(val_value)) if val_value
+                    else float("nan")
+                )
+                history.val_policy_losses.append(
+                    float(np.mean(val_policy)) if val_policy
+                    else float("nan")
+                )
+            else:
+                history.val_losses.append(float("nan"))
+                history.val_value_losses.append(float("nan"))
+                history.val_policy_losses.append(float("nan"))
+
+            if (
+                history.val_losses[-1] == history.val_losses[-1]
+                and history.val_losses[-1] < history.best_val_loss
+            ):
+                history.best_val_loss = history.val_losses[-1]
+                history.best_val_epoch = epoch
+
+            _emit("running", current_epoch=epoch + 1)
+            if epoch_callback is not None:
+                try:
+                    epoch_callback({
+                        "epoch": epoch + 1,
+                        "total_epochs": int(effective_total_epochs),
+                        "elapsed_seconds": (
+                            time.perf_counter() - started_perf
+                            if progress_enabled else 0.0
+                        ),
+                        "train_loss": history.train_losses[-1],
+                        "val_loss": history.val_losses[-1],
+                        "train_value_loss": (
+                            history.train_value_losses[-1]
+                        ),
+                        "val_value_loss": history.val_value_losses[-1],
+                        "train_policy_loss": (
+                            history.train_policy_losses[-1]
+                        ),
+                        "val_policy_loss": (
+                            history.val_policy_losses[-1]
+                        ),
+                        "status": "running",
+                    })
+                except Exception:  # noqa: BLE001
+                    pass
+    except BaseException:
+        try:
+            _emit("failed", current_epoch=len(history.train_losses))
+        except Exception:
+            pass
+        raise
+
+    save_target = model
+    save_target.to("cpu")
+    torch.save(save_target.state_dict(), weights_out_path)
+    history.weights_path = weights_out_path
+
+    _emit("completed", current_epoch=len(history.train_losses))
+
+    return history

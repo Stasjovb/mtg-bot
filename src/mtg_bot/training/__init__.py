@@ -75,8 +75,16 @@ from mtg_bot.training.replay_capture import (
     nn_eval_annotator,
 )
 from mtg_bot.training.self_play import MatchStats, run_match
+from mtg_bot.training.structured_dataset import (
+    StructuredDataset,
+    load_structured_dataset,
+    structured_collate,
+)
 from mtg_bot.training.trainer import (
-    TrainingHistory, auto_device, train_value_network,
+    TrainingHistory,
+    auto_device,
+    train_structured_model,
+    train_value_network,
 )
 
 __all__ = [
@@ -92,6 +100,7 @@ __all__ = [
     "HeuristicsConfig",
     "ReplayCaptureConfig",
     "ReplayRecorder",
+    "StructuredDataset",
     "TrainingHistory",
     "auto_device",
     "build_search_annotation",
@@ -102,9 +111,12 @@ __all__ = [
     "heuristic_weight_grid",
     "load_all_datasets",
     "load_dataset",
+    "load_structured_dataset",
     "nn_eval_annotator",
     "random_choice_factory",
     "run_match",
     "save_dataset",
+    "structured_collate",
+    "train_structured_model",
     "train_value_network",
 ]
