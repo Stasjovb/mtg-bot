@@ -17616,3 +17616,368 @@ def test_cross_engine_real_eoe_melded_moxite_etb_if_you_do_discard_draw_parity(
     # Stacks empty on both sides.
     assert rust_state.stack_size() == 0
     assert len(py_state.stack) == 0
+
+
+def test_cross_engine_real_eoe_fell_gravship_etb_sequence_mill_return_parity(
+    parity_smoke,
+):
+    """Probe: Fell Gravship (EoE) ETB ``mill three cards, then return
+    a creature or Spacecraft card from your graveyard to your hand``
+    parity -- composes the Sequence composer with the leaf bridge
+    arms ``mill`` + ``return_creature_or_spacecraft_from_your_graveyard_to_hand``.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this Spacecraft enters, mill three cards, then return
+         a creature or Spacecraft card from your graveyard to your
+         hand.
+         Station ({tap} another creature you control: ...)
+         Flying, lifelink"
+
+    The Station activated ability + Flying / lifelink statics are
+    OUT OF SCOPE; only the ETB sequence trigger is exercised.
+
+    Effect: ``Sequence{[Mill{3},
+    ReturnCreatureOrSpacecraftFromYourGraveyardToHand]}`` -- combines
+    the Sequence composer with the rider-widened return-to-hand
+    leaf arm. The ``or_spacecraft`` rider is on the bridge from the
+    earlier Phase 5 commits.
+
+    **Targeting timing divergence (handled by pre-seed).** Python's
+    ``push_triggered_ability`` picks the return target at PUSH time
+    via ``Sequence.legal_targets`` -- which delegates to the
+    targeting sub-effect's legal_targets BEFORE the upstream Mill
+    resolves. So the pre-mill graveyard contents drive the pool;
+    post-mill cards aren't yet visible to the targeting pipeline.
+    Rust at resolve time scans the post-mill graveyard. To pin a
+    cross-engine consistent target, we PRE-SEED p0's graveyard
+    with the recur target before the trigger fires; the milled
+    cards (intentionally NON-creature, NON-Spacecraft Lands so the
+    rider's filter only matches the pre-seeded card) accumulate
+    after the pre-seeded target in graveyard insertion order.
+    Rust's iterator-order scan finds the pre-seeded creature
+    FIRST (it sits at gy index 0); Python's PUSH-time pick is
+    forced to the same card by the same insertion order +
+    creature-only filter. The two engines agree on the recur
+    target despite the timing divergence.
+
+    Probe shape:
+
+      1. Pre-seed p0's graveyard with one Creature card
+         (Recur Bait) that satisfies the
+         or_spacecraft-rider filter via the creature-primary path.
+      2. Pre-seed p0's library with 3 Land cards (mill bait,
+         non-creature non-Spacecraft so they don't perturb the
+         recur pick).
+      3. Inject Fell Gravship onto p0's bf; SourceIsSelf ENTERS
+         fires; Sequence trigger lands on the stack with target
+         picked at push time = Recur Bait.
+      4. Drain both stacks. Both engines:
+         * Mill 3 from p0 library → p0 gy now has [Recur Bait,
+           Mill Land 1, Mill Land 2, Mill Land 3] (insertion
+           order).
+         * Return-to-hand resolves on Recur Bait → moves it
+           from p0 gy to p0 hand.
+      5. Cross-engine assert:
+         * p0 hand: 0 → 1 (Recur Bait).
+         * p0 graveyard: 1 → 3 (the 3 milled lands; Recur Bait
+           gone to hand).
+         * p0 library: 3 → 0 (drained by mill).
+
+    Out of scope: Station / Flying / lifelink / cast cost /
+    empty-graveyard fizzle on the return.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Fell Gravship on p0's battlefield.
+      * p0 hand: ["Fell Recur Bait"].
+      * p0 graveyard: 3 mill-bait Lands (Recur Bait promoted to
+        hand).
+      * p0 library empty.
+      * p1 untouched.
+      * Lives unchanged.
+      * No residual stack.
+    """
+    from mtg_bot.agents import Agent
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    fell_gravship = CardDef(
+        name="Fell Gravship",
+        card_type="Artifact",
+        mana_cost_generic=2,
+        mana_cost_colored=(("B", 1),),
+        subtypes=("Spacecraft",),
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "sequence",
+                    "effects": [
+                        {"kind": "mill", "count": 3},
+                        {
+                            "kind": (
+                                "return_creature_or_spacecraft_from_your_graveyard_to_hand"
+                            ),
+                        },
+                    ],
+                },
+            },
+        ),
+    )
+    fell_recur_bait = CardDef(
+        name="Fell Recur Bait",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=2,
+        toughness=2,
+    )
+    mill_land_1 = CardDef(
+        name="Mill Land 1",
+        card_type="Land",
+    )
+    mill_land_2 = CardDef(
+        name="Mill Land 2",
+        card_type="Land",
+    )
+    mill_land_3 = CardDef(
+        name="Mill Land 3",
+        card_type="Land",
+    )
+    spec = DeckSpec(
+        card_defs=(
+            fell_gravship, fell_recur_bait,
+            mill_land_1, mill_land_2, mill_land_3,
+        ),
+        # Top-of-library = index 0; lands milled in order Land 1,
+        # 2, 3 (matching insertion order in p0's gy).
+        p0_library=("Mill Land 1", "Mill Land 2", "Mill Land 3"),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    ZONE_GRAVEYARD = 3
+    rust_recur_bait_dict = {
+        "name": "Fell Recur Bait",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_state.register_and_inject_object(
+        rust_recur_bait_dict, 0, ZONE_GRAVEYARD,
+    )
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p0_gy_before = rust_state.graveyard_sizes[0]
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_lib_before == 3
+    assert rust_p0_hand_before == 0
+    assert rust_p0_gy_before == 1
+
+    rust_gravship_dict = {
+        "name": "Fell Gravship",
+        "card_types": ["Artifact"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "sequence",
+                    "effects": [
+                        {"kind": "mill", "count": 3},
+                        {
+                            "kind": (
+                                "return_creature_or_spacecraft_from_your_graveyard_to_hand"
+                            ),
+                        },
+                    ],
+                },
+            }
+        ],
+    }
+    rust_state.register_and_inject_object(
+        rust_gravship_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Fell Gravship's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land Sequence(Mill(3), "
+        f"ReturnCreatureOrSpacecraft) on the stack. Got "
+        f"stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.effects.generic.library_lookat import SelfMill
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    recur_bait_printing = CardPrinting(
+        name="Fell Recur Bait",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    gravship_printing = CardPrinting(
+        name="Fell Gravship",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("B", 1),)),
+        type_line="Artifact - Spacecraft",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=("Spacecraft",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=Sequence(
+                    effects=(
+                        SelfMill(amount=3),
+                        ReturnCreatureFromYourGraveyardToHand(
+                            or_spacecraft=True,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    class _PickFirstLegalTargetAgent(Agent):
+        """Pick ``legal_targets[0]``. Mirrors Rust's iterator-order
+        graveyard scan for the return-to-hand effect.
+        """
+
+        def choose_target(self, state, player_id, legal_targets):
+            if not legal_targets:
+                return None
+            return legal_targets[0]
+
+    py_state.players[0].agent = _PickFirstLegalTargetAgent()
+
+    # Pre-seed p0's graveyard with the recur bait creature.
+    py_recur_bait = py_state.new_object(
+        recur_bait_printing, owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    py_state.players[0].graveyard.append(py_recur_bait)
+
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p0_gy_before = len(py_state.players[0].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p0_lib_before == 3
+    assert py_p0_hand_before == 0
+    assert py_p0_gy_before == 1
+
+    py_gravship = py_state.new_object(
+        gravship_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_gravship.summoning_sick = False
+    py_gravship.tapped = False
+    py_gravship.damage = 0
+    py_gravship.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_gravship)
+    _trigger_etb_abilities(py_state, py_gravship)
+    assert len(py_state.stack) == 1, (
+        "Python: Fell Gravship's own arrival should fire the "
+        "IsSelf ENTERS trigger and land Sequence(Mill(3), "
+        f"ReturnCreatureOrSpacecraft) on the stack. Got "
+        f"stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # p0 hand: 0 → 1 (Recur Bait).
+    # p0 graveyard: 1 → 3 (3 mill lands; Recur Bait promoted out).
+    # p0 library: 3 → 0 (drained by mill).
+    assert rust_state.hand_sizes[0] == 1, (
+        f"Rust p0 hand should hold the recurred Fell Recur Bait; "
+        f"got hand_size={rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.library_sizes[0] == 0, (
+        f"Rust p0 library should be drained (3 → 0); got "
+        f"{rust_state.library_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == 3, (
+        f"Rust p0 gy should hold 3 mill lands (Recur Bait promoted "
+        f"to hand); got gy_size={rust_state.graveyard_sizes[0]}"
+    )
+
+    assert len(py_state.players[0].hand) == 1
+    assert len(py_state.players[0].library) == 0
+    assert len(py_state.players[0].graveyard) == 3
+
+    # Strongest pin: per-card identities.
+    rust_p0_hand_names = [
+        e["printing_name"] for e in rust_state.hand_snapshot(0)
+    ]
+    py_p0_hand_names = [o.printing.name for o in py_state.players[0].hand]
+    assert rust_p0_hand_names == ["Fell Recur Bait"], (
+        f"Rust p0 hand should hold Fell Recur Bait; "
+        f"got {rust_p0_hand_names}"
+    )
+    assert py_p0_hand_names == ["Fell Recur Bait"], (
+        f"Python p0 hand should hold Fell Recur Bait; "
+        f"got {py_p0_hand_names}"
+    )
+    rust_p0_gy_names = sorted(
+        e["printing_name"] for e in rust_state.graveyard_snapshot(0)
+    )
+    py_p0_gy_names = sorted(
+        o.printing.name for o in py_state.players[0].graveyard
+    )
+    expected_gy = sorted(["Mill Land 1", "Mill Land 2", "Mill Land 3"])
+    assert rust_p0_gy_names == expected_gy, (
+        f"Rust p0 gy should hold the 3 milled lands; "
+        f"got {rust_p0_gy_names}"
+    )
+    assert py_p0_gy_names == expected_gy, (
+        f"Python p0 gy should hold the 3 milled lands; "
+        f"got {py_p0_gy_names}"
+    )
+
+    # Cross-engine: per-zone parity.
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+    assert rust_state.graveyard_sizes[0] == len(py_state.players[0].graveyard)
+    assert rust_p0_hand_names == py_p0_hand_names
+    assert rust_p0_gy_names == py_p0_gy_names
+
+    # Lives unchanged.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
