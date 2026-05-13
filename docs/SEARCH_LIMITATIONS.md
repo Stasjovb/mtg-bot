@@ -1527,6 +1527,113 @@ damage. Perf neutral.
 
 ---
 
+## Rust port — `Effect::EachOpponentSacrificesCreature` nontoken-filter shortcut
+
+**Location**:
+`rust/src/state_ops_resolve.rs:6529-6539`
+(`Effect::EachOpponentSacrificesCreature` resolver — the
+`bf.iter().find_map` first-creature scan with no `is_token`
+predicate),
+`rust/src/cards.rs:1412-1425, 3393`
+(variant declaration + `parse_effect` arm),
+`src/mtg_bot/effects/generic/opponent_punishers.py:30-63`
+(Python's `EachOpponentSacrificesCreature` with the
+`not o.printing.is_token` legal-list filter).
+
+Pinned by:
+`tests/test_parity_smoke.py::test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_divergence_pin`
+(per-engine divergence assertion landed in
+`feature/phase5-ce-bridge-each-opp-sac-token-first-divergence`).
+
+**What we do today**: Rust's resolver scans the opponent's bf
+for the first object whose `card_types` contains "Creature" and
+sacrifices that object. The Rust runtime carries no `is_token`
+field on `CardPrinting` — token-vs-printed creatures are
+indistinguishable at this scan. So if a token sits at bf-iter
+index 0 and a nontoken creature at index 1, Rust sacrifices the
+TOKEN.
+
+Python's `EachOpponentSacrificesCreature.resolve` first builds
+its `legal` list by walking `state.battlefield` and filtering
+by `o.controller_id == p.id and o.printing.is_creature and not
+o.printing.is_token` — the `is_token` filter drops every Token-
+supertype printing. The agent's pick comes from the filtered
+list. So when a token sits at bf-iter index 0 and a nontoken at
+index 1, Python's `legal` contains ONLY the nontoken; the
+nontoken is sacrificed.
+
+**Why this diverges from CR**: the printed oracle text on
+Susurian Dirgecraft (and the other 3+ EoE consumers of this
+arm) is "each opponent sacrifices a NONTOKEN creature of their
+choice" — the nontoken filter is part of the rules text, not a
+heuristic. Python matches the printed text; Rust's shortcut
+omits the filter for performance / brevity (one bf-iter pass
+beats a filtered legal-list construction + agent callback) and
+diverges from the rules text on the token-at-index-0 case.
+
+**Failure mode**: when an opponent has any token AND any
+nontoken creature with the token at bf-iter index 0, Rust
+sacrifices the token (rules-illegal pick) while Python
+sacrifices the first nontoken (rules-correct). On the practical
+gameplay surface this means: a controller with a Soldier token
+on bf at index 0 and a real creature at index 1, facing a
+Susurian Dirgecraft, will lose the TOKEN on Rust (cheap loss)
+but the NONTOKEN on Python (expensive loss). The strength gap
+favors the Rust side because tokens are typically lower-value;
+the bot trained on the Rust shortcut would over-value Susurian
+Dirgecraft against token-heavy boards.
+
+**Cross-engine smoke surfacing**: pinned by the per-engine
+assertion in
+`test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_divergence_pin`.
+The probe asserts Rust's p1 bf token-count drops to 0 AND
+Python's stays at 1 AND the two values are NOT equal. If the
+Rust gap closes (resolver gains the nontoken filter), the
+probe flags the regression immediately and the engineer
+flips it to a parity assertion.
+
+**Why it's OK for now**: the divergence is observable only on
+the (token-at-index-0 ∧ nontoken-at-index-1+) intersection of
+opponent bf-states facing a `each_opponent_sacrifices_creature`
+effect. The 3+ EoE consumers are mid-cost cards whose ETB
+fires once on entry; the divergent intersection is gameplay-
+real but not common (token-heavy decks aren't the dominant EoE
+archetype). The bridge documentation already notes the gap in
+the Susurian Dirgecraft sibling probe's docstring; this entry
+adds the doc backstop and the regression pin.
+
+**Fix scope when prioritized**: small.
+1. Extend `rust/src/state_ops_resolve.rs:6532-6538`'s
+   `find_map` predicate from
+   `printing.card_types.iter().any(|t| t == "Creature")`
+   to also require "the printing is not a token" — Rust today
+   has no per-printing `is_token` field, so the closure path
+   either:
+   (a) Add an `is_token: bool` field to Rust's `CardPrinting`
+       struct + thread it through `parse_printing` / the registry
+       loaders + populate it from the dict-shape's
+       `supertypes` containing "Token" (or from a dedicated
+       `is_token` key), then gate the predicate on it; OR
+   (b) Inline the supertype-string check into the predicate
+       (cheaper but spreads the convention across N call sites).
+2. Update `cross_engine.py`'s `each_opponent_sacrifices_creature`
+   bridge arm docstring (no code change — the bridge is
+   already structurally correct).
+3. Flip the divergence-pin probe to a cross-engine parity
+   assertion (both engines: token remains on bf, nontoken
+   sacrificed; delete the per-engine docstring's "this pin
+   documents the gap" framing).
+4. Remove THIS SEARCH_LIMITATIONS entry.
+
+**Impact estimate**: bounded to the (token-at-index-0 ∧
+nontoken-at-index-1+) intersection × `each_opponent_sacrifices_creature`
+consumers (3+ EoE cards). Strength cost: small — the bot
+trained on the Rust shortcut would over-value the effect
+against token-heavy boards because it perceives the sacrifice
+as cheap. Perf neutral on the fix.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:

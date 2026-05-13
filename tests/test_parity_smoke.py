@@ -24609,6 +24609,511 @@ def test_cross_engine_synthetic_etb_mill_cross_controller_routes_to_source_contr
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_divergence_pin(
+    parity_smoke,
+):
+    """Probe: Susurian Dirgecraft (EoE Spacecraft) ETB
+    ``each opponent sacrifices a nontoken creature of their choice``
+    on a p1 bf where the FIRST creature (bf-iter index 0) is a TOKEN
+    and the SECOND is a NONTOKEN bait creature -- PINS the documented
+    Rust-vs-Python divergence on the nontoken-filter shortcut.
+
+    Sibling of
+    ``test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opponent_sacrifices_parity``
+    (tests/test_parity_smoke.py:18137), which seats only NONTOKEN
+    creatures on p1's bf -- both engines pick the same first creature,
+    converge cleanly. THIS probe drives the bf-iter-index-0 = token
+    case -- the existing Susurian Dirgecraft probe's docstring spells
+    the divergence out:
+
+      Filter-divergence note. Rust does NOT enforce a nontoken
+      filter (bf.iter().find_map picks the first creature regardless
+      of token status); Python does (the resolve filters
+      ``not o.printing.is_token``). For probes that seat only
+      nontoken creatures on the opponent's bf, both engines pick
+      the same creature observably; the divergence only surfaces
+      with a token AND a nontoken creature with the token at index 0
+      (Rust would pick the token, Python would skip it). This probe
+      seats only nontoken creatures.
+
+    Per round-1 substrate-gap notes: Rust's
+    ``Effect::EachOpponentSacrificesCreature`` shortcut at
+    state_ops_resolve.rs:6529-6539 picks the first creature on each
+    opponent's bf via ``bf.iter().find_map`` regardless of token
+    status; Python's ``EachOpponentSacrificesCreature`` at
+    opponent_punishers.py:46-58 filters tokens out via
+    ``not o.printing.is_token`` BEFORE the agent picks. The current
+    Susurian Dirgecraft probe avoids the divergence by seating only
+    nontoken creatures. This probe lands the regression pin via
+    per-engine assertions: it asserts the EXPECTED divergent
+    behavior on each side, so the test is GREEN today and would only
+    flag if either engine's behavior changed (at which point the
+    engineer fixing the Rust gap should flip this probe to a
+    cross-engine parity assertion).
+
+    Mirrors the structure of
+    ``test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_optional_empty_bf_divergence_pin``
+    (commit 6d1cfada): per-engine asserts of the divergent behavior +
+    an explicit non-parity assertion that the two engines disagree
+    on a SPECIFIC observable (token-count remaining on p1's bf), so
+    a future Rust fix that adds the nontoken filter flips this probe
+    to red and prompts the flip-to-parity rewrite.
+
+    Predicate / effect (identical to the Susurian Dirgecraft sibling):
+
+        SourceIsSelf
+        each_opponent_sacrifices_creature
+
+    Engine-specific expected behavior on a p1 bf with a TOKEN at
+    index 0 and a NONTOKEN at index 1:
+
+    * Rust: ``Effect::EachOpponentSacrificesCreature`` arm at
+      state_ops_resolve.rs:6529-6539 scans p1's bf for the first
+      creature via ``bf.iter().find_map``; the predicate is
+      ``card_types.iter().any(|t| t == "Creature")``. The token at
+      index 0 is a Creature (Rust has no ``is_token`` field), so
+      Rust picks the TOKEN, removes it from p1's bf, pushes it onto
+      p1's graveyard. Post-resolve: p1's bf retains the NONTOKEN
+      bait; the token is gone. Token count on p1's bf = 0.
+    * Python: ``EachOpponentSacrificesCreature.resolve`` at
+      opponent_punishers.py:47-52 filters p1's bf creatures by
+      ``not o.printing.is_token``; the token is dropped from
+      ``legal``; only the NONTOKEN bait remains. The
+      ``_SacrificeFirstAgent`` returns ``legal[0]`` which is the
+      NONTOKEN. Python sacrifices the NONTOKEN. Post-resolve: p1's
+      bf retains the TOKEN; the nontoken is gone. Token count on
+      p1's bf = 1.
+
+    The CROSS-ENGINE NON-PARITY observable: Rust's p1 token-count
+    (0) != Python's p1 token-count (1).
+
+    Probe shape:
+
+      1. Build a Token Creature printing (via ``make_token_creature``
+         on the Python side; equivalent dict-shape on the Rust side
+         registered via ``register_and_inject_object`` with a stub
+         injection onto p1's library to claim a registry pid). Use
+         the cross_engine ``register_token_printing`` registry to
+         pair the two; the pairing isn't load-bearing for THIS probe
+         (the create_token bridge arm isn't exercised here -- the
+         token is pre-seated on bf, not spawned by an effect), but
+         registering keeps the printing-id substrate consistent
+         with the round-3 token-creation probe convention.
+      2. Pre-seed p1's bf with the TOKEN at INDEX 0 (so Rust's bf-
+         iter-first-creature scan picks it up first), then the
+         NONTOKEN bait at INDEX 1.
+      3. Inject Susurian Dirgecraft on p0's bf via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + manual ``_trigger_etb_abilities`` (Python). Both
+         engines dispatch ENTERS for the just-arrived Spacecraft;
+         the SourceIsSelf predicate matches; one
+         ``EachOpponentSacrificesCreature()`` trigger lands on
+         the stack.
+      4. Seat ``_SacrificeFirstAgent`` on p1 (Python side) -- the
+         agent picks ``legal[0]``, which AFTER Python's nontoken
+         filter is the NONTOKEN bait.
+      5. Drain both stacks.
+      6. Assert per-engine expected behavior:
+         - Rust: p1 bf retains the NONTOKEN; token is in p1's
+           graveyard.
+         - Python: p1 bf retains the TOKEN; nontoken is in p1's
+           graveyard.
+      7. CROSS-ENGINE NON-PARITY: assert ``rust_p1_bf_token_count
+         != py_p1_bf_token_count`` so a Rust fix flips this red.
+
+    Out of scope:
+
+      * Cross-engine parity -- THE PROBE DOCUMENTS A KNOWN
+        DIVERGENCE; the explicit non-parity assertion is the doc.
+        See docs/SEARCH_LIMITATIONS.md entry "Rust port -
+        EachOpponentSacrificesCreature nontoken-filter shortcut"
+        for the closure plan.
+      * Multi-opponent fanout -- the 2-player harness reduces
+        "each opponent" to "the one opponent". The N-player per-
+        seat-iteration shape is exercised by the Rust resolve
+        arm's loop body directly.
+      * Empty-p1-bf short-circuit -- not exercised; both engines
+        silently fizzle on empty bf (covered by the silent-fizzle
+        guard at state_ops_resolve.rs:6541-6543 / Python's
+        ``if not legal`` at opponent_punishers.py:53-54).
+      * Token-creation via the create_token bridge arm -- this
+        probe pre-seats the token on bf via direct injection;
+        the create_token arm is exercised by the round-3 sibling
+        probes.
+      * Station / 7+ Spacecraft activated abilities -- mana + tap
+        costs + charge-counter substrate; none on the bridge today.
+
+    Expected post-dispatch + post-drain state:
+
+      * Rust: Susurian Dirgecraft on p0's bf; p1 bf has the NONTOKEN
+        Sac Bait Beta (the token was sacrificed); p1 graveyard has
+        the token; p0 / p1 lives unchanged; no residual stack.
+      * Python: Susurian Dirgecraft on p0's bf; p1 bf has the TOKEN
+        (the nontoken was sacrificed); p1 graveyard has the
+        nontoken; p0 / p1 lives unchanged; no residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        clear_token_printings, register_token_printing,
+    )
+    from tests.parity._picker_shims import _SacrificeFirstAgent
+
+    # Empty card_defs: Susurian Dirgecraft + bait creatures + token
+    # are built and injected manually on both sides (the bridge is
+    # exercised by the existing Susurian Dirgecraft sibling probe).
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side: register the token printing into the registry
+    # via a stub library injection (mirrors the I81 cross-controller
+    # probe's `_register_soldier_token` pattern), then pre-seed p1's
+    # bf with [token, nontoken] in that order. ----
+    ZONE_LIBRARY = 1
+    ZONE_BATTLEFIELD = 2
+
+    rust_token_dict = {
+        "name": "Spacecraft Sacrifice Token",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+    }
+    # Claim the next free pid for the token before injecting; this
+    # is the pid that the cross_engine `register_token_printing`
+    # bridge map will key on. The injection itself is just a
+    # registry side-effect -- the dummy lands harmlessly on p1's
+    # library and is never observed (libraries are empty per the
+    # spec; the dummy gets popped/ignored at probe-end).
+    rust_token_pid = rust_state.registry_size
+    rust_state.register_and_inject_object(
+        rust_token_dict, 1, ZONE_LIBRARY,
+    )
+    # Now inject a SECOND copy of the token printing onto p1's bf at
+    # INDEX 0 -- this is the load-bearing token for the divergence
+    # scenario.
+    rust_state.register_and_inject_object(
+        rust_token_dict, 1, ZONE_BATTLEFIELD,
+    )
+
+    rust_nontoken_dict = {
+        "name": "Sac Bait Beta",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_state.register_and_inject_object(
+        rust_nontoken_dict, 1, ZONE_BATTLEFIELD,
+    )
+
+    # Confirm p1 bf order pre-injection: [token at idx 0, nontoken
+    # at idx 1] -- the load-bearing precondition.
+    rust_p1_bf_pre = [
+        e for e in rust_state.battlefield_snapshot()
+        if int(e.get("controller_id", -1)) == 1
+    ]
+    assert len(rust_p1_bf_pre) == 2, (
+        f"Rust: p1 bf should hold the [token, nontoken] pair pre-"
+        f"injection of Susurian Dirgecraft; got {rust_p1_bf_pre}"
+    )
+    assert rust_p1_bf_pre[0]["printing_name"] == "Spacecraft Sacrifice Token", (
+        f"Rust: p1 bf index 0 must be the token (load-bearing for "
+        f"the divergence scenario); got "
+        f"{rust_p1_bf_pre[0]['printing_name']}"
+    )
+    assert rust_p1_bf_pre[1]["printing_name"] == "Sac Bait Beta", (
+        f"Rust: p1 bf index 1 must be the nontoken bait; got "
+        f"{rust_p1_bf_pre[1]['printing_name']}"
+    )
+
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p1_bf_size_before = rust_state.battlefield_sizes[1]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+
+    rust_dirgecraft_dict = {
+        "name": "Susurian Dirgecraft",
+        "card_types": ["Artifact"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 4, "B": 1},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_sacrifices_creature",
+                },
+            }
+        ],
+    }
+    rust_state.register_and_inject_object(
+        rust_dirgecraft_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Susurian Dirgecraft's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "EachOpponentSacrificesCreature() on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import (
+        CardPrinting, ManaCost, make_token_creature,
+    )
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacrificesCreature,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    # Token printing -- `make_token_creature` adds the "Token"
+    # supertype which trips the Python `is_token` filter (the
+    # whole point of the divergence). Register it against Rust's
+    # pid (the token-creation registry isn't exercised here, but
+    # round-3 convention is to pair them whenever a probe touches
+    # tokens cross-engine, so a future probe can re-use the
+    # printing without re-registration noise).
+    py_token_printing = make_token_creature(
+        name="Spacecraft Sacrifice Token",
+        power=1,
+        toughness=1,
+    )
+    clear_token_printings()
+    register_token_printing(rust_token_pid, py_token_printing)
+
+    nontoken_printing = CardPrinting(
+        name="Sac Bait Beta",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    dirgecraft_printing = CardPrinting(
+        name="Susurian Dirgecraft",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=4, colored=(("B", 1),)),
+        type_line="Artifact -- Spacecraft",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=("Spacecraft",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=EachOpponentSacrificesCreature(),
+            ),
+        ),
+    )
+
+    def _inject_bf(printing, owner_id):
+        obj = py_state.new_object(
+            printing, owner_id=owner_id, zone=Zone.BATTLEFIELD,
+        )
+        obj.summoning_sick = False
+        obj.tapped = False
+        obj.damage = 0
+        obj.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(obj)
+        return obj
+
+    # Inject [token at idx 0, nontoken at idx 1] on p1's bf -- same
+    # order as Rust so both engines see the same pre-resolve
+    # opponent-bf shape. Python's `EachOpponentSacrificesCreature`
+    # builds its own `legal` list by walking `state.battlefield`
+    # in-order and filtering tokens out, so the bf insertion order
+    # determines what legal[0] is on the Python side AFTER the
+    # token filter runs (just the nontoken).
+    py_token_obj = _inject_bf(py_token_printing, owner_id=1)
+    py_nontoken_obj = _inject_bf(nontoken_printing, owner_id=1)
+    assert py_token_obj.printing.is_token, (
+        "Python: token printing must trip is_token (load-bearing "
+        "for the nontoken-filter divergence); got "
+        f"is_token={py_token_obj.printing.is_token}"
+    )
+    assert not py_nontoken_obj.printing.is_token, (
+        "Python: nontoken bait must NOT trip is_token; got "
+        f"is_token={py_nontoken_obj.printing.is_token}"
+    )
+
+    # Custom agent for p1: returns legal[0]. After Python's
+    # nontoken-filter runs, legal contains only the nontoken bait,
+    # so the agent's pick is the nontoken. Same shim as the
+    # existing Susurian Dirgecraft sibling probe.
+    py_state.players[1].agent = _SacrificeFirstAgent()
+
+    py_p1_bf_size_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+
+    py_dirgecraft = _inject_bf(dirgecraft_printing, owner_id=0)
+    _trigger_etb_abilities(py_state, py_dirgecraft)
+    assert len(py_state.stack) == 1, (
+        "Python: Susurian Dirgecraft's arrival should fire the "
+        "IsSelf ENTERS trigger and land "
+        "EachOpponentSacrificesCreature() on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then assert per-engine divergence. ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides post-drain.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Both engines: p1 bf shrank by 1, p1 graveyard grew by 1
+    # (exactly one creature was sacrificed on each side).
+    assert rust_state.battlefield_sizes[1] == rust_p1_bf_size_before - 1, (
+        f"Rust: p1 bf size should be {rust_p1_bf_size_before - 1} "
+        f"after sacrifice; got {rust_state.battlefield_sizes[1]}"
+    )
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_size_before + 1, (
+        f"Rust: p1 graveyard size should be "
+        f"{rust_p1_gy_size_before + 1} after sacrifice; got "
+        f"{rust_state.graveyard_sizes[1]}"
+    )
+
+    # ---- Per-engine divergence assertions on WHICH creature was
+    # sacrificed. ----
+    rust_p1_gy_names = [
+        e["printing_name"] for e in rust_state.graveyard_snapshot(1)
+    ]
+    rust_p1_bf_names = [
+        e["printing_name"]
+        for e in rust_state.battlefield_snapshot()
+        if int(e.get("controller_id", -1)) == 1
+    ]
+    # Rust: bf-iter-first-creature scan picks the TOKEN (no
+    # nontoken filter on the Rust side). Token is sacrificed; the
+    # nontoken bait remains on p1's bf.
+    assert "Spacecraft Sacrifice Token" in rust_p1_gy_names, (
+        f"Rust: expected the TOKEN in p1's graveyard (bf-iter-first-"
+        f"creature scan picks it; no nontoken filter on Rust). "
+        f"This pins the divergent shortcut at "
+        f"state_ops_resolve.rs:6529-6539; see SEARCH_LIMITATIONS.md "
+        f'"EachOpponentSacrificesCreature Rust nontoken-filter '
+        f'shortcut". Got rust_p1_gy_names={rust_p1_gy_names}'
+    )
+    assert "Sac Bait Beta" not in rust_p1_gy_names, (
+        f"Rust: the nontoken bait should NOT be sacrificed (Rust's "
+        f"shortcut picked the token at bf-iter index 0 first). Got "
+        f"rust_p1_gy_names={rust_p1_gy_names}"
+    )
+    assert "Sac Bait Beta" in rust_p1_bf_names, (
+        f"Rust: nontoken bait should remain on p1's bf. Got "
+        f"rust_p1_bf_names={rust_p1_bf_names}"
+    )
+    assert "Spacecraft Sacrifice Token" not in rust_p1_bf_names, (
+        f"Rust: token should be gone from p1's bf (sacrificed). "
+        f"Got rust_p1_bf_names={rust_p1_bf_names}"
+    )
+
+    # Python: nontoken-filter drops the token from the legal list;
+    # `_SacrificeFirstAgent` picks legal[0] which is the nontoken.
+    # Nontoken is sacrificed; the token remains on p1's bf.
+    py_p1_bf_now = [
+        o for o in py_state.battlefield if o.controller_id == 1
+    ]
+    assert len(py_p1_bf_now) == py_p1_bf_size_before - 1, (
+        f"Python: p1 bf size should be {py_p1_bf_size_before - 1} "
+        f"after sacrifice; got {len(py_p1_bf_now)}"
+    )
+    assert (
+        len(py_state.players[1].graveyard) == py_p1_gy_size_before + 1
+    ), (
+        f"Python: p1 graveyard size should be "
+        f"{py_p1_gy_size_before + 1} after sacrifice; got "
+        f"{len(py_state.players[1].graveyard)}"
+    )
+    py_p1_gy_names = [
+        o.printing.name for o in py_state.players[1].graveyard
+    ]
+    py_p1_bf_names = [o.printing.name for o in py_p1_bf_now]
+    assert "Sac Bait Beta" in py_p1_gy_names, (
+        f"Python: expected the NONTOKEN bait in p1's graveyard "
+        f"(Python's nontoken filter dropped the token; "
+        f"_SacrificeFirstAgent picked the only remaining legal "
+        f"entry, which is the nontoken). Got "
+        f"py_p1_gy_names={py_p1_gy_names}"
+    )
+    assert "Spacecraft Sacrifice Token" not in py_p1_gy_names, (
+        f"Python: token should NOT be sacrificed (Python's "
+        f"nontoken filter at opponent_punishers.py:51 excludes "
+        f"it). Got py_p1_gy_names={py_p1_gy_names}"
+    )
+    assert "Spacecraft Sacrifice Token" in py_p1_bf_names, (
+        f"Python: token should remain on p1's bf (it was filtered "
+        f"out of the sacrifice candidate set). Got "
+        f"py_p1_bf_names={py_p1_bf_names}"
+    )
+    assert "Sac Bait Beta" not in py_p1_bf_names, (
+        f"Python: nontoken bait should be gone from p1's bf "
+        f"(sacrificed). Got py_p1_bf_names={py_p1_bf_names}"
+    )
+
+    # Lives unchanged on both seats (the sacrifice doesn't touch
+    # life totals).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # ---- CROSS-ENGINE NON-PARITY documentation ----
+    # The load-bearing observable: p1's bf token-count after
+    # sacrifice. Rust: 0 (the token was the bf-iter-first creature
+    # and got sacrificed). Python: 1 (the token was filtered out
+    # of the legal set and the nontoken got sacrificed instead).
+    rust_p1_bf_token_count = sum(
+        1 for n in rust_p1_bf_names if n == "Spacecraft Sacrifice Token"
+    )
+    py_p1_bf_token_count = sum(
+        1 for n in py_p1_bf_names if n == "Spacecraft Sacrifice Token"
+    )
+    assert rust_p1_bf_token_count == 0, (
+        f"Rust: p1 bf should hold ZERO tokens post-sacrifice "
+        f"(the token was the bf-iter-first creature and got "
+        f"sacrificed by the Rust shortcut). Got "
+        f"rust_p1_bf_token_count={rust_p1_bf_token_count}"
+    )
+    assert py_p1_bf_token_count == 1, (
+        f"Python: p1 bf should still hold the token "
+        f"(the nontoken filter dropped it from the sacrifice "
+        f"candidate set). Got "
+        f"py_p1_bf_token_count={py_p1_bf_token_count}"
+    )
+    assert rust_p1_bf_token_count != py_p1_bf_token_count, (
+        f"Cross-engine: this probe PINS a known divergence -- "
+        f"Rust's bf-iter-first-creature shortcut sacrifices the "
+        f"token (bf token-count -> 0); Python's nontoken-filter "
+        f"sacrifices the nontoken instead (bf token-count -> 1). "
+        f"If both engines now agree on the bf token-count, the "
+        f"Rust gap has been closed and this probe should be "
+        f"flipped to assert parity. "
+        f"rust_p1_bf_token_count={rust_p1_bf_token_count} "
+        f"py_p1_bf_token_count={py_p1_bf_token_count}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
