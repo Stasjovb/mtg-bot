@@ -1628,5 +1628,86 @@ def test_rust_parser_accepts_each_opponent_sacrifices_creature_in_triggered_abil
     assert pid == 0
 
 
+def test_bridge_each_opponent_mills_cards_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "each_opponent_mills_cards", "count": N}`` translates
+    to Python ``EachOpponentMillsCards(amount=N)``.
+
+    Field-name translation: Rust ``count`` -> Python ``amount``.
+    Mirrors the field-name divergence between Rust's count-keyed
+    arms (each_opponent_mills_cards, surveil) and Python's amount-
+    keyed effect family.
+    """
+    from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_mills_cards", "count": 3}
+    )
+    assert isinstance(e, EachOpponentMillsCards)
+    assert e.amount == 3
+
+
+def test_bridge_each_opponent_mills_cards_count_default_one():
+    """Missing ``count`` defaults to 1 in the bridge translator
+    (mirrors the Python class's ``amount: int = 1`` default).
+    Rust's parse_effect REQUIRES the key present so direct Rust
+    callers must supply it explicitly; the bridge default is a
+    translator-robustness backstop for direct unit-test calls.
+    """
+    from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_mills_cards"}
+    )
+    assert isinstance(e, EachOpponentMillsCards)
+    assert e.amount == 1
+
+
+def test_bridge_each_opponent_mills_cards_zero_count_translates():
+    """``count=0`` translates to ``amount=0`` (a no-op on both
+    engines but a legal field value -- Rust's parse_effect at
+    cards.rs:3604-3605 rejects only NEGATIVE counts, not zero)."""
+    from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_mills_cards", "count": 0}
+    )
+    assert isinstance(e, EachOpponentMillsCards)
+    assert e.amount == 0
+
+
+def test_rust_parser_accepts_each_opponent_mills_cards_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``each_opponent_mills_cards`` effect kind in a triggered_ability
+    dict. Rust's parse_effect at cards.rs:3592-3608 requires the
+    ``count`` key explicitly.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- EachOpponentMillsCards",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_mills_cards",
+                    "count": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

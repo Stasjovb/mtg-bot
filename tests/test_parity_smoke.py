@@ -18587,6 +18587,341 @@ def test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opponent_sacrifices_
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_synthetic_etb_each_opponent_mills_cards_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ``ETB Mill Bear`` exercising the freshly
+    landed ``each_opponent_mills_cards`` bridge arm end-to-end.
+
+    Why synthetic rather than a real EoE card: the audit lists
+    ``each_opponent_mills_cards`` as USED by Specimen Freighter (an
+    attack-trigger 2-player simplification of "defending player mills
+    four cards"), NOT as an ETB trigger. No EoE card in the current
+    pool prints ``When this enters, each opponent mills N cards``;
+    a synthetic creature card with the bare-arm trigger is the
+    canonical end-to-end driver until a future EoE printing matches
+    the shape.
+
+    Trigger shape:
+
+        Event: enters
+        Predicate: source_is_self
+        Effect: each_opponent_mills_cards (count=2)
+
+    **Rust resolve semantics.** Rust's
+    ``Effect::EachOpponentMillsCards { count }`` arm
+    (state_ops_resolve.rs:6580-6634) is UNTARGETED -- it derives
+    ``source_controller`` via the standard 5-zone walk + stack
+    fallback for ``source_obj_id``, then for the (single 2-player)
+    opponent runs ``count`` iterations of "remove top of library
+    (lib[0]); push to opponent's graveyard". Empty library mid-loop
+    stops silently (CR 704.5b mill != draw -- no loss-condition
+    check).
+
+    **Python resolve semantics.** Python's ``EachOpponentMillsCards``
+    (effects/generic/draw_mill.py:30) walks ``state.players``,
+    skipping the controller and any has_lost player, and pops the
+    top ``self.amount`` cards off each opponent's library into their
+    graveyard. Same observable: each opponent's library shrinks by
+    up-to-N from the top, with the same N popped cards landing in
+    their graveyard in pop order.
+
+    **Untargeted -- no agent shim required.** Mill is a pure top-N
+    library pop with no per-card decision. The harness's default
+    Player has ``agent=None`` and that's fine -- the mill walks
+    purely on the source-controller's id.
+
+    Probe shape (inject-and-fire-ENTERS):
+
+      1. Pre-seed p1's library with TWO distinct vanilla bait cards
+         (Mill Bait Alpha, Mill Bait Beta) so a single-swap or
+         single-mill divergence between engines surfaces as a
+         per-card name divergence in p1's graveyard / library
+         rather than a count-only divergence.
+
+      2. Inject ``ETB Mill Bear`` directly onto p0's battlefield via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + manual ``_trigger_etb_abilities`` (Python). Both
+         engines dispatch ENTERS for the just-arrived bear; the
+         SourceIsSelf predicate matches; one
+         ``EachOpponentMillsCards(count=2)`` trigger lands on the
+         stack with empty targets.
+
+      3. Drain both stacks. Resolve walk: p1's library shrinks by
+         2 from the top; both bait cards land in p1's graveyard in
+         library-top-down order (Alpha first, then Beta).
+
+      4. Cross-engine assert: post-drain, BOTH engines have an
+         empty p1 library AND p1 graveyard contains both Alpha and
+         Beta (Alpha as the older entry). p0's library / graveyard
+         unchanged.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- inject-and-dispatch-ENTERS
+        bypasses the mana pipeline.
+      * Driving the empty-library short-circuit branch -- the
+        substrate's silent-stop guard at state_ops_resolve.rs:6627
+        + Python's matching ``if not p.library: break`` at
+        draw_mill.py:49-50 are both pinned by their unit tests
+        already in the suite. The non-empty path is the load-
+        bearing parity case for the bridge arm.
+      * Multi-opponent fanout -- the 2-player harness reduces "each
+        opponent" to "the one opponent". The N-player per-seat-
+        iteration shape is exercised by the Rust resolve arm's
+        loop body directly.
+      * Self-loss-condition (decking) -- mill on Magic does NOT
+        trigger CR 704.5b (loss for empty library); the next draw
+        would. The probe doesn't drive a draw step so no loss-
+        condition fires.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * ETB Mill Bear on p0's battlefield.
+      * p1 library: empty (both Alpha and Beta milled).
+      * p1 graveyard: [Mill Bait Alpha, Mill Bait Beta] in that order.
+      * p0 library / graveyard: unchanged.
+      * Lives unchanged on both seats (mill doesn't touch life).
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    mill_bear = CardDef(
+        name="ETB Mill Bear",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("B", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_mills_cards",
+                    "count": 2,
+                },
+            },
+        ),
+    )
+    # Two distinct vanilla cards on p1's library so a single-swap
+    # divergence between engines surfaces as a per-card name
+    # divergence rather than a count-only divergence.
+    mill_bait_a = CardDef(
+        name="Mill Bait Alpha",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    mill_bait_b = CardDef(
+        name="Mill Bait Beta",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(mill_bear, mill_bait_a, mill_bait_b),
+        # p0 library empty -- only p1 gets milled.
+        p0_library=(),
+        # Library top-down: Alpha first (popped first by mill),
+        # Beta second. Both engines' build_*_state honor the
+        # spec's library order; the mill-resolve pops in this
+        # order on both sides.
+        p1_library=("Mill Bait Alpha", "Mill Bait Beta"),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_p1_lib_size_before = rust_state.library_sizes[1]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+    rust_p0_lib_size_before = rust_state.library_sizes[0]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    # The deckspec already wired Alpha + Beta into p1's library;
+    # confirm.
+    assert rust_p1_lib_size_before == 2, (
+        "Rust p1 library should hold the two seeded bait cards; "
+        f"got library_size={rust_p1_lib_size_before}"
+    )
+
+    rust_mill_bear_dict = {
+        "name": "ETB Mill Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_mills_cards",
+                    "count": 2,
+                },
+            }
+        ],
+    }
+    rust_state.register_and_inject_object(
+        rust_mill_bear_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # ENTERS dispatch via deferred-dispatch queue; SourceIsSelf
+    # matches the just-arrived Mill Bear -> one
+    # EachOpponentMillsCards(count=2) trigger lands on the stack.
+    assert rust_state.stack_size() == 1, (
+        "Rust: ETB Mill Bear's arrival should fire the SourceIsSelf "
+        "ENTERS trigger and land EachOpponentMillsCards(count=2) on "
+        f"the stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.draw_mill import EachOpponentMillsCards
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    mill_bear_printing = CardPrinting(
+        name="ETB Mill Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=EachOpponentMillsCards(amount=2),
+            ),
+        ),
+    )
+
+    py_p1_lib_size_before = len(py_state.players[1].library)
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+    py_p0_lib_size_before = len(py_state.players[0].library)
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    # The deckspec already wired Alpha + Beta into p1's library;
+    # confirm.
+    assert py_p1_lib_size_before == 2, (
+        "Python p1 library should hold the two seeded bait cards; "
+        f"got library_size={py_p1_lib_size_before}"
+    )
+
+    py_mill_bear = py_state.new_object(
+        mill_bear_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_mill_bear.summoning_sick = False
+    py_mill_bear.tapped = False
+    py_mill_bear.damage = 0
+    py_mill_bear.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_mill_bear)
+    _trigger_etb_abilities(py_state, py_mill_bear)
+    assert len(py_state.stack) == 1, (
+        "Python: ETB Mill Bear's arrival should fire the IsSelf "
+        "ENTERS trigger and land EachOpponentMillsCards(amount=2) "
+        f"on the stack. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: p1 library shrank by 2, p1 graveyard
+    # grew by 2; p0 unchanged.
+    assert rust_state.library_sizes[1] == rust_p1_lib_size_before - 2, (
+        f"Rust p1 library should shrink by 2; expected "
+        f"{rust_p1_lib_size_before - 2}, got "
+        f"{rust_state.library_sizes[1]}"
+    )
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_size_before + 2, (
+        f"Rust p1 graveyard should grow by 2; expected "
+        f"{rust_p1_gy_size_before + 2}, got "
+        f"{rust_state.graveyard_sizes[1]}"
+    )
+    assert rust_state.library_sizes[0] == rust_p0_lib_size_before, (
+        "Rust p0 library should be unchanged (mill is opponent-only)"
+    )
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_size_before, (
+        "Rust p0 graveyard should be unchanged"
+    )
+    rust_p1_gy_names = [
+        e["printing_name"] for e in rust_state.graveyard_snapshot(1)
+    ]
+    # Mill pops library top-down; both bait cards land in graveyard
+    # in pop order. Alpha was top of library so Alpha lands FIRST in
+    # the graveyard (older entry), Beta lands SECOND (newer entry).
+    assert rust_p1_gy_names == ["Mill Bait Alpha", "Mill Bait Beta"], (
+        f"Rust p1 graveyard should be [Alpha, Beta] in pop order; "
+        f"got {rust_p1_gy_names}"
+    )
+
+    # Python: same shape on the equivalent zones.
+    assert (
+        len(py_state.players[1].library) == py_p1_lib_size_before - 2
+    )
+    assert (
+        len(py_state.players[1].graveyard) == py_p1_gy_size_before + 2
+    )
+    assert (
+        len(py_state.players[0].library) == py_p0_lib_size_before
+    )
+    assert (
+        len(py_state.players[0].graveyard) == py_p0_gy_size_before
+    )
+    py_p1_gy_names = [
+        o.printing.name for o in py_state.players[1].graveyard
+    ]
+    assert py_p1_gy_names == ["Mill Bait Alpha", "Mill Bait Beta"], (
+        f"Python p1 graveyard should be [Alpha, Beta] in pop order; "
+        f"got {py_p1_gy_names}"
+    )
+
+    # Cross-engine: same per-zone sizes on both seats.
+    assert (
+        rust_state.library_sizes[1]
+        == len(py_state.players[1].library)
+    )
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+    assert (
+        rust_state.library_sizes[0]
+        == len(py_state.players[0].library)
+    )
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+
+    # Lives unchanged on both seats (mill doesn't touch life).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

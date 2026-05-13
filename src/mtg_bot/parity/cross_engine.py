@@ -1006,6 +1006,52 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             EachOpponentSacrificesCreature,
         )
         return EachOpponentSacrificesCreature()
+    if kind == "each_opponent_mills_cards":
+        # "Each opponent puts the top N cards of their library into
+        # their graveyard." Sister arm to ``each_opponent_discards`` /
+        # ``each_opponent_sacrifices_creature`` -- untargeted, source-
+        # controller-of-effect resolution, per-opponent loop. Rust's
+        # ``Effect::EachOpponentMillsCards { count }`` (cards.rs:1390)
+        # carries one ``count: i32`` field. The parse_effect arm at
+        # cards.rs:3592-3608 requires the ``count`` key explicitly and
+        # rejects negative values; the resolve arm at
+        # ``state_ops_resolve.rs:6580-6634`` does the source-controller
+        # lookup (5-zone walk + stack fallback for source_obj_id) and
+        # mills the (single 2-player) opponent's library top N cards
+        # via a fixed-iteration Vec::remove(0) loop. Empty library
+        # stops the inner loop silently (CR 704.5b mill ≠ draw -- no
+        # loss-condition check).
+        #
+        # **Field-name translation: count -> amount.** Rust uses
+        # ``count``; Python's ``EachOpponentMillsCards`` (effects/
+        # generic/draw_mill.py:30) uses ``amount`` (matches the
+        # Effect::Mill / SelfMill / Surveil family which uses
+        # ``amount``). The bridge does the rename inline. The
+        # ``count`` default of 1 mirrors the Python class default;
+        # Rust's parse REQUIRES the key present so end-to-end Rust
+        # callers must supply it explicitly.
+        #
+        # **Untargeted -- no agent shim required.** Both engines
+        # silently iterate over each opponent. No discard / sacrifice
+        # / surveil decision is made (mill is purely a top-N library
+        # pop with no per-card choice). The harness's default Player
+        # has ``agent=None`` and that's fine -- the resolve walks
+        # opponents purely on the source-controller's id.
+        #
+        # **EoE consumer note (substrate-side).** The audit lists
+        # ``each_opponent_mills_cards`` as USED by Specimen
+        # Freighter (an attack-trigger 2-player simplification of
+        # "defending player mills four cards"), NOT as an ETB
+        # trigger. No EoE card in the current pool prints
+        # ``When this enters, each opponent mills N cards`` -- so
+        # the bare-arm end-to-end exercise is via a synthetic ETB
+        # probe (test_parity_smoke.py companion to this commit).
+        from mtg_bot.effects.generic.draw_mill import (
+            EachOpponentMillsCards,
+        )
+        return EachOpponentMillsCards(
+            amount=eff_dict.get("count", 1),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
