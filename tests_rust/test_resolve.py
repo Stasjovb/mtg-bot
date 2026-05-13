@@ -9420,6 +9420,273 @@ def test_resolve_return_creature_from_gy_to_hand_zone_change_resets(synthetic_st
     assert creature_obj["summoning_sick"] is True  # r28 CE1 default
 
 
+# -------------------- Phase 5 rider-widened return-to-hand (Option B additive arms) --------------------
+#
+# Two new Effect variants extend the unit-variant
+# ``Effect::ReturnCreatureFromYourGraveyardToHand`` with the EoE
+# rider widenings:
+#
+#   * ``Effect::ReturnArtifactOrCreatureFromYourGraveyardToHand``
+#     — Interceptor Mechan (EoE) shape: "...return target artifact
+#     or creature card from your graveyard to your hand."
+#
+#   * ``Effect::ReturnCreatureOrSpacecraftFromYourGraveyardToHand``
+#     — Fell Gravship (EoE) suffix shape: "...return a creature or
+#     Spacecraft card from your graveyard to your hand."
+#
+# Both arms inherit the I82 controller-of-effect contract:
+# ``controller_idx`` reads ``current_resolve_source_controller``,
+# scanning the SOURCE's controller's graveyard and pushing to the
+# SOURCE's controller's hand. Cross-controller routing matches the
+# unit-variant arm.
+#
+# Each arm differs from the unit variant ONLY in the legal-target
+# filter — the disjunction widens:
+#   * unit: ``card_types.contains("Creature")``
+#   * or_artifact: ``card_types.contains("Creature") ||
+#                   card_types.contains("Artifact")``
+#   * or_spacecraft: ``card_types.contains("Creature") ||
+#                     subtypes.contains("Spacecraft")``
+#
+# Zone-change reset (CR 400.7) is identical across all three:
+# ``tapped``, ``summoning_sick``, ``damage``, ``counters``,
+# ``attached_to``, ``exiled_with_source`` all reset on the move
+# to hand.
+
+
+def _return_artifact_or_creature_dict():
+    """Interceptor-Mechan-shape sorcery — single-effect 'return
+    target artifact or creature card from your graveyard to your
+    hand'. Used by the or_artifact rider regression pins."""
+    return {
+        "name": "Test Interceptor Recur",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "return_artifact_or_creature_from_your_graveyard_to_hand"
+            }
+        ],
+    }
+
+
+def _return_creature_or_spacecraft_dict():
+    """Fell-Gravship-shape sorcery — single-effect 'return target
+    creature or Spacecraft card from your graveyard to your hand'.
+    Used by the or_spacecraft rider regression pins."""
+    return {
+        "name": "Test Gravship Recur",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "return_creature_or_spacecraft_from_your_graveyard_to_hand"
+            }
+        ],
+    }
+
+
+def _vanilla_artifact_dict(name="Test Artifact"):
+    """A non-creature non-Spacecraft artifact printing for graveyard
+    injection. Used to exercise the artifact branch of the or_artifact
+    disjunction and the artifact-but-NOT-Spacecraft side of the
+    or_spacecraft disjunction (should skip on the latter)."""
+    return {
+        "name": name,
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+    }
+
+
+def _vanilla_spacecraft_dict(name="Test Spacecraft"):
+    """A Spacecraft printing — Artifact card type plus Spacecraft
+    subtype. Mirrors the EoE Spacecraft printings (e.g. Fell Gravship)
+    which carry both 'Artifact' on card_types and 'Spacecraft' on
+    subtypes. Pre-Station they are NOT creatures."""
+    return {
+        "name": name,
+        "card_types": ["Artifact"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 3},
+    }
+
+
+# ===== or_artifact rider arm: 4 happy-path / edge-case pins =====
+
+
+def test_resolve_return_artifact_or_creature_pulls_creature(synthetic_state):
+    """Happy path 1: a creature card in p0's graveyard is pulled by
+    the or_artifact-rider arm (creature branch of the disjunction).
+    Same observable as the bare unit variant when the graveyard
+    contains a creature."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_artifact_or_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_HAND
+
+
+def test_resolve_return_artifact_or_creature_pulls_artifact(synthetic_state):
+    """Happy path 2: a non-creature artifact card in p0's graveyard
+    is pulled by the or_artifact-rider arm (artifact branch). Key
+    delta from the bare unit variant — that arm would silently no-op
+    on an artifact-only graveyard."""
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_artifact_or_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Post-fix: artifact moved to hand on the artifact branch of the
+    # disjunction.
+    assert synthetic_state.find_object_zone(artifact_id) == ZONE_HAND
+
+
+def test_resolve_return_artifact_or_creature_skips_lands(synthetic_state):
+    """Edge case: a land in the graveyard does NOT qualify (neither
+    'Creature' nor 'Artifact' is in card_types for vanilla land). The
+    arm fizzles silently when only a land is present."""
+    land_id = synthetic_state.register_and_inject_object(
+        _vanilla_land_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_artifact_or_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Land stayed in graveyard (silent fizzle).
+    assert synthetic_state.find_object_zone(land_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_return_artifact_or_creature_cross_controller_routing(engine):
+    """**I82 controller-of-effect inheritance pin.** On p0's turn
+    (active_player=0), the or_artifact-rider source cast by p1
+    must scan p1's graveyard and push to p1's hand — NOT
+    active_player's. Mirrors the unit-variant I82 regression pin."""
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    # Inject artifacts into each player's graveyard. The scan must
+    # find p1's, not p0's.
+    p0_artifact_id = state.register_and_inject_object(
+        _vanilla_artifact_dict("P0 Artifact"), 0, ZONE_GRAVEYARD
+    )
+    p1_artifact_id = state.register_and_inject_object(
+        _vanilla_artifact_dict("P1 Artifact"), 1, ZONE_GRAVEYARD
+    )
+
+    src_id = state.register_and_inject_object(
+        _return_artifact_or_creature_dict(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1, active still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # P1's artifact reanimated to p1's hand; p0's artifact untouched.
+    assert state.find_object_zone(p1_artifact_id) == ZONE_HAND
+    assert state.find_object_zone(p0_artifact_id) == ZONE_GRAVEYARD
+
+
+# ===== or_spacecraft rider arm: 4 happy-path / edge-case pins =====
+
+
+def test_resolve_return_creature_or_spacecraft_pulls_creature(synthetic_state):
+    """Happy path 1: a creature card in p0's graveyard is pulled by
+    the or_spacecraft-rider arm (creature branch of the disjunction).
+    Same observable as the bare unit variant."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_creature_or_spacecraft_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_HAND
+
+
+def test_resolve_return_creature_or_spacecraft_pulls_spacecraft(synthetic_state):
+    """Happy path 2: a Spacecraft (non-creature Artifact with
+    'Spacecraft' subtype) in p0's graveyard is pulled by the
+    or_spacecraft-rider arm (Spacecraft branch of the disjunction).
+    Key delta from the unit variant — the bare arm would skip a
+    pre-Station Spacecraft because its printed card_types contain
+    no 'Creature' entry."""
+    spacecraft_id = synthetic_state.register_and_inject_object(
+        _vanilla_spacecraft_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_creature_or_spacecraft_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Spacecraft moved to hand on the Spacecraft-subtype branch.
+    assert synthetic_state.find_object_zone(spacecraft_id) == ZONE_HAND
+
+
+def test_resolve_return_creature_or_spacecraft_skips_artifact_no_subtype(
+    synthetic_state,
+):
+    """Edge case: a non-creature non-Spacecraft artifact does NOT
+    qualify (card_types lacks 'Creature' AND subtypes lacks
+    'Spacecraft'). Distinct from the or_artifact arm which WOULD
+    pull this artifact — the disjunction here is creature-or-
+    Spacecraft, NOT creature-or-artifact.
+
+    This is the discriminating pin between the two new variants —
+    feeding a plain Artifact (no subtype) into the or_spacecraft arm
+    must fizzle silently."""
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_creature_or_spacecraft_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Artifact stayed in graveyard — neither branch matched.
+    assert synthetic_state.find_object_zone(artifact_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_return_creature_or_spacecraft_cross_controller_routing(engine):
+    """**I82 controller-of-effect inheritance pin.** On p0's turn,
+    the or_spacecraft-rider source cast by p1 must scan p1's
+    graveyard and push to p1's hand — NOT active_player's."""
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_spacecraft_id = state.register_and_inject_object(
+        _vanilla_spacecraft_dict("P0 Gravship"), 0, ZONE_GRAVEYARD
+    )
+    p1_spacecraft_id = state.register_and_inject_object(
+        _vanilla_spacecraft_dict("P1 Gravship"), 1, ZONE_GRAVEYARD
+    )
+
+    src_id = state.register_and_inject_object(
+        _return_creature_or_spacecraft_dict(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # P1's Spacecraft reanimated to p1's hand; p0's untouched.
+    assert state.find_object_zone(p1_spacecraft_id) == ZONE_HAND
+    assert state.find_object_zone(p0_spacecraft_id) == ZONE_GRAVEYARD
+
+
 # -------------------- Round-28 DealDamageEqualToSourcePowerAnyTarget (2 cards) --------------------
 
 

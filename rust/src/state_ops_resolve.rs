@@ -3018,6 +3018,134 @@ fn apply_effect(
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
+        // **Phase 5 rider-widened return-to-hand: artifact-or-
+        // creature variant.** Mirrors the bare unit-variant arm
+        // above exactly, with one filter delta: the disjunction
+        // `Creature OR Artifact` (vs the unit variant's
+        // `Creature` only).
+        //
+        // **Controller-of-effect.** Inherits the I82 contract:
+        // `controller_idx` derives from
+        // `current_resolve_source_controller`, falling back to
+        // `active_player` for direct apply_effect_pub callers. The
+        // graveyard scan and hand push both anchor to the source's
+        // controller — cross-controller routing (p1's ETB resolving
+        // on p0's turn) Just Works.
+        //
+        // **Disjunction shape.** The legal-target filter widens
+        // from `card_types.contains("Creature")` to
+        // `card_types.contains("Creature") ||
+        //  card_types.contains("Artifact")`. Artifact-creatures
+        // (printings carrying BOTH types) match at the first
+        // branch and are pulled.
+        //
+        // **Real EoE consumer.** Interceptor Mechan (EoE):
+        // "When this creature enters, return target artifact or
+        // creature card from your graveyard to your hand."
+        Effect::ReturnArtifactOrCreatureFromYourGraveyardToHand => {
+            let _ = source_obj_id;
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
+            let target_obj_id: Option<u32> = state.players[controller_idx]
+                .graveyard
+                .iter()
+                .find_map(|obj| match state.registry.lookup(obj.printing_id) {
+                    Some(printing)
+                        if printing.card_types.iter().any(|t| t == "Creature")
+                            || printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Artifact") =>
+                    {
+                        Some(obj.id)
+                    }
+                    _ => None,
+                });
+            let Some(target_id) = target_obj_id else {
+                return Ok(());
+            };
+            let graveyard_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].graveyard);
+            let pos = graveyard_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in graveyard but not on re-scan");
+            let mut obj = graveyard_mut.remove(pos);
+            obj.zone = ZONE_HAND;
+            obj.tapped = false;
+            obj.summoning_sick = true;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
+        }
+        // **Phase 5 rider-widened return-to-hand: creature-or-
+        // Spacecraft variant.** Sibling to the artifact-or-
+        // creature arm. Filter delta: the disjunction is
+        // `Creature OR subtype Spacecraft` — Spacecraft is a
+        // SUBTYPE (artifact subtype), not a card type, so the
+        // second branch reads `printing.subtypes`, not
+        // `printing.card_types`. Mirrors Python's
+        // `printing.is_spacecraft` which reads
+        // `"Spacecraft" in subtypes` off the Subtypes substrate.
+        //
+        // **Effective-subtypes scope.** Same caveat as the other
+        // subtype-reading sites in the Rust codebase (see
+        // `subject_has_subtype` at cards.rs:2141): reads the
+        // static `printing.subtypes` directly. No effective_-
+        // subtypes layer (CR 613 layer 4) — type-modifying
+        // continuous effects that would grant "Spacecraft" to
+        // a non-Spacecraft printing aren't observable here. In
+        // the EoE pool, the cards a player would want to recur
+        // are PRINTED Spacecraft, so the static read is correct
+        // for the consumer set.
+        //
+        // **Real EoE consumer.** Fell Gravship (EoE) suffix:
+        // "...then return a creature or Spacecraft card from
+        // your graveyard to your hand." (The leading mill-3 is
+        // composed elsewhere in the trigger's effect sequence;
+        // this arm is the leaf return-effect substrate.)
+        Effect::ReturnCreatureOrSpacecraftFromYourGraveyardToHand => {
+            let _ = source_obj_id;
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
+            let target_obj_id: Option<u32> = state.players[controller_idx]
+                .graveyard
+                .iter()
+                .find_map(|obj| match state.registry.lookup(obj.printing_id) {
+                    Some(printing)
+                        if printing.card_types.iter().any(|t| t == "Creature")
+                            || printing
+                                .subtypes
+                                .iter()
+                                .any(|s| s == "Spacecraft") =>
+                    {
+                        Some(obj.id)
+                    }
+                    _ => None,
+                });
+            let Some(target_id) = target_obj_id else {
+                return Ok(());
+            };
+            let graveyard_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].graveyard);
+            let pos = graveyard_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in graveyard but not on re-scan");
+            let mut obj = graveyard_mut.remove(pos);
+            obj.zone = ZONE_HAND;
+            obj.tapped = false;
+            obj.summoning_sick = true;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
+        }
         // **Controller resolution (I83 follow-up to the
         // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 / I69 /
         // I70 / I71 / I72 / I73 / I74 / I75 / I76 / I77 / I78 /
