@@ -11642,3 +11642,164 @@ def test_dealdamage_controller_swap_restores_after_resolution(engine):
     state.resolve_top_of_stack()
     assert state.life_totals[0] == p0_life_mid
     assert state.life_totals[1] == p1_life_mid - 2
+
+
+# ====================================================================
+# Mill (self-mill) controller-of-effect fix — regression pins (I65).
+#
+# Same shape as the I59 DrawCards / I60 GainLife / I63
+# DamageEachOpponent / I64 DealDamage fixes. Pre-fix `Effect::Mill`
+# at state_ops_resolve.rs read `state.active_player` as the milling
+# player. Wrong when the resolving spell / triggered ability has a
+# controller != active_player — example: on p0's turn, p1 casts an
+# instant Mill-2 self-mill (a graveyard-fueling reactive spell) —
+# pre-fix the cards leave p0's library (wrong), post-fix they leave
+# p1's library (the spell's controller). Mirrors Python's
+# self-mill handling.
+# ====================================================================
+
+
+def _mill_self_spell_dict(count=2):
+    """Instant-typed Mill-N self-mill printing for cross-controller
+    regression pins."""
+    return {
+        "name": f"Test Mill Self {count}",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1},
+        "effects": [{"kind": "mill", "count": count}],
+    }
+
+
+def test_mill_routes_to_source_controller_not_active_player(engine):
+    """**Regression pin for the Mill controller-of-effect fix
+    (I65).**
+
+    On p0's turn (active_player=0), a Mill-2 self-mill spell whose
+    controller is p1 (a cross-controller instant) must mill 2 from
+    PLAYER 1's library, NOT player 0's. Pre-fix the cards left
+    p0's library because `controller = state.active_player = 0`.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    spell_id = state.register_and_inject_object(
+        _mill_self_spell_dict(count=2), 1, ZONE_HAND
+    )
+    p0_lib_before = state.library_sizes[0]
+    p0_gy_before = state.graveyard_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+    p1_gy_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack()
+
+    # p1 (the spell's controller) milled 2 cards — library shrank
+    # by 2, graveyard grew by at least 2 (the spell itself goes to
+    # p1's graveyard too because it's an instant).
+    assert state.library_sizes[1] == p1_lib_before - 2
+    # p1's graveyard: 2 milled cards + the spell itself (instant goes
+    # to graveyard after resolving).
+    assert state.graveyard_sizes[1] == p1_gy_before + 2 + 1
+    # p0 (active_player) UNTOUCHED — library and graveyard unchanged.
+    assert state.library_sizes[0] == p0_lib_before
+    assert state.graveyard_sizes[0] == p0_gy_before
+
+
+def test_mill_active_player_controlled_spell_still_works(engine):
+    """**Back-compat pin.** A Mill spell whose controller IS the
+    active player must keep working — controller = active_player = 0,
+    identical to pre-fix.
+    """
+    state = engine.make_synthetic_state()
+    spell_id = state.register_and_inject_object(
+        _mill_self_spell_dict(count=3), 0, ZONE_HAND
+    )
+    p0_lib_before = state.library_sizes[0]
+    p0_gy_before = state.graveyard_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+    p1_gy_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # p0 (controller) milled 3.
+    assert state.library_sizes[0] == p0_lib_before - 3
+    # p0 graveyard: 3 milled + 1 for the instant itself.
+    assert state.graveyard_sizes[0] == p0_gy_before + 3 + 1
+    # p1 untouched.
+    assert state.library_sizes[1] == p1_lib_before
+    assert state.graveyard_sizes[1] == p1_gy_before
+
+
+def test_mill_via_triggered_ability_routes_to_triggers_controller(engine):
+    """**Cross-controller LTB-trigger pin for Mill.** A triggered-
+    ability StackItem carries its own `controller`; the resolver
+    swaps that controller in for the Mill apply.
+
+    Shape: p1's creature has a `source_is_self LEAVES_BATTLEFIELD →
+    mill 2` trigger. p0 casts a bounce spell on p1's creature. When
+    the LTB trigger resolves, p1 (the trigger's controller) mills 2.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    ltb_creature = {
+        "name": "Test LTB-Mill Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "mill", "count": 2},
+            }
+        ],
+    }
+    crt_id = state.register_and_inject_object(
+        ltb_creature, 1, ZONE_BATTLEFIELD
+    )
+    bounce_id = state.register_and_inject_object(
+        {
+            "name": "Test Bounce (Mill LTB)",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [
+                {"kind": "return_to_hand", "target": {"kind": "any_creature"}}
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    state.push_to_stack(bounce_id, 0)
+    state.resolve_top_of_stack()  # bounce; LTB trigger pushes
+    top = state.peek_top_of_stack()
+    assert top["controller"] == 1
+
+    state.resolve_top_of_stack()  # LTB trigger fires
+
+    # Post-fix: p1 (trigger's controller) milled 2.
+    assert state.library_sizes[1] == p1_lib_before - 2
+    # p0 untouched (would have been wrong target pre-fix).
+    assert state.library_sizes[0] == p0_lib_before
+
+
+def test_mill_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for Mill.**"""
+    state = engine.make_synthetic_state()
+    spell_id = state.register_and_inject_object(
+        _mill_self_spell_dict(count=1), 1, ZONE_HAND
+    )
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    assert state.library_sizes[1] == p1_lib_before - 1
+    assert state.library_sizes[0] == p0_lib_before
