@@ -3584,3 +3584,230 @@ def test_ltb_fires_on_sacrifice_self_cost_path(engine):
         "trigger's draw); got "
         f"{state.library_sizes[0]} vs {library_before}"
     )
+
+
+# -------------------------------------------------------------------
+# Slice 11 — DestroyAllCreatures LTB fan-out residual
+#
+# Closes the 14th LTB-silent Effect arm: `Effect::DestroyAllCreatures`
+# (Wrath of God shape) at state_ops_resolve.rs:2887. Pre-Slice-11 this
+# arm moved victims to graveyards directly and stamped the void flag
+# inline (`state.permanent_left_battlefield_this_turn = true`) without
+# pushing onto `pending_leaves_dispatches` — so a creature with a
+# `source_is_self` LEAVES trigger would die silently on a Wrath. Slice
+# 11 routes void-flag stamping through `mark_left_battlefield_if_nonland`
+# (same as every other bf-exit) and queues each victim onto the LEAVES
+# dispatch list (drained after the Wrath's stack pop).
+# -------------------------------------------------------------------
+
+
+def test_ltb_fires_on_destroy_all_creatures_effect_arm(engine):
+    """A `source_is_self` LEAVES trigger fires when its host is
+    destroyed via the `destroy_all_creatures` Effect arm (Wrath of
+    God shape). Pre-Slice-11 silent miss; Slice 11 closure.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    # Single victim with a self-LTB-draw trigger on p0's bf.
+    victim_id = state.register_and_inject_object(
+        _leaves_self_draw_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # Wrath-shaped sorcery in p0's hand.
+    spell_obj_id = state.register_and_inject_object(
+        {
+            "name": "Test LTB-on-Wrath Spell",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"W": 2, "generic": 2},
+            "effects": [{"kind": "destroy_all_creatures"}],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_lib_before = state.library_sizes[0]
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Victim is in p0's graveyard.
+    assert state.find_object_zone(victim_id) == ZONE_GRAVEYARD
+    # The LTB trigger landed on the stack post-Wrath-pop (Slice 10
+    # defer-past-pop pattern: drain runs AFTER the resolving spell's
+    # stack pop, so the LEAVES trigger lands on the now-empty top).
+    assert state.stack_size() == 1, (
+        f"expected the source_is_self LEAVES trigger to fire from "
+        f"the destroy_all_creatures Effect arm; got stack_size="
+        f"{state.stack_size()}"
+    )
+    top = state.peek_top_of_stack()
+    assert top["source_obj_id"] == victim_id
+
+    # Resolve the trigger: draw lands on active_player = p0.
+    state.resolve_top_of_stack()
+    assert state.library_sizes[0] == p0_lib_before - 1
+
+
+def test_ltb_fires_for_each_victim_on_mass_destroy(engine):
+    """Wrath destroys MULTIPLE creatures with LEAVES triggers.
+    Per-victim LTB push: each victim gets its own LTB trigger on
+    the stack. Pin: post-Wrath stack carries one trigger per victim,
+    each with its source_obj_id matching the victim that was
+    destroyed.
+
+    Note: empty libraries would deck out resolving the draws, so we
+    fix the count of victims small enough (2) to allow each LTB-draw
+    to succeed.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    victim_a = state.register_and_inject_object(
+        _leaves_self_draw_dict("LTB Victim A"), 0, ZONE_BATTLEFIELD
+    )
+    victim_b = state.register_and_inject_object(
+        _leaves_self_draw_dict("LTB Victim B"), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        {
+            "name": "Test Multi-Victim Wrath",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"W": 2, "generic": 2},
+            "effects": [{"kind": "destroy_all_creatures"}],
+        },
+        0,
+        ZONE_HAND,
+    )
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Both victims in their respective graveyards.
+    assert state.find_object_zone(victim_a) == ZONE_GRAVEYARD
+    assert state.find_object_zone(victim_b) == ZONE_GRAVEYARD
+    # Both LTB triggers landed on the stack.
+    assert state.stack_size() == 2, (
+        f"expected two source_is_self LEAVES triggers (one per "
+        f"victim); got {state.stack_size()}"
+    )
+
+
+def test_ltb_observer_fires_on_destroy_all_creatures_effect_arm(engine):
+    """A surviving (non-creature or indestructible) observer with a
+    `subject_is_creature` LEAVES trigger fires when ANY creature dies
+    to a Wrath. Pins the observer-side dispatch path on the mass-
+    destroy arm.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    # Observer is an INDESTRUCTIBLE creature on p0's bf with a
+    # `subject_is_creature` LEAVES trigger. It survives the Wrath and
+    # observes the other victim's bf-exit.
+    observer_dict = {
+        "name": "Test LTB Observer (Indestructible)",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 3,
+        "keywords": ["indestructible"],
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "subject_is_creature"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    observer_id = state.register_and_inject_object(
+        observer_dict, 0, ZONE_BATTLEFIELD
+    )
+    # Single destructible victim on p1's bf.
+    victim_id = state.register_and_inject_object(
+        _leaves_self_draw_dict("Plain Victim"), 1, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        {
+            "name": "Test LTB-on-Wrath With Observer",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"W": 2, "generic": 2},
+            "effects": [{"kind": "destroy_all_creatures"}],
+        },
+        0,
+        ZONE_HAND,
+    )
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Observer survived, victim died.
+    assert state.find_object_zone(observer_id) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(victim_id) == ZONE_GRAVEYARD
+    # TWO LTB triggers fired: the victim's source_is_self AND the
+    # observer's subject_is_creature on the victim's leaving event.
+    assert state.stack_size() == 2, (
+        f"expected 2 LTB triggers (victim self-LTB + observer "
+        f"LTB on victim); got {state.stack_size()}"
+    )
+
+
+def test_void_flag_still_set_on_destroy_all_creatures(engine):
+    """Slice 11 routes the void-flag stamping through
+    `mark_left_battlefield_if_nonland` instead of stamping inline.
+    Pin: the flag still goes true after a Wrath destroys a non-token
+    creature (which is, by definition, nonland). The behavior was
+    correct pre-Slice-11 via direct flag set; Slice 11 preserves it
+    via the helper.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    state.register_and_inject_object(
+        _leaves_self_draw_dict("Pinned Victim"), 0, ZONE_BATTLEFIELD
+    )
+    spell_obj_id = state.register_and_inject_object(
+        {
+            "name": "Test Void-Flag Wrath",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"W": 2, "generic": 2},
+            "effects": [{"kind": "destroy_all_creatures"}],
+        },
+        0,
+        ZONE_HAND,
+    )
+    # Pre-Wrath void flag should be false (no recent bf-exit).
+    pre = state.permanent_left_battlefield_this_turn
+    # The synthetic state may have had bf-exits during setup; we only
+    # assert the post-Wrath value is true (the helper stamps it).
+    _ = pre  # silence unused warning if pre is already True from setup
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+    assert state.permanent_left_battlefield_this_turn is True, (
+        "expected mark_left_battlefield_if_nonland to set the void "
+        "flag after Wrath destroys a nonland creature"
+    )
+
+
+def test_no_ltb_fired_when_destroy_all_creatures_destroys_nothing(engine):
+    """Wrath on an empty battlefield (no creatures) — no LTB
+    triggers fire, no stack growth.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    spell_obj_id = state.register_and_inject_object(
+        {
+            "name": "Test Wrath On Empty Bf",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"W": 2, "generic": 2},
+            "effects": [{"kind": "destroy_all_creatures"}],
+        },
+        0,
+        ZONE_HAND,
+    )
+
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack is empty post-resolve — no LTB triggers (no victims).
+    assert state.stack_size() == 0
