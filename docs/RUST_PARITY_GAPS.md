@@ -4208,6 +4208,54 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I73. `Effect::AddCounters { AnyCreature }` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (AddCounters defender divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_add_counters_*` regression pins covering cross-
+    controller spell resolution (1: p1-controlled +1/+1 counter
+    instant on p0's turn → counter lands on p0's bf[0], NOT
+    p1's), same-controller back-compat (1: p0-controlled source
+    still writes to p1's bf[0]), pause-variant parity (1), and
+    empty-defender fizzle (1).
+
+- **Rule**. CR 119.5 / 608.2 — sibling closure to I72 UntapTarget.
+  Same `defender = 1 - controller` shape, same transient-slot
+  lookup substrate.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::AddCounters { AnyCreature }` arm at
+  `state_ops_resolve.rs:1464` (pre-fix line) computed
+  `let defender = (1 - state.active_player) as usize`. Wrong when
+  the resolving spell / triggered ability has a controller !=
+  active_player. Example: p1's "put a +1/+1 counter on target
+  creature" instant on p0's turn pre-fix self-buffed p1's own
+  bf[0]; post-fix it correctly places the counter on p0's bf[0]
+  (the source's controller's opponent — per the bounce / exile /
+  tap / untap defender convention).
+
+- **Reuses I59 substrate**. Identical to I71 / I72 — same
+  preamble:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let defender = 1 - controller;`. The mutation site
+  (`Arc::make_mut(&mut state.players[defender].battlefield)`,
+  inner loop on `counters.saturating_add(delta)`) reads the
+  resolved `defender` unchanged.
+
+- **Signed-counter shape preserved.** The pre-fix arm folded
+  positive `count` (+1/+1) and negative `count` (-1/-1) onto a
+  single `i32 saturating_add(delta)`; the fix doesn't touch that
+  write path, only the defender lookup. Negative-delta calls
+  continue to land on the resolved defender's bf[0] via the same
+  saturating_add.
+
+- **Forward inventory (post-I73 remaining defender-shape
+  `(1 - state.active_player)` sites in `state_ops_resolve.rs`):**
+  - DiscardCard (1496), DestroyTarget (1616), several sites in
+    DestroyAllCreatures / ExileAll subarms (4638, 4958, 5022) —
+    per-arm audit pending.
+
 ### I72. `Effect::UntapTarget { AnyCreature }` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (UntapTarget defender divergence closure)
 
 - **Pinned by**:
