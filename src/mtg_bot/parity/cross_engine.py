@@ -944,6 +944,68 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             power_bonus=eff_dict.get("power_bonus", 0),
             toughness_bonus=eff_dict.get("toughness_bonus", 0),
         )
+    if kind == "each_opponent_sacrifices_creature":
+        # "Each opponent sacrifices a [nontoken] creature [of their
+        # choice]." Sister arm to ``each_opponent_discards`` --
+        # untargeted, source-controller-of-effect resolution, per-
+        # opponent loop. Rust's
+        # ``Effect::EachOpponentSacrificesCreature`` (cards.rs:1425)
+        # is a UNIT VARIANT -- no fields beyond ``kind``. The
+        # parse_effect arm at cards.rs:3391-3393 accepts the dict
+        # shape ``{"kind": "each_opponent_sacrifices_creature"}`` with
+        # no companion fields. The resolve arm at
+        # ``state_ops_resolve.rs:6496-6580`` walks the source-
+        # controller-of-effect (5-zone walk + stack fallback for the
+        # source_obj_id), then for the source-controller's opponent's
+        # battlefield picks the FIRST creature deterministically and
+        # routes it to that opponent's graveyard via the standard
+        # CR 400.7 zone-change reset.
+        #
+        # **Filter divergence -- Rust's no-token filter.** Rust's
+        # arm picks ``the first object whose card_types contains
+        # 'Creature'`` (state_ops_resolve.rs:6534), with NO nontoken
+        # filter. Python's ``EachOpponentSacrificesCreature``
+        # (effects/generic/opponent_punishers.py:30) DOES filter
+        # ``not o.printing.is_token`` -- closer to the printed oracle
+        # text. For probes that seat only nontoken creatures on the
+        # opponent's bf, both engines pick the same creature
+        # observably; the divergence only surfaces when the opponent's
+        # bf has a token AND a nontoken creature with the token at
+        # index 0 (Rust would pick the token, Python would skip it).
+        # This is a documented Rust shortcut (search_limitations.md
+        # already records the Rust effect cluster's nontoken-filter
+        # gap).
+        #
+        # **Per-opponent pick contract.** Both engines pick the
+        # opponent's sacrifice from the OPPONENT's bf (the
+        # sacrificing player's perspective; the source's controller
+        # doesn't pick for them). Rust at state_ops_resolve.rs:6532
+        # picks bf.iter().find first-creature deterministically.
+        # Python at opponent_punishers.py:55-56 calls
+        # ``p.agent.choose_sacrifice(state, p.id, [o.id for o in legal])``
+        # and removes whatever id the agent returns (defaulting to
+        # ``legal[0]`` if the agent's return id isn't found). The
+        # harness's default Player has ``agent=None``; Python silently
+        # SKIPS opponents with no agent (opponent_punishers.py:53).
+        # Probes that exercise this end-to-end MUST seat an agent on
+        # the sacrificing opponent; the canonical shim is
+        # ``_SacrificeFirstAgent`` from
+        # ``tests/parity/_picker_shims.py`` which returns
+        # ``legal_object_ids[0]`` -- observably equivalent to Rust's
+        # bf-iter-first-creature pick when both engines see the same
+        # bf composition in the same order.
+        #
+        # **Real EoE consumer.** Susurian Dirgecraft (EoE Spacecraft):
+        # "When this Spacecraft enters, each opponent sacrifices a
+        # nontoken creature of their choice." The audit lists Susurian
+        # Dirgecraft as the SOLE EoE consumer of this bridge arm
+        # today; the effect composes directly off the bare arm (no
+        # Sequence / IfYouDo nesting), end-to-end probeable from the
+        # leaf arm alone.
+        from mtg_bot.effects.generic.opponent_punishers import (
+            EachOpponentSacrificesCreature,
+        )
+        return EachOpponentSacrificesCreature()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

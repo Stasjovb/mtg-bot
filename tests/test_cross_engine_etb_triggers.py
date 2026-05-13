@@ -1535,5 +1535,98 @@ def test_rust_parser_accepts_pump_creatures_opponents_control_until_eot_in_trigg
     assert pid == 0
 
 
+def test_bridge_each_opponent_sacrifices_creature_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "each_opponent_sacrifices_creature"}`` translates to
+    Python ``EachOpponentSacrificesCreature()``.
+
+    Rust's variant is a UNIT VARIANT -- no fields beyond ``kind``.
+    Bridges Susurian Dirgecraft (EoE Spacecraft) end-to-end.
+    """
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacrificesCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_sacrifices_creature"}
+    )
+    assert isinstance(e, EachOpponentSacrificesCreature)
+
+
+def test_bridge_each_opponent_sacrifices_creature_ignores_extra_fields():
+    """Unit-variant arm tolerates extra fields on the dict (mirrors
+    every other unit-variant arm on the bridge -- the kind alone
+    determines the translation; extra keys are inert)."""
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacrificesCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "each_opponent_sacrifices_creature",
+            "spurious_field": 42,
+        }
+    )
+    assert isinstance(e, EachOpponentSacrificesCreature)
+
+
+def test_bridge_each_opponent_sacrifices_creature_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``{"kind": "sequence", "effects": [{"kind":
+    "each_opponent_sacrifices_creature"}, {"kind": "draw_cards",
+    "count": 1}]}`` translates to ``Sequence(effects=(
+    EachOpponentSacrificesCreature(), DrawCards(amount=1)))``."""
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacrificesCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "each_opponent_sacrifices_creature"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], EachOpponentSacrificesCreature)
+
+
+def test_rust_parser_accepts_each_opponent_sacrifices_creature_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``each_opponent_sacrifices_creature`` effect kind in a
+    triggered_ability dict. Rust's parse_effect at cards.rs:3391-3393
+    accepts the bare kind with no companion fields.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- EachOpponentSacrificesCreature",
+        "card_types": ["Artifact", "Creature"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 4, "B": 1},
+        "power": 4,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_sacrifices_creature",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
