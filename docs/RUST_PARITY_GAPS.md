@@ -4208,6 +4208,96 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I69. `Effect::SearchLibraryForBasicLandTapped` controller-of-effect fix — reuses I59 transient slot; searcher resolved from source-controller instead of `state.active_player` (first non-defender-shape arm in the controller-of-effect series)
+
+- **Pinned by**:
+  - 5 new `tests_rust/test_resolve.py`
+    `test_search_library_for_basic_land_tapped_*` regression pins
+    covering cross-controller spell resolution (1: p1-controlled
+    Rampant-Growth-shape sorcery on p0's turn → searches P1'S
+    library, lands on P1'S bf, NOT p0's), same-controller back-
+    compat (1: p0-controlled source still searches p0's library),
+    object-identity (1: the searched land's `controller_id` is
+    stamped to the SEARCHER, observable on `battlefield_snapshot`),
+    `resolve_top_of_stack_pause` parity (1: pause variant threads
+    the controller identically), and multi-fetch count=2 (1: every
+    iteration of the inner loop pulls from the source's
+    controller's library).
+
+- **Rule**. CR 119.5 / 608.2: an effect resolves under its
+  source's controller. "Search your library" / "your battlefield"
+  / "your hand" all refer to the SOURCE'S controller, not the
+  active player. Sibling closure to I65 Mill — both are "your
+  zone" self-target effects whose acting player is the source's
+  controller. Mirrors Python's
+  `SearchLibraryForBasicLandTapped.resolve(state, controller_id,
+  ...)`, which takes `controller_id` from the resolver (the
+  StackItem's controller).
+
+- **First non-defender-shape arm in the I-series**. I59-I68 all
+  touched `defender_idx = 1 - <something>` or "controller of
+  effect = active_player" first-slice sites. I69 is the first arm
+  where the `state.active_player` reference is the POSITIVE (self-
+  target) controller — not the defender swap. The fix shape is
+  the same (transient slot lookup with active_player fallback),
+  but the semantic is "this is the SEARCHER" rather than "this is
+  the defender". Same one-line preamble; the rest of the arm just
+  reads `controller_idx` unchanged.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::SearchLibraryForBasicLandTapped` arm at
+  `state_ops_resolve.rs:2032` (pre-fix line) computed
+  `let controller_idx = state.active_player as usize`. Wrong when
+  the resolving spell / triggered ability has a controller !=
+  active_player. Example: on p0's turn, p1's Cultivate-shape
+  spell ("search your library for up to 2 basic land cards")
+  resolves — pre-fix it pulled basics from P0'S library onto
+  P0's battlefield (the active player), not p1's; post-fix it
+  correctly pulls from p1's library onto p1's battlefield.
+  Same shape on the per-object stamp: pre-fix `obj.controller =
+  state.active_player`, post-fix `obj.controller = controller_u8`
+  (the resolved source-controller).
+
+- **Reuses I59 substrate**. No new state, no new helper. The
+  arm gains a controller-resolution preamble identical to the
+  I65 Mill / I66 Sacrifice / I67 DealDamageAnyTarget / I68
+  DealDamageEqualToSourcePowerAnyTarget arms:
+  `let controller_idx = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);`.
+  The land's `obj.controller` stamp now reads `controller_idx as
+  u8` (was `state.active_player`).
+
+- **xorshift seed left unchanged**. The post-search shuffle's
+  fallback xorshift seed mixes `state.active_player` (alongside
+  turn, source_obj_id, library_len). Migrating it would break
+  the existing `test_resolve_search_library_for_basic_land_tapped_-
+  shuffle_is_deterministic` pin, and the seed is a pure-state
+  determinism input, not a behavior switch — per-run uniqueness
+  comes from source_obj_id + library_len mixing. The seed
+  controls SHUFFLE permutation, which is invisible to MTG
+  semantics (CR 701.19 / 701.22 mandates a shuffle; the
+  permutation is implementation-defined).
+
+- **Out of scope (deferred to future slices)**:
+  - **`Effect::SearchLibraryForCard`** — already uses a 5-zone
+    source-finder + stack fallback (lines 3877-3910); correct
+    pre-I69. No migration needed.
+  - **`Effect::SearchLibraryForEquipmentToBattlefield`** —
+    pending audit; same "your library" shape.
+  - **`Effect::SearchLibraryForGreenCreatureWithMVAtMostX`** —
+    pending audit; same "your library" shape.
+  - **12+ defender sites across various arms** — per-arm audit
+    pending.
+
+- **Forward inventory (post-I69 remaining `active_player`-keyed
+  arms in `state_ops_resolve.rs`):**
+  - **`Effect::SearchLibraryForEquipmentToBattlefield`** —
+    pending audit (likely needs the same fix).
+  - **`Effect::SearchLibraryForGreenCreatureWithMVAtMostX`** —
+    pending audit (likely needs the same fix).
+  - **12+ defender sites across various arms** — per-arm audit
+    pending.
+
 ### I68. `Effect::DealDamageEqualToSourcePowerAnyTarget` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (DealDamageEqualToSourcePowerAnyTarget controller divergence closure)
 
 - **Pinned by**:

@@ -12386,3 +12386,201 @@ def test_deal_damage_eq_source_power_pause_variant_threads_controller(engine):
 
     # Damage went to p0's bear (p1's opponent).
     assert state.get_damage(p0_first_bear_id) == 1
+
+
+# ====================================================================
+# SearchLibraryForBasicLandTapped controller-of-effect fix —
+# regression pins (I69).
+#
+# Pre-fix this arm hardcoded `controller_idx = state.active_player`.
+# Wrong when the resolving spell / triggered ability has a controller
+# != active_player. Mirrors Python's
+# `SearchLibraryForBasicLandTapped.resolve(state, controller_id, ...)`
+# which takes `controller_id` from the resolver (StackItem.controller).
+#
+# Sibling closure to I65 Mill — both are "your library" / "your
+# graveyard" self-target effects whose acting player is the source's
+# controller, not the active player.
+# ====================================================================
+
+
+def _rampant_growth_dict_for_i69(count: int = 1):
+    """A Rampant-Growth-shaped sorcery whose only effect is
+    SearchLibraryForBasicLandTapped. Used by I69 regression pins."""
+    return {
+        "name": f"Test Rampant Growth I69 (x{count})",
+        "card_types": ["Sorcery"],
+        "effects": [
+            {
+                "kind": "search_library_for_basic_land_tapped",
+                "count": count,
+            }
+        ],
+    }
+
+
+def test_search_library_for_basic_land_tapped_routes_to_source_controllers_library(
+    engine,
+):
+    """**Regression pin for the SearchLibraryForBasicLandTapped
+    controller-of-effect fix (I69).**
+
+    On p0's turn (active_player=0), a Rampant-Growth-shape sorcery
+    whose controller is p1 must search P1'S library and put the
+    searched basic land onto P1'S battlefield, NOT p0's. Pre-fix
+    `controller_idx = state.active_player = 0` => searched from p0's
+    library and landed on p0's bf (a wrong-side-of-the-table bug
+    sibling to I65 Mill).
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    # Inject the Rampant-Growth-shape source on p1's HAND so the
+    # post-resolve Sorcery → graveyard move doesn't touch the
+    # battlefield count we're asserting on.
+    src_id = state.register_and_inject_object(
+        _rampant_growth_dict_for_i69(count=1), 1, ZONE_HAND
+    )
+
+    bf_p0_before = state.battlefield_sizes[0]
+    bf_p1_before = state.battlefield_sizes[1]
+    lib_p0_before = state.library_sizes[0]
+    lib_p1_before = state.library_sizes[1]
+
+    # Push with controller=1 (p1), but active_player is still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # P1's library shrank by 1, p1's battlefield grew by 1.
+    assert state.library_sizes[1] == lib_p1_before - 1
+    assert state.battlefield_sizes[1] == bf_p1_before + 1
+    # P0's zones untouched.
+    assert state.library_sizes[0] == lib_p0_before
+    assert state.battlefield_sizes[0] == bf_p0_before
+
+
+def test_search_library_for_basic_land_tapped_active_player_controlled_still_works(
+    engine,
+):
+    """**Back-compat pin.** A Rampant-Growth-shape sorcery cast by
+    the active player must still search the ACTIVE PLAYER'S library
+    and put the land onto the active player's bf — bug never fired
+    in this case pre-fix because controller == active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    src_id = state.register_and_inject_object(
+        _rampant_growth_dict_for_i69(count=1), 0, ZONE_HAND
+    )
+
+    bf_p0_before = state.battlefield_sizes[0]
+    bf_p1_before = state.battlefield_sizes[1]
+    lib_p0_before = state.library_sizes[0]
+    lib_p1_before = state.library_sizes[1]
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # P0's library shrank, p0's battlefield grew.
+    assert state.library_sizes[0] == lib_p0_before - 1
+    assert state.battlefield_sizes[0] == bf_p0_before + 1
+    # P1 untouched.
+    assert state.library_sizes[1] == lib_p1_before
+    assert state.battlefield_sizes[1] == bf_p1_before
+
+
+def test_search_library_for_basic_land_tapped_searched_land_controller_is_searcher(
+    engine,
+):
+    """**Object-identity pin for I69.** The searched land enters
+    under the SEARCHER's control — `obj.controller` is stamped to
+    the source's controller (which may differ from active_player).
+    Confirm via the battlefield snapshot's `controller_id` field
+    (NOT `controller` — caught by I67 worker).
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    # P1's library top is at p1's library[0] (post-CE3). p1's base
+    # id = num_battlefield(10) + num_hand(7) for p0 plus full p0 zones
+    # ... — easier to just snapshot post-search and find the land that
+    # moved to p1's bf via name.
+    src_id = state.register_and_inject_object(
+        _rampant_growth_dict_for_i69(count=1), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Find a Forest on p1's bf — there must be one, the searched land.
+    snap = state.battlefield_snapshot()
+    p1_forests_on_bf = [
+        d for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Forest"
+    ]
+    # P1's synthetic seed gives 0 Forests on bf at start — only the
+    # searched-up one should be there.
+    assert len(p1_forests_on_bf) >= 1
+    # And all should be controlled by p1 (the searcher).
+    for d in p1_forests_on_bf:
+        assert d["controller_id"] == 1
+
+
+def test_search_library_for_basic_land_tapped_pause_variant_threads_controller(
+    engine,
+):
+    """**`resolve_top_of_stack_pause` parity pin for
+    SearchLibraryForBasicLandTapped.** Mirrors the I65 / I66 / I67 /
+    I68 pause-variant pins — confirms the controller transient is
+    set + read identically across both resolve flavors.
+    """
+    state = engine.make_synthetic_state()
+    src_id = state.register_and_inject_object(
+        _rampant_growth_dict_for_i69(count=1), 1, ZONE_HAND
+    )
+
+    bf_p0_before = state.battlefield_sizes[0]
+    bf_p1_before = state.battlefield_sizes[1]
+    lib_p0_before = state.library_sizes[0]
+    lib_p1_before = state.library_sizes[1]
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # P1's library shrank, p1's battlefield grew. P0 untouched.
+    assert state.library_sizes[1] == lib_p1_before - 1
+    assert state.battlefield_sizes[1] == bf_p1_before + 1
+    assert state.library_sizes[0] == lib_p0_before
+    assert state.battlefield_sizes[0] == bf_p0_before
+
+
+def test_search_library_for_basic_land_tapped_count_two_threads_controller(
+    engine,
+):
+    """**count=2 pin for I69.** Multi-fetch (Cultivate / Larval
+    Scoutlander shape) must thread the source-controller through
+    every iteration of the inner loop — both fetched lands land on
+    the source's controller's bf, not active_player's.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    src_id = state.register_and_inject_object(
+        _rampant_growth_dict_for_i69(count=2), 1, ZONE_HAND
+    )
+
+    bf_p0_before = state.battlefield_sizes[0]
+    bf_p1_before = state.battlefield_sizes[1]
+    lib_p0_before = state.library_sizes[0]
+    lib_p1_before = state.library_sizes[1]
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # P1's library shrank by 2, p1's bf grew by 2.
+    assert state.library_sizes[1] == lib_p1_before - 2
+    assert state.battlefield_sizes[1] == bf_p1_before + 2
+    # P0 untouched.
+    assert state.library_sizes[0] == lib_p0_before
+    assert state.battlefield_sizes[0] == bf_p0_before
