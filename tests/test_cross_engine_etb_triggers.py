@@ -1984,5 +1984,90 @@ def test_rust_parser_accepts_create_token_in_triggered_ability():
     assert pid == soldier_pid + 1
 
 
+def test_bridge_mill_target_player_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "mill_target_player", "count": N}`` translates to
+    Python ``MillTargetPlayer(amount=N)``.
+
+    Unblocks Mind-Funeral / Tome-Scour / Scrabbling-Skullcrab-shape
+    "target player mills N" effects on the cross-engine bridge --
+    sibling closure to the bare ``mill`` arm (controller-self
+    mill shortcut). The Rust effect variant exists at
+    ``rust/src/cards.rs:84`` (``Effect::MillTargetPlayer { count }``)
+    and its parse_effect arm at ``cards.rs:2833-2848``; the Rust
+    resolve arm at ``state_ops_resolve.rs:1085-1148`` carries the
+    I77 controller-of-effect fix (target_idx = 1 - controller, where
+    controller derives from current_resolve_source_controller).
+    Pins the field-name translation ``count -> amount`` for the
+    target-player mill shape.
+    """
+    from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "mill_target_player", "count": 2}
+    )
+    assert isinstance(e, MillTargetPlayer)
+    assert e.amount == 2
+    assert e.use_controller_life is False
+
+
+def test_bridge_mill_target_player_count_default_one():
+    """Missing ``count`` defaults to 1 (matching ``MillTargetPlayer``'s
+    class default ``amount: int = 1``, which mirrors the bare ``mill``
+    arm's lenient-default convention; both share the SelfMill /
+    MillTargetPlayer ``amount: int = 1`` Python class default).
+
+    Bridge consumers SHOULD pass ``count`` explicitly to keep round-
+    trip dict-shape consistency with the Rust parser
+    (``cards.rs:2833-2848`` requires the field at register time and
+    rejects negatives). This default is a robustness backstop for
+    partial fixtures, not a contract.
+    """
+    from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "mill_target_player"})
+    assert isinstance(e, MillTargetPlayer)
+    assert e.amount == 1
+
+
+def test_rust_parser_accepts_mill_target_player_in_triggered_ability():
+    """Pin the Rust parser surface for the ``mill_target_player``
+    effect kind. The bridge's dict shape must register cleanly on
+    the Rust side too; this lockstep gate keeps the Python bridge
+    from drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing ``mill`` parser-surface pin
+    (test_rust_parser_accepts_mill_in_triggered_ability) -- what's
+    being pinned is parse_effect's ``mill_target_player`` arm
+    accepting a triggered_abilities entry with ``count: N`` and
+    rejecting negatives at register time per
+    ``cards.rs:2841-2846``.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- MillTargetPlayer",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "U": 1, "B": 1},
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "mill_target_player",
+                    "count": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
