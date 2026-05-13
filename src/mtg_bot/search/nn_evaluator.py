@@ -75,6 +75,45 @@ def _action_encoding() -> Any:
         )
     return _ACTION_ENCODING_MODULE
 
+
+# ``mtg_bot.training.structured_model`` and ``state_tokenizer`` are
+# only needed for ``architecture='structured'`` evaluators. Importing
+# them eagerly would (a) trigger ``mtg_bot.training.__init__`` (same
+# cycle worry as action_encoding above) and (b) pull torch's
+# transformer machinery into the import path of every NNEvaluator,
+# even the legacy 51-dim MLP path that doesn't use them. Resolve
+# lazily so the structured-model code path stays opt-in.
+_STRUCTURED_MODEL_MODULE: Optional[object] = None
+_STATE_TOKENIZER_MODULE: Optional[object] = None
+
+
+def _structured_model() -> Any:
+    """Return the ``mtg_bot.training.structured_model`` module,
+    importing it on first call."""
+    global _STRUCTURED_MODEL_MODULE
+    if _STRUCTURED_MODEL_MODULE is None:
+        import importlib
+        _STRUCTURED_MODEL_MODULE = importlib.import_module(
+            "mtg_bot.training.structured_model",
+        )
+    return _STRUCTURED_MODEL_MODULE
+
+
+def _state_tokenizer() -> Any:
+    """Return the ``mtg_bot.training.state_tokenizer`` module,
+    importing it on first call. Slice E talks to the tokenizer via
+    this helper so the evaluator stays decoupled from the eager
+    import — and so tests can monkey-patch the module attribute
+    on this module to inject a fake tokenizer.
+    """
+    global _STATE_TOKENIZER_MODULE
+    if _STATE_TOKENIZER_MODULE is None:
+        import importlib
+        _STATE_TOKENIZER_MODULE = importlib.import_module(
+            "mtg_bot.training.state_tokenizer",
+        )
+    return _STATE_TOKENIZER_MODULE
+
 # Hidden-layer widths. 3 hidden layers, ReLU between. ~25k params at
 # these sizes (51 → 128 → 128 → 64 → 1).
 #
@@ -271,8 +310,16 @@ class _ValuePolicyMLPSeparate(nn.Module):
 # ``metadata.json`` so loaders can route weights to the right class.
 ARCHITECTURE_SHARED = "shared"
 ARCHITECTURE_SEPARATE = "separate"
+# ``structured`` selects the per-object-token transformer trunk
+# (``mtg_bot.training.structured_model.StructuredModel``) — the Step 1
+# NN-representation rewrite. This architecture does NOT consume the
+# flat 51-dim feature vector; the inference path tokenizes the live
+# engine state via ``state_tokenizer.tokenize_state`` and forwards a
+# variable-length per-token batch through the transformer trunk. See
+# ``docs/NN_REPRESENTATION_ROADMAP.md`` for the full design.
+ARCHITECTURE_STRUCTURED = "structured"
 SUPPORTED_ARCHITECTURES: tuple[str, ...] = (
-    ARCHITECTURE_SHARED, ARCHITECTURE_SEPARATE,
+    ARCHITECTURE_SHARED, ARCHITECTURE_SEPARATE, ARCHITECTURE_STRUCTURED,
 )
 
 
@@ -286,6 +333,13 @@ def _build_dual_head_model(
 
     Centralized so trainer + NNEvaluator dispatch the same way. Raises
     ``ValueError`` on an unknown architecture string.
+
+    NOTE: ``ARCHITECTURE_STRUCTURED`` is NOT handled here — the
+    structured model has a fundamentally different input shape (per-
+    token dict, not a flat ``(B, FEATURE_DIM)`` tensor) and is built
+    by ``_build_structured_model`` instead. Mixing the dispatch would
+    invite an MLP getting fed structured input (or vice versa) on a
+    typo. Raising here for ``"structured"`` keeps the boundary loud.
     """
     if architecture == ARCHITECTURE_SHARED:
         return _ValuePolicyMLP(hidden_sizes=hidden_sizes)
@@ -294,10 +348,61 @@ def _build_dual_head_model(
             hidden_sizes=hidden_sizes,
             policy_hidden_sizes=policy_hidden_sizes,
         )
+    if architecture == ARCHITECTURE_STRUCTURED:
+        raise ValueError(
+            "architecture='structured' uses StructuredModel, not the "
+            "flat-feature MLP — route through _build_structured_model "
+            "instead of _build_dual_head_model."
+        )
     raise ValueError(
         f"unknown architecture {architecture!r}; "
         f"expected one of {SUPPORTED_ARCHITECTURES}"
     )
+
+
+def _build_structured_model(
+    *,
+    emb_dim: Optional[int] = None,
+    n_heads: Optional[int] = None,
+    n_layers: Optional[int] = None,
+    hidden_dim: Optional[int] = None,
+    action_history_n: Optional[int] = None,
+    n_printings: Optional[int] = None,
+    action_vocab_size: Optional[int] = None,
+    enable_hand_belief_head: Optional[bool] = None,
+    dropout: Optional[float] = None,
+) -> nn.Module:
+    """Instantiate a ``StructuredModel`` with optional config overrides.
+
+    Any field left ``None`` falls back to the default in
+    ``StructuredModelConfig``. The structured-model module is imported
+    lazily (see ``_structured_model``) so this function is callable
+    even from contexts where the training package isn't fully loaded.
+
+    Used by ``NNEvaluator.__init__`` when ``architecture='structured'``
+    and (eventually) by the matching trainer slice when constructing
+    the model for training. Centralizing the config-building keeps
+    the loader and trainer in lockstep on hyperparam handling — e.g.
+    when ``ModelMetadata.training`` carries ``action_history_n=64``,
+    both sides pick it up the same way.
+    """
+    sm = _structured_model()
+    cfg_kwargs: dict[str, Any] = {}
+    for key, value in (
+        ("emb_dim", emb_dim),
+        ("n_heads", n_heads),
+        ("n_layers", n_layers),
+        ("hidden_dim", hidden_dim),
+        ("action_history_n", action_history_n),
+        ("n_printings", n_printings),
+        ("action_vocab_size", action_vocab_size),
+        ("enable_hand_belief_head", enable_hand_belief_head),
+        ("dropout", dropout),
+    ):
+        if value is not None:
+            cfg_kwargs[key] = value
+    config = sm.StructuredModelConfig(**cfg_kwargs)
+    return sm.StructuredModel(config)
 
 
 class NNEvaluator(Evaluator):
@@ -329,6 +434,24 @@ class NNEvaluator(Evaluator):
         architecture: str = ARCHITECTURE_SHARED,
         policy_hidden_sizes: Optional[tuple[int, ...]] = None,
         action_encoding_version: str = "positional_v1",
+        # ----- structured-architecture hyperparameters --------------
+        # All optional; ``None`` defers to ``StructuredModelConfig``
+        # defaults. Only consulted when ``architecture='structured'``.
+        # The matching ``ModelMetadata.training`` dict carries the
+        # values the saved weights were trained against; loaders read
+        # them out and pass them here so the constructed model's
+        # parameter shapes match the saved state_dict (mismatched
+        # shapes surface as a PyTorch load_state_dict error — the
+        # same loud failure as the dual-head shape-mismatch case).
+        structured_emb_dim: Optional[int] = None,
+        structured_n_heads: Optional[int] = None,
+        structured_n_layers: Optional[int] = None,
+        structured_hidden_dim: Optional[int] = None,
+        structured_action_history_n: Optional[int] = None,
+        structured_n_printings: Optional[int] = None,
+        structured_action_vocab_size: Optional[int] = None,
+        structured_enable_hand_belief_head: Optional[bool] = None,
+        structured_dropout: Optional[float] = None,
     ) -> None:
         # ``with_policy=False`` (default) preserves bit-exact backward
         # compat with v1/v2 weights — same _ValueMLP, same forward
@@ -380,11 +503,57 @@ class NNEvaluator(Evaluator):
         # definition single-sourced.
         _action_encoding()._check_version(action_encoding_version)
         self.device = torch.device(device)
+        # ``is_structured`` is the per-call branch the evaluate /
+        # batch_evaluate / evaluate_with_policy / ... paths consult.
+        # Set once at __init__ time per the slice's "detect by
+        # inspecting ModelMetadata.architecture at load time, don't
+        # dispatch per-call" rule.
+        self.is_structured = architecture == ARCHITECTURE_STRUCTURED
+        # The structured trunk always has a policy head (and a value
+        # head). ``with_policy`` is the legacy MLP-evaluator's switch
+        # between the value-only and dual-head builds; for the
+        # structured trunk we force it on so the with-policy entry
+        # points (``evaluate_with_policy``, etc.) are always
+        # available. Callers that pass ``with_policy=False`` to a
+        # structured evaluator are upgraded silently — the cost
+        # of running the policy head is folded into the same
+        # transformer forward pass, so there's nothing to opt out of.
+        if self.is_structured:
+            with_policy = True
         self.with_policy = with_policy
         self.architecture = architecture
         self.action_encoding_version = action_encoding_version
-        if with_policy:
-            self.model: nn.Module = _build_dual_head_model(
+        if self.is_structured:
+            self.model: nn.Module = _build_structured_model(
+                emb_dim=structured_emb_dim,
+                n_heads=structured_n_heads,
+                n_layers=structured_n_layers,
+                hidden_dim=structured_hidden_dim,
+                action_history_n=structured_action_history_n,
+                n_printings=structured_n_printings,
+                action_vocab_size=structured_action_vocab_size,
+                enable_hand_belief_head=(
+                    structured_enable_hand_belief_head
+                ),
+                dropout=structured_dropout,
+            )
+            # The action-history window the tokenizer should use.
+            # Mirrors the model config so the input shape's
+            # action-token slice matches the trunk's expectation. The
+            # tokenizer accepts any ``n``; we read the loaded model's
+            # config to stay in lockstep with the trained
+            # hyperparameter.
+            self._structured_action_history_n = (
+                self.model.config.action_history_n
+            )
+            # Tokenizer cap so unknown / out-of-table printings
+            # bucket deterministically into the model's embedding
+            # table — see ``state_tokenizer.printing_id``.
+            self._structured_n_printings_cap = (
+                self.model.config.n_printings
+            )
+        elif with_policy:
+            self.model = _build_dual_head_model(
                 architecture,
                 hidden_sizes=hidden_sizes,
                 policy_hidden_sizes=policy_hidden_sizes,
@@ -403,6 +572,14 @@ class NNEvaluator(Evaluator):
     def _evaluate_nonterminal(
         self, state: GameState, player_id: PlayerID,
     ) -> float:
+        if self.is_structured:
+            # Tokenize + forward through the StructuredModel. The
+            # batched helper handles the structured input pipeline for
+            # both per-state and per-batch entry points; here we
+            # construct a 1-element batch and pull the single value
+            # out.
+            values, _ = self._structured_forward([state], player_id)
+            return float(values[0])
         engine = self._engine_state(state)
         features = extract_features(engine, player_id)
         with torch.no_grad():
@@ -440,6 +617,7 @@ class NNEvaluator(Evaluator):
         terminal_results: list[tuple[int, float]] = []
         nonterminal_indices: list[int] = []
         nonterminal_features: list[np.ndarray] = []
+        nonterminal_states: list[GameState] = []
         for i, s in enumerate(states):
             if s.is_terminal():
                 winner = s.winner()
@@ -450,15 +628,27 @@ class NNEvaluator(Evaluator):
                         (i, 1.0 if winner == player_id else -1.0)
                     )
                 continue
-            engine = self._engine_state(s)
             nonterminal_indices.append(i)
-            nonterminal_features.append(
-                extract_features(engine, player_id)
-            )
+            if self.is_structured:
+                nonterminal_states.append(s)
+            else:
+                engine = self._engine_state(s)
+                nonterminal_features.append(
+                    extract_features(engine, player_id)
+                )
 
         out: list[float] = [0.0] * len(states)
         for i, v in terminal_results:
             out[i] = v
+        if self.is_structured:
+            if nonterminal_states:
+                values_t, _ = self._structured_forward(
+                    nonterminal_states, player_id,
+                )
+                values = values_t.tolist()
+                for idx, v in zip(nonterminal_indices, values):
+                    out[idx] = v
+            return out
         if nonterminal_features:
             stacked = np.stack(nonterminal_features, axis=0)
             with torch.no_grad():
@@ -517,11 +707,27 @@ class NNEvaluator(Evaluator):
             policy = np.zeros(vocab_size, dtype=np.float32)
             return value, policy
 
-        engine = self._engine_state(state)
-        features = extract_features(engine, player_id)
         mask_np = ae.legal_action_mask(
             state, player_id, version=self.action_encoding_version,
         )
+        if self.is_structured:
+            values_t, logits_t = self._structured_forward(
+                [state], player_id,
+            )
+            value = float(values_t[0].item())
+            row_logits = logits_t[0]
+            mask_t = torch.from_numpy(mask_np).to(self.device)
+            masked = row_logits.masked_fill(~mask_t, float("-inf"))
+            if not mask_np.any():
+                policy = np.zeros(vocab_size, dtype=np.float32)
+            else:
+                policy_t = F.softmax(masked, dim=-1)
+                policy = policy_t.cpu().numpy().astype(
+                    np.float32, copy=False,
+                )
+            return value, policy
+        engine = self._engine_state(state)
+        features = extract_features(engine, player_id)
         with torch.no_grad():
             x = torch.from_numpy(features).unsqueeze(0).to(self.device)
             value_t, logits_t = self.model(x)
@@ -584,6 +790,7 @@ class NNEvaluator(Evaluator):
         nonterminal_indices: list[int] = []
         nonterminal_features: list[np.ndarray] = []
         nonterminal_masks: list[np.ndarray] = []
+        nonterminal_states: list[GameState] = []
         for i, s in enumerate(states):
             if s.is_terminal():
                 winner = s.winner()
@@ -595,17 +802,44 @@ class NNEvaluator(Evaluator):
                     value, np.zeros(vocab_size, dtype=np.float32),
                 )
                 continue
-            engine = self._engine_state(s)
             nonterminal_indices.append(i)
-            nonterminal_features.append(
-                extract_features(engine, player_id)
-            )
             nonterminal_masks.append(
                 ae.legal_action_mask(
                     s, player_id,
                     version=self.action_encoding_version,
                 ),
             )
+            if self.is_structured:
+                nonterminal_states.append(s)
+            else:
+                engine = self._engine_state(s)
+                nonterminal_features.append(
+                    extract_features(engine, player_id)
+                )
+
+        if self.is_structured:
+            if nonterminal_states:
+                values_t, logits_t = self._structured_forward(
+                    nonterminal_states, player_id,
+                )
+                values = values_t.tolist()
+                logits_np = logits_t.cpu().numpy()
+                for k, idx in enumerate(nonterminal_indices):
+                    mask_np = nonterminal_masks[k]
+                    if not mask_np.any():
+                        policy = np.zeros(
+                            vocab_size, dtype=np.float32,
+                        )
+                    else:
+                        row = logits_np[k].astype(np.float32, copy=True)
+                        row[~mask_np] = -np.inf
+                        row -= row.max()
+                        exp = np.exp(row)
+                        policy = (exp / exp.sum()).astype(
+                            np.float32, copy=False,
+                        )
+                    out[idx] = (values[k], policy)
+            return out
 
         if nonterminal_features:
             stacked = np.stack(nonterminal_features, axis=0)
@@ -675,6 +909,15 @@ class NNEvaluator(Evaluator):
                 value = 1.0 if winner == player_id else -1.0
             logits = np.zeros(vocab_size, dtype=np.float32)
             return value, logits
+        if self.is_structured:
+            values_t, logits_t = self._structured_forward(
+                [state], player_id,
+            )
+            value = float(values_t[0].item())
+            logits = logits_t[0].cpu().numpy().astype(
+                np.float32, copy=False,
+            )
+            return value, logits
         engine = self._engine_state(state)
         features = extract_features(engine, player_id)
         with torch.no_grad():
@@ -709,6 +952,7 @@ class NNEvaluator(Evaluator):
             return out
         nonterminal_indices: list[int] = []
         nonterminal_features: list[np.ndarray] = []
+        nonterminal_states: list[GameState] = []
         for i, s in enumerate(states):
             if s.is_terminal():
                 winner = s.winner()
@@ -720,11 +964,26 @@ class NNEvaluator(Evaluator):
                     value, np.zeros(vocab_size, dtype=np.float32),
                 )
                 continue
-            engine = self._engine_state(s)
             nonterminal_indices.append(i)
-            nonterminal_features.append(
-                extract_features(engine, player_id)
-            )
+            if self.is_structured:
+                nonterminal_states.append(s)
+            else:
+                engine = self._engine_state(s)
+                nonterminal_features.append(
+                    extract_features(engine, player_id)
+                )
+        if self.is_structured:
+            if nonterminal_states:
+                values_t, logits_t = self._structured_forward(
+                    nonterminal_states, player_id,
+                )
+                values = values_t.tolist()
+                logits_np = logits_t.cpu().numpy().astype(
+                    np.float32, copy=False,
+                )
+                for k, idx in enumerate(nonterminal_indices):
+                    out[idx] = (values[k], logits_np[k].copy())
+            return out
         if nonterminal_features:
             stacked = np.stack(nonterminal_features, axis=0)
             with torch.no_grad():
@@ -738,6 +997,166 @@ class NNEvaluator(Evaluator):
                 out[idx] = (values[k], logits_np[k].copy())
         return out
 
+    # ----------------------------------------------------------------
+    # Structured-architecture forward pipeline
+    # ----------------------------------------------------------------
+
+    def _structured_forward(
+        self,
+        states: Sequence[GameState],
+        viewer_id: PlayerID,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Tokenize each state, collate into a padded batch, and run
+        the structured model.
+
+        Returns ``(values, policy_logits)``:
+
+        - ``values`` is a 1-D ``FloatTensor`` of length ``len(states)``
+          in ``[-1, +1]`` (the trunk's value head is tanh-activated).
+        - ``policy_logits`` is a ``FloatTensor`` of shape
+          ``(B, ACTION_VOCAB_SIZE)`` — raw logits straight off the
+          cross-attention policy decoder. Callers mask + softmax
+          themselves (matching the pre-existing dual-head MLP path's
+          contract).
+
+        All terminal-state short-circuiting is the caller's
+        responsibility — this helper assumes every state in ``states``
+        is non-terminal and should be tokenized + forwarded. Returning
+        tensors (not numpy) lets each public method do its
+        per-state masking + post-processing in the existing place.
+
+        Action-history strategy
+        -----------------------
+        First-pass acceptable per Slice E's open design question:
+        ``recent_actions=()`` for every state. The tokenizer accepts
+        an empty sequence as valid input (the action-token slice
+        contributes zero rows to the per-token batch). Documented
+        limitation: the trunk sees only the current state, not the
+        opp-passed-priority-with-counter-mana-open signal Step 1's
+        action-token plan eventually unlocks. Threading a real
+        per-state action history into MCTS / PIMC is a separate
+        slice that lands once the engine grows a public action log
+        on ``GameState`` (today there is no such field).
+        """
+        tokenizer = _state_tokenizer()
+        token_dicts: list[dict[str, np.ndarray]] = []
+        for s in states:
+            engine = self._engine_state(s)
+            token_dicts.append(
+                tokenizer.tokenize_state(
+                    engine,
+                    int(viewer_id),
+                    (),  # empty action history — see docstring above
+                    n=self._structured_action_history_n,
+                    n_printings_cap=self._structured_n_printings_cap,
+                ),
+            )
+        batch = _collate_structured_token_dicts(
+            token_dicts, device=self.device,
+        )
+        with torch.no_grad():
+            out = self.model(batch)
+        values = out["value"]
+        if values.dim() == 0:
+            # Single-element batch on some PyTorch versions returns a
+            # 0-D tensor when the model squeezes; normalize to 1-D so
+            # callers always index it as values[i].
+            values = values.unsqueeze(0)
+        return values, out["policy_logits"]
+
+    @classmethod
+    def from_metadata(
+        cls,
+        weights_path: Path,
+        metadata: Any,
+        *,
+        device: str = "cpu",
+    ) -> "NNEvaluator":
+        """Construct an evaluator dispatched on a
+        ``ModelMetadata.architecture`` field.
+
+        Centralizes the loader-side dispatch that today is replicated
+        across iterate / capture / eval / bench call sites — each
+        reads ``metadata.architecture``, ``metadata.hidden_sizes``,
+        ``metadata.action_encoding_version``, etc. and forwards them
+        into ``NNEvaluator(...)`` by hand. The structured architecture
+        adds another set of fields the existing call sites would have
+        to learn about; folding the dispatch here keeps the structured
+        path's hyperparam wiring single-sourced.
+
+        For the structured architecture, the additional hyperparams
+        live under ``metadata.training`` (which is a free-form dict
+        the trainer fills in) — same convention the existing dual-
+        head architectures use for ``policy_hidden_sizes``. The keys
+        recognized here are:
+
+        - ``structured_emb_dim``
+        - ``structured_n_heads``
+        - ``structured_n_layers``
+        - ``structured_hidden_dim``
+        - ``structured_action_history_n``
+        - ``structured_n_printings``
+        - ``structured_action_vocab_size``
+        - ``structured_enable_hand_belief_head``
+        - ``structured_dropout``
+
+        Any missing key falls through to ``StructuredModelConfig``'s
+        default. Slice C's training run is expected to write the
+        values its training used.
+        """
+        architecture = getattr(metadata, "architecture", "shared")
+        action_encoding_version = getattr(
+            metadata, "action_encoding_version", "positional_v1",
+        )
+        if architecture == ARCHITECTURE_STRUCTURED:
+            training = getattr(metadata, "training", {}) or {}
+            return cls(
+                weights_path=weights_path,
+                device=device,
+                architecture=architecture,
+                action_encoding_version=action_encoding_version,
+                structured_emb_dim=training.get("structured_emb_dim"),
+                structured_n_heads=training.get("structured_n_heads"),
+                structured_n_layers=training.get("structured_n_layers"),
+                structured_hidden_dim=training.get(
+                    "structured_hidden_dim",
+                ),
+                structured_action_history_n=training.get(
+                    "structured_action_history_n",
+                ),
+                structured_n_printings=training.get(
+                    "structured_n_printings",
+                ),
+                structured_action_vocab_size=training.get(
+                    "structured_action_vocab_size",
+                ),
+                structured_enable_hand_belief_head=training.get(
+                    "structured_enable_hand_belief_head",
+                ),
+                structured_dropout=training.get("structured_dropout"),
+            )
+        # MLP architectures (shared / separate). Hidden sizes default
+        # to HIDDEN_SIZES when metadata's hidden_sizes is empty or
+        # absent (back-compat for v1-/v2-style metadata).
+        hidden_sizes_meta = getattr(metadata, "hidden_sizes", None) or ()
+        hidden_sizes = (
+            tuple(hidden_sizes_meta) if hidden_sizes_meta else HIDDEN_SIZES
+        )
+        with_policy = getattr(metadata, "with_policy", False)
+        training = getattr(metadata, "training", {}) or {}
+        policy_hidden_sizes_meta = (
+            tuple(training.get("policy_hidden_sizes") or ()) or None
+        )
+        return cls(
+            weights_path=weights_path,
+            device=device,
+            with_policy=with_policy,
+            hidden_sizes=hidden_sizes,
+            architecture=architecture,
+            policy_hidden_sizes=policy_hidden_sizes_meta,
+            action_encoding_version=action_encoding_version,
+        )
+
     def save(self, path: Path) -> None:
         """Persist ``state_dict`` to disk. Standard PyTorch convention."""
         torch.save(self.model.state_dict(), path)
@@ -750,3 +1169,66 @@ class NNEvaluator(Evaluator):
         if engine is not None:
             return engine
         return state  # assume already an EngineGameState
+
+
+def _collate_structured_token_dicts(
+    token_dicts: Sequence[dict[str, np.ndarray]],
+    *,
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    """Pad a sequence of per-state token dicts into a single batched
+    tensor dict suitable for ``StructuredModel.forward``.
+
+    The tokenizer emits one dict per state with these keys:
+
+    - ``token_type``     int64 ``(seq_len_i,)``
+    - ``token_emb_ids``  int64 ``(seq_len_i, N_EMB_FIELDS)``
+    - ``token_scalars``  float32 ``(seq_len_i, N_SCALAR_FIELDS)``
+    - ``attention_mask`` bool  ``(seq_len_i,)`` — every emitted row True
+
+    Different states have different ``seq_len_i`` because hand /
+    graveyard / exile / battlefield sizes vary. The collator picks
+    ``max_len = max(seq_len_i)`` and pads each row up to it. Padded
+    rows have ``attention_mask=False``; their integer / scalar
+    contents are zero so the model's NA-token (id 0 on every
+    categorical embedding) absorbs them cleanly.
+
+    The output tensors are placed on ``device`` so the subsequent
+    ``model.forward`` doesn't pay a per-row host-to-device transfer.
+
+    This is the inference-time collate. The structured-trainer slice
+    is writing the matching training-time collator — both should
+    produce identical shapes given identical inputs. Keeping the two
+    consistent is a "tested via shape contract" rather than via
+    shared code; the inputs to each collator come from the same
+    tokenizer output format, so the inference path's collator
+    matching the training path's is the unit-test invariant.
+    """
+    if not token_dicts:
+        raise ValueError("token_dicts must be non-empty")
+    n_emb_fields = token_dicts[0]["token_emb_ids"].shape[1]
+    n_scalar_fields = token_dicts[0]["token_scalars"].shape[1]
+    max_len = max(d["token_type"].shape[0] for d in token_dicts)
+    batch_size = len(token_dicts)
+
+    token_type = np.zeros((batch_size, max_len), dtype=np.int64)
+    token_emb_ids = np.zeros(
+        (batch_size, max_len, n_emb_fields), dtype=np.int64,
+    )
+    token_scalars = np.zeros(
+        (batch_size, max_len, n_scalar_fields), dtype=np.float32,
+    )
+    attention_mask = np.zeros((batch_size, max_len), dtype=bool)
+    for i, d in enumerate(token_dicts):
+        n = d["token_type"].shape[0]
+        token_type[i, :n] = d["token_type"]
+        token_emb_ids[i, :n] = d["token_emb_ids"]
+        token_scalars[i, :n] = d["token_scalars"]
+        attention_mask[i, :n] = d["attention_mask"]
+
+    return {
+        "token_type": torch.from_numpy(token_type).to(device),
+        "token_emb_ids": torch.from_numpy(token_emb_ids).to(device),
+        "token_scalars": torch.from_numpy(token_scalars).to(device),
+        "attention_mask": torch.from_numpy(attention_mask).to(device),
+    }
