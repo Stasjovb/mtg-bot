@@ -1539,7 +1539,32 @@ fn apply_effect(
                 ));
             }
             TargetFilter::AnyPlayer => {
-                let defender = (1 - state.active_player) as usize;
+                // **Controller resolution (I74 follow-up to the
+                // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 /
+                // I69 / I70 / I71 / I72 / I73 controller-of-effect
+                // substrate).** CR 119.5 / 608.2: an effect
+                // resolves under its source's controller. Mind-Rot-
+                // shape "target player discards a card" first-slice
+                // target shortcut picks the SOURCE'S controller's
+                // opponent (defender), where defender = 1 -
+                // controller.
+                //
+                // **Why the fix.** Pre-fix this arm computed
+                // `defender = 1 - state.active_player`. Wrong when
+                // the resolving spell / triggered ability has a
+                // controller != active_player. Example: on p0's
+                // turn, p1 casts a Mind-Rot-shape instant — pre-
+                // fix it self-milled p1's own hand[0]; post-fix
+                // it correctly discards p0's hand[0] (the source's
+                // controller's opponent — matching the convention
+                // that AnyPlayer-on-discard means "target opponent
+                // discards", a first-slice approximation of the
+                // real "target player choice" surface).
+                let controller = state
+                    .current_resolve_source_controller
+                    .map(|c| c as usize)
+                    .unwrap_or(state.active_player as usize);
+                let defender = 1 - controller;
                 let hand = &state.players[defender].hand;
                 if hand.is_empty() {
                     return Ok(()); // fizzle silently
