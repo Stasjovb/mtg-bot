@@ -68,7 +68,7 @@ from mtg_bot.training.stop_signal import (
     sentinel_path, stop_requested, write_stop,
 )
 from mtg_bot.training_ui.launcher import (
-    ITERATE_SCHEMA, spawn_iterate,
+    build_iterate_schema, spawn_iterate,
 )
 
 
@@ -402,15 +402,27 @@ def _read_json_cycle_id(progress_dir: Path, run_id: str) -> Optional[str]:
 # ---- Flask app factory ----------------------------------------------------
 
 
-def create_app(progress_dir: Path) -> Flask:
+def create_app(
+    progress_dir: Path,
+    *,
+    registry_root: Optional[Path] = None,
+) -> Flask:
     """Build the Flask app. ``progress_dir`` is the directory that
     holds both the per-run progress JSON files (legacy + producer
     dual-write source) AND the ``runs.db`` SQLite file (Phase 2 sole
     source of truth read by the UI). The directory does NOT have to
     exist at app-creation time — every endpoint reads it lazily on
     each request, so a UI started before the first training run still
-    works."""
+    works.
+
+    ``registry_root`` (optional) is the trained-weights registry root
+    used by the launch-iterate form to populate the bootstrap-version
+    dropdown. When ``None``, the dropdown shows empty choices and
+    the user can still type any string (which iterate itself
+    validates at spawn time)."""
     progress_dir = Path(progress_dir).resolve()
+    if registry_root is not None:
+        registry_root = Path(registry_root).resolve()
 
     template_dir = Path(__file__).parent / "templates"
     static_dir = Path(__file__).parent / "static"
@@ -420,6 +432,7 @@ def create_app(progress_dir: Path) -> Flask:
         static_folder=str(static_dir),
     )
     app.config["PROGRESS_DIR"] = progress_dir
+    app.config["REGISTRY_ROOT"] = registry_root
 
     @app.route("/")
     def index():  # noqa: D401 - Flask view
@@ -741,13 +754,15 @@ def create_app(progress_dir: Path) -> Flask:
     def api_launch_iterate_schema():
         """Return the schema describing every iterate CLI argument.
 
-        The frontend ("Launch new iterate" panel in index.html)
-        fetches this on tab-open and renders the form from it. The
-        schema is built at server-import time but refers to the live
-        ``EVAL_GATE_THRESHOLD`` / per-game-timeout defaults — restart
-        the UI to pick up changes to those constants.
+        Rebuilt per request so the bootstrap-version dropdown picks
+        up newly-trained versions without a UI restart. The live
+        ``EVAL_GATE_THRESHOLD`` and per-game-timeout defaults also
+        flow through, but those rarely change.
         """
-        return jsonify({"schema": ITERATE_SCHEMA})
+        schema = build_iterate_schema(
+            registry_root=app.config.get("REGISTRY_ROOT"),
+        )
+        return jsonify({"schema": schema})
 
     @app.route("/api/launch/iterate", methods=["POST"])
     def api_launch_iterate():
@@ -773,8 +788,12 @@ def create_app(progress_dir: Path) -> Flask:
                 "error": "request body must be JSON with an 'args' object",
             }), 400
         try:
+            schema = build_iterate_schema(
+                registry_root=app.config.get("REGISTRY_ROOT"),
+            )
             result = spawn_iterate(
                 submitted, app.config["PROGRESS_DIR"],
+                schema=schema,
             )
         except ValueError as e:
             # Schema-validation failure (missing required, unknown key,

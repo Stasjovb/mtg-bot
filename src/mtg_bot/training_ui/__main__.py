@@ -64,6 +64,17 @@ def main(argv: Optional[list[str]] = None) -> None:
         ),
     )
     parser.add_argument(
+        "--registry-root", type=Path,
+        default=Path("trained_weights"),
+        help=(
+            "Registry root holding versioned weights (default "
+            "./trained_weights). Used to populate the "
+            "bootstrap-version dropdown in the Launch-iterate form "
+            "and to read iterate_state.json for current_best. "
+            "Should match the same path iterate uses."
+        ),
+    )
+    parser.add_argument(
         "--debug", action="store_true",
         help="Run Flask with debug=True (auto-reload on edit).",
     )
@@ -71,8 +82,9 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     progress_dir = args.progress_dir.resolve()
     progress_dir.mkdir(parents=True, exist_ok=True)
+    registry_root = args.registry_root.resolve()
 
-    app = create_app(progress_dir)
+    app = create_app(progress_dir, registry_root=registry_root)
 
     print(f"Training-progress UI watching: {progress_dir}")
     print("Reachable at:")

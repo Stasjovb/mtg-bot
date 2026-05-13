@@ -25,7 +25,8 @@ from flask import Flask
 
 from mtg_bot.training_ui.app import create_app
 from mtg_bot.training_ui.launcher import (
-    ITERATE_SCHEMA, build_iterate_command, spawn_iterate,
+    ITERATE_SCHEMA, build_iterate_command, build_iterate_schema,
+    spawn_iterate,
 )
 
 
@@ -122,19 +123,19 @@ def test_schema_args_match_iterate_cli() -> None:
 
 def test_build_command_minimal_required_only() -> None:
     """Only required fields submitted; everything else stays at the
-    iterate-CLI default (omitted from argv)."""
+    iterate-CLI default (omitted from argv). Required fields are
+    always emitted even when matching the schema default — iterate
+    asserts their presence at startup."""
     argv = build_iterate_command({
         "bootstrap-version": "v3",
         "deck-pool": "data/17lands/eoe_decks.json.gz",
     })
-    # The required flags MUST appear; nothing else (default-suppressed).
-    # Note: deck-pool == its schema default, so it's also suppressed.
-    # bootstrap-version has default=None so it's always emitted.
+    # Both required flags MUST appear regardless of default-match.
     assert "--bootstrap-version" in argv
     assert argv[argv.index("--bootstrap-version") + 1] == "v3"
-    # deck-pool default in schema is data/17lands/eoe_decks.json.gz
-    # → suppressed because submitted == default.
-    assert "--deck-pool" not in argv
+    assert "--deck-pool" in argv
+    assert (argv[argv.index("--deck-pool") + 1]
+            == "data/17lands/eoe_decks.json.gz")
     # bool_tristate args are always emitted (no implicit-default
     # shortcut for them). Confirm both SHM flags appear in the
     # current-platform-default form.
@@ -332,10 +333,165 @@ def test_spawn_iterate_runs_subprocess(tmp_path: Path) -> None:
 
 @pytest.fixture
 def app(tmp_path: Path) -> Flask:
+    """Flask app without a registry — the bootstrap-version dropdown
+    will be empty. Tests that exercise the dropdown population path
+    use ``app_with_registry``."""
     progress = tmp_path / "training_progress"
     progress.mkdir()
     return create_app(progress)
 
+
+@pytest.fixture
+def app_with_registry(tmp_path: Path) -> Flask:
+    """Flask app with a fake registry containing v1/v2 and a
+    current_best=v2. Lets the endpoint tests exercise the
+    bootstrap-version dropdown population."""
+    progress = tmp_path / "training_progress"
+    progress.mkdir()
+    registry = tmp_path / "trained_weights"
+    _make_fake_registry(
+        registry,
+        versions=[("v1", "shared"), ("v2", "structured")],
+        current_best="v2",
+    )
+    return create_app(progress, registry_root=registry)
+
+
+# ---------------------------------------------------------------------
+# build_iterate_schema dropdown population (registry-driven).
+# ---------------------------------------------------------------------
+
+def _make_fake_registry(
+    root: Path,
+    versions: list[tuple[str, str]],
+    *,
+    current_best: str | None = None,
+) -> Path:
+    """Drop a minimal Registry-compatible layout into ``root``.
+
+    Each ``(version, architecture)`` pair becomes a directory with a
+    ``weights.pt`` placeholder and a ``metadata.json``. Optionally
+    writes ``iterate_state.json`` with ``current_best`` to exercise
+    the dropdown's default-selection path.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    for v, arch in versions:
+        vdir = root / v
+        vdir.mkdir()
+        (vdir / "weights.pt").write_bytes(b"stub")
+        # Write the minimum set of ModelMetadata.from_dict()'s required
+        # keys (version / created_at / feature_dim / hidden_sizes).
+        # The schema label only reads ``architecture`` so we keep the
+        # rest minimal.
+        (vdir / "metadata.json").write_text(
+            json.dumps({
+                "version": v,
+                "created_at": "2026-05-13T00:00:00+00:00",
+                "feature_dim": 51,
+                "hidden_sizes": [],
+                "architecture": arch,
+            }),
+            encoding="utf-8",
+        )
+    if current_best is not None:
+        (root / "iterate_state.json").write_text(
+            f'{{"current_best": "{current_best}"}}',
+            encoding="utf-8",
+        )
+    return root
+
+
+def test_build_schema_with_no_registry_root_returns_empty_choices(
+) -> None:
+    """``registry_root=None`` is the test/fallback path. The
+    bootstrap-version spec is still present, just with empty
+    choices."""
+    schema = build_iterate_schema(registry_root=None)
+    flat = {a["name"]: a for s in schema for a in s["args"]}
+    spec = flat["bootstrap-version"]
+    assert spec["type"] == "choice"
+    assert spec["choices"] == []
+    assert spec["default"] is None
+    assert spec["required"] is True
+
+
+def test_build_schema_populates_versions_newest_first(
+    tmp_path: Path,
+) -> None:
+    """A registry with v1/v2/v3 surfaces in the dropdown in
+    newest-first order — the most-likely-pick is at the top."""
+    _make_fake_registry(
+        tmp_path,
+        versions=[("v1", "shared"),
+                  ("v2", "structured"),
+                  ("v3", "structured")],
+    )
+    schema = build_iterate_schema(registry_root=tmp_path)
+    spec = next(a for s in schema for a in s["args"]
+                if a["name"] == "bootstrap-version")
+    assert spec["choices"] == ["v3", "v2", "v1"]
+    assert spec["default"] is None  # no iterate_state.json
+
+
+def test_build_schema_default_is_current_best(tmp_path: Path) -> None:
+    """When iterate_state.json names a current_best, the dropdown
+    pre-selects it AND tags its label."""
+    _make_fake_registry(
+        tmp_path,
+        versions=[("v1", "shared"),
+                  ("v2", "structured"),
+                  ("v3", "structured")],
+        current_best="v2",
+    )
+    schema = build_iterate_schema(registry_root=tmp_path)
+    spec = next(a for s in schema for a in s["args"]
+                if a["name"] == "bootstrap-version")
+    assert spec["default"] == "v2"
+    labels = spec["choice_labels"]
+    assert labels["v2"] == "v2 (structured, current best)"
+    assert labels["v3"] == "v3 (structured)"
+    assert labels["v1"] == "v1 (shared)"
+
+
+def test_build_schema_missing_registry_is_defensive(
+    tmp_path: Path,
+) -> None:
+    """A non-existent registry root yields an empty dropdown rather
+    than raising. The UI still loads."""
+    schema = build_iterate_schema(
+        registry_root=tmp_path / "does-not-exist",
+    )
+    spec = next(a for s in schema for a in s["args"]
+                if a["name"] == "bootstrap-version")
+    assert spec["choices"] == []
+    assert spec["default"] is None
+
+
+def test_build_command_rejects_unknown_version_with_choices(
+    tmp_path: Path,
+) -> None:
+    """When the schema has populated choices, submitting a version
+    that isn't in the registry raises rather than spawning iterate
+    just to have iterate sys.exit on the missing version."""
+    _make_fake_registry(
+        tmp_path,
+        versions=[("v1", "shared"), ("v2", "structured")],
+        current_best="v2",
+    )
+    schema = build_iterate_schema(registry_root=tmp_path)
+    with pytest.raises(ValueError, match="not in choices"):
+        build_iterate_command(
+            {
+                "bootstrap-version": "v_does_not_exist",
+                "deck-pool": "data/17lands/eoe_decks.json.gz",
+            },
+            schema=schema,
+        )
+
+
+# ---------------------------------------------------------------------
+# Flask integration.
+# ---------------------------------------------------------------------
 
 def test_schema_endpoint_returns_iterate_schema(app: Flask) -> None:
     client = app.test_client()
@@ -382,7 +538,11 @@ def test_launch_endpoint_spawns_on_valid_request(
     the subprocess, and returns the metadata. We POST a config the
     real iterate will reject (missing deck pool); the spawn still
     succeeds — only the subprocess's exit code reflects the
-    iterate-side rejection, which the endpoint doesn't wait for."""
+    iterate-side rejection, which the endpoint doesn't wait for.
+
+    Uses the no-registry ``app`` fixture so bootstrap-version's
+    choices are empty and arbitrary strings pass schema validation.
+    """
     client = app.test_client()
     r = client.post(
         "/api/launch/iterate",
@@ -401,3 +561,21 @@ def test_launch_endpoint_spawns_on_valid_request(
     cmd = body["pretty_command"]
     assert "iterate" in cmd
     assert "--bootstrap-version v_nonexistent_test_only" in cmd
+
+
+def test_schema_endpoint_includes_dropdown_choices(
+    app_with_registry: Flask,
+) -> None:
+    """End-to-end: when the UI is launched with a registry, the
+    schema endpoint surfaces the version choices + labels +
+    current_best default that the dropdown renders against."""
+    r = app_with_registry.test_client().get(
+        "/api/launch/iterate/schema",
+    )
+    assert r.status_code == 200
+    body = r.get_json()
+    spec = next(a for s in body["schema"] for a in s["args"]
+                if a["name"] == "bootstrap-version")
+    assert spec["choices"] == ["v2", "v1"]
+    assert spec["default"] == "v2"
+    assert spec["choice_labels"]["v2"].endswith("current best)")

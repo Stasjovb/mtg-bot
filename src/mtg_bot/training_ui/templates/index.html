@@ -1640,11 +1640,22 @@ setInterval(refresh, REFRESH_MS);
         + '</label></div>';
     } else if (arg.type === 'choice') {
       const choices = arg.choices || [];
-      const opts = ['<option value="">— default ('
-        + escAttr(defaultStr) + ') —</option>']
-        .concat(choices.map(c => '<option value="' + escAttr(c) + '">'
-          + escAttr(c) + '</option>'))
-        .join('');
+      const labels = arg.choice_labels || {};
+      // When the schema's default is itself one of the choices (the
+      // bootstrap-version dropdown's "current_best" case), pre-select
+      // it. Otherwise the first option is the explicit "— default —"
+      // sentinel so the submission omits the flag when unchanged.
+      const defaultIsChoice = choices.includes(arg.default);
+      const optHtml = (c) => '<option value="' + escAttr(c) + '"'
+        + (c === arg.default ? ' selected' : '') + '>'
+        + escAttr(labels[c] || c) + '</option>';
+      const opts = (defaultIsChoice
+        ? choices.map(optHtml)
+        : ['<option value="">— default ('
+            + escAttr(defaultStr) + ') —</option>']
+            .concat(choices.map(optHtml))
+      ).join('') || '<option value="" disabled selected>'
+        + '(no choices — pass --registry-root to the UI)</option>';
       controlHtml = '<select id="' + escAttr(id)
         + '" data-arg="' + escAttr(arg.name)
         + '" data-type="choice">' + opts + '</select>';

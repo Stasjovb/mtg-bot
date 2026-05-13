@@ -41,8 +41,12 @@ def test_main_invokes_create_app_and_app_run(tmp_path: Path):
             "--host", "127.0.0.1",
             "--port", "5099",
             "--progress-dir", str(progress_dir),
+            "--registry-root", str(tmp_path / "trained_weights"),
         ])
-    create.assert_called_once_with(progress_dir.resolve())
+    create.assert_called_once_with(
+        progress_dir.resolve(),
+        registry_root=(tmp_path / "trained_weights").resolve(),
+    )
     fake_app.run.assert_called_once_with(
         host="127.0.0.1", port=5099, debug=False,
     )

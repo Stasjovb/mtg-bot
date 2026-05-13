@@ -25,6 +25,8 @@ will fail loudly if drift creeps in.
 
 from __future__ import annotations
 
+import copy
+import json
 import shlex
 import subprocess
 import sys
@@ -68,25 +70,126 @@ def _default_per_game_eval() -> float:
     return _common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC
 
 
-def build_iterate_schema() -> list[dict[str, Any]]:
+def _list_registered_versions(
+    registry_root: Path,
+) -> tuple[list[str], dict[str, str], Optional[str]]:
+    """Return ``(versions_newest_first, labels, current_best)``.
+
+    - ``versions_newest_first`` is the list of complete version IDs in
+      the registry, sorted newest first so the dropdown reads top-down
+      as "most-likely-pick first".
+    - ``labels`` maps each version to a human-readable label that
+      mentions the architecture + the current-best tag so the user
+      can disambiguate across structurally-distinct chains. Falls
+      back to the bare version ID when metadata can't be read.
+    - ``current_best`` is the version named in
+      ``<registry_root>/iterate_state.json``'s ``current_best`` field,
+      or ``None`` when iterate_state.json is absent / malformed. Used
+      as the default-selected option in the dropdown.
+
+    Defensive: a missing or unreadable registry directory yields
+    ``([], {}, None)`` rather than raising — the UI can still load,
+    and the user gets an empty dropdown with a help hint to point at
+    the right directory.
+    """
+    registry_root = Path(registry_root)
+    if not registry_root.is_dir():
+        return [], {}, None
+    # Late import: registry depends on the rest of the package, which
+    # we don't want pulled in at module import time for tests that
+    # only construct schemas.
+    from mtg_bot.training.registry import Registry
+
+    try:
+        registry = Registry(registry_root)
+        versions_oldest_first = registry.list_versions()
+    except Exception:  # noqa: BLE001 - defensive
+        return [], {}, None
+
+    versions = list(reversed(versions_oldest_first))
+
+    # iterate_state.json is the source of truth for current_best.
+    current_best: Optional[str] = None
+    state_path = registry_root / "iterate_state.json"
+    if state_path.is_file():
+        try:
+            data = json.loads(
+                state_path.read_text(encoding="utf-8"),
+            )
+            cb = data.get("current_best")
+            if isinstance(cb, str) and cb in versions:
+                current_best = cb
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    labels: dict[str, str] = {}
+    for v in versions:
+        try:
+            meta = registry.load_metadata(v)
+        except Exception:  # noqa: BLE001 - defensive
+            labels[v] = v
+            continue
+        # ``architecture`` may not be set on legacy metadata; default
+        # to the canonical "shared" so the label still distinguishes
+        # the new structured chain.
+        arch = getattr(meta, "architecture", None) or "shared"
+        suffix = f"{arch}, current best" if v == current_best else arch
+        labels[v] = f"{v} ({suffix})"
+    return versions, labels, current_best
+
+
+def build_iterate_schema(
+    registry_root: Optional[Path] = None,
+) -> list[dict[str, Any]]:
     """Return the iterate-form schema with defaults resolved at call
-    time (the SHM, gate, and per-game-timeout defaults all read from
-    live Python constants)."""
+    time.
+
+    Two layers of dynamism:
+
+    - ``EVAL_GATE_THRESHOLD`` and the per-game-timeout defaults are
+      read from live Python constants every call, so changing them
+      doesn't require a UI restart.
+    - ``--bootstrap-version`` becomes a ``choice`` type with the
+      ``choices`` populated from ``<registry_root>``'s complete
+      version dirs (newest first). The ``default`` is the
+      ``current_best`` from ``iterate_state.json`` when present. Pass
+      ``registry_root=None`` to render the form without any choices
+      (tests use this; iterate's CLI default ``trained_weights/`` is
+      passed by the production endpoint).
+    """
+    if registry_root is None:
+        bootstrap_choices: list[str] = []
+        bootstrap_labels: dict[str, str] = {}
+        bootstrap_default: Optional[str] = None
+    else:
+        (
+            bootstrap_choices,
+            bootstrap_labels,
+            bootstrap_default,
+        ) = _list_registered_versions(registry_root)
+
+    bootstrap_spec: dict[str, Any] = {
+        "name": "bootstrap-version",
+        "type": "choice",
+        "required": True,
+        "default": bootstrap_default,
+        "choices": bootstrap_choices,
+        "choice_labels": bootstrap_labels,
+        "help": (
+            "Registered version to start from. Iter_001's self-play "
+            "uses this as both seats' weights; v_N+1 then competes "
+            "against this version in the eval gate. iterate inherits "
+            "hidden_sizes / architecture / action_encoding_version "
+            "from this version's metadata so the trained chain stays "
+            "structurally consistent."
+        ),
+    }
     return [
         {
             "section": "Required",
             "open": True,
             "args": [
-                {
-                    "name": "bootstrap-version",
-                    "type": "string",
-                    "required": True,
-                    "default": None,
-                    "help": (
-                        "Registered version to start from (e.g. v3). "
-                        "Must exist under --registry-root."
-                    ),
-                },
+                bootstrap_spec,
                 {
                     "name": "deck-pool",
                     "type": "path",
@@ -494,11 +597,14 @@ def build_iterate_schema() -> list[dict[str, Any]]:
     ]
 
 
-# Module-level constant so endpoints + tests share one snapshot.
-# Built at import time; the dynamic-default helpers above resolve
-# at import as well, so changing EVAL_GATE_THRESHOLD or the
-# per-game-timeout defaults requires a UI restart to pick up.
-ITERATE_SCHEMA: list[dict[str, Any]] = build_iterate_schema()
+# Module-level snapshot for callers that don't need the dynamic
+# version-list — tests, ``build_iterate_command``'s validation pass.
+# Endpoints build a fresh schema per request via
+# ``build_iterate_schema(registry_root)`` so dropdown choices stay
+# current.
+ITERATE_SCHEMA: list[dict[str, Any]] = build_iterate_schema(
+    registry_root=None,
+)
 
 
 def _flatten_schema_args(
@@ -536,7 +642,11 @@ def _normalize_value(
         v = str(raw).strip()
         if not v:
             return None
-        if t == "choice" and v not in spec["choices"]:
+        if t == "choice" and spec.get("choices") and v not in spec["choices"]:
+            # Empty ``choices`` is a "no-registry fallback" — we let
+            # the value pass through and iterate's own startup check
+            # catches a bad version at spawn time. Populated choices
+            # are the canonical-validation path (production endpoint).
             raise ValueError(
                 f"--{spec['name']}: value {v!r} not in "
                 f"choices {spec['choices']!r}"
@@ -572,6 +682,7 @@ def build_iterate_command(
     submitted: dict[str, Any],
     *,
     python_executable: Optional[str] = None,
+    schema: Optional[list[dict[str, Any]]] = None,
 ) -> list[str]:
     """Build the ``[python, -m, mtg_bot.cli, iterate, ...]`` argv.
 
@@ -583,14 +694,20 @@ def build_iterate_command(
     ``python_executable`` defaults to :data:`sys.executable` so the
     spawned subprocess uses the same interpreter (venv) the Flask
     process is running in.
+
+    ``schema`` overrides the module-level :data:`ITERATE_SCHEMA` —
+    pass a registry-populated schema (from ``build_iterate_schema(
+    registry_root)``) so the choice validation for
+    ``bootstrap-version`` runs against the live version list.
     """
-    flat = _flatten_schema_args(ITERATE_SCHEMA)
+    schema = schema or ITERATE_SCHEMA
+    flat = _flatten_schema_args(schema)
     python_exe = python_executable or sys.executable
     argv: list[str] = [python_exe, "-m", "mtg_bot.cli", "iterate"]
 
     # Walk schema in order so the spawned command line groups by
     # section — easier to read in the console log.
-    for section in ITERATE_SCHEMA:
+    for section in schema:
         for spec in section["args"]:
             name = spec["name"]
             raw = submitted.get(name)
@@ -614,8 +731,13 @@ def build_iterate_command(
                     )
                 # Optional + blank → leave at iterate's default.
                 continue
-            if value == spec.get("default"):
+            if (
+                not spec.get("required")
+                and value == spec.get("default")
+            ):
                 # Optional + matches default → omit (UI noise cut).
+                # Required args ALWAYS emit even when matching the
+                # default — iterate.py requires their presence.
                 continue
             argv.append(f"--{name}")
             argv.append(str(value))
@@ -638,6 +760,7 @@ def spawn_iterate(
     *,
     python_executable: Optional[str] = None,
     repo_root: Optional[Path] = None,
+    schema: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Spawn the iterate subprocess detached from the current process.
 
@@ -671,7 +794,7 @@ def spawn_iterate(
         repo_root = Path(__file__).resolve().parents[3]
 
     argv = build_iterate_command(
-        submitted, python_executable=python_executable,
+        submitted, python_executable=python_executable, schema=schema,
     )
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
