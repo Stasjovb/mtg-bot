@@ -306,6 +306,50 @@ def test_capture_config_build_recorder_passes_arch_to_nn_annotator(
     assert len(recorder.annotators) == 2
 
 
+def test_capture_config_build_recorder_routes_structured_arch(
+    tmp_path: Path,
+):
+    """ReplayCaptureConfig.build_recorder() with
+    ``nn_architecture='structured'`` must construct StructuredModel and
+    load the saved structured-arch state_dict. Without
+    nn_architecture passed, NNEvaluator defaults to the flat
+    _ValuePolicyMLP and load_state_dict fails on every per-game
+    recorder build — which surfaced as ~4% of iter_002 self-play
+    games crashing on every shard (architecture default mismatch).
+    Regression test for the 6-call-site replay-capture arch
+    pass-through fix.
+    """
+    import torch
+
+    from mtg_bot.training.structured_model import (
+        StructuredModel, StructuredModelConfig,
+    )
+
+    # Save a default-config StructuredModel. NNEvaluator constructs
+    # the structured model with StructuredModelConfig defaults when no
+    # structured_* overrides are passed, so the saved weights must
+    # match those defaults for load_state_dict to succeed. Using a
+    # smaller config here would require threading structured_emb_dim /
+    # n_heads / ... fields all the way through ReplayCaptureConfig +
+    # nn_eval_annotator + NNEvaluator — out of scope for this fix.
+    weights_path = tmp_path / "structured_default.pt"
+    model = StructuredModel(StructuredModelConfig())
+    torch.save(model.state_dict(), weights_path)
+
+    cfg = ReplayCaptureConfig(
+        save_dir=str(tmp_path),
+        nn_weights_path=str(weights_path),
+        nn_version_label="tiny_struct",
+        nn_with_policy=True,
+        nn_architecture="structured",
+    )
+    # Without nn_architecture, build_recorder would default to the
+    # flat MLP path and crash with state_dict mismatch. With it,
+    # NNEvaluator picks up the structured branch and loads cleanly.
+    recorder = cfg.build_recorder()
+    assert len(recorder.annotators) == 2
+
+
 def test_nn_eval_annotator_annotates_running_and_terminal_states(
     tmp_path: Path,
 ):
