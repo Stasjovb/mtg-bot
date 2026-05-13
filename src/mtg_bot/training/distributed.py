@@ -39,6 +39,7 @@ from typing import Any, Callable, Optional
 
 from mtg_bot.cli.runs import client as _runs_client
 from mtg_bot.cli.runs import db as _runs_db
+from mtg_bot.cli.runs import lifecycle as _runs_lifecycle
 from mtg_bot.search.heuristics_config import HeuristicsConfig
 
 
@@ -173,6 +174,85 @@ def _ensure_master_run_row(
         kind=kind,
         config_json="{}",
         git_commit="unknown",
+    )
+
+
+def _local_shard_run_lifecycle(
+    *,
+    master_run_id: str,
+    label: str,
+    kind: str,
+    progress_dir: Path,
+    iter_total_games: int,
+    spec: Any,
+    queue_url: str,
+):
+    """Context manager that registers a per-shard ``runs`` row for the
+    master's in-process local shard.
+
+    The SSH-launched shards in :mod:`mtg_bot.cli.shard` already wrap
+    their body in :func:`mtg_bot.cli.runs.lifecycle.run_lifecycle`,
+    which creates an ``iter_NNN_..._shard_<label>`` row in the master's
+    ``runs`` table (parent = the master ``run_id``). The local shard
+    runs in the master process and historically bypassed that wrap,
+    so the per-shard ``runs`` row never landed for ``label="local"``
+    even though :func:`run_shard_pull` happily pushed
+    ``run_progress`` rows under the master ``run_id`` /
+    ``shard_label="local"`` pair (the FK target there is the master
+    row, which the orchestrator pre-registers via
+    :func:`_ensure_master_run_row`).
+
+    The missing per-shard ``runs`` row breaks downstream tooling that
+    enumerates shards via ``parent_run_id``: aggregator scripts
+    listing "what machines ran this iter", future force-kill flows
+    keyed off the per-shard pid+host, and any UI surface that mirrors
+    the SSH-launched-shard schema. Wrapping the local runner in this
+    helper closes the gap so local and remote shards are
+    structurally identical.
+
+    ``spec`` carries the per-mode job spec (SelfPlayJobSpec or
+    EvalJobSpec); the config dict captures the small identifying
+    fields (mirroring :func:`mtg_bot.cli.shard._build_shard_config`)
+    rather than serializing the full spec — the master's parent run
+    row already has the rest in its own ``config_json``.
+
+    All run-DB writes are no-ops when neither ``MTG_BOT_RUN_DB_PATH``
+    nor ``MTG_BOT_RUN_DB_URL`` is set, so unconfigured callers (most
+    test fixtures) pay zero cost.
+    """
+    import os as _os
+    import platform as _platform
+
+    shard_run_id = f"{master_run_id}_shard_{label}"
+    progress_json_path = progress_dir / f"{shard_run_id}.json"
+    # Best-effort spec field pulls — different specs have different
+    # weight fields. Missing attributes -> None (the config dict
+    # stores ``None`` for the missing field, same shape cli/shard.py
+    # emits when the JSON value is absent).
+    config = {
+        "mode": kind,
+        "run_id": master_run_id,
+        "shard_label": label,
+        "shard_host": "local",
+        "iter_total_games": iter_total_games,
+        "queue_url": queue_url,
+        "progress_dir": str(progress_dir),
+        "weights_path": getattr(spec, "weights_path", None),
+        "new_weights_path": getattr(spec, "new_weights_path", None),
+        "old_weights_path": getattr(spec, "old_weights_path", None),
+        "samples": getattr(spec, "samples", None),
+        "inner_nodes": getattr(spec, "inner_nodes", None),
+        "base_seed": getattr(spec, "base_seed", None),
+        "hostname": _platform.node() or "unknown",
+        "pid": _os.getpid(),
+    }
+    return _runs_lifecycle.run_lifecycle(
+        run_id=shard_run_id,
+        kind=kind,
+        config=config,
+        progress_json_path=progress_json_path,
+        parent_run_id=master_run_id,
+        label=label,
     )
 
 
@@ -2020,6 +2100,15 @@ def run_distributed_self_play(
         a :class:`ShardSelfPlayReport`. Without this, a local-shard
         crash takes the whole iter down even when remotes finished
         cleanly.
+
+        Run-DB lifecycle: wraps the body in
+        :func:`_local_shard_run_lifecycle` so the per-shard ``runs``
+        row lands on the master DB (parent = ``run_id_prefix``).
+        This mirrors what :mod:`mtg_bot.cli.shard` does for SSH-
+        launched remote shards — without the wrap, the local shard
+        would have ``run_progress`` rows but no companion ``runs``
+        row, breaking downstream tooling that enumerates per-shard
+        runs by ``parent_run_id``.
         """
         n_workers = shard.n_workers
         if n_workers is None:
@@ -2030,17 +2119,26 @@ def run_distributed_self_play(
             progress_dir / f"{run_id_prefix}_shard_{label}.json"
         )
         try:
-            paths = run_shard_pull(
-                spec,
-                queue_url=_loopback_queue_url(queue_url),
-                run_id=run_id_prefix,
-                n_workers=n_workers,
-                output_dir=output_dir,
+            with _local_shard_run_lifecycle(
+                master_run_id=run_id_prefix,
                 label=label,
-                stamp=stamp,
-                iter_total_games=total_games,
+                kind="self_play",
                 progress_dir=progress_dir,
-            )
+                iter_total_games=total_games,
+                spec=spec,
+                queue_url=queue_url,
+            ):
+                paths = run_shard_pull(
+                    spec,
+                    queue_url=_loopback_queue_url(queue_url),
+                    run_id=run_id_prefix,
+                    n_workers=n_workers,
+                    output_dir=output_dir,
+                    label=label,
+                    stamp=stamp,
+                    iter_total_games=total_games,
+                    progress_dir=progress_dir,
+                )
             return ShardSelfPlayReport(
                 shard_label=label, success=True,
                 npz_paths=list(paths),
@@ -2384,7 +2482,13 @@ def run_distributed_eval(
     def _local_runner(shard: ShardConfig) -> ShardEvalReport:
         """Local-shard wrapper for eval. Same shape as the self-play
         side: convert per-shard exceptions into a failure
-        :class:`ShardEvalReport` so siblings' counts survive."""
+        :class:`ShardEvalReport` so siblings' counts survive.
+
+        Run-DB lifecycle: same wrap as the self-play local runner —
+        see :func:`_local_shard_run_lifecycle`. ``kind="eval"`` keeps
+        the dashboard rollups treating the per-shard row as eval
+        work alongside its SSH-launched siblings.
+        """
         n_workers = shard.n_workers
         if n_workers is None:
             import os
@@ -2394,15 +2498,24 @@ def run_distributed_eval(
             progress_dir / f"{run_id_prefix}_shard_{label}.json"
         )
         try:
-            counts = run_shard_eval_pull(
-                spec,
-                queue_url=_loopback_queue_url(queue_url),
-                run_id=run_id_prefix,
-                n_workers=n_workers,
+            with _local_shard_run_lifecycle(
+                master_run_id=run_id_prefix,
                 label=label,
-                iter_total_games=total_games,
+                kind="eval",
                 progress_dir=progress_dir,
-            )
+                iter_total_games=total_games,
+                spec=spec,
+                queue_url=queue_url,
+            ):
+                counts = run_shard_eval_pull(
+                    spec,
+                    queue_url=_loopback_queue_url(queue_url),
+                    run_id=run_id_prefix,
+                    n_workers=n_workers,
+                    label=label,
+                    iter_total_games=total_games,
+                    progress_dir=progress_dir,
+                )
             return ShardEvalReport(
                 shard_label=label, success=True,
                 counts=dict(counts),
