@@ -470,6 +470,35 @@ def test_build_schema_default_is_current_best(tmp_path: Path) -> None:
     assert arch_spec["default"] == "structured"
 
 
+def test_build_command_always_emits_architecture(
+    tmp_path: Path,
+) -> None:
+    """--architecture is marked always_emit so its flag appears in
+    the spawn argv even when the submitted value matches the schema's
+    preferred default. Without this, iterate falls back to its own
+    argparse default 'shared' and fires the bootstrap-vs-arch
+    mismatch error."""
+    _make_fake_registry(
+        tmp_path,
+        versions=[("v1", "structured"), ("v2", "structured")],
+        current_best="v2",
+    )
+    schema = build_iterate_schema(registry_root=tmp_path)
+    # Submitted value matches schema default ("structured" from
+    # current_best v2). Without always_emit, the flag would be
+    # omitted. With it, the flag must appear.
+    argv = build_iterate_command(
+        {
+            "bootstrap-version": "v2",
+            "deck-pool": "data/17lands/eoe_decks.json.gz",
+            "architecture": "structured",
+        },
+        schema=schema,
+    )
+    assert "--architecture" in argv
+    assert argv[argv.index("--architecture") + 1] == "structured"
+
+
 def test_build_schema_architecture_default_falls_back_to_shared(
     tmp_path: Path,
 ) -> None:

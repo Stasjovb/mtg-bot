@@ -475,6 +475,12 @@ def build_iterate_schema(
                         if bootstrap_default
                         else "shared"
                     ),
+                    # always_emit because the schema's "preferred
+                    # default" can differ from iterate's argparse
+                    # default ("shared"). If we omit the flag, iterate
+                    # falls back to its own default and we get a
+                    # mismatch with the bootstrap's stored arch.
+                    "always_emit": True,
                     "help": (
                         "Dual-head model class. 'shared' = single-trunk "
                         "_ValuePolicyMLP. 'separate' = parallel value+"
@@ -872,11 +878,20 @@ def build_iterate_command(
                 continue
             if (
                 not spec.get("required")
+                and not spec.get("always_emit")
                 and value == spec.get("default")
             ):
                 # Optional + matches default → omit (UI noise cut).
                 # Required args ALWAYS emit even when matching the
                 # default — iterate.py requires their presence.
+                # ``always_emit`` is for fields whose schema default
+                # is DYNAMIC (resolved from registry / disk) and may
+                # diverge from iterate's static argparse default —
+                # if we omit the flag, iterate falls back to its own
+                # default which can differ from what the UI showed.
+                # --architecture is the canonical case (schema picks
+                # the bootstrap's arch; iterate argparse default is
+                # ``shared``).
                 continue
             argv.append(f"--{name}")
             argv.append(str(value))
