@@ -13764,3 +13764,172 @@ def test_mill_target_player_empty_source_controllers_opponent_library_noops(engi
     assert state.graveyard_sizes[1] == p1_grave_before + 1
     assert state.library_sizes[0] == 0
     assert state.graveyard_sizes[0] == p0_grave_before
+
+
+# ====================================================================
+# OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary controller-
+# of-effect fix — regression pins (I78).
+#
+# Pre-fix `defender = (1 - state.active_player) as usize`. Wrong when
+# the resolving spell / triggered ability has a controller !=
+# active_player — example: on p0's turn, p1 casts a Lost-in-Space-
+# shape sorcery. Pre-fix it self-bounced p1's own Artifact-or-
+# Creature to p1's library bottom (defender = 1 - active_player =
+# 1 - 0 = 1); post-fix it correctly bounces p0's Artifact-or-
+# Creature to p0's library bottom (the source's controller's
+# opponent — standard Lost-in-Space removal shape).
+#
+# Sibling closure to I70 / I75 / I76 — identical defender-swap
+# shape; differs only in destination zone (owner's library bottom
+# vs exile / graveyard / defender's hand).
+#
+# Synthetic seed (10 bf / 7 hand / 50 library): each player's bf
+# is 5 Forests then 5 Grizzly Bears, so the first Artifact-or-
+# Creature on p0's bf is id 5 (Bears) and on p1's bf is id 72
+# (Bears). The owner (= controller, since first-slice synthetic
+# states don't split owner vs controller) is the same player whose
+# bf the target was picked from.
+# ====================================================================
+
+
+def _lost_in_space_dict_for_i78():
+    """A Lost-in-Space-shape sorcery whose only effect is
+    OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary. Used by
+    I78 regression pins."""
+    return {
+        "name": "Test Lost in Space I78",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "effects": [
+            {
+                "kind": (
+                    "owner_puts_target_artifact_or_creature_"
+                    "on_top_or_bottom_of_library"
+                )
+            }
+        ],
+    }
+
+
+def test_owner_puts_target_aoc_routes_to_source_controllers_opponent(engine):
+    """**Regression pin for the OwnerPutsTargetArtifactOrCreature-
+    OnTopOrBottomOfLibrary controller-of-effect fix (I78).**
+
+    On p0's turn (active_player=0), a Lost-in-Space-shape sorcery
+    whose controller is p1 must target a p0 Artifact-or-Creature
+    (p0's bf[5] = Bears, id 5), NOT a p1 Artifact-or-Creature
+    (p1's bf[5] = Bears, id 72). Pre-fix `defender = 1 -
+    active_player = 1 - 0 = 1` => p1's own Bears (id 72) self-
+    bounced. Post-fix `defender = 1 - controller = 1 - 1 = 0` =>
+    correctly hits p0's Bears (id 5).
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_first_aoc_id = 5  # p0's bf[5] (Bears, controller=0)
+    p1_first_aoc_id = 72  # p1's bf[5] (Bears, controller=1)
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _lost_in_space_dict_for_i78(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Post-fix: p0's Bears moved to p0's library (owner = controller
+    # = 0). Pre-fix would have moved p1's Bears to p1's library.
+    assert state.find_object_zone(p0_first_aoc_id) == ZONE_LIBRARY
+    assert state.find_object_zone(p1_first_aoc_id) == ZONE_BATTLEFIELD
+    # P0's library grew by 1; p1's library unchanged.
+    assert state.library_sizes[0] == p0_lib_before + 1
+    assert state.library_sizes[1] == p1_lib_before
+    # The Bears is at the BOTTOM of p0's library (= tail of Vec
+    # per the post-CE3 bottom-is-tail convention).
+    p0_lib_snap = state.library_snapshot(0)
+    assert p0_lib_snap[-1]["id"] == p0_first_aoc_id
+
+
+def test_owner_puts_target_aoc_active_player_controlled_still_works(engine):
+    """**Back-compat pin.** A Lost-in-Space-shape sorcery cast by
+    the active player must still target the opponent's first
+    Artifact-or-Creature — bug never fired in this case pre-fix
+    because controller == active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_first_aoc_id = 5
+    p1_first_aoc_id = 72
+    p0_lib_before = state.library_sizes[0]
+    p1_lib_before = state.library_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _lost_in_space_dict_for_i78(), 0, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # P1's Bears moved to p1's library (p0's opponent).
+    assert state.find_object_zone(p1_first_aoc_id) == ZONE_LIBRARY
+    assert state.find_object_zone(p0_first_aoc_id) == ZONE_BATTLEFIELD
+    assert state.library_sizes[1] == p1_lib_before + 1
+    assert state.library_sizes[0] == p0_lib_before
+    p1_lib_snap = state.library_snapshot(1)
+    assert p1_lib_snap[-1]["id"] == p1_first_aoc_id
+
+
+def test_owner_puts_target_aoc_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for
+    OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary.**
+    Mirrors the I64 / I67 / I68 / I69 / I70 / I71 / I72 / I73 /
+    I74 / I75 / I76 / I77 pause-variant pins."""
+    state = engine.make_synthetic_state()
+
+    p0_first_aoc_id = 5
+    p1_first_aoc_id = 72
+    p0_lib_before = state.library_sizes[0]
+
+    src_id = state.register_and_inject_object(
+        _lost_in_space_dict_for_i78(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Post-fix: p0's Bears moved to p0's library.
+    assert state.find_object_zone(p0_first_aoc_id) == ZONE_LIBRARY
+    assert state.find_object_zone(p1_first_aoc_id) == ZONE_BATTLEFIELD
+    assert state.library_sizes[0] == p0_lib_before + 1
+
+
+def test_owner_puts_target_aoc_empty_source_controllers_opponent_bf_fizzles(engine):
+    """**Empty-defender fizzle pin for I78.** When the source-
+    controller's opponent has no Artifact-or-Creature on bf, the
+    effect fizzles silently. Build a state where both bfs start
+    empty and cast a p1-controlled Lost-in-Space — post-fix
+    defender=0 (p1's opponent = p0), bf empty -> no eligible
+    target -> fizzle.
+
+    We pin: stack popped, source moved to p1's graveyard, p0's
+    library size unchanged (no spurious library push).
+    """
+    state = engine.make_synthetic_state(num_battlefield=0)
+    p0_lib_before = state.library_sizes[0]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _lost_in_space_dict_for_i78(), 1, ZONE_HAND
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Stack popped, source sorcery moved to p1's graveyard.
+    assert state.is_stack_empty() is True
+    assert state.graveyard_sizes[1] == p1_grave_before + 1
+    # P0's library untouched — no spurious bottom-of-library push.
+    assert state.library_sizes[0] == p0_lib_before

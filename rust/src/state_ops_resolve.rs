@@ -4906,7 +4906,50 @@ fn apply_effect(
         // attached_to also reset to None on zone change.
         Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary => {
             let _ = source_obj_id;
-            let defender = (1 - state.active_player) as usize;
+            // **Controller resolution (I78 follow-up to the
+            // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 / I69 /
+            // I70 / I71 / I72 / I73 / I74 / I75 / I76 / I77
+            // controller-of-effect substrate).** CR 119.5 / 608.2:
+            // an effect resolves under its source's controller.
+            // OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOf-
+            // Library's first-slice target picker chooses the
+            // SOURCE'S controller's opponent's first
+            // Artifact-or-Creature, where defender = 1 - controller.
+            // Sibling closure to I70 / I75 / I76 — identical
+            // defender-swap shape; differs only in destination
+            // zone (owner's library bottom vs exile / graveyard /
+            // defender's hand).
+            //
+            // **Why the fix.** Pre-fix this arm computed
+            // `defender = 1 - state.active_player`. Wrong when the
+            // resolving spell / triggered ability has a controller
+            // != active_player. Example: on p0's turn, p1 casts a
+            // Lost-in-Space-shape sorcery. Pre-fix it self-targeted
+            // p1's own Artifact-or-Creature
+            // (defender = 1 - active_player = 1 - 0 = 1). Post-fix
+            // it correctly targets p0's Artifact-or-Creature (the
+            // source's controller's opponent — standard
+            // Lost-in-Space removal shape).
+            //
+            // **Owner-as-controller convention preserved.** Owner
+            // is captured from the target object's `controller`
+            // field on re-scan after the target is identified;
+            // first-slice synthetic states never split owner vs
+            // controller, so owner_idx == defender == 1 - controller.
+            // The library destination remains the OWNER's library
+            // (CR 401.1 "into its owner's library"); the controller
+            // fix only changes which side the target is picked from.
+            //
+            // **LTB fan-out preserved** — the leaving id still
+            // pushes onto `pending_leaves_dispatches` so the drain
+            // runs in `resolve_top_of_stack` AFTER the resolving
+            // slot pops, mirroring the pending_etb_dispatches
+            // deferral shape.
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let defender = 1 - controller;
             let target_id: Option<u32> = {
                 let bf = &state.players[defender].battlefield;
                 let registry = &state.registry;
