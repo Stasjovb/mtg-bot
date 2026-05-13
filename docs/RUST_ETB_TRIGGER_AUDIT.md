@@ -1307,3 +1307,104 @@ regex-match updated from "Slice 7" to "Slice 8".
 - `Event::Blocks` — symmetric of `Event::Attacks` for
   `declare_blocker`; defer until a Blocks-trigger card lands in
   the EoE pool.
+
+---
+
+## Slice 9 completion notice (landed)
+
+`feature/etb-slice-9` adds `Event::Blocks` plus its dispatch wiring
+at the `declare_blocker` site — the per-blocker event that fires
+after each blocker is committed during combat. Symmetric to Slice
+7's ATTACKS dispatch.
+
+**Implementation shape:**
+
+- `Event::Blocks` parser arm in `rust/src/cards.rs::parse_triggered_ability`
+  (the previously-unregistered `"blocks"` event now succeeds; only
+  `"deals_damage"` still raises).
+- `dispatch_event` accepts `Event::Blocks` in addition to ENTERS /
+  DIES / CAST / ATTACKS / LEAVES_BATTLEFIELD. No extra-observer
+  logic needed — the blocker is on the battlefield by construction
+  (eligibility gate rejects non-bf objects via
+  `read_creature_status`), so the bf observer set already contains
+  it. `Predicate::SourceIsSelf` ("whenever this creature blocks")
+  matches naturally via `source_id == subject_id`.
+- `declare_blocker` signature change: `bool` -> `PyResult<bool>`.
+  The dispatch_event call needs error-propagation; the only Rust
+  caller (`state_ops_actions.rs::DeclareBlockers` arm) already used
+  `call_method1` with `?` so the Python-facing contract stays
+  unchanged. Dispatch happens AFTER `self.blockers.push((attacker_id,
+  blocker_id))`, so the trigger observes the blocker in its
+  post-declare state.
+- `cross_engine.py::_ta_dict_to_python_triggered_ability` accepts
+  `event="blocks"` and translates to Python's `Event.BLOCKS`
+  (no spelling divergence — Python's enum spells it `BLOCKS` too).
+
+**Push site placement:** Rust's `declare_blocker` is per-pair
+(blocker_id, attacker_id), so the natural dispatch site is at the
+end of `declare_blocker` after the push to `self.blockers`. The
+`Action::DeclareBlockers` arm in `state_ops_actions.rs` iterates
+the assignment list and calls `declare_blocker` per pair, so
+triggers fire per blocker in declaration order — mirroring Python's
+per-pair `dispatch_event(state, Event.BLOCKS, blocker=...,
+attacker=...)` call at `src/mtg_bot/combat.py:274`.
+
+**Inline-vs-deferred:** Slice 9 uses INLINE dispatch (matches Slice
+6 CAST and Slice 7 ATTACKS). Reason: `declare_blocker` is a
+single-pair primitive, not a loop-over-victims iteration. There's
+no risk of re-entering a loop mid-iteration via a dispatched
+trigger; the caller-side `DeclareBlockers` arm naturally batches
+per-pair calls.
+
+**Single-subject divergence from Python (documented):** Python's
+BLOCKS event carries TWO subjects (blocker + attacker) and exposes
+both to predicates via the multi-subject schema (see
+`EVENT_SUBJECTS` in `src/mtg_bot/effects/predicates.py:211`).
+Rust's `dispatch_event` API only threads the blocker today;
+multi-subject predicates against the attacker (e.g. Skystinger's
+"whenever ~ blocks a creature with flying" — `IsSelf(subject=
+"blocker") & HasKeyword("flying", subject="attacker")`) need the
+`Predicate::Subject(slot, inner)` substrate that Slice 12 will
+introduce alongside `Event::DealsCombatDamage`. Until then, BLOCKS
+triggers whose predicates only key on the blocker (SourceIsSelf,
+SubjectIsCreature, ControlledByYou, etc.) work as expected; the
+multi-subject pin (Skystinger-shape) is deferred.
+
+**Tests** (9 new in `tests_rust/test_triggers.py`, plus updates to
+1 pre-existing test that pinned the Slice 8 unwired-event raise):
+
+- Parser surface: `blocks` parses; only `deals_damage` still
+  raises.
+- SourceIsSelf BLOCKS: a 2/2 with "when this blocks, draw a card"
+  fires its trigger on `declare_blocker`.
+- subject_is_creature BLOCKS observer (Hellrider-shape symmetric):
+  fires on ANY blocker.
+- subject_is_creature AND controlled_by_you BLOCKS observer: fires
+  on own blocker, skips opponent's blocker.
+- Multiple blockers: declaring two blockers in sequence against the
+  same attacker fires the observer once per blocker (declaration-
+  order push).
+- declare_blocker REJECTS (attacker not in `state.attackers`):
+  BLOCKS dispatch doesn't fire on the failure path — the
+  eligibility gate bails before reaching the dispatch line.
+- Cross-engine bridge: `event: blocks` round-trips to Python's
+  `Event.BLOCKS`.
+
+**Rust gate**: 2012/2012 pass (Slice 8 baseline 1988 + 9 new from
+this slice + 15 unrelated tests that landed adjacent to Slice 8
+from the CE20 Spacecraft tier_threshold merge `093c7e17`).
+One pre-existing test
+(`test_triggered_abilities_unwired_event_raises`) had its
+regex-match updated from "Slice 8" to "Slice 9".
+
+**Out of scope for Slice 9 (queued for Slice 10+):**
+
+- `Event::DealsCombatDamage` — multi-subject event still blocked
+  on `Predicate::Subject(slot, inner)` substrate.
+- Multi-subject BLOCKS predicates (Skystinger "blocks a creature
+  with flying"): same substrate dependency as DealsCombatDamage.
+- Fan-out from the 15+ `state_ops_resolve.rs` bf-exit sites that
+  call `mark_left_battlefield_if_nonland` directly (Slice 8
+  carryover; LTB fan-out task).
+- `HasSubtype(s)` predicate — still blocked on `CardPrinting.subtypes`
+  field.
