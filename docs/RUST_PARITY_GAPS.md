@@ -4402,9 +4402,80 @@ the forked branch.
 
 - **Out of scope (deferred to future slices)**:
   - Generalizing the swap to the OTHER `state.active_player`-keyed
-    apply arms (DealDamage defender, PumpCreaturesYouControl,
-    search-zone resolvers). Same per-arm parity decision pattern
-    as I60's forward inventory.
+    apply arms (~~DealDamageEachOpponent~~ — **CLOSED by I63**,
+    ~~DealDamage defender~~ — **CLOSED by I64**,
+    PumpCreaturesYouControl, search-zone resolvers, the ~15 remaining
+    `defender = 1 - active_player` arms in `state_ops_resolve.rs`).
+    Same per-arm parity decision pattern as I60's forward inventory.
+
+### I64. `Effect::DealDamage` controller-of-effect fix — `defender = 1 - source_controller` via the I59/I60 `current_resolve_source_controller` transient slot (DealDamage controller divergence closure)
+
+- **Pinned by**:
+  - 6 new `tests_rust/test_resolve.py` `test_dealdamage_*`
+    regression pins covering cross-controller spell resolution
+    (1: p1-controlled Bolt on p0's turn deals damage to p0, NOT
+    to p1), same-controller back-compat (1: p0-controlled Bolt on
+    p0's turn still deals damage to p1), cross-controller LTB
+    trigger (1: p1's LTB → DealDamage trigger fires on bounce by p0,
+    damage lands on p0 = p1's opponent), `resolve_top_of_stack_pause`
+    parity (1), `any_creature` target variant (1: p1-controlled
+    spell with any_creature target damages p0's creature, NOT p1's),
+    and swap-restore hygiene (1: a leaked Some(1) would route a
+    subsequent p0 Bolt's damage to p0; pin asserts restoration).
+    Mirrors the I59 / I60 test shape on the parallel effect arm.
+
+- **Rule**. CR 119.5 / 608.2: an effect resolves under its source's
+  controller. The first-slice "deterministic target = the defending
+  player" pick must be relative to the resolving spell's controller,
+  not whichever player happens to have priority at resolve time.
+  Mirrors Python's `DealDamageTargetPlayer` /
+  `DealDamageAnyTarget.resolve(state, controller_id, targets)` at
+  `src/mtg_bot/effects/generic/damage.py`, which receives the source's
+  controller explicitly and derives `defender = opponent_of(controller)`.
+
+- **Pre-fix Rust behavior**. The `Effect::DealDamage` arm at
+  `state_ops_resolve.rs:738` hardcoded
+  `let defender: u8 = 1 - state.active_player;` — wrong when the
+  resolving spell / triggered ability has a controller != active_player.
+  Example: on p0's turn, p1 casts a Lightning Bolt — pre-fix the damage
+  hit p1 (1 - 0 = 1, friendly-fire bug), not p0.
+
+- **Fix**. Single-arm edit at `state_ops_resolve.rs:738`:
+  ```rust
+  let source_controller = state
+      .current_resolve_source_controller
+      .unwrap_or(state.active_player);
+  let defender: u8 = 1 - source_controller;
+  ```
+  The transient slot is the same one I59 (DrawCards) and I60 (GainLife)
+  introduced; this slice consumes it. The stack resolver was already
+  swapping the slot to `Some(stack_item.controller)` around
+  `apply_effect`, so the arm picks up the right controller transparently.
+  No callers need migration — the change is entirely contained to the
+  one arm.
+
+- **`AnyPlayer` and `AnyCreature` both fixed**. Both `TargetFilter`
+  match arms read the same `defender` local, so both paths got the
+  fix. The `AnyCreature` path picks the first creature on the
+  defender's battlefield (Python parity); post-fix that's now
+  consistently the spell controller's opponent's first creature
+  rather than the active player's opponent's.
+
+- **Latent today** in pure self-play (every existing EoE Bolt-shape
+  printing today fires when its controller == active_player), but
+  cleans up the substrate before a real cross-controller DealDamage
+  parity case surfaces. Phase 5 Probe F (Tannuk's DealDamageEachOpponent)
+  already flagged this gap explicitly in its forward inventory; this
+  closure is the parallel for DealDamage.
+
+- **Out of scope (deferred to future slices)**:
+  - `Effect::DealDamageAnyTarget`, `Effect::DealDamageEqualToSourcePowerAnyTarget`,
+    `Effect::DealDamageEachOpponent`, `Effect::DealDamageEachCreature`,
+    `Effect::DealDamageToOpponentCreature`, and the ~15 other
+    `defender = 1 - active_player` arms remaining in
+    `state_ops_resolve.rs`. Same per-arm fix shape; each lands as
+    its own slice (one-arm-per-PR keeps the blast radius surgical).
+    The four PumpCreaturesYouControl + search-zone arms also remain.
 
 ### I62. `ActivationCost.sacrifice_food: bool` + `ActivationCost.sacrifice_a_desert: bool` extend the cost shape; emission target fan-out + apply-arm sacrifice-target validation share the Slice 6 Phase 2.7 / Phase 5c pipeline; subtype-filtered eligibility consumes the `CardPrinting.subtypes` substrate (CE20 follow-up Slice 7 subtype-filtered sacrifice variants closure)
 

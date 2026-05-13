@@ -599,12 +599,14 @@ pub(crate) fn apply_effect_pub(
 /// for the duration of the inner `apply_effect` call, restoring the
 /// prior value (typically `None`) afterward.
 ///
-/// Effect arms that need the source's controller (today only
-/// `Effect::DrawCards` — see CR 119.5 / the "Controller of effect"
-/// convention notes in the DrawCards arm comment) read the swapped
-/// field. Arms that don't care continue to read
-/// `state.active_player` unchanged — back-compat for every existing
-/// call site that hasn't been migrated.
+/// Effect arms that need the source's controller (today
+/// `Effect::DrawCards` per I59, `Effect::GainLife` per I60,
+/// `Effect::DamageEachOpponent` per I63, and `Effect::DealDamage`
+/// per I64 — see CR 119.5 / the "Controller of effect" convention
+/// notes in those arms' comments) read the swapped field. Arms that
+/// don't care continue to read `state.active_player` unchanged —
+/// back-compat for every existing call site that hasn't been
+/// migrated.
 ///
 /// **Why this exists.** The pre-fix DrawCards arm read
 /// `state.active_player` as the controller, which is wrong when the
@@ -619,8 +621,8 @@ pub(crate) fn apply_effect_pub(
 /// swap (`state_ops_actions.rs`) and Slice 4's
 /// `current_resolve_payload_target_id` swap. Cleaner than mutating
 /// `active_player` because it doesn't touch any of the OTHER
-/// `active_player`-keyed arms (DealDamage's defender = 1 -
-/// active_player, etc.) — those still mean exactly what they meant
+/// `active_player`-keyed arms (PumpCreaturesYouControl, search-zone
+/// resolvers, etc.) — those still mean exactly what they meant
 /// before. Only arms that explicitly opt into reading
 /// `current_resolve_source_controller` change behavior.
 ///
@@ -736,7 +738,31 @@ fn apply_effect(
 ) -> PyResult<()> {
     match effect {
         Effect::DealDamage { amount, target } => {
-            let defender: u8 = 1 - state.active_player;
+            // **Controller-of-effect fix (DealDamage defender).** The
+            // defender is the OPPONENT of the SOURCE's controller, not
+            // the opponent of `active_player`. CR 119.5 / 608.2: an
+            // effect resolves under its source's controller; the
+            // first-slice "target = the defending player" deterministic
+            // pick must be relative to the resolving spell's
+            // controller, not whichever player happens to have priority
+            // at resolve time. Pre-fix Rust hardcoded
+            // `defender = 1 - state.active_player`, which is wrong when
+            // the resolving spell / triggered ability has a controller
+            // != active_player. Example: on p0's turn, p1 casts a
+            // Lightning Bolt — pre-fix the damage went to p1
+            // (1 - active_player = 1 - 0 = 1), not p0. Same fix shape
+            // as I59 (DrawCards) and I60 (GainLife); reads the same
+            // `current_resolve_source_controller` transient slot, then
+            // derives `defender = 1 - source_controller`.
+            //
+            // Mirrors Python's `DealDamageTargetPlayer` /
+            // `DealDamageAnyTarget` deterministic-defender pick at
+            // `effects/generic/damage.py`, which uses the source's
+            // controller as the choosing player.
+            let source_controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let defender: u8 = 1 - source_controller;
             let amount_i32 = *amount;
             match target {
                 TargetFilter::AnyPlayer => {
