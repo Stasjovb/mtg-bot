@@ -17769,6 +17769,318 @@ def test_cross_engine_real_eoe_fell_gravship_etb_sequence_mill_return_parity(
     assert len(py_state.stack) == 0
 
 
+def test_cross_engine_synthetic_etb_recur_bear_empty_graveyard_silent_skip_parity(
+    parity_smoke,
+):
+    """Probe: ``ETB-Recur-Bear`` with EMPTY p0 graveyard -- silent
+    no-op parity for the
+    ``return_creature_from_your_graveyard_to_hand`` bridge arm.
+
+    Sister probe to the canonical happy-path
+    ``test_cross_engine_synthetic_etb_return_creature_from_graveyard_to_hand_parity``
+    -- pins the silent-skip half of the substrate's contract that
+    the happy-path probe explicitly carved out as out-of-scope:
+
+        > Empty-graveyard silent-skip case -- separate sibling probe
+        > could pin the silent no-op on both sides; this probe drives
+        > the happy path with one return target.
+
+    **Documented engine-internal asymmetry, observable parity.**
+    The two engines reach the SAME post-drain observable state from
+    DIFFERENT intermediate stack shapes:
+
+      * **Rust** pushes the trigger onto the stack on the ENTERS
+        dispatch even when no eligible target exists, then resolves
+        it as a silent ``return Ok(())`` no-op (the resolve arm at
+        ``state_ops_resolve.rs:2986-3020`` scans the source-
+        controller's graveyard for the first creature, finds none,
+        and exits clean). Stack briefly carries 1 item; post-drain
+        it is empty and zones are unchanged.
+      * **Python** elides the push at PUSH time when
+        ``effect.legal_targets(...)`` returns an empty pool: the
+        targeting pipeline (``push_triggered_ability`` /
+        ``actions.py:3172``) refuses to land a trigger that has
+        no legal target candidate. Stack stays at 0 the entire time.
+
+    Both paths are well-defined silent-skips; both engines agree on
+    the post-drain observable contract:
+
+      * p0 graveyard: still empty (nothing to return).
+      * p0 hand: still empty (nothing was returned).
+      * p0 battlefield: still holds ETB Recur Bear (the source).
+      * No life changes.
+      * No residual stack on either engine.
+
+    The probe asserts the post-drain observable parity directly and
+    does NOT assert mid-flight stack equality (which would force a
+    spurious divergence on the documented internal asymmetry).
+
+    Why this probe matters:
+
+      * **Coverage of the substrate's silent-skip branch.** The
+        happy-path probe exercises the populated-graveyard pick;
+        without this sibling, a regression that flipped Rust's
+        ``return Ok(())`` early-exit into a hard panic (or Python's
+        ``legal_targets`` no-push elision into a crash on the empty
+        pool) would slip past the existing harness.
+      * **Asymmetric-internal / symmetric-observable contract.**
+        Documents one of Phase 5's structural parity contracts: the
+        bridge translates the Rust dict to the Python class, and
+        both engines may reach a parity-clean observable state via
+        different internal stack shapes. This is the well-defined
+        silent-skip: well-defined precisely because the asymmetry
+        is bounded to the unobserved push step and the post-drain
+        observable matches.
+
+    Probe shape (inject-and-fire-ENTERS, NO graveyard seed):
+
+      1. **Skip the gy seed.** The happy-path probe seeds a single
+         Recur Bait Bear in p0's graveyard before injecting; this
+         probe's whole point is to NOT seed, so the trigger fires
+         against an empty graveyard.
+      2. Inject ETB Recur Bear directly onto p0's bf (Rust:
+         ``register_and_inject_object``; Python: new_object + bf
+         append + manual ``_trigger_etb_abilities``). The
+         ENTERS dispatch fires the SourceIsSelf trigger.
+      3. Drain both stacks (no-op on Python where the stack stayed
+         at 0; one silent-resolve walk on Rust where the trigger
+         landed and immediately resolved-to-noop).
+      4. Cross-engine assert: post-drain hand/graveyard/bf sizes
+         and life totals match between engines and match the
+         pre-dispatch baseline.
+
+    Out of scope:
+
+      * The populated-graveyard happy path -- exercised by the
+        sibling ``test_cross_engine_synthetic_etb_return_creature
+        _from_graveyard_to_hand_parity``.
+      * Multi-creature graveyard pick -- the iterator-order parity
+        case is a separate probe shape.
+      * Rider widenings (or_artifact / or_spacecraft) -- both
+        riders carry their own dedicated EoE probes (Interceptor
+        Mechan / Fell Gravship suffix); their empty-graveyard
+        silent-skip behaviors mirror this probe's contract but the
+        target-pick filter widens, so a rider-specific empty-gy
+        probe would add coverage there too -- separate slice.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * p0 hand: 0 cards (nothing returned).
+      * p0 graveyard: 0 cards (the silent-skip didn't push or pop).
+      * p0 battlefield: 1 object (ETB Recur Bear).
+      * p1 zones: all unchanged.
+      * Life totals: 20 / 20.
+      * Residual stack: 0 on both engines.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+
+    # Recur Bear: vanilla 2/2 + ETB return-creature-from-gy-to-hand.
+    # Same shape as the happy-path probe; the ONLY difference is the
+    # absent graveyard seed -- this probe skips it.
+    recur_bear = CardDef(
+        name="ETB Recur Bear (empty-gy probe)",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("B", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_hand",
+                },
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(recur_bear,),
+        # Libraries empty-but-for-symmetry: probe injects directly
+        # onto bf so libraries aren't observed.
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_recur_dict = {
+        "name": "ETB Recur Bear (empty-gy probe)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_hand",
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    # Pre-dispatch: graveyard EMPTY on both sides (no seed).
+    assert rust_state.graveyard_sizes[0] == 0
+    assert rust_state.hand_sizes[0] == 0
+    assert rust_state.battlefield_sizes[0] == 0
+
+    # Inject the recur-bear onto p0's battlefield -> fires ENTERS via
+    # the deferred-dispatch queue. SourceIsSelf matches; Rust pushes
+    # ReturnCreatureFromYourGraveyardToHand onto the stack even with
+    # no eligible target (the resolve arm scans the gy at apply-time
+    # and silent-no-ops when no creature card is found).
+    rust_state.register_and_inject_object(
+        rust_recur_dict, 0, ZONE_BATTLEFIELD,
+    )
+    rust_stack_after_dispatch = rust_state.stack_size()
+    # Document Rust's mid-flight push: we do NOT assert this matches
+    # Python's count (Python's legal_targets-empty path elides the
+    # push). The post-drain observable is what we pin.
+    assert rust_stack_after_dispatch == 1, (
+        "Rust: ETB Recur Bear's arrival fires SourceIsSelf even "
+        "with empty p0 graveyard; trigger lands on stack and "
+        "resolves to silent no-op. "
+        f"Got mid-flight stack_size={rust_stack_after_dispatch}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    recur_printing = CardPrinting(
+        name="ETB Recur Bear (empty-gy probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ReturnCreatureFromYourGraveyardToHand(),
+            ),
+        ),
+    )
+
+    # Seat the canonical first-legal-target shim on p0 (mirrors the
+    # happy-path probe's setup). The shim's only behavior of interest
+    # here is its empty-pool branch (returns None when
+    # legal_targets is empty); the targeting pipeline elides the
+    # push without ever calling the shim, so this is defense-in-
+    # depth (a regression that began calling the shim with an empty
+    # pool in this codepath would surface here via the None return).
+    py_state.players[0].agent = _PickFirstLegalTargetAgent()
+
+    # Inject the recur-bear onto p0's battlefield, then manually
+    # dispatch ENTERS (same shape as prior probes).
+    py_recur = py_state.new_object(
+        recur_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_recur.summoning_sick = False
+    py_recur.tapped = False
+    py_recur.damage = 0
+    py_recur.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_recur)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    # Pre-dispatch: graveyard EMPTY on both sides (no seed).
+    assert len(py_state.players[0].graveyard) == 0
+    assert len(py_state.players[0].hand) == 0
+    _trigger_etb_abilities(py_state, py_recur)
+    py_stack_after_dispatch = len(py_state.stack)
+    # Document Python's mid-flight elision: legal_targets-empty
+    # path doesn't push. We pin the post-drain observable, not the
+    # mid-flight stack count.
+    assert py_stack_after_dispatch == 0, (
+        "Python: ETB Recur Bear's arrival with empty p0 graveyard "
+        "should trigger the legal_targets-empty push elision; the "
+        "trigger never lands on the stack. "
+        f"Got mid-flight stack size={py_stack_after_dispatch}"
+    )
+
+    # ---- Drain both stacks, then compare observable parity ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides post-drain (Rust: silent-resolve
+    # consumed the no-op trigger; Python: nothing to drain).
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-drain observable: hand/gy still empty, bf
+    # still holds the source.
+    assert rust_state.hand_sizes[0] == 0, (
+        f"Rust: p0 hand should remain empty (no creature card to "
+        f"return); got hand_size={rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == 0, (
+        f"Rust: p0 graveyard should remain empty; got "
+        f"graveyard_size={rust_state.graveyard_sizes[0]}"
+    )
+    assert rust_state.battlefield_sizes[0] == 1, (
+        f"Rust: p0 bf should hold ETB Recur Bear (the source); "
+        f"got bf_size={rust_state.battlefield_sizes[0]}"
+    )
+
+    assert len(py_state.players[0].hand) == 0, (
+        f"Python: p0 hand should remain empty; got "
+        f"hand_size={len(py_state.players[0].hand)}"
+    )
+    assert len(py_state.players[0].graveyard) == 0, (
+        f"Python: p0 graveyard should remain empty; got "
+        f"graveyard_size={len(py_state.players[0].graveyard)}"
+    )
+    py_bf_p0 = [o for o in py_state.battlefield if o.controller_id == 0]
+    assert len(py_bf_p0) == 1, (
+        f"Python: p0 bf should hold ETB Recur Bear; got "
+        f"bf_size={len(py_bf_p0)}"
+    )
+    assert py_bf_p0[0].printing.name == "ETB Recur Bear (empty-gy probe)"
+
+    # Cross-engine: lives unchanged on both sides.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine zone-size parity (the post-drain observable).
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+    assert rust_state.battlefield_sizes[0] == len(py_bf_p0)
+    py_bf_p1 = [o for o in py_state.battlefield if o.controller_id == 1]
+    assert rust_state.battlefield_sizes[1] == len(py_bf_p1)
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
