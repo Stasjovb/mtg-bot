@@ -903,7 +903,49 @@ fn apply_effect(
                 ));
             }
             TargetFilter::AnyCreature => {
-                let defender = (1 - state.active_player) as usize;
+                // **Controller resolution (I76 follow-up to the
+                // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 /
+                // I69 / I70 / I71 / I72 / I73 / I74 / I75 controller-
+                // of-effect substrate).** CR 119.5 / 608.2: an effect
+                // resolves under its source's controller.
+                // ReturnToHand's first-slice AnyCreature shortcut
+                // picks the SOURCE'S controller's opponent's bf[0],
+                // where defender = 1 - controller. Sibling closure
+                // to I70 ExileTarget / I75 DestroyTarget — identical
+                // target selection path (bf[0] of defender),
+                // identical LTB fan-out via
+                // pending_leaves_dispatches. Differs from I70 / I75
+                // only in destination zone (defender's HAND vs
+                // exile / graveyard).
+                //
+                // **Why the fix.** Pre-fix this arm computed
+                // `defender = 1 - state.active_player`. Wrong when
+                // the resolving spell / triggered ability has a
+                // controller != active_player. Example: on p0's
+                // turn, p1 casts an Unsummon-shape instant — pre-
+                // fix it self-bounced p1's own bf[0] back to p1's
+                // hand (defender = 1 - active_player = 1 - 0 = 1).
+                // Post-fix it correctly bounces p0's bf[0] back to
+                // p0's hand (the source's controller's opponent —
+                // standard Unsummon / Boomerang / Vapor Snag shape).
+                //
+                // **First-slice owner-vs-controller convention
+                // preserved.** Target's controller == owner, so the
+                // bounce destination is the defender's hand (where
+                // the target's owner's hand lives). The controller
+                // fix only changes which side that defender refers
+                // to; the destination-is-defender's-hand semantics
+                // are unchanged.
+                //
+                // **LTB fan-out preserved** — leaving id still
+                // pushes onto `pending_leaves_dispatches` so the
+                // drain runs in `resolve_top_of_stack` AFTER the
+                // resolving slot pops.
+                let controller = state
+                    .current_resolve_source_controller
+                    .map(|c| c as usize)
+                    .unwrap_or(state.active_player as usize);
+                let defender = 1 - controller;
                 let bf = &state.players[defender].battlefield;
                 if bf.is_empty() {
                     return Ok(()); // fizzle silently
