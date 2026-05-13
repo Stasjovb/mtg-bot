@@ -330,6 +330,89 @@
 
     .modal { padding: 18px 18px; }
   }
+
+  /* ---- Launch new iterate panel ----------------------------------
+     Sits at the top of the page, collapsed by default. Expanding it
+     shows a sectioned form auto-rendered from
+     /api/launch/iterate/schema. Submit POSTs to /api/launch/iterate
+     which spawns the subprocess and returns its PID + console log
+     path. */
+  .launch-panel { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); margin-bottom: 18px; overflow: hidden; }
+  .launch-panel-header { display: flex; align-items: center; gap: 12px;
+    padding: 14px 22px; cursor: pointer; user-select: none;
+    background: var(--surface); border-bottom: 1px solid transparent;
+    transition: border-color 0.15s; }
+  .launch-panel.open .launch-panel-header { border-bottom-color: var(--border); }
+  .launch-panel-header:hover { background: #20242f; }
+  .launch-panel-title { font-weight: 600; font-size: 0.95rem;
+    letter-spacing: -0.01em; }
+  .launch-panel-caret { font-family: monospace; color: var(--muted);
+    transition: transform 0.15s; }
+  .launch-panel.open .launch-panel-caret { transform: rotate(90deg); }
+  .launch-panel-body { display: none; padding: 18px 22px; }
+  .launch-panel.open .launch-panel-body { display: block; }
+  .launch-section { border: 1px solid var(--border); border-radius: 8px;
+    margin-bottom: 12px; overflow: hidden; background: var(--bg); }
+  .launch-section-header { display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; cursor: pointer; user-select: none;
+    font-weight: 600; font-size: 0.85rem; color: var(--text); }
+  .launch-section-header:hover { background: #20242f; }
+  .launch-section-caret { font-family: monospace; color: var(--muted);
+    transition: transform 0.15s; font-size: 0.8rem; }
+  .launch-section.open .launch-section-caret { transform: rotate(90deg); }
+  .launch-section-body { display: none; padding: 12px 14px;
+    border-top: 1px solid var(--border); }
+  .launch-section.open .launch-section-body { display: block; }
+  .launch-arg { display: grid; grid-template-columns: 220px 1fr;
+    gap: 12px; align-items: start; margin-bottom: 10px; }
+  .launch-arg-label { font-family: monospace; font-size: 0.78rem;
+    color: var(--text); padding-top: 8px; }
+  .launch-arg-label .req { color: var(--red); margin-left: 2px; }
+  .launch-arg-control { display: flex; flex-direction: column; gap: 4px; }
+  .launch-arg-control input[type="text"],
+  .launch-arg-control input[type="number"],
+  .launch-arg-control select {
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px; font-family: monospace; font-size: 0.82rem;
+    font-family: inherit;
+  }
+  .launch-arg-control select { font-family: monospace; }
+  .launch-arg-control input[type="text"]:focus,
+  .launch-arg-control input[type="number"]:focus,
+  .launch-arg-control select:focus {
+    outline: none; border-color: var(--blue); }
+  .launch-arg-control .bool-group { display: flex; gap: 8px; }
+  .launch-arg-control .bool-group label { display: inline-flex;
+    align-items: center; gap: 4px; font-size: 0.78rem;
+    color: var(--text); cursor: pointer; font-family: inherit; }
+  .launch-arg-help { font-size: 0.72rem; color: var(--muted);
+    line-height: 1.4; }
+  .launch-actions { display: flex; align-items: center; gap: 12px;
+    margin-top: 16px; padding-top: 16px;
+    border-top: 1px solid var(--border); }
+  .launch-submit { padding: 8px 18px; font-size: 0.85rem;
+    font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    background: #14532d; color: #4ade80; border: 1px solid #166534;
+    border-radius: 6px; cursor: pointer; font-family: inherit; }
+  .launch-submit:hover:not(:disabled) { background: #166534; color: #86efac; }
+  .launch-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+  .launch-status { font-size: 0.8rem; color: var(--muted); }
+  .launch-status.success { color: #4ade80; }
+  .launch-status.error { color: #fca5a5; }
+  .launch-result { margin-top: 12px; padding: 12px 14px;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; font-family: monospace; font-size: 0.75rem;
+    color: var(--text); display: none; word-break: break-all;
+    white-space: pre-wrap; line-height: 1.5; }
+  .launch-result.show { display: block; }
+  @media (max-width: 640px) {
+    .launch-panel-header, .launch-section-header { padding: 12px 14px; }
+    .launch-panel-body { padding: 14px; }
+    .launch-arg { grid-template-columns: 1fr; gap: 4px; }
+    .launch-arg-label { padding-top: 0; font-weight: 600; }
+  }
 </style>
 </head>
 <body>
@@ -338,6 +421,22 @@
     <h1>Training Pipeline Progress</h1>
     <span id="refresh-indicator">loading…</span>
   </header>
+
+  <div class="launch-panel" id="launch-panel">
+    <div class="launch-panel-header" id="launch-panel-toggle">
+      <span class="launch-panel-caret">▶</span>
+      <span class="launch-panel-title">Launch new iterate run</span>
+    </div>
+    <div class="launch-panel-body" id="launch-panel-body">
+      <div id="launch-form-host">Loading…</div>
+      <div class="launch-actions">
+        <button type="button" class="launch-submit"
+                id="launch-submit-btn" disabled>Launch</button>
+        <span class="launch-status" id="launch-status"></span>
+      </div>
+      <div class="launch-result" id="launch-result"></div>
+    </div>
+  </div>
 
   <div id="active"></div>
 
@@ -1472,6 +1571,207 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, REFRESH_MS);
+</script>
+
+<script>
+// Launch-new-iterate panel. Fetches /api/launch/iterate/schema on
+// first toggle-open, renders a sectioned form, POSTs the submitted
+// values to /api/launch/iterate which spawns the subprocess. The
+// renderer maps schema['type'] to an input element:
+//   string / path  → <input type="text">
+//   int / float    → <input type="number"> (step="any" for float)
+//   bool           → checkbox (store_true)
+//   bool_tristate  → 3-radio group: default / --flag / --no-flag
+//   choice         → <select>
+// Defaults are shown placeholder-style; we don't pre-fill the input
+// so the launch endpoint can see "user didn't change this" and skip
+// the flag.
+(function () {
+  const panel = document.getElementById('launch-panel');
+  const toggleBtn = document.getElementById('launch-panel-toggle');
+  const formHost = document.getElementById('launch-form-host');
+  const submitBtn = document.getElementById('launch-submit-btn');
+  const statusEl = document.getElementById('launch-status');
+  const resultEl = document.getElementById('launch-result');
+  let schema = null;
+  let fetchPromise = null;
+
+  function escAttr(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;',
+      '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function renderArg(arg) {
+    const labelHtml = '<div class="launch-arg-label">'
+      + '--' + escAttr(arg.name)
+      + (arg.required ? '<span class="req">*</span>' : '')
+      + '</div>';
+    let controlHtml = '';
+    const id = 'arg-' + arg.name;
+    const defaultStr = arg.default === null || arg.default === undefined
+      ? '' : String(arg.default);
+    const placeholder = defaultStr !== ''
+      ? 'default: ' + defaultStr
+      : (arg.required ? '(required)' : '(leave blank for argparse default)');
+    if (arg.type === 'bool') {
+      controlHtml = '<div class="bool-group">'
+        + '<label><input type="checkbox" id="' + escAttr(id)
+        + '" data-arg="' + escAttr(arg.name)
+        + '" data-type="bool"> enable</label></div>';
+    } else if (arg.type === 'bool_tristate') {
+      const name = 'group-' + arg.name;
+      controlHtml = '<div class="bool-group">'
+        + '<label><input type="radio" name="' + escAttr(name)
+        + '" value="default" checked '
+        + 'data-arg="' + escAttr(arg.name)
+        + '" data-type="bool_tristate"> default ('
+        + (arg.default ? 'on' : 'off') + ')</label>'
+        + '<label><input type="radio" name="' + escAttr(name)
+        + '" value="on" '
+        + 'data-arg="' + escAttr(arg.name)
+        + '" data-type="bool_tristate"> --' + escAttr(arg.name)
+        + '</label>'
+        + '<label><input type="radio" name="' + escAttr(name)
+        + '" value="off" '
+        + 'data-arg="' + escAttr(arg.name)
+        + '" data-type="bool_tristate"> --no-' + escAttr(arg.name)
+        + '</label></div>';
+    } else if (arg.type === 'choice') {
+      const choices = arg.choices || [];
+      const opts = ['<option value="">— default ('
+        + escAttr(defaultStr) + ') —</option>']
+        .concat(choices.map(c => '<option value="' + escAttr(c) + '">'
+          + escAttr(c) + '</option>'))
+        .join('');
+      controlHtml = '<select id="' + escAttr(id)
+        + '" data-arg="' + escAttr(arg.name)
+        + '" data-type="choice">' + opts + '</select>';
+    } else if (arg.type === 'int' || arg.type === 'float') {
+      const step = arg.type === 'int' ? '1' : 'any';
+      controlHtml = '<input type="number" step="' + step
+        + '" id="' + escAttr(id)
+        + '" data-arg="' + escAttr(arg.name)
+        + '" data-type="' + escAttr(arg.type) + '"'
+        + ' placeholder="' + escAttr(placeholder) + '">';
+    } else {
+      controlHtml = '<input type="text" id="' + escAttr(id)
+        + '" data-arg="' + escAttr(arg.name)
+        + '" data-type="' + escAttr(arg.type) + '"'
+        + ' placeholder="' + escAttr(placeholder) + '">';
+    }
+    return '<div class="launch-arg">' + labelHtml
+      + '<div class="launch-arg-control">'
+      + controlHtml
+      + '<div class="launch-arg-help">' + escAttr(arg.help || '') + '</div>'
+      + '</div></div>';
+  }
+
+  function renderSection(section, idx) {
+    const sectionId = 'sec-' + idx;
+    const argsHtml = section.args.map(renderArg).join('');
+    const openClass = section.open ? ' open' : '';
+    return '<div class="launch-section' + openClass + '" id="' + sectionId + '">'
+      + '<div class="launch-section-header" data-section="' + sectionId + '">'
+      + '<span class="launch-section-caret">▶</span>'
+      + '<span>' + escAttr(section.section) + '</span>'
+      + '</div>'
+      + '<div class="launch-section-body">' + argsHtml + '</div>'
+      + '</div>';
+  }
+
+  function renderForm(s) {
+    schema = s;
+    formHost.innerHTML = schema.map(renderSection).join('');
+    formHost.querySelectorAll('.launch-section-header').forEach(h => {
+      h.addEventListener('click', () => {
+        const id = h.getAttribute('data-section');
+        document.getElementById(id).classList.toggle('open');
+      });
+    });
+    submitBtn.disabled = false;
+  }
+
+  function fetchSchema() {
+    if (fetchPromise) return fetchPromise;
+    fetchPromise = fetch('/api/launch/iterate/schema')
+      .then(r => r.json())
+      .then(j => renderForm(j.schema))
+      .catch(e => {
+        formHost.textContent = 'Failed to load schema: ' + e.message;
+      });
+    return fetchPromise;
+  }
+
+  toggleBtn.addEventListener('click', () => {
+    panel.classList.toggle('open');
+    if (panel.classList.contains('open') && !schema) {
+      fetchSchema();
+    }
+  });
+
+  function collectArgs() {
+    const submitted = {};
+    formHost.querySelectorAll('[data-arg]').forEach(el => {
+      const name = el.getAttribute('data-arg');
+      const type = el.getAttribute('data-type');
+      if (type === 'bool') {
+        // Always emit (false for unchecked is fine — server skips
+        // store_true args at their default of false).
+        submitted[name] = el.checked;
+      } else if (type === 'bool_tristate') {
+        // Only emit the one checked radio; group has 3 entries.
+        if (el.checked) {
+          if (el.value === 'default') {
+            // Skip — let the spawn use the schema default.
+          } else {
+            submitted[name] = el.value === 'on';
+          }
+        }
+      } else {
+        const v = el.value;
+        if (v !== '') submitted[name] = v;
+      }
+    });
+    return submitted;
+  }
+
+  submitBtn.addEventListener('click', async () => {
+    if (!schema) return;
+    submitBtn.disabled = true;
+    statusEl.className = 'launch-status';
+    statusEl.textContent = 'Spawning…';
+    resultEl.classList.remove('show');
+    resultEl.textContent = '';
+    try {
+      const r = await fetch('/api/launch/iterate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ args: collectArgs() }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        statusEl.className = 'launch-status error';
+        statusEl.textContent = 'Launch failed: '
+          + (j.error || ('HTTP ' + r.status));
+      } else {
+        statusEl.className = 'launch-status success';
+        statusEl.textContent = 'Spawned PID ' + j.pid;
+        resultEl.textContent = 'pid: ' + j.pid + '\n'
+          + 'spawned_at: ' + j.spawned_at + '\n'
+          + 'console_log: ' + j.console_log_path + '\n'
+          + 'command:\n  ' + j.pretty_command;
+        resultEl.classList.add('show');
+      }
+    } catch (e) {
+      statusEl.className = 'launch-status error';
+      statusEl.textContent = 'Launch failed: ' + e.message;
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+})();
 </script>
 </body>
 </html>
