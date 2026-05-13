@@ -453,14 +453,19 @@ def main(argv=None) -> None:
     device = args.device or auto_device()
     print(f"# Training on {device} for {args.epochs} epochs")
 
-    # Resolve the progress-file path BEFORE training so the UI can
-    # see the run from epoch 0. We peek at the next version ID
-    # rather than reserve it — the registry assigns sequentially at
-    # register time, so as long as nobody else trains concurrently
-    # the peek value matches the eventual assignment. If a race
-    # happens, the progress filename simply won't match the
-    # registered version; nothing breaks (the UI just sees an extra
-    # file with the original name).
+    # Resolve the progress-file path BEFORE training so we can
+    # register it as a ``progress_json`` artifact on the run row.
+    # We peek at the next version ID rather than reserve it — the
+    # registry assigns sequentially at register time, so as long as
+    # nobody else trains concurrently the peek value matches the
+    # eventual assignment.
+    #
+    # Phase 3 cutover: the JSON file itself is no longer written
+    # (the UI reads runs.db directly). The path string survives as
+    # an artifact pointer for historical-compatibility reasons —
+    # downstream tooling that walks ``run_artifacts`` keeps seeing
+    # a ``progress_json`` entry per training run, even though that
+    # file no longer lands on disk for new runs.
     registry = Registry(args.registry_root)
     peeked_version = registry.next_version_id()
     if args.progress_path is None:
@@ -472,8 +477,6 @@ def main(argv=None) -> None:
     else:
         progress_path = args.progress_path
         progress_path.parent.mkdir(parents=True, exist_ok=True)
-    if progress_path is not None:
-        print(f"# Progress JSON: {progress_path}")
 
     # Phase 1 dual-write: alongside the existing JSON progress
     # emission, push start_run / per-epoch progress + events /
@@ -577,7 +580,15 @@ def main(argv=None) -> None:
             "val_split": args.val_split,
             "device": device,
             "rng_seed": args.seed,
-            "progress_path": progress_path,
+            # Phase 3 cutover: the per-epoch JSON dual-write is dead I/O
+            # now that the UI reads runs.db directly. ``_on_epoch``
+            # pushes the same per-epoch progress + ``epoch_completed``
+            # event into the DB. Pass ``progress_path=None`` so
+            # train_value_network skips its ``atomic_write_json`` calls;
+            # ``progress_path`` (the path string) is still registered as
+            # a ``progress_json`` artifact via run_lifecycle for
+            # historical compatibility.
+            "progress_path": None,
             "run_id": peeked_version,
             "notes": args.notes,
             "compile_model": args.compile_model,
