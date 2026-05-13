@@ -788,6 +788,125 @@ def test_rust_parser_accepts_mill_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_return_creature_from_graveyard_to_hand_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "return_creature_from_your_graveyard_to_hand"}``
+    translates to Python
+    ``ReturnCreatureFromYourGraveyardToHand()``.
+
+    Unblocks Interceptor-Mechan / Fell-Gravship-suffix-shape ETB
+    triggers (the bare unit-variant; the rider-widened EoE-card
+    shapes — or_artifact / or_spacecraft — would surface as
+    separate parametric Rust variants and re-enter the bridge as
+    new arms). The Rust effect variant exists at
+    ``rust/src/cards.rs:782`` (unit variant
+    ``Effect::ReturnCreatureFromYourGraveyardToHand``); its
+    parse_effect arm at ``cards.rs:3148-3151`` takes no fields;
+    the resolve arm at ``state_ops_resolve.rs:2986-3020`` carries
+    the I82 controller-of-effect fix (``controller_idx`` derives
+    from ``current_resolve_source_controller``, not
+    ``active_player``).
+
+    Python's class already exists at
+    ``effects/generic/bounce.py:356`` as constructor sugar over
+    ``ReturnFromGraveyard`` (pins ``creature=True`` +
+    ``destination="hand"``). This pins the bridge translation that
+    wires them up.
+    """
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "return_creature_from_your_graveyard_to_hand"}
+    )
+    assert isinstance(e, ReturnCreatureFromYourGraveyardToHand)
+    # The unified base's flags should reflect the unit-variant shape:
+    # primary type = creature, destination = hand, no widening
+    # riders, no MV cap, single-target.
+    assert e.creature is True
+    assert e.destination == "hand"
+    assert e.or_artifact is False
+    assert e.or_spacecraft is False
+    assert e.or_enchantment is False
+    assert e.max_mv == 0
+    assert e.min_n == 1
+    assert e.max_n == 1
+    assert e.target_kind == "graveyard_creature"
+
+
+def test_bridge_return_creature_from_graveyard_to_hand_ignores_extra_fields():
+    """The unit variant has no fields, so the bridge translator
+    silently ignores every key beyond ``kind`` on the dict (matches
+    the Rust parse_effect arm at ``cards.rs:3148-3151`` which only
+    matches on the discriminator and constructs the unit variant
+    without reading any companion fields). Defense-in-depth: keep
+    this lenient pin so partial fixtures don't crash the translator
+    if a downstream slice prepends rider-shape stubs to the dict
+    before the rider arms land.
+    """
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "return_creature_from_your_graveyard_to_hand",
+            # Round-trip noise: future rider stubs that aren't yet
+            # plumbed through. The bridge silently ignores them, as
+            # does the Rust unit-variant parser arm.
+            "or_artifact": True,
+            "max_mv": 4,
+        }
+    )
+    assert isinstance(e, ReturnCreatureFromYourGraveyardToHand)
+    # The riders DO NOT carry through — the bare unit variant ignores
+    # them. Probes that need widening must wait for a parametric Rust
+    # variant + companion bridge arm.
+    assert e.or_artifact is False
+    assert e.max_mv == 0
+
+
+def test_rust_parser_accepts_return_creature_from_graveyard_to_hand_in_triggered_ability():
+    """Pin the Rust parser surface for the matched effect kind. The
+    bridge's dict shape must register cleanly on the Rust side too;
+    this lockstep gate keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Mirrors the existing ``deal_damage_any_target`` /
+    ``damage_each_opponent`` parser-surface pins. The unit variant
+    takes no fields beyond ``kind`` — the predicate-path triggered-
+    ability wrapper is just a carrier; the substrate being pinned
+    is parse_effect's
+    ``return_creature_from_your_graveyard_to_hand`` arm at
+    ``cards.rs:3148-3151``.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Return Creature From GY to Hand",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "B": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_creature_from_your_graveyard_to_hand",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+
 def test_bridge_pump_target_creature_until_eot_translates_to_python():
     """Phase 5 bridge extension: Rust
     ``{"kind": "pump_target_creature_until_eot",
@@ -796,25 +915,10 @@ def test_bridge_pump_target_creature_until_eot_translates_to_python():
 
     Unblocks Sinister-Cryologist / Dubious-Delicacy-shape ETB triggers
     that "target creature gets +X/+Y UEOT" on the cross-engine bridge.
-    The Rust effect variant already exists at
-    ``rust/src/cards.rs:713`` (``Effect::PumpTargetCreatureUntilEOT``)
-    and its parse_effect arm at ``cards.rs:3125-3147``; the Rust
-    resolve arm at ``state_ops_resolve.rs:3927-3988`` picks the FIRST
-    creature on the source controller's battlefield and pushes a
-    ``UeotModifier::PowerToughnessBonus``. This pins the field-name
-    pass-through ``power_bonus -> power_bonus``,
-    ``toughness_bonus -> toughness_bonus`` (Python and Rust agree on
-    both field names -- no translation needed, unlike ``mill``'s
-    ``count -> amount`` swap).
-
-    Sinister Cryologist's -3/-0 debuff shape is the canonical
-    consumer; negatives are allowed by both engines.
     """
     from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
 
-    # Sinister Cryologist's -3/-0 ETB debuff (the headline EoE
-    # consumer of this bridge arm).
     e = _ta_dict_to_python_effect(
         {
             "kind": "pump_target_creature_until_eot",
@@ -825,24 +929,13 @@ def test_bridge_pump_target_creature_until_eot_translates_to_python():
     assert isinstance(e, PumpTargetCreatureUntilEOT)
     assert e.power_bonus == -3
     assert e.toughness_bonus == 0
-    # Defaults on the narrowing flags (the bridge does not yet plumb
-    # opponents_only / you_control_only / optional through the dict
-    # shape -- mirrors Rust today which has no opponent-control
-    # filter on the variant).
     assert e.opponents_only is False
     assert e.you_control_only is False
     assert e.optional is False
 
 
 def test_bridge_pump_target_creature_until_eot_positive_bonus_translates():
-    """Positive bonus arm -- generic Giant-Growth-shape +3/+3.
-
-    Pins that the bridge arm is not signed-specific: positive bonuses
-    pass through unchanged. Pairs the negative-bonus assertion in
-    ``test_bridge_pump_target_creature_until_eot_translates_to_python``
-    with the more common buff-shape consumer for any future EoE
-    printing that buffs (rather than debuffs) a target creature.
-    """
+    """Positive bonus arm -- +3/+3 round-trip."""
     from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
 
@@ -859,17 +952,7 @@ def test_bridge_pump_target_creature_until_eot_positive_bonus_translates():
 
 
 def test_bridge_pump_target_creature_until_eot_defaults_to_zero():
-    """Missing ``power_bonus`` / ``toughness_bonus`` default to 0
-    (matching Rust's ``parse_effect`` lenient default and Python's
-    ``PumpTargetCreatureUntilEOT`` class-field defaults).
-
-    ``(0, 0)`` is a pure no-op on both engines: Rust short-circuits
-    before doing the lookup (cards.rs:3928-3930) and Python's resolve
-    writes a no-op layer-7c entry that produces no observable delta.
-    Bridge consumers SHOULD pass both fields explicitly so the dict
-    shape stays self-documenting; the defaults are translator-
-    robustness backstops, not a contract.
-    """
+    """Missing ``power_bonus`` / ``toughness_bonus`` default to 0."""
     from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
 
@@ -883,17 +966,7 @@ def test_bridge_pump_target_creature_until_eot_defaults_to_zero():
 
 def test_rust_parser_accepts_pump_target_creature_until_eot_in_triggered_ability():
     """Pin the Rust parser surface for the
-    ``pump_target_creature_until_eot`` effect kind. The bridge's dict
-    shape must register cleanly on the Rust side too; this lockstep
-    gate keeps the Python bridge from drifting away from Rust's
-    parse_effect coverage.
-
-    Mirrors the existing ``mill`` / ``surveil`` /
-    ``deal_damage_any_target`` parser-surface pins -- what's being
-    pinned is parse_effect's ``pump_target_creature_until_eot`` arm
-    accepting a triggered_abilities entry with the
-    ``power_bonus`` / ``toughness_bonus`` field pair (negatives
-    allowed, mirrors Sinister Cryologist's -3/-0 shape).
+    ``pump_target_creature_until_eot`` effect kind.
     """
     import mtg_bot_engine
 
@@ -925,19 +998,6 @@ def test_bridge_put_plus_one_counter_on_creature_you_control_translates_to_pytho
     ``{"kind": "put_plus_one_counter_on_creature_you_control",
     "amount": N}`` translates to Python
     ``PutPlusOneCounterOnCreatureYouControl(amount=N)``.
-
-    Unblocks Rayblade-Trooper / Drix-Fatemaker / tail-shape ETB
-    triggers that "put N +1/+1 counter(s) on target creature you
-    control" on the cross-engine bridge. The Rust effect variant
-    already exists at ``rust/src/cards.rs:815``
-    (``Effect::PutPlusOneCounterOnCreatureYouControl``) and its
-    parse_effect arm at ``cards.rs:3848-3864``; the Rust resolve arm
-    at ``state_ops_resolve.rs:4148-4211`` picks the FIRST creature
-    on the source controller's battlefield and adds ``amount`` to
-    its scalar ``counters`` field. This pins the field-name pass-
-    through ``amount -> amount`` (Python's PutPlusOneCounters base
-    class also names the field ``amount`` -- no translation needed,
-    unlike ``mill``'s ``count -> amount`` swap).
     """
     from mtg_bot.effects.generic.counters import (
         PutPlusOneCounterOnCreatureYouControl,
@@ -955,22 +1015,7 @@ def test_bridge_put_plus_one_counter_on_creature_you_control_translates_to_pytho
 
 
 def test_bridge_put_plus_one_counter_on_creature_you_control_amount_default_one():
-    """Missing ``amount`` defaults to 1 (matching Rust's
-    ``parse_effect`` lenient default and Python's
-    ``PutPlusOneCounters.amount: int = 1`` class default).
-
-    Distinct from the ``gain_life`` / ``damage_each_opponent`` /
-    ``pump_target_creature_until_eot`` arms (which default to 0):
-    the +1/+1 counter shape has a natural unit of 1 (matches the
-    typical "put a +1/+1 counter on X" oracle text without an
-    explicit count). The bridge mirrors the Python class's chosen
-    default so the translator is robust to partial fixtures.
-
-    Rust's parse_effect at cards.rs:3848-3864 requires
-    non-negative ``amount`` (raises on negatives); bridge consumers
-    SHOULD pass ``amount`` explicitly to keep round-trip dict-shape
-    consistency.
-    """
+    """Missing ``amount`` defaults to 1."""
     from mtg_bot.effects.generic.counters import (
         PutPlusOneCounterOnCreatureYouControl,
     )
@@ -984,18 +1029,8 @@ def test_bridge_put_plus_one_counter_on_creature_you_control_amount_default_one(
 
 
 def test_rust_parser_accepts_put_plus_one_counter_on_creature_you_control_in_triggered_ability():
-    """Pin the Rust parser surface for the
-    ``put_plus_one_counter_on_creature_you_control`` effect kind.
-    The bridge's dict shape must register cleanly on the Rust side
-    too; this lockstep gate keeps the Python bridge from drifting
-    away from Rust's parse_effect coverage.
-
-    Mirrors the existing ``mill`` / ``surveil`` /
-    ``pump_target_creature_until_eot`` parser-surface pins -- what's
-    being pinned is parse_effect's
-    ``put_plus_one_counter_on_creature_you_control`` arm accepting a
-    triggered_abilities entry with the ``amount`` field set to 1
-    (Rayblade Trooper's amount).
+    """Pin the Rust parser surface for
+    ``put_plus_one_counter_on_creature_you_control``.
     """
     import mtg_bot_engine
 

@@ -321,6 +321,130 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # ``draw_cards`` arm's count default of 1).
         from mtg_bot.effects.generic.library_lookat import Surveil
         return Surveil(amount=eff_dict.get("count", 1))
+    if kind == "discard_self":
+        # ``DiscardSelf N`` — the SOURCE's controller discards
+        # ``amount`` cards from their hand; each discard is the
+        # discarding-player's choice via ``agent.choose_discard``
+        # (Python: effects/generic/discard.py:30-64). Rust's
+        # ``Effect::DiscardSelf { amount: i32 }`` variant
+        # (cards.rs:412) has existed since the I61 controller-of-
+        # effect substrate landed; its resolve arm
+        # (state_ops_resolve.rs:2875-2948) performs a 5-zone walk
+        # (with stack-scan fallback) to recover the source's
+        # controller, then pops up to ``amount`` cards off the
+        # head of that player's hand into their graveyard with the
+        # CR 400.7 zone-change reset applied. Unlike most other
+        # bridge-arm effects, the resolve arm intrinsically derives
+        # the source-controller (it does NOT read
+        # ``current_resolve_source_controller``) so cross-controller
+        # cases (opponent's trigger resolves on your turn after a
+        # flicker re-ETB) discard from the trigger SOURCE's
+        # controller's hand, not active_player's.
+        #
+        # Python's ``DiscardSelf(amount: int = 1)`` walks the same
+        # loop: up to ``amount`` iterations, break on empty hand,
+        # each iteration calls ``p.agent.choose_discard`` on the
+        # source-controller and moves the chosen card to graveyard.
+        #
+        # **Empty-hand contract** (gotcha #3 from this slice's
+        # planning notes). Both engines AGREE that an empty hand is
+        # a silent no-op (mid-loop short-circuit: Rust at
+        # state_ops_resolve.rs:2930 ``hand.is_empty() {{ break }}``,
+        # Python at discard.py:53 ``if not p.hand: break``). A probe
+        # that drives discard_self on an empty hand observes no
+        # state change on either engine — same library, same hand
+        # (empty), same graveyard (unchanged). The "no agent on
+        # controller" case is asymmetric, though: Rust's resolve
+        # picks hand[0] DETERMINISTICALLY (Vec::remove(0)); Python
+        # calls ``p.agent.choose_discard`` and would crash on
+        # ``None.choose_discard``. Probes that drive the non-empty-
+        # hand path MUST seat an agent on the source's controller
+        # (any agent whose ``choose_discard`` returns hand[0].id
+        # mirrors Rust's deterministic pick).
+        #
+        # **Sequence / IfYouDo composability** (forward note). The
+        # two EoE cards listed against this gap — Uthros Scanship
+        # (Sequence{[DrawCards{2}, DiscardSelf{1}]}) and Melded
+        # Moxite (IfYouDo{cost=DiscardSelf, then=DrawCards{2}}) —
+        # are NOT directly probeable from THIS bridge arm alone;
+        # they also need the ``sequence`` or ``if_you_do`` bridge
+        # arm. The Rust parser already accepts both nested kinds,
+        # so once the composer bridge arms land in a future slice,
+        # those EoE probes can fan-out off this discard_self arm
+        # without re-touching this file.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:2931-2952)
+        # which uses ``amount`` (not ``count`` — distinct from
+        # surveil/draw_cards). Missing ``amount`` defaults to 1
+        # (mirrors Python's class default of 1, AND Rust's
+        # parse_effect default at cards.rs:2945). Negative amount
+        # would raise in both engines (Python via the resolve
+        # loop's range semantics, Rust via the explicit register-
+        # time check); the bridge translator is lenient here and
+        # passes through whatever amount the dict carries — same
+        # convention as every other bridge arm.
+        from mtg_bot.effects.generic.discard import DiscardSelf
+        return DiscardSelf(amount=eff_dict.get("amount", 1))
+    if kind == "each_opponent_discards":
+        # ``EachOpponentDiscards N`` — each opponent of the source's
+        # controller discards ``count`` cards from their hand;
+        # untargeted; each discarding player chooses their OWN
+        # discard via ``agent.choose_discard`` (the ability's
+        # controller doesn't pick for them). Rust's
+        # ``Effect::EachOpponentDiscards { count: i32 }`` variant
+        # (cards.rs:531) and its parse_effect arm at
+        # cards.rs:3010-3031 already accept this dict shape; its
+        # resolve arm at state_ops_resolve.rs:3438-3502 performs
+        # the same 5-zone source-controller walk used by
+        # ``DiscardSelf`` then iterates the 2-player-game opposite
+        # seat, popping hand[0] cards deterministically (same shape
+        # as DiscardSelf's per-discard pick).
+        #
+        # Python's ``EachOpponentDiscards(count: int = 1)``
+        # (effects/generic/discard.py:132-168) walks every player
+        # whose ``id != controller_id and not has_lost``, and for
+        # each one calls ``p.agent.choose_discard`` and moves the
+        # chosen card to graveyard. The 2-player ETB-probe case
+        # reduces to "the one opponent's agent picks one of its
+        # own hand cards", and Rust's deterministic hand[0] pick
+        # is observably matched by a Python agent whose
+        # ``choose_discard`` returns the first hand id passed in.
+        #
+        # **Empty-hand contract**. Both engines agree: opponent
+        # with empty hand is a silent no-op (mid-loop short-
+        # circuit on either side — Rust at
+        # state_ops_resolve.rs:3482, Python at discard.py:152).
+        # Probes that drive the empty-hand path can omit the
+        # opponent-side agent entirely (Python's
+        # ``agent.choose_discard`` is never invoked when the loop
+        # body short-circuits on empty hand). Probes that drive
+        # the non-empty path MUST seat an agent on the OPPONENT
+        # (not the source's controller — the discarding player
+        # picks their own discard) whose ``choose_discard``
+        # mirrors Rust's hand[0] pick.
+        #
+        # **No composer required**. Unlike the audit's two
+        # ``discard_self`` consumers (Uthros Scanship via Sequence,
+        # Melded Moxite via IfYouDo), the ``each_opponent_discards``
+        # consumer Virus Beetle's effect is the BARE arm: oracle
+        # text "When this creature enters, each opponent discards
+        # a card." composes directly off this bridge arm with no
+        # nesting. Virus Beetle is end-to-end probeable today.
+        #
+        # Mirrors Rust's parse_effect arm (cards.rs:3010-3031)
+        # which uses ``count`` (not ``amount`` — matches Python's
+        # class field name on this variant; mirrors surveil /
+        # draw_cards's count-shape rather than DiscardSelf's
+        # amount-shape). Missing ``count`` defaults to 1 (mirrors
+        # Python's class default AND Rust's parse_effect default
+        # at cards.rs:3024). The dict-key is ``count`` on both
+        # engines (no rename).
+        from mtg_bot.effects.generic.discard import (
+            EachOpponentDiscards,
+        )
+        return EachOpponentDiscards(
+            count=eff_dict.get("count", 1),
+        )
     if kind == "deal_damage_to_opponent_creature":
         # Targeted "deals N damage to target creature an opponent
         # controls" — restricted to the
@@ -545,6 +669,70 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return PutPlusOneCounterOnCreatureYouControl(
             amount=eff_dict.get("amount", 1),
         )
+    if kind == "return_creature_from_your_graveyard_to_hand":
+        # "Return target creature card from your graveyard to your
+        # hand." Rust's ``Effect::ReturnCreatureFromYourGraveyardToHand``
+        # is a UNIT VARIANT (cards.rs:782) — no fields beyond ``kind``.
+        # The parse_effect arm (cards.rs:3148-3151) accepts the dict
+        # shape ``{"kind": "return_creature_from_your_graveyard_to_hand"}``
+        # with no companion fields. The resolve arm
+        # (state_ops_resolve.rs:2986-3020) carries the I82 controller-
+        # of-effect fix: ``controller_idx`` derives from
+        # ``current_resolve_source_controller`` (falls back to
+        # ``active_player`` for direct ``apply_effect_pub`` callers),
+        # so the scan reads the SOURCE's controller's graveyard and
+        # pushes to the SOURCE's controller's hand. Cross-controller
+        # case (p1's ETB trigger resolves on p0's turn) routes
+        # correctly post-I82.
+        #
+        # **Rust target-pick semantics.** Rust picks the returned
+        # card deterministically at apply_effect time: scan the
+        # source-controller's graveyard top-to-bottom (insertion
+        # order; ``state.players[controller_idx].graveyard.iter()``)
+        # for the FIRST object whose printing's ``card_types``
+        # contains "Creature". No eligible card → silent no-op (the
+        # arm returns ``Ok(())`` and leaves the graveyard / hand
+        # untouched). This empty-graveyard / no-creature-cards case
+        # is the well-defined silent-skip both engines agree on.
+        #
+        # **Python target-pick semantics.** Python's
+        # ``ReturnCreatureFromYourGraveyardToHand`` is constructor
+        # sugar over ``ReturnFromGraveyard`` (bounce.py:356-404) that
+        # pins ``creature=True`` + ``destination="hand"``. The base's
+        # ``legal_targets`` walks the controller's graveyard and
+        # emits one ``("graveyard_creature", card.id)`` entry per
+        # creature card. The targeting pipeline picks at PUSH time
+        # via ``push_triggered_ability`` (actions.py:3172) →
+        # ``controller.agent.choose_target`` on the enumerated
+        # ``effect.legal_targets`` pool. Probes that exercise this
+        # bridge end-to-end must therefore set an agent on the
+        # source's controller (the harness's default Player has
+        # ``agent=None``) that mimics Rust's "first creature card
+        # in graveyard insertion order" pick — the simplest agent
+        # returns the first legal_target entry, which observably
+        # matches Rust's iterator-order scan in 2-player games where
+        # both engines build their graveyards in the same order.
+        # Empty-graveyard / no-creature-cards case: both engines
+        # silently no-op (Python's ``ReturnFromGraveyard.resolve``
+        # returns early when ``targets`` is empty; the targeting
+        # pipeline doesn't push the trigger when ``legal_targets``
+        # is empty — same observable outcome as Rust's
+        # ``return Ok(())`` early-exit).
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3148-3151);
+        # the unit variant takes no fields, so the bridge translator
+        # ignores every other key on the dict for round-trip dict-
+        # shape consistency. The Rust unit variant doesn't carry
+        # the EoE-card widening riders (or_artifact for Interceptor
+        # Mechan, or_spacecraft for Fell Gravship suffix); those
+        # would surface as separate parametric Effect variants in
+        # Rust (mirror Python's ``ReturnCreatureFromYourGraveyardToHand``
+        # rider fields) and re-enter the bridge as new arms — out
+        # of scope for the bare-shape extension.
+        from mtg_bot.effects.generic.bounce import (
+            ReturnCreatureFromYourGraveyardToHand,
+        )
+        return ReturnCreatureFromYourGraveyardToHand()
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"effect kind {kind!r} (extend `_ta_dict_to_python_effect` "
