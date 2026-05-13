@@ -2167,5 +2167,106 @@ def test_rust_parser_accepts_exile_target_creature_until_source_leaves_in_trigge
     assert pid == 0
 
 
+def test_bridge_destroy_target_translates_to_python_destroy_with_creature_slot():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "destroy_target", "target": {"kind": "any_creature"}}``
+    translates to Python
+    ``Destroy(targets=(TargetSpec(IsCreature()),))``.
+
+    Unblocks Doom-Blade / Murder / Naturalize-shape ETB destroy
+    triggers on the cross-engine bridge. The Rust effect variant
+    exists at ``rust/src/cards.rs:1567`` (``Effect::DestroyTarget {
+    target: TargetFilter }``); its parse_effect arm at
+    ``cards.rs:2902-2909`` requires a ``target`` dict; the resolve
+    arm at ``state_ops_resolve.rs:1687`` carries the I75 controller-
+    of-effect fix (defender = 1 - controller, where controller
+    derives from current_resolve_source_controller). Sibling closure
+    to I70 / I76 / I78 / I79 / I80 -- identical defender-swap shape;
+    differs only in destination zone (graveyard for I75 vs exile /
+    hand / library bottom for the siblings) and in carrying the
+    indestructible suppress gate (CR 702.12) on the destroyed object.
+    """
+    from mtg_bot.effects.generic.destroy import Destroy
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target", "target": {"kind": "any_creature"}}
+    )
+    assert isinstance(e, Destroy)
+    # The bridge constructs a single TargetSpec slot with an
+    # IsCreature() filter; mirrors the AnyCreature first-slice
+    # symbol from the Rust side.
+    assert len(e.targets) == 1
+    slot = e.targets[0]
+    assert isinstance(slot, TargetSpec)
+    assert isinstance(slot.filter, IsCreature)
+    # Default count_min/count_max for a TargetSpec is 1/1 (the
+    # "exactly one" target shape that mirrors Rust's first-slice
+    # picker which always selects bf[0] of the defender).
+    assert slot.count_min == 1
+    assert slot.count_max == 1
+
+
+def test_bridge_destroy_target_rejects_unsupported_target_filter_kind():
+    """The bridge mirrors the Rust parser's accepted-kind allowlist
+    for target filters (cards.rs:2790-2799 accepts only ``any_player``
+    and ``any_creature``). The destroy_target arm only honors
+    creature-shaped filters; an unknown filter kind raises a
+    ValueError with a pointer to the Rust parse_target_filter
+    docstring location.
+
+    This pin documents the bridge-side surface contract: future
+    additions to ``parse_target_filter`` (e.g., ``any_artifact``,
+    ``any_nonland_permanent``) need a paired bridge update on this
+    arm before they can land cross-engine.
+    """
+    import pytest
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="any_player"):
+        _ta_dict_to_python_effect(
+            {"kind": "destroy_target", "target": {"kind": "any_player"}}
+        )
+
+
+def test_rust_parser_accepts_destroy_target_in_triggered_ability():
+    """Pin the Rust parser surface for the ``destroy_target`` effect
+    kind. The bridge's dict shape must register cleanly on the Rust
+    side too; this lockstep gate keeps the Python bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing ``mill_target_player`` parser-surface pin
+    -- both arms require a companion field (``count`` for
+    mill_target_player, ``target`` for destroy_target). The Rust
+    parse_effect arm at ``cards.rs:2902-2909`` accepts the
+    ``{"kind": "destroy_target", "target": {"kind": "any_creature"}}``
+    shape on a triggered-ability carrier.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- DestroyTarget",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "destroy_target",
+                    "target": {"kind": "any_creature"},
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
