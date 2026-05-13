@@ -3655,3 +3655,504 @@ def test_walker_does_not_fire_dies_trigger_only_leaves(synthetic_state):
         f"Expected p0 life +7 from LEAVES observer alone (DIES "
         f"observer should NOT fire on a walker); got {life_delta}"
     )
+
+
+# -------------------------------------------------------------------
+# CE20 Slice 5 — Planeswalker loyalty (Slice C)
+#
+# CR 606.3 once-per-turn-per-walker ledger. After ANY successful
+# loyalty activation, the walker is locked for the remainder of the
+# turn; emission filter skips ALL of its abilities and direct apply
+# raises. Cleared at the cleanup step (same site as
+# `triggered_this_turn`).
+# -------------------------------------------------------------------
+
+
+# --- emission gate: locked walker emits nothing ----------------------
+
+
+def test_walker_once_per_turn_emission_locked_after_activate(synthetic_state):
+    """Activate the +1 ability on a walker; emission filter then
+    skips ALL of the walker's activated abilities for the rest of
+    the turn (CR 606.3).
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 4)
+
+    # Pre-activation: all three abilities emit (+1, 0, -3 — loyalty
+    # 4 >= 3 covers the -3 ability).
+    decisions = synthetic_state.legal_decisions(0)
+    walker_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == walker_id
+    ]
+    pre_indices = {d["ability_index"] for d in walker_acts}
+    assert {0, 1, 2}.issubset(pre_indices), (
+        f"Pre-activation expected all 3 abilities to emit, got {pre_indices}"
+    )
+
+    # Activate the 0 ability (simplest effect; gain_life=1).
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 1,
+        }
+    )
+    # Drain the stack item so emission returns to its priority-emission
+    # shape (with a stack item pending, only `pass_priority` emits).
+    while synthetic_state.stack_size() > 0:
+        synthetic_state.resolve_top_of_stack()
+
+    # Post-activation: NONE of the walker's abilities emit.
+    decisions_after = synthetic_state.legal_decisions(0)
+    walker_acts_after = [
+        d
+        for d in decisions_after
+        if d["kind"] == "activate_ability"
+        and d["source_id"] == walker_id
+    ]
+    assert walker_acts_after == [], (
+        f"Expected zero walker activations after locking, "
+        f"got {walker_acts_after}"
+    )
+
+
+def test_walker_once_per_turn_emission_other_walkers_unaffected(
+    synthetic_state,
+):
+    """Activating one walker doesn't lock OTHER walkers (the ledger
+    is per-walker, not global)."""
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    _tap_all_default_p0_mana_sources(synthetic_state)
+    w1 = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    w2 = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(w1, False)
+    synthetic_state.force_set_summoning_sick(w2, False)
+    synthetic_state.set_loyalty_counters(w1, 4)
+    synthetic_state.set_loyalty_counters(w2, 4)
+
+    # Activate w1 with the 0 ability (no stack effect to interfere
+    # with emission post-activation; gain_life=1 is the simplest
+    # effect that doesn't depend on library state).
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": w1,
+            "ability_index": 1,
+        }
+    )
+    # Drain any stack items the activation produced so emission
+    # returns to the priority-emission shape (not just pass_priority).
+    while synthetic_state.stack_size() > 0:
+        synthetic_state.resolve_top_of_stack()
+
+    # w1 should be locked; w2 should still emit.
+    decisions = synthetic_state.legal_decisions(0)
+    w1_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability" and d["source_id"] == w1
+    ]
+    w2_acts = [
+        d
+        for d in decisions
+        if d["kind"] == "activate_ability" and d["source_id"] == w2
+    ]
+    assert w1_acts == [], (
+        f"Expected w1 locked, got {w1_acts}"
+    )
+    assert len(w2_acts) >= 1, (
+        f"Expected w2 still active, got {w2_acts}"
+    )
+
+
+def test_walker_once_per_turn_emission_non_walker_unaffected(
+    synthetic_state,
+):
+    """The ledger is gated on Planeswalker card_type. Non-walker
+    activated-ability sources (e.g. Forest's mana ability) keep
+    emitting after a walker activation.
+    """
+    PHASE_MAIN1 = 3
+    synthetic_state.set_phase(PHASE_MAIN1)
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 4)
+
+    # Count Forest mana abilities BEFORE walker activation.
+    forest_ids = {
+        o["id"]
+        for o in synthetic_state.battlefield_snapshot()
+        if o["printing_name"] == "Forest" and o.get("controller_id") == 0
+    }
+    decisions_pre = synthetic_state.legal_decisions(0)
+    forest_acts_pre = [
+        d
+        for d in decisions_pre
+        if d["kind"] == "activate_ability"
+        and d["source_id"] in forest_ids
+    ]
+    n_forest_pre = len(forest_acts_pre)
+    assert n_forest_pre >= 1, "Need at least 1 Forest for this test"
+
+    # Activate walker (use the 0-cost ability — gain_life=1 — so the
+    # stack trigger is simple and resolution is a no-op for the
+    # forests on bf).
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 1,
+        }
+    )
+    # Drain the stack so emission returns to non-priority-only shape.
+    while synthetic_state.stack_size() > 0:
+        synthetic_state.resolve_top_of_stack()
+
+    # Forest mana abilities should still emit (Forest is not a
+    # Planeswalker; not gated by the ledger).
+    decisions_post = synthetic_state.legal_decisions(0)
+    forest_acts_post = [
+        d
+        for d in decisions_post
+        if d["kind"] == "activate_ability"
+        and d["source_id"] in forest_ids
+    ]
+    assert len(forest_acts_post) == n_forest_pre, (
+        f"Expected {n_forest_pre} Forest activations to remain "
+        f"emitted, got {len(forest_acts_post)}"
+    )
+
+
+# --- apply-arm: locked walker raises on direct call ------------------
+
+
+def test_walker_once_per_turn_apply_locked_raises(synthetic_state):
+    """A direct apply_action on an already-activated walker raises
+    BEFORE any mutation (Phase 3c precheck). Loyalty counters and
+    other state untouched.
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 5)
+
+    # First activation: succeeds (+1 ability brings loyalty to 6).
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+    assert synthetic_state.get_loyalty_counters(walker_id) == 6
+
+    # Second activation attempt (try the 0 ability — different
+    # ability_index): raises CR 606.3 violation.
+    with pytest.raises(
+        ValueError, match=r"already activated a loyalty ability"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": walker_id,
+                "ability_index": 1,
+            }
+        )
+    # Loyalty unchanged from first activation.
+    assert synthetic_state.get_loyalty_counters(walker_id) == 6
+
+
+def test_walker_once_per_turn_apply_same_ability_twice_raises(
+    synthetic_state,
+):
+    """Activating the SAME ability twice on the same walker raises
+    on the second attempt (the ledger keys on walker, not ability).
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 4)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+
+    with pytest.raises(
+        ValueError, match=r"already activated a loyalty ability"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": walker_id,
+                "ability_index": 0,
+            }
+        )
+
+
+def test_walker_once_per_turn_apply_zero_cost_locks_walker(
+    synthetic_state,
+):
+    """The "0" ability (cost.loyalty == 0) still stamps the ledger.
+    CR 606.3 says "activated A loyalty ability" — the cost value
+    doesn't matter.
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 4)
+
+    # Activate the 0 ability.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 1,
+        }
+    )
+    # Loyalty unchanged (cost == 0).
+    assert synthetic_state.get_loyalty_counters(walker_id) == 4
+
+    # Walker is now locked.
+    with pytest.raises(
+        ValueError, match=r"already activated a loyalty ability"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": walker_id,
+                "ability_index": 0,
+            }
+        )
+
+
+# --- no ledger residue on failed activation --------------------------
+
+
+def test_walker_once_per_turn_no_stamp_on_failed_activation(
+    synthetic_state,
+):
+    """A failed activation (insufficient loyalty) MUST NOT stamp the
+    ledger — the walker stays activatable for a subsequent
+    legal-cost ability this turn.
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    # Loyalty 2: -3 ability is unaffordable, +1 and 0 are fine.
+    synthetic_state.set_loyalty_counters(walker_id, 2)
+
+    # Try the -3 ability: raises BEFORE Phase 5e stamp (Phase 3b
+    # short-circuit).
+    with pytest.raises(
+        ValueError, match=r"insufficient loyalty"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": walker_id,
+                "ability_index": 2,
+            }
+        )
+
+    # Walker is NOT locked; the +1 ability should still apply.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+    assert synthetic_state.get_loyalty_counters(walker_id) == 3
+
+
+# --- cleanup step clears the ledger ----------------------------------
+
+
+def test_walker_once_per_turn_cleanup_clears_ledger(synthetic_state):
+    """`cleanup_step_for_active_player` clears the ledger, so the
+    walker is re-activatable next turn.
+    """
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 5)
+
+    # Activate on turn N.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+
+    # Confirm locked.
+    with pytest.raises(
+        ValueError, match=r"already activated a loyalty ability"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": walker_id,
+                "ability_index": 1,
+            }
+        )
+
+    # Run cleanup step (resets ledger).
+    synthetic_state.cleanup_step_for_active_player()
+
+    # Walker is re-activatable.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 1,
+        }
+    )
+    # Loyalty unchanged from the +1 (now at 6) plus the 0 ability.
+    assert synthetic_state.get_loyalty_counters(walker_id) == 6
+
+
+def test_walker_once_per_turn_end_turn_clears_ledger(synthetic_state):
+    """`end_turn_and_start_next` (which composes cleanup + advance)
+    also clears the ledger as a regression pin on the composition
+    primitive."""
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 5)
+
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+
+    turn_before = synthetic_state.turn_number
+    synthetic_state.end_turn_and_start_next()
+    assert synthetic_state.turn_number == turn_before + 1
+
+    # Walker now controlled by previously-non-active player (it's
+    # still on p0's bf, but active_player has flipped to p1). The
+    # ledger is keyed on (controller, walker_id) = (0, walker_id),
+    # which has been cleared. Confirm by directly applying — note
+    # apply_action doesn't check active_player for ActivateAbility,
+    # so we can fire as p0 even on p1's turn.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 1,
+        }
+    )
+    # Activation succeeded (no raise); ledger was cleared.
+
+
+# --- CoW invariant: cloning before activation isolates the ledger ----
+
+
+def test_walker_once_per_turn_clone_isolates_ledger(synthetic_state):
+    """Cloning the GameState and activating on the clone does NOT
+    lock the walker on the source. The ledger is per-state."""
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 5)
+
+    clone = synthetic_state.clone_once()
+
+    # Activate on the clone.
+    clone.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+
+    # Source's walker is still activatable.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+    # Both ran successfully; no exception raised.
+
+
+# --- combined: end-to-end double-activate-then-cleanup-then-reactivate
+
+
+def test_walker_once_per_turn_end_to_end(synthetic_state):
+    """Full life cycle: activate -> locked -> cleanup -> re-activate.
+    Pins the 3-state contract of the CR 606.3 ledger."""
+    walker_id = synthetic_state.register_and_inject_object(
+        _walker_dict(), 0, ZONE_BATTLEFIELD,
+    )
+    synthetic_state.force_set_summoning_sick(walker_id, False)
+    synthetic_state.set_loyalty_counters(walker_id, 5)
+
+    # State 1: fresh — activate the +1.
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 0,
+        }
+    )
+    assert synthetic_state.get_loyalty_counters(walker_id) == 6
+
+    # State 2: locked — second activation raises.
+    with pytest.raises(
+        ValueError, match=r"already activated a loyalty ability"
+    ):
+        synthetic_state.apply_action(
+            {
+                "kind": "activate_ability",
+                "source_id": walker_id,
+                "ability_index": 2,
+            }
+        )
+    assert synthetic_state.get_loyalty_counters(walker_id) == 6
+
+    # State 3: cleanup -> re-activatable.
+    synthetic_state.cleanup_step_for_active_player()
+    synthetic_state.apply_action(
+        {
+            "kind": "activate_ability",
+            "source_id": walker_id,
+            "ability_index": 2,  # -3 ability (loyalty 6 >= 3)
+        }
+    )
+    assert synthetic_state.get_loyalty_counters(walker_id) == 3
