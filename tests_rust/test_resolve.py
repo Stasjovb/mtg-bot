@@ -11803,3 +11803,208 @@ def test_mill_pause_variant_threads_controller(engine):
 
     assert state.library_sizes[1] == p1_lib_before - 1
     assert state.library_sizes[0] == p0_lib_before
+
+
+# ====================================================================
+# Sacrifice (self-target) controller-of-effect fix — regression pins
+# (I66).
+#
+# Same shape as the I59 DrawCards / I60 GainLife / I63
+# DamageEachOpponent / I64 DealDamage / I65 Mill fixes. Pre-fix
+# `Effect::Sacrifice` AnyCreature arm at state_ops_resolve.rs read
+# `state.active_player` as the sacrificing player. Wrong when the
+# resolving spell / triggered ability has a controller != active_player
+# — example: on p0's turn, p1 casts an instant Altar's-Reap-shape
+# spell ("sacrifice a creature, ...") — pre-fix the spell sacrificed
+# p0's bf[0] (active_player), post-fix it correctly sacrifices p1's
+# bf[0] (the spell's controller). Mirrors Python's analogous "you
+# sacrifice" handling.
+# ====================================================================
+
+
+def _sacrifice_self_spell_dict():
+    """Instant-typed self-sacrifice printing for cross-controller
+    regression pins. ``any_creature`` target = the controller's
+    bf[0] (per the Effect::Sacrifice AnyCreature arm contract)."""
+    return {
+        "name": "Test Sacrifice Self (Altar's Reap shape)",
+        "card_types": ["Instant"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {"kind": "sacrifice", "target": {"kind": "any_creature"}}
+        ],
+    }
+
+
+def test_sacrifice_routes_to_source_controller_not_active_player(engine):
+    """**Regression pin for the Sacrifice controller-of-effect fix
+    (I66).**
+
+    On p0's turn (active_player=0), a self-Sacrifice spell whose
+    controller is p1 (a cross-controller instant) must sacrifice
+    PLAYER 1's bf[0], NOT player 0's. Pre-fix the active player p0
+    lost their bf[0] because `active = state.active_player = 0`.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    spell_id = state.register_and_inject_object(
+        _sacrifice_self_spell_dict(), 1, ZONE_HAND
+    )
+    p0_bf_before = state.battlefield_sizes[0]
+    p1_bf_before = state.battlefield_sizes[1]
+    p0_gy_before = state.graveyard_sizes[0]
+    p1_gy_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack()
+
+    # p1 (the spell's controller) lost a battlefield permanent.
+    assert state.battlefield_sizes[1] == p1_bf_before - 1
+    # p1's graveyard grew by 2: the sacrificed permanent + the spell
+    # itself (instant goes to graveyard after resolving).
+    assert state.graveyard_sizes[1] == p1_gy_before + 1 + 1
+    # p0 (active_player) UNTOUCHED — battlefield and graveyard unchanged.
+    assert state.battlefield_sizes[0] == p0_bf_before
+    assert state.graveyard_sizes[0] == p0_gy_before
+
+
+def test_sacrifice_active_player_controlled_spell_still_works(engine):
+    """**Back-compat pin.** A Sacrifice spell whose controller IS the
+    active player must keep working — controller = active_player = 0,
+    identical to pre-fix.
+    """
+    state = engine.make_synthetic_state()
+    spell_id = state.register_and_inject_object(
+        _sacrifice_self_spell_dict(), 0, ZONE_HAND
+    )
+    p0_bf_before = state.battlefield_sizes[0]
+    p1_bf_before = state.battlefield_sizes[1]
+    p0_gy_before = state.graveyard_sizes[0]
+    p1_gy_before = state.graveyard_sizes[1]
+
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # p0 (controller == active_player) sacrificed bf[0].
+    assert state.battlefield_sizes[0] == p0_bf_before - 1
+    # p0 graveyard: 1 sacrificed permanent + 1 for the instant itself.
+    assert state.graveyard_sizes[0] == p0_gy_before + 1 + 1
+    # p1 untouched.
+    assert state.battlefield_sizes[1] == p1_bf_before
+    assert state.graveyard_sizes[1] == p1_gy_before
+
+
+def test_sacrifice_via_triggered_ability_routes_to_triggers_controller(
+    engine,
+):
+    """**Cross-controller LTB-trigger pin for Sacrifice.** A triggered-
+    ability StackItem carries its own `controller`; the resolver
+    swaps that controller in for the Sacrifice apply.
+
+    Shape: p1's creature has a `source_is_self LEAVES_BATTLEFIELD →
+    sacrifice a creature` trigger. p0 casts a bounce spell on p1's
+    creature. When the LTB trigger resolves, p1 (the trigger's
+    controller) sacrifices their bf[0].
+
+    Setup is empty battlefield + 2 explicitly-injected creatures
+    (one on p1 with the LTB trigger, one on p1 as a sacrifice
+    target). Mirrors the I65 Mill LTB test shape exactly.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=5
+    )
+    ltb_creature = {
+        "name": "Test LTB-Sacrifice Creature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "leaves_battlefield",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "sacrifice",
+                    "target": {"kind": "any_creature"},
+                },
+            }
+        ],
+    }
+    state.register_and_inject_object(
+        ltb_creature, 1, ZONE_BATTLEFIELD
+    )
+    # A vanilla sac-victim on p1's bf so there's something to sacrifice
+    # after the LTB creature itself leaves the battlefield via the
+    # bounce.
+    sac_victim_id = state.register_and_inject_object(
+        {
+            "name": "Test Sac Victim",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "power": 1,
+            "toughness": 1,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    bounce_id = state.register_and_inject_object(
+        {
+            "name": "Test Bounce (Sacrifice LTB)",
+            "card_types": ["Instant"],
+            "mana_cost": {"U": 1},
+            "effects": [
+                {"kind": "return_to_hand", "target": {"kind": "any_creature"}}
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_bf_before = state.battlefield_sizes[0]
+
+    state.push_to_stack(bounce_id, 0)
+    state.resolve_top_of_stack()  # bounce; LTB trigger pushes
+    top = state.peek_top_of_stack()
+    assert top is not None
+    assert top["controller"] == 1
+
+    p1_bf_after_bounce = state.battlefield_sizes[1]
+    p0_bf_after_bounce = state.battlefield_sizes[0]
+    # Bounce removed the LTB creature from p1's bf, so p1 now has 1
+    # creature left (the sac_victim). p0's bf was empty and stays
+    # empty (the bounce defender is the source-controller's opponent =
+    # p1 post-I64).
+    assert p1_bf_after_bounce == 1
+    assert p0_bf_after_bounce == p0_bf_before
+
+    state.resolve_top_of_stack()  # LTB trigger fires
+
+    # Post-fix: p1 (trigger's controller) sacrificed their last
+    # remaining creature (the sac_victim).
+    assert state.battlefield_sizes[1] == p1_bf_after_bounce - 1
+    assert state.find_object_zone(sac_victim_id) == ZONE_GRAVEYARD
+    # p0 untouched.
+    assert state.battlefield_sizes[0] == p0_bf_after_bounce
+
+
+def test_sacrifice_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for Sacrifice.**
+
+    The pause variant uses the same stack-resolver swap; cross-
+    controller routing must work identically.
+    """
+    state = engine.make_synthetic_state()
+    spell_id = state.register_and_inject_object(
+        _sacrifice_self_spell_dict(), 1, ZONE_HAND
+    )
+    p0_bf_before = state.battlefield_sizes[0]
+    p1_bf_before = state.battlefield_sizes[1]
+
+    state.push_to_stack(spell_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # p1 (controller) sacrificed; p0 (active_player) untouched.
+    assert state.battlefield_sizes[1] == p1_bf_before - 1
+    assert state.battlefield_sizes[0] == p0_bf_before
