@@ -95,6 +95,8 @@ def main(argv=None) -> None:  # pragma: no cover
         nn_version_label=args.bootstrap_version,
         nn_hidden_sizes=hidden_sizes,
         nn_with_policy=True,
+        nn_architecture=arch,
+        nn_policy_hidden_sizes=policy_hidden,
         filename_prefix=args.replay_prefix,
     )
 

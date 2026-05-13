@@ -1255,6 +1255,8 @@ def run_shard_local(
             nn_version_label=spec.nn_version_label,
             nn_hidden_sizes=spec.hidden_sizes,
             nn_with_policy=spec.with_policy,
+            nn_architecture=spec.architecture,
+            nn_policy_hidden_sizes=spec.policy_hidden_sizes,
         )
 
     hang_dump_dir: Optional[str] = None
@@ -3070,6 +3072,8 @@ def run_shard_pull(
             nn_version_label=spec.nn_version_label,
             nn_hidden_sizes=spec.hidden_sizes,
             nn_with_policy=spec.with_policy,
+            nn_architecture=spec.architecture,
+            nn_policy_hidden_sizes=spec.policy_hidden_sizes,
         )
 
     hang_dump_dir: Optional[str] = None
@@ -3750,6 +3754,8 @@ def run_shard_eval_pull(
             nn_version_label=spec.nn_new_version_label,
             nn_hidden_sizes=spec.hidden_sizes,
             nn_with_policy=True,
+            nn_architecture=spec.new_architecture,
+            nn_policy_hidden_sizes=spec.policy_hidden_sizes,
         )
 
     hang_dump_dir: Optional[str] = None

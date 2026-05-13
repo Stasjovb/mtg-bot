@@ -2098,6 +2098,8 @@ def main(argv=None) -> None:  # pragma: no cover
                 nn_version_label=best_version,
                 nn_hidden_sizes=iter_hidden_sizes,
                 nn_with_policy=True,
+                nn_architecture=best_architecture,
+                nn_policy_hidden_sizes=best_policy_hidden_sizes,
             )
         sp_hang_dir = (
             str(args.hang_dump_dir / self_play_run_id)
@@ -2381,6 +2383,8 @@ def main(argv=None) -> None:  # pragma: no cover
                     nn_version_label=new_version,
                     nn_hidden_sizes=iter_hidden_sizes,
                     nn_with_policy=True,
+                    nn_architecture=iter_architecture,
+                    nn_policy_hidden_sizes=iter_policy_hidden_sizes,
                 )
             eval_hang_dir = (
                 str(args.hang_dump_dir / eval_run_id)
