@@ -20119,6 +20119,372 @@ def test_cross_engine_synthetic_etb_recur_bear_multi_creature_graveyard_iterator
 
 
 
+def test_cross_engine_real_eoe_starbreach_whale_etb_surveil_2_mill_path_parity(
+    parity_smoke,
+):
+    """Probe: Starbreach Whale (EoE) ETB ``surveil 2`` MILL-PATH parity --
+    drives the ``send_all_to_graveyard`` strategy / ``choose_surveil ->
+    True`` agent leg of the surveil substrate.
+
+    Sibling of the existing keep_all_on_top probe at
+    ``test_cross_engine_real_eoe_starbreach_whale_etb_surveil_2_parity``
+    (tests/test_parity_smoke.py:13952). That probe pins the substrate's
+    NO-AGENT default: both engines leave every observed card on library
+    top. THIS probe pins the OPPOSITE leg: every observed card moves to
+    the graveyard, in popped order.
+
+    Cross-engine contract validated:
+
+    * Rust: after the surveil trigger resolves (via
+      ``resolve_top_of_stack_pause`` to skip the trigger-path's
+      terminal ``auto_resolve_pending("keep_all_on_top")``), the
+      caller drains the queued ``SurveilChoice`` via
+      ``auto_resolve_pending_decisions("send_all_to_graveyard")``.
+      Implementation: ``state_ops_decisions.rs:794-805`` -- the
+      strategy walks ``cards.into_iter()``, rewrites each
+      ``obj.zone = 3`` (ZONE_GRAVEYARD), and pushes onto the
+      controller's graveyard. Order: ``cards[0]`` (the topmost card
+      pre-surveil, popped first) lands in the graveyard FIRST, so it
+      sits at the bottom of the new graveyard suffix; ``cards[1]``
+      (second-from-top, popped second) sits above it. Net graveyard
+      shape (with empty pre-state): ``[bait_alpha, bait_beta]``.
+
+    * Python: with ``_SurveilSendAllAgent`` seated on p0 (the
+      surveil's controller), ``Surveil.resolve``
+      (effects/generic/library_lookat.py:591) walks
+      ``examined = p.library[:n]`` in iteration order
+      (``library[0] = bait_alpha`` first, then ``library[1] =
+      bait_beta``); each iteration calls ``p.agent.choose_surveil``,
+      which returns ``True`` unconditionally; the Python resolve
+      ``p.library.remove(card)`` + ``p.graveyard.append(card)``
+      writes each card to the graveyard in walk order. Net graveyard
+      shape (with empty pre-state): ``[bait_alpha, bait_beta]``.
+
+    Rust + Python agree on ``[bait_alpha, bait_beta]`` graveyard
+    suffix in the SAME order; library shrinks from N=2 to N=0 on
+    both engines.
+
+    Predicate decomposition (same as the keep_all_on_top probe):
+
+        SourceIsSelf
+
+    Effect: ``surveil(count=2)`` -- bridge arm landed in
+    ``5a543130`` (``feature/phase5-ce-bridge-surveil``); the bridge's
+    docstring forward-noted this mill-path probe slice (#2) as
+    out-of-scope-for-the-original-slice but valid future work.
+
+    Probe shape (mirrors the keep_all_on_top probe except for the
+    decision-substrate flip):
+
+      1. Pre-seed p0's library with TWO distinct vanilla bait cards
+         (Surveil Bait Alpha at top, Surveil Bait Beta second). A
+         single-swap or single-mill mismatch between engines surfaces
+         as a per-card name divergence rather than a count-only
+         divergence.
+      2. Inject Starbreach Whale onto p0's battlefield via
+         ``register_and_inject_object`` (Rust) / ``new_object`` + bf
+         append + manual ``_trigger_etb_abilities`` (Python). Both
+         engines dispatch ENTERS for the just-arrived whale; the
+         predicate (SourceIsSelf) matches, the trigger lands on the
+         stack with the Surveil(2) effect.
+      3. Seat ``_SurveilSendAllAgent`` on Python's p0 (the surveil
+         controller). The Rust side has NO agent equivalent --
+         driving the mill path on Rust uses the explicit
+         ``auto_resolve_pending_decisions("send_all_to_graveyard")``
+         API call, which is the documented mirror per the bridge
+         arm's comment block in ``cross_engine.py:303-309``.
+      4. Drain the trigger via ``resolve_top_of_stack_pause`` on
+         Rust (NOT the auto-resolving ``resolve_top_of_stack``) so
+         the SurveilChoice stays on the queue. Then call
+         ``auto_resolve_pending_decisions("send_all_to_graveyard")``
+         to apply the mill-all strategy. On Python, drain via the
+         standard ``resolve_top_of_stack`` -- the seated agent
+         drives the mill path inline during the resolve.
+      5. Cross-engine assert: post-drain, BOTH engines have an
+         EMPTY p0 library (the two bait cards were milled) and a p0
+         graveyard containing exactly ``[bait_alpha, bait_beta]`` in
+         that order.
+
+    Out of scope:
+
+      * Flying / Warp -- same reasoning as the keep_all_on_top probe;
+        no combat / mana pipeline involvement.
+      * Mid-list mixed mill-or-keep -- the agent here returns True
+        unconditionally to mirror Rust's ``send_all_to_graveyard``
+        strategy. A more granular probe (``choose_surveil`` returning
+        True for one card, False for another) would need a Rust
+        ``submit_surveil_decision(top_ids=[...], graveyard_ids=[...])``
+        call instead of a strategy fast-path -- distinct mechanism,
+        out of scope here.
+      * Cross-controller surveil (opponent's trigger surveils opponent's
+        library on your turn) -- the bridge's I61 controller-of-effect
+        substrate is exercised by the existing keep_all_on_top probes;
+        this probe stays on the same-controller (active_player) shape
+        for minimum delta from the sibling probe.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Starbreach Whale on p0's battlefield.
+      * p0 library: EMPTY (both bait cards milled).
+      * p0 graveyard: ``[Surveil Bait Alpha, Surveil Bait Beta]`` in
+        popped order.
+      * p1 library / graveyard: unchanged (empty).
+      * Lives unchanged on both seats.
+      * No residual stack on either engine.
+      * No pending decisions on Rust (the explicit auto-resolve
+        drained the SurveilChoice).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _SurveilSendAllAgent
+
+    starbreach_whale = CardDef(
+        name="Starbreach Whale",
+        card_type="Creature",
+        mana_cost_generic=4,
+        mana_cost_colored=(("U", 1),),
+        power=3,
+        toughness=5,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "surveil", "count": 2},
+            },
+        ),
+    )
+    # Distinct bait names from the keep_all_on_top sibling probe so
+    # log-correlation across the two probes stays unambiguous.
+    surveil_bait_a = CardDef(
+        name="Surveil Bait Alpha Mill",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    surveil_bait_b = CardDef(
+        name="Surveil Bait Beta Mill",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(starbreach_whale, surveil_bait_a, surveil_bait_b),
+        # Library is built head-first (index 0 = top per Rust's CE3
+        # convention; matches Python's library[0] = top in
+        # effects/generic/library_lookat.py:330). Bait Alpha sits at
+        # top (will be popped first by Surveil), Bait Beta sits second
+        # (popped second).
+        p0_library=("Surveil Bait Alpha Mill", "Surveil Bait Beta Mill"),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_whale_dict = {
+        "name": "Starbreach Whale",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 4, "U": 1},
+        "effects": [],
+        "power": 3,
+        "toughness": 5,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "surveil", "count": 2},
+            }
+        ],
+    }
+    rust_p0_lib_size_before = rust_state.library_sizes[0]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    # Capture the names at the top of p0's library BEFORE the surveil
+    # so the post-drain graveyard-name assertion has an apples-to-
+    # apples comparison target. library_snapshot returns dicts with
+    # printing_name; the top is index 0.
+    rust_p0_lib_top_names_before = [
+        d["printing_name"] for d in rust_state.library_snapshot(0)
+    ]
+    rust_state.register_and_inject_object(
+        rust_whale_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Starbreach Whale's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land Surveil(2) on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # Drain the surveil trigger via the PAUSE variant so the
+    # SurveilChoice stays on the pending-decisions queue (the
+    # auto-resolving variant would terminate with keep_all_on_top
+    # and we'd never observe the mill path). Then explicitly drain
+    # via the send_all_to_graveyard strategy. This is the exact
+    # pattern used in tests_rust/test_pending_decisions.py:236-252
+    # for the synthetic-spell shape; here we apply it to a
+    # triggered-ability shape on a real EoE card.
+    rust_state.resolve_top_of_stack_pause()
+    assert rust_state.stack_size() == 0, (
+        "Rust: surveil trigger should have popped off the stack "
+        "during resolve_top_of_stack_pause; the pause variant only "
+        "skips the auto-resolve of pending decisions, not the "
+        f"stack pop. Got stack_size={rust_state.stack_size()}"
+    )
+    assert rust_state.has_pending_decision() is True, (
+        "Rust: SurveilChoice should be pending after "
+        "resolve_top_of_stack_pause -- the pause variant's whole "
+        "purpose is to leave the decision queue populated. "
+        f"has_pending_decision returned False"
+    )
+    rust_state.auto_resolve_pending_decisions("send_all_to_graveyard")
+    assert rust_state.has_pending_decision() is False, (
+        "Rust: SurveilChoice should have drained via "
+        "auto_resolve_pending_decisions; has_pending_decision "
+        "returned True after the explicit auto-resolve call"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack as py_resolve
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    whale_printing = CardPrinting(
+        name="Starbreach Whale",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=4, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=3,
+        toughness=5,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=Surveil(amount=2),
+            ),
+        ),
+    )
+    py_whale = py_state.new_object(
+        whale_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_whale.summoning_sick = False
+    py_whale.tapped = False
+    py_whale.damage = 0
+    py_whale.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_whale)
+    # Snapshot p0's pre-surveil library names so the post-drain
+    # graveyard-name assertion can match against the in-order
+    # popped sequence (library[0] -> graveyard first; library[1] ->
+    # graveyard second).
+    py_p0_lib_top_names_before = [
+        o.printing.name for o in py_state.players[0].library
+    ]
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    # SEAT THE MILL-ALL AGENT on p0 -- this is the cross-engine
+    # mirror of Rust's send_all_to_graveyard strategy. Without an
+    # agent, Python would short-circuit to keep-all-on-top via the
+    # `p.agent is None` branch at library_lookat.py:605, mirroring
+    # Rust's keep_all_on_top default (covered by the sibling probe).
+    py_state.players[0].agent = _SurveilSendAllAgent()
+    _trigger_etb_abilities(py_state, py_whale)
+    assert len(py_state.stack) == 1, (
+        "Python: Starbreach Whale's own arrival should fire the "
+        "IsSelf ENTERS trigger and land Surveil(2) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+    # Drain the surveil trigger -- with the agent seated, the
+    # Surveil.resolve loop walks examined = p.library[:2] in order,
+    # asks the agent for each card, mills both. No Python-side
+    # equivalent of the pause / auto-resolve split is needed -- the
+    # agent IS the decision-resolution surface on Python.
+    py_resolve(py_state)
+    assert len(py_state.stack) == 0, (
+        "Python: surveil trigger should have resolved off the stack "
+        f"after py_resolve. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Cross-engine assertion: mill-path post-state ----
+    # Library: BOTH engines should be at size 0 (both bait cards
+    # milled).
+    assert rust_state.library_sizes[0] == rust_p0_lib_size_before - 2, (
+        f"Rust p0 library size should drop by 2 (both bait cards "
+        f"milled via send_all_to_graveyard): "
+        f"before={rust_p0_lib_size_before} "
+        f"after={rust_state.library_sizes[0]}"
+    )
+    assert len(py_state.players[0].library) == 0, (
+        f"Python p0 library should be empty post-mill (both bait "
+        f"cards moved to graveyard): "
+        f"library={[o.printing.name for o in py_state.players[0].library]}"
+    )
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library), (
+        f"Cross-engine library size mismatch: "
+        f"rust={rust_state.library_sizes[0]} "
+        f"py={len(py_state.players[0].library)}"
+    )
+    # Graveyard: BOTH engines should hold exactly the two milled bait
+    # cards in popped order (Alpha first, Beta second).
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_size_before + 2, (
+        f"Rust p0 graveyard size should grow by 2 (both bait cards "
+        f"milled): before={rust_p0_gy_size_before} "
+        f"after={rust_state.graveyard_sizes[0]}"
+    )
+    rust_p0_gy_names_after = [
+        d["printing_name"] for d in rust_state.graveyard_snapshot(0)
+    ]
+    py_p0_gy_names_after = [
+        o.printing.name for o in py_state.players[0].graveyard
+    ]
+    # Send-all-to-graveyard pushes cards onto the graveyard in popped
+    # order: cards[0] (was lib[0] = top) lands first; cards[1] (was
+    # lib[1] = second-from-top) lands second. So gy ends up
+    # [bait_alpha, bait_beta] in that order on Rust.
+    assert rust_p0_gy_names_after == rust_p0_lib_top_names_before, (
+        f"Rust p0 graveyard should hold the two milled bait cards in "
+        f"popped order (cards[0]=lib[0]=top first, cards[1]=lib[1] "
+        f"second): expected={rust_p0_lib_top_names_before} "
+        f"got={rust_p0_gy_names_after}"
+    )
+    # Python's Surveil walks examined = p.library[:n] in order and
+    # appends each milled card to graveyard, so gy ends up in the
+    # same order: [lib[0], lib[1]] = [bait_alpha, bait_beta].
+    assert py_p0_gy_names_after == py_p0_lib_top_names_before, (
+        f"Python p0 graveyard should hold the two milled bait cards "
+        f"in walk order (lib[0] first, lib[1] second): "
+        f"expected={py_p0_lib_top_names_before} "
+        f"got={py_p0_gy_names_after}"
+    )
+    # Cross-engine: identical names in identical order.
+    assert rust_p0_gy_names_after == py_p0_gy_names_after, (
+        f"Cross-engine graveyard order divergence: "
+        f"rust={rust_p0_gy_names_after} py={py_p0_gy_names_after}"
+    )
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    # Lives unchanged (no damage / life-gain in the surveil-mill
+    # path).
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+    # p1 zones untouched (the surveil targets p0's library only).
+    assert rust_state.library_sizes[1] == 0
+    assert rust_state.graveyard_sizes[1] == 0
+    assert len(py_state.players[1].library) == 0
+    assert len(py_state.players[1].graveyard) == 0
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

@@ -192,3 +192,28 @@ class _DiscardFirstAgent(Agent):
     def choose_discard(self, state, player_id, hand_ids):
         assert hand_ids, "agent called with empty hand"
         return hand_ids[0]
+
+
+class _SurveilSendAllAgent(Agent):
+    """Mill every observed surveil card to the graveyard.
+
+    Mirrors Rust's ``auto_resolve_pending_decisions(
+    "send_all_to_graveyard")`` strategy: every card carried by the
+    SurveilChoice gets routed to the controller's graveyard in popped
+    order. Python's ``Surveil.resolve``
+    (effects/generic/library_lookat.py:591) walks
+    ``examined = p.library[:n]`` in order and invokes
+    ``p.agent.choose_surveil(state, p.id, card.id)`` once per card;
+    returning ``True`` removes the card from the library and pushes
+    it onto the graveyard. Returning ``True`` unconditionally drives
+    every observed card to the graveyard, matching Rust's
+    send_all_to_graveyard strategy bit-for-bit on probes that build
+    the same library prefix on both engines.
+
+    Used by: Starbreach Whale surveil-mill probe (the
+    keep_all_on_top default's mirror; this drives the
+    send_all_to_graveyard branch of the surveil substrate).
+    """
+
+    def choose_surveil(self, state, player_id, top_card_id):
+        return True
