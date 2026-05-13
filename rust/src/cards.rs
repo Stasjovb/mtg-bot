@@ -2369,6 +2369,46 @@ pub struct ActivationCost {
     /// Eligibility: target on activator's bf with `Artifact` card_type,
     /// NOT the source itself ("another" qualifier).
     pub sacrifice_another_artifact: bool,
+    /// **CE20 follow-up Slice 7 — subtype-filtered sacrifice variants.**
+    /// "Sacrifice a Food" — the activator picks any permanent they
+    /// control whose `subtypes` contains "Food". Mirrors Python's
+    /// `ActivationCost.sacrifice_food` at `effects/base.py`. Default
+    /// `false`. Rides on the subtypes substrate (`CardPrinting.subtypes`)
+    /// landed at commit `03aebefb` / `dd15d7ed`.
+    ///
+    /// Eligibility: target on activator's bf with `subtypes.contains(
+    /// "Food")`. Title Case subtype string per CR 205.3 / Scryfall
+    /// convention. The source itself IS eligible iff its own subtypes
+    /// include "Food" — "a Food" carries no "another" qualifier (matches
+    /// the `sacrifice_a_land` lenient reading from Slice 6).
+    ///
+    /// **EoE printing affected**: 1 (Ragost, Deft Gastronaut —
+    /// `{1}, {T}, Sacrifice a Food: Ragost deals 3 damage to each
+    /// opponent.`). Ragost's static ability ALSO confers the "Food"
+    /// subtype on every artifact the activator controls, but the static
+    /// subtype-conferral layer is out of scope; the test fixture uses
+    /// pre-stamped Food subtypes on synthetic printings.
+    ///
+    /// **Composes with `tap_self` + `mana`.** Order:
+    /// mana → tap → sac-food → effect.
+    pub sacrifice_food: bool,
+    /// **CE20 follow-up Slice 7 — subtype-filtered sacrifice variants.**
+    /// "Sacrifice a Desert" — the activator picks any permanent they
+    /// control whose `subtypes` contains "Desert". Mirrors Python's
+    /// `ActivationCost.sacrifice_a_desert` at `effects/base.py`. Default
+    /// `false`. Rides on the subtypes substrate.
+    ///
+    /// Eligibility: target on activator's bf with `subtypes.contains(
+    /// "Desert")`. The printed text reads "Sacrifice a Desert" with no
+    /// "another" qualifier, so when the source IS a Desert the source
+    /// itself is eligible (mirrors `sacrifice_a_land` / `sacrifice_food`
+    /// lenient reading).
+    ///
+    /// **EoE printings affected**: 0 in EoE today; the substrate ships
+    /// without a real-card probe — tests use synthetic Desert printings.
+    /// Closes the symmetric pair with `sacrifice_food` and unblocks any
+    /// future Desert-cost printing without a structural change.
+    pub sacrifice_a_desert: bool,
     /// **CE20 follow-up Slice 5 — Planeswalker loyalty (Slice A).**
     /// Signed loyalty cost (CR 606). Positive values are PAY costs
     /// (the walker LOSES N loyalty counters); negative values are
@@ -4018,6 +4058,8 @@ pub fn apply_mana_produced_bridge(
             sacrifice_another_creature_or_artifact: false,
             sacrifice_a_land: false,
             sacrifice_another_artifact: false,
+            sacrifice_food: false,
+            sacrifice_a_desert: false,
             loyalty: 0,
         },
         effect: bridge_effect,
@@ -4321,9 +4363,14 @@ fn parse_activated_ability(
 /// CE20 follow-up Slice 2 adds `sacrifice_self` (optional bool).
 /// CE20 follow-up Slice 4 adds `requires_target_creature_you_control`
 /// (optional bool — flags target fan-out at emission + a required
-/// `target_creature_id` key on the apply dict). Unknown keys raise so
-/// future field additions surface as parser errors rather than silent
-/// drops.
+/// `target_creature_id` key on the apply dict). CE20 follow-up Slice 6
+/// adds `sacrifice_another_creature_or_artifact`, `sacrifice_a_land`,
+/// `sacrifice_another_artifact` (optional bools — targeted-sacrifice
+/// variants via `sacrifice_target_id`). CE20 follow-up Slice 7 adds
+/// `sacrifice_food` and `sacrifice_a_desert` (optional bools —
+/// subtype-filtered sacrifice variants riding on `CardPrinting.subtypes`
+/// from the subtypes substrate). Unknown keys raise so future field
+/// additions surface as parser errors rather than silent drops.
 fn parse_activation_cost(
     dict: &Bound<'_, PyDict>,
 ) -> PyResult<ActivationCost> {
@@ -4338,6 +4385,8 @@ fn parse_activation_cost(
             | "sacrifice_another_creature_or_artifact"
             | "sacrifice_a_land"
             | "sacrifice_another_artifact"
+            | "sacrifice_food"
+            | "sacrifice_a_desert"
             | "loyalty" => {}
             other => {
                 return Err(PyValueError::new_err(format!(
@@ -4346,6 +4395,7 @@ fn parse_activation_cost(
                      requires_target_creature_you_control, \
                      sacrifice_another_creature_or_artifact, \
                      sacrifice_a_land, sacrifice_another_artifact, \
+                     sacrifice_food, sacrifice_a_desert, \
                      loyalty"
                 )));
             }
@@ -4407,6 +4457,24 @@ fn parse_activation_cost(
                 PyValueError::new_err(
                     "activation_cost.sacrifice_another_artifact \
                      must be a bool",
+                )
+            })?;
+    }
+    // CE20 follow-up Slice 7 — subtype-filtered sacrifice variants.
+    // Both fields default `false`; missing keys are back-compat-OK.
+    if let Some(sac_food_any) = dict.get_item("sacrifice_food")? {
+        cost.sacrifice_food =
+            sac_food_any.extract::<bool>().map_err(|_| {
+                PyValueError::new_err(
+                    "activation_cost.sacrifice_food must be a bool",
+                )
+            })?;
+    }
+    if let Some(sac_desert_any) = dict.get_item("sacrifice_a_desert")? {
+        cost.sacrifice_a_desert =
+            sac_desert_any.extract::<bool>().map_err(|_| {
+                PyValueError::new_err(
+                    "activation_cost.sacrifice_a_desert must be a bool",
                 )
             })?;
     }
