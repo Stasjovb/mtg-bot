@@ -701,3 +701,88 @@ def test_rust_parser_accepts_surveil_in_triggered_ability():
     }
     pid = reg.register_printing(d)
     assert pid == 0
+
+
+def test_bridge_mill_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "mill", "count": N}`` translates to Python
+    ``SelfMill(amount=N)``.
+
+    Unblocks Seedship-Broodtender / Icetill-Explorer-shape ETB
+    triggers that "mill N cards" on the cross-engine bridge. The
+    Rust effect variant already exists at
+    ``rust/src/cards.rs:75`` (``Effect::Mill``) and its parse_effect
+    arm at ``cards.rs:2744-2747``; the Rust resolve arm at
+    ``state_ops_resolve.rs:1034-1051`` carries the I65 controller-
+    of-effect fix (mills the SOURCE's controller's library, not the
+    active player's). This pins the field-name translation
+    ``count -> amount`` for the controller-self mill shape.
+    """
+    from mtg_bot.effects.generic.library_lookat import SelfMill
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "mill", "count": 3}
+    )
+    assert isinstance(e, SelfMill)
+    assert e.amount == 3
+
+
+def test_bridge_mill_count_default_one():
+    """Missing ``count`` defaults to 1 (matching ``SelfMill``'s class
+    default ``amount: int = 1``, which mirrors the typical oracle
+    text "mill a card" without an explicit count).
+
+    Distinct from the ``gain_life`` / ``damage_each_opponent`` /
+    ``deal_damage_any_target`` arms (which default to 0): SelfMill's
+    Python class default is 1, not 0. The bridge mirrors the Python
+    class's chosen default so the translator is robust to partial
+    fixtures without changing semantics relative to a direct
+    ``SelfMill()`` construction.
+
+    Bridge consumers SHOULD pass ``count`` explicitly to keep round-
+    trip dict-shape consistency with the Rust parser (cards.rs:2744-
+    2747 requires the field). This default is a robustness backstop,
+    not a contract.
+    """
+    from mtg_bot.effects.generic.library_lookat import SelfMill
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "mill"})
+    assert isinstance(e, SelfMill)
+    assert e.amount == 1
+
+
+def test_rust_parser_accepts_mill_in_triggered_ability():
+    """Pin the Rust parser surface for the ``mill`` effect kind. The
+    bridge's dict shape must register cleanly on the Rust side too;
+    this lockstep gate keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Mirrors the existing ``damage_each_opponent`` /
+    ``deal_damage_any_target`` parser-surface pins -- what's being
+    pinned is parse_effect's ``mill`` arm accepting a
+    triggered_abilities entry with ``count: N``.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- Mill",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "B": 1, "G": 1},
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "mill",
+                    "count": 3,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
