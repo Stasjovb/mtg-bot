@@ -343,7 +343,7 @@ class SharedTensorNNEvalServer:
         *,
         device: Optional[str] = None,
         with_policy: bool = False,
-        batch_size: int = 32,
+        batch_size: int = 64,
         batch_wait_ms: float = 0.5,
         n_slots: int = 64,
         hidden_sizes: Optional[tuple[int, ...]] = None,
@@ -351,6 +351,39 @@ class SharedTensorNNEvalServer:
         policy_hidden_sizes: Optional[tuple[int, ...]] = None,
         model_factory: Optional[Any] = None,
         logger: Optional[logging.Logger] = None,
+        # ----- GPU fast-path knobs (Slice "shm-gpu-opts") -----------
+        # ``autocast_dtype`` enables mixed-precision in the dispatcher
+        # forward. ``None`` (the back-compat default on non-CUDA hosts)
+        # disables autocast; ``torch.bfloat16`` is the recommended
+        # production setting on CUDA Blackwell+ (RTX 5090 has tensor
+        # cores for both bf16/fp16; bf16's wider dynamic range avoids
+        # the residual-stream overflow that fp16 hits on transformer
+        # attention). When ``device='cuda'`` and ``autocast_dtype`` is
+        # not explicitly set, we auto-enable bf16; pass
+        # ``autocast_dtype=False`` to opt out (e.g. for fp32-vs-fp32
+        # numerical regression tests).
+        autocast_dtype: Any = "auto",
+        # ``compile_model`` wraps the loaded model in
+        # ``torch.compile(mode='reduce-overhead')`` after load. CUDA
+        # graphs internally fuse the dispatch path's many-small-call
+        # pattern; first forward pays the compile cost (~seconds),
+        # subsequent calls amortize. Defaults to ``True`` on CUDA,
+        # ``False`` elsewhere. Pass ``False`` to disable explicitly
+        # (used in tests that want raw-eager output for numerical
+        # comparison, and on hosts where Triton is unavailable).
+        compile_model: Optional[bool] = None,
+        # ``warmup`` runs a synthetic forward pass at
+        # MAX_SEQ_LEN + batch_size during ``start()`` so CUDA kernels
+        # (and torch.compile artifacts) JIT-compile before the first
+        # real request. Adds ~hundreds of ms to startup but eliminates
+        # the cold-cache spike on the first batch. Defaults to ``True``
+        # on CUDA, ``False`` elsewhere.
+        warmup: Optional[bool] = None,
+        # ``pin_memory`` calls ``.pin_memory()`` on the slot tensors
+        # so host->device copies use page-locked memory + can be
+        # ``non_blocking=True``. Only meaningful on CUDA; ignored on
+        # CPU. Defaults to ``True`` on CUDA, ``False`` elsewhere.
+        pin_memory: Optional[bool] = None,
         # ----- structured-architecture knobs ------------------------
         # ``max_seq_len`` caps the per-slot sequence length for the
         # structured input pool. Requests that tokenize to seq_len >
@@ -378,6 +411,50 @@ class SharedTensorNNEvalServer:
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self._device = torch.device(device)
+        self._is_cuda = self._device.type == "cuda"
+        # ----- GPU fast-path defaults --------------------------------
+        # Resolve the autocast / compile / warmup / pin_memory knobs.
+        # Default policy per knob:
+        #
+        # - ``autocast_dtype="auto"`` → OFF by default. Measurement
+        #   on the current tiny structured trunk (emb_dim=128,
+        #   2-layer, batch_size=16, seq_len=64) shows bf16 is 3.2x
+        #   SLOWER than fp32 because per-op autocast dispatch
+        #   overhead dominates the small kernel work. The
+        #   infrastructure stays for opt-in via explicit
+        #   ``autocast_dtype=torch.bfloat16`` once the trunk grows
+        #   large enough to amortize tensor-core throughput. Set to
+        #   ``"auto-cuda"`` to force-enable on CUDA.
+        # - ``warmup`` → ON by default on CUDA. One-shot startup
+        #   cost; eliminates first-batch latency spike.
+        # - ``compile_model`` → OFF by default. Triton isn't
+        #   packaged for Windows in the current cu128 wheel, and
+        #   the structured trunk's dynamic input dict isn't a clean
+        #   reduce-overhead target until Slice F's MAX_SEQ_LEN
+        #   padding propagates further. Opt in explicitly.
+        # - ``pin_memory`` → OFF by default. The added host-host
+        #   copy through pinned staging buffers costs more than the
+        #   non-blocking H2D speedup at our current per-request size
+        #   (~6 KB structured input).
+        if autocast_dtype == "auto":
+            autocast_dtype = None
+        elif autocast_dtype == "auto-cuda":
+            autocast_dtype = torch.bfloat16 if self._is_cuda else None
+        elif autocast_dtype is False:
+            autocast_dtype = None
+        self._autocast_dtype = autocast_dtype
+        self._autocast_enabled = (
+            self._is_cuda and self._autocast_dtype is not None
+        )
+        if compile_model is None:
+            compile_model = False
+        self._compile_model_requested = bool(compile_model)
+        if warmup is None:
+            warmup = self._is_cuda
+        self._warmup_enabled = bool(warmup)
+        if pin_memory is None:
+            pin_memory = False
+        self._pin_memory_enabled = bool(pin_memory) and self._is_cuda
         # Resolve the architecture string. ``None`` (the legacy default)
         # routes to the shared-trunk dual-head MLP, matching the
         # pre-Slice-F behaviour. The structured architecture is opted
@@ -451,6 +528,47 @@ class SharedTensorNNEvalServer:
             self._model.load_state_dict(state_dict)
         self._model.to(self._device)
         self._model.eval()
+        # ----- torch.compile (after .to(device) + .eval()) -----------
+        # Wrap the loaded model in ``torch.compile(mode='reduce-
+        # overhead')`` when requested. ``reduce-overhead`` is geared
+        # for many small calls — exactly our dispatch pattern (~25
+        # forwards per decision × hundreds of decisions per game).
+        # CUDA-only by default; on CPU/MPS the cost > benefit.
+        #
+        # The padded structured input substrate already pins seq_len
+        # at MAX_SEQ_LEN per slot, so compile sees a single static
+        # shape across requests — no dynamic-shape recompiles. For
+        # the flat-feature MLP path the input shape is already
+        # ``(batch, FEATURE_DIM)`` so the same static-shape contract
+        # holds.
+        #
+        # Triton is required on Linux (the inductor backend), and
+        # historically wasn't packaged for Windows. As of torch
+        # 2.11 + cu128 Triton ships with the Windows wheels, but
+        # keep a soft fallback so a future split doesn't crash
+        # startup.
+        self._model_compiled = False
+        self._uncompiled_model = self._model
+        if self._compile_model_requested and self._is_cuda:
+            try:
+                self._model = torch.compile(
+                    self._model, mode="reduce-overhead", dynamic=False,
+                )
+                # ``torch.compile`` is lazy — the wrap only swaps the
+                # callable. The actual graph compile happens at the
+                # first forward. Triton-missing failures don't surface
+                # here. We trigger the eager probe at warmup time
+                # (``_run_warmup_forward``) and back off there if
+                # inductor errors out. Set ``_model_compiled=True``
+                # optimistically; warmup will demote it on failure.
+                self._model_compiled = True
+            except Exception as exc:  # noqa: BLE001
+                self._logger.warning(
+                    "torch.compile failed at wrap time (%s); falling "
+                    "back to eager execution.", exc,
+                )
+                self._model = self._uncompiled_model
+                self._model_compiled = False
 
         # Resolve dimensions for slot allocation.
         from mtg_bot.features import FEATURE_DIM
@@ -468,6 +586,17 @@ class SharedTensorNNEvalServer:
         # handle-record uniformity (the structured client never touches
         # it). For MLP servers ``features`` is the flat-feature slot
         # pool and the per-token tensors stay None on the handle.
+        #
+        # ``pin_memory_enabled`` (CUDA-only) allocates separate
+        # PINNED host staging tensors alongside the slot pool. The
+        # dispatcher uses these to bounce slot rows through pinned
+        # memory before issuing ``.to(device, non_blocking=True)`` —
+        # which is the H2D fast path on CUDA. Pinning the SHARED slot
+        # tensors directly doesn't work: ``share_memory_()`` and
+        # ``pin_memory()`` are mutually exclusive at the storage
+        # level (each replaces the underlying storage with its own
+        # backing). Two-buffer split is the standard pattern for
+        # IPC + GPU.
         if self._is_structured:
             # Per-token vocab sizes pulled off the model so the slot
             # tensors line up with the trunk's embedding tables.
@@ -515,6 +644,69 @@ class SharedTensorNNEvalServer:
         else:
             self._masks = None
             self._policies = None
+
+        # ----- Pinned host staging buffers (CUDA fast path) ---------
+        # Pre-allocate one pinned staging tensor per input slot
+        # tensor. The dispatcher copies the gathered batch into these
+        # before issuing ``.to(device, non_blocking=True)`` — which
+        # is what unlocks the asynchronous H2D transfer.
+        #
+        # Sized to the FULL slot pool so a single ``batch_size <=
+        # n_slots`` dispatch can use a contiguous slice without
+        # reallocation. Stays None when pin_memory is disabled
+        # (CPU host, or explicit ``pin_memory=False``).
+        if self._pin_memory_enabled:
+            try:
+                self._pinned_features = (
+                    torch.zeros_like(self._features).pin_memory()
+                    if self._features.numel() > 0 else None
+                )
+                self._pinned_masks = (
+                    torch.zeros_like(self._masks).pin_memory()
+                    if self._masks is not None else None
+                )
+                if self._is_structured:
+                    self._pinned_token_type = (
+                        torch.zeros_like(self._token_type).pin_memory()
+                    )
+                    self._pinned_token_emb_ids = (
+                        torch.zeros_like(self._token_emb_ids).pin_memory()
+                    )
+                    self._pinned_token_scalars = (
+                        torch.zeros_like(self._token_scalars).pin_memory()
+                    )
+                    self._pinned_attention_mask = (
+                        torch.zeros_like(self._attention_mask).pin_memory()
+                    )
+                else:
+                    self._pinned_token_type = None
+                    self._pinned_token_emb_ids = None
+                    self._pinned_token_scalars = None
+                    self._pinned_attention_mask = None
+            except (RuntimeError, NotImplementedError) as exc:
+                # Older torch / exotic platform: fall back to the
+                # unpinned slow path. The dispatcher consults
+                # ``self._pinned_*`` and degrades to direct .to()
+                # automatically when any of them is None.
+                self._logger.warning(
+                    "Pinned host buffer allocation failed (%s); "
+                    "dispatcher will fall back to unpinned H2D "
+                    "copies.", exc,
+                )
+                self._pin_memory_enabled = False
+                self._pinned_features = None
+                self._pinned_masks = None
+                self._pinned_token_type = None
+                self._pinned_token_emb_ids = None
+                self._pinned_token_scalars = None
+                self._pinned_attention_mask = None
+        else:
+            self._pinned_features = None
+            self._pinned_masks = None
+            self._pinned_token_type = None
+            self._pinned_token_emb_ids = None
+            self._pinned_token_scalars = None
+            self._pinned_attention_mask = None
 
         # Sync primitives. Use the host's preferred context — fork on
         # Linux/macOS, spawn on Windows. The free_slots / request_queue
@@ -567,12 +759,170 @@ class SharedTensorNNEvalServer:
         # Clear the cross-process shutdown signal so a restart-after-
         # stop server doesn't immediately fail every client call.
         self._server_stopped.clear()
+        # Run the synthetic warmup forward BEFORE the dispatcher
+        # thread spins up so the first real request sees a pre-
+        # compiled model + warm CUDA kernels. Skipped (no-op) when
+        # warmup is disabled (CPU host, or explicit ``warmup=False``).
+        # Counts the number of warmup forwards so tests can assert
+        # exactly-one-call semantics.
+        #
+        # Warmup also acts as the compile-failure probe: if
+        # ``torch.compile`` was applied at construction time but
+        # inductor errors out at first-call time (e.g. Triton missing
+        # on Windows), the compiled callable raises here. We catch
+        # the failure, demote the model back to its uncompiled form,
+        # and re-run the warmup forward through eager. The dispatcher
+        # then sees an eager model on subsequent calls instead of
+        # rethrowing on every request.
+        self.warmup_calls = 0
+        if self._warmup_enabled:
+            try:
+                self._run_warmup_forward()
+            except Exception as exc:  # noqa: BLE001
+                if self._model_compiled:
+                    self._logger.warning(
+                        "torch.compile failed at first forward (%s); "
+                        "falling back to eager execution. Re-running "
+                        "warmup against the uncompiled model.", exc,
+                    )
+                    self._model = self._uncompiled_model
+                    self._model_compiled = False
+                    try:
+                        self._run_warmup_forward()
+                    except Exception as exc2:  # noqa: BLE001
+                        self._logger.warning(
+                            "Eager-mode warmup failed too (%s); first "
+                            "real request will pay the cold-cache "
+                            "cost.", exc2,
+                        )
+                else:
+                    self._logger.warning(
+                        "SHM eval server warmup failed (%s); first "
+                        "real request will pay the cold-cache cost.",
+                        exc,
+                    )
         self._dispatch_thread = threading.Thread(
             target=self._dispatch_loop,
             name="shm-nn-eval-server-dispatcher",
             daemon=True,
         )
         self._dispatch_thread.start()
+
+    def _run_warmup_forward(self) -> None:
+        """Issue one synthetic forward pass at the full
+        ``(batch_size, MAX_SEQ_LEN, ...)`` shape so the model's CUDA
+        kernels (and any ``torch.compile`` artifact) JIT-compile and
+        cache before the first real request. Discards the output.
+
+        For structured servers, the synthetic batch matches the
+        ``StructuredModel.forward`` input dict shape — random
+        integers in vocab ranges for ids, random floats for scalars,
+        all-True attention mask. For flat-feature servers, a random
+        ``(batch_size, FEATURE_DIM)`` tensor is enough.
+
+        Runs under the same ``torch.no_grad()`` + autocast context
+        the dispatcher uses, so the warmed kernels match the hot
+        path bit-identically.
+        """
+        device = self._device
+        batch_size = self._batch_size
+        with torch.no_grad(), self._autocast_ctx():
+            if self._is_structured:
+                cfg = self._uncompiled_model.config
+                from mtg_bot.training.structured_model import (
+                    ACTION_KIND_VOCAB_SIZE,
+                    CONTROLLER_VOCAB_SIZE,
+                    EMB_FIELD_ACTION_KIND,
+                    EMB_FIELD_CONTROLLER,
+                    EMB_FIELD_PRINTING,
+                    EMB_FIELD_STEP,
+                    EMB_FIELD_TARGET_KIND,
+                    EMB_FIELD_TARGET_PRINTING,
+                    EMB_FIELD_VARIANT,
+                    N_EMB_FIELDS,
+                    N_SCALAR_FIELDS,
+                    N_TOKEN_TYPES,
+                    STEP_VOCAB_SIZE,
+                    TARGET_KIND_VOCAB_SIZE,
+                    VARIANT_VOCAB_SIZE,
+                )
+                seq_len = max(1, self._max_seq_len)
+                # Each emb-field has its own sub-vocab size; using a
+                # single max across all fields would overflow the
+                # smaller tables (action_kind=23, controller=3,
+                # target_kind=6, variant=9, step=13). Build the
+                # tensor field-by-field so each column stays in range.
+                token_emb_ids = torch.zeros(
+                    (batch_size, seq_len, N_EMB_FIELDS),
+                    dtype=torch.int64, device=device,
+                )
+                n_printings_cap = max(1, cfg.n_printings)
+                token_emb_ids[..., EMB_FIELD_PRINTING] = torch.randint(
+                    0, n_printings_cap,
+                    size=(batch_size, seq_len),
+                    dtype=torch.int64, device=device,
+                )
+                token_emb_ids[..., EMB_FIELD_ACTION_KIND] = torch.randint(
+                    0, ACTION_KIND_VOCAB_SIZE,
+                    size=(batch_size, seq_len),
+                    dtype=torch.int64, device=device,
+                )
+                token_emb_ids[..., EMB_FIELD_CONTROLLER] = torch.randint(
+                    0, CONTROLLER_VOCAB_SIZE,
+                    size=(batch_size, seq_len),
+                    dtype=torch.int64, device=device,
+                )
+                token_emb_ids[..., EMB_FIELD_TARGET_PRINTING] = (
+                    torch.randint(
+                        0, n_printings_cap,
+                        size=(batch_size, seq_len),
+                        dtype=torch.int64, device=device,
+                    )
+                )
+                token_emb_ids[..., EMB_FIELD_TARGET_KIND] = torch.randint(
+                    0, TARGET_KIND_VOCAB_SIZE,
+                    size=(batch_size, seq_len),
+                    dtype=torch.int64, device=device,
+                )
+                token_emb_ids[..., EMB_FIELD_VARIANT] = torch.randint(
+                    0, VARIANT_VOCAB_SIZE,
+                    size=(batch_size, seq_len),
+                    dtype=torch.int64, device=device,
+                )
+                token_emb_ids[..., EMB_FIELD_STEP] = torch.randint(
+                    0, STEP_VOCAB_SIZE,
+                    size=(batch_size, seq_len),
+                    dtype=torch.int64, device=device,
+                )
+                batch = {
+                    "token_type": torch.randint(
+                        0, N_TOKEN_TYPES,
+                        size=(batch_size, seq_len),
+                        dtype=torch.int64, device=device,
+                    ),
+                    "token_emb_ids": token_emb_ids,
+                    "token_scalars": torch.randn(
+                        (batch_size, seq_len, N_SCALAR_FIELDS),
+                        dtype=torch.float32, device=device,
+                    ),
+                    "attention_mask": torch.ones(
+                        (batch_size, seq_len),
+                        dtype=torch.bool, device=device,
+                    ),
+                }
+                _ = self._model(batch)
+            else:
+                feats = torch.randn(
+                    (batch_size, self._feature_dim),
+                    dtype=torch.float32, device=device,
+                )
+                _ = self._model(feats)
+        # Optional CUDA-side sync so the warmup actually completes
+        # before we return (otherwise the dispatcher thread might
+        # race the kernel-compile that's still in flight).
+        if self._is_cuda:
+            torch.cuda.synchronize(device)
+        self.warmup_calls += 1
 
     def stop(self, timeout: float = 5.0) -> None:
         if self._dispatch_thread is None:
@@ -727,25 +1077,70 @@ class SharedTensorNNEvalServer:
         self.requests_served += len(slot_indices)
         self.batch_sizes.append(len(slot_indices))
 
+    def _stage_to_device(
+        self,
+        src: torch.Tensor,
+        idx_tensor: torch.Tensor,
+        pinned: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Gather ``src[idx_tensor]`` and ship it to ``self._device``.
+
+        Uses the pre-allocated pinned staging buffer (when present) so
+        the H2D copy can run ``non_blocking=True`` and overlap with
+        compute. Falls back to a direct ``.to(device)`` when pinning
+        is disabled or unsupported on this host.
+        """
+        gathered = src.index_select(0, idx_tensor)
+        if pinned is not None:
+            # Copy gathered rows into the pinned staging window,
+            # then non-blocking ship to device. The staging buffer is
+            # sized to ``n_slots`` rows; the gathered slice fits.
+            n = gathered.shape[0]
+            pinned[:n].copy_(gathered)
+            return pinned[:n].to(self._device, non_blocking=True)
+        return gathered.to(self._device, non_blocking=self._is_cuda)
+
+    def _autocast_ctx(self):
+        """Return a torch.autocast context manager for the dispatch
+        forward when autocast is enabled, else a no-op contextlib
+        nullcontext. The CUDA-only gate prevents accidental MPS / CPU
+        autocast paths from getting wired up here.
+        """
+        if self._autocast_enabled:
+            return torch.autocast(
+                device_type="cuda", dtype=self._autocast_dtype,
+            )
+        import contextlib
+        return contextlib.nullcontext()
+
     def _dispatch_flat(self, slot_indices: list[int]) -> None:
         """Flat-feature MLP dispatch path. Identical to the pre-Slice-F
         behaviour: gather features (+ masks) from the slot tensors,
         run one forward pass, scatter outputs back, signal response
         events.
+
+        GPU fast path: when ``self._pin_memory_enabled``, gathered
+        rows go through pinned staging and ``non_blocking=True``
+        H2D copies; when ``self._autocast_enabled``, the forward
+        pass runs inside ``torch.autocast(device_type='cuda',
+        dtype=bf16|fp16)``.
         """
         idx_tensor = torch.tensor(slot_indices, dtype=torch.long)
-        feat_batch = self._features.index_select(0, idx_tensor)
         with torch.no_grad():
-            feat_dev = feat_batch.to(self._device)
+            feat_dev = self._stage_to_device(
+                self._features, idx_tensor, self._pinned_features,
+            )
             if self._with_policy:
                 assert self._masks is not None
                 assert self._policies is not None
-                mask_batch = (
-                    self._masks.index_select(0, idx_tensor)
-                    .to(self._device)
+                mask_batch = self._stage_to_device(
+                    self._masks, idx_tensor, self._pinned_masks,
                 )
-                value_t, policy_logits = self._model(feat_dev)
+                with self._autocast_ctx():
+                    value_t, policy_logits = self._model(feat_dev)
                 # Apply the mask: -inf where mask is False, then softmax.
+                # Use the policy_logits dtype (bf16/fp16/fp32) so the
+                # masked-fill scalar matches.
                 neg_inf = torch.tensor(
                     float("-inf"), dtype=policy_logits.dtype,
                     device=self._device,
@@ -762,7 +1157,8 @@ class SharedTensorNNEvalServer:
                     self._policies[slot].copy_(policy_cpu[i])
                     self._response_events[slot].set()
             else:
-                value_t = self._model(feat_dev)
+                with self._autocast_ctx():
+                    value_t = self._model(feat_dev)
                 if isinstance(value_t, tuple):
                     value_t = value_t[0]
                 value_cpu = value_t.detach().to(torch.float32).cpu()
@@ -789,23 +1185,28 @@ class SharedTensorNNEvalServer:
         idx_tensor = torch.tensor(slot_indices, dtype=torch.long)
         with torch.no_grad():
             batch = {
-                "token_type": self._token_type.index_select(
-                    0, idx_tensor,
-                ).to(self._device),
-                "token_emb_ids": self._token_emb_ids.index_select(
-                    0, idx_tensor,
-                ).to(self._device),
-                "token_scalars": self._token_scalars.index_select(
-                    0, idx_tensor,
-                ).to(self._device),
-                "attention_mask": self._attention_mask.index_select(
-                    0, idx_tensor,
-                ).to(self._device),
+                "token_type": self._stage_to_device(
+                    self._token_type, idx_tensor,
+                    self._pinned_token_type,
+                ),
+                "token_emb_ids": self._stage_to_device(
+                    self._token_emb_ids, idx_tensor,
+                    self._pinned_token_emb_ids,
+                ),
+                "token_scalars": self._stage_to_device(
+                    self._token_scalars, idx_tensor,
+                    self._pinned_token_scalars,
+                ),
+                "attention_mask": self._stage_to_device(
+                    self._attention_mask, idx_tensor,
+                    self._pinned_attention_mask,
+                ),
             }
-            mask_batch = (
-                self._masks.index_select(0, idx_tensor).to(self._device)
+            mask_batch = self._stage_to_device(
+                self._masks, idx_tensor, self._pinned_masks,
             )
-            out = self._model(batch)
+            with self._autocast_ctx():
+                out = self._model(batch)
             value_t = out["value"]
             policy_logits = out["policy_logits"]
             # ``value_t`` is shaped ``(B,)`` per StructuredModel's
