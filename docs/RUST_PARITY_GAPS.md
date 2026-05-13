@@ -4208,6 +4208,82 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I70. `Effect::ExileTarget { AnyCreature }` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player` (ExileTarget defender divergence closure)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_exile_target_*` regression pins covering cross-
+    controller spell resolution (1: p1-controlled
+    Path-to-Exile-shape instant on p0's turn → exiles p0's bf[0],
+    NOT p1's), same-controller back-compat (1: p0-controlled
+    source still exiles p1's bf[0]), `resolve_top_of_stack_pause`
+    parity (1: pause variant threads the controller identically),
+    and empty-defender fizzle (1: source-controller's opponent
+    has empty bf → effect fizzles silently, source still moves
+    to graveyard, no spurious exile push).
+
+- **Rule**. CR 119.5 / 608.2: an effect resolves under its
+  source's controller. "ExileTarget" with the
+  `TargetFilter::AnyCreature` first-slice shortcut picks the
+  FIRST object on the DEFENDING side — where defender = the
+  SOURCE'S controller's opponent. Sibling closure to I64
+  DealDamage / I67 DealDamageAnyTarget — same
+  `defender = 1 - controller` shape, same transient-slot lookup
+  substrate.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::ExileTarget { AnyCreature }` arm at
+  `state_ops_resolve.rs:1110` (pre-fix line) computed
+  `let defender = (1 - state.active_player) as usize`. Wrong
+  when the resolving spell / triggered ability has a controller
+  != active_player. Example: on p0's turn, p1 casts an Exile-
+  target-creature instant (e.g. a Path-to-Exile-shape spell on
+  p0's combat). Pre-fix the trigger self-exiled p1's own bf[0]
+  (defender = 1 - active_player = 1 - 0 = 1). Post-fix it
+  correctly exiles p0's bf[0] (the source's controller's
+  opponent).
+
+- **Reuses I59 substrate**. No new state, no new helper. The
+  arm gains a controller-resolution preamble identical to the
+  I64 DealDamage / I67 DealDamageAnyTarget / I68
+  DealDamageEqualToSourcePowerAnyTarget arms:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let defender = 1 - controller;`. The exile-push site
+  (`Arc::make_mut(&mut state.players[defender].exile).push(obj)`)
+  reads the resolved `defender` unchanged.
+
+- **`AnyCreature` first-slice scope note**. The current
+  `AnyCreature` target shortcut picks `bf[0]` regardless of
+  card-type filter — there is no creature-type filter at this
+  layer. Synthetic-state `bf[0]` is a Forest (lands fill the
+  first half of `make_player`'s bf seeding), but the regression
+  pins assert WHICH SIDE got hit, not the card type — which is
+  the load-bearing semantic of I70. A future slice can tighten
+  the target filter; the controller-of-effect fix is
+  independent.
+
+- **Out of scope (deferred to future slices)**:
+  - **`Effect::TapTarget { AnyCreature }`** — same shape at
+    `state_ops_resolve.rs:1185`; likely same fix in a sibling
+    slice (I71 candidate).
+  - **`Effect::UntapTarget { AnyCreature }`** at
+    `state_ops_resolve.rs:1236` — same shape.
+  - **`Effect::AddCounters { AnyCreature }`** at
+    `state_ops_resolve.rs:1393`.
+  - **`Effect::DiscardCard { AnyCreature }`** at
+    `state_ops_resolve.rs:1447`.
+  - **`Effect::DestroyTarget { AnyCreature }`** at
+    `state_ops_resolve.rs:1567`.
+
+- **Forward inventory (post-I70 remaining defender-shape
+  `(1 - state.active_player)` sites in `state_ops_resolve.rs`):**
+  - TapTarget (line 1185), UntapTarget (1236), AddCounters
+    (1393), DiscardCard (1447), DestroyTarget (1567), several
+    sites in DestroyAllCreatures / ExileAll subarms (4638,
+    4958, 5022) — per-arm audit pending. Each is its own
+    per-slice decision.
+
 ### I69. `Effect::SearchLibraryForBasicLandTapped` controller-of-effect fix — reuses I59 transient slot; searcher resolved from source-controller instead of `state.active_player` (first non-defender-shape arm in the controller-of-effect series)
 
 - **Pinned by**:
