@@ -403,14 +403,14 @@ pub(crate) fn dispatch_event(
     event: Event,
     subject_id: u32,
 ) -> PyResult<()> {
-    // Defensive: Slice 5 wires ENTERS + DIES. Other events declared
-    // in the enum stay raise-on-dispatch so a future caller who
-    // skipped the fan-out plan surfaces it loudly rather than
+    // Defensive: Slice 6 wires ENTERS + DIES + CAST. Other events
+    // declared in the enum stay raise-on-dispatch so a future caller
+    // who skipped the fan-out plan surfaces it loudly rather than
     // silently no-op.
-    if event != Event::Enters && event != Event::Dies {
+    if event != Event::Enters && event != Event::Dies && event != Event::Cast {
         return Err(PyValueError::new_err(format!(
-            "dispatch_event: event {event:?} is not yet wired in Slice 5; \
-             only Event::Enters and Event::Dies dispatch today"
+            "dispatch_event: event {event:?} is not yet wired in Slice 6; \
+             only Event::Enters, Event::Dies, and Event::Cast dispatch today"
         )));
     }
 
@@ -427,37 +427,51 @@ pub(crate) fn dispatch_event(
     // it (mirroring Python's `extra_observers=[obj]`) so an
     // `IsSelf`-shape "when this creature dies" trigger can still
     // see itself as a candidate observer.
+    //
+    // For CAST events, the spell-being-cast is still in the hand
+    // zone at dispatch time (Rust's no-stack `cast_creature`
+    // dispatches CAST after mana payment but BEFORE the move-to-bf).
+    // The subject is the object in the hand; SourceIsSelf-shape
+    // "when you cast this" triggers need the casting card as an
+    // extra observer so the predicate's source==subject test can
+    // match. Mirrors the DIES extra-observer pattern.
     let firings: Vec<(u32, u8, u32, Effect, bool)> = {
         let bf = bf_iter_etb_sorted(state);
-        // Build the observer list: every bf permanent, plus the
-        // dying object (if this is a DIES dispatch and the object is
-        // findable). The extra observer is keyed by id so the
-        // ability-walk lookup uses the same registry lookup the bf
-        // permanents go through.
+        // Build the observer list: every bf permanent, plus
+        // event-specific extra observers (the dying creature for
+        // DIES, the cast-spell for CAST). The extra observer is
+        // keyed by id so the ability-walk lookup uses the same
+        // registry lookup the bf permanents go through.
         let mut observer_entries: Vec<(u32, u8, u32)> = bf
             .iter()
             .map(|o| (o.id, o.controller, o.printing_id))
             .collect();
-        if event == Event::Dies {
-            // Look up the dying object (now in graveyard) to gather
-            // its printing_id + controller. Skip if not found — the
-            // SBA caller always moves to the controller's graveyard
-            // before dispatching, but the lookup is loud-but-safe to
-            // future-proof against alternate-zone movers.
+        if event == Event::Dies || event == Event::Cast {
+            // DIES: look up the dying object (now in graveyard).
+            // CAST: look up the cast object (still in hand).
+            // Both share the four-zone walk shape. Skip if not
+            // found — the dispatch caller is loud-but-safe.
             //
-            // Dedup guard: if the dying object somehow still appears
-            // in `bf` (it shouldn't, post-move), don't double-register
-            // it as an observer.
+            // Dedup guard: if the subject somehow also appears in
+            // `bf` (shouldn't happen for either event's caller),
+            // don't double-register it as an observer.
             if !observer_entries.iter().any(|(id, _, _)| *id == subject_id) {
-                for player in &state.players {
-                    for obj in player.graveyard.iter() {
-                        if obj.id == subject_id {
-                            observer_entries.push((
-                                obj.id,
-                                obj.controller,
-                                obj.printing_id,
-                            ));
-                            break;
+                'outer: for player in &state.players {
+                    for zone in [
+                        &player.hand,
+                        &player.library,
+                        &player.battlefield,
+                        &player.graveyard,
+                    ] {
+                        for obj in zone.iter() {
+                            if obj.id == subject_id {
+                                observer_entries.push((
+                                    obj.id,
+                                    obj.controller,
+                                    obj.printing_id,
+                                ));
+                                break 'outer;
+                            }
                         }
                     }
                 }

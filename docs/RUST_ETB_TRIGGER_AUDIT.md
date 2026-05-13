@@ -1052,3 +1052,68 @@ combat-shape probes.
   declared attacker — Slice 7.
 - `Event::DealsCombatDamage` — multi-subject event needs richer
   `Predicate::Subject(slot, inner)` schema.
+
+---
+
+## Slice 6 completion notice (landed)
+
+`feature/etb-slice-6` adds `Event::Cast` and its dispatch wiring at
+the `cast_creature` site. CAST fires after mana payment commits and
+before the move-to-bf step's ENTERS dispatch — matching Python's
+cast-then-resolve ordering.
+
+**Implementation shape:**
+
+- `Event::Cast` parser arm in `rust/src/cards.rs::parse_triggered_ability`
+  (previously raise-on-register `"cast"` event now succeeds; only
+  `attacks` and `deals_damage` still raise).
+- `dispatch_event` accepts `Event::Cast` in addition to `Enters` /
+  `Dies`. The CAST branch reuses the DIES extra-observer logic: the
+  cast-spell is still in the hand zone at dispatch time, so the
+  four-zone object lookup finds it. `Predicate::SourceIsSelf` triggers
+  ("when you cast this") can match the cast spell against itself.
+- New wiring point: `state_ops_cast.rs::cast_creature` dispatches
+  `Event::Cast` after `pay_mana_cost` commits and BEFORE
+  `move_from_hand_to_battlefield` fires its own ENTERS dispatch.
+  Push order: CAST first, ENTERS second. Stack-resolution is LIFO so
+  ENTERS resolves first (matches Python's cast-pushes-spell-on-stack
+  semantics).
+- `cross_engine.py::_ta_dict_to_python_triggered_ability` accepts
+  `event="cast"` and translates to Python's `Event.IS_CAST` (note
+  Python's enum spelling is `IS_CAST` while Rust uses `Cast`).
+
+**Tests** (8 new in `tests_rust/test_triggers.py`):
+
+- Parser surface: `cast` parses; `attacks` / `deals_damage`
+  still raise.
+- SourceIsSelf CAST: a free-cast creature with "when you cast
+  this, draw a card" fires its trigger on cast.
+- Subject-creature CAST observer (Talrand-shape): fires on
+  ANY creature cast.
+- Subject-creature + controlled_by_you CAST observer: fires on
+  p0's own cast.
+- Both CAST and ENTERS on the same source: 2 triggers stack;
+  push order is CAST first, ENTERS second; LIFO resolves ENTERS
+  first.
+- Cross-engine bridge: `event: cast` round-trips to Python's
+  `Event.IS_CAST`.
+
+**Rust gate**: 1961/1961 pass (Slice 5 baseline 1942 + 8 new + 11
+unrelated from concurrent CE20 agent work).
+
+**Out of scope for Slice 6 (queued for Slice 7+):**
+
+- `Event::Attacks` + dispatch site in `state_ops_combat.rs::declare_attackers`
+  per declared attacker — Slice 7.
+- `Event::DealsCombatDamage` — multi-subject event needs richer
+  `Predicate::Subject(slot, inner)` schema for the (source,
+  target) subject mapping.
+- Cascade-shape CAST triggers that fire on the SOURCE's own cast
+  via SourceIsSelf — already supported via the extra-observer
+  pattern, but the harness-side cast-without-cast-creature-primitive
+  paths (search-loop's stack-push without cast_creature) won't
+  dispatch CAST today. Slice N is when we add a real stack-push
+  cast primitive.
+- Cost-modifier triggers (e.g. "spells you cast cost {1} less" —
+  these aren't triggers per se, they're cost-replacements; out of
+  the dispatch scope).

@@ -349,6 +349,23 @@ impl GameState {
             return Ok(false);
         }
         self.players[idx].mana_pool = pool_copy;
+        // Slice 6: dispatch Event::Cast NOW — after mana payment
+        // commits but before the move-to-bf fires its ENTERS
+        // dispatch. CR 601.2 — a spell is "cast" the moment its
+        // cost is paid (technically before, but post-cost-pay is
+        // the closest moment Rust's no-stack primitive can hook
+        // into). CAST fires BEFORE ENTERS, matching the Python flow
+        // where the spell stack item resolves on top of the cast
+        // event.
+        //
+        // The subject is the card-being-cast still in the hand zone
+        // (move-to-bf hasn't fired yet). Predicate matchers walk
+        // all four zones so the hand-zone lookup finds it.
+        crate::state_ops_resolve::dispatch_event(
+            self,
+            crate::cards::Event::Cast,
+            obj_id,
+        )?;
         // Phase 3: move the card. Stamp summoning sickness AFTER the
         // push (stamp on the in-place battlefield slot, since
         // `move_from_hand_to_battlefield` returns the snapshot at
