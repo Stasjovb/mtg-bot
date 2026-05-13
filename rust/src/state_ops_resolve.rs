@@ -2007,10 +2007,11 @@ fn apply_effect(
         // (`summoning_sick = false` — CR 302.1 only applies to
         // creatures; a land bypassing creature-spell resolution via
         // a search effect has no summoning sickness regardless). The
-        // `controller` field is stamped to the active player —
-        // searching for someone else's basic land into their own
-        // battlefield isn't a thing in real MTG, so first-slice the
-        // searched land enters under the searcher's control.
+        // `controller` field is stamped to the SEARCHER (the
+        // source's controller, per I69) — searching for someone
+        // else's basic land into their own battlefield isn't a
+        // thing in real MTG, so the searched land enters under the
+        // searcher's control.
         //
         // **Inlining note (cross-file friction).** Per per-slice file-
         // isolation we inline the search + move logic here rather
@@ -2029,7 +2030,48 @@ fn apply_effect(
             if n == 0 {
                 return Ok(());
             }
-            let controller_idx = state.active_player as usize;
+            // **Controller resolution (I69 follow-up to the I59 /
+            // I60 / I63 / I64 / I65 / I66 / I67 / I68 controller-
+            // of-effect substrate).** Prefer the transient
+            // `state.current_resolve_source_controller` (set by
+            // the stack resolver around each `apply_effect` call),
+            // falling back to `state.active_player` for back-compat
+            // with direct `apply_effect_pub` callers. Same pattern
+            // as `Effect::DrawCards` / `Effect::GainLife` /
+            // `Effect::Mill` / `Effect::Sacrifice` — CR 119.5 /
+            // 608.2: an effect resolves under its source's
+            // controller. For SearchLibraryForBasicLandTapped
+            // ("your library"), the searcher is the SOURCE'S
+            // controller, not the active player. Mirrors the
+            // Python `SearchLibraryForBasicLandTapped.resolve`
+            // shape, which takes `controller_id` from the
+            // resolver (the StackItem's controller).
+            //
+            // **Why the fix.** Pre-fix this arm hardcoded
+            // `controller_idx = state.active_player`. Wrong when
+            // the resolving spell / triggered ability has a
+            // controller != active_player. Example: on p0's turn,
+            // p1's Cultivate-shape spell ("search your library
+            // for up to 2 basic land cards") resolves — pre-fix
+            // it pulled basics from P0'S library onto P0's
+            // battlefield (the active player), not p1's; post-fix
+            // it correctly pulls from p1's library onto p1's
+            // battlefield.
+            //
+            // **xorshift seed unchanged.** The fallback seed at
+            // the post-search shuffle still mixes `state.active_-
+            // player` (alongside turn, source_obj_id, library_-
+            // len). Changing it would break the existing
+            // `test_resolve_search_library_for_basic_land_tapped_-
+            // shuffle_is_deterministic` pin, and the seed is a
+            // pure-state determinism input, not a behavior switch
+            // — per-run uniqueness comes from source_obj_id +
+            // library_len mixing.
+            let controller_idx = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let controller_u8 = controller_idx as u8;
             // ETB-trigger Slice 2 (RS2): collect the obj_id of every
             // land we move onto the battlefield so we can fan out
             // `dispatch_event(Event::Enters, ...)` for each AFTER the
@@ -2062,18 +2104,17 @@ fn apply_effect(
                 };
                 // CE4 closure: reserve before the player-mut borrow.
                 let etb_ts = crate::state::reserve_etb_timestamp(state);
-                let active = state.active_player;
                 let player = &mut state.players[controller_idx];
                 let lib = Arc::make_mut(&mut player.library);
                 let mut obj = lib.remove(p);
                 // Stamp battlefield entry: tapped, not summoning-sick
                 // (CR 302.1 applies to creatures; lands don't have
-                // summoning sickness regardless). Controller =
-                // active_player (the searcher).
+                // summoning sickness regardless). Controller = the
+                // SEARCHER (source's controller, per I69).
                 obj.zone = ZONE_BATTLEFIELD;
                 obj.tapped = true;
                 obj.summoning_sick = false;
-                obj.controller = active;
+                obj.controller = controller_u8;
                 obj.damage = 0;
                 obj.counters = 0;
                 obj.attached_to = None;
