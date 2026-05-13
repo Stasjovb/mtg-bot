@@ -533,3 +533,163 @@ def test_make_state_fingerprint_differs_when_registry_name_differs(engine):
     name_b = state_b.library_snapshot(0)[0]["printing_name"]
     assert name_a == "Forest"
     assert name_b == "Spooky Forest"
+
+
+# =====================================================================
+# Subtypes substrate (Slice 1)
+#
+# `CardPrinting.subtypes: Vec<String>` mirrors Python's
+# `CardPrinting.subtypes: tuple[str, ...]` at `cards/base.py:501`.
+# Empty when the type line has no subtypes (vanilla instants/sorceries
+# / generic artifacts). Mixed semantics by design: holds basic-land
+# subtypes ("Forest", "Mountain"), creature subtypes ("Bear", "Goblin"),
+# artifact subtypes ("Equipment", "Food"), enchantment subtypes ("Aura",
+# "Saga"). Case-sensitive Title Case strings exactly as printed.
+#
+# Substrate-only — these tests pin parse, round-trip, and back-compat
+# default. The first consumer (Predicate::HasSubtype) lands in a follow-up
+# slice with its own predicate-dispatch tests.
+# =====================================================================
+
+
+def test_subtypes_round_trip_basic_land(engine):
+    """A basic Forest registers with ``subtypes=["Forest"]`` and the
+    getter round-trips. Pins the basic-land-subtype shape (CR 205.3i).
+    """
+    reg = engine.Registry()
+    forest_pid = reg.register_printing({
+        "name": "Forest",
+        "card_types": ["Land"],
+        "subtypes": ["Forest"],
+        "mana_cost": {},
+        "mana_produced": ["G"],
+        "effects": [],
+    })
+    assert reg.get_printing_subtypes(forest_pid) == ["Forest"]
+
+
+def test_subtypes_round_trip_creature(engine):
+    """A Grizzly Bears printing registers with ``subtypes=["Bear"]`` and
+    round-trips. Pins the creature-subtype shape (CR 205.3m).
+    """
+    reg = engine.Registry()
+    bears_pid = reg.register_printing({
+        "name": "Grizzly Bears",
+        "card_types": ["Creature"],
+        "subtypes": ["Bear"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [],
+    })
+    assert reg.get_printing_subtypes(bears_pid) == ["Bear"]
+
+
+def test_subtypes_round_trip_multi(engine):
+    """A multi-subtype creature ("Creature — Elf Druid") round-trips
+    with both subtypes preserved in declared order.
+    """
+    reg = engine.Registry()
+    elf_druid_pid = reg.register_printing({
+        "name": "Llanowar Elves",
+        "card_types": ["Creature"],
+        "subtypes": ["Elf", "Druid"],
+        "mana_cost": {"G": 1},
+        "power": 1,
+        "toughness": 1,
+        "effects": [],
+    })
+    assert reg.get_printing_subtypes(elf_druid_pid) == ["Elf", "Druid"]
+
+
+def test_subtypes_missing_key_defaults_to_empty(engine):
+    """Pre-substrate registry dicts (no ``subtypes`` key) parse to an
+    empty list — back-compat for every caller predating this slice.
+    """
+    reg = engine.Registry()
+    shock_pid = reg.register_printing({
+        "name": "Mini Shock",
+        "card_types": ["Instant"],
+        "mana_cost": {"R": 1},
+        "effects": [
+            {"kind": "deal_damage", "amount": 2,
+             "target": {"kind": "any_creature"}},
+        ],
+    })
+    assert reg.get_printing_subtypes(shock_pid) == []
+
+
+def test_subtypes_empty_list_explicit(engine):
+    """An explicit empty ``subtypes=[]`` parses to an empty list
+    (sanity — the Python-side cross_engine harness emits this shape for
+    vanilla creatures / instants / sorceries).
+    """
+    reg = engine.Registry()
+    sorcery_pid = reg.register_printing({
+        "name": "Test Sorcery",
+        "card_types": ["Sorcery"],
+        "subtypes": [],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+    })
+    assert reg.get_printing_subtypes(sorcery_pid) == []
+
+
+def test_subtypes_artifact_equipment(engine):
+    """An Equipment artifact ("Artifact — Equipment") round-trips. Pins
+    the artifact-subtype shape (CR 205.3g) — load-bearing for the
+    Equipment-gated effect surface called out in cards.rs:1511.
+    """
+    reg = engine.Registry()
+    equip_pid = reg.register_printing({
+        "name": "Test Sword",
+        "card_types": ["Artifact"],
+        "subtypes": ["Equipment"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+    })
+    assert reg.get_printing_subtypes(equip_pid) == ["Equipment"]
+
+
+def test_subtypes_case_sensitive_storage(engine):
+    """``subtypes`` are stored exactly as supplied (no lowercasing,
+    unlike ``keywords``). MTG subtypes are Title Case in CR/Scryfall,
+    and consumer-side ``contains`` is case-sensitive on the canonical
+    casing.
+    """
+    reg = engine.Registry()
+    pid = reg.register_printing({
+        "name": "Test Bear",
+        "card_types": ["Creature"],
+        "subtypes": ["Bear"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [],
+    })
+    subtypes = reg.get_printing_subtypes(pid)
+    # Exact-case round-trip: stays "Bear", not "bear".
+    assert subtypes == ["Bear"]
+    assert "Bear" in subtypes
+    assert "bear" not in subtypes
+
+
+def test_subtypes_non_string_entry_raises(engine):
+    """Non-string entries in ``subtypes`` raise at register time —
+    loud-fail rather than silent coerce. Same shape as the
+    ``card_types`` / ``keywords`` validation arms.
+    """
+    import pytest
+    reg = engine.Registry()
+    with pytest.raises(ValueError, match="subtypes"):
+        reg.register_printing({
+            "name": "Bad",
+            "card_types": ["Creature"],
+            "subtypes": [42],
+            "mana_cost": {"G": 1},
+            "power": 1,
+            "toughness": 1,
+            "effects": [],
+        })
+
+

@@ -1603,7 +1603,42 @@ new from this slice).
   `Predicate::Subject(slot, inner)` substrate.
 - Multi-subject BLOCKS predicates (Skystinger): same substrate
   dependency.
-- `HasSubtype(s)` predicate — still blocked on
-  `CardPrinting.subtypes` field.
+- ~~`HasSubtype(s)` predicate — still blocked on
+  `CardPrinting.subtypes` field.~~ **Substrate landed** by
+  `feature/subtypes-substrate`. The `Predicate::HasSubtype(String)`
+  consumer lands in a follow-up slice off the substrate — see the
+  "Subtypes substrate (landed)" section at the bottom of this doc.
 - `Effect::DrawCards` controller-of-effect fix — pre-existing
   divergence, separate workstream.
+
+---
+
+## Subtypes substrate (landed — feature/subtypes-substrate)
+
+`CardPrinting.subtypes: Vec<String>` (Slice 1 of the subtypes lane)
+mirrors Python's `CardPrinting.subtypes: tuple[str, ...]` at
+`src/mtg_bot/cards/base.py:501`. The substrate-only slice:
+
+- Adds the field to the Rust `CardPrinting` struct with
+  back-compat-default behavior — a registry dict missing the
+  `subtypes` key parses to empty Vec.
+- Adds `Registry::get_printing_subtypes(id)` (mirrors the existing
+  `get_printing_card_types` / `get_printing_keywords` getter shape).
+- Fills the three direct-construction fixtures in `state.rs`:
+  Forest → `["Forest"]` (basic-land subtype, CR 205.3i), Grizzly
+  Bears → `["Bear"]` (creature subtype, CR 205.3m), Llanowar
+  Elves → `["Elf"]` (the synthetic shim drops the printed "Druid"
+  — only "Elf" is consumer-relevant today).
+- Passthrough in `cross_engine.py::build_rust_state` so cross-engine
+  smoke probes see matching subtype tuples on both engines.
+
+**Unblocks**:
+- `Predicate::HasSubtype(String)` — the canonical
+  Kavu/Sliver/Equipment-enters predicate. Next slice off this
+  substrate.
+- `CE20_FOLLOWUP_PLAYBOOK.md` §5 subtype-filtered sacrifice
+  variants (`sacrifice_food`, `sacrifice_a_desert`) — different
+  lane, separate consumer.
+
+**Rust gate**: 2112/2112 (substrate baseline 2104 + 8 round-trip
++ default + error-path + casing tests).

@@ -1740,6 +1740,11 @@ pub fn make_synthetic_state(
         toughness: None,
         mana_produced: forest_mana_produced,
         card_types: vec!["Land".to_string()],
+        // Forest carries the basic-land-type subtype "Forest"
+        // (CR 205.3i) — mirrors Python's
+        // ``CardPrinting.subtypes=("Forest",)`` at
+        // ``cross_engine.py:6337`` for the synthetic Forest printing.
+        subtypes: vec!["Forest".to_string()],
         keywords: Vec::new(),
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
@@ -1760,6 +1765,10 @@ pub fn make_synthetic_state(
         toughness: Some(2),
         mana_produced: None,
         card_types: vec!["Creature".to_string()],
+        // Grizzly Bears' printed type line is "Creature — Bear"
+        // (CR 205.3m creature subtype) — mirrors Python's
+        // ``subtypes=("Bear",)`` at ``cross_engine.py:6585``.
+        subtypes: vec!["Bear".to_string()],
         keywords: Vec::new(),
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
@@ -1791,6 +1800,12 @@ pub fn make_synthetic_state(
         toughness: Some(1),
         mana_produced: elves_mana_produced,
         card_types: vec!["Creature".to_string()],
+        // Llanowar Elves' printed type line is "Creature — Elf Druid"
+        // (CR 205.3m). The synthetic fixture omits "Druid" — only
+        // "Elf" is load-bearing for current consumers, and the
+        // synthetic state's Elves shim is already an oversimplification
+        // (see the comment above on its activated-ability shape).
+        subtypes: vec!["Elf".to_string()],
         keywords: Vec::new(),
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
