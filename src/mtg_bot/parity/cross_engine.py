@@ -1105,6 +1105,61 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return PutPlusOneCounterOnEachCreatureYouControl(
             amount=eff_dict.get("amount", 1),
         )
+    if kind == "return_creature_from_your_graveyard_to_battlefield":
+        # "Return target creature card from your graveyard to the
+        # battlefield." Sister-arm to
+        # ``return_creature_from_your_graveyard_to_hand`` -- same
+        # source-controller-of-effect derivation, same first-creature
+        # iterator-order pick semantics; the only difference is the
+        # destination zone (battlefield vs hand). Rust's
+        # ``Effect::ReturnCreatureFromYourGraveyardToBattlefield``
+        # (cards.rs:371) is a UNIT VARIANT -- no fields beyond
+        # ``kind``. The parse_effect arm at cards.rs:3006-3014
+        # accepts the dict shape
+        # ``{"kind": "return_creature_from_your_graveyard_to_battlefield"}``
+        # with no companion fields. The resolve arm at
+        # ``state_ops_resolve.rs:3192+`` carries the I83
+        # controller-of-effect fix: the source-controller's
+        # graveyard scan + the destination battlefield push + the
+        # GameObject.controller stamp on the reanimated creature
+        # all derive from ``current_resolve_source_controller``
+        # (with active_player as the back-compat fallback for
+        # direct ``apply_effect_pub`` callers). Cross-controller
+        # case (p1's ETB trigger resolves on p0's turn) routes the
+        # reanimation correctly post-I83.
+        #
+        # **Rust target-pick semantics.** Rust scans the source-
+        # controller's graveyard top-to-bottom (insertion order)
+        # for the FIRST object whose printing's ``card_types``
+        # contains "Creature". The picked card moves out of the
+        # graveyard, gets a fresh ``etb_timestamp`` (CR 400.7
+        # zone-change reset), is pushed onto the source-
+        # controller's battlefield, AND fires its own ENTERS
+        # triggers via the deferred-dispatch queue (mirrors the
+        # ``register_and_inject_object`` ENTERS-fan-out shape).
+        # Empty graveyard / no creature cards -> silent no-op.
+        #
+        # **Python target-pick semantics.** Python's
+        # ``ReturnCreatureFromYourGraveyardToBattlefield`` (effects/
+        # generic/graveyard.py:361) is constructor sugar over
+        # ``ReturnFromGraveyard`` that pins ``creature=True`` and
+        # ``destination="battlefield"``. The base's ``legal_targets``
+        # walks the controller's graveyard and emits one
+        # ``("graveyard_creature", card.id)`` per creature card; the
+        # targeting pipeline picks at PUSH time via the seated
+        # agent's ``choose_target``. The canonical first-legal-
+        # target shim observably matches Rust's iterator-order scan
+        # in 2-player games where both engines build their
+        # graveyards in the same order.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3006-3014);
+        # the unit variant takes no fields, so the bridge translator
+        # ignores every other key on the dict for round-trip dict-
+        # shape consistency.
+        from mtg_bot.effects.generic.graveyard import (
+            ReturnCreatureFromYourGraveyardToBattlefield,
+        )
+        return ReturnCreatureFromYourGraveyardToBattlefield()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
