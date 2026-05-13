@@ -4208,6 +4208,88 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I80. `Effect::ExileOpponentsNonlandPermanentUntilLeaves` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player`; closes the post-I77 forward inventory of defender-shape `(1 - state.active_player)` sites
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_exile_opps_nonland_*` regression pins covering
+    cross-controller spell resolution (1: p1-controlled
+    Hardlight-Containment-shape Enchantment on p0's turn →
+    exiles p0's first non-land permanent, NOT p1's; also pins
+    `return_paired_exiles_for(src_id)` recovery), same-controller
+    back-compat (1: p0-controlled source still exiles p1's
+    first non-land permanent), pause-variant parity (1), and
+    lands-only-on-defender fizzle (1).
+
+- **Rule**. CR 119.5 / 608.2 — sibling closure to I79. Same
+  broader-shape "until source leaves" exile; differs from I79
+  only in the target filter ("not a Land" instead of "is a
+  Creature") — so artifacts, enchantments, planeswalkers, and
+  creatures are all eligible. All bookkeeping
+  (`exiled_with_source`, owner re-scan, LTB fan-out) is identical
+  to I79.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::ExileOpponentsNonlandPermanentUntilLeaves` arm at
+  `state_ops_resolve.rs:5293` (pre-fix line) computed
+  `let defender = (1 - state.active_player) as usize`. Wrong when
+  the resolving spell / triggered ability has a controller !=
+  active_player. Example: on p0's turn, p1's Hardlight-
+  Containment-shape Enchantment has an ETB that exiles an
+  opponent's non-land permanent until the source leaves. Pre-fix
+  it self-exiled p1's own first non-land permanent
+  (defender = 1 - active_player = 1 - 0 = 1); post-fix it
+  correctly exiles p0's first non-land permanent (the source's
+  controller's opponent — the standard Hardlight-Containment
+  shape, where "opponent's" in the card text actually means the
+  source-controller's opponent, not the active-player's
+  opponent).
+
+- **Bookkeeping invariants preserved (sibling to I79
+  gotcha-list #7).** The
+  `exiled_with_source = Some(source_obj_id)` stamp (which
+  enables `return_paired_exiles_for`) is unchanged. The owner-
+  on-re-scan continues to route the exiled object onto its
+  owner's exile zone. CR 400.7 zone-change reset preserved. LTB
+  fan-out via `pending_leaves_dispatches` preserved.
+
+- **Reuses I59 substrate**. Identical to I60 / I65 / I70 / I71 /
+  I72 / I73 / I74 / I75 / I76 / I77 / I78 / I79 — same preamble:
+  `let controller = state.current_resolve_source_controller
+  .map(|c| c as usize).unwrap_or(state.active_player as usize);
+  let defender = 1 - controller;`. The target-pick site
+  (first non-land permanent on `state.players[defender]
+  .battlefield`), the owner re-scan, the link stamp, and the
+  exile-zone push all read the resolved `defender` unchanged.
+
+- **Real target-choice plumbing remains deferred.** First-slice
+  still picks the first eligible non-land permanent on the
+  source-controller's opponent's bf deterministically. A future
+  slice that surfaces multi-target / choice-callback semantics
+  will need to thread an explicit target parameter through the
+  arm.
+
+- **Closes the post-I77 forward inventory of defender-shape
+  `(1 - state.active_player)` sites in `state_ops_resolve.rs`.**
+  After I80, the four defender-swap-shape sites the I77 / I78
+  worker flagged for migration (OwnerPutsTargetArtifactOr-
+  CreatureOnTopOrBottomOfLibrary, ExileTargetCreatureUntilSource-
+  Leaves, ExileOpponentsNonlandPermanentUntilLeaves —
+  MillTargetPlayer was already I77) are all migrated. The single-
+  target first-slice defender-swap inventory is exhausted.
+
+- **Remaining candidates need per-arm audit (not defender-swap
+  shape):**
+  - `CreateToken` (~1924) — docstring claims "first-slice already
+    correct"; verify and skip if so.
+  - `ReturnCreatureFromYourGraveyard*` family (~2643/2676) —
+    different shape (controller-of-source-is-where-the-card-
+    comes-from, not defender-swap); needs audit.
+  - Site at ~5626 (per I77 worker's notes) — also needs audit.
+  - Mass arms (`DestroyAllCreatures`, `ExileAll` subarms) — iterate-
+    both-bf, not defender-swap; NOT in this fix family (per I75
+    worker's explicit note).
+
 ### I79. `Effect::ExileTargetCreatureUntilSourceLeaves` controller-of-effect fix — reuses I59 transient slot; defender computed as `1 - controller` instead of `1 - active_player`; `exiled_with_source` link + owner re-scan preserved (ExileTargetCreatureUntilSourceLeaves defender divergence closure)
 
 - **Pinned by**:
