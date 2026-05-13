@@ -683,6 +683,18 @@ class SelfPlayJobSpec:
     # NNEvaluator path. Bench numbers from PR #40 suggest a 3-10x
     # NN-throughput gain over per-worker on the master.
     use_shm_server: bool = False
+    # Opt into the Step 1 structured-token data-gen writer (see
+    # ``docs/NN_REPRESENTATION_ROADMAP.md``). When True, each shard's
+    # self-play npzs carry the four extra structured-token arrays
+    # alongside the legacy 51-dim ``features`` column so the next
+    # iter's structured trainer has the per-state token streams it
+    # needs. Iterate sets this when the bootstrap version's
+    # ``metadata.architecture == 'structured'``; flat-feature
+    # bootstraps leave it at False so the existing v* lineage stays
+    # bit-identical. Threaded through to
+    # ``generate_training_data_parallel(structured_tokens=...)``
+    # inside both ``run_shard_local`` and ``run_shard_pull``.
+    write_structured_tokens: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict. Used by ``run_self_play_shard.py``
@@ -729,6 +741,7 @@ class SelfPlayJobSpec:
             ),
             "action_encoding_version": self.action_encoding_version,
             "use_shm_server": self.use_shm_server,
+            "write_structured_tokens": self.write_structured_tokens,
         }
 
     @classmethod
@@ -768,6 +781,9 @@ class SelfPlayJobSpec:
             ),
             action_encoding_version=d.get("action_encoding_version"),
             use_shm_server=bool(d.get("use_shm_server", False)),
+            write_structured_tokens=bool(
+                d.get("write_structured_tokens", False)
+            ),
         )
 
 
@@ -1108,30 +1124,29 @@ def run_shard_local(
 
     try:
         try:
-            features, outcomes, policy_targets, action_masks = (
-                generate_training_data_parallel(
-                    p0_factory=cfg.build,
-                    p1_factory=cfg.build,
-                    n_games=n_games,
-                    base_seed=spec.base_seed + shard.seed_offset,
-                    n_workers=shard.n_workers,
-                    with_policy=True,
-                    decision_cap=spec.decision_cap,
-                    sample_every=spec.sample_every,
-                    enable_mulligans=spec.enable_mulligans,
-                    per_game_timeout_sec=spec.per_game_timeout_sec,
-                    progress=progress,
-                    deck_pool=deck_pool,
-                    replay_config=replay_config,
-                    hang_dump_dir=hang_dump_dir,
-                    heuristics=spec.heuristics,
-                    action_encoding_version=(
-                        spec.action_encoding_version or "positional_v1"
-                    ),
-                    pool_initializer=shm_initializer,
-                    pool_initargs=shm_initargs,
-                    pool_mp_context=shm_mp_context,
-                )
+            gen_result = generate_training_data_parallel(
+                p0_factory=cfg.build,
+                p1_factory=cfg.build,
+                n_games=n_games,
+                base_seed=spec.base_seed + shard.seed_offset,
+                n_workers=shard.n_workers,
+                with_policy=True,
+                decision_cap=spec.decision_cap,
+                sample_every=spec.sample_every,
+                enable_mulligans=spec.enable_mulligans,
+                per_game_timeout_sec=spec.per_game_timeout_sec,
+                progress=progress,
+                deck_pool=deck_pool,
+                replay_config=replay_config,
+                hang_dump_dir=hang_dump_dir,
+                heuristics=spec.heuristics,
+                action_encoding_version=(
+                    spec.action_encoding_version or "positional_v1"
+                ),
+                pool_initializer=shm_initializer,
+                pool_initargs=shm_initargs,
+                pool_mp_context=shm_mp_context,
+                structured_tokens=spec.write_structured_tokens,
             )
         except BaseException:
             progress.finalize(status="failed")
@@ -1146,10 +1161,33 @@ def run_shard_local(
         if shm_server is not None:
             shm_server.stop(timeout=5.0)
 
-    save_dataset(
-        features, outcomes, output_path,
-        policy_targets=policy_targets, action_masks=action_masks,
-    )
+    if spec.write_structured_tokens:
+        # Structured tokens enabled: data-gen returns an 8-tuple
+        # ``(features, outcomes, policy_targets, action_masks,
+        # structured_token_type, structured_token_emb_ids,
+        # structured_token_scalars, structured_attention_mask)``.
+        # Forward all four extra arrays to ``save_dataset`` so the
+        # npz carries the structured-token columns alongside the
+        # legacy 51-dim ``features``.
+        (
+            features, outcomes, policy_targets, action_masks,
+            structured_token_type, structured_token_emb_ids,
+            structured_token_scalars, structured_attention_mask,
+        ) = gen_result
+        save_dataset(
+            features, outcomes, output_path,
+            policy_targets=policy_targets, action_masks=action_masks,
+            structured_token_type=structured_token_type,
+            structured_token_emb_ids=structured_token_emb_ids,
+            structured_token_scalars=structured_token_scalars,
+            structured_attention_mask=structured_attention_mask,
+        )
+    else:
+        features, outcomes, policy_targets, action_masks = gen_result
+        save_dataset(
+            features, outcomes, output_path,
+            policy_targets=policy_targets, action_masks=action_masks,
+        )
     return output_path
 
 
@@ -2888,10 +2926,14 @@ def run_shard_pull(
         )
 
     def _build_args(game_idx: int) -> tuple:
-        # 13-element form so the worker's ``_play_one_parallel_game``
+        # 14-element form so the worker's ``_play_one_parallel_game``
         # picks up the spec's slot-mapping convention rather than
-        # silently defaulting to v1. ``None`` flows through as v1
-        # there too — keeps the existing v13/v15/v16 behavior intact.
+        # silently defaulting to v1, plus the structured-token writer
+        # flag (Step 1 NN representation roadmap). ``None`` flows
+        # through as v1 there too — keeps the existing v13/v15/v16
+        # behavior intact; ``write_structured_tokens=False`` (the
+        # default on every existing v* spec) preserves the legacy
+        # npz schema.
         return (
             game_idx, factory, factory, spec.base_seed,
             spec.decision_cap, spec.sample_every,
@@ -2899,6 +2941,7 @@ def run_shard_pull(
             spec.enable_mulligans, spec.per_game_timeout_sec,
             hang_dump_dir, spec.heuristics,
             spec.action_encoding_version or "positional_v1",
+            spec.write_structured_tokens,
         )
 
     def _flush() -> None:
@@ -2912,10 +2955,42 @@ def run_shard_pull(
             f"{run_id}_shard_{label}_chunk_"
             f"{chunk_idx:04d}_{stamp}.npz"
         )
-        save_dataset(
-            f, o, output_path,
-            policy_targets=p, action_masks=m,
-        )
+        if spec.write_structured_tokens:
+            # Step 1 NN-representation writer: gather per-row
+            # structured-token dicts from each completed game's chunk
+            # (index 6 of the per-game tuple) and pack them into the
+            # four ndarrays ``save_dataset`` expects. Crashed /
+            # timed-out chunks emit an empty list at index 6 — safe to
+            # extend through.
+            from mtg_bot.training.data_gen import (
+                _pad_and_stack_structured_rows,
+            )
+            flat_rows: list = []
+            for _, c, _ in pending_chunks:
+                if len(c) > 6:
+                    flat_rows.extend(c[6])
+            struct_arrays = _pad_and_stack_structured_rows(flat_rows)
+            save_dataset(
+                f, o, output_path,
+                policy_targets=p, action_masks=m,
+                structured_token_type=struct_arrays[
+                    "structured_token_type"
+                ],
+                structured_token_emb_ids=struct_arrays[
+                    "structured_token_emb_ids"
+                ],
+                structured_token_scalars=struct_arrays[
+                    "structured_token_scalars"
+                ],
+                structured_attention_mask=struct_arrays[
+                    "structured_attention_mask"
+                ],
+            )
+        else:
+            save_dataset(
+                f, o, output_path,
+                policy_targets=p, action_masks=m,
+            )
         npz_paths.append(output_path)
         if events is not None:
             events.record(

@@ -499,6 +499,7 @@ def _self_play(  # pragma: no cover
     cycle_id: str | None = None,
     stop_check: "callable | None" = None,
     action_encoding_version: str = "positional_v1",
+    write_structured_tokens: bool = False,
 ) -> tuple[int, int, float]:
     """Run one self-play data-gen pass. Returns (n_samples,
     n_policy_rows, elapsed_seconds). Both seats use the same
@@ -513,6 +514,14 @@ def _self_play(  # pragma: no cover
     Useful in long iterate runs where the self-play phase
     consumes 80%+ of wall time and the UI would otherwise be
     silent for ~40 min per iteration.
+
+    ``write_structured_tokens=True`` flips data_gen into the Step 1
+    structured-token writer (``docs/NN_REPRESENTATION_ROADMAP.md``):
+    each row's per-state token stream is captured alongside the
+    legacy 51-dim featurizer output and packed into four extra
+    arrays on the npz. Iterate sets this when the bootstrap
+    architecture is ``"structured"``; flat-feature bootstraps leave
+    it at False so the existing v* lineage stays bit-identical.
     """
     cfg = NNPimcConfig(
         weights_path=str(weights_path),
@@ -551,24 +560,23 @@ def _self_play(  # pragma: no cover
         )
     started = time.perf_counter()
     try:
-        features, outcomes, policy_targets, action_masks = (
-            generate_training_data_parallel(
-                p0_factory=cfg.build,
-                p1_factory=cfg.build,
-                n_games=n_games,
-                base_seed=seed,
-                n_workers=n_workers,
-                with_policy=True,
-                enable_mulligans=enable_mulligans,
-                per_game_timeout_sec=per_game_timeout_sec,
-                progress=progress,
-                deck_pool=deck_pool,
-                replay_config=replay_config,
-                hang_dump_dir=hang_dump_dir,
-                heuristics=heuristics,
-                stop_check=stop_check,
-                action_encoding_version=action_encoding_version,
-            )
+        gen_result = generate_training_data_parallel(
+            p0_factory=cfg.build,
+            p1_factory=cfg.build,
+            n_games=n_games,
+            base_seed=seed,
+            n_workers=n_workers,
+            with_policy=True,
+            enable_mulligans=enable_mulligans,
+            per_game_timeout_sec=per_game_timeout_sec,
+            progress=progress,
+            deck_pool=deck_pool,
+            replay_config=replay_config,
+            hang_dump_dir=hang_dump_dir,
+            heuristics=heuristics,
+            stop_check=stop_check,
+            action_encoding_version=action_encoding_version,
+            structured_tokens=write_structured_tokens,
         )
     except BaseException:
         if progress is not None:
@@ -582,10 +590,27 @@ def _self_play(  # pragma: no cover
     ):
         progress.finalize(status="completed")
     elapsed = time.perf_counter() - started
-    save_dataset(
-        features, outcomes, output,
-        policy_targets=policy_targets, action_masks=action_masks,
-    )
+    if write_structured_tokens:
+        # data_gen returns an 8-tuple when structured_tokens is on.
+        (
+            features, outcomes, policy_targets, action_masks,
+            structured_token_type, structured_token_emb_ids,
+            structured_token_scalars, structured_attention_mask,
+        ) = gen_result
+        save_dataset(
+            features, outcomes, output,
+            policy_targets=policy_targets, action_masks=action_masks,
+            structured_token_type=structured_token_type,
+            structured_token_emb_ids=structured_token_emb_ids,
+            structured_token_scalars=structured_token_scalars,
+            structured_attention_mask=structured_attention_mask,
+        )
+    else:
+        features, outcomes, policy_targets, action_masks = gen_result
+        save_dataset(
+            features, outcomes, output,
+            policy_targets=policy_targets, action_masks=action_masks,
+        )
     n_samples = features.shape[0]
     n_policy = int((policy_targets.sum(axis=-1) > 0.5).sum())
     return n_samples, n_policy, elapsed
@@ -621,6 +646,7 @@ def _self_play_distributed(  # pragma: no cover
     heuristics: HeuristicsConfig | None = None,
     action_encoding_version: str = "positional_v1",
     use_shm_server: bool = False,
+    write_structured_tokens: bool = False,
 ) -> tuple[int, int, float]:
     """Distributed self-play: dispatch the iter's games across the
     shards in ``shards_config``, gather all per-shard npzs into the
@@ -661,6 +687,7 @@ def _self_play_distributed(  # pragma: no cover
         policy_hidden_sizes=policy_hidden_sizes,
         action_encoding_version=action_encoding_version,
         use_shm_server=use_shm_server,
+        write_structured_tokens=write_structured_tokens,
     )
     started = time.perf_counter()
     extra_kwargs: dict = {}
@@ -807,6 +834,11 @@ def _train_next(
     policy_hidden_sizes: tuple[int, ...] | None = None,
     early_stop_patience: int | None = None,
     action_encoding_version: str = "positional_v1",
+    structured_emb_dim: int | None = None,
+    structured_n_heads: int | None = None,
+    structured_n_layers: int | None = None,
+    structured_hidden_dim: int | None = None,
+    structured_action_history_n: int | None = None,
 ) -> str:
     """Run train_nn.py via subprocess so its progress JSON / hub
     UI / registry plumbing all behave the same as a manual train.
@@ -875,6 +907,27 @@ def _train_next(
         cmd.extend([
             "--early-stop-patience", str(early_stop_patience),
         ])
+    # Structured-architecture hyperparams (Slice G). Only emitted when
+    # the architecture is "structured" — the flat-feature trainer
+    # ignores them, and emitting them unconditionally would surface as
+    # an argparse "unrecognized arguments" error on the structured
+    # path that hasn't grown the flag yet. Defaults are picked at the
+    # iterate CLI level so each emitted flag carries an explicit value
+    # (matching :class:`StructuredModelConfig`'s defaults — see
+    # ``--emb-dim`` / ``--n-heads`` / ... below).
+    if architecture == "structured":
+        if structured_emb_dim is not None:
+            cmd.extend(["--emb-dim", str(structured_emb_dim)])
+        if structured_n_heads is not None:
+            cmd.extend(["--n-heads", str(structured_n_heads)])
+        if structured_n_layers is not None:
+            cmd.extend(["--n-layers", str(structured_n_layers)])
+        if structured_hidden_dim is not None:
+            cmd.extend(["--hidden-dim", str(structured_hidden_dim)])
+        if structured_action_history_n is not None:
+            cmd.extend([
+                "--action-history-n", str(structured_action_history_n),
+            ])
     if progress_path is not None:
         # Override train_nn.py's default ``training_progress/<peeked
         # _version>.json`` so the iterate-loop's training cards have
@@ -1093,7 +1146,7 @@ def main(argv=None) -> None:  # pragma: no cover
     )
     parser.add_argument(
         "--architecture",
-        choices=["shared", "separate"],
+        choices=["shared", "separate", "structured"],
         default="shared",
         help=(
             "Dual-head model class for trained iterations: 'shared' "
@@ -1101,14 +1154,59 @@ def main(argv=None) -> None:  # pragma: no cover
             "_ValuePolicyMLP. 'separate' switches to the parallel "
             "value_trunk + policy_trunk _ValuePolicyMLPSeparate, "
             "fixing the value-vs-policy gradient saturation observed "
-            "at the shared trunk's bottleneck. The architectures are "
-            "NOT cross-loadable: switching from 'shared' to 'separate' "
-            "(or vice versa) breaks the v-chain — the new architecture "
-            "has to bootstrap from random init, so a 'separate' run "
-            "cannot resume a 'shared' v15 baseline. The choice is "
-            "passed to train_nn.py and recorded in metadata.json so "
-            "self-play / eval workers dispatch the right NNEvaluator "
-            "class when loading weights."
+            "at the shared trunk's bottleneck. 'structured' switches "
+            "to the Step 1 transformer trunk (per-object tokens + "
+            "printing embeddings + last-N action tokens — see "
+            "docs/NN_REPRESENTATION_ROADMAP.md); self-play also "
+            "emits structured-token columns so the next train phase "
+            "has the data it needs. The three architectures are NOT "
+            "cross-loadable — switching forms a fresh v-chain. The "
+            "choice is passed to train_nn.py and recorded in "
+            "metadata.json so self-play / eval workers dispatch the "
+            "right NNEvaluator class when loading weights."
+        ),
+    )
+    parser.add_argument(
+        "--emb-dim", type=int, default=128,
+        help=(
+            "Structured-trunk only (--architecture=structured): "
+            "per-token embedding dimension. Default 128 matches "
+            "StructuredModelConfig.emb_dim. Threaded through to "
+            "train_nn.py as ``--emb-dim`` only when the iter's "
+            "architecture is 'structured'; ignored otherwise."
+        ),
+    )
+    parser.add_argument(
+        "--n-heads", type=int, default=4,
+        help=(
+            "Structured-trunk only: transformer attention heads. "
+            "Default 4 matches StructuredModelConfig.n_heads. "
+            "``emb_dim`` must divide evenly by this — torch's "
+            "MultiheadAttention enforces it at construction time."
+        ),
+    )
+    parser.add_argument(
+        "--n-layers", type=int, default=2,
+        help=(
+            "Structured-trunk only: transformer encoder-layer count. "
+            "Default 2 matches StructuredModelConfig.n_layers."
+        ),
+    )
+    parser.add_argument(
+        "--hidden-dim", type=int, default=256,
+        help=(
+            "Structured-trunk only: MLP hidden dimension inside the "
+            "transformer encoder layers. Default 256 matches "
+            "StructuredModelConfig.hidden_dim."
+        ),
+    )
+    parser.add_argument(
+        "--action-history-n", type=int, default=32,
+        help=(
+            "Structured-trunk only: last-N action-history window the "
+            "state tokenizer emits per row. Default 32 matches "
+            "StructuredModelConfig.action_history_n and the §3 "
+            "default in the NN-representation roadmap."
         ),
     )
     parser.add_argument(
@@ -1635,6 +1733,40 @@ def main(argv=None) -> None:  # pragma: no cover
         bootstrap_meta, "architecture", "shared",
     )
     iter_architecture = args.architecture
+    # 'structured' is a hard v-chain break (the input shape is
+    # different — per-token, not 51-dim flat). The shared / separate
+    # path can mix bootstraps because both consume the same 51-dim
+    # featurizer at NN-eval time; structured can't. Fail loud on a
+    # cross-arch attempt rather than silently mis-routing self-play
+    # through an NNEvaluator that would crash on first load.
+    if (
+        bootstrap_architecture == "structured"
+        and iter_architecture != "structured"
+    ):
+        sys.exit(
+            f"[iterate] bootstrap {args.bootstrap_version} is a "
+            f"structured-architecture model but --architecture="
+            f"{iter_architecture!r}; the structured trunk consumes "
+            f"per-token input and is NOT cross-loadable with the "
+            f"flat-feature MLP. Either pass --architecture structured "
+            f"to stay on the structured v-chain, or pick a "
+            f"flat-feature bootstrap."
+        )
+    if (
+        iter_architecture == "structured"
+        and bootstrap_architecture != "structured"
+    ):
+        sys.exit(
+            f"[iterate] --architecture=structured requires a "
+            f"structured-architecture bootstrap version, but "
+            f"{args.bootstrap_version} has "
+            f"architecture={bootstrap_architecture!r}. Train a "
+            f"structured bootstrap first via ``mtg_bot train "
+            f"--architecture structured`` and pass its version "
+            f"here. (Structured is a fresh v-chain break: the "
+            f"per-token input shape is incompatible with the "
+            f"flat-feature MLP weights.)"
+        )
     if iter_architecture != bootstrap_architecture:
         # The architectures aren't cross-loadable, so this combination
         # bootstrap-from-random-init is the only viable path. Self-play
@@ -1651,6 +1783,25 @@ def main(argv=None) -> None:  # pragma: no cover
             f"{iter_architecture!r} from random init. The two "
             f"architectures are NOT cross-loadable — once promoted, "
             f"subsequent iterations run end-to-end on the new arch."
+        )
+    # Slice G: the iter's effective write_structured_tokens flag
+    # follows ``iter_architecture == 'structured'``. Self-play emits
+    # the four extra structured-token columns on every npz alongside
+    # the legacy 51-dim featurizer; the next train phase
+    # (subprocess-routed through ``--architecture structured`` in
+    # ``_train_next``) consumes those columns via the structured
+    # trainer. Flat-feature lineages leave it at False so existing v*
+    # npzs stay bit-identical.
+    iter_write_structured_tokens = iter_architecture == "structured"
+    if iter_write_structured_tokens:
+        print(
+            "[iterate] structured architecture detected: "
+            "self-play will emit structured-token columns "
+            "(emb_dim={ed}, n_heads={nh}, n_layers={nl}, "
+            "hidden_dim={hd}, action_history_n={ahn})".format(
+                ed=args.emb_dim, nh=args.n_heads, nl=args.n_layers,
+                hd=args.hidden_dim, ahn=args.action_history_n,
+            )
         )
     iter_policy_hidden_sizes: tuple[int, ...] | None = None
     if args.policy_hidden_sizes is not None:
@@ -1694,6 +1845,42 @@ def main(argv=None) -> None:  # pragma: no cover
             f"current_best={state['current_best']}, "
             f"iterations_completed={state['iterations_completed']}"
         )
+        # Slice G: detect a clearly-mismatched resume where
+        # ``current_best`` in the state file is on a different
+        # architecture lineage than the iter is being told to run.
+        # The structured trunk is a hard v-chain break so the
+        # cross-arch case isn't recoverable by warning — self-play
+        # would fail at the NNEvaluator load. Fail loud with the
+        # versions in scope so the user can either swap
+        # --bootstrap-version or rewrite iterate_state.json.
+        try:
+            current_best_meta = registry.load_metadata(state["current_best"])
+            current_best_arch = getattr(
+                current_best_meta, "architecture", "shared",
+            )
+        except (FileNotFoundError, KeyError, OSError):
+            current_best_arch = None
+        if (
+            current_best_arch is not None
+            and current_best_arch != bootstrap_architecture
+            and (
+                current_best_arch == "structured"
+                or bootstrap_architecture == "structured"
+            )
+        ):
+            sys.exit(
+                f"[iterate] resume mismatch: iterate_state.json "
+                f"current_best={state['current_best']} has "
+                f"architecture={current_best_arch!r} but "
+                f"--bootstrap-version {args.bootstrap_version} has "
+                f"architecture={bootstrap_architecture!r}. The "
+                f"structured trunk is a hard v-chain break (per-token "
+                f"input shape ≠ flat 51-dim featurizer); the resumed "
+                f"iter cannot bridge the two. Either rerun with a "
+                f"bootstrap that matches current_best's architecture, "
+                f"or hand-edit iterate_state.json to clear the "
+                f"current_best pointer."
+            )
         if args.reconcile_state:
             try:
                 reconciled = _reconcile_iterate_state(
@@ -1963,6 +2150,7 @@ def main(argv=None) -> None:  # pragma: no cover
                     cycle_id=cycle_id,
                     stop_check=_cycle_stop_check,
                     action_encoding_version=iter_action_encoding_version,
+                    write_structured_tokens=iter_write_structured_tokens,
                 )
             else:
                 # Distributed: each shard writes its own npz to args.data_dir
@@ -2008,6 +2196,7 @@ def main(argv=None) -> None:  # pragma: no cover
                     use_shm_server=(
                         args.use_shm_self_play or args.use_shm_server
                     ),
+                    write_structured_tokens=iter_write_structured_tokens,
                 )
         # Self-play stage finished — register the produced npz as an
         # artifact on the self_play stage run and emit a stage_completed
@@ -2109,6 +2298,15 @@ def main(argv=None) -> None:  # pragma: no cover
                 policy_hidden_sizes=iter_policy_hidden_sizes,
                 early_stop_patience=args.early_stop_patience,
                 action_encoding_version=iter_action_encoding_version,
+                # Structured-trunk hyperparameters; ``_train_next``
+                # only forwards them as CLI flags when
+                # ``architecture == 'structured'`` so the flat-feature
+                # trainer doesn't see unknown flags.
+                structured_emb_dim=args.emb_dim,
+                structured_n_heads=args.n_heads,
+                structured_n_layers=args.n_layers,
+                structured_hidden_dim=args.hidden_dim,
+                structured_action_history_n=args.action_history_n,
             )
         new_weights = registry.weights_path(new_version)
         # Register the produced weights file as an artifact on the
