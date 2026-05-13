@@ -12224,3 +12224,165 @@ def test_deal_damage_any_target_pause_variant_threads_controller(engine):
 
     # Damage went to p0's first creature (p1's opponent), not p1's bf.
     assert state.get_damage(expected_target) == damage_before + 1
+
+
+# ====================================================================
+# DealDamageEqualToSourcePowerAnyTarget controller-of-effect fix —
+# regression pins (I68).
+#
+# Sibling closure to I67 DealDamageAnyTarget. Pre-fix this arm
+# computed `defender_idx = 1 - state.active_player`. Wrong when the
+# resolving spell / triggered ability has a controller !=
+# active_player — example: p1's Mishra's-Bauble-shape spell fires
+# on p0's turn (cross-controller activation / trigger).
+# ====================================================================
+
+
+def _power_damage_creature_dict_for_i68(power: int = 3):
+    """A creature whose ability deals damage equal to its power to
+    any target. Used by I68 regression pins."""
+    return {
+        "name": f"Test Power Damager P{power}",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "power": power,
+        "toughness": 3,
+        "effects": [
+            {"kind": "deal_damage_equal_to_source_power_any_target"}
+        ],
+    }
+
+
+def test_deal_damage_eq_source_power_routes_to_source_controllers_opponent(
+    engine,
+):
+    """**Regression pin for the DealDamageEqualToSourcePowerAnyTarget
+    controller-of-effect fix (I68).**
+
+    On p0's turn (active_player=0), a power-damage source whose
+    controller is p1 must damage the FIRST creature on p0's bf, NOT
+    p1's. Pre-fix `defender_idx = 1 - active_player = 1 - 0 = 1` =>
+    damage went to p1's bf (a friendly-fire bug, sibling closure to
+    I67).
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    # Inject the power-damage source on p1's battlefield.
+    src_id = state.register_and_inject_object(
+        _power_damage_creature_dict_for_i68(power=3), 1, ZONE_BATTLEFIELD
+    )
+
+    # Find p0's first creature (Grizzly Bears in synthetic seed).
+    snap = state.battlefield_snapshot()
+    p0_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    # And p1's first bear so we can assert it's UNTOUCHED.
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Damage went to p0's first creature, NOT p1's.
+    assert state.get_damage(p0_first_bear_id) == 3
+    assert state.get_damage(p1_first_bear_id) == 0
+
+
+def test_deal_damage_eq_source_power_active_player_controlled_still_works(
+    engine,
+):
+    """**Back-compat pin.** A power-damage activation by the active
+    player must still target the opponent's first creature — bug
+    never fired in this case pre-fix because controller ==
+    active_player.
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    src_id = state.register_and_inject_object(
+        _power_damage_creature_dict_for_i68(power=2), 0, ZONE_BATTLEFIELD
+    )
+
+    snap = state.battlefield_snapshot()
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # Damage went to p1's first creature.
+    assert state.get_damage(p1_first_bear_id) == 2
+
+
+def test_deal_damage_eq_source_power_via_triggered_ability_routes_to_triggers_controller(
+    engine,
+):
+    """**Cross-controller LTB-trigger pin for
+    DealDamageEqualToSourcePowerAnyTarget.**
+
+    Shape: p1's creature has a `source_is_self LEAVES_BATTLEFIELD →
+    deal damage equal to its power to any target` trigger. p0 casts
+    a bounce spell. Since the trigger fires AFTER the source has
+    left the battlefield, the source-power lookup returns 0
+    (silent fizzle by the `amount == 0` guard) — this scenario
+    isn't a useful pin for the defender swap.
+
+    Instead, use a cross-controller spell-on-stack shape: p1's
+    creature with an effect that "this creature deals N damage to
+    any target" — push the creature as a stack item with
+    controller=1 on p0's turn. The effect resolves with the
+    creature still on bf, source-power is non-zero, and the
+    defender-swap is observable.
+    """
+    state = engine.make_synthetic_state()
+    src_id = state.register_and_inject_object(
+        _power_damage_creature_dict_for_i68(power=4), 1, ZONE_BATTLEFIELD
+    )
+
+    snap = state.battlefield_snapshot()
+    p0_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+    p1_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    )
+
+    # Push the source as a stack item with controller=1 on p0's turn —
+    # mirrors a p1-controlled activation.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # Post-fix: damage went to p0's bear (p1's opponent). Pre-fix
+    # would have hit p1's bear (defender = 1 - 0 = 1).
+    assert state.get_damage(p0_first_bear_id) == 4
+    assert state.get_damage(p1_first_bear_id) == 0
+
+
+def test_deal_damage_eq_source_power_pause_variant_threads_controller(engine):
+    """**`resolve_top_of_stack_pause` parity pin for
+    DealDamageEqualToSourcePowerAnyTarget.**"""
+    state = engine.make_synthetic_state()
+    src_id = state.register_and_inject_object(
+        _power_damage_creature_dict_for_i68(power=1), 1, ZONE_BATTLEFIELD
+    )
+
+    snap = state.battlefield_snapshot()
+    p0_first_bear_id = next(
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    )
+
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack_pause()
+
+    # Damage went to p0's bear (p1's opponent).
+    assert state.get_damage(p0_first_bear_id) == 1
