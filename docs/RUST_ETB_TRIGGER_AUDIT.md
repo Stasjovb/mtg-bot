@@ -1117,3 +1117,90 @@ unrelated from concurrent CE20 agent work).
 - Cost-modifier triggers (e.g. "spells you cast cost {1} less" —
   these aren't triggers per se, they're cost-replacements; out of
   the dispatch scope).
+
+---
+
+## Slice 7 completion notice (landed)
+
+`feature/etb-slice-7` adds `Event::Attacks` plus its dispatch wiring
+at the `declare_attacker` site — the per-attacker event that fires
+after each attacker commits during combat.
+
+**Implementation shape:**
+
+- `Event::Attacks` parser arm in `rust/src/cards.rs::parse_triggered_ability`
+  (the previously raise-on-register `"attacks"` event now succeeds;
+  only `"deals_damage"` still raises).
+- `dispatch_event` accepts `Event::Attacks` in addition to ENTERS /
+  DIES / CAST. No extra-observer logic needed — the attacker is on
+  the battlefield by construction (eligibility gate rejects
+  non-bf objects), so the bf observer set already contains it.
+  `Predicate::SourceIsSelf` ("whenever this creature attacks")
+  matches naturally via `source_id == subject_id`.
+- `declare_attacker` signature change: `bool` -> `PyResult<bool>`.
+  The dispatch_event call needs error-propagation; the only caller
+  (`state_ops_actions.rs::DeclareAttackers` arm) already used
+  `call_method1` with `?` so the Python-facing contract stays
+  unchanged. Dispatch happens AFTER `self.attackers.push(obj_id)`,
+  so the trigger observes the attacker in its post-declare state.
+- `cross_engine.py::_ta_dict_to_python_triggered_ability` accepts
+  `event="attacks"` and translates to Python's `Event.ATTACKS`
+  (no spelling divergence — Python's enum spells it `ATTACKS` too).
+
+**Push site placement:** Rust's `declare_attacker` is per-attacker
+(unlike Python's `declare_attackers` plural which is per-attacker-
+list), so the natural dispatch site is at the end of
+`declare_attacker` after the push to `self.attackers`. The
+`Action::DeclareAttackers` arm in `state_ops_actions.rs` iterates
+the id list and calls `declare_attacker` per id, so triggers fire
+per attacker in declaration order — mirroring Python's
+`_fire_attacks_triggers(state, obj)` per-attacker call at
+`src/mtg_bot/combat.py:115`.
+
+**Inline-vs-deferred:** Slice 7 uses INLINE dispatch (not the
+deferred-queue pattern Slice 2 used for ENTERS and Slice 5 used for
+DIES). Reason: `declare_attacker` is a single-permanent primitive,
+not a loop-over-victims iteration. There's no risk of re-entering a
+loop mid-iteration via a dispatched trigger; the caller-side
+`DeclareAttackers` arm naturally batches per-id calls. The CAST
+dispatch in Slice 6 uses the same inline shape for the same reason.
+
+**Tests** (9 new in `tests_rust/test_triggers.py`, plus updates to
+2 pre-existing tests that pinned the "attacks not yet wired" arm):
+
+- Parser surface: `attacks` parses; only `deals_damage` still
+  raises.
+- SourceIsSelf ATTACKS: a 2/2 with "when this attacks, draw a card"
+  fires its trigger on `declare_attacker`.
+- Subject-creature ATTACKS observer (Hellrider-shape): fires on
+  ANY attacker.
+- subject_is_creature AND controlled_by_you ATTACKS observer:
+  fires on own attacker, skips opponent's attacker.
+- Multiple attackers: declaring two creatures in sequence fires
+  the observer once per attacker (declaration-order push).
+- declare_attacker REJECTS (summoning-sick): ATTACKS dispatch
+  doesn't fire on the failure path — eligibility gate bails before
+  reaching the dispatch line.
+- Cross-engine bridge: `event: attacks` round-trips to
+  Python's `Event.ATTACKS`.
+
+**Rust gate**: 1979/1979 pass (Slice 6 baseline 1961 + 9 new + 9
+existing/modified). Two pre-existing tests
+(`test_triggered_abilities_unwired_event_raises`,
+`test_slice5_other_events_still_raise[attacks]`) had their
+parametrize / event-string updated to use `deals_damage` as the
+new representative unwired event.
+
+**Out of scope for Slice 7 (queued for Slice 8+):**
+
+- `Event::LeavesBattlefield` (LTB) + dispatch at the existing
+  `mark_left_battlefield_if_nonland` / `move_object`-off-bf hook
+  — Slice 8.
+- `Event::DealsCombatDamage` — multi-subject event needs richer
+  `Predicate::Subject(slot, inner)` schema for the (source,
+  target) subject mapping. Likely a substrate slice on its own
+  before any DealsCombatDamage dispatch can land.
+- `Event::Blocks` — symmetric of `Event::Attacks` for the
+  `declare_blocker` primitive; same single-permanent shape, same
+  inline dispatch pattern. Tactically defer until a Blocks
+  trigger card surfaces in the EoE pool (low-priority).

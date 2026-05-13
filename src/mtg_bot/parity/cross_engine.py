@@ -259,6 +259,8 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         # `src/mtg_bot/effects/predicates.py:Event`); Rust uses `Cast`
         # internally. The bridge translates.
         event = Event.IS_CAST
+    elif event_str == "attacks":
+        event = Event.ATTACKS
     else:
         raise ValueError(
             f"cross_engine triggered_abilities bridge: event "
