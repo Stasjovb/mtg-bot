@@ -624,14 +624,13 @@ pub(crate) fn apply_effect_pub(
 /// before. Only arms that explicitly opt into reading
 /// `current_resolve_source_controller` change behavior.
 ///
-/// **Currently unused by direct callers** — the in-tree resolver
-/// branches set the slot manually around their `apply_effect` loops
-/// (avoids an extra function-call layer for the hot stack-resolve
-/// path). Shipped as a public-in-crate helper for future per-call
-/// use cases (e.g. a `MayDoChoice` resolution that wants to route
-/// DrawCards to its source's controller, or future arms dispatched
-/// directly outside the stack resolver).
-#[allow(dead_code)]
+/// **Callers (post-I61):** every pending-decision dispatcher in
+/// `state_ops_decisions.rs` (MayDo / IfYouDo / ChooseMode /
+/// OptionalManaCost auto-resolve + submit). The in-tree stack
+/// resolver branches still set the slot manually around their
+/// `apply_effect` loops (avoids an extra function-call layer for the
+/// hot stack-resolve path); the helper is the cleaner route for the
+/// one-shot pending-decision path where readability beats nano-perf.
 pub(crate) fn apply_effect_pub_with_controller(
     state: &mut GameState,
     effect: &Effect,
@@ -2197,7 +2196,11 @@ fn apply_effect(
                     "Surveil count must be non-negative, got {count}"
                 )));
             }
-            let controller = state.active_player;
+            // I61: prefer the transient source-controller swap (same
+            // pattern as I59 / I60 reader-side fix).
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
             let pidx = controller as usize;
             // Clamp count to library size (CR 701.43 fold).
             let lib_len = state.players[pidx].library.len();
@@ -4929,12 +4932,18 @@ fn apply_effect(
         // PendingDecision dict snapshot for agent introspection but
         // isn't used here.
         //
-        // Controller convention: `state.active_player` — first-slice
-        // shape consistent with Surveil / DrawCards. Real MTG plumbs
-        // the spell controller through `StackItem.controller`;
-        // deferred.
+        // Controller convention (I61 follow-up): prefer the transient
+        // `state.current_resolve_source_controller` (set by the stack
+        // resolver around each `apply_effect` call to the
+        // StackItem.controller), falling back to `state.active_player`
+        // for back-compat with direct `apply_effect_pub` callers. This
+        // mirrors the I59 / I60 reader-side fix and closes the latent
+        // cross-controller MayDo divergence: a p1-controlled spell on
+        // p0's turn must push a MayDoChoice with controller=1, not 0.
         Effect::MayDo { inner_effect, prompt: _prompt } => {
-            let controller = state.active_player;
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
             state.pending_decisions.push(PendingDecision::MayDoChoice {
                 source_obj_id,
                 controller,
@@ -4962,7 +4971,10 @@ fn apply_effect(
                     "LookTopNPutOneInHandRestToGraveyard: n must be non-negative, got {n}"
                 )));
             }
-            let controller = state.active_player;
+            // I61: prefer the transient source-controller swap.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
             let pidx = controller as usize;
             let lib_len = state.players[pidx].library.len();
             let count = (*n as usize).min(lib_len);
@@ -4996,7 +5008,10 @@ fn apply_effect(
         // Empty-modes case is rejected at parse time so the resolve
         // arm always has at least one mode to fall through to.
         Effect::ChooseOneMode { modes } => {
-            let controller = state.active_player;
+            // I61: prefer the transient source-controller swap.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
             state.pending_decisions.push(
                 PendingDecision::ChooseModeChoice {
                     source_obj_id,
@@ -5015,7 +5030,10 @@ fn apply_effect(
         // effects cloned so the registry's printing keeps its
         // originals and the PendingDecision owns its copies.
         Effect::IfYouDo { do_action, then_action } => {
-            let controller = state.active_player;
+            // I61: prefer the transient source-controller swap.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
             state.pending_decisions.push(PendingDecision::IfYouDoChoice {
                 source_obj_id,
                 controller,
@@ -5190,7 +5208,10 @@ fn apply_effect(
                      docs/SEARCH_LIMITATIONS.md"
                 )));
             }
-            let controller = state.active_player;
+            // I61: prefer the transient source-controller swap.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
             let pidx = controller as usize;
             let lib_len = state.players[pidx].library.len();
             let pop_count = lib_len.min(2);
@@ -5317,7 +5338,10 @@ fn apply_effect(
                      docs/SEARCH_LIMITATIONS.md"
                 )));
             }
-            let controller = state.active_player;
+            // I61: prefer the transient source-controller swap.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
             let pidx = controller as usize;
             let lib_len = state.players[pidx].library.len();
             let pop_count = lib_len.min(2);
@@ -5367,7 +5391,10 @@ fn apply_effect(
                     "LookAtTopNRevealOrCounter: n must be non-negative, got {n}"
                 )));
             }
-            let controller = state.active_player;
+            // I61: prefer the transient source-controller swap.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
             let pidx = controller as usize;
             let lib_len = state.players[pidx].library.len();
             let pop_count = (*n as usize).min(lib_len);
@@ -5906,7 +5933,10 @@ fn apply_effect(
         // OptionalManaCostThenEffect.resolve, which inspects pool
         // state at resolve time).
         Effect::OptionalManaCostThenEffect { cost, inner_effect } => {
-            let controller = state.active_player;
+            // I61: prefer the transient source-controller swap.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
             state.pending_decisions.push(
                 PendingDecision::OptionalManaCostChoice {
                     source_obj_id,

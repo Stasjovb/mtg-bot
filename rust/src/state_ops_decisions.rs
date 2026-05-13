@@ -181,8 +181,8 @@ pub(crate) fn auto_resolve_pending(
             }
             PendingDecision::MayDoChoice {
                 source_obj_id,
+                controller,
                 inner_effect,
-                ..
             } => {
                 // "default" / "may_do_yes" → apply inner effect.
                 // "may_do_no" → drop the decision (no inner applies).
@@ -194,10 +194,16 @@ pub(crate) fn auto_resolve_pending(
                     _ => true, // default, may_do_yes, keep_all_on_top, send_all_to_graveyard, pick_top
                 };
                 if say_yes {
-                    crate::state_ops_resolve::apply_effect_pub(
+                    // I61: route via the controller-aware variant so
+                    // controller-of-effect arms (DrawCards / GainLife /
+                    // future) read the source's controller, not
+                    // state.active_player. See docs/RUST_PARITY_GAPS.md
+                    // I61 for the motivation.
+                    crate::state_ops_resolve::apply_effect_pub_with_controller(
                         state,
                         &inner_effect,
                         source_obj_id,
+                        controller,
                     )?;
                 }
             }
@@ -214,8 +220,8 @@ pub(crate) fn auto_resolve_pending(
             }
             PendingDecision::ChooseModeChoice {
                 source_obj_id,
+                controller,
                 modes,
-                ..
             } => {
                 // "default" / "choose_mode_0" → pick modes[0]. Other
                 // strategies fall through to the same default for
@@ -225,18 +231,22 @@ pub(crate) fn auto_resolve_pending(
                 // it ever reaches here we drop the decision silently
                 // rather than panic.
                 if !modes.is_empty() {
-                    crate::state_ops_resolve::apply_effect_pub(
+                    // I61: route via the controller-aware variant so
+                    // controller-of-effect arms inside the chosen mode
+                    // see the source's controller.
+                    crate::state_ops_resolve::apply_effect_pub_with_controller(
                         state,
                         &modes[0],
                         source_obj_id,
+                        controller,
                     )?;
                 }
             }
             PendingDecision::IfYouDoChoice {
                 source_obj_id,
+                controller,
                 do_action,
                 then_action,
-                ..
             } => {
                 // "default" / "if_you_do_yes" → apply both do_action
                 // and then_action in order. "if_you_do_no" → drop
@@ -248,15 +258,20 @@ pub(crate) fn auto_resolve_pending(
                     _ => true,
                 };
                 if say_yes {
-                    crate::state_ops_resolve::apply_effect_pub(
+                    // I61: controller-aware route for both inner
+                    // actions so DrawCards / GainLife etc. resolve to
+                    // the source's controller, not active_player.
+                    crate::state_ops_resolve::apply_effect_pub_with_controller(
                         state,
                         &do_action,
                         source_obj_id,
+                        controller,
                     )?;
-                    crate::state_ops_resolve::apply_effect_pub(
+                    crate::state_ops_resolve::apply_effect_pub_with_controller(
                         state,
                         &then_action,
                         source_obj_id,
+                        controller,
                     )?;
                 }
             }
@@ -321,10 +336,12 @@ pub(crate) fn auto_resolve_pending(
                                 state.players[controller as usize].mana_pool
                             )));
                         }
-                        crate::state_ops_resolve::apply_effect_pub(
+                        // I61: controller-aware route.
+                        crate::state_ops_resolve::apply_effect_pub_with_controller(
                             state,
                             &inner_effect,
                             source_obj_id,
+                            controller,
                         )?;
                     }
                     _ => {
@@ -332,10 +349,12 @@ pub(crate) fn auto_resolve_pending(
                         // affordable. Matches Python's no-agent-seated
                         // resolve.
                         if pay_mana_cost_internal(state, controller, &cost) {
-                            crate::state_ops_resolve::apply_effect_pub(
+                            // I61: controller-aware route.
+                            crate::state_ops_resolve::apply_effect_pub_with_controller(
                                 state,
                                 &inner_effect,
                                 source_obj_id,
+                                controller,
                             )?;
                         }
                         // else: drop silently — matches Python's
@@ -1162,22 +1181,28 @@ impl GameState {
         }
         // Validation passed — consume the head.
         let decision = self.pending_decisions.remove(0);
-        let (source_obj_id, inner_effect) = match decision {
+        let (source_obj_id, controller, inner_effect) = match decision {
             PendingDecision::MayDoChoice {
                 source_obj_id,
+                controller,
                 inner_effect,
-                ..
-            } => (source_obj_id, inner_effect),
+            } => (source_obj_id, controller, inner_effect),
             // Unreachable: we just validated head was MayDoChoice
             // above. The pattern is here for the irrefutable-match
             // shape only.
             _ => unreachable!("validated above"),
         };
         if yes {
-            crate::state_ops_resolve::apply_effect_pub(
+            // I61: route via the controller-aware variant. Latent today
+            // (current EoE printings have active_player == source
+            // controller in the test suite), but cross-controller MayDo
+            // resolution must thread the source's controller through to
+            // DrawCards / GainLife / future controller-of-effect arms.
+            crate::state_ops_resolve::apply_effect_pub_with_controller(
                 self,
                 &inner_effect,
                 source_obj_id,
+                controller,
             )?;
         }
         Ok(())
@@ -1287,16 +1312,22 @@ impl GameState {
         }
         // Validation passed — consume the head.
         let decision = self.pending_decisions.remove(0);
-        let (source_obj_id, modes) = match decision {
+        let (source_obj_id, controller, modes) = match decision {
             PendingDecision::ChooseModeChoice {
-                source_obj_id, modes, ..
-            } => (source_obj_id, modes),
+                source_obj_id,
+                controller,
+                modes,
+            } => (source_obj_id, controller, modes),
             _ => unreachable!("validated above"),
         };
-        crate::state_ops_resolve::apply_effect_pub(
+        // I61: controller-aware route — the chosen mode's inner effects
+        // must read the source's controller for controller-of-effect
+        // arms (DrawCards / GainLife / ...).
+        crate::state_ops_resolve::apply_effect_pub_with_controller(
             self,
             &modes[chosen_idx],
             source_obj_id,
+            controller,
         )
     }
 
@@ -1332,25 +1363,28 @@ impl GameState {
             }
         }
         let decision = self.pending_decisions.remove(0);
-        let (source_obj_id, do_action, then_action) = match decision {
+        let (source_obj_id, controller, do_action, then_action) = match decision {
             PendingDecision::IfYouDoChoice {
                 source_obj_id,
+                controller,
                 do_action,
                 then_action,
-                ..
-            } => (source_obj_id, do_action, then_action),
+            } => (source_obj_id, controller, do_action, then_action),
             _ => unreachable!("validated above"),
         };
         if yes {
-            crate::state_ops_resolve::apply_effect_pub(
+            // I61: controller-aware route for both inner actions.
+            crate::state_ops_resolve::apply_effect_pub_with_controller(
                 self,
                 &do_action,
                 source_obj_id,
+                controller,
             )?;
-            crate::state_ops_resolve::apply_effect_pub(
+            crate::state_ops_resolve::apply_effect_pub_with_controller(
                 self,
                 &then_action,
                 source_obj_id,
+                controller,
             )?;
         }
         Ok(())
@@ -1629,10 +1663,14 @@ impl GameState {
             // Belt-and-suspenders: validation above already confirmed
             // affordability — pay must succeed.
             debug_assert!(ok);
-            crate::state_ops_resolve::apply_effect_pub(
+            // I61: controller-aware route — the inner effect's
+            // controller-of-effect arms (DrawCards / GainLife / ...)
+            // read the source's controller.
+            crate::state_ops_resolve::apply_effect_pub_with_controller(
                 self,
                 &inner_effect,
                 source_obj_id,
+                controller,
             )?;
         }
         Ok(())
