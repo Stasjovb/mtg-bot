@@ -85,12 +85,66 @@ if TYPE_CHECKING:  # pragma: no cover
 from mtg_bot.features import FEATURE_DIM, extract_features
 from mtg_bot.search.evaluator import Evaluator
 from mtg_bot.search.nn_evaluator import (
+    ARCHITECTURE_SHARED,
+    ARCHITECTURE_STRUCTURED,
     HIDDEN_SIZES,
     NNEvaluator,
+    SUPPORTED_ARCHITECTURES,
+    _build_dual_head_model,
+    _build_structured_model,
+    _collate_structured_token_dicts,
     _ValueMLP,
     _ValuePolicyMLP,
-    _build_dual_head_model,
 )
+
+
+# ----------------------------------------------------------------------
+# Structured-architecture shared-tensor layout.
+#
+# When the loaded model is ``StructuredModel`` (architecture='structured'),
+# the SHM substrate hosts per-token tensors instead of the flat
+# ``(B, FEATURE_DIM)`` MLP input. Each slot's per-request tensors are:
+#
+#   - ``token_type``     int64 [n_slots, MAX_SEQ_LEN]
+#   - ``token_emb_ids``  int64 [n_slots, MAX_SEQ_LEN, N_EMB_FIELDS]
+#   - ``token_scalars``  float32 [n_slots, MAX_SEQ_LEN, N_SCALAR_FIELDS]
+#   - ``attention_mask`` bool  [n_slots, MAX_SEQ_LEN]
+#
+# Workers tokenize their state to a variable-length dict, then pad up
+# to ``MAX_SEQ_LEN`` (padded positions get ``attention_mask=False``,
+# zeroed categorical / scalar fields; the model's ``padding_idx=0`` +
+# ``src_key_padding_mask`` handle them cleanly).
+#
+# The value / policy output slots stay fixed-shape: ``values`` is
+# ``float32[n_slots, 1]`` and ``policies`` is
+# ``float32[n_slots, ACTION_VOCAB_SIZE]``. The structured trunk always
+# emits a policy head (``StructuredModel.forward`` returns both), so
+# ``with_policy`` is forced True for structured servers — mirroring
+# ``NNEvaluator``'s behaviour.
+#
+# MAX_SEQ_LEN tuning: real-state seq_len distribution from the
+# Slice A+B agent measures median=53, p95=82. Default
+# ``MAX_SEQ_LEN=128`` sits at ~1.5x p95 — plenty of headroom for the
+# long tail without burning much memory. Four tensors per slot at
+# MAX_SEQ_LEN=128 cost ~5.5 KB combined (8 + 56 + 12 + 1 bytes per
+# token × 128 tokens), so a 64-slot pool burns ~350 KB total for the
+# structured input substrate — trivial compared to the model itself.
+#
+# A request whose tokenized seq_len exceeds MAX_SEQ_LEN is an
+# architectural-bound violation — fail loudly rather than silently
+# truncate (truncation would drop tokens at the tail, which carry
+# the most recent action history — exactly the signal Step 1 cares
+# most about). The override knob is the ``max_seq_len`` server
+# constructor kwarg if a config legitimately needs more headroom.
+# ----------------------------------------------------------------------
+
+DEFAULT_MAX_SEQ_LEN = 128
+"""Default per-slot sequence-length cap for structured SHM servers.
+
+Sized to ~1.5x the p95 of the real-state seq_len distribution
+(measured median=53, p95=82 across the Slice A+B tokenizer). Bump
+this only when a config-level test demonstrates the current cap
+clips production sequences."""
 
 
 def _action_encoding():
@@ -224,8 +278,13 @@ class SharedTensorServerHandle:
     # proceed in parallel as before, so dispatcher fusion across
     # workers is unaffected.
     acquire_lock: Any  # mp.synchronize.Lock
-    # Shared tensors. ``features``, ``values`` always present;
-    # ``masks`` / ``policies`` only when ``with_policy=True``.
+    # Shared tensors. ``features``, ``values`` always present for
+    # MLP-architecture servers; ``masks`` / ``policies`` only when
+    # ``with_policy=True``. For structured-architecture servers
+    # ``features`` is a zero-element tensor (kept on the handle for
+    # field-uniformity; never written or read by structured callers);
+    # ``values`` + ``policies`` stay fixed-shape because the model's
+    # output side is identical across architectures.
     features: torch.Tensor
     values: torch.Tensor
     masks: Optional[torch.Tensor]
@@ -234,6 +293,22 @@ class SharedTensorServerHandle:
     n_slots: int
     feature_dim: int
     action_vocab_size: int
+    # Architecture-routing metadata. ``architecture`` carries the
+    # ``ARCHITECTURE_*`` string the server was built around so
+    # clients pick the right submit path without having to consult
+    # the loaded model. ``max_seq_len`` is the per-slot sequence-
+    # length cap for the structured pool (unused / 0 for MLP).
+    architecture: str = ARCHITECTURE_SHARED
+    max_seq_len: int = 0
+    # Structured-only per-slot shared tensors. Each is allocated
+    # as zero-element when ``architecture != ARCHITECTURE_STRUCTURED``
+    # so the dataclass stays a flat record. The model's
+    # ``padding_idx=0`` + ``src_key_padding_mask`` handle padded
+    # positions cleanly when these are populated.
+    token_type: Optional[torch.Tensor] = None
+    token_emb_ids: Optional[torch.Tensor] = None
+    token_scalars: Optional[torch.Tensor] = None
+    attention_mask: Optional[torch.Tensor] = None
 
 
 class SharedTensorNNEvalServer:
@@ -265,6 +340,25 @@ class SharedTensorNNEvalServer:
         policy_hidden_sizes: Optional[tuple[int, ...]] = None,
         model_factory: Optional[Any] = None,
         logger: Optional[logging.Logger] = None,
+        # ----- structured-architecture knobs ------------------------
+        # ``max_seq_len`` caps the per-slot sequence length for the
+        # structured input pool. Requests that tokenize to seq_len >
+        # max_seq_len are rejected (loud error) rather than silently
+        # truncated — truncation would drop the most-recent action
+        # tokens, which is the signal Step 1 cares most about.
+        max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
+        # Optional config overrides for the StructuredModel trunk.
+        # ``None`` falls through to StructuredModelConfig's defaults
+        # (matching ``NNEvaluator(architecture='structured')``).
+        structured_emb_dim: Optional[int] = None,
+        structured_n_heads: Optional[int] = None,
+        structured_n_layers: Optional[int] = None,
+        structured_hidden_dim: Optional[int] = None,
+        structured_action_history_n: Optional[int] = None,
+        structured_n_printings: Optional[int] = None,
+        structured_action_vocab_size: Optional[int] = None,
+        structured_enable_hand_belief_head: Optional[bool] = None,
+        structured_dropout: Optional[float] = None,
     ) -> None:
         # Deferred CUDA resolution: same pattern as PR #36's fix to
         # NNEvalServer. Don't call torch.cuda.is_available() in any
@@ -273,10 +367,33 @@ class SharedTensorNNEvalServer:
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self._device = torch.device(device)
+        # Resolve the architecture string. ``None`` (the legacy default)
+        # routes to the shared-trunk dual-head MLP, matching the
+        # pre-Slice-F behaviour. The structured architecture is opted
+        # into explicitly via ``architecture='structured'``.
+        resolved_arch = (
+            architecture if architecture is not None else ARCHITECTURE_SHARED
+        )
+        if resolved_arch not in SUPPORTED_ARCHITECTURES:
+            raise ValueError(
+                f"architecture must be one of {SUPPORTED_ARCHITECTURES}; "
+                f"got {resolved_arch!r}"
+            )
+        self._architecture = resolved_arch
+        self._is_structured = resolved_arch == ARCHITECTURE_STRUCTURED
+        # The structured trunk always has a policy head; mirroring
+        # ``NNEvaluator``, we silently upgrade ``with_policy=False``
+        # to True for structured servers so the dispatch path always
+        # writes both outputs.
+        if self._is_structured:
+            with_policy = True
         self._with_policy = with_policy
         self._batch_size = max(1, int(batch_size))
         self._batch_wait_s = max(0.0, float(batch_wait_ms)) / 1000.0
         self._n_slots = max(1, int(n_slots))
+        self._max_seq_len = (
+            max(1, int(max_seq_len)) if self._is_structured else 0
+        )
         self._logger = logger or logging.getLogger(
             "mtg_bot.search.shm_nn_eval_server"
         )
@@ -284,17 +401,31 @@ class SharedTensorNNEvalServer:
         # Build the model. Dispatch by ``with_policy`` + ``architecture``
         # the same way NNEvaluator does so the SHM server can host any
         # production-shape weights (1024-trunk dual-head, separate-trunks,
-        # value-only). ``hidden_sizes=None`` falls through to the
-        # underlying class default (HIDDEN_SIZES) — matches NNEvaluator.
+        # value-only, structured-transformer). ``hidden_sizes=None``
+        # falls through to the underlying class default (HIDDEN_SIZES)
+        # — matches NNEvaluator.
         effective_hidden = (
             tuple(hidden_sizes) if hidden_sizes is not None else HIDDEN_SIZES
         )
         if model_factory is not None:
             self._model = model_factory()
+        elif self._is_structured:
+            self._model = _build_structured_model(
+                emb_dim=structured_emb_dim,
+                n_heads=structured_n_heads,
+                n_layers=structured_n_layers,
+                hidden_dim=structured_hidden_dim,
+                action_history_n=structured_action_history_n,
+                n_printings=structured_n_printings,
+                action_vocab_size=structured_action_vocab_size,
+                enable_hand_belief_head=(
+                    structured_enable_hand_belief_head
+                ),
+                dropout=structured_dropout,
+            )
         elif with_policy:
-            arch = architecture if architecture is not None else "shared"
             self._model = _build_dual_head_model(
-                arch,
+                resolved_arch,
                 hidden_sizes=effective_hidden,
                 policy_hidden_sizes=policy_hidden_sizes,
             )
@@ -319,11 +450,47 @@ class SharedTensorNNEvalServer:
         else:
             self._action_vocab_size = 0
 
-        # Allocate shared tensors. share_memory_() puts the storage
-        # on shm (anonymous-mmap on Linux); fork-inherited.
-        self._features = torch.zeros(
-            self._n_slots, self._feature_dim, dtype=torch.float32,
-        ).share_memory_()
+        # Allocate shared tensors. share_memory_() puts the storage on
+        # shm (anonymous-mmap on Linux); fork-inherited. For structured
+        # servers the input substrate is the four per-token tensors
+        # plus a zero-element ``features`` placeholder kept for
+        # handle-record uniformity (the structured client never touches
+        # it). For MLP servers ``features`` is the flat-feature slot
+        # pool and the per-token tensors stay None on the handle.
+        if self._is_structured:
+            # Per-token vocab sizes pulled off the model so the slot
+            # tensors line up with the trunk's embedding tables.
+            from mtg_bot.training.structured_model import (
+                N_EMB_FIELDS,
+                N_SCALAR_FIELDS,
+            )
+            # Zero-element ``features`` keeps the handle's contract
+            # (always-present tensor) without burning shared memory.
+            self._features = torch.zeros(
+                self._n_slots, 0, dtype=torch.float32,
+            ).share_memory_()
+            self._token_type = torch.zeros(
+                self._n_slots, self._max_seq_len, dtype=torch.int64,
+            ).share_memory_()
+            self._token_emb_ids = torch.zeros(
+                self._n_slots, self._max_seq_len, N_EMB_FIELDS,
+                dtype=torch.int64,
+            ).share_memory_()
+            self._token_scalars = torch.zeros(
+                self._n_slots, self._max_seq_len, N_SCALAR_FIELDS,
+                dtype=torch.float32,
+            ).share_memory_()
+            self._attention_mask = torch.zeros(
+                self._n_slots, self._max_seq_len, dtype=torch.bool,
+            ).share_memory_()
+        else:
+            self._features = torch.zeros(
+                self._n_slots, self._feature_dim, dtype=torch.float32,
+            ).share_memory_()
+            self._token_type = None
+            self._token_emb_ids = None
+            self._token_scalars = None
+            self._attention_mask = None
         self._values = torch.zeros(
             self._n_slots, 1, dtype=torch.float32,
         ).share_memory_()
@@ -452,6 +619,12 @@ class SharedTensorNNEvalServer:
             n_slots=self._n_slots,
             feature_dim=self._feature_dim,
             action_vocab_size=self._action_vocab_size,
+            architecture=self._architecture,
+            max_seq_len=self._max_seq_len,
+            token_type=self._token_type,
+            token_emb_ids=self._token_emb_ids,
+            token_scalars=self._token_scalars,
+            attention_mask=self._attention_mask,
         )
 
     # ---- dispatcher --------------------------------------------------------
@@ -492,11 +665,28 @@ class SharedTensorNNEvalServer:
         scatter outputs back, signal response events."""
         if not slot_indices:
             return
+        if self._is_structured:
+            self._dispatch_structured(slot_indices)
+        else:
+            self._dispatch_flat(slot_indices)
+        # Telemetry.
+        self.batches_dispatched += 1
+        self.requests_served += len(slot_indices)
+        self.batch_sizes.append(len(slot_indices))
+
+    def _dispatch_flat(self, slot_indices: list[int]) -> None:
+        """Flat-feature MLP dispatch path. Identical to the pre-Slice-F
+        behaviour: gather features (+ masks) from the slot tensors,
+        run one forward pass, scatter outputs back, signal response
+        events.
+        """
         idx_tensor = torch.tensor(slot_indices, dtype=torch.long)
         feat_batch = self._features.index_select(0, idx_tensor)
         with torch.no_grad():
             feat_dev = feat_batch.to(self._device)
             if self._with_policy:
+                assert self._masks is not None
+                assert self._policies is not None
                 mask_batch = (
                     self._masks.index_select(0, idx_tensor)
                     .to(self._device)
@@ -527,10 +717,66 @@ class SharedTensorNNEvalServer:
                     self._values[slot, 0] = value_cpu[i].squeeze()
                     self._response_events[slot].set()
 
-        # Telemetry.
-        self.batches_dispatched += 1
-        self.requests_served += len(slot_indices)
-        self.batch_sizes.append(len(slot_indices))
+    def _dispatch_structured(self, slot_indices: list[int]) -> None:
+        """Structured-input dispatch path. Gather the four per-token
+        tensors from the slot pool, forward through ``StructuredModel``,
+        apply the legal-action mask + softmax to the policy logits,
+        scatter back into the fixed-shape ``values`` / ``policies`` slots.
+
+        The model's value head is tanh-activated (per
+        ``StructuredModel.forward``); no extra clamp is needed on this
+        side.
+        """
+        assert self._token_type is not None
+        assert self._token_emb_ids is not None
+        assert self._token_scalars is not None
+        assert self._attention_mask is not None
+        assert self._masks is not None
+        assert self._policies is not None
+        idx_tensor = torch.tensor(slot_indices, dtype=torch.long)
+        with torch.no_grad():
+            batch = {
+                "token_type": self._token_type.index_select(
+                    0, idx_tensor,
+                ).to(self._device),
+                "token_emb_ids": self._token_emb_ids.index_select(
+                    0, idx_tensor,
+                ).to(self._device),
+                "token_scalars": self._token_scalars.index_select(
+                    0, idx_tensor,
+                ).to(self._device),
+                "attention_mask": self._attention_mask.index_select(
+                    0, idx_tensor,
+                ).to(self._device),
+            }
+            mask_batch = (
+                self._masks.index_select(0, idx_tensor).to(self._device)
+            )
+            out = self._model(batch)
+            value_t = out["value"]
+            policy_logits = out["policy_logits"]
+            # ``value_t`` is shaped ``(B,)`` per StructuredModel's
+            # contract; some PyTorch versions return ``(B, 1)`` if a
+            # squeeze axis collapses to 0-D — normalize so the write
+            # below can index ``[i]``.
+            if value_t.dim() == 0:
+                value_t = value_t.unsqueeze(0)
+            elif value_t.dim() > 1:
+                value_t = value_t.squeeze(-1)
+            neg_inf = torch.tensor(
+                float("-inf"), dtype=policy_logits.dtype,
+                device=self._device,
+            )
+            masked_logits = torch.where(
+                mask_batch, policy_logits, neg_inf,
+            )
+            policy = torch.softmax(masked_logits, dim=-1)
+            value_cpu = value_t.detach().to(torch.float32).cpu()
+            policy_cpu = policy.detach().to(torch.float32).cpu()
+            for i, slot in enumerate(slot_indices):
+                self._values[slot, 0] = value_cpu[i]
+                self._policies[slot].copy_(policy_cpu[i])
+                self._response_events[slot].set()
 
 
 class SharedTensorNNEvalClient(Evaluator):
@@ -548,10 +794,24 @@ class SharedTensorNNEvalClient(Evaluator):
     def __init__(self, handle: SharedTensorServerHandle) -> None:
         self._h = handle
         self._with_policy = handle.with_policy
+        self._architecture = getattr(handle, "architecture", ARCHITECTURE_SHARED)
+        self._is_structured = (
+            self._architecture == ARCHITECTURE_STRUCTURED
+        )
+        # Cap the per-request seq_len at the server's configured
+        # MAX_SEQ_LEN. Requests with seq_len > cap are rejected with a
+        # clear error rather than silently truncated (truncation would
+        # drop the freshest action tokens, the signal Step 1 cares
+        # most about).
+        self._max_seq_len = getattr(handle, "max_seq_len", 0)
 
     @property
     def with_policy(self) -> bool:
         return self._with_policy
+
+    @property
+    def architecture(self) -> str:
+        return self._architecture
 
     # ---- Evaluator API ---------------------------------------------------
 
@@ -563,6 +823,21 @@ class SharedTensorNNEvalClient(Evaluator):
         circuit; this method only ever sees non-terminal states.
         Server batches across worker-process boundaries already; the
         slot round-trip is the unit of work."""
+        if self._is_structured:
+            # The structured server always has a policy head; route
+            # through the with-policy path and discard the policy
+            # array. This keeps both architectures' value-only callers
+            # bit-equivalent (same tokenize + forward), at the cost of
+            # one wasted policy-head materialization per call. The
+            # alternative — a separate value-only-only structured
+            # submit path — would diverge from the model's actual
+            # forward graph and re-introduce the silent-output-drift
+            # risk Slice E specifically guarded against.
+            ae = _action_encoding()
+            mask = ae.legal_action_mask(state, player_id)
+            tokens = self._tokenize_state(state, player_id)
+            value, _ = self._call_structured_value_policy(tokens, mask)
+            return value
         engine = _engine_state(state)
         feats = extract_features(engine, player_id)
         return self._call_value(feats)
@@ -592,6 +867,10 @@ class SharedTensorNNEvalClient(Evaluator):
             else:
                 value = 1.0 if winner == player_id else -1.0
             return value, np.zeros(vocab_size, dtype=np.float32)
+        if self._is_structured:
+            mask = ae.legal_action_mask(state, player_id)
+            tokens = self._tokenize_state(state, player_id)
+            return self._call_structured_value_policy(tokens, mask)
         engine = _engine_state(state)
         feats = extract_features(engine, player_id)
         mask = ae.legal_action_mask(state, player_id)
@@ -630,6 +909,9 @@ class SharedTensorNNEvalClient(Evaluator):
         out: list[float] = [0.0] * len(states)
         nonterminal_indices: list[int] = []
         nonterminal_features: list[np.ndarray] = []
+        nonterminal_token_dicts: list[dict[str, np.ndarray]] = []
+        nonterminal_masks: list[np.ndarray] = []
+        ae = _action_encoding() if self._is_structured else None
         for i, s in enumerate(states):
             if s.is_terminal():
                 winner = s.winner()
@@ -638,20 +920,41 @@ class SharedTensorNNEvalClient(Evaluator):
                 else:
                     out[i] = 1.0 if winner == player_id else -1.0
                 continue
-            engine = _engine_state(s)
             nonterminal_indices.append(i)
-            nonterminal_features.append(
-                extract_features(engine, player_id),
-            )
+            if self._is_structured:
+                # Structured value-only path tokenizes and forwards
+                # through the full structured submit (policy head is
+                # part of the same forward pass), then drops the
+                # policy. Same rationale as ``_evaluate_nonterminal``
+                # — keeps bit-equivalence with the direct
+                # NNEvaluator(architecture='structured') call.
+                nonterminal_token_dicts.append(
+                    self._tokenize_state(s, player_id),
+                )
+                assert ae is not None
+                nonterminal_masks.append(
+                    ae.legal_action_mask(s, player_id),
+                )
+            else:
+                engine = _engine_state(s)
+                nonterminal_features.append(
+                    extract_features(engine, player_id),
+                )
 
         if not nonterminal_indices:
             return out
 
-        values, _ = self._call_chunked(
-            features=nonterminal_features,
-            masks=None,
-            vocab_size=0,
-        )
+        if self._is_structured:
+            values, _ = self._call_chunked_structured(
+                token_dicts=nonterminal_token_dicts,
+                masks=nonterminal_masks,
+            )
+        else:
+            values, _ = self._call_chunked(
+                features=nonterminal_features,
+                masks=None,
+                vocab_size=0,
+            )
         for k, v in enumerate(values):
             out[nonterminal_indices[k]] = v
         return out
@@ -685,6 +988,7 @@ class SharedTensorNNEvalClient(Evaluator):
         ]
         nonterminal_indices: list[int] = []
         nonterminal_features: list[np.ndarray] = []
+        nonterminal_token_dicts: list[dict[str, np.ndarray]] = []
         nonterminal_masks: list[np.ndarray] = []
         for i, s in enumerate(states):
             if s.is_terminal():
@@ -695,23 +999,34 @@ class SharedTensorNNEvalClient(Evaluator):
                     value = 1.0 if winner == player_id else -1.0
                 out[i] = (value, np.zeros(vocab_size, dtype=np.float32))
                 continue
-            engine = _engine_state(s)
             nonterminal_indices.append(i)
-            nonterminal_features.append(
-                extract_features(engine, player_id),
-            )
             nonterminal_masks.append(
                 ae.legal_action_mask(s, player_id),
             )
+            if self._is_structured:
+                nonterminal_token_dicts.append(
+                    self._tokenize_state(s, player_id),
+                )
+            else:
+                engine = _engine_state(s)
+                nonterminal_features.append(
+                    extract_features(engine, player_id),
+                )
 
         if not nonterminal_indices:
             return out
 
-        values, policies = self._call_chunked(
-            features=nonterminal_features,
-            masks=nonterminal_masks,
-            vocab_size=vocab_size,
-        )
+        if self._is_structured:
+            values, policies = self._call_chunked_structured(
+                token_dicts=nonterminal_token_dicts,
+                masks=nonterminal_masks,
+            )
+        else:
+            values, policies = self._call_chunked(
+                features=nonterminal_features,
+                masks=nonterminal_masks,
+                vocab_size=vocab_size,
+            )
         for k, v in enumerate(values):
             out[nonterminal_indices[k]] = (v, policies[k])
         return out
@@ -914,6 +1229,227 @@ class SharedTensorNNEvalClient(Evaluator):
             return value, policy
         finally:
             self._h.free_slots.put(slot)
+
+    # ---- structured (per-token) request paths ----------------------------
+
+    def _tokenize_state(
+        self,
+        state: "GameState",
+        viewer_id: "PlayerID",
+    ) -> dict[str, np.ndarray]:
+        """Run ``state_tokenizer.tokenize_state`` against the engine
+        state behind ``state``. The recent-action history defaults to
+        empty (same first-pass-acceptable choice the direct
+        ``NNEvaluator(architecture='structured')`` path makes — see
+        the docstring there). Action-history threading is a separate
+        followup once the engine grows a public action log."""
+        import importlib
+        tokenizer = importlib.import_module(
+            "mtg_bot.training.state_tokenizer",
+        )
+        engine = _engine_state(state)
+        return tokenizer.tokenize_state(
+            engine,
+            int(viewer_id),
+            (),
+        )
+
+    def _validate_seq_len(self, token_dict: dict[str, np.ndarray]) -> None:
+        """Verify the tokenized sequence fits in the server's per-slot
+        cap. Architectural-bound violation surfaces here rather than
+        silently truncating the action history.
+        """
+        seq_len = int(token_dict["token_type"].shape[0])
+        if seq_len > self._max_seq_len:
+            raise ValueError(
+                f"tokenized state seq_len={seq_len} exceeds the SHM "
+                f"server's MAX_SEQ_LEN={self._max_seq_len}; raise the "
+                f"server's ``max_seq_len`` kwarg or shrink the "
+                f"per-state token set. Refusing to silently truncate "
+                f"because the tail tokens carry the freshest action "
+                f"history (the strongest signal Step 1's trunk has)."
+            )
+
+    def _write_structured_row(
+        self,
+        slot: int,
+        token_dict: dict[str, np.ndarray],
+        mask: np.ndarray,
+    ) -> None:
+        """Pad ``token_dict`` up to ``MAX_SEQ_LEN`` and write it into
+        the slot's shared tensors, alongside the policy-head legal-
+        action mask.
+
+        Padded positions get ``attention_mask=False`` and zeroed
+        categorical / scalar values; the model's ``padding_idx=0`` on
+        every embedding plus the ``src_key_padding_mask`` flip in
+        ``StructuredModel.forward`` together ensure padded rows
+        contribute zero to the trunk's attention output.
+        """
+        self._validate_seq_len(token_dict)
+        assert self._h.token_type is not None
+        assert self._h.token_emb_ids is not None
+        assert self._h.token_scalars is not None
+        assert self._h.attention_mask is not None
+        assert self._h.masks is not None
+        seq_len = int(token_dict["token_type"].shape[0])
+        max_len = self._max_seq_len
+        # Zero the trailing pad region of every per-token tensor for
+        # this slot so a stale write from a previous request can't
+        # leak into the current forward pass.
+        self._h.token_type[slot].zero_()
+        self._h.token_emb_ids[slot].zero_()
+        self._h.token_scalars[slot].zero_()
+        self._h.attention_mask[slot].zero_()
+        if seq_len > 0:
+            self._h.token_type[slot, :seq_len].copy_(
+                torch.from_numpy(
+                    np.ascontiguousarray(
+                        token_dict["token_type"], dtype=np.int64,
+                    ),
+                ),
+            )
+            self._h.token_emb_ids[slot, :seq_len].copy_(
+                torch.from_numpy(
+                    np.ascontiguousarray(
+                        token_dict["token_emb_ids"], dtype=np.int64,
+                    ),
+                ),
+            )
+            self._h.token_scalars[slot, :seq_len].copy_(
+                torch.from_numpy(
+                    np.ascontiguousarray(
+                        token_dict["token_scalars"], dtype=np.float32,
+                    ),
+                ),
+            )
+            self._h.attention_mask[slot, :seq_len].copy_(
+                torch.from_numpy(
+                    np.ascontiguousarray(
+                        token_dict["attention_mask"], dtype=bool,
+                    ),
+                ),
+            )
+        # Pad-region of ``attention_mask`` stays False from the
+        # zero-fill above — the trunk's key_padding_mask flip in
+        # forward() turns those into "ignore" positions.
+        # Suppress an unused-var hint about max_len; it pins the
+        # shape contract the assertion below upholds.
+        assert self._h.attention_mask[slot].shape[0] == max_len
+        # Legal-action mask for the policy head.
+        np_mask = np.ascontiguousarray(mask, dtype=bool)
+        self._h.masks[slot].copy_(torch.from_numpy(np_mask))
+
+    def _call_structured_value_policy(
+        self,
+        token_dict: dict[str, np.ndarray],
+        mask: np.ndarray,
+    ) -> tuple[float, np.ndarray]:
+        """Single-state structured submit. Mirrors
+        ``_call_value_policy`` but writes the per-token tensors
+        instead of the flat feature row."""
+        slot = self._h.free_slots.get()
+        try:
+            self._write_structured_row(slot, token_dict, mask)
+            self._h.request_queue.put(slot)
+            self._await_response(slot)
+            assert self._h.policies is not None
+            value = float(self._h.values[slot, 0].item())
+            policy = self._h.policies[slot].clone().numpy()
+            return value, policy
+        finally:
+            self._h.free_slots.put(slot)
+
+    def _call_chunked_structured(
+        self,
+        *,
+        token_dicts: list[dict[str, np.ndarray]],
+        masks: list[np.ndarray],
+    ) -> tuple[list[float], list[np.ndarray]]:
+        """Structured analogue of :meth:`_call_chunked`. Chunks
+        oversized batches into sub-batches of at most ``n_slots`` so
+        the call degrades gracefully when the request exceeds the
+        slot pool's size.
+
+        Invariants preserved:
+
+        - Input order: results are appended in chunk-iteration order,
+          which matches the input order.
+        - Slot lifecycle: each chunk acquires + writes + submits +
+          waits + releases its slots within a try/finally so
+          exceptions (e.g. ``server_stopped`` raised by
+          ``_await_response``) don't leak slots.
+        - ``server_stopped`` detection: the first sub-batch to hit a
+          stopped server raises immediately; subsequent chunks are
+          not started.
+
+        Pre-validates every request's seq_len up front so an oversize
+        request fails fast (before acquiring any slots) rather than
+        partway through writing.
+        """
+        n = len(token_dicts)
+        assert len(masks) == n
+        if n == 0:
+            return [], []
+        for td in token_dicts:
+            self._validate_seq_len(td)
+
+        chunk_size = min(n, self._h.n_slots)
+        values: list[float] = []
+        policies: list[np.ndarray] = []
+        for start in range(0, n, chunk_size):
+            end = min(start + chunk_size, n)
+            chunk_tokens = token_dicts[start:end]
+            chunk_masks = masks[start:end]
+            slots = self._submit_batch_structured(
+                token_dicts=chunk_tokens,
+                masks=chunk_masks,
+            )
+            try:
+                for slot in slots:
+                    self._await_response(slot)
+                    values.append(float(self._h.values[slot, 0].item()))
+                    assert self._h.policies is not None
+                    policies.append(
+                        self._h.policies[slot].clone().numpy(),
+                    )
+            finally:
+                for slot in slots:
+                    self._h.free_slots.put(slot)
+        return values, policies
+
+    def _submit_batch_structured(
+        self,
+        *,
+        token_dicts: list[dict[str, np.ndarray]],
+        masks: list[np.ndarray],
+    ) -> list[int]:
+        """Structured analogue of :meth:`_submit_batch`. Acquires
+        ``len(token_dicts)`` slots under ``acquire_lock``, writes each
+        slot's per-token tensors + mask, then submits every slot index
+        to the request queue.
+
+        The acquire-all-before-write ordering, the lock-only-on-acquire
+        rule, and the BaseException-safe release-on-failure handling
+        all mirror the flat-feature submit path. See its docstring for
+        the deeper rationale.
+        """
+        n = len(token_dicts)
+        assert len(masks) == n
+        slots: list[int] = []
+        try:
+            with self._h.acquire_lock:
+                for _ in range(n):
+                    slots.append(self._h.free_slots.get())
+            for k, slot in enumerate(slots):
+                self._write_structured_row(slot, token_dicts[k], masks[k])
+            for slot in slots:
+                self._h.request_queue.put(slot)
+        except BaseException:
+            for slot in slots:
+                self._h.free_slots.put(slot)
+            raise
+        return slots
 
     def close(self) -> None:
         # Nothing to close — no per-worker resources.
