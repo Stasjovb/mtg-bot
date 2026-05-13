@@ -1458,6 +1458,114 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ExileTargetCreatureUntilSourceLeaves,
         )
         return ExileTargetCreatureUntilSourceLeaves()
+    if kind == "destroy_target":
+        # "Destroy target creature." Rust's
+        # ``Effect::DestroyTarget { target: TargetFilter }``
+        # (cards.rs:1567) is the explicit-target removal arm; its
+        # ``parse_effect`` arm at cards.rs:2902-2909 requires a
+        # ``target`` dict (parsed via ``parse_target_filter``). The
+        # resolve arm at state_ops_resolve.rs:1687 carries the I75
+        # controller-of-effect fix: defender = 1 - controller, where
+        # controller derives from
+        # ``current_resolve_source_controller`` (with active_player
+        # fallback). Sibling closure to I70 ExileTarget / I76
+        # ReturnToHand / I78 OwnerPutsTarget*OnTopOrBottomOfLibrary /
+        # I79 ExileTargetCreatureUntilSourceLeaves / I80
+        # ExileOpponentsNonlandPermanentUntilLeaves -- identical
+        # defender-swap shape; differs only in destination zone
+        # (graveyard for I75 vs exile / hand / library bottom for the
+        # siblings) and in carrying the indestructible suppress gate
+        # (CR 702.12) on the destroyed object.
+        #
+        # **Rust target-pick semantics.** The Rust resolve arm is the
+        # AnyCreature first-slice shortcut: scans the resolved
+        # defender's bf for ``bf[0]`` regardless of card-type filter
+        # at this layer (the ``AnyCreature`` filter symbol does NOT
+        # narrow to creatures in the first-slice picker -- per the
+        # I70 docstring, "the current AnyCreature target shortcut
+        # picks ``bf[0]`` regardless of card-type filter"). The
+        # indestructible gate runs AFTER the picker on the chosen
+        # ``bf[0]`` and short-circuits silently on indestructible.
+        # LTB fan-out (``pending_leaves_dispatches.push``) preserved.
+        #
+        # **Python target-pick semantics.** Python's ``Destroy``
+        # base class (effects/generic/destroy.py:30) drives off
+        # ``targets: tuple`` -- a tuple of ``TargetSpec`` slots. For
+        # the AnyCreature filter, the bridge constructs
+        # ``Destroy(targets=(TargetSpec(IsCreature()),))``. The
+        # targeting pipeline picks at PUSH time via
+        # ``push_triggered_ability`` -> the source-controller's
+        # ``agent.choose_target`` over the legal_targets pool (every
+        # creature on the battlefield), and ``Destroy.resolve``
+        # re-verifies the slot's filter at fire time per CR 608.2b
+        # before invoking ``turn.destroy(state, obj)`` (which carries
+        # the indestructible check + LTB dispatch). Probes that drive
+        # this arm cross-engine seat ``_PickFirstOpponentTargetAgent``
+        # (or a defender-bf-first shim) on the source's controller --
+        # the agent's opponent-controller filter mirrors Rust's
+        # defender-side scan exactly on the 2-player harness.
+        #
+        # **Filter narrowness asymmetry note.** Rust's first-slice
+        # ``AnyCreature`` picker doesn't actually filter to creatures
+        # (it picks ``bf[0]`` blindly); Python's ``IsCreature()``
+        # slot filter DOES narrow to creatures. On synthetic probes
+        # that seat only creatures on the defender's bf, this
+        # asymmetry collapses and both engines pick the same target.
+        # Real-card probes that mix lands / artifacts on the
+        # defender's bf may diverge; the bridge surface mirrors
+        # Rust's filter symbol verbatim and lets the Python side's
+        # narrower filter shape land additional safety. A future
+        # slice can tighten Rust's picker to actually honor
+        # ``AnyCreature`` (per the I70 scope note); the bridge
+        # already speaks the tightened contract.
+        #
+        # **Indestructible gate parity.** Rust's destroy-arm gate
+        # (CR 702.12) reads ``keywords.contains("indestructible")``;
+        # Python's ``turn.destroy`` gate reads
+        # ``"indestructible" in obj.printing.keywords``. Both
+        # short-circuit silently and leave the source on stack until
+        # the resolve completes; both append a noop log entry only
+        # if the resolve mutates a non-indestructible target. Probes
+        # that exercise indestructible bait need to seed the keyword
+        # on both sides; the bare bridge arm doesn't carry rider
+        # behaviors beyond what ``Destroy.resolve`` already does.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:2902-2909)
+        # which requires ``target`` and downcasts to a target-filter
+        # dict. The bridge surface translates the inner filter dict
+        # via ``_target_filter_dict_to_python_filter`` (a tiny
+        # local helper that maps ``{"kind": "any_creature"}`` to
+        # ``IsCreature()`` -- the only filter symbol Rust's
+        # parse_target_filter accepts today besides ``any_player``,
+        # which destroy_target doesn't honor).
+        from mtg_bot.effects.generic.destroy import Destroy
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        target_dict = eff_dict.get("target")
+        # Rust's parse_target_filter only accepts ``any_player`` and
+        # ``any_creature`` today; the destroy arm only makes sense
+        # with a creature-shaped filter. Default to ``any_creature``
+        # if absent (mirrors the lenient-default convention used by
+        # the mill / mill_target_player arms above for missing
+        # ``count`` -- bridge consumers SHOULD pass ``target``
+        # explicitly to keep round-trip dict-shape consistency with
+        # what Rust's parser accepts).
+        target_kind = (
+            target_dict.get("kind", "any_creature")
+            if isinstance(target_dict, dict)
+            else "any_creature"
+        )
+        if target_kind == "any_creature":
+            slot_filter = IsCreature()
+        else:
+            raise ValueError(
+                f"cross_engine destroy_target bridge: unsupported "
+                f"target filter kind {target_kind!r} (Rust's "
+                f"parse_target_filter at cards.rs:2790-2799 accepts "
+                f"only 'any_player' and 'any_creature'; destroy_target "
+                f"only honors creature-shaped filters)"
+            )
+        return Destroy(targets=(TargetSpec(slot_filter),))
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
