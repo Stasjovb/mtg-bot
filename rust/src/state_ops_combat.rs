@@ -711,16 +711,25 @@ impl GameState {
     /// see module docstring.
     ///
     /// Blocking does NOT tap the blocker (CR 509.1).
-    fn declare_blocker(&mut self, blocker_id: u32, attacker_id: u32) -> bool {
+    ///
+    /// **Slice 9 signature change**: returns `PyResult<bool>` (was
+    /// `bool`). The `Ok(bool)` payload preserves the prior "did the
+    /// block stick" contract; the `Err` arm only fires when the
+    /// post-push `Event::Blocks` dispatch raises (a Python-side
+    /// error during effect resolution). The only caller — the
+    /// `Action::DeclareBlockers` arm in `state_ops_actions.rs` —
+    /// already invokes via `call_method1(...)?` so the Python-facing
+    /// behavior is unchanged.
+    fn declare_blocker(&mut self, blocker_id: u32, attacker_id: u32) -> PyResult<bool> {
         if !self.attackers.contains(&attacker_id) {
-            return false;
+            return Ok(false);
         }
         let Some((tapped, _summoning_sick)) = read_creature_status(self, blocker_id) else {
             // Object missing OR non-creature.
-            return false;
+            return Ok(false);
         };
         if tapped {
-            return false;
+            return Ok(false);
         }
         // Flying gate (CR 702.9): a flying attacker can only be blocked
         // by creatures with flying or reach (CR 702.17). Reach on the
@@ -730,7 +739,7 @@ impl GameState {
             let blocker_has_flying = battlefield_has_keyword(self, blocker_id, "flying");
             let blocker_has_reach = battlefield_has_keyword(self, blocker_id, "reach");
             if !blocker_has_flying && !blocker_has_reach {
-                return false;
+                return Ok(false);
             }
         }
         // Skulk gate (CR 702.118): a creature with skulk can't be
@@ -742,7 +751,7 @@ impl GameState {
             let attacker_power = battlefield_creature_power(self, attacker_id);
             let blocker_power = battlefield_creature_power(self, blocker_id);
             if blocker_power > attacker_power {
-                return false;
+                return Ok(false);
             }
         }
         // Note: we do NOT check the blocker's summoning_sick flag.
@@ -750,7 +759,39 @@ impl GameState {
         // not blocking (CR 302.1) — a freshly cast creature can block
         // the turn it comes down.
         self.blockers.push((attacker_id, blocker_id));
-        true
+        // Slice 9: dispatch Event::Blocks for the just-declared
+        // blocker. The blocker is on the battlefield (it has to be,
+        // per the read_creature_status gate above), so the bf
+        // observer set already contains it — `Predicate::SourceIsSelf`
+        // ("whenever this creature blocks") matches naturally
+        // without needing the DIES/CAST/LEAVES extra-observer
+        // pattern.
+        //
+        // Mirrors Python's per-pair `dispatch_event(state,
+        // Event.BLOCKS, ...)` call in `src/mtg_bot/combat.py:274` —
+        // fired per blocker→attacker pair immediately after the
+        // blocker.blocking / attacker.blocked_by mutations, so
+        // triggers observe each blocker in declaration order.
+        //
+        // **Subject mapping divergence from Python**: Python's
+        // BLOCKS event carries two subjects (blocker + attacker)
+        // and exposes both to predicates via the multi-subject
+        // schema. Rust's single-subject `dispatch_event` API only
+        // threads the blocker today; multi-subject predicates
+        // against the attacked creature (e.g. Skystinger's
+        // "whenever ~ blocks a creature with flying") need the
+        // `Predicate::Subject(slot, inner)` substrate that a
+        // future slice will introduce alongside
+        // `Event::DealsCombatDamage`. Until then, BLOCKS triggers
+        // whose predicates only key on the blocker (SourceIsSelf,
+        // SubjectIsCreature, ControlledByYou, etc.) work as
+        // expected.
+        crate::state_ops_resolve::dispatch_event(
+            self,
+            crate::cards::Event::Blocks,
+            blocker_id,
+        )?;
+        Ok(true)
     }
 
     /// Read the declared attackers as a list of object ids in

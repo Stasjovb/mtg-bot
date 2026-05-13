@@ -1892,10 +1892,22 @@ pub enum Event {
     /// "When you cast a spell" / "When X is cast". Stub for
     /// Slice 5+; no dispatch site yet.
     Cast,
-    /// "When X attacks". Stub for Slice 6+; no dispatch site yet.
+    /// "When X attacks". Slice 7 wires this — dispatched inline at
+    /// the `declare_attacker` site after the per-attacker push to
+    /// `state.attackers`. SourceIsSelf matches naturally via
+    /// `source_id == subject_id` on the bf-snapshot observer set.
     Attacks,
+    /// "When X blocks". Slice 9 wires this — dispatched inline at
+    /// the `declare_blocker` site after the per-pair push to
+    /// `state.blockers`. Single-subject shape: subject = blocker
+    /// (multi-subject blocker + attacked-creature predicates are
+    /// out of scope until `Predicate::Subject(slot, inner)` lands
+    /// alongside Event::DealsCombatDamage). SourceIsSelf
+    /// ("whenever this creature blocks") matches naturally via
+    /// `source_id == subject_id`.
+    Blocks,
     /// "When X deals damage" / combat-damage triggers. Stub for
-    /// Slice 7+; no dispatch site yet.
+    /// Slice 12+; no dispatch site yet.
     DealsDamage,
     /// "When X leaves the battlefield". Fires from
     /// `dispatch_event(Event::LeavesBattlefield, leaving_id)` on
@@ -4099,11 +4111,12 @@ fn parse_activation_cost(
 /// ```
 ///
 /// Slice 1 wired `"enters"`; Slice 5 added `"dies"`; Slice 6 added
-/// `"cast"`; Slice 7 added `"attacks"`; Slice 8 adds
-/// `"leaves_battlefield"`. Remaining variants (`deals_damage`) still
-/// raise because their dispatch sites don't exist yet — allowing
-/// them through would let registry-dict callers stamp triggers that
-/// never fire, masking the missing-fanout bug.
+/// `"cast"`; Slice 7 added `"attacks"`; Slice 8 added
+/// `"leaves_battlefield"`; Slice 9 adds `"blocks"`. Remaining
+/// variants (`deals_damage`) still raise because their dispatch
+/// sites don't exist yet — allowing them through would let
+/// registry-dict callers stamp triggers that never fire, masking
+/// the missing-fanout bug.
 fn parse_triggered_ability(
     dict: &Bound<'_, PyDict>,
 ) -> PyResult<TriggeredAbility> {
@@ -4115,20 +4128,21 @@ fn parse_triggered_ability(
         "dies" => Event::Dies,
         "cast" => Event::Cast,
         "attacks" => Event::Attacks,
+        "blocks" => Event::Blocks,
         "leaves_battlefield" => Event::LeavesBattlefield,
         // Out-of-scope events stay raise-on-register. Each lands
         // alongside its dispatch fan-out so the parser surface stays
         // consistent with the dispatcher's coverage.
         "deals_damage" => {
             return Err(PyValueError::new_err(format!(
-                "triggered_ability.event {event_str:?} is not yet wired in Slice 8; \
-                 only \"enters\", \"dies\", \"cast\", \"attacks\", and \"leaves_battlefield\" dispatch today"
+                "triggered_ability.event {event_str:?} is not yet wired in Slice 9; \
+                 only \"enters\", \"dies\", \"cast\", \"attacks\", \"blocks\", and \"leaves_battlefield\" dispatch today"
             )));
         }
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown triggered_ability.event {other:?}; \
-                 valid: enters, dies, cast, attacks, leaves_battlefield (Slice 8)"
+                 valid: enters, dies, cast, attacks, blocks, leaves_battlefield (Slice 9)"
             )));
         }
     };

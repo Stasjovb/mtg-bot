@@ -201,8 +201,8 @@ def test_triggered_abilities_unknown_predicate_kind_raises(empty_registry):
 
 
 def test_triggered_abilities_unwired_event_raises(empty_registry):
-    """Slice 8 wires ``Event::Enters``, ``Event::Dies``,
-    ``Event::Cast``, ``Event::Attacks``, and
+    """Slice 9 wires ``Event::Enters``, ``Event::Dies``,
+    ``Event::Cast``, ``Event::Attacks``, ``Event::Blocks``, and
     ``Event::LeavesBattlefield``; the remaining declared event
     (``deals_damage``) raises at register time so a caller can't
     stamp a trigger that never fires. Pin one such event here —
@@ -221,7 +221,7 @@ def test_triggered_abilities_unwired_event_raises(empty_registry):
             }
         ],
     }
-    with pytest.raises(ValueError, match="not yet wired in Slice 8"):
+    with pytest.raises(ValueError, match="not yet wired in Slice 9"):
         empty_registry.register_printing(d)
 
 
@@ -2789,3 +2789,375 @@ def test_leaves_battlefield_event_parses_via_cross_engine_bridge():
     }
     ta = _ta_dict_to_python_triggered_ability(ta_dict)
     assert ta.event is Event.LEAVES_BATTLEFIELD
+
+
+# ====================================================================
+# Slice 9 — Event::Blocks
+#
+# `Event::Blocks` is the per-blocker event that fires after each
+# blocker is committed via `declare_blocker`. Symmetric to Slice 7's
+# ATTACKS dispatch: the blocker is on the battlefield (per the
+# eligibility gate), so the bf observer set already contains it and
+# SourceIsSelf ("whenever this creature blocks") matches naturally
+# without the DIES/CAST/LEAVES extra-observer pattern.
+#
+# Mirrors Python's per-pair `dispatch_event(state, Event.BLOCKS,
+# blocker=..., attacker=...)` call in `src/mtg_bot/combat.py:274` —
+# fired per blocker→attacker pair immediately after the
+# blocker.blocking / attacker.blocked_by mutations, so triggers
+# observe each blocker in declaration order.
+#
+# **Single-subject divergence from Python**: Python carries TWO
+# subjects on BLOCKS (blocker + attacker) and exposes both via the
+# multi-subject predicate schema. Rust dispatches on the blocker
+# only; multi-subject predicates against the attacker (e.g.
+# Skystinger's "whenever ~ blocks a creature with flying") need the
+# `Predicate::Subject(slot, inner)` substrate that lands later. For
+# now, BLOCKS triggers keying only on the blocker work as expected.
+# ====================================================================
+
+
+# --- registry-dict shapes used by the Slice 9 tests -----------------
+
+
+def _blocks_self_draw_dict(name="Test BLOCKS Self-Draw"):
+    """A creature with a `source_is_self` BLOCKS trigger that draws
+    1 card when it blocks. The canonical "whenever this creature
+    blocks, draw a card" shape.
+    """
+    return {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "blocks",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+def _blocks_creature_observer_dict():
+    """Pre-existing observer with a `subject_is_creature` BLOCKS
+    trigger. Fires when ANY creature blocks — regardless of
+    controller. Symmetric of the Hellrider-shape ATTACKS observer
+    from Slice 7.
+    """
+    return {
+        "name": "Test BLOCKS Creature Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "blocks",
+                "predicate": {"kind": "subject_is_creature"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+
+
+# --- parser surface --------------------------------------------------
+
+
+def test_slice9_blocks_event_parses(empty_registry):
+    """`event: blocks` is accepted at register-time post-Slice-9."""
+    pid = empty_registry.register_printing(_blocks_self_draw_dict())
+    assert pid == 0
+
+
+@pytest.mark.parametrize("event_kind", ["deals_damage"])
+def test_slice9_other_events_still_raise(empty_registry, event_kind):
+    """`deals_damage` still raises at register-time post-Slice-9
+    (Slice 9 wires enters / dies / cast / attacks / blocks /
+    leaves_battlefield only).
+    """
+    d = {
+        "name": f"Slice9 Bad Event {event_kind}",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": event_kind,
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="not yet wired"):
+        empty_registry.register_printing(d)
+
+
+# --- SourceIsSelf BLOCKS — "whenever this creature blocks" ----------
+
+
+def test_blocks_self_trigger_fires_on_declare_blocker(synthetic_state):
+    """Inject a 2/2 with a `source_is_self` BLOCKS trigger onto p0's
+    bf. Declare a p1 attacker, then declare the injected creature as
+    its blocker. The BLOCKS trigger fires; resolving it draws 1 card.
+    """
+    blocker_id = synthetic_state.register_and_inject_object(
+        _blocks_self_draw_dict(), 0, ZONE_BATTLEFIELD
+    )
+    # P1_FIRST_BEAR_ID = 67 + 5 = 72 — first p1 bear (2/2, not
+    # summoning-sick in the synthetic seed). Declare it as attacker
+    # first; only then can the p0 blocker block it.
+    P1_FIRST_BEAR_ID = 67 + 5
+    ok_atk = synthetic_state.declare_attacker(P1_FIRST_BEAR_ID)
+    assert ok_atk is True
+    # The attacker is the only attacking creature; no ATTACKS trigger
+    # because the p1 attacker has no triggered_abilities. Clear the
+    # stack just in case (defensive; the synthetic bears are barren).
+    while synthetic_state.stack_size() > 0:
+        synthetic_state.resolve_top_of_stack()
+
+    library_before = synthetic_state.library_sizes[0]
+    hand_before = synthetic_state.hand_sizes[0]
+
+    ok_blk = synthetic_state.declare_blocker(blocker_id, P1_FIRST_BEAR_ID)
+    assert ok_blk is True
+    # Blocking does NOT tap the blocker (CR 509.1).
+    assert synthetic_state.is_tapped(blocker_id) is False
+    # The BLOCKS trigger is on the stack.
+    assert synthetic_state.stack_size() == 1, (
+        "expected the source_is_self BLOCKS trigger to land on the "
+        "stack after declare_blocker succeeded"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == blocker_id
+
+    # Resolve: DrawCards(1) -> hand +1, library -1.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+# --- subject_is_creature BLOCKS observer (Wall-of-Tanglecord shape) -
+
+
+def test_blocks_creature_observer_fires_on_another_blocker(synthetic_state):
+    """Pre-existing observer with `subject_is_creature` BLOCKS
+    trigger. When ANY creature blocks, the observer fires.
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _blocks_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    P1_FIRST_BEAR_ID = 67 + 5
+    # Declare the p1 bear as the attacker.
+    ok_atk = synthetic_state.declare_attacker(P1_FIRST_BEAR_ID)
+    assert ok_atk is True
+    while synthetic_state.stack_size() > 0:
+        synthetic_state.resolve_top_of_stack()
+
+    library_before = synthetic_state.library_sizes[0]
+
+    # Declare P0_FIRST_BEAR_ID as the blocker. The observer should
+    # fire on its `subject_is_creature` predicate.
+    ok_blk = synthetic_state.declare_blocker(
+        P0_FIRST_BEAR_ID, P1_FIRST_BEAR_ID
+    )
+    assert ok_blk is True
+
+    # The observer's BLOCKS trigger should be on the stack.
+    assert synthetic_state.stack_size() == 1, (
+        "expected the observer's `subject_is_creature` BLOCKS trigger "
+        "to fire when the Bear blocked"
+    )
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+    # Resolve: observer's controller (p0) draws 1.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.library_sizes[0] == library_before - 1
+
+
+def test_blocks_observer_with_controlled_by_you_fires_on_own_blocker(
+    synthetic_state,
+):
+    """`subject_is_creature AND controlled_by_you` BLOCKS observer
+    fires on p0's own creature blocking.
+    """
+    observer = {
+        "name": "Test BLOCKS Under-Your-Control Observer",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "blocks",
+                "predicate": {
+                    "kind": "and",
+                    "left": {"kind": "subject_is_creature"},
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    observer_id = synthetic_state.register_and_inject_object(
+        observer, 0, ZONE_BATTLEFIELD
+    )
+
+    P1_FIRST_BEAR_ID = 67 + 5
+    ok_atk = synthetic_state.declare_attacker(P1_FIRST_BEAR_ID)
+    assert ok_atk is True
+    while synthetic_state.stack_size() > 0:
+        synthetic_state.resolve_top_of_stack()
+
+    ok_blk = synthetic_state.declare_blocker(
+        P0_FIRST_BEAR_ID, P1_FIRST_BEAR_ID
+    )
+    assert ok_blk is True
+
+    assert synthetic_state.stack_size() == 1
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+
+def test_blocks_observer_with_controlled_by_you_skips_opponent_blocker(
+    synthetic_state,
+):
+    """`controlled_by_you` BLOCKS observer on p0's bf does NOT fire
+    when an opponent's creature blocks. Symmetric of Slice 7's
+    cross-controller filter test.
+    """
+    observer = {
+        "name": "Test BLOCKS Under-Your-Control Observer (skip case)",
+        "card_types": ["Creature"],
+        "mana_cost": {},
+        "effects": [],
+        "power": 1,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "blocks",
+                "predicate": {
+                    "kind": "and",
+                    "left": {"kind": "subject_is_creature"},
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    # Observer on p0's bf. P0's bear attacks p1; p1's bear blocks.
+    # The observer's `controlled_by_you` predicate (keyed on the
+    # observer's controller == subject's controller) should reject
+    # because the blocker is controlled by p1.
+    _ = synthetic_state.register_and_inject_object(
+        observer, 0, ZONE_BATTLEFIELD
+    )
+    P1_FIRST_BEAR_ID = 67 + 5
+
+    ok_atk = synthetic_state.declare_attacker(P0_FIRST_BEAR_ID)
+    assert ok_atk is True
+    while synthetic_state.stack_size() > 0:
+        synthetic_state.resolve_top_of_stack()
+
+    ok_blk = synthetic_state.declare_blocker(
+        P1_FIRST_BEAR_ID, P0_FIRST_BEAR_ID
+    )
+    assert ok_blk is True
+    # No triggers on the stack — predicate filtered out the opponent's
+    # blocker.
+    assert synthetic_state.stack_size() == 0
+
+
+def test_blocks_fires_per_blocker_in_declaration_order(synthetic_state):
+    """A `subject_is_creature` BLOCKS observer fires ONCE per
+    blocker. Declare two blockers in sequence against the same
+    attacker; two triggers stack in push order (matches Python's
+    per-pair dispatch fan-out at `combat.py:274`).
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _blocks_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    P1_FIRST_BEAR_ID = 67 + 5
+    ok_atk = synthetic_state.declare_attacker(P1_FIRST_BEAR_ID)
+    assert ok_atk is True
+    while synthetic_state.stack_size() > 0:
+        synthetic_state.resolve_top_of_stack()
+
+    second_bear_id = P0_FIRST_BEAR_ID + 1
+
+    ok1 = synthetic_state.declare_blocker(
+        P0_FIRST_BEAR_ID, P1_FIRST_BEAR_ID
+    )
+    assert ok1 is True
+    # First block: 1 trigger on the stack.
+    assert synthetic_state.stack_size() == 1
+    # Resolve before declaring the next (cleaner state assertion).
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.stack_size() == 0
+
+    ok2 = synthetic_state.declare_blocker(
+        second_bear_id, P1_FIRST_BEAR_ID
+    )
+    assert ok2 is True
+    assert synthetic_state.stack_size() == 1
+    top = synthetic_state.peek_top_of_stack()
+    assert top["source_obj_id"] == observer_id
+
+
+def test_blocks_skips_when_declare_blocker_fails(synthetic_state):
+    """When `declare_blocker` REJECTS the pair (attacker not in
+    `state.attackers`, blocker tapped / missing / non-creature, or a
+    keyword gate like flying/skulk fails), the BLOCKS dispatch is
+    NOT fired — the failure path bails out before reaching the
+    dispatch line.
+
+    Tight gate: pin the "attacker not declared" rejection path
+    (cheapest fixture). The Slice 7 ATTACKS test pinned the
+    summoning-sick rejection; this test pins the symmetric "no
+    matching attacker" reject for BLOCKS.
+    """
+    observer_id = synthetic_state.register_and_inject_object(
+        _blocks_creature_observer_dict(), 0, ZONE_BATTLEFIELD
+    )
+    P1_FIRST_BEAR_ID = 67 + 5
+    # NB: deliberately do NOT call declare_attacker — the BLOCKS
+    # eligibility gate `if !self.attackers.contains(&attacker_id)` is
+    # the first reject branch and bails before the dispatch line.
+
+    ok = synthetic_state.declare_blocker(
+        P0_FIRST_BEAR_ID, P1_FIRST_BEAR_ID
+    )
+    assert ok is False
+    # No trigger on the stack — failure path didn't dispatch.
+    assert synthetic_state.stack_size() == 0
+    # Sanity: observer is still on the bf, just didn't observe anything.
+    assert (
+        synthetic_state.find_object_zone(observer_id) == ZONE_BATTLEFIELD
+    )
+
+
+# --- cross-engine bridge accepts "blocks" event ---------------------
+
+
+def test_blocks_event_parses_via_cross_engine_bridge():
+    """The cross_engine.py bridge accepts `event: blocks` and
+    produces Python's `Event.BLOCKS`.
+    """
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+    )
+    from mtg_bot.effects.predicates import Event
+
+    ta_dict = {
+        "event": "blocks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    }
+    ta = _ta_dict_to_python_triggered_ability(ta_dict)
+    assert ta.event is Event.BLOCKS
