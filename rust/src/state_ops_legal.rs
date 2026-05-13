@@ -1119,6 +1119,20 @@ impl GameState {
                 {
                     continue;
                 }
+                // CE20 follow-up Slice 5 (Walker loyalty Slice A):
+                // positive `cost.loyalty` is a pay-loyalty cost
+                // (CR 606). The walker must have at least
+                // `cost.loyalty` counters to activate. Negative
+                // values are add-loyalty (always affordable). Zero
+                // is no gate. Mirrors the tier-gate slot: fires
+                // BEFORE tap_self / mana affordability — a walker
+                // that can't afford its -N ability is outright
+                // unable, regardless of mana state.
+                if ability.cost.loyalty > 0
+                    && obj.loyalty_counters < ability.cost.loyalty
+                {
+                    continue;
+                }
                 if ability.cost.tap_self {
                     if obj.tapped {
                         continue;

@@ -207,6 +207,7 @@ fn push_object(
         damage: 0,
         counters: 0,
         charge_counters: 0,
+        loyalty_counters: 0,
         attached_to: None,
         exiled_with_source: None,
         // CE4 closure: make_state never places objects directly on

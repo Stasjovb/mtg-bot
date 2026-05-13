@@ -547,6 +547,12 @@ impl GameState {
                     /// target MUST be an artifact on the activator's
                     /// bf, NOT the source itself.
                     sacrifice_another_artifact: bool,
+                    /// CE20 Slice 5 (Walker loyalty Slice A). Signed
+                    /// loyalty cost. Positive = pay (decrement
+                    /// `loyalty_counters` by N); negative = add
+                    /// (increment by |N|); zero = no cost. Committed
+                    /// in Phase 5d.
+                    loyalty: i32,
                 }
                 let resolved: ResolvedAbility = {
                     let printing = state.registry.lookup(printing_id).ok_or_else(|| {
@@ -581,6 +587,7 @@ impl GameState {
                             sacrifice_a_land: ab.cost.sacrifice_a_land,
                             sacrifice_another_artifact:
                                 ab.cost.sacrifice_another_artifact,
+                            loyalty: ab.cost.loyalty,
                         }
                     } else {
                         // ability_index out of range. Loud fail —
@@ -772,6 +779,23 @@ impl GameState {
                              tier threshold (charge_counters={} < \
                              tier_threshold={})",
                             obj.charge_counters, resolved.tier_threshold,
+                        )));
+                    }
+                }
+                // Phase 3b: CE20 Slice 5 (Walker loyalty) loyalty gate.
+                // Positive `cost.loyalty` requires the source to have
+                // at least `cost.loyalty` loyalty counters. Negative
+                // (add-loyalty) values are always affordable. Mirrors
+                // the emission filter's pin so a direct (bypass-
+                // emission) caller gets the same rejection shape.
+                if resolved.loyalty > 0 {
+                    let obj = &state.players[controller_idx].battlefield[bf_pos];
+                    if obj.loyalty_counters < resolved.loyalty {
+                        return Err(PyValueError::new_err(format!(
+                            "ActivateAbility: source {source_id} \
+                             insufficient loyalty (loyalty_counters={} \
+                             < cost.loyalty={})",
+                            obj.loyalty_counters, resolved.loyalty,
                         )));
                     }
                 }
@@ -968,6 +992,46 @@ impl GameState {
                              (invariant violation)"
                         )));
                     }
+                }
+                // Phase 5d: CE20 Slice 5 (Walker loyalty Slice A)
+                // loyalty-counter commit. Signed subtraction handles
+                // both directions uniformly:
+                //   - positive cost.loyalty (a "-N" ability): walker
+                //     LOSES N loyalty counters (decrement).
+                //   - negative cost.loyalty (a "+N" ability): walker
+                //     GAINS |N| loyalty counters (increment).
+                //   - zero: no-op (a "0" ability).
+                //
+                // **The walker is NOT moved to gy inline here** —
+                // even if `loyalty_counters` drops to 0 or below, the
+                // SBA pass at state_ops_sba.rs catches it and routes
+                // the walker through the standard bf→gy primitives
+                // (so LTB triggers fire, etc.) on the next SBA tick.
+                // This matches CR 704.5i: SBAs handle walker-zero-
+                // loyalty as a simultaneous-action with other SBAs,
+                // not inline at activation.
+                //
+                // **Source position assumption**: bf_pos was captured
+                // at Phase 1 and may be stale if Phase 5b/5c moved the
+                // source (in particular: sacrifice_self would have
+                // moved the source to gy at Phase 5b, in which case
+                // the source isn't on bf anymore and we should NOT
+                // attempt a loyalty mutation). Defensively look up by
+                // id: skip if the source has left the bf.
+                if resolved.loyalty != 0 {
+                    let bf = &state.players[controller_idx].battlefield;
+                    if let Some(pos) =
+                        bf.iter().position(|o| o.id == source_id)
+                    {
+                        let bf_mut = Arc::make_mut(
+                            &mut state.players[controller_idx].battlefield,
+                        );
+                        bf_mut[pos].loyalty_counters -= resolved.loyalty;
+                    }
+                    // If the source has already left bf (Phase 5b
+                    // sacrifice_self path), skip — the loyalty
+                    // commit's observable effect doesn't apply to an
+                    // off-bf object.
                 }
                 // Phase 6: dispatch the effect.
                 if resolved.is_mana_ability {

@@ -148,6 +148,25 @@ impl GameState {
             let Some(printing) = self.registry.lookup(obj.printing_id) else {
                 continue;
             };
+            // CE20 Slice 5 (Walker loyalty Slice A): CR 704.5i — "If a
+            // planeswalker has loyalty 0, it's put into its owner's
+            // graveyard." Catch any walker with `loyalty_counters <= 0`
+            // before the creature pass; the walker doesn't need to be
+            // a creature to die this way. Walker filter: card_type
+            // includes "Planeswalker". Same bf-ETB-timestamp-ordered
+            // walk + same field-reset + same LEAVES queue plumbing as
+            // the creature SBA paths below (DIES not pushed — walkers
+            // don't fire Event::Dies per Python's
+            // `move_off_battlefield` shape; only LEAVES_BATTLEFIELD
+            // fires).
+            let is_walker = printing
+                .card_types
+                .iter()
+                .any(|t| t == "Planeswalker");
+            if is_walker && obj.loyalty_counters <= 0 {
+                victims.push((obj.controller, obj.id));
+                continue;
+            }
             let Some(toughness) = printing.toughness else {
                 // Non-creature — neither 704.5f nor 704.5g apply.
                 continue;
@@ -315,13 +334,28 @@ impl GameState {
             // queue mirrors Slice 2's ENTERS pattern — push the id
             // now, drain after the loop. The drain happens at the
             // end of `apply_sbas` below.
-            self.pending_dies_dispatches.push(dying_obj_id);
+            //
+            // CE20 Slice 5 (Walker loyalty Slice A): Event::Dies is
+            // CR 700.4 "a creature dies". A non-creature walker dying
+            // via CR 704.5i (loyalty <= 0) is NOT a death — only the
+            // LEAVES event fires. Gate the DIES push on
+            // creature-typing so walker SBA-removal doesn't fire
+            // spurious DIES triggers.
+            let victim_is_creature = self
+                .registry
+                .lookup(printing_id)
+                .map(|p| p.card_types.iter().any(|t| t == "Creature"))
+                .unwrap_or(false);
+            if victim_is_creature {
+                self.pending_dies_dispatches.push(dying_obj_id);
+            }
             // ETB-trigger Slice 8: every death is also a bf-exit.
             // Mirror Python's `move_off_battlefield` (turn.py:280-289)
             // which fires DIES first then LEAVES_BATTLEFIELD. Push
             // order: DIES first, LEAVES second; the matching drain
             // order below preserves that stack-push order. LIFO
-            // resolution: LEAVES resolves before DIES.
+            // resolution: LEAVES resolves before DIES. Walkers fire
+            // ONLY LEAVES (no DIES per the creature-gate above).
             self.pending_leaves_dispatches.push(dying_obj_id);
         }
         // Drain pending DIES dispatches AFTER the SBA loop completes.

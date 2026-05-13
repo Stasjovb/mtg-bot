@@ -60,6 +60,26 @@ pub struct GameObject {
     /// per-object state reset) via the same field-reset shape
     /// `Effect::Sacrifice` and friends use.
     pub charge_counters: i32,
+    /// **CE20 follow-up — Planeswalker loyalty (Slice 5).** Loyalty
+    /// counters tracked per-object, distinct from `counters` (+1/+1)
+    /// and `charge_counters` (Spacecraft station). Defaults to `0`;
+    /// a planeswalker's printing seeds its loyalty via the
+    /// `starting_loyalty` field on `CardPrinting`, stamped at ETB by
+    /// every walker-entering call site. Activated loyalty abilities
+    /// (CR 606) pay positive `cost.loyalty` (decrement) or add
+    /// negative-shape (increment) counters; the SBA pass at
+    /// `state_ops_sba.rs` moves a walker with `loyalty_counters <= 0`
+    /// to its controller's graveyard per CR 704.5i.
+    ///
+    /// **Why a distinct field**: G8 (multi-kind counter open gap)
+    /// applies — +1/+1 / charge / loyalty each need their own slot.
+    /// Tezzeret, Cruel Captain (the sole EoE walker) carries this
+    /// shape; non-walker objects keep `loyalty_counters = 0` and
+    /// never gate on it.
+    ///
+    /// Cleared (reset to `0`) on every zone change (CR 400.7
+    /// per-object state reset).
+    pub loyalty_counters: i32,
     /// Round-28 attach foundation — when this object is an Aura /
     /// Equipment that is currently attached to another permanent,
     /// `attached_to` holds the target permanent's GameObject `id`.
@@ -1512,6 +1532,7 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         damage: 0,
         counters: 0,
         charge_counters: 0,
+        loyalty_counters: 0,
         attached_to: None,
         exiled_with_source: None,
         // CE4 closure: synthetic-state fixtures pre-populate the

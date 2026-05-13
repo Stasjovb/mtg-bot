@@ -118,6 +118,7 @@ impl GameState {
                 damage: 0,
                 counters: 0,
                 charge_counters: 0,
+                loyalty_counters: 0,
                 attached_to: None,
                 exiled_with_source: None,
                 // CE4 closure: deck-loaded library cards never start
