@@ -4208,6 +4208,70 @@ the forked branch.
   - **Cross-engine smoke probe** for walker activations. Unchanged
     from I56.
 
+### I82. `Effect::ReturnCreatureFromYourGraveyardToHand` controller-of-effect fix — reuses I59 transient slot; source graveyard scan + destination hand push both routed to SOURCE'S CONTROLLER (not active_player); second POSITIVE-controller closure ("your graveyard"/"your hand" divergence)
+
+- **Pinned by**:
+  - 4 new `tests_rust/test_resolve.py`
+    `test_return_creature_to_hand_*` regression pins covering
+    cross-controller spell resolution (1: p1-controlled
+    Disentomb-shape sorcery on p0's turn → scans p1's graveyard
+    and returns the creature to p1's hand, NOT p0's graveyard /
+    hand), same-controller back-compat (1: p0-controlled source
+    still scans p0's graveyard and returns to p0's hand),
+    pause-variant parity (1), and empty-source-controller's-
+    graveyard fizzle (1: when only p0 has a graveyard creature
+    but a p1-controlled spell resolves, the scan finds nothing
+    in p1's graveyard and silently fizzles — p0's creature stays
+    in p0's graveyard).
+
+- **Rule**. CR 119.5 / 608.2 — an effect resolves under its
+  source's controller. "Your" pronouns in oracle text (e.g.
+  "return target creature card from YOUR graveyard to YOUR
+  hand") bind to that controller, not to whichever player
+  happens to have priority at resolve time.
+
+- **Pre-fix Rust behavior**. The
+  `Effect::ReturnCreatureFromYourGraveyardToHand` arm at
+  `state_ops_resolve.rs:2957` (pre-fix line) computed
+  `let controller_idx = state.active_player as usize`, used for
+  BOTH the source graveyard scan AND the destination hand
+  push. Wrong when the resolving spell / triggered ability has
+  a controller != active_player. Example: on p0's turn, p1
+  casts a Disentomb-shape sorcery — pre-fix it scanned p0's
+  graveyard for a creature and returned that creature to p0's
+  hand (active_player=0); post-fix it correctly scans p1's
+  graveyard and returns the creature to p1's hand. Mirrors
+  Python's `ReturnFromGraveyard.resolve(state, controller_id,
+  targets)` at `effects/generic/graveyard.py:195` and its
+  `_move_one(state, controller_id, card)` helper, which both
+  pin the "your graveyard"/"your hand" zones to
+  `state.player_by_id(controller_id)`.
+
+- **Distinct from the defender-shape I59-I80 sites.** I59-I80
+  closed defender-swap-shape sites where the effect reads
+  `1 - controller` (the opponent of the source's controller).
+  ReturnCreatureFromYourGraveyardToHand routes BOTH endpoints
+  (source graveyard scan, destination hand push) to the SOURCE'S
+  CONTROLLER directly. Sibling closure to I81 (CreateToken)
+  and to I65 (Mill — self-mill) where positive-controller arms
+  were migrated to read the transient slot.
+
+- **Reuses I59 substrate**. Identical preamble shape to
+  I59 / I60 / I65 / I77 / I81: `let controller_idx = state
+  .current_resolve_source_controller.unwrap_or(state.active_player)
+  as usize;`. Both the graveyard scan (`state.players[controller_idx]
+  .graveyard.iter().find_map(...)`) AND the hand-push
+  (`Arc::make_mut(&mut state.players[controller_idx].hand)
+  .push(obj);`) read the resolved `controller_idx` unchanged from
+  the existing arm.
+
+- **Forward inventory.** Sibling arm
+  `Effect::ReturnCreatureFromYourGraveyardToBattlefield` at
+  `state_ops_resolve.rs:2990` (post-I82 lineno) has the SAME
+  active_player → source-controller divergence and the SAME
+  shape (scan + push to controller's zone). Queued as I83 —
+  same fix.
+
 ### I81. `Effect::CreateToken { count, token_printing_id }` controller-of-effect fix — reuses I59 transient slot; tokens enter under SOURCE'S CONTROLLER (not 1 - controller); first POSITIVE-controller audit-cleared site post-I80 (CreateToken controller-of-effect divergence closure)
 
 - **Pinned by**:
