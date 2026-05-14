@@ -30449,6 +30449,533 @@ def test_cross_engine_synthetic_etb_return_to_hand_cross_controller_routes_to_so
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_synthetic_etb_each_opponent_sacrifices_creature_cross_controller_routes_to_source_controller_opponent_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``each_opponent_sacrifices_creature``
+    trigger fired by a permanent CONTROLLED BY P1 while
+    ACTIVE_PLAYER=P0 -- the cross-controller leg of the existing
+    ``each_opponent_sacrifices_creature`` bridge arm. Both engines
+    must derive the sacrificing seat from the SOURCE's controller (P1)
+    so the OPPONENT (P0) sacrifices a creature, NOT P1 (which would
+    happen if the resolve derived the sacrificing seat from
+    active_player's opponent).
+
+    **The substrate.** Per the Susurian Dirgecraft same-controller
+    probe (round 6 on this branch's history): Rust's
+    ``Effect::EachOpponentSacrificesCreature`` resolve arm
+    (state_ops_resolve.rs:6496-6579) performs an INTRINSIC 5-zone
+    walk + stack-scan fallback to recover the source's controller,
+    then computes ``opponent_idx = (1 - controller) as usize`` and
+    picks the FIRST creature on that opponent's bf via
+    ``bf.iter().find_map``. The intrinsic source-controller derivation
+    is the I-fix family for this arm (sister to
+    ``each_opponent_discards`` which has the same 5-zone walk + stack
+    fallback pattern at state_ops_resolve.rs:3566-3636): the cross-
+    controller case works correctly without any caller plumbing
+    because the resolve walks zones directly to find the source.
+    Python's ``EachOpponentSacrificesCreature.resolve``
+    (effects/generic/opponent_punishers.py:30-79) walks every player
+    whose ``id != controller_id and not has_lost``, calls each one's
+    ``agent.choose_sacrifice``, and moves the chosen creature to
+    graveyard. The trigger pushes with ``controller_id`` = the
+    source's controller, so Python derives the same opponent set
+    correctly.
+
+    **Same-controller sister probe** (round 6): Susurian Dirgecraft
+    on P0's bf, p1's bf pre-seeded with bait creatures,
+    ACTIVE_PLAYER=P0. The SOURCE's controller (P0) and the active
+    player (P0) coincide, so the OPPONENT pick (P1) is the same
+    regardless of whether the resolve uses active_player or the
+    source's controller. This probe is the cross-controller leg:
+    source on P1's bf (controller=1), P0's bf pre-seeded with bait
+    creatures, ACTIVE_PLAYER=P0. The SOURCE's controller (P1) and
+    the active player (P0) DIFFER, so the OPPONENT pick is P0
+    if-and-only-if the resolve uses the SOURCE's controller (post-
+    fix). A pre-fix Rust that derived the opponent set from
+    active_player would have looked at P1's bf for a sacrifice
+    target (finding nothing in this probe; a degenerate silent no-op)
+    instead of P0's bf (where the bait sits).
+
+    **Why synthetic, not Susurian Dirgecraft.** The Susurian
+    Dirgecraft probe above already pins the same-controller leg on
+    the real EoE card; spinning up a cross-controller leg on the
+    same card would re-build the same harness with the only delta
+    being the controllers we inject under. A synthetic 2/2 vanilla
+    ("Cross-Controller Sacrificer Bear") with the same trigger
+    keeps the docstring claims of the Susurian Dirgecraft probe
+    intact and mirrors the ``each_opponent_discards`` cross-
+    controller probe shape (commit a1159739) exactly except for the
+    target zone (opponent's bf for sacrifice vs opponent's hand for
+    discard) and destination (opponent's graveyard for both).
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Pre-seed P0's bf with TWO distinct vanilla bait creatures
+         (Sac Bait Alpha, Sac Bait Beta)** so a single-swap or
+         single-sac divergence between engines surfaces as a per-
+         card name divergence in P0's graveyard / bf rather than a
+         count-only divergence. Rust picks the bf-iter first creature
+         (= Alpha); Python's ``_SacrificeFirstAgent`` returns
+         legal_object_ids[0]'s id (= Alpha) -- same observable.
+
+      3. **Inject Cross-Controller Sacrificer Bear (the source) onto
+         P1's bf** with controller=1 (Rust's
+         ``register_and_inject_object``; Python's ``new_object`` +
+         bf append + manual ``_trigger_etb_abilities``). The
+         injection's ENTERS dispatch fires the SourceIsSelf
+         trigger; the trigger lands on the stack with controller=1
+         (the SOURCE's controller).
+
+      4. **Seat ``_SacrificeFirstAgent`` on P0** (the sacrificing
+         player on the post-fix surface). The sacrificing player
+         picks their own sacrifice, NOT the source's controller; so
+         the agent goes on P0, not P1. (P1's agent stays None --
+         P1 isn't asked to sacrifice anything.)
+
+      5. **Drain both stacks.** The trigger resolves: Rust's
+         intrinsic 5-zone walk finds the source on P1's bf, derives
+         source-controller=1, computes opponent_idx = 0, picks
+         P0's bf-iter first creature (= Sac Bait Alpha), removes it
+         from P0's bf, routes it to P0's graveyard. Python's
+         resolve uses the trigger's controller_id=1 directly, walks
+         players with id != 1 = [P0], asks P0's
+         ``_SacrificeFirstAgent`` for legal_object_ids[0]'s id, and
+         moves Sac Bait Alpha to P0's graveyard.
+
+      6. **Cross-engine assert (post-fix contract):**
+         - P0's bf shrank by 1 on both engines (Alpha sacrificed).
+         - P0's graveyard grew by 1 on both engines.
+         - The sacrificed creature is Sac Bait Alpha on both
+           engines (NOT Beta -- the load-bearing per-card pick
+           pin).
+         - Sac Bait Beta still on P0's bf on both engines.
+         - P1's bf is unchanged on both engines (P1 did NOT
+           sacrifice; the source-controller's opponent is P0).
+         - P1's bf carries the source (no degenerate state).
+         - Lives unchanged on both seats.
+         - No residual stack on either engine.
+
+    **Pre-fix vs post-fix observable.**
+    Pre-fix Rust would have:
+      - Derived the opponent set from active_player=P0, computed
+        opponent_idx = 1, scanned P1's bf for the first creature.
+        P1's bf holds only the source spacecraft itself (which IS
+        a creature in this probe), so the pre-fix derivation
+        would have self-sacrificed the source. The pre-fix
+        observable diverges from post-fix on TWO seat slots
+        simultaneously: P0's bf doesn't shrink (post-fix it does)
+        and P1's bf shrinks by 1 (post-fix it doesn't); P0's
+        graveyard doesn't grow (post-fix it does) and P1's
+        graveyard grows by 1 (post-fix it doesn't).
+    Post-fix Rust (which is what's on the bridge today) derives
+    source-controller=1 from the source's location on P1's bf,
+    computes opponent_idx = 0, picks the first creature on P0's
+    bf = Sac Bait Alpha into P0's graveyard. Python's always-
+    correct behavior makes the cross-engine pin sharp.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline.
+      * Empty-opponent-bf silent no-op -- both engines agree on
+        the empty-bf short-circuit (Rust at
+        state_ops_resolve.rs:6541, Python at
+        opponent_punishers.py via the empty-legal-list guard). A
+        future probe could pin the empty-bf surface; this probe
+        drives the non-empty path which is the load-bearing
+        cross-controller routing case.
+      * Multi-opponent fanout -- the 2-player harness reduces "each
+        opponent" to "the one opponent". The N-player per-seat-
+        iteration shape is exercised by the Rust resolve arm's loop
+        body directly.
+      * Token-vs-nontoken filter divergence -- documented Rust
+        shortcut (Rust picks first Creature regardless of token
+        status; Python filters tokens out per
+        opponent_punishers.py:50-51). This probe seats only
+        nontoken creatures so the divergence doesn't surface.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller Sacrificer Bear on P1's battlefield
+        (controller=1; unchanged from inject).
+      * P0's bf: Sac Bait Beta only (Alpha was sacrificed).
+      * P0's graveyard: Sac Bait Alpha.
+      * P1's bf: 1 (only the source spacecraft; unchanged).
+      * P1's graveyard: unchanged (was empty, still empty).
+      * P0 / P1 lives: unchanged at 20.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _SacrificeFirstAgent
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines (the
+    # whole point of the probe is the cross-controller case where
+    # the SOURCE's controller != active_player).
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side: pre-seed P0's bf with [Alpha at idx 0, Beta
+    # at idx 1] so the deterministic bf-iter-first pick is observably
+    # Alpha, then inject Cross-Controller Sacrificer Bear onto P1's
+    # bf. ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_alpha_dict = {
+        "name": "Sac Bait Alpha (cross-controller sac probe)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_bait_beta_dict = {
+        "name": "Sac Bait Beta (cross-controller sac probe)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    # Inject the bait creatures onto P0's bf FIRST -- the SOURCE-
+    # controller's opponent on the post-fix surface. Order matters:
+    # Alpha at bf-iter index 0 so the deterministic bf-iter-first pick
+    # (Rust) and the _SacrificeFirstAgent's pick (Python) both pick
+    # Alpha specifically.
+    rust_state.register_and_inject_object(
+        rust_bait_alpha_dict, 0, ZONE_BATTLEFIELD,
+    )
+    rust_state.register_and_inject_object(
+        rust_bait_beta_dict, 0, ZONE_BATTLEFIELD,
+    )
+
+    rust_source_dict = {
+        "name": "Cross-Controller Sacrificer Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_sacrifices_creature",
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p0_bf_size_before = rust_state.battlefield_sizes[0]
+    rust_p1_bf_size_before = rust_state.battlefield_sizes[1]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+    assert rust_p0_bf_size_before == 2, (
+        f"Rust: P0's bf must hold exactly the [Alpha, Beta] pair "
+        f"pre-injection; got bf_size={rust_p0_bf_size_before}"
+    )
+    assert rust_p1_bf_size_before == 0, (
+        f"Rust: P1's bf must be empty pre-injection (the probe "
+        f"pin requires source-controller routing to derive opponent "
+        f"as P0, not P1); got bf_size={rust_p1_bf_size_before}"
+    )
+
+    # Inject the source onto P1's bf with controller=1. ENTERS fires
+    # via the deferred-dispatch queue; the SourceIsSelf trigger lands
+    # on the stack with controller=1 (the SOURCE's controller).
+    rust_state.register_and_inject_object(
+        rust_source_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller Sacrificer Bear's arrival on P1 "
+        "should fire the SourceIsSelf ENTERS trigger and land "
+        "EachOpponentSacrificesCreature on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.opponent_punishers import (
+        EachOpponentSacrificesCreature,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_alpha_printing = CardPrinting(
+        name="Sac Bait Alpha (cross-controller sac probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+    )
+    bait_beta_printing = CardPrinting(
+        name="Sac Bait Beta (cross-controller sac probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+
+    def _inject_bf(printing, owner_id):
+        obj = py_state.new_object(
+            printing, owner_id=owner_id, zone=Zone.BATTLEFIELD,
+        )
+        obj.summoning_sick = False
+        obj.tapped = False
+        obj.damage = 0
+        obj.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(obj)
+        return obj
+
+    # Inject Alpha first so it lands at bf index 0 (mirrors the Rust
+    # order). Python's EachOpponentSacrificesCreature walks the
+    # opponent's bf creatures and the agent picks legal[0].
+    py_alpha = _inject_bf(bait_alpha_printing, owner_id=0)
+    py_beta = _inject_bf(bait_beta_printing, owner_id=0)
+
+    source_printing = CardPrinting(
+        name="Cross-Controller Sacrificer Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=EachOpponentSacrificesCreature(),
+            ),
+        ),
+    )
+    # Custom agent for P0: mirror Rust's bf-iter-first deterministic
+    # pick. The sacrificing player (P0) is asked for their own
+    # sacrifice; _SacrificeFirstAgent returns legal_object_ids[0]
+    # which is Alpha. The agent is seated on P0 (the sacrificer),
+    # NOT on P1 (the source's controller) -- "each opponent
+    # sacrifices a [...] creature of their choice" lets each
+    # opponent pick their own sacrifice.
+    py_state.players[0].agent = _SacrificeFirstAgent()
+
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_p0_bf_size_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_size_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+    assert py_p0_bf_size_before == 2
+    assert py_p1_bf_size_before == 0
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller Sacrificer Bear's arrival on P1 "
+        "should fire the IsSelf ENTERS trigger and land "
+        "EachOpponentSacrificesCreature on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Post-drain: P0's bf shrank by 1 (Alpha sacrificed), P0's
+    # graveyard grew by 1 (Alpha landed there). Sac Bait Beta
+    # remains on P0's bf. P1's bf still holds the source (no
+    # degenerate state).
+    assert rust_state.battlefield_sizes[0] == rust_p0_bf_size_before - 1, (
+        f"Rust cross-controller routing contract: P0's bf should "
+        f"shrink by 1 ({rust_p0_bf_size_before - 1}); got "
+        f"{rust_state.battlefield_sizes[0]}. A pre-fix Rust would "
+        f"have derived opponent_idx from active_player=P0, looked "
+        f"at P1's bf for a creature, found the source itself (which "
+        f"IS a Creature), and self-sacrificed it -- leaving P0's "
+        f"bf at its pre-trigger size."
+    )
+    # P1's bf carries only the source (the +1 vs the pre-trigger
+    # snapshot accounts for the source-inject step that happens
+    # AFTER the snapshot is taken).
+    assert rust_state.battlefield_sizes[1] == rust_p1_bf_size_before + 1, (
+        f"Rust: P1's bf should hold the source (post-fix: bait got "
+        f"sacrificed, not the source). "
+        f"after p1_bf={rust_state.battlefield_sizes[1]}"
+    )
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_size_before + 1, (
+        f"Rust: P0's graveyard should grow by 1; got "
+        f"{rust_state.graveyard_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_size_before, (
+        f"Rust: P1's graveyard should be unchanged at "
+        f"{rust_p1_gy_size_before}; got "
+        f"{rust_state.graveyard_sizes[1]}"
+    )
+    rust_p0_gy_names = [
+        e["printing_name"] for e in rust_state.graveyard_snapshot(0)
+    ]
+    assert (
+        "Sac Bait Alpha (cross-controller sac probe)"
+        in rust_p0_gy_names
+    ), (
+        f"Rust: expected Alpha (the bf-iter-first deterministic "
+        f"pick) in P0's graveyard. Got {rust_p0_gy_names}"
+    )
+    assert (
+        "Sac Bait Beta (cross-controller sac probe)"
+        not in rust_p0_gy_names
+    ), (
+        f"Rust: Beta should NOT have been sacrificed (only the "
+        f"bf-iter-first creature was picked). Got {rust_p0_gy_names}"
+    )
+    rust_p0_bf_names = [
+        e["printing_name"]
+        for e in rust_state.battlefield_snapshot()
+        if int(e["controller_id"]) == 0
+    ]
+    assert (
+        "Sac Bait Beta (cross-controller sac probe)"
+        in rust_p0_bf_names
+    ), (
+        f"Rust: Sac Bait Beta should remain on P0's bf; got "
+        f"{rust_p0_bf_names}"
+    )
+
+    # Python observable: same shape on the equivalent zones.
+    py_p0_bf_now = [
+        o for o in py_state.battlefield if o.controller_id == 0
+    ]
+    py_p1_bf_now = [
+        o for o in py_state.battlefield if o.controller_id == 1
+    ]
+    assert len(py_p0_bf_now) == py_p0_bf_size_before - 1, (
+        f"Python: P0's bf should shrink by 1; got "
+        f"{len(py_p0_bf_now)}"
+    )
+    assert len(py_p1_bf_now) == py_p1_bf_size_before + 1, (
+        f"Python: P1's bf should hold only the source; got "
+        f"{len(py_p1_bf_now)}"
+    )
+    assert (
+        len(py_state.players[0].graveyard) == py_p0_gy_size_before + 1
+    ), (
+        f"Python: P0's graveyard should grow by 1; got "
+        f"{len(py_state.players[0].graveyard)}"
+    )
+    assert (
+        len(py_state.players[1].graveyard) == py_p1_gy_size_before
+    ), (
+        f"Python: P1's graveyard should be unchanged; got "
+        f"{len(py_state.players[1].graveyard)}"
+    )
+    py_p0_gy_names = [
+        o.printing.name for o in py_state.players[0].graveyard
+    ]
+    assert (
+        "Sac Bait Alpha (cross-controller sac probe)"
+        in py_p0_gy_names
+    ), (
+        f"Python: expected Alpha in P0's graveyard. Got "
+        f"{py_p0_gy_names}"
+    )
+    assert (
+        "Sac Bait Beta (cross-controller sac probe)"
+        not in py_p0_gy_names
+    ), (
+        f"Python: Beta should NOT have been sacrificed. Got "
+        f"{py_p0_gy_names}"
+    )
+    py_p0_bf_names = [o.printing.name for o in py_p0_bf_now]
+    assert (
+        "Sac Bait Beta (cross-controller sac probe)"
+        in py_p0_bf_names
+    ), (
+        f"Python: Sac Bait Beta should remain on P0's bf; got "
+        f"{py_p0_bf_names}"
+    )
+
+    # Lives unchanged on both seats (the sacrifice doesn't touch
+    # life totals).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # Cross-engine: bf / graveyard / life sizes match between engines
+    # on both seats.
+    assert rust_state.battlefield_sizes[0] == len(py_p0_bf_now)
+    assert rust_state.battlefield_sizes[1] == len(py_p1_bf_now)
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Reference py_alpha / py_beta to silence unused-variable warnings;
+    # the assertions above check the post-state by name lookups in
+    # graveyard / bf, but the references document that both bait
+    # objects were materialized on the Python side.
+    assert py_alpha is not None
+    assert py_beta is not None
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
