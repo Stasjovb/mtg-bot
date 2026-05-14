@@ -35846,6 +35846,377 @@ def test_cross_engine_real_eoe_haliya_ascendant_cadet_etb_plus_one_counter_on_ta
     assert py_state.players[1].life == 20
 
 
+def test_cross_engine_real_eoe_biomechan_engineer_etb_create_lander_artifact_token_insect_artificer_carrier_parity(
+    parity_smoke,
+):
+    """Probe: Biomechan Engineer (EoE Creature -- Insect Artificer)
+    ETB ``create a Lander token`` -- SAME-CONTROLLER cross-engine
+    parity for the create_token bridge arm on a Creature carrier
+    whose subtype combination (Insect Artificer) is novel for this
+    arm.
+
+    Sister probes on the create_token bridge arm:
+
+      * ``test_cross_engine_real_eoe_galactic_wayfarer_etb_create_lander_artifact_token_parity``
+        -- THE direct sister: identical Lander artifact token shape
+        on a Creature -- Human Scout carrier. This probe is its
+        real-EoE pair on a Creature -- INSECT ARTIFICER carrier,
+        demonstrating that the bridge's create_token contract is
+        invariant across two real-EoE creature carriers sharing the
+        same ETB trigger-text rendering and same spawned-token shape
+        but differing in subtype lineup (Human Scout vs Insect
+        Artificer) AND mana-cost color identity (mono-G vs G/U).
+      * ``test_cross_engine_real_eoe_bioengineered_future_etb_create_lander_artifact_token_enchantment_carrier_parity``
+        -- Enchantment carrier producing the same Lander artifact
+        token shape.
+      * ``test_cross_engine_real_eoe_honored_knight_captain_etb_create_soldier_token_parity``
+        -- Creature carrier producing a Creature-typed Soldier token.
+      * ``test_cross_engine_real_eoe_knight_luminary_etb_create_soldier_token_parity``
+        -- Creature carrier producing a Creature-typed Soldier token.
+      * ``test_cross_engine_real_eoe_wedgelight_rammer_etb_create_robot_artifact_creature_token_parity``
+        -- Artifact-Spacecraft carrier producing an Artifact-
+        Creature Robot token.
+
+    This probe extends create_token coverage along the CARRIER-
+    SUBTYPE + COLOR-IDENTITY axes for Creature carriers. The
+    subtype list ``Insect Artificer`` is structurally distinct from
+    every prior real-EoE create_token Creature consumer:
+
+      * ``Human Scout`` -- Galactic Wayfarer (mono-G, {2}{G}).
+      * ``Human Advisor Knight`` -- Honored Knight-Captain.
+      * ``Human Knight`` -- Knight Luminary.
+      * ``Insect Artificer`` (this probe) -- Biomechan Engineer
+        (G/U, {G}{U}). Two-color carrier; ``Artificer`` subtype is
+        unrepresented elsewhere on the create_token arm.
+
+    The ENTERS dispatch is type-agnostic on both engines (the I80
+    Banishing Light probe pinned the same dispatch surface for a
+    pure Enchantment carrier on the exile-until-leaves arm; the
+    Bioengineered Future sister proved the same for create_token).
+    This probe extends the parity claim that the carrier-subtype +
+    carrier-color-identity axes are informational rather than
+    load-bearing for the create_token substrate -- the SourceIsSelf
+    predicate reads the object's identity, not its types/colors,
+    so the trigger-dispatch leg is bit-equal to every other
+    create_token consumer.
+
+    Real-EoE consumer alignment: Biomechan Engineer's printed
+    oracle text is ``When this creature enters, create a Lander
+    token. (It's an artifact with "{2}, {T}, Sacrifice this token:
+    Search your library for a basic land card, put it onto the
+    battlefield tapped, then shuffle.") / {8}: Draw two cards and
+    create a 2/2 colorless Robot artifact creature token.``. This
+    probe exclusively exercises the ETB-create_token surface; the
+    activated {8} draw-two-and-make-Robot ability is out of scope
+    (separate bridge widening -- activated cost + draw_cards arm +
+    create_token arm chained). The Lander's activated ramp ability
+    rides on the token PRINTING (registered, not exercised).
+
+    **Why a fresh slice and not Galactic Wayfarer expansion.** The
+    Galactic Wayfarer sister probe is a strict mono-G Human Scout
+    Lander-token shape; broadening it to also cover G/U Insect
+    Artificer carriers would over-parameterize the existing probe
+    and muddy its docstring. A fresh probe lets the documentation
+    cleanly capture WHY this shape matters: it pins the bridge's
+    create_token contract is invariant w.r.t. the carrier's
+    subtype lineup AND mana-cost color identity, completing the
+    Creature-carrier coverage with a multicolor/Artificer pairing
+    that no prior probe exercised.
+
+    Trigger shape (mirrors the Galactic Wayfarer + Bioengineered
+    Future sisters, only the carrier-metadata + printing-id
+    differs):
+
+        Event: enters
+        Predicate: source_is_self
+        Effect: create_token(count=1, token_printing_id=<lander pid>)
+
+    Probe shape (inject-and-fire-ENTERS, same-controller):
+
+      1. **active_player=P0** (default). P0 is also the SOURCE's
+         controller, so ``current_resolve_source_controller``
+         resolves to ``Some(0)`` AND the back-compat fallback
+         (``active_player``) AGREES at 0. This is the same-
+         controller surface; the cross-controller leg is pinned by
+         the I81 sister probe.
+
+      2. **Register Lander artifact token printing** on Rust (gets
+         a pid via ``rust_state.registry_size``); register the
+         matching Python ``CardPrinting`` (built directly via
+         ``CardPrinting`` constructor since Lander is a non-creature
+         artifact) against that pid via
+         ``register_token_printing(pid, ...)``.
+
+      3. **Inject Biomechan Engineer onto P0's bf** with
+         controller=0. ENTERS fires; the trigger lands on the stack
+         carrying controller=0.
+
+      4. **Drain both stacks.** The trigger resolves; the post-I81
+         CreateToken arm routes the spawn to P0's bf under P0's
+         control on Rust, and Python's
+         ``CreateToken.resolve(state, controller_id=0, ...)`` spawns
+         under P0 the same way.
+
+      5. **Cross-engine assert (post-resolve parity):**
+         - P0's bf grew by exactly +2 (Biomechan Engineer +
+           freshly-spawned Lander artifact token).
+         - P1's bf is unchanged.
+         - The fresh token's ``controller_id`` is 0 on both
+           engines.
+         - The fresh token's printing name matches across engines.
+
+    Out of scope:
+
+      * Activated {8} ability (draw two + spawn 2/2 Robot
+        artifact-creature token) -- activated cost + multi-effect
+        chain; no bridge arm couples activated cost to multi-effect
+        resolutions today.
+      * Lander's activated ramp ability -- activated cost + tap
+        cost + sacrifice cost + tutor substrate; no bridge arms.
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Cross-controller routing -- pinned by the I81 sister probe.
+      * count != 1 -- the bridge arm carries the count through;
+        all sister probes pin count=1.
+      * Tapped / attacking / each_player riders on the spawned
+        token -- Python-only flags with no Rust mirror today.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Biomechan Engineer on P0's battlefield (unchanged from
+        inject; controller=0).
+      * One Lander Token on P0's battlefield (newly spawned;
+        controller=0; printing name matches across engines).
+      * P1's battlefield: empty.
+      * No residual stack on either engine.
+      * Life totals unchanged on both seats.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+
+    # ---- Rust side: register Lander artifact token, then inject
+    # Biomechan Engineer onto P0's bf. ----
+    ZONE_LIBRARY = 1
+    ZONE_BATTLEFIELD = 2
+    rust_lander_token_dict = {
+        # Biomechan Engineer's reminder text: "It's an artifact
+        # with '{2}, {T}, Sacrifice this token: Search your library
+        # for a basic land card, ...'". Non-creature artifact:
+        # Artifact card_type ONLY, no Creature, no P/T.
+        "name": "Lander Token (Biomechan Engineer ETB)",
+        "card_types": ["Artifact"],
+        "subtypes": ["Lander"],
+    }
+    rust_token_pid = rust_state.registry_size  # next free pid
+    rust_state.register_and_inject_object(
+        rust_lander_token_dict, 1, ZONE_LIBRARY,
+    )
+
+    rust_engineer_trigger_dict = {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token",
+            "count": 1,
+            "token_printing_id": rust_token_pid,
+        },
+    }
+    rust_engineer_dict = {
+        "name": "Biomechan Engineer",
+        # Creature carrier with Insect Artificer subtype lineup
+        # (novel on this arm). G/U two-color cost. Activated {8}
+        # ability is out of scope.
+        "card_types": ["Creature"],
+        "subtypes": ["Insect", "Artificer"],
+        "power": 2,
+        "toughness": 2,
+        "mana_cost": {"G": 1, "U": 1},
+        "effects": [],
+        "triggered_abilities": [rust_engineer_trigger_dict],
+    }
+
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_bf_p0_before = rust_state.battlefield_sizes[0]
+    rust_bf_p1_before = rust_state.battlefield_sizes[1]
+
+    # Inject onto P0's bf with controller=0. ENTERS fires; the
+    # trigger lands on the stack carrying controller=0 (same as
+    # active_player here).
+    rust_state.register_and_inject_object(
+        rust_engineer_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Biomechan Engineer's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land CreateToken on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: register the Python token printing against
+    # Rust's pid via the bridge, build Biomechan Engineer's
+    # printing using the bridge translator on the SAME trigger dict,
+    # then inject onto P0's bf and dispatch ENTERS. ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings, register_token_printing,
+    )
+
+    # Lander is a non-creature artifact token (see Galactic Wayfarer
+    # / Bioengineered Future sisters); build the printing directly.
+    py_lander_token = CardPrinting(
+        name="Lander Token (Biomechan Engineer ETB)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line="Token Artifact -- Lander",
+        supertypes=("Token",),
+        card_types=("Artifact",),
+        subtypes=("Lander",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    clear_token_printings()
+    register_token_printing(rust_token_pid, py_lander_token)
+    py_engineer_trigger = _ta_dict_to_python_triggered_ability(
+        rust_engineer_trigger_dict
+    )
+    py_engineer_printing = CardPrinting(
+        name="Biomechan Engineer",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=(("G", 1), ("U", 1))),
+        type_line="Creature -- Insect Artificer",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Insect", "Artificer"),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(py_engineer_trigger,),
+    )
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_bf_p0_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+
+    py_engineer = py_state.new_object(
+        py_engineer_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_engineer.summoning_sick = False
+    py_engineer.tapped = False
+    py_engineer.damage = 0
+    py_engineer.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_engineer)
+    _trigger_etb_abilities(py_state, py_engineer)
+    assert len(py_state.stack) == 1, (
+        "Python: Biomechan Engineer's arrival should fire the "
+        "IsSelf ENTERS trigger and land CreateToken on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # Drain both stacks.
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust observable: P0's bf grew by carrier + 1 token = +2;
+    # P1's bf unchanged.
+    rust_bf_p0_after = rust_state.battlefield_sizes[0]
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p0_after == rust_bf_p0_before + 2, (
+        f"Rust same-controller create_token: P0's bf should gain "
+        f"Biomechan Engineer + 1 Lander Token = +2 from baseline. "
+        f"Got bf_p0_before={rust_bf_p0_before}, "
+        f"bf_p0_after={rust_bf_p0_after}"
+    )
+    assert rust_bf_p1_after == rust_bf_p1_before, (
+        f"Rust: P1's bf should be unchanged. Got "
+        f"bf_p1_before={rust_bf_p1_before}, "
+        f"bf_p1_after={rust_bf_p1_after}"
+    )
+    rust_bf_snap = rust_state.battlefield_snapshot()
+    rust_lander_tokens = [
+        d for d in rust_bf_snap
+        if d["printing_name"]
+        == "Lander Token (Biomechan Engineer ETB)"
+    ]
+    assert len(rust_lander_tokens) == 1, (
+        f"Rust: expected exactly 1 Lander Token on the bf; got "
+        f"{len(rust_lander_tokens)}"
+    )
+    assert rust_lander_tokens[0]["controller_id"] == 0, (
+        f"Rust same-controller contract: spawned Lander Token's "
+        f"controller_id must be 0 (source's controller). Got "
+        f"controller_id={rust_lander_tokens[0]['controller_id']}"
+    )
+
+    # Python observable: same shape.
+    py_bf_p0_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert py_bf_p0_after == py_bf_p0_before + 2, (
+        f"Python: P0's bf should gain Biomechan Engineer + 1 "
+        f"Lander Token = +2. Got bf_p0_before={py_bf_p0_before}, "
+        f"bf_p0_after={py_bf_p0_after}"
+    )
+    assert py_bf_p1_after == py_bf_p1_before, (
+        f"Python: P1's bf should be unchanged. Got "
+        f"bf_p1_before={py_bf_p1_before}, "
+        f"bf_p1_after={py_bf_p1_after}"
+    )
+    py_lander_tokens = [
+        o for o in py_state.battlefield
+        if o.printing.name
+        == "Lander Token (Biomechan Engineer ETB)"
+    ]
+    assert len(py_lander_tokens) == 1, (
+        f"Python: expected exactly 1 Lander Token on the bf; got "
+        f"{len(py_lander_tokens)}"
+    )
+    assert py_lander_tokens[0].controller_id == 0, (
+        f"Python: spawned Lander Token's controller_id must be 0. "
+        f"Got controller_id={py_lander_tokens[0].controller_id}"
+    )
+
+    # Cross-engine: lives unchanged on both sides (create_token
+    # doesn't touch life totals).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine bf-size parity (the post-drain observable).
+    assert rust_bf_p0_after == py_bf_p0_after
+    assert rust_bf_p1_after == py_bf_p1_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
