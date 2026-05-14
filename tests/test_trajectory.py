@@ -212,6 +212,214 @@ def test_oversized_opening_hand_rejected():
         setup_matched_game(spec, opening_hand_size=7)
 
 
+# ---------------------------------------------------------------------------
+# Phase 6 round-16 (closes infrastructure gap #3): RealGameCombatAgent
+# unit tests.
+# ---------------------------------------------------------------------------
+
+
+def test_combat_agent_invalid_strategy_rejected():
+    """Defensive: only the documented strategies are supported."""
+    from mtg_bot.parity.trajectory import RealGameCombatAgent
+
+    with pytest.raises(ValueError, match="strategy="):
+        RealGameCombatAgent(strategy="charge_blindly")
+
+
+def test_combat_agent_default_strategy_is_attack_all():
+    """Default strategy is `attack_all`."""
+    from mtg_bot.parity.trajectory import RealGameCombatAgent
+
+    agent = RealGameCombatAgent()
+    assert agent.strategy == "attack_all"
+
+
+def test_combat_agent_no_attack_picks_no_attackers():
+    """``"no_attack"`` returns ``[]`` regardless of bf state."""
+    from mtg_bot.parity.trajectory import (
+        RealGameCombatAgent,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+    agent = RealGameCombatAgent(strategy="no_attack")
+    assert agent.pick_attackers(py_state) == []
+    assert agent.pick_blocks(py_state) == []
+
+
+def test_combat_agent_attack_all_picks_no_blocks():
+    """``"attack_all"`` returns blocks=[] even when defender has
+    creatures (the strategy doesn't block)."""
+    from mtg_bot.parity.trajectory import (
+        RealGameCombatAgent,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+    agent = RealGameCombatAgent(strategy="attack_all")
+    # Empty bf — no attackers, no blocks.
+    assert agent.pick_attackers(py_state) == []
+    assert agent.pick_blocks(py_state) == []
+
+
+def test_combat_agent_drive_combat_phase_wrong_step_rejected():
+    """``drive_combat_phase`` requires step=DECLARE_ATTACKERS."""
+    from mtg_bot.parity.trajectory import (
+        RealGameCombatAgent,
+        drive_combat_phase,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, rust_state = setup_matched_game(spec)
+    agent = RealGameCombatAgent(strategy="no_attack")
+    # Fresh state is at step=UNTAP, not DECLARE_ATTACKERS.
+    with pytest.raises(ValueError, match="DECLARE_ATTACKERS"):
+        drive_combat_phase(py_state, rust_state, agent)
+
+
+def test_combat_agent_attack_all_block_smallest_assignment_pairing():
+    """`pick_blocks` for `attack_all_block_smallest` pairs each attacker
+    with the smallest available blocker, one blocker per attacker.
+
+    Constructs an in-memory bf with two attacking creatures (p0) and
+    two blockers (p1, different sizes); asserts the small blocker
+    pairs with the lower-id attacker, the bigger blocker with the
+    higher-id attacker.
+    """
+    from mtg_bot.parity.trajectory import (
+        RealGameCombatAgent,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+
+    # Build a synthetic bf: two p0 attackers (Bears 2/2) + two p1
+    # blockers (Bears 2/2 + a 3/3 Big Bear). Use the Python new_object
+    # path directly.
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    bears = CardPrinting(
+        name="Grizzly Bears",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature — Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset(),
+    )
+    big_bear = CardPrinting(
+        name="Big Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature — Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=3,
+        toughness=3,
+        produces=frozenset(),
+        keywords=frozenset(),
+    )
+
+    def _add_creature(state, printing, controller):
+        obj = state.new_object(printing, owner_id=controller, zone=Zone.BATTLEFIELD)
+        obj.summoning_sick = False
+        obj.tapped = False
+        obj.attacking = False
+        obj.blocking = False
+        obj.etb_timestamp = state.next_timestamp
+        state.next_timestamp += 1
+        state.battlefield.append(obj)
+        return obj
+
+    atk_a = _add_creature(py_state, bears, controller=0)
+    atk_b = _add_creature(py_state, bears, controller=0)
+    blk_small = _add_creature(py_state, bears, controller=1)
+    blk_big = _add_creature(py_state, big_bear, controller=1)
+
+    # Mark both p0 creatures as attacking (simulates post-declare-
+    # attackers state, what pick_blocks would see at DECLARE_BLOCKERS).
+    atk_a.attacking = True
+    atk_b.attacking = True
+
+    agent = RealGameCombatAgent(strategy="attack_all_block_smallest")
+    assignments = agent.pick_blocks(py_state)
+    # Two attackers, two blockers — one block per attacker.
+    assert len(assignments) == 2
+    # Assignment shape: [blocker_id, attacker_id].
+    assignment_dict = {b: a for b, a in assignments}
+    # Smaller blocker (bears 2/2) should pair with lower-id attacker
+    # (atk_a). Bigger blocker pairs with atk_b.
+    # The agent walks attackers in id-sort order and assigns the
+    # smallest UNUSED blocker.
+    assert assignment_dict[int(blk_small.id)] == int(atk_a.id)
+    assert assignment_dict[int(blk_big.id)] == int(atk_b.id)
+
+
+def test_combat_agent_block_smallest_more_attackers_than_blockers():
+    """When defender has fewer blockers than attackers, the lower-id
+    attackers get blocked first; remaining attackers go through
+    unblocked (no assignment for them)."""
+    from mtg_bot.parity.trajectory import (
+        RealGameCombatAgent,
+        setup_matched_game,
+    )
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+
+    bears = CardPrinting(
+        name="Grizzly Bears",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature — Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset(),
+    )
+
+    def _add_creature(state, printing, controller):
+        obj = state.new_object(printing, owner_id=controller, zone=Zone.BATTLEFIELD)
+        obj.summoning_sick = False
+        obj.tapped = False
+        obj.attacking = False
+        obj.blocking = False
+        obj.etb_timestamp = state.next_timestamp
+        state.next_timestamp += 1
+        state.battlefield.append(obj)
+        return obj
+
+    atk_a = _add_creature(py_state, bears, controller=0)
+    atk_b = _add_creature(py_state, bears, controller=0)
+    atk_c = _add_creature(py_state, bears, controller=0)
+    blk_only = _add_creature(py_state, bears, controller=1)
+    atk_a.attacking = True
+    atk_b.attacking = True
+    atk_c.attacking = True
+
+    agent = RealGameCombatAgent(strategy="attack_all_block_smallest")
+    assignments = agent.pick_blocks(py_state)
+    # Only one assignment — the single blocker pairs with the
+    # lowest-id attacker (atk_a).
+    assert len(assignments) == 1
+    assert assignments[0] == [int(blk_only.id), int(atk_a.id)]
+
+
 def test_no_seed_no_shuffle_path():
     """With neither ``seed=`` nor ``shared_rng_seed`` set, libraries
     stay in deck-list order (no shuffle on either engine). The path
