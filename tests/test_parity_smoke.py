@@ -31714,6 +31714,332 @@ def test_cross_engine_real_eoe_sinister_cryologist_etb_pump_target_creature_minu
     assert py_state.players[1].life == 20
 
 
+def test_cross_engine_real_eoe_drix_fatemaker_etb_plus_one_counter_on_target_creature_parity(
+    parity_smoke,
+):
+    """Probe: Drix Fatemaker (EoE Creature -- Drix Wizard) ETB
+    ``put a +1/+1 counter on target creature`` -- SECOND real-EoE
+    cross-engine probe on the
+    ``put_plus_one_counter_on_creature_you_control`` bridge arm.
+    Sister to the Rayblade Trooper probe (line 16115); the pair
+    pins the bridge arm against two distinct real-EoE printings
+    sharing the same trigger shape.
+
+    Sister probe on the same bridge arm:
+
+      * ``test_cross_engine_real_eoe_rayblade_trooper_etb_plus_one_counter_parity``
+        (tests/test_parity_smoke.py:16115) -- the canonical first
+        probe on a 2/2 Creature carrier with a "target creature
+        you control" oracle phrasing. Drix Fatemaker is its
+        real-EoE pair on a 3/2 Creature -- Drix Wizard carrier
+        with the BROADER "target creature" phrasing (no "you
+        control" restriction in oracle text), demonstrating that
+        the bridge arm's caster-side scan is invariant to the
+        oracle's surface phrasing.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this creature enters, put a +1/+1 counter on target
+         creature.
+         Each creature you control with a +1/+1 counter on it has
+         trample.
+         Warp {1}{G} (...)"
+
+    The static "creatures with +1/+1 counters have trample" anthem
+    + Warp clause are out of scope -- this probe exclusively
+    exercises the ETB-trigger surface, the substrate sweet-spot:
+
+      * Event: ``enters``
+      * Predicate: ``source_is_self`` (only the just-entered
+        creature's own ETB fires)
+      * Effect: ``put_plus_one_counter_on_creature_you_control``
+        amount=1 -- same dict shape as the Rayblade Trooper sister.
+
+    **Caster-side target-scan narrowing (documented divergence
+    inherited from the Rayblade Trooper probe).** Rust's
+    ``Effect::PutPlusOneCounterOnCreatureYouControl`` resolve arm
+    (``state_ops_resolve.rs:4148-4211``) scans the SOURCE
+    CONTROLLER's battlefield (the source's OWN side), not all
+    creatures on the bf. Drix Fatemaker's printed text says
+    "target creature" with NO "you control" restriction -- the
+    Rust scan is observably narrower than the oracle (Rust
+    targets caster's own creature). This is documented as a
+    deliberate SEARCH_LIMITATION (see
+    ``cross_engine.py:672-690`` for the bridge-arm comment); the
+    Python side ``PutPlusOneCounterOnCreatureYouControl`` mirrors
+    Rust's caster-side scan when the scenario forces target
+    selection onto the same side. The probe scenario constrains
+    the target onto P0's bf (caster-side bait bear) and P1's bf
+    is empty, so the only eligible target on both engines is the
+    caster-side bait bear -- the divergence is observationally
+    invisible here. A future probe widening the scan to the
+    opponent's side will pin the wider contract once the bridge
+    plumbs a "target ANY creature" variant.
+
+    Predicate decomposition (same as Rayblade Trooper / Germinating
+    Wurm / Quantum Riddler / Nebula Dragon / Seedship Broodtender
+    / Dubious Delicacy / Sinister Cryologist):
+
+        SourceIsSelf
+
+    Effect: ``put_plus_one_counter_on_creature_you_control(amount=1)``
+    -- identical to the Rayblade Trooper sister; this probe pins
+    the bridge arm against a SECOND real-EoE printing with a
+    different name + supertype / subtype / mana cost / secondary
+    abilities (anthem static instead of Warp dies-trigger), but
+    the SAME bridged effect dict.
+
+    Probe shape (inject-and-fire-ENTERS, mirrors Rayblade Trooper):
+
+      1. Inject a Bait Bear onto p0's bf FIRST (so it's at index 0
+         and the deterministic scan picks it before any later-
+         injected creature). Bait bear has printed counters=0; the
+         post-resolve assertion checks counters became 1.
+
+      2. Inject Drix Fatemaker onto p0's bf. ENTERS dispatch +
+         SourceIsSelf predicate => trigger lands on stack with
+         target pre-chosen (Bait Bear on both sides via the
+         caster-side scan, Bait Bear at index 0 on both engines).
+
+      3. Drain both stacks. Resolve walk: Bait Bear's
+         ``counters`` (Rust) / ``plus_one_counters`` (Python)
+         increments from 0 to 1.
+
+      4. Cross-engine assert: both engines show Bait Bear with
+         exactly one +1/+1 counter; Drix Fatemaker has zero
+         counters (the trigger didn't target it).
+
+    Out of scope:
+
+      * The static anthem "Each creature you control with a +1/+1
+        counter on it has trample" -- continuous-effects substrate;
+        no bridge plumbing today.
+      * Warp -- exile-then-cast-later substrate; no bridge arm.
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * "Target creature" (no "you control" restriction) -- Rust
+        scans only the caster's bf, narrower than oracle text.
+        Documented divergence; the probe scenario forces a
+        caster-side target so the divergence is observationally
+        invisible.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Bait Bear on p0's bf with 1 +1/+1 counter.
+      * Drix Fatemaker on p0's bf with 0 counters (printed P/T 3/2,
+        no modifier).
+      * No life changes.
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstControlledCreatureAgent
+
+    drix_fatemaker = CardDef(
+        name="Drix Fatemaker",
+        card_type="Creature",
+        mana_cost_generic=3,
+        mana_cost_colored=(("G", 1),),
+        power=3,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_creature_you_control",
+                    "amount": 1,
+                },
+            },
+        ),
+    )
+    # The counter target: a Bait Bear injected BEFORE Drix Fatemaker
+    # so it's at index 0 of p0's bf, and the deterministic scan picks
+    # it before the Fatemaker.
+    bait_bear = CardDef(
+        name="Bait Bear (Drix counter target)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(drix_fatemaker, bait_bear),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Bait Bear (Drix counter target)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0
+
+    rust_drix_dict = {
+        "name": "Drix Fatemaker",
+        "card_types": ["Creature"],
+        "subtypes": ["Drix", "Wizard"],
+        "mana_cost": {"generic": 3, "G": 1},
+        "effects": [],
+        "power": 3,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_creature_you_control",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    rust_drix_id = rust_state.register_and_inject_object(
+        rust_drix_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Drix Fatemaker's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "PutPlusOneCounterOnCreatureYouControl(1) on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnCreatureYouControl,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="Bait Bear (Drix counter target)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    drix_printing = CardPrinting(
+        name="Drix Fatemaker",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("G", 1),)),
+        type_line="Creature -- Drix Wizard",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Drix", "Wizard"),
+        power=3,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
+            ),
+        ),
+    )
+
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    assert py_bait.plus_one_counters == 0
+
+    # Caster-side target-pick shim. Same shape as the Rayblade
+    # Trooper probe -- filter legal_targets to creatures controlled
+    # by the agent's player_id and return the first. Mirrors Rust's
+    # first-creature-on-caster-bf scan. Shim hoisted to
+    # tests/parity/_picker_shims.py.
+    py_state.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    py_drix = py_state.new_object(
+        drix_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_drix.summoning_sick = False
+    py_drix.tapped = False
+    py_drix.damage = 0
+    py_drix.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_drix)
+    _trigger_etb_abilities(py_state, py_drix)
+    assert len(py_state.stack) == 1, (
+        "Python: Drix Fatemaker's own arrival should fire the "
+        "IsSelf ENTERS trigger and land "
+        "PutPlusOneCounterOnCreatureYouControl(1) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: Bait Bear has 1 +1/+1 counter; Drix
+    # Fatemaker has 0 (the trigger targeted the bait, not itself,
+    # per the deterministic first-in-bf scan).
+    rust_bf = rust_state.battlefield_snapshot()
+    rust_bait_entry = next(
+        e for e in rust_bf if int(e["id"]) == rust_bait_id
+    )
+    rust_drix_entry = next(
+        e for e in rust_bf if int(e["id"]) == rust_drix_id
+    )
+    assert rust_bait_entry["counters"] == 1, (
+        f"Rust bait bear should have 1 +1/+1 counter; got "
+        f"{rust_bait_entry['counters']}"
+    )
+    assert rust_drix_entry["counters"] == 0, (
+        f"Rust Drix Fatemaker should have 0 counters (it wasn't "
+        f"the target); got {rust_drix_entry['counters']}"
+    )
+
+    assert py_bait.plus_one_counters == 1, (
+        f"Python bait bear should have 1 +1/+1 counter; got "
+        f"{py_bait.plus_one_counters}"
+    )
+    assert py_drix.plus_one_counters == 0, (
+        f"Python Drix Fatemaker should have 0 counters (it wasn't "
+        f"the target); got {py_drix.plus_one_counters}"
+    )
+
+    # Cross-engine: same counter values on the same objects.
+    assert rust_bait_entry["counters"] == py_bait.plus_one_counters
+    assert rust_drix_entry["counters"] == py_drix.plus_one_counters
+
+    # Lives unchanged.
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
