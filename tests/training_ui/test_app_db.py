@@ -1773,6 +1773,70 @@ def test_cycle_replays_falls_back_to_default_root(
     )
 
 
+def test_cycle_replays_aggregates_shard_subdirs_via_run_progress(
+    client, progress_dir: Path, tmp_path: Path,
+):
+    """Shards are not separate ``runs`` rows — they live as
+    ``run_progress`` rows keyed on ``(stage_run_id, shard_label)``.
+    iterate's filesystem convention writes shard captures to
+    ``<root>/<stage_run_id>_shard_<shard_label>/`` (``distributed.py``
+    line 4977's ``run_id_full``). The aggregator must walk those
+    subdirs in addition to the bare stage subdir."""
+    replays_root = tmp_path / "replays"
+    stage_dir = replays_root / "iter_014_self_play_v5"
+    shard_local = replays_root / "iter_014_self_play_v5_shard_local"
+    shard_mac = (
+        replays_root
+        / "iter_014_self_play_v5_shard_greggs-macbook-pro"
+    )
+    for d in (stage_dir, shard_local, shard_mac):
+        d.mkdir(parents=True)
+    (stage_dir / "stage.json.gz").write_bytes(b"")
+    (shard_local / "local_a.json.gz").write_bytes(b"")
+    (shard_local / "local_b.json.gz").write_bytes(b"")
+    (shard_mac / "mac.json.gz").write_bytes(b"")
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_014_cycle", kind="iterate", status="running",
+            started_at="2026-05-13T05:00:00+00:00",
+            config_json=json.dumps({
+                "kind": "cycle",
+                "replays_dir": str(replays_root),
+                "capture_every_self_play": 20,
+                "capture_every_eval": 0,
+            }),
+        )
+        _seed_run(
+            conn, "iter_014_self_play_v5", kind="self_play",
+            status="running",
+            started_at="2026-05-13T05:01:00+00:00",
+            parent_run_id="iter_014_cycle",
+        )
+        # Per-shard rows: presence of shard_label is what flags them
+        # as shards rather than aggregate. The aggregator should
+        # synthesize <stage>_shard_<label> for each.
+        _seed_progress(
+            conn, "iter_014_self_play_v5", shard_label="local",
+            n_games_done=80,
+        )
+        _seed_progress(
+            conn, "iter_014_self_play_v5",
+            shard_label="greggs-macbook-pro", n_games_done=200,
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/iter_014_cycle/replays").get_json()
+    assert body["count"] == 4
+    subpaths = sorted(r["subpath"] for r in body["replays"])
+    assert subpaths == [
+        "iter_014_self_play_v5/stage.json.gz",
+        "iter_014_self_play_v5_shard_greggs-macbook-pro/mac.json.gz",
+        "iter_014_self_play_v5_shard_local/local_a.json.gz",
+        "iter_014_self_play_v5_shard_local/local_b.json.gz",
+    ]
+
+
 def test_stage_replays_unchanged_by_cycle_branch(
     client, progress_dir: Path, tmp_path: Path,
 ):
