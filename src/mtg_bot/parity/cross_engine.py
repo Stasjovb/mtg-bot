@@ -1203,6 +1203,88 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         do_action = _ta_dict_to_python_effect(eff_dict["do_action"])
         then_action = _ta_dict_to_python_effect(eff_dict["then_action"])
         return IfYouDo(do_action=do_action, then_action=then_action)
+    if kind == "may_do":
+        # **Phase 5 composer bridge arm (may_do).**
+        # Mirrors Rust's ``Effect::MayDo { inner_effect: Box<Effect>,
+        # prompt: String }`` (cards.rs:1579); the parse_effect arm at
+        # cards.rs:3722-3746 accepts the dict shape
+        # ``{"kind": "may_do", "inner_effect": <effect_dict>,
+        # "prompt": <str>}``. ``inner_effect`` is REQUIRED (parse
+        # raises on missing); ``prompt`` defaults to the empty string
+        # on Rust if omitted (matches Python's class default
+        # ``prompt: str = ""``).
+        #
+        # **Field-name translation: Rust ``inner_effect`` -> Python
+        # ``inner``.** Python's
+        # ``MayDo(inner: Effect, prompt: str = "")`` from
+        # ``effects/combinators.py:507`` uses the field name
+        # ``inner`` (a deliberate rename to avoid shadowing
+        # ``typing.Optional`` in older docstrings, per the class
+        # comment at combinators.py:510-511). Rust uses ``inner_effect``
+        # to disambiguate from the various other ``inner`` fields on
+        # PendingDecision / UeotModifier variants. The bridge does
+        # the translation here -- this is the third bridge arm with a
+        # cross-engine field rename (after ``draw_cards.count`` ->
+        # Python ``DrawCards.amount`` and ``each_opponent_discards.
+        # count`` -> Python ``EachOpponentDiscards.amount``); the
+        # rename is documented inline so a future audit can grep for
+        # all three patterns at once.
+        #
+        # **Resolve semantics (cross-engine).** Rust pushes a
+        # ``PendingDecision::MayDoChoice`` onto
+        # ``state.pending_decisions`` and short-circuits the resolve
+        # (state_ops_resolve.rs:6341-6349); the controller then
+        # drains via ``submit_may_do_decision(yes)`` (manual) or
+        # ``auto_resolve_pending_decisions("default" | "may_do_yes" |
+        # "may_do_no")`` (deterministic). Python resolves
+        # synchronously inside ``MayDo.resolve``: it asks the
+        # controller's ``Agent.choose_yes_no`` and either fires the
+        # inner effect (yes -> ``inner.resolve(...)``) or returns
+        # False (no -> declined). Both engines return False on "no"
+        # and forward the inner's return on "yes" -- this is what
+        # lets ``IfYouDo(MayDo(X), Y)`` "looter" compositions gate
+        # their then-action on the may-do decision: when MayDo
+        # returns False, IfYouDo's do_action signals failure and
+        # Y is skipped. The two engines diverge on the IDLE-on-stack
+        # wire-shape (Rust queues, Python recurses) but converge on
+        # the post-resolve observable. End-to-end probes that need
+        # to drive a "yes" answer use ``auto_resolve_pending_decisions
+        # ("default")`` on Rust + a yes-answering ``Agent`` on
+        # Python (the test ``DummyAgent.choose_yes_no -> True``
+        # shim mirrors Rust's ``"default"`` strategy).
+        #
+        # **Recursive translation.** ``inner_effect`` is itself an
+        # effect-dict; we recurse into ``_ta_dict_to_python_effect``
+        # for it. This unlocks the ``IfYouDo(MayDo(...), ...)``
+        # nesting end-to-end as long as each leaf arm is on the
+        # bridge.
+        #
+        # **Real EoE consumer** unblocked by this composer:
+        # - Melded Moxite (looter form): IfYouDo(MayDo(DiscardSelf),
+        #   DrawCards{2}) -- "You may discard a card. If you do,
+        #   draw two cards." The ``IfYouDo`` arm already on the
+        #   bridge composes around this; without ``may_do``, the
+        #   only ``IfYouDo(do_action, ...)`` shape that round-trips
+        #   is the bare ``IfYouDo(DiscardSelf, ...)`` form, where the
+        #   discard is mandatory. The looter shape ("you MAY") needs
+        #   ``may_do`` as the do_action wrapper.
+        # - Other ``you may [pay/sac/discard]; if you do, [effect]``
+        #   cards in EoE follow the same composition; this slice
+        #   ships the bare arm that unlocks all of them once their
+        #   inner-effect substrates are also on the bridge.
+        #
+        # **prompt field is informational.** Rust stores it on the
+        # MayDoChoice PendingDecision for agent introspection but
+        # doesn't consume it during resolve. Python's MayDo defaults
+        # the resolve-time prompt to ``inner.describe()`` if
+        # ``self.prompt`` is empty. The bridge round-trips the
+        # prompt verbatim (empty string when Rust omitted it); the
+        # post-resolve observable is identical regardless.
+        from mtg_bot.effects.combinators import MayDo
+        inner_dict = eff_dict["inner_effect"]
+        inner = _ta_dict_to_python_effect(inner_dict)
+        prompt = eff_dict.get("prompt", "")
+        return MayDo(inner=inner, prompt=prompt)
     if kind == "pump_creatures_opponents_control_until_eot":
         # Mass-debuff "creatures your opponents control get +X/+Y until
         # end of turn" (CR 702.x layer-7c additive bonus, expires at
