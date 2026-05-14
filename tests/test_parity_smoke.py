@@ -33862,6 +33862,523 @@ def test_cross_engine_real_eoe_hardlight_containment_etb_exile_target_creature_u
     assert len(py_state.players[1].exile) == 0
 
 
+def test_cross_engine_synthetic_etb_discard_card_cross_controller_routes_to_source_controller_opponent_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``discard_card`` (any_player filter)
+    trigger fired by a permanent CONTROLLED BY P1 while
+    ACTIVE_PLAYER=P0 -- the cross-controller leg of the round-8
+    ``discard_card`` bridge arm (commits 57597f64 / d7ef2420). Both
+    engines must derive the discarding seat from the SOURCE's
+    controller (P1), so the OPPONENT (P0) discards from P0's hand,
+    NOT P1's own hand (which is empty in this probe). Pre-fix Rust
+    would have looked at P1's hand instead of P0's (the I74
+    controller-of-effect bug), silent-no-opping on a degenerate
+    observable since P1's hand is empty.
+
+    **The substrate.** Per the round-8 bridge arm landed at commit
+    d7ef2420 (``bridge(phase5): discard_card bridge arm + 3 pin
+    tests``): Rust's
+    ``Effect::DiscardCard { target: TargetFilter }`` resolve arm
+    (state_ops_resolve.rs:1607-1660) carries the I74 controller-
+    of-effect fix: defender = 1 - controller, where controller
+    derives from ``current_resolve_source_controller`` (with
+    active_player fallback). The discarding seat is the defending
+    player; for the AnyPlayer filter shape, Rust forces the
+    defender to discard hand[0] (deterministic first-slice choice).
+    Sibling closure to I70 / I75 / I76 / I71 / I72 / I73 --
+    identical defender-swap shape; differs in BOTH the source zone
+    (target's hand instead of bf) and the destination (target's
+    graveyard).
+
+    **First bridge arm to honor ONLY the wider any_player filter
+    shape.** Sibling destroy_target / exile_target / return_to_hand
+    / tap_target arms honor only AnyCreature; deal_damage honors
+    BOTH; discard_card is the inverse-narrow case (any_player
+    only, AnyCreature rejected at register time).
+
+    Python's ``TargetOpponentDiscards(count=1)`` (effects/generic/
+    discard.py:396) drives off ``targets[0]`` as
+    ``("player", id)``; ``legal_targets`` emits one entry per
+    non-controller, non-lost player. The discarding player's agent
+    picks the card via ``choose_discard``. Probes that drive this
+    arm cross-engine seat ``_DiscardFirstAgent`` on the SOURCE'S
+    CONTROLLER'S OPPONENT (the defending player whose hand is
+    being raided -- NOT the source's controller, since the discard
+    pick is made by the discarder's own agent per CR 701.8). The
+    source's controller's agent (P1) is asked to choose_target
+    over legal_targets; with controller_id=1 the legal_targets is
+    ``[("player", 0)]`` (the only opponent), so any picker shim
+    that returns legal_targets[0] suffices --
+    ``_PickFirstLegalTargetAgent`` is the canonical choice.
+
+    **Sister probes.** No same-controller cross-engine probe
+    landed alongside the round-8 bridge arm -- the 3 pin tests on
+    the arm covered the bridge translation surface and the Rust
+    parser surface but not the end-to-end resolve walk. Earlier
+    round-7 cross-controller probes for the I70/I75/I76/I71
+    sibling arms (destroy_target, exile_target, return_to_hand,
+    tap_target) and the round-7 each_opponent_discards cross-
+    controller probe established the discard-via-_DiscardFirstAgent
+    template; this slice closes the cross-controller gap on the
+    new ``discard_card`` arm. Sister probes for round 8 on the
+    same template: deal_damage cross-controller (already merged)
+    and tap_target cross-controller (already merged). The
+    each_opponent_discards cross-controller probe is the closest
+    sister: same _DiscardFirstAgent shim, same hand-seeding
+    pattern; differs in the multi-vs-single-target shape (each
+    opponent vs one chosen opponent).
+
+    **Why synthetic, not a real EoE card.** The bridge arm's pin
+    tests already covered the bridge translation surface; the
+    cross-controller pin needs a load-bearing inject-and-fire
+    harness, which the synthetic ``Cross-Controller Discarder
+    Bear`` delivers without a separate real-card consumer probe.
+    Mirrors the synthetic-Bear pattern from the round-7 each_opp_
+    discards / each_opp_sac cross-controller probes.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Pre-seed P0's hand with TWO distinct vanilla bait
+         creatures (Discard Bait Alpha at idx 0, Beta at idx 1)**
+         so a single-card divergence between engines surfaces as a
+         per-card name divergence in P0's graveyard / hand rather
+         than a count-only divergence. Rust picks the hand[0]
+         deterministic first-slice (= Alpha); Python's
+         ``_DiscardFirstAgent`` returns hand_ids[0] (= Alpha) --
+         same observable.
+
+      3. **Inject Cross-Controller Discarder Bear (the source)
+         onto P1's bf** with controller=1 (Rust's
+         ``register_and_inject_object``; Python's ``new_object`` +
+         bf append + manual ``_trigger_etb_abilities``). The
+         injection's ENTERS dispatch fires the SourceIsSelf
+         trigger; the trigger lands on the stack with controller=1
+         (the SOURCE's controller).
+
+      4. **Seat ``_PickFirstLegalTargetAgent`` on P1** (the
+         SOURCE's controller, asked to pick the player target).
+         legal_targets is ``[("player", 0)]`` (the only opponent
+         per ``TargetOpponentDiscards.legal_targets``), so the
+         shim's legal_targets[0] return picks P0.
+
+      5. **Seat ``_DiscardFirstAgent`` on P0** (the discarding
+         player on the post-fix surface). The discarding player
+         picks their own discard, NOT the source's controller; so
+         the agent goes on P0, not P1. (P1's agent is the picker
+         shim above; P1 isn't asked to discard anything.)
+
+      6. **Drain both stacks.** The trigger resolves: Rust's
+         current_resolve_source_controller derivation finds the
+         source on P1's bf, derives source-controller=1, computes
+         defender=0, picks P0's hand[0] = Discard Bait Alpha,
+         removes it from P0's hand, routes it to P0's graveyard.
+         Python's resolve uses the trigger's controller_id=1
+         directly, asks P1's agent to pick the player target
+         (returns P0), then asks P0's ``_DiscardFirstAgent`` for
+         hand_ids[0]'s id, and moves Discard Bait Alpha to P0's
+         graveyard.
+
+      7. **Cross-engine assert (post-fix contract):**
+         - P0's hand shrank by 1 on both engines (Alpha
+           discarded).
+         - P0's graveyard grew by 1 on both engines.
+         - The discarded card is Discard Bait Alpha on both
+           engines (NOT Beta -- the load-bearing per-card pick
+           pin).
+         - Discard Bait Beta still in P0's hand on both engines.
+         - P1's hand is unchanged on both engines (P1 did NOT
+           discard; the source-controller's opponent is P0).
+         - P1's hand is empty (was empty pre-resolve, still
+           empty post-resolve -- pre-fix Rust would have tried
+           to discard from P1's hand, found it empty, and silent-
+           no-opped).
+         - Lives unchanged on both seats.
+         - No residual stack on either engine.
+
+    **Pre-fix vs post-fix observable.**
+    Pre-fix Rust would have:
+      - Derived the defender via active_player=P0, defender=1-0=1,
+        looked at P1's hand for hand[0] = nothing (P1's hand is
+        empty), silent-no-opped. The pre-fix observable diverges
+        from post-fix on TWO seat slots simultaneously: P0's hand
+        doesn't shrink (post-fix it does) and P0's graveyard
+        doesn't grow (post-fix it does).
+    Post-fix Rust derives source-controller=1 from
+    current_resolve_source_controller, computes defender=0,
+    picks P0's hand[0] = Discard Bait Alpha into P0's graveyard.
+    Python's always-correct behavior makes the cross-engine pin
+    sharp.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-
+        ENTERS pattern bypasses the mana pipeline.
+      * Empty-target-hand silent no-op -- both engines agree on
+        the empty-hand short-circuit; this probe drives the
+        non-empty path which is the load-bearing cross-controller
+        routing case.
+      * Multi-card discard ("discard N") -- not yet a Rust
+        variant; Mind-Twist-shape effects would land as a
+        separate bridge arm with a count field.
+      * AnyCreature filter rejection -- pinned at the bridge
+        level by the existing register-time rejection test
+        (``test_bridge_discard_card_rejects_unsupported_target_
+        filter_kind``).
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller Discarder Bear on P1's battlefield
+        (controller=1; unchanged from inject).
+      * P0's hand: Discard Bait Beta only (Alpha was discarded).
+      * P0's graveyard: Discard Bait Alpha.
+      * P1's hand: unchanged (was empty, still empty).
+      * P1's graveyard: unchanged (was empty, still empty).
+      * P0 / P1 lives: unchanged at 20.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import (
+        _DiscardFirstAgent, _PickFirstLegalTargetAgent,
+    )
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines (the
+    # whole point of the probe is the cross-controller case where
+    # the SOURCE's controller != active_player).
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side: pre-seed P0's hand with [Alpha at idx 0, Beta
+    # at idx 1] so the deterministic hand[0] pick is observably
+    # Alpha, then inject Cross-Controller Discarder Bear onto P1's
+    # bf. ----
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    rust_bait_alpha_dict = {
+        "name": (
+            "Discard Bait Alpha "
+            "(cross-controller discard_card probe)"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_bait_beta_dict = {
+        "name": (
+            "Discard Bait Beta "
+            "(cross-controller discard_card probe)"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    # Inject the bait creatures into P0's hand FIRST -- the SOURCE-
+    # controller's opponent on the post-fix surface. Order matters:
+    # Alpha at hand-iter index 0 so the deterministic hand[0] pick
+    # (Rust) and the _DiscardFirstAgent's pick (Python) both pick
+    # Alpha specifically.
+    rust_state.register_and_inject_object(
+        rust_bait_alpha_dict, 0, ZONE_HAND,
+    )
+    rust_state.register_and_inject_object(
+        rust_bait_beta_dict, 0, ZONE_HAND,
+    )
+
+    rust_source_dict = {
+        "name": "Cross-Controller Discarder Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "discard_card",
+                    "target": {"kind": "any_player"},
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p0_hand_size_before = rust_state.hand_sizes[0]
+    rust_p1_hand_size_before = rust_state.hand_sizes[1]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+    assert rust_p0_hand_size_before == 2, (
+        f"Rust: P0's hand must hold exactly the [Alpha, Beta] pair "
+        f"pre-injection; got hand_size={rust_p0_hand_size_before}"
+    )
+    assert rust_p1_hand_size_before == 0, (
+        f"Rust: P1's hand must be empty pre-injection (the probe "
+        f"pin requires source-controller routing to derive defender "
+        f"as P0, not P1; the empty-P1-hand makes the pre-fix "
+        f"divergence a sharp silent-no-op vs post-fix's actual "
+        f"discard); got hand_size={rust_p1_hand_size_before}"
+    )
+
+    # Inject the source onto P1's bf with controller=1. ENTERS fires
+    # via the deferred-dispatch queue; the SourceIsSelf trigger lands
+    # on the stack with controller=1 (the SOURCE's controller).
+    rust_state.register_and_inject_object(
+        rust_source_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller Discarder Bear's arrival on P1 "
+        "should fire the SourceIsSelf ENTERS trigger and land "
+        "DiscardCard on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.discard import (
+        TargetOpponentDiscards,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_alpha_printing = CardPrinting(
+        name=(
+            "Discard Bait Alpha "
+            "(cross-controller discard_card probe)"
+        ),
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+    )
+    bait_beta_printing = CardPrinting(
+        name=(
+            "Discard Bait Beta "
+            "(cross-controller discard_card probe)"
+        ),
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    # Inject Alpha first so it lands at hand index 0 (mirrors the
+    # Rust order). Python's TargetOpponentDiscards walks the
+    # discarder's hand and the agent picks legal[0].
+    py_alpha = py_state.new_object(
+        bait_alpha_printing, owner_id=0, zone=Zone.HAND,
+    )
+    py_state.players[0].hand.append(py_alpha)
+    py_beta = py_state.new_object(
+        bait_beta_printing, owner_id=0, zone=Zone.HAND,
+    )
+    py_state.players[0].hand.append(py_beta)
+
+    source_printing = CardPrinting(
+        name="Cross-Controller Discarder Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=TargetOpponentDiscards(count=1),
+            ),
+        ),
+    )
+    # Custom agents:
+    #   * P1 (the source's controller): _PickFirstLegalTargetAgent
+    #     for the player-target choice. legal_targets is
+    #     [("player", 0)] (only opponent), so legal_targets[0]
+    #     picks P0 -- the discarding player.
+    #   * P0 (the discarder, the source's controller's opponent):
+    #     _DiscardFirstAgent for the hand[0] pick, mirroring Rust's
+    #     deterministic first-slice. The discarding player is asked
+    #     for their own discard (per CR 701.8); the agent goes on
+    #     P0, NOT P1.
+    py_state.players[1].agent = _PickFirstLegalTargetAgent()
+    py_state.players[0].agent = _DiscardFirstAgent()
+
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_p0_hand_size_before = len(py_state.players[0].hand)
+    py_p1_hand_size_before = len(py_state.players[1].hand)
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+    assert py_p0_hand_size_before == 2
+    assert py_p1_hand_size_before == 0
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller Discarder Bear's arrival on P1 "
+        "should fire the IsSelf ENTERS trigger and land "
+        "TargetOpponentDiscards on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Post-drain: lives unchanged. The load-bearing cross-controller
+    # routing pin: P0 (the source's controller's opponent) discarded
+    # exactly one card; P1's hand is unchanged (would have been the
+    # pre-fix discard target -- empty hand, silent no-op).
+    assert rust_state.get_life(0) == rust_p0_life_before, (
+        f"Rust p0 life should be unchanged ({rust_p0_life_before}); "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before, (
+        f"Rust p1 life should be unchanged ({rust_p1_life_before}); "
+        f"got {rust_state.get_life(1)}"
+    )
+    rust_p0_hand_size_after = rust_state.hand_sizes[0]
+    rust_p1_hand_size_after = rust_state.hand_sizes[1]
+    rust_p0_gy_size_after = rust_state.graveyard_sizes[0]
+    rust_p1_gy_size_after = rust_state.graveyard_sizes[1]
+    assert rust_p0_hand_size_after == rust_p0_hand_size_before - 1, (
+        "Rust cross-controller routing contract: P0's hand should "
+        "shrink by exactly 1 (Alpha discarded). Pre-fix Rust would "
+        "have looked at P1's hand (empty), silent-no-opped, and "
+        "P0's hand would be unchanged. "
+        f"before={rust_p0_hand_size_before} "
+        f"after={rust_p0_hand_size_after}"
+    )
+    assert rust_p1_hand_size_after == rust_p1_hand_size_before, (
+        "Rust cross-controller routing contract: P1's hand should "
+        "be unchanged (P1 is the source's controller, not the "
+        "discarder). "
+        f"before={rust_p1_hand_size_before} "
+        f"after={rust_p1_hand_size_after}"
+    )
+    assert rust_p0_gy_size_after == rust_p0_gy_size_before + 1, (
+        "Rust cross-controller routing contract: P0's graveyard "
+        "should grow by exactly 1 (Alpha routed to P0's gy). "
+        f"before={rust_p0_gy_size_before} "
+        f"after={rust_p0_gy_size_after}"
+    )
+    assert rust_p1_gy_size_after == rust_p1_gy_size_before, (
+        "Rust cross-controller routing contract: P1's graveyard "
+        "should be unchanged. "
+        f"before={rust_p1_gy_size_before} "
+        f"after={rust_p1_gy_size_after}"
+    )
+    # Per-card pick pin: the discarded card is Alpha (NOT Beta).
+    rust_p0_gy_names_after = sorted(
+        e["printing_name"] for e in rust_state.graveyard_snapshot(0)
+    )
+    assert any(
+        "Alpha" in n for n in rust_p0_gy_names_after
+    ), (
+        "Rust per-card pick pin: P0's graveyard should contain "
+        "Discard Bait Alpha (the hand[0] pick). "
+        f"Got names={rust_p0_gy_names_after}"
+    )
+    rust_p0_hand_names_after = sorted(
+        e["printing_name"] for e in rust_state.hand_snapshot(0)
+    )
+    assert any(
+        "Beta" in n for n in rust_p0_hand_names_after
+    ), (
+        "Rust per-card pick pin: P0's hand should still contain "
+        "Discard Bait Beta (NOT picked by the deterministic "
+        "hand[0] pick). "
+        f"Got names={rust_p0_hand_names_after}"
+    )
+
+    # Python observable: same shape.
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    py_p0_hand_size_after = len(py_state.players[0].hand)
+    py_p1_hand_size_after = len(py_state.players[1].hand)
+    py_p0_gy_size_after = len(py_state.players[0].graveyard)
+    py_p1_gy_size_after = len(py_state.players[1].graveyard)
+    assert py_p0_hand_size_after == py_p0_hand_size_before - 1
+    assert py_p1_hand_size_after == py_p1_hand_size_before
+    assert py_p0_gy_size_after == py_p0_gy_size_before + 1
+    assert py_p1_gy_size_after == py_p1_gy_size_before
+    py_p0_gy_names = sorted(
+        c.printing.name for c in py_state.players[0].graveyard
+    )
+    py_p0_hand_names = sorted(
+        c.printing.name for c in py_state.players[0].hand
+    )
+    assert any("Alpha" in n for n in py_p0_gy_names), (
+        f"Python: P0's gy should contain Alpha; got {py_p0_gy_names}"
+    )
+    assert any("Beta" in n for n in py_p0_hand_names), (
+        f"Python: P0's hand should still hold Beta; got "
+        f"{py_p0_hand_names}"
+    )
+
+    # Cross-engine: same lives, same hand / gy sizes.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    assert rust_p0_hand_size_after == py_p0_hand_size_after
+    assert rust_p1_hand_size_after == py_p1_hand_size_after
+    assert rust_p0_gy_size_after == py_p0_gy_size_after
+    assert rust_p1_gy_size_after == py_p1_gy_size_after
+    # Per-card pick parity: the discarded card name set matches
+    # across engines.
+    assert rust_p0_gy_names_after == py_p0_gy_names
+    assert rust_p0_hand_names_after == py_p0_hand_names
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
