@@ -38916,6 +38916,681 @@ def test_cross_engine_real_eoe_mouth_of_the_storm_etb_extended_duration_debuff_a
     assert py_state.players[1].life == 20
 
 
+# =====================================================================
+# BLOCKED-RUST-EFFECT slice — Fight effect arm regression pins.
+#
+# Synthetic Rust + cross-engine probes for the new
+# `Effect::FightTargetCreatureWithTargetCreature` (Rust) +
+# `FightTargetCreatureWithTargetCreature` (Python) variant pair shipped
+# in this slice. No real-EoE consumer exercises the bare bilateral
+# generic-fight shape (Meltstrider's Resolve uses the Aura-shape
+# `EnchantedCreatureFightsTargetEffect` sibling, which is the deferred
+# follow-up — see docs/EOE_PROBE_READINESS_AUDIT.md). Probes here run
+# entirely on synthetic printings.
+# =====================================================================
+
+
+def _build_rust_fight_state():
+    """Helper: build a Rust state with a Fight ETB-trigger source on
+    p0's bf and ONE creature each on both bfs (the would-be fighters).
+    Returns (rust_state, source_id, p0_creature_id, p1_creature_id).
+
+    Source carries the bare bilateral fight ETB (`source_is_self`
+    predicate, `fight_target_creature_with_target_creature` effect).
+    The pre-staged creatures are 2/2 vanilla Bears so the fight
+    resolves to mutual 2-damage marking.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    p0_creature_id = rust_state.register_and_inject_object(
+        {
+            "name": "Caster Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p1_creature_id = rust_state.register_and_inject_object(
+        {
+            "name": "Opponent Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "R": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    # Source: a vanilla creature with the fight ETB trigger. Pre-state
+    # damage on both fighters is 0; the source itself isn't a target
+    # of the fight (the resolve scan picks the FIRST same-side and
+    # FIRST opponent-side creature, but the source enters AFTER both
+    # bait Bears so it's at index 1 on p0's bf — not the picked
+    # caster-side fighter).
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "Fight Source (3/3)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 1},
+            "power": 3,
+            "toughness": 3,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "fight_target_creature_with_target_creature",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id, p0_creature_id, p1_creature_id
+
+
+def test_rust_fight_target_creature_basic_resolves_both_sides_simultaneously():
+    """BLOCKED-RUST-EFFECT slice — basic fight pin. Both vanilla 2/2
+    Bears deal 2 damage to each other simultaneously; both end with
+    damage=2 (= toughness, lethal but no SBA fired in this probe —
+    the marker is the load-bearing observable).
+
+    Pins:
+      - The arm fires both sides (no asymmetry, no skipped damage).
+      - Damage marker is additive into the GameObject's `damage` field.
+      - Source's own creature (the trigger carrier) is NOT picked as
+        the caster-side fighter when an earlier creature exists on
+        the caster's bf (zone-iteration order; FIRST creature wins).
+    """
+    rust_state, source_id, p0_id, p1_id = _build_rust_fight_state()
+    # Source's ENTERS lands the fight trigger on the stack.
+    assert rust_state.stack_size() == 1, (
+        "Rust: source's arrival should fire the SourceIsSelf ENTERS "
+        "trigger and land FightTargetCreatureWithTargetCreature on "
+        f"the stack. Got stack_size={rust_state.stack_size()}"
+    )
+    # Pre-state pins: both Bears at 0 damage.
+    assert rust_state.get_damage(p0_id) == 0
+    assert rust_state.get_damage(p1_id) == 0
+    # Resolve.
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Both Bears now marked with 2 damage (their opponent's 2-power).
+    assert rust_state.get_damage(p0_id) == 2, (
+        "Rust: caster-side fighter should be marked with 2 damage "
+        "(opponent Bears' 2 power dealt). "
+        f"Got damage={rust_state.get_damage(p0_id)}"
+    )
+    assert rust_state.get_damage(p1_id) == 2, (
+        "Rust: opponent-side fighter should be marked with 2 damage "
+        "(caster Bears' 2 power dealt). "
+        f"Got damage={rust_state.get_damage(p1_id)}"
+    )
+    # Source itself is untouched (it's a creature on p0's bf at
+    # index 1, not the picked caster-side fighter at index 0).
+    assert rust_state.get_damage(source_id) == 0, (
+        "Rust: source creature should NOT be marked with damage "
+        "(the resolve scan picks the FIRST creature on each side, "
+        "and the source entered AFTER the bait Bears). "
+        f"Got damage={rust_state.get_damage(source_id)}"
+    )
+
+
+def test_rust_fight_target_creature_missing_caster_side_silently_fizzles():
+    """BLOCKED-RUST-EFFECT slice — caster-side missing-fighter pin.
+    If the source-controller has NO creatures on bf (the source
+    itself is the only object, and we'll skip the source by injecting
+    it into hand instead), the arm silently fizzles — no damage on
+    either side.
+
+    Probe shape: inject a Fight ETB carrier into p0's HAND (not bf),
+    push it onto the stack, resolve. The resolve walks the stack item;
+    its source is in p0's hand (not bf). The caster-side scan finds
+    no creature on p0's bf → silent fizzle.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    # Opponent has a creature on bf (so opponent-side scan would find one
+    # if the caster-side scan succeeded).
+    p1_id = rust_state.register_and_inject_object(
+        {
+            "name": "Opponent Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "R": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    # Inject a "synthetic Fight source" object into p0's hand — its
+    # ETB trigger does NOT fire from hand (ENTERS event needs bf
+    # arrival), so we manually push the trigger via apply_effect_pub
+    # path. Easier route: cast a creature whose ENTERS triggers a
+    # fight, and verify resolution from hand → bf has the fight on
+    # the stack with the SOURCE on bf… BUT then the source itself
+    # (now on bf) becomes the caster-side fighter, and the test
+    # collapses to "source fights opponent". To get the no-caster-
+    # creature scenario, inject a non-creature carrier whose ETB
+    # carries the fight effect — e.g. an Artifact.
+    artifact_source_id = rust_state.register_and_inject_object(
+        {
+            "name": "Fight-Trigger Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "fight_target_creature_with_target_creature",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # The artifact's ETB lands the fight trigger on the stack.
+    assert rust_state.stack_size() == 1
+    # Pre-state: opponent Bears at 0 damage.
+    assert rust_state.get_damage(p1_id) == 0
+    # Resolve. Caster-side scan finds NO creature (the artifact source
+    # isn't a creature; nothing else on p0's bf). Silent fizzle —
+    # opponent Bears untouched.
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    assert rust_state.get_damage(p1_id) == 0, (
+        "Rust: caster-side missing-fighter case should silently "
+        "fizzle (CR 701.12c — no fighter, no damage). Opponent "
+        "Bears must remain at 0 damage. "
+        f"Got damage={rust_state.get_damage(p1_id)}"
+    )
+    # Artifact source itself untouched.
+    assert rust_state.get_damage(artifact_source_id) == 0
+
+
+def test_rust_fight_target_creature_missing_opponent_side_silently_fizzles():
+    """BLOCKED-RUST-EFFECT slice — opponent-side missing-fighter pin.
+    If the source-controller's opponent has NO creatures on bf, the
+    arm silently fizzles — caster-side fighter takes no damage either.
+
+    Mirrors the caster-side fizzle case in direction.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Caster has a creature; opponent has NONE.
+    p0_id = rust_state.register_and_inject_object(
+        {
+            "name": "Caster Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # Inject the fight-trigger source (also a creature, but lands at
+    # index 1 on p0's bf so the caster-side pick still goes to the
+    # bait Bears at index 0).
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "Fight Source (3/3)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 1},
+            "power": 3,
+            "toughness": 3,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "fight_target_creature_with_target_creature",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    assert rust_state.get_damage(p0_id) == 0
+    # Resolve. Opponent-side scan finds nothing. Silent fizzle.
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    assert rust_state.get_damage(p0_id) == 0, (
+        "Rust: opponent-side missing-fighter case should silently "
+        "fizzle (CR 701.12c). Caster bait Bears must remain at 0 "
+        f"damage. Got damage={rust_state.get_damage(p0_id)}"
+    )
+    assert rust_state.get_damage(source_id) == 0
+
+
+def test_rust_fight_target_creature_larger_creature_survives_smaller():
+    """BLOCKED-RUST-EFFECT slice — asymmetric power pin. A 5/5 fights
+    a 2/2: the 5/5 takes 2 damage (non-lethal at 5 toughness); the
+    2/2 takes 5 damage (lethal at 2 toughness, but SBA hasn't run yet
+    in this probe — observable via the marker only).
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Caster's 5/5 (the "larger" fighter).
+    p0_id = rust_state.register_and_inject_object(
+        {
+            "name": "Caster Hill Giant (5/5)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 4, "G": 1},
+            "power": 5,
+            "toughness": 5,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # Opponent's 2/2 (the "smaller" fighter).
+    p1_id = rust_state.register_and_inject_object(
+        {
+            "name": "Opponent Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "R": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    # Fight-trigger artifact (avoids the source-itself-is-a-creature
+    # ambiguity and keeps the test scenario unambiguous: caster has
+    # exactly ONE creature on bf, the 5/5).
+    rust_state.register_and_inject_object(
+        {
+            "name": "Fight-Trigger Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "fight_target_creature_with_target_creature",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # 5/5 took 2 damage from the 2/2's power.
+    assert rust_state.get_damage(p0_id) == 2, (
+        f"5/5 should take 2 damage from 2/2's power; got {rust_state.get_damage(p0_id)}"
+    )
+    # 2/2 took 5 damage from the 5/5's power.
+    assert rust_state.get_damage(p1_id) == 5, (
+        f"2/2 should take 5 damage from 5/5's power; got {rust_state.get_damage(p1_id)}"
+    )
+
+
+def test_rust_fight_target_creature_cross_controller_routing_p1_source_on_p0_turn():
+    """BLOCKED-RUST-EFFECT slice — cross-controller routing pin.
+    Source-controller is resolved by SCANNING ZONES for the source
+    object (mirrors PumpTargetCreatureUntilEOT's source-side scan),
+    NOT by reading active_player. So a fight effect whose source is
+    on p1's bf (e.g. a flicker re-ETB on p1's creature firing while
+    p0 has priority on p0's turn) routes the caster-side scan to
+    p1's bf and the opponent-side scan to p0's bf — the OPPOSITE of
+    what active_player would suggest.
+
+    Probe: build state with p1 as the source-side, p0 as the opponent-
+    side; p0's bf has a 4/4, p1's bf has a 2/2 + the fight source.
+    Resolve. p1's 2/2 takes 4 damage (from p0's 4/4); p0's 4/4 takes
+    2 damage (from p1's 2/2). The cross-controller routing puts the
+    caster-side scan on the source's controller's bf (p1), regardless
+    of active_player.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # p0's bf: 4/4 Hill Giant.
+    p0_id = rust_state.register_and_inject_object(
+        {
+            "name": "p0 Hill Giant (4/4)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 3, "R": 1},
+            "power": 4,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # p1's bf: 2/2 Bears (will be the caster-side fighter).
+    p1_id = rust_state.register_and_inject_object(
+        {
+            "name": "p1 Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    # p1's fight-trigger artifact (controller=1).
+    rust_state.register_and_inject_object(
+        {
+            "name": "p1 Fight-Trigger Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "fight_target_creature_with_target_creature",
+                    },
+                }
+            ],
+        },
+        1,  # controller = p1
+        ZONE_BATTLEFIELD,
+    )
+    # The trigger lands on the stack with controller=1.
+    assert rust_state.stack_size() == 1
+    # active_player default is 0 (p0); we DELIBERATELY don't change it
+    # to make the cross-controller routing observable — pre-fix
+    # behavior would scan p0's bf as caster (wrong); post-fix scans
+    # p1's bf (the source's actual controller).
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # p1's 2/2 (caster-side) took 4 damage from p0's 4/4 (opponent-
+    # side from p1's perspective).
+    assert rust_state.get_damage(p1_id) == 4, (
+        "Rust: cross-controller routing — p1's source means p1's "
+        "2/2 is the caster-side fighter; it should take p0's 4/4's "
+        "4 damage. "
+        f"Got damage={rust_state.get_damage(p1_id)}"
+    )
+    # p0's 4/4 (opponent-side from p1's perspective) took 2 damage.
+    assert rust_state.get_damage(p0_id) == 2, (
+        "Rust: cross-controller routing — p0's 4/4 is the opponent-"
+        "side fighter; it should take p1's 2/2's 2 damage. "
+        f"Got damage={rust_state.get_damage(p0_id)}"
+    )
+
+
+def test_cross_engine_fight_target_creature_synthetic_etb_parity(
+    parity_smoke,
+):
+    """BLOCKED-RUST-EFFECT slice — cross-engine end-to-end synthetic
+    probe. Drives the new
+    `Effect::FightTargetCreatureWithTargetCreature` arm + the
+    `FightTargetCreatureWithTargetCreature` Python class through both
+    engines via an ETB-trigger carrier; pins post-resolve damage
+    markers agree on both sides.
+
+    No real-EoE consumer of the bare bilateral generic-fight shape
+    today. Meltstrider's Resolve uses the Aura-shape sibling
+    (`EnchantedCreatureFightsTargetEffect`) which is the deferred
+    follow-up — see `docs/EOE_PROBE_READINESS_AUDIT.md` and
+    `docs/SEARCH_LIMITATIONS.md`.
+
+    Probe shape (mirrors the Dubious-Delicacy / Mouth-of-the-Storm
+    inject-and-fire-ENTERS pattern):
+
+      1. Pre-seat one bait Bears creature on p0's bf (caster-side
+         fighter) and one bait Bears on p1's bf (opponent-side
+         fighter). Both vanilla 2/2.
+      2. Inject an Artifact with the fight ETB onto p0's bf. The ETB
+         trigger fires on its own arrival; the trigger lands on the
+         stack on both engines.
+      3. Drain both stacks. Both 2/2 Bears now carry damage=2.
+      4. Cross-engine: same damage marker on both sides.
+
+    Out of scope (documented):
+
+      * SBA-driven destroy of lethal-damaged creatures — both engines
+        record the marker; SBA pass not driven here. The marker is
+        the load-bearing observable.
+      * Real-EoE Aura-shape (Meltstrider's Resolve) — needs the
+        Aura-attachment ETB substrate routed through `attached_to`
+        end-to-end on Rust before the cross-engine bridge can drive
+        it. Tracked as deferred follow-up.
+      * "Up to one target" optional shape, with-trample / with-
+        deathtouch composers — separate Effect arms once a real
+        consumer demands them.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_p0_creature_id = rust_state.register_and_inject_object(
+        {
+            "name": "Caster Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_p1_creature_id = rust_state.register_and_inject_object(
+        {
+            "name": "Opponent Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "R": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    # Pre-state pin: both Bears at 0 damage on Rust.
+    assert rust_state.get_damage(rust_p0_creature_id) == 0
+    assert rust_state.get_damage(rust_p1_creature_id) == 0
+    # Inject the fight-trigger artifact source.
+    rust_state.register_and_inject_object(
+        {
+            "name": "Fight-Trigger Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "fight_target_creature_with_target_creature",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: artifact's arrival should fire SourceIsSelf ENTERS and "
+        "land FightTargetCreatureWithTargetCreature on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import (
+        FightTargetCreatureWithTargetCreature,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing_p0 = CardPrinting(
+        name="Caster Bears (2/2)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    bait_printing_p1 = CardPrinting(
+        name="Opponent Bears (2/2)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("R", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_p0_creature = py_state.new_object(
+        bait_printing_p0, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_p0_creature.summoning_sick = False
+    py_p0_creature.tapped = False
+    py_p0_creature.damage = 0
+    py_p0_creature.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_p0_creature)
+
+    py_p1_creature = py_state.new_object(
+        bait_printing_p1, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_p1_creature.summoning_sick = False
+    py_p1_creature.tapped = False
+    py_p1_creature.damage = 0
+    py_p1_creature.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_p1_creature)
+    # Pre-state pin: both Bears at 0 damage on Python.
+    assert py_p0_creature.damage == 0
+    assert py_p1_creature.damage == 0
+
+    artifact_printing = CardPrinting(
+        name="Fight-Trigger Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=FightTargetCreatureWithTargetCreature(),
+            ),
+        ),
+    )
+    py_source = py_state.new_object(
+        artifact_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: artifact's arrival should fire IsSelf ENTERS and "
+        "land FightTargetCreatureWithTargetCreature on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Cross-engine post-state ----
+    # Both bait Bears now marked with 2 damage (their opponent's
+    # 2-power dealt simultaneously).
+    rust_p0_damage_after = rust_state.get_damage(rust_p0_creature_id)
+    rust_p1_damage_after = rust_state.get_damage(rust_p1_creature_id)
+    assert rust_p0_damage_after == 2, (
+        f"Rust caster Bears damage should be 2; got {rust_p0_damage_after}"
+    )
+    assert rust_p1_damage_after == 2, (
+        f"Rust opponent Bears damage should be 2; got {rust_p1_damage_after}"
+    )
+    assert py_p0_creature.damage == 2, (
+        f"Python caster Bears damage should be 2; got {py_p0_creature.damage}"
+    )
+    assert py_p1_creature.damage == 2, (
+        f"Python opponent Bears damage should be 2; got {py_p1_creature.damage}"
+    )
+    # Cross-engine agreement.
+    assert rust_p0_damage_after == py_p0_creature.damage
+    assert rust_p1_damage_after == py_p1_creature.damage
+    # Lives unchanged — the fight only marks creature damage.
+    assert list(rust_state.life_totals) == [20, 20]
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
