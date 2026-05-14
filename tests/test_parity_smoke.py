@@ -42004,6 +42004,477 @@ def test_cross_engine_optional_sac_artifact_synthetic_etb_parity(
     assert py_state.players[1].life == 20
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- look_at_top_n_reveal_or_counter (round 20).
+#
+# Round-19 audit refresh reclassified `LookAtTopNRevealOrCounter` from
+# BLOCKED-RUST-EFFECT to BLOCKED-BRIDGE-ARM. The Rust effect variant
+# `Effect::LookAtTopNRevealOrCounter { n, filter_name, max_power,
+# counter_on_miss }` (cards.rs:2152) was already on main from rounds
+# 28-29 (parse + to_dict + resolve + PendingDecision::LookAtTopN
+# RevealOrCounterChoice + submit_look_at_top_n_decision dispatcher);
+# this slice closes the bridge-translator gap so the printed "look at
+# top N; you may reveal one matching FILTER and put it into your hand;
+# bottom the rest in a random order; otherwise put a +1/+1 counter on
+# this creature" surface round-trips end-to-end.
+#
+# Real-EoE consumers unblocked: Pulsar Squadron Ace (n=5, filter=
+# spacecraft, counter_on_miss=True) + Living Phone (n=4, filter=
+# creature, max_power=2, counter_on_miss=False).
+#
+# Pin layout: 6 bridge-translator pins (dict to Python class shape) +
+# 4 Rust regression pins (resolve arm + dispatcher + counter rider) +
+# 1 cross-engine end-to-end synthetic ETB probe (Pulsar Squadron Ace
+# shape with no spacecraft in top-5 -> counter rider fires).
+# =====================================================================
+
+
+# --- Bridge translator pin tests (dict -> Python class shape) ---
+
+
+def test_look_at_top_n_bridge_arm_default_fields():
+    """Bridge arm pin: minimal dict (only `kind` + `n`) maps to Python's
+    LookAtTopNRevealOrCounter with class defaults for filter_name /
+    max_power / counter_on_miss. Mirrors Rust's parse_effect default
+    handling (cards.rs:4257-4271).
+    """
+    from mtg_bot.effects.generic.library_lookat import (
+        LookAtTopNRevealOrCounter,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    eff = _ta_dict_to_python_effect(
+        {"kind": "look_at_top_n_reveal_or_counter", "n": 5}
+    )
+    assert isinstance(eff, LookAtTopNRevealOrCounter)
+    assert eff.n == 5
+    assert eff.filter_name == "spacecraft"
+    assert eff.max_power == 0
+    assert eff.counter_on_miss is True
+
+
+def test_look_at_top_n_bridge_arm_pulsar_squadron_ace_shape():
+    """Bridge arm pin: full Pulsar-Squadron-Ace dict shape (n=5,
+    spacecraft, max_power=0, counter_on_miss=True) round-trips."""
+    from mtg_bot.effects.generic.library_lookat import (
+        LookAtTopNRevealOrCounter,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    eff = _ta_dict_to_python_effect(
+        {
+            "kind": "look_at_top_n_reveal_or_counter",
+            "n": 5,
+            "filter_name": "spacecraft",
+            "max_power": 0,
+            "counter_on_miss": True,
+        }
+    )
+    assert eff == LookAtTopNRevealOrCounter(
+        n=5, filter_name="spacecraft", max_power=0, counter_on_miss=True,
+    )
+
+
+def test_look_at_top_n_bridge_arm_living_phone_shape():
+    """Bridge arm pin: full Living-Phone dict shape (n=4, creature,
+    max_power=2, counter_on_miss=False) round-trips."""
+    from mtg_bot.effects.generic.library_lookat import (
+        LookAtTopNRevealOrCounter,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    eff = _ta_dict_to_python_effect(
+        {
+            "kind": "look_at_top_n_reveal_or_counter",
+            "n": 4,
+            "filter_name": "creature",
+            "max_power": 2,
+            "counter_on_miss": False,
+        }
+    )
+    assert eff == LookAtTopNRevealOrCounter(
+        n=4, filter_name="creature", max_power=2, counter_on_miss=False,
+    )
+
+
+def test_look_at_top_n_bridge_arm_artifact_filter_passes_through():
+    """Bridge arm pin: `filter_name="artifact"` (third recognized
+    filter per Python's `_matches` at library_lookat.py:62-74)
+    round-trips verbatim."""
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    eff = _ta_dict_to_python_effect(
+        {
+            "kind": "look_at_top_n_reveal_or_counter",
+            "n": 3,
+            "filter_name": "artifact",
+        }
+    )
+    assert eff.filter_name == "artifact"
+    assert eff.n == 3
+    assert eff.max_power == 0
+    assert eff.counter_on_miss is True
+
+
+def test_look_at_top_n_bridge_arm_missing_n_raises():
+    """Bridge arm pin: missing required `n` raises ValueError to mirror
+    Rust's parse_effect error contract (cards.rs:4210). Python's class
+    has a default of 5, but the bridge enforces explicit `n` to keep
+    the dict-shape contract aligned with Rust's parse path."""
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="missing required field 'n'"):
+        _ta_dict_to_python_effect(
+            {"kind": "look_at_top_n_reveal_or_counter"}
+        )
+
+
+def test_look_at_top_n_bridge_arm_int_coercion_robust_to_python_bool():
+    """Bridge arm pin: `int(...)` coercion on `n` and `max_power`
+    handles JSON-shape int values cleanly."""
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    eff = _ta_dict_to_python_effect(
+        {
+            "kind": "look_at_top_n_reveal_or_counter",
+            "n": 7,
+            "max_power": 4,
+        }
+    )
+    assert eff.n == 7
+    assert eff.max_power == 4
+    assert isinstance(eff.n, int)
+    assert isinstance(eff.max_power, int)
+
+
+# --- Rust regression pins (substrate dispatcher + counter rider) ---
+
+
+def _build_rust_look_at_top_n_state(
+    n: int = 5,
+    filter_name: str = "spacecraft",
+    max_power: int = 0,
+    counter_on_miss: bool = True,
+    library_size: int = 5,
+):
+    """Helper: build a Rust state with a LookAtTopNRevealOrCounter
+    creature carrier on p0's bf and a vanilla-bears library of the
+    requested size. Returns (rust_state, source_id).
+
+    The carrier is a Creature so the counter-on-miss rider has a
+    permanent target on bf to land on. Library filler is vanilla bears
+    so the spacecraft filter never matches (deterministic miss).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * library_size,
+        p1_library=("Library Filler Bears (2/2)",) * 5,
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "LookAtTopN-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "look_at_top_n_reveal_or_counter",
+                        "n": n,
+                        "filter_name": filter_name,
+                        "max_power": max_power,
+                        "counter_on_miss": counter_on_miss,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_look_at_top_n_pushes_pending_decision_on_resolve():
+    """Rust regression pin: LookAtTopNRevealOrCounter resolve pops
+    `min(n, lib_len)` cards into a LookAtTopNRevealOrCounterChoice
+    pending decision and short-circuits without applying counter or
+    moving any card to hand. Mirrors the round-19 may_do
+    `pushes_pending_decision_on_resolve` shape; pins the resolve arm
+    at state_ops_resolve.rs:6781-6810.
+    """
+    rust_state, source_id = _build_rust_look_at_top_n_state(n=3)
+    assert rust_state.stack_size() == 1
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    counters_before = rust_state.get_counters(source_id)
+    rust_state.resolve_top_of_stack_pause()
+    assert rust_state.stack_size() == 0
+    assert rust_state.has_pending_decision() is True
+    assert rust_state.library_sizes[0] == p0_lib_before - 3
+    assert rust_state.hand_sizes[0] == p0_hand_before
+    assert rust_state.get_counters(source_id) == counters_before
+
+
+def test_rust_look_at_top_n_default_strategy_fires_counter_on_miss():
+    """Rust regression pin: `auto_resolve_pending_decisions("default")`
+    matches Python's no-agent-seated path -- no reveal, all examined
+    cards bottom-of-library, +1/+1 counter on the creature source.
+    Pins state_ops_decisions.rs:377-435 (the LookAtTopN dispatcher
+    arm) on the default-strategy -> no-reveal path.
+    """
+    rust_state, source_id = _build_rust_look_at_top_n_state(
+        n=5, counter_on_miss=True,
+    )
+    rust_state.resolve_top_of_stack_pause()
+    p0_lib_after_pause = rust_state.library_sizes[0]
+    p0_hand_after_pause = rust_state.hand_sizes[0]
+    counters_before = rust_state.get_counters(source_id)
+    rust_state.auto_resolve_pending_decisions("default")
+    assert rust_state.has_pending_decision() is False
+    assert rust_state.hand_sizes[0] == p0_hand_after_pause
+    assert rust_state.library_sizes[0] == p0_lib_after_pause + 5
+    assert rust_state.get_counters(source_id) == counters_before + 1
+
+
+def test_rust_look_at_top_n_counter_on_miss_false_skips_counter():
+    """Rust regression pin: `counter_on_miss=False` (Living-Phone
+    shape) on a no-reveal answer -> bottom the cards but DO NOT fire
+    the counter rider. Pins the asymmetric branch of the counter
+    rider; without this pin a buggy dispatcher that always added a
+    counter would still pass the default-strategy test above.
+    """
+    rust_state, source_id = _build_rust_look_at_top_n_state(
+        n=4, counter_on_miss=False,
+    )
+    rust_state.resolve_top_of_stack_pause()
+    counters_before = rust_state.get_counters(source_id)
+    rust_state.auto_resolve_pending_decisions("default")
+    assert rust_state.has_pending_decision() is False
+    assert rust_state.get_counters(source_id) == counters_before
+
+
+def test_rust_look_at_top_n_short_library_no_underflow():
+    """Rust regression pin: library shorter than `n` does not underflow
+    -- only the available cards are popped into the pending decision.
+    Pins the `min(n, lib_len)` slicing in the resolve arm
+    (state_ops_resolve.rs:6781-6810) on a 2-card library + n=5 query.
+    """
+    rust_state, _source_id = _build_rust_look_at_top_n_state(
+        n=5, library_size=2,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    rust_state.resolve_top_of_stack_pause()
+    assert rust_state.library_sizes[0] == p0_lib_before - 2
+    pds = rust_state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "LookAtTopNRevealOrCounterChoice"
+    assert len(pds[0]["cards"]) == 2
+
+
+# --- Cross-engine end-to-end synthetic ETB probe ---
+
+
+def test_cross_engine_look_at_top_n_synthetic_etb_no_match_counter_parity(
+    parity_smoke,
+):
+    """BLOCKED-BRIDGE-ARM slice -- cross-engine end-to-end synthetic
+    probe for the bare ``LookAtTopNRevealOrCounter(n=5, filter_name=
+    "spacecraft", counter_on_miss=True)`` ETB shape (Pulsar-Squadron-
+    Ace shape, library has NO spacecraft so the counter rider fires).
+    Drives the ``Effect::LookAtTopNRevealOrCounter`` arm + the Python
+    ``LookAtTopNRevealOrCounter`` class through both engines via an
+    ETB-trigger carrier; pins that no-reveal answer routes correctly
+    on both engines and lands a +1/+1 counter on the source.
+
+    Probe shape (mirrors the round-19 may_do synthetic ETB pattern):
+
+      1. Spec a 5-Bears library on p0 (no spacecraft -> filter never
+         matches).
+      2. Inject a Creature with a LookAtTopNRevealOrCounter ETB onto
+         p0's bf. The ETB trigger fires on its own arrival; the
+         trigger lands on the stack on both engines.
+      3. Drain both stacks. Rust's auto-resolve drain on the
+         resulting LookAtTopNRevealOrCounterChoice picks the
+         "default" strategy via keep_all_on_top -> reveal_no branch
+         (state_ops_decisions.rs:399 only takes reveal_yes for the
+         "reveal_yes" strategy literal). Python's resolve hits the
+         no-agent-seated path (default Agent has no
+         choose_card_from_library override that returns a chosen id;
+         the default returns None) -> no reveal.
+      4. Cross-engine: source on bf has +1/+1 counter on both sides;
+         hand sizes unchanged; library sizes back to original (cards
+         bottomed); lives unchanged.
+
+    Out of scope (deferred per round-17/18/19 synthetic-only-when-
+    riders-cascade precedent):
+
+      * Reveal-yes cross-engine -- needs `_TakeFirstAgent` shim on
+        Python + auto-resolve "reveal_yes" on Rust.
+      * Living-Phone cross-engine (n=4 creature counter_on_miss=
+        False) -- covered by Rust regression
+        ``test_rust_look_at_top_n_counter_on_miss_false_skips_counter``.
+      * Real Pulsar-Squadron-Ace cross-engine probe -- needs cast-
+        from-hand mana pipeline OR full inject-and-fire-ENTERS shape
+        with the EoE printing's printing_id round-trip.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=("Library Filler Bears (2/2)",) * 5,
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_source_id = rust_state.register_and_inject_object(
+        {
+            "name": "LookAtTopN-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "look_at_top_n_reveal_or_counter",
+                        "n": 5,
+                        "filter_name": "spacecraft",
+                        "max_power": 0,
+                        "counter_on_miss": True,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_counters_before = rust_state.get_counters(rust_source_id)
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.library_lookat import (
+        LookAtTopNRevealOrCounter,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    creature_printing = CardPrinting(
+        name="LookAtTopN-Trigger Creature",
+        mana_cost_str="",
+        mana_cost=ManaCost(colored=(("W", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=LookAtTopNRevealOrCounter(
+                    n=5,
+                    filter_name="spacecraft",
+                    max_power=0,
+                    counter_on_miss=True,
+                ),
+            ),
+        ),
+    )
+    py_source = py_state.new_object(
+        creature_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_counters_before = py_source.plus_one_counters
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    assert rust_state.has_pending_decision() is False
+
+    # ---- Cross-engine post-state ----
+    rust_p0_hand_after = rust_state.hand_sizes[0]
+    rust_p0_lib_after = rust_state.library_sizes[0]
+    rust_counters_after = rust_state.get_counters(rust_source_id)
+    py_p0_hand_after = len(py_state.players[0].hand)
+    py_p0_lib_after = len(py_state.players[0].library)
+    py_counters_after = py_source.plus_one_counters
+
+    assert rust_p0_hand_after == rust_p0_hand_before
+    assert py_p0_hand_after == py_p0_hand_before
+    assert rust_p0_lib_after == rust_p0_lib_before
+    assert py_p0_lib_after == py_p0_lib_before
+    assert rust_counters_after == rust_counters_before + 1, (
+        f"Rust counter rider should fire (no spacecraft + counter_"
+        f"on_miss=True); before={rust_counters_before}, "
+        f"after={rust_counters_after}"
+    )
+    assert py_counters_after == py_counters_before + 1, (
+        f"Python counter rider should fire (no spacecraft + counter_"
+        f"on_miss=True); before={py_counters_before}, "
+        f"after={py_counters_after}"
+    )
+    assert (
+        rust_counters_after - rust_counters_before
+        == py_counters_after - py_counters_before
+    )
+    assert list(rust_state.life_totals) == [20, 20]
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
