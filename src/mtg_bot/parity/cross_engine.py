@@ -1558,6 +1558,98 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ExileTargetCreatureUntilSourceLeaves,
         )
         return ExileTargetCreatureUntilSourceLeaves()
+    if kind == "discard_card":
+        # "Target player discards a card." Rust's
+        # ``Effect::DiscardCard { target: TargetFilter }`` is the
+        # explicit-target discard arm (Mind Rot / Wrench Mind /
+        # Specter-bonk shape); its ``parse_effect`` arm at
+        # cards.rs:2890-2897 requires a ``target`` dict (parsed via
+        # ``parse_target_filter``). The resolve arm at
+        # state_ops_resolve.rs:1607-1660 carries the I74 controller-
+        # of-effect fix: defender = 1 - controller, where controller
+        # derives from ``current_resolve_source_controller`` (with
+        # active_player fallback). Sibling closure to I70 / I75 / I76
+        # / I71 / I72 / I73 -- identical defender-swap shape; differs
+        # in BOTH the source zone (target's hand instead of bf) and
+        # the destination (target's graveyard).
+        #
+        # **Filter-narrow-by-design but to the OPPOSITE shape from
+        # destroy_target / exile_target / return_to_hand / tap_target /
+        # add_counters.** Rust's resolve arm
+        # (state_ops_resolve.rs:1608-1611) explicitly raises a
+        # PyValueError on ``TargetFilter::AnyCreature`` -- "DiscardCard
+        # with AnyCreature target is semantically nonsense (cannot
+        # discard a creature)". Only ``any_player`` is honored.
+        # **First bridge arm to honor ONLY the wider ``any_player``
+        # filter shape** (the deal_damage arm honors BOTH; sibling
+        # destroy / exile / return / tap arms honor only AnyCreature).
+        # The bridge mirrors this narrowness: ``any_creature`` is
+        # rejected at register time (loud failure) rather than letting
+        # it fall through to Rust's runtime resolve raise.
+        #
+        # **Rust target-pick semantics.** For ``AnyPlayer``, Rust
+        # picks the defending player directly (the source's
+        # controller's opponent) and forces them to discard
+        # ``hand[0]`` (deterministic first-slice choice — no
+        # per-spell choose-which-to-discard surface yet). Silent
+        # fizzle if the defender's hand is empty.
+        #
+        # **Python target-pick semantics.** Python's
+        # ``TargetOpponentDiscards(count: int = 1)``
+        # (effects/generic/discard.py:395) drives off
+        # ``targets[0]`` as ``("player", id)``; ``legal_targets``
+        # emits one entry per non-controller, non-lost player. The
+        # discarding player's agent picks the card via
+        # ``choose_discard``. Probes that drive this arm cross-engine
+        # seat ``_DiscardFirstAgent`` on the SOURCE'S CONTROLLER'S
+        # OPPONENT (the defending player whose hand is being raided
+        # — NOT the source's controller, since the discard pick is
+        # made by the discarder's own agent per CR 701.8).
+        #
+        # **Discard count parity.** Rust's first-slice arm always
+        # discards exactly ONE card (no count field on the variant);
+        # Python's ``TargetOpponentDiscards`` defaults to
+        # ``count=1`` so the bare bridge construction matches Rust
+        # bit-for-bit. Future Mind-Twist-shape variants ("discard N")
+        # would land as a separate Rust variant + bridge arm.
+        #
+        # **Distinct from ``each_opponent_discards``** (the
+        # ``EachOpponentDiscards`` arm, already on the bridge). That
+        # variant is multi-target sweep ("each opponent discards");
+        # this ``discard_card`` arm is single-target Mind-Rot shape
+        # (one specific opponent discards).
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:2890-2897)
+        # which requires ``target`` and downcasts to a target-filter
+        # dict.
+        from mtg_bot.effects.generic.discard import (
+            TargetOpponentDiscards,
+        )
+        target_dict = eff_dict.get("target")
+        # Lenient-default behavior INVERTED from the destroy_target /
+        # exile_target / return_to_hand / tap_target / deal_damage
+        # arms: missing ``target`` defaults to ``any_player`` since
+        # discard_card is the inverse arm (only any_player is
+        # honored). Bridge consumers SHOULD pass ``target`` explicitly
+        # to keep round-trip dict-shape consistency with what Rust's
+        # parser accepts.
+        target_kind = (
+            target_dict.get("kind", "any_player")
+            if isinstance(target_dict, dict)
+            else "any_player"
+        )
+        if target_kind == "any_player":
+            return TargetOpponentDiscards(count=1)
+        raise ValueError(
+            f"cross_engine discard_card bridge: unsupported "
+            f"target filter kind {target_kind!r} (Rust's "
+            f"parse_target_filter at cards.rs:2790-2799 accepts "
+            f"only 'any_player' and 'any_creature'; discard_card "
+            f"is filter-narrow-by-design and only honors "
+            f"player-shaped filters -- Rust raises a runtime "
+            f"PyValueError on AnyCreature at state_ops_resolve.rs:"
+            f"1608-1611 since you can't discard a creature)"
+        )
     if kind == "tap_target":
         # "Tap target creature." Rust's
         # ``Effect::TapTarget { target: TargetFilter }`` is the
