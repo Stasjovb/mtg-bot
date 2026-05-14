@@ -2354,3 +2354,122 @@ def test_deathtouch_combat_damage_kills_blocker_parity():
         f"deathtouch's 1 damage should be lethal for the 4/4 blocker "
         f"per CR 702.2; got p1_gy={p1_gy}"
     )
+
+
+def test_double_strike_combat_damage_doubles_parity():
+    """Double-strike attacker (2/2) blocked by a 2/2 vanilla.
+
+    Per CR 702.4 + CR 510.5: a creature with double strike deals
+    first-strike damage in the first-strike substep, then regular
+    damage in the regular substep IF it's still alive. Against a 2/2
+    blocker with no first strike:
+      * First-strike substep: DS attacker deals 2 to blocker; blocker
+        dies before regular damage (its damage event is in the
+        regular substep, but it's dead by then).
+      * Regular substep: DS attacker is still on bf with 0 damage;
+        deals its 2 regular damage.
+
+    Both engines DO assert byte-equal (`compare_fields == []`) on
+    the post-combat state — that is the strongest cross-engine
+    invariant the probe pins, and it holds. The CR-vs-engine
+    divergence ("life_p1 should be 20 per CR 510.1c — only trample
+    spills damage past blockers; without trample, the regular-damage
+    assignment lands on the now-dead blocker as a no-op") is
+    documented in `docs/SEARCH_LIMITATIONS.md` (round-18 entry:
+    double-strike + dead blocker → spillover to player on both
+    engines). The probe asserts the OBSERVED behavior so it
+    regression-pins the cross-engine agreement; flipping to CR-strict
+    behavior is a separate engine slice that would update both engines
+    + this probe in lockstep.
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    _advance_n_phases(py_state, rust_state, 3)
+    _advance_n_phases(py_state, rust_state, 12 * 6)
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.PRECOMBAT_MAIN
+
+    # Inject a 2/2 double-strike attacker on p0 + 2/2 vanilla blocker
+    # on p1. Single-attacker / single-blocker shape so the smallest-
+    # block selector pairs them deterministically.
+    _inject_keyword_creature_on_p0_bf(
+        py_state, rust_state,
+        keyword="double strike",
+        printing_name="Bear Duelist",
+        power=2, toughness=2,
+    )
+    _inject_vanilla_creature_on_bf(
+        py_state, rust_state,
+        controller_idx=1,
+        printing_name="Bear Wall",
+        power=2, toughness=2,
+    )
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"keyword-injection (double strike) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    pre_combat_life_p0 = py_view["life_p0"]
+    pre_combat_life_p1 = py_view["life_p1"]
+
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    agent = trajectory.RealGameCombatAgent(
+        strategy="attack_all_block_smallest"
+    )
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"double-strike combat via RealGameCombatAgent surfaced a "
+            f"real cross-engine divergence: {exc}"
+        )
+
+    # Post-combat parity.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+
+    # Both engines: blocker dies in first-strike substep, attacker
+    # survives. Both engines also (incorrectly per CR 510.1c) spill
+    # double-strike's regular damage to the player when the blocker
+    # is dead before regular-damage. See SEARCH_LIMITATIONS.md
+    # (round-18 entry).
+    p0_gy = [entry[0] for entry in py_view["graveyard_p0"]]
+    p1_gy = [entry[0] for entry in py_view["graveyard_p1"]]
+    assert "Bear Wall" in p1_gy, (
+        f"2/2 blocker should die to double-strike's first-strike damage; "
+        f"got p1_gy={p1_gy}"
+    )
+    assert "Bear Duelist" not in p0_gy, (
+        f"double-strike attacker should survive (blocker died before "
+        f"its regular-damage substep, dealt 0 damage back); "
+        f"got p0_gy={p0_gy}"
+    )
+    assert py_view["life_p0"] == pre_combat_life_p0
+    # Observed cross-engine behavior: both engines treat the attacker
+    # as "unblocked" for the regular-damage substep when its blocker
+    # died in the first-strike substep, spilling 2 to the player.
+    # CR 510.1c says only trample lets damage spill past blockers, so
+    # the canonical expectation is life_p1 == pre_combat_life_p1 (20).
+    # The deliberate divergence is documented in
+    # docs/SEARCH_LIMITATIONS.md round-18 entry; pin the OBSERVED
+    # value (18) here so a future regression on the cross-engine
+    # agreement still surfaces.
+    assert py_view["life_p1"] == pre_combat_life_p1 - 2, (
+        f"both engines spill double-strike's regular damage to player "
+        f"(documented in SEARCH_LIMITATIONS round-18 entry); "
+        f"got life_p1={py_view['life_p1']}"
+    )

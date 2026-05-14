@@ -1943,6 +1943,69 @@ slice ships).
 
 ---
 
+## Combat — double-strike regular damage spills past dead blocker (no trample required)
+
+**Location**: combat damage resolution on both engines —
+`src/mtg_bot/combat.py` (regular-damage substep) and
+`rust/src/state_ops_combat.rs` (mirror).
+
+**What we do today**: when a double-strike attacker kills its
+blocker in the first-strike substep (the blocker has no first
+strike + insufficient toughness), the regular-damage substep
+treats the attacker as if it were UNBLOCKED — its regular damage
+spills to the defending player. Surfaced by
+`tests/test_trajectory_parity.py::test_double_strike_combat_damage_doubles_parity`
+(round-18 keyword trajectory probe): 2/2 double-strike vs 2/2
+vanilla blocker on both engines yields `life_p1 == 18` (not 20).
+Both engines agree byte-for-byte (`compare_fields == []`); the
+divergence is from current CR, not between engines.
+
+**Why this is wrong under current CR**: per CR 510.1c, regular-
+damage assignment from a blocked attacker still goes to the
+blocker — even if that blocker has been destroyed by first-strike
+damage and is no longer on the battlefield. Only **trample** lets
+damage spill past blockers (CR 702.19b). A double-strike-only
+attacker (no trample) blocked by a creature that dies in the
+first-strike substep should deal its regular damage to the
+(dead) blocker as a no-op; the player should take 0 damage in
+the regular substep.
+
+**Failure mode**: double-strike consistently overestimates damage
+output against equal-toughness blockers without first strike.
+Bot will overvalue double-strike attacks into blocker walls (+2
+phantom player damage per such attack), and the simulator will
+underestimate the "block to absorb" defensive line because
+blocking with a small creature still lets the player take
+double-strike damage.
+
+**When it matters**: any board state with a double-strike
+attacker the defender could realistically wall up. Common in
+midrange / aggro decks; rarer in pure ramp / control. The card
+pool (EoE) currently has no double-strike printings the filter
+admits, so production self-play does not hit this divergence
+yet. It WILL bite once double-strike is in scope.
+
+**Fix scope when prioritized**: 50-100 LOC across both engines —
+in the regular-damage substep, an attacker whose blocker(s) all
+died in the first-strike substep should NOT be recategorized to
+"unblocked"; instead its regular-damage assignment goes to the
+already-dead blocker (a no-op for damage to the player). Trample
+keeps its existing spillover path (assign lethal to the dead
+blocker — `0` since the blocker is already destroyed — then
+spill the rest to the defender, which preserves trample's
+intended behavior). The probe's expected value flips from
+`life_p1 == pre - 2` to `life_p1 == pre`.
+
+**Impact estimate**: today **zero strength cost** — no current EoE
+double-strike printing rides the production pipeline. Strength
+cost on the fix is +small in any future card pool with double-
+strike (correct combat math means correct attack-or-hold
+decisions). Perf cost is negligible — the substep already walks
+blocker assignments; only the "blocker is dead → reclassify
+attacker as unblocked" branch goes away.
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,
