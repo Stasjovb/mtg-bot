@@ -1320,6 +1320,152 @@ def test_bridge_return_enchantment_or_creature_describe_matches_oracle():
     assert "hand" in desc
 
 
+# ===== Phase 5 to-BATTLEFIELD or_enchantment bridge pins (4) =====
+#
+# Sister bridge to the to-HAND or_enchantment block above; the
+# destination delta is the load-bearing difference. Mirrors Rust's
+# ``Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield``
+# (cards.rs new variant) end-to-end.
+#
+# **Closes the loop on Rescue Skiff.** Unlike the to-hand sibling
+# (which had no real-EoE consumer and landed for substrate
+# symmetry), this arm is the direct unblocker for Rescue Skiff
+# (EoE): "When this Spacecraft enters, return target creature or
+# enchantment card from your graveyard to the battlefield."
+
+
+def test_bridge_return_enchantment_or_creature_to_bf_translates_to_python():
+    """Phase 5 rider bridge: Rust
+    ``{"kind": "return_enchantment_or_creature_from_your_graveyard_to_battlefield"}``
+    translates to Python
+    ``ReturnCreatureFromYourGraveyardToBattlefield(or_enchantment=True)``.
+
+    Sister bridge to the to-hand or_enchantment arm; the destination
+    delta (BATTLEFIELD vs HAND) is the load-bearing difference.
+    Closes the loop on Rescue Skiff (EoE) — its ETB resolves
+    through this exact bridge arm.
+
+    Discriminator vs the to-hand sibling: ``destination ==
+    "battlefield"`` (pinned by
+    ``ReturnCreatureFromYourGraveyardToBattlefield.__post_init__``).
+    Python's ``_gy_card_matches`` honors the ``or_enchantment``
+    flag (graveyard.py:46) which reads ``printing.is_enchantment``
+    -> ``"Enchantment" in card_types``.
+    """
+    from mtg_bot.effects.generic.graveyard import (
+        ReturnCreatureFromYourGraveyardToBattlefield,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": (
+                "return_enchantment_or_creature_from_your_graveyard_to_battlefield"
+            )
+        }
+    )
+    assert isinstance(e, ReturnCreatureFromYourGraveyardToBattlefield)
+    # Primary type stays creature; or_enchantment widens the pool
+    # to admit Enchantment cards alongside Creature.
+    assert e.creature is True
+    # Destination delta from the to-hand sibling — load-bearing.
+    assert e.destination == "battlefield"
+    assert e.or_enchantment is True
+    # Other riders stay off — discriminator. A plain Artifact or
+    # Spacecraft is NOT admitted by this rider.
+    assert e.or_artifact is False
+    assert e.or_spacecraft is False
+    assert e.max_mv == 0
+    assert e.min_n == 1
+    assert e.max_n == 1
+    assert e.target_kind == "graveyard_creature"
+
+
+def test_bridge_return_enchantment_or_creature_to_bf_round_trips_through_rust():
+    """Round-trip pin: Rust accepts the kind via parse_effect, and
+    the to-dict serializer round-trips it back to the same string.
+    Mirrors the parser-surface pins for the bare to-bf unit variant
+    and the to-hand sibling arms.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Return Enchantment Or Creature To BF",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": (
+                    "return_enchantment_or_creature_from_your_graveyard_to_battlefield"
+                ),
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_accepts_return_enchantment_or_creature_to_bf_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    or_enchantment-rider to-bf kind in a triggered_ability dict.
+    Mirrors the parser-surface pins for the bare to-bf unit variant
+    and the to-hand sibling arms. Load-bearing for Rescue Skiff —
+    its ETB trigger carries this exact effect kind.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Trigger Rescue Skiff Recur",
+        "card_types": ["Artifact"],
+        "mana_cost": {"W": 1, "generic": 5},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "return_enchantment_or_creature_from_your_graveyard_to_battlefield"
+                    ),
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_bridge_return_enchantment_or_creature_to_bf_describe_matches_oracle():
+    """The bridged Python effect's ``describe()`` text matches the
+    oracle phrasing for Rescue Skiff: "return target creature or
+    enchantment card from your graveyard to the battlefield". Pins
+    the legacy printed phrasing through the rider for the to-bf
+    destination — load-bearing for the audit's 'creature or
+    enchantment card' substring search and the Python class's
+    stringification contract.
+
+    The ``ReturnCreatureFromYourGraveyardToBattlefield`` describe()
+    override (graveyard.py:382-389) was already or_enchantment-aware;
+    this pin guards against any future regression that would drop
+    the rider from the override's type-phrase chain.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": (
+                "return_enchantment_or_creature_from_your_graveyard_to_battlefield"
+            )
+        }
+    )
+    desc = e.describe()
+    assert "creature or enchantment" in desc.lower()
+    assert "graveyard" in desc
+    # Destination delta from the to-hand sibling — load-bearing.
+    assert "battlefield" in desc
+
+
 # ===== Phase 5 composer bridge pins (sequence) =====
 #
 # Rust's ``Effect::Sequence { effects: Vec<Effect> }`` carries an
