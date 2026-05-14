@@ -188,6 +188,22 @@ def _row_to_ui_dict(
                 ui["status"] = extra["original_status"]
         except (json.JSONDecodeError, TypeError):
             pass
+    # Derive ``win_rate`` from wins_new + wins_old when the producer
+    # didn't push it explicitly. The JS reads ``run.win_rate`` for the
+    # eval card's headline percentage; the JSON-era producers used to
+    # compute it client-side before backfill, but the DB-only path
+    # doesn't get it from anywhere unless we fan it out here. Compute
+    # only when at least one decisive game has landed — Wilson CI on
+    # 0 games is meaningless.
+    wins_new = ui.get("wins_new")
+    wins_old = ui.get("wins_old")
+    if (
+        ui.get("win_rate") is None
+        and isinstance(wins_new, (int, float))
+        and isinstance(wins_old, (int, float))
+        and (wins_new + wins_old) > 0
+    ):
+        ui["win_rate"] = wins_new / (wins_new + wins_old)
     return ui
 
 

@@ -232,6 +232,70 @@ def test_api_runs_reads_run_row_from_db_when_no_json(
     assert r["_db_kind"] == "eval"
 
 
+def test_api_runs_derives_win_rate_from_wins_when_missing(
+    client, progress_dir: Path,
+):
+    """Eval cards on the DB-only read path don't have ``win_rate``
+    pushed by producers — the JSON-era producers used to compute it
+    pre-backfill but the DB schema doesn't carry it. The UI's eval
+    render branch reads ``run.win_rate`` for the headline percentage;
+    derive it server-side from wins_new + wins_old when at least one
+    decisive game has landed."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "eval_v4_vs_v3", kind="eval", status="running",
+            started_at="2026-05-14T03:51:47+00:00",
+        )
+        # Per-shard rows only — no aggregate, no extra_json with
+        # win_rate. Exercises the rollup-path derivation.
+        _seed_progress(
+            conn, "eval_v4_vs_v3", shard_label="local",
+            n_games_done=29, n_games_total=500,
+            wins_new=14, wins_old=15,
+        )
+        _seed_progress(
+            conn, "eval_v4_vs_v3", shard_label="macbook",
+            n_games_done=61, n_games_total=500,
+            wins_new=34, wins_old=26,
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    [r] = [r for r in res.get_json()["runs"]
+           if r["run_id"] == "eval_v4_vs_v3"]
+    # Wins SUM across shards.
+    assert r["wins_new"] == 48
+    assert r["wins_old"] == 41
+    # Derived: 48 / (48 + 41) = 0.5393...
+    assert r["win_rate"] == pytest.approx(48 / 89)
+
+
+def test_api_runs_does_not_synthesize_win_rate_before_first_game(
+    client, progress_dir: Path,
+):
+    """Wilson CI / win-rate at 0 games is undefined. Don't synthesize
+    a 0.0 (or NaN) value — leave win_rate as None so the JS shows
+    the ``—`` placeholder."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "eval_zero_decisive", kind="eval", status="running",
+            started_at="2026-05-14T04:00:00+00:00",
+        )
+        _seed_progress(
+            conn, "eval_zero_decisive", shard_label="local",
+            n_games_done=0, n_games_total=500,
+            wins_new=0, wins_old=0,
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    [r] = [r for r in res.get_json()["runs"]
+           if r["run_id"] == "eval_zero_decisive"]
+    assert r.get("win_rate") is None
+
+
 def test_api_runs_rolls_up_per_shard_when_aggregate_missing(
     client, progress_dir: Path,
 ):
