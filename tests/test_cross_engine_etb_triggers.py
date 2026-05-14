@@ -993,6 +993,110 @@ def test_rust_parser_accepts_pump_target_creature_until_eot_in_triggered_ability
     assert pid == 0
 
 
+def test_bridge_fight_target_creature_with_target_creature_translates_to_python():
+    """BLOCKED-RUST-EFFECT slice -- Fight effect arm. Rust
+    ``{"kind": "fight_target_creature_with_target_creature"}``
+    translates to Python
+    ``FightTargetCreatureWithTargetCreature()``.
+
+    Unit-variant arm; no fields beyond ``kind`` (mirrors the
+    bilateral source-vs-opponent shape baked into the variant
+    identity on both engines). Routes Rust's
+    ``Effect::FightTargetCreatureWithTargetCreature`` to its
+    Python sibling for the cross-engine bridge.
+    """
+    from mtg_bot.effects.generic.damage import (
+        FightTargetCreatureWithTargetCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "fight_target_creature_with_target_creature"}
+    )
+    assert isinstance(e, FightTargetCreatureWithTargetCreature)
+
+
+def test_bridge_fight_target_creature_with_target_creature_ignores_extra_fields():
+    """Unit-variant arm tolerates extra fields on the dict (mirrors
+    every other unit-variant bridge arm -- the kind alone determines
+    the translation; extra keys are inert)."""
+    from mtg_bot.effects.generic.damage import (
+        FightTargetCreatureWithTargetCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "fight_target_creature_with_target_creature",
+            "spurious_field": 42,
+        }
+    )
+    assert isinstance(e, FightTargetCreatureWithTargetCreature)
+
+
+def test_bridge_fight_target_creature_with_target_creature_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``{"kind": "sequence", "effects": [{"kind":
+    "fight_target_creature_with_target_creature"}, {"kind":
+    "draw_cards", "count": 1}]}`` translates to ``Sequence(effects=(
+    FightTargetCreatureWithTargetCreature(), DrawCards(amount=1)))``.
+    Pins the unit-variant arm against accidental list-construction
+    drift in the Sequence translator."""
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.damage import (
+        FightTargetCreatureWithTargetCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "fight_target_creature_with_target_creature"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], FightTargetCreatureWithTargetCreature)
+
+
+def test_rust_parser_accepts_fight_target_creature_with_target_creature_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``fight_target_creature_with_target_creature`` effect kind on
+    a triggered_ability carrier. The bridge dict shape must register
+    cleanly on the Rust side too; this lockstep gate keeps the
+    bridge from drifting away from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs`` accepts the
+    bare kind with no companion fields (unit variant); extra dict
+    fields are silently ignored for round-trip dict-shape
+    consistency.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- FightTargetCreatureWithTargetCreature",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "G": 1},
+        "power": 3,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "fight_target_creature_with_target_creature",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 def test_bridge_put_plus_one_counter_on_creature_you_control_translates_to_python():
     """Phase 5 bridge extension: Rust
     ``{"kind": "put_plus_one_counter_on_creature_you_control",

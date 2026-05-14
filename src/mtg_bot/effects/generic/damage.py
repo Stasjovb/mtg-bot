@@ -628,6 +628,124 @@ class DealDamageToTargetTappedCreature(DealDamage):
 
 
 @dataclass(frozen=True)
+class FightTargetCreatureWithTargetCreature(Effect):
+    """Bilateral fight effect: "Target creature you control fights
+    target creature an opponent controls" (CR 701.12).
+
+    Sibling of the Aura-shape ``EnchantedCreatureFightsTargetEffect``
+    in ``effects/bespoke.py``: that class derives the source-side
+    fighter from the resolving Aura's ``attached_to`` field; this
+    generic class derives BOTH fighters from a deterministic battle-
+    field scan that matches the Rust
+    ``Effect::FightTargetCreatureWithTargetCreature`` arm
+    (``rust/src/state_ops_resolve.rs``):
+
+      * Source-side fighter = FIRST creature on the source-controller's
+        battlefield (smallest list index).
+      * Opponent-side fighter = FIRST creature on the opponent's
+        battlefield (smallest list index).
+
+    The deterministic-pick shape mirrors Rust's first-slice "no
+    explicit target choice" convention (same pattern as
+    ``Effect::PumpTargetCreatureUntilEOT`` and
+    ``Effect::DealDamageAnyTarget``). The richer target-choice
+    machinery (multi-slot ``targets`` tuple with ``ControlledByYou``
+    and ``ControlledByOpponent`` filters, agent-driven push-time
+    pick) is the future-slice extension once the cross-engine
+    decision-callback substrate plumbs explicit target picks
+    bilaterally.
+
+    **Mechanism.** Compute BOTH fighters' effective power BEFORE
+    applying any damage (CR 701.12 — simultaneous-damage event;
+    a fighter that takes lethal still deals its damage first). If
+    either fighter is missing at resolve time, the fight does NOT
+    deal damage on either side (CR 701.12c — silent fizzle). Routes
+    through ``_apply_damage`` so any "when ~ is dealt damage" auras
+    on either fighter trigger correctly. State-based actions then
+    handle creatures with lethal damage on the next SBA pass.
+
+    **Consumer.** No real-EoE card uses this exact generic shape
+    today — the only EoE Fight consumer (Meltstrider's Resolve) is
+    Aura-shape and routes through
+    ``EnchantedCreatureFightsTargetEffect``. This class exists as
+    the Rust-side ``Effect::FightTargetCreatureWithTargetCreature``
+    sibling so the bridge has a Python target for the new effect
+    arm; synthetic probes drive end-to-end coverage. Future cards
+    matching the bilateral generic-fight shape (Pounce, Prey Upon,
+    Rabid Bite — none in EoE) drop in cleanly.
+
+    **Deferred riders** (documented in
+    ``docs/EOE_PROBE_READINESS_AUDIT.md``):
+    - "Up to one target creature you control fights..." (optional
+      target slot, no-fizzle on missing source-side).
+    - "Target creature you control fights target creature... and
+      gains trample / deathtouch UEOT" (composes via Sequence with
+      a future Pump+Keyword arm).
+    - "Target creature fights twice" (would need a counter or a
+      sequence of two FightTarget arms).
+    - The Aura-attached-creature shape (Meltstrider's Resolve) —
+      kept on the bespoke ``EnchantedCreatureFightsTargetEffect``
+      class until the Aura ETB-trigger substrate routes
+      ``attached_to`` through the cross-engine bridge end-to-end.
+    """
+
+    def requires_target(self) -> bool:
+        # Deterministic-pick shape: no explicit target choice. Mirrors
+        # Rust's first-slice convention.
+        return False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import effective_power
+
+        opponent_id = 1 - controller_id
+        # Same-side fighter: FIRST creature on source-controller's bf.
+        caster_fighter = next(
+            (
+                o for o in state.battlefield
+                if o.controller_id == controller_id and o.printing.is_creature
+            ),
+            None,
+        )
+        # Opponent-side fighter: FIRST creature on opponent's bf.
+        opponent_fighter = next(
+            (
+                o for o in state.battlefield
+                if o.controller_id == opponent_id and o.printing.is_creature
+            ),
+            None,
+        )
+        # CR 701.12c: missing fighter on either side = silent fizzle.
+        if caster_fighter is None or opponent_fighter is None:
+            return
+        # Compute BOTH effective powers BEFORE applying damage so the
+        # simultaneous-exchange semantics hold (a fighter that takes
+        # lethal still deals its damage first).
+        caster_power = effective_power(state, caster_fighter)
+        opponent_power = effective_power(state, opponent_fighter)
+        state.log.append(
+            f"{caster_fighter.printing.name} fights "
+            f"{opponent_fighter.printing.name}"
+        )
+        if caster_power > 0:
+            _apply_damage(
+                state, ("creature", opponent_fighter.id), caster_power,
+            )
+        if opponent_power > 0:
+            _apply_damage(
+                state, ("creature", caster_fighter.id), opponent_power,
+            )
+
+    def describe(self) -> str:
+        return (
+            "target creature you control fights target creature an "
+            "opponent controls"
+        )
+
+
+@dataclass(frozen=True)
 class DrawCardsAndLoseLifeEqualToResolvingDamage(Effect):
     """"You draw that many cards and lose that much life." — the granted
     UEOT trigger body Requiem Monolith installs on the target creature.

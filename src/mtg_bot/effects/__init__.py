@@ -116,6 +116,7 @@ from mtg_bot.effects.generic import (
     ExileTargetCreatureWithPowerOrToughnessAtMost,
     ExileTopOfLibraryMayPlayThisTurn,
     ExileTopXOfLibraryMayPlayThisTurn,
+    FightTargetCreatureWithTargetCreature,
     CreateNTokensFromLastExileRecall,
     MoveEachExiledWithSourceToOwnersGraveyard,
     PutEachCreatureCardExiledWithSourceOntoBattlefieldUnderYourControl,
