@@ -137,6 +137,16 @@ class CardDef:
     # Rust's `CardPrinting.subtypes` storage). Empty tuple is the
     # back-compat default; pre-substrate fixtures don't need to set it.
     subtypes: tuple[str, ...] = ()
+    # Supertypes substrate (Round 30) — Title Case strings ("Basic",
+    # "Legendary", "Snow", "World", "Token") matching Python's
+    # `CardPrinting.supertypes` and Rust's `CardPrinting.supertypes`.
+    # Empty tuple is the back-compat default — pre-Round-30 fixtures
+    # don't need to set it; the bridge then omits the `"supertypes"`
+    # key from the registry dict and the Rust parser maps that absence
+    # to an empty Vec. Set this for any CardDef whose cross-engine
+    # probe relies on the `legendary_creature` filter (or any future
+    # supertype-keyed dispatch).
+    supertypes: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -3868,6 +3878,15 @@ def build_rust_state(spec: DeckSpec):
         # parser maps a missing ``subtypes`` key to an empty Vec.
         if card.subtypes:
             printing_dict["subtypes"] = list(card.subtypes)
+        # Supertypes substrate (Round 30): pass through to Rust so
+        # supertype-anchored consumers (the `legendary_creature` arm
+        # of `Effect::SearchLibraryForCard`, future Predicate::Has-
+        # Supertype follow-ups) see the same supertype tuple on both
+        # engines. Pre-Round-30 fixtures default to an empty tuple —
+        # Rust's parser maps a missing ``supertypes`` key to an empty
+        # Vec, mirroring the ``subtypes`` parse shape.
+        if card.supertypes:
+            printing_dict["supertypes"] = list(card.supertypes)
         # ETB-trigger Slice 3: pass triggered_abilities through to the
         # Rust registry so CE19-shape probes (predicate-path ENTERS
         # triggers) can drive both engines from the same DeckSpec.
@@ -3959,6 +3978,19 @@ def build_python_state(spec: DeckSpec):
             type_line = card.card_type
             supertypes = ()
             subtypes = ()
+        # Round-30 supertypes substrate: explicit CardDef.supertypes /
+        # CardDef.subtypes override the type-line heuristic. This lets
+        # probes that need a specific supertype (e.g. "Legendary" on a
+        # creature for the `legendary_creature` filter) or a specific
+        # subtype (e.g. "Spacecraft", "Sliver", "Demon") wire it
+        # explicitly. The Rust side reads the same fields from CardDef
+        # via the `if card.supertypes:` / `if card.subtypes:` branches
+        # in the registry-dict builder above; this branch keeps the
+        # Python printing in lockstep.
+        if card.supertypes:
+            supertypes = tuple(card.supertypes)
+        if card.subtypes:
+            subtypes = tuple(card.subtypes)
         # Lands with ``mana_produced`` get an explicit ``{T}: Add {C}``
         # activated ability so ``ActivateAbility(land_id, 0)`` works on
         # the Python side. Rust's ``ActivateAbility`` dispatch reads the

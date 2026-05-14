@@ -43219,10 +43219,20 @@ def test_rust_search_library_for_card_no_match_silently_fizzles():
 
 def test_rust_search_library_for_card_unknown_filter_silently_fizzles():
     """Unknown filter silent-fizzle pin. If the filter_name string
-    isn't in Rust's dispatch (e.g., legendary_creature, which Rust
-    can't match without supertypes registry), every printing
-    returns false -> no match -> silent fizzle. Pins Rust's
-    ``_ => false`` fallthrough at state_ops_resolve.rs:4874.
+    isn't in Rust's dispatch (e.g., a never-implemented filter name
+    like ``"goblin_warrior_with_sunburst"``), every printing returns
+    false -> no match -> silent fizzle. Pins Rust's ``_ => false``
+    fallthrough at the terminal arm of the
+    `Effect::SearchLibraryForCard` filter dispatch.
+
+    **Round-30 substrate update.** This pin formerly used
+    ``"legendary_creature"`` as the unknown-filter case (Rust had no
+    supertypes registry). Round 30 added supertypes to CardPrinting
+    and widened the dispatch to honor `legendary_creature` /
+    `spacecraft` / `sliver` / `demon`; the unknown-filter pin now
+    uses a deliberately-fictional filter name to keep exercising the
+    fallthrough arm. Positive pins for the four newly-supported
+    filters live in their own tests below.
     """
     from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
 
@@ -43243,7 +43253,7 @@ def test_rust_search_library_for_card_unknown_filter_silently_fizzles():
     ZONE_BATTLEFIELD = 2
     rust_state.register_and_inject_object(
         {
-            "name": "Legendary-Creature Tutor (Rust unknown filter)",
+            "name": "Fictional-Filter Tutor (Rust unknown filter)",
             "card_types": ["Creature"],
             "subtypes": ["Bear", "Druid"],
             "mana_cost": {"generic": 4},
@@ -43256,7 +43266,9 @@ def test_rust_search_library_for_card_unknown_filter_silently_fizzles():
                     "predicate": {"kind": "source_is_self"},
                     "effect": {
                         "kind": "search_library_for_card",
-                        "filter_name": "legendary_creature",
+                        # Deliberately-fictional filter name to keep
+                        # the fallthrough arm covered post-Round-30.
+                        "filter_name": "goblin_warrior_with_sunburst",
                     },
                 }
             ],
@@ -43267,8 +43279,8 @@ def test_rust_search_library_for_card_unknown_filter_silently_fizzles():
     p0_lib_before = rust_state.library_sizes[0]
     p0_hand_before = rust_state.hand_sizes[0]
     rust_state.resolve_top_of_stack()
-    # Silent fizzle: Rust doesn't carry supertypes registry, so
-    # legendary_creature falls through to the `_ => false` arm.
+    # Silent fizzle: the fictional filter name falls through to the
+    # `_ => false` arm.
     assert rust_state.library_sizes[0] == p0_lib_before
     assert rust_state.hand_sizes[0] == p0_hand_before
 
