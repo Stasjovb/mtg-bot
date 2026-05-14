@@ -106,14 +106,68 @@ def test_seed_kwarg_does_not_override_existing_shared_rng_seed():
     assert a_view["hand_p0"] == b_view["hand_p0"]
 
 
-def test_mulligans_true_raises_not_implemented():
-    """Mulligans path is reserved — passing ``True`` must raise loudly
-    rather than silently no-op'ing into a non-mulligan setup."""
+def test_mulligans_true_default_agent_is_no_op_keep():
+    """Round-14 closure of gap #2: ``mulligans=True`` with no agent
+    supplied defaults to a ``target_hand_size=7`` agent that always
+    keeps the initial 7. The post-state is byte-equivalent to the
+    ``mulligans=False`` path on the same DeckSpec + seed.
+    """
+    from mtg_bot.parity.trajectory import setup_matched_game
+    from mtg_bot.parity.cross_engine import build_python_field_view, parity_smoke
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_a, rust_a = setup_matched_game(spec, mulligans=False)
+    py_b, rust_b = setup_matched_game(spec, mulligans=True)
+
+    a_view = build_python_field_view(py_a)
+    b_view = build_python_field_view(py_b)
+    assert a_view["hand_p0"] == b_view["hand_p0"]
+    assert a_view["hand_p1"] == b_view["hand_p1"]
+    assert a_view["library_p0"] == b_view["library_p0"]
+    assert a_view["library_p1"] == b_view["library_p1"]
+
+    # Post-state is parity-clean on both engines.
+    ps = parity_smoke()
+    from mtg_bot.parity.cross_engine import compare_fields
+    assert compare_fields(b_view, ps._build_field_view(rust_b)) == []
+
+
+def test_mulligan_agent_with_mulligans_false_rejected():
+    """Defensive: passing an agent without mulligans=True is a likely
+    caller bug — raise loudly rather than silently ignoring it."""
+    from mtg_bot.parity.trajectory import setup_matched_game, MulliganDeterministicAgent
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    agent = MulliganDeterministicAgent(target_hand_size=6)
+    with pytest.raises(ValueError, match="mulligan_agent supplied"):
+        setup_matched_game(spec, mulligans=False, mulligan_agent=agent)
+
+
+def test_mulligans_true_with_non_default_opening_hand_size_rejected():
+    """The mulligan path requires opening_hand_size=7 (London rule)."""
     from mtg_bot.parity.trajectory import setup_matched_game
 
     spec = _vanilla_60_deckspec(shared_rng_seed=42)
-    with pytest.raises(NotImplementedError, match="MulliganAgent"):
-        setup_matched_game(spec, mulligans=True)
+    with pytest.raises(ValueError, match="opening_hand_size=7"):
+        setup_matched_game(spec, mulligans=True, opening_hand_size=6)
+
+
+def test_mulligan_agent_invalid_target_hand_size_rejected():
+    """Defensive: target_hand_size must be in [0, 7]."""
+    from mtg_bot.parity.trajectory import MulliganDeterministicAgent
+
+    with pytest.raises(ValueError, match="target_hand_size must be in"):
+        MulliganDeterministicAgent(target_hand_size=8)
+    with pytest.raises(ValueError, match="target_hand_size must be in"):
+        MulliganDeterministicAgent(target_hand_size=-1)
+
+
+def test_mulligan_agent_unsupported_bottom_strategy_rejected():
+    """Defensive: only bottom_strategy='first' is implemented."""
+    from mtg_bot.parity.trajectory import MulliganDeterministicAgent
+
+    with pytest.raises(ValueError, match="bottom_strategy"):
+        MulliganDeterministicAgent(bottom_strategy="last")
 
 
 def test_negative_opening_hand_size_rejected():

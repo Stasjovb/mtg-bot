@@ -489,13 +489,154 @@ def test_shared_setup_game_helper_exists():
     assert py_view["step"] == "UNTAP"
 
 
-def test_setup_matched_game_rejects_mulligans():
-    """Mulligans are reserved for a follow-up slice (gap #2)."""
+def test_setup_matched_game_default_mulligan_agent_keeps():
+    """Round-14 closure of gap #2: ``mulligans=True`` with the default
+    agent (target_hand_size=7) is a no-op keep — produces the same
+    post-state as ``mulligans=False`` and remains parity-clean.
+    """
     from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
 
     spec = _vanilla_60_deckspec(seed=42)
-    with pytest.raises(NotImplementedError, match="MulliganAgent"):
-        trajectory.setup_matched_game(spec, mulligans=True)
+    py_state, rust_state = trajectory.setup_matched_game(spec, mulligans=True)
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    assert len(py_view["hand_p0"]) == 7
+    assert len(py_view["hand_p1"]) == 7
+    assert len(py_view["library_p0"]) == 53
+    assert len(py_view["library_p1"]) == 53
+
+
+def test_mulligan_to_6_then_play_first_turn_parity():
+    """Round-14 gap #2 closure: drive a one-mulligan-each-side opening
+    via the deterministic agent, then walk turn 1 phase-by-phase.
+
+    Pre-state: both players mulligan exactly once (target_hand_size=6),
+    bottom 1 card each, end up with 6-card hands and 54-card libraries.
+    Post-state: walks turn 1 UNTAP → CLEANUP → turn 2 UNTAP, asserting
+    per-step parity at every phase boundary. If the mulligan loop
+    diverges, this test pins the divergence to either:
+      (a) the post-mulligan hand/library order, or
+      (b) the turn-structure walk on top of the mulliganed state.
+
+    Both engines must agree byte-for-byte at every step.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python,
+        compare_fields,
+    )
+
+    spec = _vanilla_60_deckspec(seed=42)
+    agent = trajectory.MulliganDeterministicAgent(target_hand_size=6)
+    py_state, rust_state = trajectory.setup_matched_game(
+        spec, mulligans=True, mulligan_agent=agent, mulligan_seed=7,
+    )
+
+    # Post-mulligan: 6 cards in hand, 54 in library on both sides.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"post-mulligan divergence: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in divs]}"
+    )
+    assert len(py_view["hand_p0"]) == 6
+    assert len(py_view["hand_p1"]) == 6
+    assert len(py_view["library_p0"]) == 54
+    assert len(py_view["library_p1"]) == 54
+
+    # Walk turn 1 UNTAP → CLEANUP wrap into turn 2 UNTAP (12 advances).
+    for advance_idx in range(12):
+        advance_phase_python(py_state)
+        rust_state.advance_phase()
+        py_view, rust_view = _step_views(py_state, rust_state)
+        divs = compare_fields(py_view, rust_view)
+        assert divs == [], (
+            f"advance #{advance_idx} ({py_view['step']!r}, turn "
+            f"{py_view['turn']}) surfaced divergences after mulligan: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in divs]}"
+        )
+    # Hand p0 still 6 (turn 1 skips draw); hand p1 still 6 at turn 2 UNTAP
+    # (UNTAP is pre-DRAW).
+    assert len(py_view["hand_p0"]) == 6
+    assert len(py_view["hand_p1"]) == 6
+
+
+def test_mulligan_to_5_then_setup_clean_parity():
+    """Round-14 gap #2 closure: 2-mulligan-each-side opening.
+
+    target_hand_size=5 → both players mulligan twice and bottom 2.
+    Final state: 5 cards in hand, 55 in library, parity-clean. This
+    is the deepest mulligan trajectory tests exercise — three or
+    more mulligans hit the same code path with no new semantics.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+
+    spec = _vanilla_60_deckspec(seed=42)
+    agent = trajectory.MulliganDeterministicAgent(target_hand_size=5)
+    py_state, rust_state = trajectory.setup_matched_game(
+        spec, mulligans=True, mulligan_agent=agent, mulligan_seed=13,
+    )
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"after 2-mulligan opening: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in divs]}"
+    )
+    assert len(py_view["hand_p0"]) == 5
+    assert len(py_view["hand_p1"]) == 5
+    assert len(py_view["library_p0"]) == 55
+    assert len(py_view["library_p1"]) == 55
+
+
+def test_mulligan_seed_reproducibility():
+    """Two calls with the same agent + mulligan_seed produce
+    bit-identical post-mulligan states. Critical for trajectory tests
+    that snapshot hand/library after setup."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import build_python_field_view
+
+    spec = _vanilla_60_deckspec(seed=42)
+    agent = trajectory.MulliganDeterministicAgent(target_hand_size=5)
+    py_a, _ = trajectory.setup_matched_game(
+        spec, mulligans=True, mulligan_agent=agent, mulligan_seed=99,
+    )
+    py_b, _ = trajectory.setup_matched_game(
+        spec, mulligans=True, mulligan_agent=agent, mulligan_seed=99,
+    )
+    a_view = build_python_field_view(py_a)
+    b_view = build_python_field_view(py_b)
+    assert a_view["hand_p0"] == b_view["hand_p0"]
+    assert a_view["hand_p1"] == b_view["hand_p1"]
+    assert a_view["library_p0"] == b_view["library_p0"]
+    assert a_view["library_p1"] == b_view["library_p1"]
+
+
+def test_mulligan_seed_differentiation():
+    """Two calls with the same agent but DIFFERENT mulligan_seed
+    produce different post-mulligan states — confirms the seed
+    actually drives the per-iteration shuffle."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import build_python_field_view
+
+    spec = _vanilla_60_deckspec(seed=42)
+    agent = trajectory.MulliganDeterministicAgent(target_hand_size=5)
+    py_a, _ = trajectory.setup_matched_game(
+        spec, mulligans=True, mulligan_agent=agent, mulligan_seed=1,
+    )
+    py_b, _ = trajectory.setup_matched_game(
+        spec, mulligans=True, mulligan_agent=agent, mulligan_seed=2,
+    )
+    a_view = build_python_field_view(py_a)
+    b_view = build_python_field_view(py_b)
+    # At least one of hand or library should differ — extremely unlikely
+    # for two random-shuffle outcomes on a 60-card deck to collide.
+    assert (
+        a_view["hand_p0"] != b_view["hand_p0"]
+        or a_view["library_p0"] != b_view["library_p0"]
+    )
 
 
 # ---------------------------------------------------------------------------
