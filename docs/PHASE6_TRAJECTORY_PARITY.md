@@ -501,15 +501,88 @@ synthetic selectors keep passing.
 
 Gate: **424 passing** (was 400, +24 net).
 
+## Round 18 enhancement work (this slice)
+
+Closed by `feature/phase6-keyword-probes-deathtouch-doublestrike-haste`:
+
+Round 18 extends the round-17 keyword-probe family with three more
+combat-keyword trajectory probes — deathtouch, double-strike, and
+haste — plus a sibling vanilla-creature injector helper for probes
+that need a controlled blocker on the defender's bf.
+
+### New helpers
+
+- **`_inject_vanilla_creature_on_bf(py_state, rust_state, *,
+  controller_idx, printing_name, power, toughness)`** — sibling of
+  round-17's `_inject_keyword_creature_on_p0_bf`; injects a vanilla
+  (no-keyword) creature on either player's bf with controlled p/t.
+  Required for deathtouch + double-strike probes where the
+  block-pairing has to be deterministic (the standard
+  `_setup_both_bears_by_turn_6` Bears prefix can't be used because
+  block-smallest assignments depend on attacker/blocker id ordering
+  that's hard to pin without controlling the defender's exact
+  creature inventory).
+
+### Three new keyword trajectory probes
+
+- **`test_deathtouch_combat_damage_kills_blocker_parity`** — 1/1
+  deathtouch attacker vs 4/4 vanilla blocker. Per CR 702.2 the 1
+  damage is lethal for the 4/4 blocker. Both creatures die; life
+  totals unchanged. Passes byte-equal.
+- **`test_double_strike_combat_damage_doubles_parity`** — 2/2
+  double-strike attacker vs 2/2 vanilla blocker. Both engines agree
+  byte-for-byte but BOTH spill double-strike's regular damage to
+  the player when the blocker dies in first-strike (life_p1 == 18,
+  not 20 per CR 510.1c). The probe pins the OBSERVED cross-engine
+  agreement so a future regression on the matched behavior
+  surfaces; the CR-vs-engine divergence is documented as a new
+  `SEARCH_LIMITATIONS.md` entry ("Combat — double-strike regular
+  damage spills past dead blocker (no trample required)").
+- **`test_haste_attacker_no_summoning_sickness_parity`** — 2/2
+  haste creature injected with summoning_sick=True (using Rust's
+  `force_set_summoning_sick` test-helper escape hatch + Python's
+  mutable `o.summoning_sick`); attacks unblocked for 2 damage. Pins
+  CR 702.10's summoning-sickness bypass.
+
+### Real bug surfaced + fixed
+
+The haste probe surfaced a real gap in
+`RealGameCombatAgent.pick_attackers`: the eligibility filter was a
+hard `not o.summoning_sick`, silently excluding haste creatures
+regardless of keyword. Updated the gate to
+`(not o.summoning_sick or "haste" in o.printing.keywords)`. Same
+Python-side keyword spelling that `combat.effective_keywords` reads
+for the no-modifier case. The fix lives in
+`src/mtg_bot/parity/trajectory.py` and is a Python-only change to
+the agent's selector; no engine code changed.
+
+## Divergences surfaced in round-18
+
+- **Double-strike regular damage spills to player past a dead
+  first-strike-killed blocker** — both engines treat the attacker
+  as "unblocked" for the regular-damage substep when its blocker
+  dies in first-strike, against CR 510.1c (only trample lets damage
+  spill past blockers). Documented in `SEARCH_LIMITATIONS.md`.
+  Engines agree byte-for-byte; this is an engine-vs-CR divergence,
+  not a cross-engine one.
+- **`RealGameCombatAgent` haste eligibility-gate bug** (FIXED in
+  this round) — agent's hard `not o.summoning_sick` filter
+  excluded haste creatures. Fixed by reading the keyword from
+  `o.printing.keywords`.
+
+Gate: **437 passing** (was 434, +3 net — one new probe per keyword).
+
 ## Suggested next slice
 
 All four Phase 6 infrastructure gaps (#1 setup_matched_game,
 #2 mulligan parity, #3 real-game combat agent, #4 action-dict
 vocabulary) are CLOSED. Round 17 adds production-shape decklists,
 three new combat strategies, and trample/vigilance/lifelink
-trajectory probes on top of that substrate.
+trajectory probes on top of that substrate. Round 18 extends the
+keyword-probe family with deathtouch / double-strike / haste +
+fixes the agent's haste eligibility gate.
 
-Remaining enhancement follow-ons after round 17:
+Remaining enhancement follow-ons after round 18:
 
 - **Bilateral / asymmetric combat strategies** — current strategies
   are symmetric across both players (both sides apply the same
@@ -535,9 +608,13 @@ Remaining enhancement follow-ons after round 17:
 - **State-conditional mulligan agents** — see gap #2 residuals.
 - **Non-positional bottom strategies** — see gap #2 residuals.
 - **Other combat-keyword trajectory probes** — round-17 added
-  trample / vigilance / lifelink. Deathtouch, double-strike,
-  haste, menace, defender, indestructible, hexproof, flying have
-  Phase 5 synthetic selectors but no trajectory probes yet.
+  trample / vigilance / lifelink; round-18 added deathtouch /
+  double-strike / haste. Menace, defender, indestructible,
+  hexproof, flying have Phase 5 synthetic selectors but no
+  trajectory probes yet.
+- **Engine fix for double-strike + dead blocker spillover** — see
+  the new `SEARCH_LIMITATIONS.md` entry. Both engines need to be
+  updated in lockstep with this probe's expected value.
 
 The Rust API gaps documented under gap #2's residuals
 (non-positional bottom, state-conditional mulligan agents) are
