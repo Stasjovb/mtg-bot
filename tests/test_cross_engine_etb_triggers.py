@@ -2478,5 +2478,112 @@ def test_rust_parser_accepts_exile_opponents_nonland_permanent_until_leaves_in_t
     assert pid == 0
 
 
+def test_bridge_return_to_hand_translates_to_python_bounce_with_creature_slot():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "return_to_hand", "target": {"kind": "any_creature"}}``
+    translates to Python
+    ``Bounce(targets=(TargetSpec(IsCreature()),))``.
+
+    Unblocks Unsummon / Boomerang / Aether Spellbomb-shape ETB
+    bounce triggers on the cross-engine bridge. The Rust effect
+    variant exists at ``rust/src/cards.rs:1417``
+    (``Effect::ReturnToHand { target: TargetFilter }``); its
+    parse_effect arm at ``cards.rs:2821-2828`` requires a ``target``
+    dict; the resolve arm at ``state_ops_resolve.rs:1417`` carries
+    the I76 controller-of-effect fix (defender = 1 - controller,
+    where controller derives from
+    current_resolve_source_controller). Sibling closure to I70 /
+    I75 / I78 / I79 / I80 -- identical defender-swap shape; differs
+    only in destination zone (owner's hand for I76 vs exile /
+    graveyard / library bottom for the siblings).
+
+    Distinct from the bounce-from-graveyard family
+    (``return_creature_from_your_graveyard_to_hand`` etc., already
+    on the bridge): both share the "to hand" destination but differ
+    on the source zone (battlefield vs graveyard).
+    """
+    from mtg_bot.effects.generic.bounce import Bounce
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "return_to_hand", "target": {"kind": "any_creature"}}
+    )
+    assert isinstance(e, Bounce)
+    # The bridge constructs a single TargetSpec slot with an
+    # IsCreature() filter; mirrors the AnyCreature first-slice
+    # symbol from the Rust side.
+    assert len(e.targets) == 1
+    slot = e.targets[0]
+    assert isinstance(slot, TargetSpec)
+    assert isinstance(slot.filter, IsCreature)
+    # Default count_min/count_max for a TargetSpec is 1/1 (the
+    # "exactly one" target shape that mirrors Rust's first-slice
+    # picker which always selects bf[0] of the defender).
+    assert slot.count_min == 1
+    assert slot.count_max == 1
+
+
+def test_bridge_return_to_hand_rejects_unsupported_target_filter_kind():
+    """The bridge mirrors the Rust parser's accepted-kind allowlist
+    for target filters (cards.rs:2790-2799 accepts only ``any_player``
+    and ``any_creature``). The return_to_hand arm only honors
+    creature-shaped filters; players can't move via owner-hand bounce
+    per CR 401.1, and an unknown filter kind raises a ValueError
+    pointing at Rust's parse_target_filter allowlist.
+
+    This pin documents the bridge-side surface contract: future
+    additions to ``parse_target_filter`` (e.g., ``any_artifact``,
+    ``any_nonland_permanent``) need a paired bridge update on this
+    arm before they can land cross-engine. Sibling pin to the
+    destroy_target / exile_target unsupported-filter pins.
+    """
+    import pytest
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="any_player"):
+        _ta_dict_to_python_effect(
+            {"kind": "return_to_hand", "target": {"kind": "any_player"}}
+        )
+
+
+def test_rust_parser_accepts_return_to_hand_in_triggered_ability():
+    """Pin the Rust parser surface for the ``return_to_hand`` effect
+    kind. The bridge's dict shape must register cleanly on the Rust
+    side too; this lockstep gate keeps the Python bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing ``destroy_target`` / ``exile_target``
+    parser-surface pins -- all three arms require a companion
+    ``target`` field. The Rust parse_effect arm at
+    ``cards.rs:2821-2828`` accepts the
+    ``{"kind": "return_to_hand", "target": {"kind": "any_creature"}}``
+    shape on a triggered-ability carrier.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- ReturnToHand",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "U": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_to_hand",
+                    "target": {"kind": "any_creature"},
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
