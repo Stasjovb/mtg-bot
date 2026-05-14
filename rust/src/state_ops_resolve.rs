@@ -4766,6 +4766,90 @@ fn apply_effect(
                 }
             }
         }
+        // Mouth-of-the-Storm sibling — extended-duration debuff
+        // anthem ("until your next turn"). First-slice resolve
+        // semantics are IDENTICAL to the bare-EOT sibling above:
+        // same source-controller lookup (5-zone walk + stack
+        // fallback); same opponent-bf creature scan; same
+        // `UeotModifier::PowerToughnessBonus` push. The cleanup-
+        // gate divergence (Python keeps the modifier into the
+        // opponent's turn, Rust drops it at the casting-turn
+        // cleanup) is a deferred follow-up Rust slice — see
+        // SEARCH_LIMITATIONS.md and the doc-comment on
+        // `Effect::PumpCreaturesOpponentsControlUntilCasterNextTurn`
+        // in cards.rs. The discriminator carries the parametric
+        // distinction so the bridge can route Mouth of the Storm
+        // cleanly TODAY and the cleanup-gate slice can swap the
+        // modifier-push line below WITHOUT any bridge / call-site
+        // changes.
+        Effect::PumpCreaturesOpponentsControlUntilCasterNextTurn {
+            power_bonus,
+            toughness_bonus,
+        } => {
+            if *power_bonus == 0 && *toughness_bonus == 0 {
+                return Ok(());
+            }
+            let mut src_controller: Option<u8> = None;
+            'outer2: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer2;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(());
+            };
+            let opponent_idx = (1 - controller) as usize;
+            let creature_ids: Vec<u32> = {
+                let bf = &state.players[opponent_idx].battlefield;
+                let registry = &state.registry;
+                bf.iter()
+                    .filter_map(|obj| {
+                        let printing = registry.printings.get(obj.printing_id as usize)?;
+                        if printing.card_types.iter().any(|t| t == "Creature") {
+                            Some(obj.id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            if creature_ids.is_empty() {
+                return Ok(());
+            }
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[opponent_idx].battlefield);
+            for obj in zone.iter_mut() {
+                if creature_ids.contains(&obj.id) {
+                    // FIRST-SLICE: same UEOT modifier as the bare
+                    // sibling. The cleanup-gate slice will swap
+                    // this for a tagged-lifetime payload that
+                    // expires at the source-controller's untap
+                    // step instead of the next cleanup.
+                    obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                        power: *power_bonus,
+                        toughness: *toughness_bonus,
+                    });
+                }
+            }
+        }
         // Round-28 graveyard-to-library-bottom move. Scans
         // graveyards in player order; takes graveyard[0] (first card)
         // from whichever player has a non-empty graveyard; moves to

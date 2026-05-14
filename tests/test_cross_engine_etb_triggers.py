@@ -1799,6 +1799,153 @@ def test_rust_parser_accepts_pump_creatures_opponents_control_until_eot_in_trigg
     assert pid == 0
 
 
+def test_bridge_pump_creatures_opponents_control_until_caster_next_turn_translates_to_python():
+    """Mouth-of-the-Storm bridge extension: Rust
+    ``{"kind": "pump_creatures_opponents_control_until_caster_next_turn",
+       "power_bonus": N, "toughness_bonus": M}`` translates to Python
+    ``PumpCreaturesOpponentsControlUntilEOT(power_bonus=N,
+    toughness_bonus=M, until_caster_next_turn=True)``.
+
+    Sibling-of-the-bare-EOT bridge arm. Real-EoE consumer: Mouth of
+    the Storm ({6}{U} Elemental, "When this creature enters,
+    creatures your opponents control get -3/-0 UNTIL YOUR NEXT TURN.")
+    -- the discriminator carries the extended-duration distinction;
+    the Python sibling routes through ``until_caster_next_turn=True``
+    which writes the modifier via ``grant_pt_pump_until_player_next_turn``
+    (layer-7c registry entry tagged
+    ``expires_at="controller_untap"``), keeping the debuff through
+    the opponent's full subsequent turn.
+
+    The Rust resolve arm currently uses the SAME UEOT cleanup-step
+    lifetime as the bare sibling (the cleanup-gate divergence is
+    documented in docs/SEARCH_LIMITATIONS.md and is a deferred
+    follow-up Rust slice). The discriminator-only sibling matters
+    NOW because it routes Mouth of the Storm cleanly today and the
+    cleanup-gate slice can swap the resolve arm WITHOUT any bridge
+    or call-site changes.
+    """
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_creatures_opponents_control_until_caster_next_turn",
+            "power_bonus": -3,
+            "toughness_bonus": 0,
+        }
+    )
+    assert isinstance(e, PumpCreaturesOpponentsControlUntilEOT)
+    assert e.power_bonus == -3
+    assert e.toughness_bonus == 0
+    # Load-bearing translation: bridge sets until_caster_next_turn=True
+    # on the Python class, distinguishing the extended duration from
+    # the bare-EOT sibling above.
+    assert e.until_caster_next_turn is True
+    # Granted-keywords rider stays at its empty default (Rust's
+    # variant has no equivalent field).
+    assert e.granted_keywords == frozenset()
+
+
+def test_bridge_pump_creatures_opponents_control_until_caster_next_turn_defaults_to_zero():
+    """Missing ``power_bonus`` / ``toughness_bonus`` default to 0 in
+    the bridge translator; ``until_caster_next_turn=True`` still
+    flows through (it's set unconditionally on this arm). Translator-
+    robustness backstop for direct unit-test calls; Rust's
+    parse_effect REQUIRES both keys present so end-to-end Rust
+    callers must supply them explicitly."""
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "pump_creatures_opponents_control_until_caster_next_turn"}
+    )
+    assert isinstance(e, PumpCreaturesOpponentsControlUntilEOT)
+    assert e.power_bonus == 0
+    assert e.toughness_bonus == 0
+    assert e.until_caster_next_turn is True
+
+
+def test_bridge_pump_creatures_opponents_control_until_caster_next_turn_distinct_from_bare_sibling():
+    """Discriminator pin: bare-EOT and extended-duration arms produce
+    DIFFERENT Python objects -- the bare arm's
+    ``until_caster_next_turn`` defaults to False; the extended-arm
+    bridge sets it True. A regression that aliased the two arms in
+    the bridge dispatch would surface here.
+    """
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    bare = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_creatures_opponents_control_until_eot",
+            "power_bonus": -3,
+            "toughness_bonus": 0,
+        }
+    )
+    extended = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_creatures_opponents_control_until_caster_next_turn",
+            "power_bonus": -3,
+            "toughness_bonus": 0,
+        }
+    )
+    assert isinstance(bare, PumpCreaturesOpponentsControlUntilEOT)
+    assert isinstance(extended, PumpCreaturesOpponentsControlUntilEOT)
+    # Same P/T payload.
+    assert bare.power_bonus == extended.power_bonus == -3
+    assert bare.toughness_bonus == extended.toughness_bonus == 0
+    # Load-bearing distinction: ONLY the extended arm sets
+    # until_caster_next_turn=True. The bare arm must default it to
+    # False so cleanup-step expiration fires at the casting turn's
+    # cleanup (Python-side parity with the Rust bare-EOT cleanup).
+    assert bare.until_caster_next_turn is False
+    assert extended.until_caster_next_turn is True
+
+
+def test_rust_parser_accepts_pump_creatures_opponents_control_until_caster_next_turn_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``pump_creatures_opponents_control_until_caster_next_turn``
+    effect kind on a triggered-ability carrier (Mouth of the Storm
+    shape). The bridge's dict shape must register cleanly on the
+    Rust side too; this lockstep gate keeps the Python bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Mirrors the bare-sibling parser-surface pin above. Rust's
+    parse_effect arm tolerates missing ``power_bonus`` /
+    ``toughness_bonus`` (defaults to 0) on this arm, mirroring the
+    bare sibling's tolerance.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Mouth-of-the-Storm Bridge Pin -- ExtendedDuration",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 6, "U": 1},
+        "power": 6,
+        "toughness": 6,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_creatures_opponents_control_until_caster_next_turn",
+                    "power_bonus": -3,
+                    "toughness_bonus": 0,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 def test_bridge_each_opponent_sacrifices_creature_translates_to_python():
     """Phase 5 bridge extension: Rust
     ``{"kind": "each_opponent_sacrifices_creature"}`` translates to

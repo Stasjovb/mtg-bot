@@ -1107,24 +1107,20 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # constraint). The canonical EoE shape is ``-3/-0`` /  ``-2/-2``
         # debuffs on opponent creatures.
         #
-        # **EoE consumer gap (substrate-side).** Mouth of the Storm
-        # (EoE) has the ETB ``creatures your opponents control get
-        # -3/-0 UNTIL YOUR NEXT TURN``, NOT the bare ``until end of
-        # turn`` form. The "until your next turn" extended duration
-        # routes through Python's ``until_caster_next_turn=True`` flag
-        # which has no Rust counterpart (Rust's
-        # ``Effect::PumpCreaturesOpponentsControlUntilEOT`` variant has
-        # only ``power_bonus`` / ``toughness_bonus`` fields -- no
-        # extended-duration field). Rust does not currently ship any
-        # parametric extension of this variant for "until your next
-        # turn". Translating Mouth of the Storm to the bare arm would
-        # observably diverge at the start of the controller's NEXT turn
-        # (Python keeps the debuff; Rust has already cleared it at the
-        # casting turn's cleanup). The bare-EOT arm has no real-EoE
-        # consumer with matching shape today; the synthetic mass-debuff
-        # probe in test_parity_smoke.py exercises this substrate
-        # end-to-end with the bare ``until end of turn`` shape until
-        # the parametric extended-duration variant lands.
+        # **EoE consumer note.** The bare-EOT arm has no real-EoE
+        # consumer with matching shape today; the synthetic mass-
+        # debuff probe in test_parity_smoke.py exercises this
+        # substrate end-to-end. The "until your next turn" sibling
+        # (Mouth of the Storm) routes through the separate
+        # ``pump_creatures_opponents_control_until_caster_next_turn``
+        # bridge arm immediately below. The Rust resolve arms for
+        # the two siblings push the SAME ``UeotModifier`` payload
+        # in the first slice (the cross-turn cleanup-gate divergence
+        # is documented in docs/SEARCH_LIMITATIONS.md and is a
+        # deferred follow-up Rust slice); the discriminator is what
+        # carries the parametric distinction so the cleanup-gate
+        # slice can swap only the extended-duration resolve arm
+        # without bridge / call-site churn.
         #
         # Mirrors Rust's ``parse_effect`` arm (cards.rs:3844-3862)
         # which tolerates missing ``power_bonus`` / ``toughness_bonus``
@@ -1138,6 +1134,60 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return PumpCreaturesOpponentsControlUntilEOT(
             power_bonus=eff_dict.get("power_bonus", 0),
             toughness_bonus=eff_dict.get("toughness_bonus", 0),
+        )
+    if kind == "pump_creatures_opponents_control_until_caster_next_turn":
+        # Mouth-of-the-Storm sibling -- extended-duration debuff
+        # anthem ("creatures your opponents control get -X/-Y UNTIL
+        # YOUR NEXT TURN"). Same field shape as the bare-EOT sibling
+        # above; the discriminator alone carries the parametric
+        # distinction. Rust's
+        # ``Effect::PumpCreaturesOpponentsControlUntilCasterNextTurn
+        # { power_bonus, toughness_bonus }`` is the new sibling
+        # variant in cards.rs; its parse_effect arm tolerates missing
+        # power_bonus / toughness_bonus (defaults to 0); its resolve
+        # arm uses the SAME source-controller lookup + opponent-bf
+        # creature scan as the bare sibling and pushes the SAME
+        # ``UeotModifier::PowerToughnessBonus`` payload (the Rust
+        # cleanup-gate divergence -- Python keeps the debuff into the
+        # opponent's turn, Rust drops at the casting-turn cleanup --
+        # is documented in docs/SEARCH_LIMITATIONS.md and is a
+        # deferred follow-up Rust slice; the discriminator-only
+        # sibling matters NOW because once the cleanup-gate slice
+        # lands, only the resolve arm's modifier-push line needs to
+        # change -- every bridge call site, every parse arm, every
+        # test pin already targets the right discriminator).
+        #
+        # **Field-name translation at the boundary.** The bridge
+        # forwards ``power_bonus`` / ``toughness_bonus`` verbatim and
+        # adds ``until_caster_next_turn=True`` on the Python
+        # constructor. Python's
+        # ``PumpCreaturesOpponentsControlUntilEOT(until_caster_next_turn=
+        # True, ...)`` routes the modifier through
+        # ``grant_pt_pump_until_player_next_turn`` (layer-7c registry
+        # entry tagged ``expires_at="controller_untap"`` /
+        # ``expires_at_player_id`` = caster), keeping the debuff
+        # through the opponent's full subsequent turn.
+        #
+        # **Real-EoE consumer:** Mouth of the Storm (EoE Creature,
+        # {6}{U} Elemental, "When this creature enters, creatures
+        # your opponents control get -3/-0 UNTIL YOUR NEXT TURN.").
+        # The bridge translates this to Python's
+        # ``PumpCreaturesOpponentsControlUntilEOT(power_bonus=-3,
+        # toughness_bonus=0, until_caster_next_turn=True)``.
+        #
+        # Mirrors Rust's ``parse_effect`` arm which tolerates missing
+        # ``power_bonus`` / ``toughness_bonus`` (defaults to 0 in the
+        # bridge -- Rust's parse REQUIRES the keys present, so end-to-
+        # end Rust callers must supply both explicitly; the bridge
+        # default is a translator robustness backstop for direct-call
+        # unit tests).
+        from mtg_bot.effects.generic.pump import (
+            PumpCreaturesOpponentsControlUntilEOT,
+        )
+        return PumpCreaturesOpponentsControlUntilEOT(
+            power_bonus=eff_dict.get("power_bonus", 0),
+            toughness_bonus=eff_dict.get("toughness_bonus", 0),
+            until_caster_next_turn=True,
         )
     if kind == "each_opponent_sacrifices_creature":
         # "Each opponent sacrifices a [nontoken] creature [of their

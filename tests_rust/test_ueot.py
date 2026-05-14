@@ -1015,6 +1015,148 @@ def test_pump_creatures_opponents_control_clone_isolation(synthetic_state):
         assert synthetic_state.effective_power(cid) == 2  # source unchanged
 
 
+# ---------------------------------------------------------------- PumpCreaturesOpponentsControlUntilCasterNextTurn (Mouth of the Storm sibling)
+#
+# Extended-duration sibling of the bare-EOT debuff anthem. First-slice
+# Rust resolve uses the SAME UeotModifier::PowerToughnessBonus push as
+# the bare arm (the cleanup-gate divergence — Python keeps the modifier
+# into the opponent's turn, Rust drops at the casting-turn cleanup —
+# is documented in SEARCH_LIMITATIONS.md and is a deferred follow-up
+# Rust slice). The discriminator carries the parametric distinction so
+# the bridge can route Mouth of the Storm cleanly.
+
+
+def _curse_anthem_caster_next_turn_dict(power_bonus: int = -3, toughness_bonus: int = 0):
+    """Mouth-of-the-Storm-shape extended-duration debuff anthem: every
+    creature opponent controls gets -power/-toughness UNTIL CONTROLLER'S
+    NEXT TURN."""
+    return {
+        "name": "Mouth-of-the-Storm Sibling (synthetic)",
+        "mana_cost": {"U": 1, "generic": 6},
+        "card_types": ["Sorcery"],
+        "effects": [
+            {
+                "kind": "pump_creatures_opponents_control_until_caster_next_turn",
+                "power_bonus": power_bonus,
+                "toughness_bonus": toughness_bonus,
+            }
+        ],
+    }
+
+
+def test_register_pump_creatures_opponents_control_until_caster_next_turn_defaults(empty_registry):
+    """Missing power_bonus / toughness_bonus default to 0; round-trip
+    through the bridge preserves the discriminator (NOT the bare-EOT
+    sibling)."""
+    pid = empty_registry.register_printing(
+        {
+            "name": "default-curse-extended",
+            "card_types": ["Sorcery"],
+            "effects": [{"kind": "pump_creatures_opponents_control_until_caster_next_turn"}],
+        }
+    )
+    eff = empty_registry.get_printing_effects(pid)[0]
+    # Discriminator pin: must match the EXTENDED-duration kind, NOT the
+    # bare sibling. A regression that aliased the two arms in
+    # parse_effect / effect_to_pydict would surface here.
+    assert eff["kind"] == "pump_creatures_opponents_control_until_caster_next_turn"
+    assert eff["power_bonus"] == 0
+    assert eff["toughness_bonus"] == 0
+
+
+def test_pump_creatures_opponents_control_until_caster_next_turn_debuffs_p1_creatures(synthetic_state):
+    """Cast the extended-duration debuff anthem from p0 — every Grizzly
+    Bears on p1's bf gets -3/-0 (Mouth-of-the-Storm shape); p0's
+    creatures untouched. Same post-resolve effective-P/T as the bare
+    sibling (the cleanup-gate divergence is deferred)."""
+    snap = synthetic_state.battlefield_snapshot()
+    p0_creature_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 0 and d["printing_name"] == "Grizzly Bears"
+    ]
+    p1_creature_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    assert len(p1_creature_ids) >= 1
+    spell_id = synthetic_state.register_and_inject_object(
+        _curse_anthem_caster_next_turn_dict(power_bonus=-3, toughness_bonus=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1's Bears: 2/2 -> -1/2 (effective_power saturates to 0 via the
+    # i16 floor in the composer, but the 2 - 3 = -1 raw value is what
+    # the modifier-push produces; check whichever the composer emits).
+    for cid in p1_creature_ids:
+        # Mouth of the Storm is -3/-0 — power drops by 3, toughness
+        # unchanged. The 2/2 Bears would go to (-1)/2; however the
+        # effective_power composer may saturate non-negative.
+        assert synthetic_state.effective_power(cid) <= 0
+        assert synthetic_state.effective_toughness(cid) == 2  # toughness unchanged
+    # p0's creatures untouched.
+    for cid in p0_creature_ids:
+        assert synthetic_state.effective_power(cid) == 2
+
+
+def test_pump_creatures_opponents_control_until_caster_next_turn_zero_zero_is_noop(synthetic_state):
+    """(0, 0) short-circuits — same fizzle semantics as the bare
+    sibling. Pins that the discriminator switch didn't drop the
+    short-circuit guard."""
+    snap = synthetic_state.battlefield_snapshot()
+    p1_bear_ids = [
+        d["id"] for d in snap
+        if d["controller_id"] == 1 and d["printing_name"] == "Grizzly Bears"
+    ]
+    spell_id = synthetic_state.register_and_inject_object(
+        _curse_anthem_caster_next_turn_dict(power_bonus=0, toughness_bonus=0), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    for cid in p1_bear_ids:
+        assert synthetic_state.effective_power(cid) == 2
+
+
+def test_pump_creatures_opponents_control_until_caster_next_turn_distinct_from_bare_sibling(empty_registry):
+    """Discriminator pin: bare-EOT and extended-duration arms are
+    DISTINCT round-trip kinds. A bug that aliased the two (e.g. a
+    typo in effect_to_pydict that set kind to the bare sibling for
+    both Effect variants) would surface here.
+
+    Registers two side-by-side printings — one with each kind — and
+    asserts the discriminator round-trips literally on each.
+    """
+    pid_bare = empty_registry.register_printing(
+        {
+            "name": "bare-curse",
+            "card_types": ["Sorcery"],
+            "effects": [{
+                "kind": "pump_creatures_opponents_control_until_eot",
+                "power_bonus": -3,
+                "toughness_bonus": 0,
+            }],
+        }
+    )
+    pid_extended = empty_registry.register_printing(
+        {
+            "name": "extended-curse",
+            "card_types": ["Sorcery"],
+            "effects": [{
+                "kind": "pump_creatures_opponents_control_until_caster_next_turn",
+                "power_bonus": -3,
+                "toughness_bonus": 0,
+            }],
+        }
+    )
+    eff_bare = empty_registry.get_printing_effects(pid_bare)[0]
+    eff_extended = empty_registry.get_printing_effects(pid_extended)[0]
+    assert eff_bare["kind"] == "pump_creatures_opponents_control_until_eot"
+    assert eff_extended["kind"] == "pump_creatures_opponents_control_until_caster_next_turn"
+    # Field shape matches.
+    assert eff_bare["power_bonus"] == eff_extended["power_bonus"] == -3
+    assert eff_bare["toughness_bonus"] == eff_extended["toughness_bonus"] == 0
+
+
 # ---------------------------------------------------------------- PumpTargetArtifactOrCreatureUntilEOT (r28)
 
 
