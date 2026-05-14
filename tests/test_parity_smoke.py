@@ -35114,6 +35114,404 @@ def test_cross_engine_real_eoe_bioengineered_future_etb_create_lander_artifact_t
     assert rust_bf_p1_after == py_bf_p1_after
 
 
+def test_cross_engine_real_eoe_all_fates_stalker_etb_exile_target_creature_until_leaves_parity(
+    parity_smoke,
+):
+    """Probe: All-Fates Stalker (EoE Creature) ETB ``exile up to one
+    target non-Assassin creature until this creature leaves the
+    battlefield`` -- FIRST real-EoE cross-engine probe on the
+    ``exile_target_creature_until_source_leaves`` bridge arm.
+
+    Sister probes on the same bridge arm:
+
+      * ``test_cross_engine_synthetic_etb_exile_target_creature_until_source_leaves_cross_controller_routes_to_source_controller_opponent_parity``
+        -- the bridge-arm-introducing synthetic + cross-controller
+        probe on a Spacecraft carrier (commit 9f98e613). That probe
+        established the I79 controller-of-effect contract on a
+        bare-default rider shape (empty excluded_subtypes / both
+        restrict-flags False).
+
+    Sister probe on the broader exile-until-leaves family (different
+    Rust Effect arm but identical bridge-pattern shape -- narrower-
+    oracle-than-arm equivalence on creature bait):
+
+      * ``test_cross_engine_real_eoe_hardlight_containment_etb_exile_target_creature_until_leaves_parity``
+        -- second real-EoE consumer of the
+        ``exile_opponents_nonland_permanent_until_leaves`` arm
+        (I80). Established the "narrower printed oracle, equivalence
+        on creature bait" template that this probe reuses for the
+        I79 arm.
+
+    **Why this slice adds substrate signal beyond the synthetic.**
+    The synthetic seats a Spacecraft (artifact carrier) on P1's bf;
+    All-Fates Stalker is a Creature carrier on a SourceIsSelf same-
+    controller probe direction. The two together pin the I79 arm
+    against both carriers (Artifact-Spacecraft cross-controller and
+    Creature same-controller) with the same bare-default Python
+    shape that the bridge constructs.
+
+    All-Fates Stalker's printed oracle text narrows the target
+    filter to "non-Assassin creature" -- the bridge arm constructs
+    the bare-default ``ExileTargetCreatureUntilSourceLeaves()``
+    (empty ``excluded_subtypes`` rider). On a probe scenario that
+    seats a non-Assassin bait, the printed-oracle narrowing and
+    the bare-default arm pick the same bait, so the divergence is
+    observationally invisible. Mirrors the Hardlight-Containment-
+    on-I80 narrower-oracle equivalence pattern exactly. A future
+    rider-widened Rust variant would expose ``excluded_subtypes``
+    as a separate arm (per the bridge arm comment at
+    cross_engine.py:1520-1530); today the bare-default is the
+    contract.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this creature enters, exile up to one target
+         non-Assassin creature until this creature leaves the
+         battlefield.
+         Warp {1}{W}"
+
+    Probe direction: **same-controller** (P0 source, P1 victim) --
+    same shape as the Hardlight Containment slice. P0 controls
+    All-Fates Stalker; the ETB-trigger exiles a P1-controlled
+    non-Assassin bait creature.
+
+    Predicate decomposition:
+
+        SourceIsSelf
+
+    Effect: ``exile_target_creature_until_source_leaves`` -- first
+    real-EoE consumer of the I79 arm (no fields; the bare unit
+    variant matching ``ExileTargetCreatureUntilSourceLeaves``).
+
+    Carrier card-type:
+        Creature (vanilla 2/1 W body per the printing). First
+        Creature-typed carrier on the I79 arm; the synthetic was
+        a Spacecraft. The "up to one" optional target clause is
+        observationally identical to "exactly one" on a probe
+        scenario that seats exactly one eligible bait (both Rust's
+        first-slice picker and Python's
+        ``_PickFirstOpponentTargetCreaturePreferredAgent``
+        select that single creature).
+
+    Probe shape (inject-and-fire-ENTERS, mirrors Hardlight
+    Containment same-controller direction):
+
+      1. Pre-seat a vanilla bait Creature (Bear) on P1's bf. Bait
+         is a non-Assassin (vanilla Bear -- no subtypes), so the
+         printed-oracle target filter narrowing is a no-op on the
+         observed pick.
+      2. Inject All-Fates Stalker onto P0's bf. The SourceIsSelf
+         ENTERS trigger fires; the ExileTargetCreatureUntilSource
+         Leaves effect lands on the stack with controller=0.
+      3. Seat ``_PickFirstOpponentTargetCreaturePreferredAgent``
+         on P0; the agent's opponent-creature-preferred filter
+         returns ``("creature", bait_id)`` from the legal_targets
+         pool (which contains exactly one entry: the P1-controlled
+         bait), mirroring Rust's deterministic first-creature scan
+         on the defender's bf (defender = 1 - controller = 1).
+      4. Drain both stacks. Bait creature exiled to P1's exile
+         with source-link stamped on each engine.
+      5. Source-leaves recall: bait returns to P1's bf via the
+         manual hooks (``return_paired_exiles_for(source_id)`` on
+         Rust; ``_release_exiled_until_leaves(state, source.id)``
+         on Python).
+
+    Out of scope:
+
+      * The Warp {1}{W} alt-cast / exile-from-exile / cast-from-
+        exile-on-later-turn substrate -- inject-and-fire-ENTERS
+        bypasses the Warp pipeline entirely.
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Multi-bait pools / target-ordering on a 2-creature
+        defender bf -- the probe seats exactly one bait so the
+        picker resolves cleanly.
+      * Assassin-subtype bait (the printed-oracle ``excluded_
+        subtypes`` rider would matter) -- the bare-default
+        bridge arm doesn't honor the rider; a probe seating an
+        Assassin bait would surface the divergence (Rust's
+        bare-default first-slice picker would still pick the
+        Assassin; Python's
+        ``ExileTargetCreatureUntilSourceLeaves`` with default
+        empty ``excluded_subtypes`` would also pick it -- the
+        bridge cancels the printed narrowing on both sides
+        symmetrically). A rider-widened variant slice would
+        carry a separate ``kind``.
+      * "up to one" zero-target choice (declining to target) --
+        the agent shim always picks when at least one legal
+        target exists; an empty-bf scenario would surface the
+        Rust-first-slice silent fizzle, but that's the
+        synthetic's empty-defender-bf scenario already (and the
+        printed "up to one" would let the source resolve
+        with no exile; this probe seats exactly one bait, so the
+        observable matches the "exactly one" path).
+      * LTB triggers fanning out from the bait's
+        ``move_off_battlefield`` -- the bait is vanilla; no LTB
+        triggers fire on either engine.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * All-Fates Stalker on P0's bf (controller=0).
+      * P0 bf: 1 (only the source).
+      * P0 exile: 0.
+      * P1 bf: 0 (bait creature left).
+      * P1 exile: 1 (bait creature here, source-link stamped).
+      * Lives unchanged on both seats.
+      * No residual stack / pending decision.
+
+    Then post-recall:
+
+      * P1 bf: 1 (bait creature back, summoning_sick).
+      * P1 exile: 0.
+      * Both engines return count == 1 from the recall hook.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import (
+        _PickFirstOpponentTargetCreaturePreferredAgent,
+    )
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side: inject the bait creature on P1's bf ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "All-Fates Stalker Bait Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [],
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: vanilla bait Bear inject must NOT push anything "
+        "onto the stack (no triggers). "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    rust_p0_bf_before = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_before = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p0_bf_before == 0
+    assert rust_p1_bf_before == 1
+    rust_p0_exile_before = len(rust_state.exile_snapshot(0))
+    rust_p1_exile_before = len(rust_state.exile_snapshot(1))
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_exile_before == 0
+    assert rust_p1_exile_before == 0
+
+    # Inject All-Fates Stalker onto P0's bf. The SourceIsSelf ENTERS
+    # trigger fires; ExileTargetCreatureUntilSourceLeaves lands on
+    # the stack with controller=0.
+    rust_source_dict = {
+        "name": "All-Fates Stalker",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "exile_target_creature_until_source_leaves",
+                },
+            }
+        ],
+    }
+    rust_source_id = rust_state.register_and_inject_object(
+        rust_source_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: All-Fates Stalker's arrival on P0 should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "ExileTargetCreatureUntilSourceLeaves on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: mirror setup ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.exile import (
+        ExileTargetCreatureUntilSourceLeaves,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="All-Fates Stalker Bait Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    py_p1_bf_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    py_p0_exile_before = len(py_state.players[0].exile)
+    py_p1_exile_before = len(py_state.players[1].exile)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p1_bf_before == 1
+    assert py_p0_exile_before == 0
+    assert py_p1_exile_before == 0
+
+    source_printing = CardPrinting(
+        name="All-Fates Stalker",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("W", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=1,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ExileTargetCreatureUntilSourceLeaves(),
+            ),
+        ),
+    )
+
+    py_state.players[0].agent = (
+        _PickFirstOpponentTargetCreaturePreferredAgent()
+    )
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: All-Fates Stalker's arrival on P0 should fire the "
+        "IsSelf ENTERS trigger and land "
+        "ExileTargetCreatureUntilSourceLeaves on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust post-state.
+    rust_p0_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p0_bf_after == 1, (
+        f"Rust: P0's bf should still hold All-Fates Stalker. "
+        f"after p0_bf={rust_p0_bf_after}"
+    )
+    assert rust_p1_bf_after == 0, (
+        f"Rust: P1's bf should drop the bait creature. "
+        f"after p1_bf={rust_p1_bf_after}"
+    )
+    rust_p1_exile_after = rust_state.exile_snapshot(1)
+    assert len(rust_p1_exile_after) == rust_p1_exile_before + 1, (
+        f"Rust: P1's exile should grow by 1. "
+        f"before={rust_p1_exile_before} "
+        f"after={len(rust_p1_exile_after)}"
+    )
+    assert (
+        rust_p1_exile_after[0]["printing_name"]
+        == "All-Fates Stalker Bait Bear"
+    )
+    assert int(rust_p1_exile_after[0]["id"]) == rust_bait_id
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+
+    # Python post-state.
+    py_p0_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert py_p0_bf_after == 1, (
+        f"Python: P0's bf should still hold All-Fates Stalker. "
+        f"after p0_bf={py_p0_bf_after}"
+    )
+    assert py_p1_bf_after == 0, (
+        f"Python: P1's bf should drop the bait creature. "
+        f"after p1_bf={py_p1_bf_after}"
+    )
+    assert len(py_state.players[1].exile) == py_p1_exile_before + 1
+    assert (
+        py_state.players[1].exile[0].printing.name
+        == "All-Fates Stalker Bait Bear"
+    )
+    assert py_state.players[1].exile[0].id == py_bait.id
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # ---- Source-leaves recall ----
+    rust_returned = rust_state.return_paired_exiles_for(rust_source_id)
+    assert rust_returned == 1, (
+        f"Rust source-leaves recall should return 1; got "
+        f"{rust_returned}"
+    )
+    rust_p1_bf_post_recall = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p1_bf_post_recall == 1
+    assert len(rust_state.exile_snapshot(1)) == 0
+
+    from mtg_bot.turn import _release_exiled_until_leaves
+    _release_exiled_until_leaves(py_state, py_source.id)
+    py_p1_bf_post_recall = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert py_p1_bf_post_recall == 1
+    assert len(py_state.players[1].exile) == 0
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
