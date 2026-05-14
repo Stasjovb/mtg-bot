@@ -32428,6 +32428,249 @@ def test_cross_engine_synthetic_etb_deal_damage_cross_controller_routes_to_sourc
     assert rust_state.battlefield_sizes[1] == py_p1_bf_after
 
 
+def test_cross_engine_real_eoe_thawbringer_etb_surveil_1_parity(
+    parity_smoke,
+):
+    """Probe: Thawbringer (EoE Creature) ETB ``surveil 1`` parity --
+    THIRD real-EoE cross-engine probe on the ``surveil`` bridge arm
+    and the FIRST consumer with ``count=1`` (the canonical surveil
+    minimum).
+
+    Sister probes on the same bridge arm:
+
+      * ``test_cross_engine_real_eoe_starbreach_whale_etb_surveil_2_parity``
+        (tests/test_parity_smoke.py:13952) -- the canonical first
+        probe on a Creature carrier with surveil 2.
+      * ``test_cross_engine_real_eoe_wurmwall_sweeper_etb_surveil_2_parity``
+        (tests/test_parity_smoke.py:14274) -- the Artifact-carrier
+        sister with surveil 2 (adds the carrier-card-type cross-
+        product axis).
+
+    Thawbringer adds the ``count=1`` axis: every prior surveil probe
+    used count=2 so the SurveilChoice walks two cards. Surveil 1
+    walks exactly one card -- the smallest non-trivial surveil --
+    and pins that the trigger-path's terminal
+    ``auto_resolve_pending("keep_all_on_top")`` (Rust) /
+    ``p.agent is None`` short-circuit (Python) handle the
+    single-card pending decision identically to the two-card case.
+    The arm's count parameter is propagated to ``Surveil(amount=N)``
+    on the Python side; this probe pins amount=1 round-trip on the
+    bridge.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this creature enters or dies, surveil 1. (Look at the
+         top card of your library. You may put it into your
+         graveyard.)"
+
+    Predicate decomposition (same as Starbreach Whale / Wurmwall
+    Sweeper / every other ENTERS-trigger probe on the bridge):
+
+        SourceIsSelf
+
+    Effect: ``surveil(count=1)`` -- third real-EoE consumer; first
+    with count=1 (Starbreach Whale + Wurmwall Sweeper both used
+    count=2). Same end-to-end decision-substrate contract: both
+    engines default to "keep the observed card on library top in
+    its original position" when no decision callback is seated.
+
+    Probe shape (inject-and-fire-ENTERS, mirrors Starbreach Whale):
+
+      1. Pre-seed p0's library with a single distinct vanilla bait
+         card (Surveil-1 only observes the top one card; one bait
+         is sufficient and a name-distinct alternative to the
+         Starbreach Whale / Wurmwall Sweeper bait names defends
+         against cross-probe printing leakage).
+      2. Inject Thawbringer onto p0's battlefield via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + manual ``_trigger_etb_abilities`` (Python). Both
+         engines dispatch ENTERS for the just-arrived Thawbringer;
+         the SourceIsSelf predicate matches its own arrival, the
+         trigger lands on the stack with Surveil(1).
+      3. Drain both stacks. Auto-resolve keep_all_on_top on Rust;
+         p.agent-is-None short-circuit on Python.
+      4. Cross-engine assert: post-drain, BOTH engines have the
+         same library top (the single bait card unchanged) and the
+         same graveyard contents (empty).
+
+    Out of scope:
+
+      * The DIES half of the trigger (``enters or dies``) -- this
+        probe exercises only the ETB leg. The dies leg fires the
+        same Surveil(1) effect through a different event predicate
+        (LeavesBattlefield + filter "into graveyard"), and is
+        left for a follow-up probe targeting the dies-trigger
+        substrate.
+      * The mill path (``choose_surveil -> True``) -- same
+        out-of-scope reasoning as the Starbreach Whale +
+        Wurmwall Sweeper probes; the keep-all default is the
+        trivially-parity-safe leg.
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Thawbringer on p0's battlefield.
+      * p0 library: unchanged (single bait card still on top).
+      * p0 graveyard: empty.
+      * p1 library / graveyard: unchanged.
+      * Lives unchanged on both seats.
+      * No residual stack / pending decision.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    thawbringer = CardDef(
+        name="Thawbringer",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("U", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "surveil", "count": 1},
+            },
+        ),
+    )
+    # Distinct bait name from the Starbreach Whale (Alpha/Beta) /
+    # Wurmwall Sweeper (Gamma/Delta) bait pools; defensive against
+    # any cross-probe printing leakage in shared fixtures.
+    surveil_bait = CardDef(
+        name="Surveil Bait Epsilon",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    spec = DeckSpec(
+        card_defs=(thawbringer, surveil_bait),
+        # Library is built head-first (index 0 = top per CE3); a
+        # single bait at index 0 is what surveil 1 will observe.
+        p0_library=("Surveil Bait Epsilon",),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_thaw_dict = {
+        "name": "Thawbringer",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "surveil", "count": 1},
+            }
+        ],
+    }
+    rust_p0_lib_before = [
+        d["printing_id"] for d in rust_state.library_snapshot(0)
+    ]
+    rust_p0_lib_size_before = rust_state.library_sizes[0]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    rust_state.register_and_inject_object(
+        rust_thaw_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Thawbringer's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land Surveil(1) on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    thaw_printing = CardPrinting(
+        name="Thawbringer",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=Surveil(amount=1),
+            ),
+        ),
+    )
+    py_thaw = py_state.new_object(
+        thaw_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_thaw.summoning_sick = False
+    py_thaw.tapped = False
+    py_thaw.damage = 0
+    py_thaw.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_thaw)
+    py_p0_lib_before = [o.printing.name for o in py_state.players[0].library]
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    _trigger_etb_abilities(py_state, py_thaw)
+    assert len(py_state.stack) == 1, (
+        "Python: Thawbringer's own arrival should fire the "
+        "IsSelf ENTERS trigger and land Surveil(1) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    rust_p0_lib_after = [
+        d["printing_id"] for d in rust_state.library_snapshot(0)
+    ]
+    py_p0_lib_after = [o.printing.name for o in py_state.players[0].library]
+    assert rust_state.library_sizes[0] == rust_p0_lib_size_before, (
+        f"Rust p0 library size should be unchanged "
+        f"(keep_all_on_top default): "
+        f"before={rust_p0_lib_size_before} "
+        f"after={rust_state.library_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_size_before, (
+        f"Rust p0 graveyard size should be unchanged "
+        f"(keep_all_on_top default mills NO cards): "
+        f"before={rust_p0_gy_size_before} "
+        f"after={rust_state.graveyard_sizes[0]}"
+    )
+    assert rust_p0_lib_after == rust_p0_lib_before, (
+        f"Rust p0 library top should be unchanged in original "
+        f"order (single-card keep_all_on_top): "
+        f"before={rust_p0_lib_before} after={rust_p0_lib_after}"
+    )
+    assert len(py_state.players[0].library) == len(py_p0_lib_before)
+    assert len(py_state.players[0].graveyard) == py_p0_gy_size_before
+    assert py_p0_lib_after == py_p0_lib_before, (
+        f"Python p0 library top should be unchanged in original "
+        f"order: before={py_p0_lib_before} "
+        f"after={py_p0_lib_after}"
+    )
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+    assert rust_state.has_pending_decision() is False
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
