@@ -43056,6 +43056,553 @@ def test_cross_engine_search_library_for_basic_land_tapped_synthetic_etb_parity(
     assert py_state.players[1].life == 20
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- search_library_for_card (round 21).
+#
+# Rust substrate ``Effect::SearchLibraryForCard { filter_name,
+# max_mv, may_fail }`` (cards.rs:1136 + parser cards.rs:4327 +
+# resolve state_ops_resolve.rs:4806) shipped on main; this slice
+# closes the cross-engine BRIDGE gap so probes can drive both arms
+# with one dict.
+#
+# **Filter taxonomy gap.** Rust's resolve dispatch supports a
+# subset of Python's _matches: basic_<color>, basic_land,
+# creature_small (uses max_mv), artifact. Rust does NOT today
+# carry supertypes/subtypes in its registry, so legendary_creature
+# / spacecraft / sliver / demon filter strings silent-fizzle on
+# Rust (Rust's match-arm fall-through returns `false`). The bridge
+# arm passes the filter string through verbatim; cross-engine
+# parity is bounded to the filters BOTH engines support today.
+# Translator pin tests at the bridge layer cover all filter strings
+# (the dispatch is just a string-keyed lookup); cross-engine probes
+# below restrict to creature_small + artifact.
+#
+# Real-EoE consumers unblocked at the BRIDGE layer (translator pins
+# pass for them today): Starfield Shepherd / The Seriema
+# (legendary_creature -- only Python matches; Rust silent-fizzles
+# pending supertypes substrate). Cross-engine probes for those
+# two cards are deferred until the Rust legendary-creature filter
+# arm lands.
+# =====================================================================
+
+
+def test_rust_search_library_for_card_etb_creature_small_drains_one_creature():
+    """Round-21 BLOCKED-BRIDGE-ARM slice -- ETB trigger drives
+    SearchLibraryForCard(filter_name=creature_small, max_mv=2). A
+    Bear-shape source on p0's bf with two creatures + a non-
+    creature in p0's library: ETB trigger fires, the topmost
+    matching creature moves to p0's hand. Pins the trigger-driven
+    resolve path with a non-trivial filter (creature_small uses
+    max_mv).
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    # Match-target: a 1-cost creature (mana_cost.total == 1).
+    grunt = CardDef(
+        name="One-Cost Grunt",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    # Non-creature filler: a Land. Tutoring should skip past it.
+    forest = CardDef(
+        name="Forest",
+        card_type="Land",
+        mana_produced=("G",),
+    )
+    spec = DeckSpec(
+        card_defs=(grunt, forest),
+        # Library: top is a creature, then a land, then another
+        # creature. The tutor should pick the topmost creature
+        # (Rust top-to-bottom scan + Python options[0] order).
+        p0_library=(
+            "One-Cost Grunt", "Forest", "One-Cost Grunt",
+        ),
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Tutor Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "creature_small",
+                        "max_mv": 2,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # One creature pulled from library -> hand.
+    assert rust_state.library_sizes[0] == p0_lib_before - 1
+    assert rust_state.hand_sizes[0] == p0_hand_before + 1
+
+
+def test_rust_search_library_for_card_no_match_silently_fizzles():
+    """No-match silent fizzle pin. If the source-controller has NO
+    matching card in library (filter_name=creature_small with
+    max_mv=0 against a library of 2-cost-or-larger creatures),
+    the resolve arm returns silently with no library / hand
+    movement. Pins the "let Some(p) = pos else { return Ok(()) }"
+    silent-fizzle branch (state_ops_resolve.rs:4883-4885).
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        # Library: only 2-cost creatures. With max_mv=0, the
+        # filter never matches (Bears have total mana cost 2 > 0).
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "No-Match Tutor Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "creature_small",
+                        "max_mv": 0,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    rust_state.resolve_top_of_stack()
+    # Silent fizzle: library + hand unchanged.
+    assert rust_state.library_sizes[0] == p0_lib_before
+    assert rust_state.hand_sizes[0] == p0_hand_before
+
+
+def test_rust_search_library_for_card_unknown_filter_silently_fizzles():
+    """Unknown filter silent-fizzle pin. If the filter_name string
+    isn't in Rust's dispatch (e.g., legendary_creature, which Rust
+    can't match without supertypes registry), every printing
+    returns false -> no match -> silent fizzle. Pins Rust's
+    ``_ => false`` fallthrough at state_ops_resolve.rs:4874.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 3,
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Legendary-Creature Tutor (Rust unknown filter)",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "legendary_creature",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    rust_state.resolve_top_of_stack()
+    # Silent fizzle: Rust doesn't carry supertypes registry, so
+    # legendary_creature falls through to the `_ => false` arm.
+    assert rust_state.library_sizes[0] == p0_lib_before
+    assert rust_state.hand_sizes[0] == p0_hand_before
+
+
+def test_rust_search_library_for_card_artifact_filter_drains_first_artifact():
+    """Artifact filter pin (filter_name=\"artifact\"). Pins the
+    artifact dispatch arm at state_ops_resolve.rs:4873. With a Mox-
+    shape Artifact in p0's library, the tutor should pick it.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    mox = CardDef(
+        name="Mana Mox (Artifact)",
+        card_type="Artifact",
+        mana_cost_generic=0,
+    )
+    spec = DeckSpec(
+        card_defs=(bears, mox),
+        p0_library=(
+            "Library Filler Bears (2/2)",  # non-artifact at top
+            "Mana Mox (Artifact)",          # artifact at index 1
+            "Library Filler Bears (2/2)",
+        ),
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Artifact Tutor Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "artifact",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    rust_state.resolve_top_of_stack()
+    # Library shrank by 1 (the Mox), hand grew by 1.
+    assert rust_state.library_sizes[0] == p0_lib_before - 1
+    assert rust_state.hand_sizes[0] == p0_hand_before + 1
+
+
+def test_rust_search_library_for_card_cross_controller_routing_p1_source_on_p0_turn():
+    """Cross-controller routing pin: source on p1's bf during p0's
+    turn. The search arm pulls from p1's library (the source-
+    controller), not p0's library. Pins the source-controller
+    derivation at state_ops_resolve.rs:4811-4839.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    grunt = CardDef(
+        name="One-Cost Grunt",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(grunt, bears),
+        # p0 has no creature_small matches (Bears total to 2).
+        # p1 has a Grunt at top -> the tutor must pull from p1.
+        p0_library=("Library Filler Bears (2/2)",) * 3,
+        p1_library=("One-Cost Grunt", "Library Filler Bears (2/2)"),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "p1-Owned Tutor Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "creature_small",
+                        "max_mv": 1,
+                    },
+                }
+            ],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p1_lib_before = rust_state.library_sizes[1]
+    p0_hand_before = rust_state.hand_sizes[0]
+    p1_hand_before = rust_state.hand_sizes[1]
+    rust_state.resolve_top_of_stack()
+    # p0's library / hand should be unchanged.
+    assert rust_state.library_sizes[0] == p0_lib_before
+    assert rust_state.hand_sizes[0] == p0_hand_before
+    # p1's library shrank by 1 (Grunt moved to p1's hand).
+    assert rust_state.library_sizes[1] == p1_lib_before - 1
+    assert rust_state.hand_sizes[1] == p1_hand_before + 1
+
+
+def test_cross_engine_search_library_for_card_synthetic_etb_creature_small_parity(
+    parity_smoke,
+):
+    """Round-21 BLOCKED-BRIDGE-ARM slice -- cross-engine end-to-end
+    synthetic probe. Drives the ``Effect::SearchLibraryForCard``
+    Rust arm + the ``SearchLibraryForCard`` Python class through
+    both engines via an ETB-trigger carrier; pins post-resolve
+    outcomes agree on both sides.
+
+    Probe shape:
+      1. Spec a 3-card library on p0: (One-Cost Grunt, Forest,
+         One-Cost Grunt). The grunt has total mana cost 1; with
+         max_mv=2 the creature_small filter matches it.
+      2. Inject a Bear-shape source with a SearchLibraryForCard(
+         filter_name=creature_small, max_mv=2) ETB onto p0's bf.
+         The trigger fires on its own arrival; lands on the stack
+         on both engines.
+      3. Drain both stacks. Each engine moves the topmost grunt
+         from p0's library to p0's hand.
+      4. Cross-engine: same library size delta (-1), same hand
+         size delta (+1).
+
+    Filter choice rationale: ``creature_small`` is supported on
+    BOTH engines (Rust's resolve at state_ops_resolve.rs:4859-4872
+    + Python's _matches at search.py:63-67). Filters that depend
+    on supertypes (``legendary_creature``) or subtypes
+    (``spacecraft``, ``sliver``, ``demon``) are bridge-translatable
+    today but Rust silent-fizzles on them (no supertypes/subtypes
+    registry); cross-engine probes for those filters are blocked
+    on Rust-side substrate, not on this bridge slice.
+
+    Out of scope (documented):
+      * Real-EoE Starfield Shepherd / The Seriema probes (need
+        legendary_creature filter; blocked on Rust supertypes).
+      * Spineseeker Centipede probe (basic_land filter -- the
+        sister round-21 search_library_for_basic_land_tapped slice
+        already pinned the basic-land path through a different
+        Rust arm; that's the canonical land-tutor path, not
+        SearchLibraryForCard's basic_land branch).
+      * Post-search shuffle parity -- Rust's resolve at
+        state_ops_resolve.rs:4898 has a ``// No shuffle (G19
+        deferral)`` comment; Python's resolve calls
+        shuffle_library at search.py:119. The cross-engine
+        library order would diverge AFTER the search resolves.
+        Pin compares library-size deltas + hand-size deltas
+        rather than full library order, side-stepping this gap.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    grunt = CardDef(
+        name="One-Cost Grunt",
+        card_type="Creature",
+        mana_cost_generic=1,
+        power=1,
+        toughness=1,
+    )
+    forest = CardDef(
+        name="Forest",
+        card_type="Land",
+        mana_produced=("G",),
+    )
+    spec = DeckSpec(
+        card_defs=(grunt, forest),
+        p0_library=(
+            "One-Cost Grunt", "Forest", "One-Cost Grunt",
+        ),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Tutor ETB Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "creature_small",
+                        "max_mv": 2,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.game import Zone
+
+    # Seat a deterministic agent on p0 that picks the FIRST option
+    # so the picker behavior matches Rust's top-to-bottom scan.
+    from mtg_bot.agents import Agent
+
+    class _PickFirstFromLibraryAgent(Agent):
+        def choose_card_from_library(self, state, player_id, option_ids):
+            return option_ids[0] if option_ids else None
+
+    py_state.players[0].agent = _PickFirstFromLibraryAgent()
+
+    bear_printing = CardPrinting(
+        name="Tutor ETB Trigger Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=4),
+        type_line="Creature -- Bear Druid",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear", "Druid"),
+        power=2,
+        toughness=4,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=SearchLibraryForCard(
+                    filter_name="creature_small",
+                    max_mv=2,
+                ),
+            ),
+        ),
+    )
+    py_bear = py_state.new_object(
+        bear_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bear.summoning_sick = False
+    py_bear.tapped = False
+    py_bear.damage = 0
+    py_bear.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bear)
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    _trigger_etb_abilities(py_state, py_bear)
+    assert len(py_state.stack) == 1, (
+        "Python: source's arrival should fire IsSelf ENTERS and land "
+        "SearchLibraryForCard on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Cross-engine post-state ----
+    rust_p0_lib_after = rust_state.library_sizes[0]
+    rust_p0_hand_after = rust_state.hand_sizes[0]
+    py_p0_lib_after = len(py_state.players[0].library)
+    py_p0_hand_after = len(py_state.players[0].hand)
+
+    # Library shrank by 1 on both sides (one creature pulled).
+    assert rust_p0_lib_after == rust_p0_lib_before - 1, (
+        f"Rust p0 lib delta should be -1; before={rust_p0_lib_before} "
+        f"after={rust_p0_lib_after}"
+    )
+    assert py_p0_lib_after == py_p0_lib_before - 1, (
+        f"Python p0 lib delta should be -1; before={py_p0_lib_before} "
+        f"after={py_p0_lib_after}"
+    )
+    # Hand grew by 1 on both sides.
+    assert rust_p0_hand_after == rust_p0_hand_before + 1
+    assert py_p0_hand_after == py_p0_hand_before + 1
+    # Cross-engine deltas agree.
+    assert (
+        rust_p0_lib_after - rust_p0_lib_before
+        == py_p0_lib_after - py_p0_lib_before
+    )
+    assert (
+        rust_p0_hand_after - rust_p0_hand_before
+        == py_p0_hand_after - py_p0_hand_before
+    )
+    # Lives unchanged on both sides.
+    assert list(rust_state.life_totals) == [20, 20]
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

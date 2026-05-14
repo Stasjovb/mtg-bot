@@ -4810,5 +4810,172 @@ def test_rust_parser_accepts_search_library_for_basic_land_tapped_in_triggered_a
     assert pid == 0
 
 
+def test_bridge_search_library_for_card_legendary_creature_filter():
+    """Round-21 BLOCKED-BRIDGE-ARM slice -- legendary_creature
+    filter (Starfield Shepherd / The Seriema shape). Rust
+    ``{"kind": "search_library_for_card",
+    "filter_name": "legendary_creature"}`` translates to Python
+    ``SearchLibraryForCard(filter_name="legendary_creature",
+    max_mv=0, may_fail=True)``. Pins default values for max_mv +
+    may_fail flow through correctly when omitted.
+    """
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "search_library_for_card",
+            "filter_name": "legendary_creature",
+        }
+    )
+    assert isinstance(e, SearchLibraryForCard)
+    assert e.filter_name == "legendary_creature"
+    assert e.max_mv == 0
+    assert e.may_fail is True
+
+
+def test_bridge_search_library_for_card_basic_land_filter():
+    """Generic basic-land filter (Spineseeker Centipede shape).
+    Pins that the basic_land filter string passes through verbatim
+    -- both engines dispatch on the same filter-name string.
+    """
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "search_library_for_card",
+            "filter_name": "basic_land",
+        }
+    )
+    assert isinstance(e, SearchLibraryForCard)
+    assert e.filter_name == "basic_land"
+
+
+def test_bridge_search_library_for_card_creature_small_with_max_mv():
+    """``creature_small`` filter uses ``max_mv`` to cap the cost
+    of matching creatures (Python's _matches arm at search.py:63-67).
+    Pins explicit max_mv flows through verbatim.
+    """
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "search_library_for_card",
+            "filter_name": "creature_small",
+            "max_mv": 3,
+        }
+    )
+    assert isinstance(e, SearchLibraryForCard)
+    assert e.filter_name == "creature_small"
+    assert e.max_mv == 3
+    assert e.may_fail is True
+
+
+def test_bridge_search_library_for_card_may_fail_false():
+    """Explicit ``may_fail=False`` flows through. Pins the
+    forced-pick path (agent can't decline; resolve falls back to
+    options[0] if agent declines).
+    """
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "search_library_for_card",
+            "filter_name": "spacecraft",
+            "may_fail": False,
+        }
+    )
+    assert isinstance(e, SearchLibraryForCard)
+    assert e.filter_name == "spacecraft"
+    assert e.may_fail is False
+
+
+def test_bridge_search_library_for_card_missing_filter_name_raises():
+    """Missing ``filter_name`` field raises ValueError. Mirrors
+    Rust's parse_effect contract at cards.rs:4336-4341 which raises
+    PyValueError on missing required field; the bridge enforces the
+    same contract so a typo in a fixture surfaces immediately
+    rather than silently constructing a SearchLibraryForCard with
+    an empty filter (which would match no card and shuffle-only-
+    fizzle without obvious failure mode).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="filter_name"):
+        _ta_dict_to_python_effect({"kind": "search_library_for_card"})
+
+
+def test_bridge_search_library_for_card_composable_in_sequence():
+    """Round-trip in a Sequence COMPOSER. Pins that the
+    SearchLibraryForCard arm composes correctly when it's a child
+    of a parent Sequence:
+    ``Sequence([SearchLibraryForCard("legendary_creature"),
+    DrawCards(1)])``.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "search_library_for_card",
+                    "filter_name": "legendary_creature",
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], SearchLibraryForCard)
+    assert e.effects[0].filter_name == "legendary_creature"
+    assert isinstance(e.effects[1], DrawCards)
+    assert e.effects[1].amount == 1
+
+
+def test_rust_parser_accepts_search_library_for_card_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``search_library_for_card`` dict shape inside a triggered_ability
+    dict. Mirrors the may_do / optional_sac_artifact_for_effect
+    lockstep gates -- keeps the bridge from drifting away from
+    Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:4327-4363``
+    accepts the dict shape; ``filter_name`` is required.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- SearchLibraryForCard",
+        "card_types": ["Creature"],
+        "subtypes": ["Bird"],
+        "mana_cost": {"generic": 4},
+        "power": 2,
+        "toughness": 4,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "search_library_for_card",
+                    "filter_name": "legendary_creature",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
