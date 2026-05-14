@@ -1312,11 +1312,15 @@ def test_per_shard_progress_rows_synthesize_machines_array(
         _seed_progress(
             conn, "eval_v9", shard_label="macbook",
             n_games_done=60, n_games_total=100, crashed=2,
+            elapsed_seconds=1200.5, timed_out=3,
+            wins_new=40, wins_old=18, draws=2,
             extra={"n_workers": 14, "status": "running"},
         )
         _seed_progress(
             conn, "eval_v9", shard_label="desktop",
             n_games_done=40, n_games_total=100, crashed=0,
+            elapsed_seconds=900.0, timed_out=0,
+            wins_new=30, wins_old=10, draws=0,
             extra={"n_workers": 16, "status": "completed"},
         )
     finally:
@@ -1331,6 +1335,19 @@ def test_per_shard_progress_rows_synthesize_machines_array(
     assert by_label["macbook"]["n_games_done"] == 60
     assert by_label["macbook"]["status"] == "running"
     assert by_label["desktop"]["status"] == "completed"
+    # Structured counter columns must surface onto each machine dict so
+    # the front-end can compute secs/game (elapsed_seconds /
+    # n_games_done), render the timeout count, and show wins/losses
+    # per shard. Without this fan-out the UI's secs/game fallback
+    # would always return a dash because the column-level fields
+    # never reach the JSON.
+    assert by_label["macbook"]["elapsed_seconds"] == 1200.5
+    assert by_label["macbook"]["n_games_total"] == 100
+    assert by_label["macbook"]["timed_out"] == 3
+    assert by_label["macbook"]["wins_new"] == 40
+    assert by_label["macbook"]["wins_old"] == 18
+    assert by_label["macbook"]["draws"] == 2
+    assert by_label["desktop"]["elapsed_seconds"] == 900.0
 
 
 def test_extra_json_preserves_train_loss_arrays(
