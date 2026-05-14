@@ -43603,6 +43603,471 @@ def test_cross_engine_search_library_for_card_synthetic_etb_creature_small_parit
     assert py_state.players[1].life == 20
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- look_top_n_put_one_in_hand_rest_to_
+# graveyard (round 21).
+#
+# Rust's Effect::LookTopNPutOneInHandRestToGraveyard { n: i32 }
+# already shipped end-to-end via round 28 (parse at cards.rs:3744-
+# 3761 + resolve at state_ops_resolve.rs:6366-6394 +
+# PendingDecision::PickCardFromExaminedChoice +
+# submit_pick_card_decision dispatcher); this slice ships the cross-
+# engine bridge translator + the regression pins that exercise it.
+#
+# Real-EoE consumer of the bare ETB shape: Codecracker Hound --
+# "When this creature enters, look at the top two cards of your
+# library. Put one into your hand and the other into your
+# graveyard." (n=2, no UEOT rider on the trigger, no other effect
+# composed with the look-N primitive). Single clean consumer; no
+# rider cascades to defer.
+#
+# Pin layout (in test_parity_smoke.py): 4 Rust regression pins
+# (substrate dispatcher + default-strategy fallback + short-library
+# guard + cross-controller routing) + 1 cross-engine end-to-end
+# synthetic ETB probe (drives both engines through the
+# Codecracker-Hound n=2 shape with deterministic top-of-library
+# pick on both engines). The 7 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_look_top_n_put_in_hand_state(
+    n: int = 2,
+    library_size: int = 5,
+):
+    """Helper: build a Rust state with a LookTopNPutOneInHandRest
+    ToGraveyard creature carrier on p0's bf and a vanilla-bears
+    library of the requested size. Returns (rust_state, source_id).
+    The carrier's ETB trigger fires on its own arrival; the trigger
+    lands on the stack on Rust as the only stack item.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * library_size,
+        p1_library=("Library Filler Bears (2/2)",) * 5,
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "LookTopN-PutInHand-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "look_top_n_put_one_in_hand_rest_to_graveyard",
+                        "n": n,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_look_top_n_put_in_hand_pushes_pending_decision_on_resolve():
+    """Rust regression pin: LookTopNPutOneInHandRestToGraveyard
+    resolve pops `min(n, lib_len)` cards into a
+    PickCardFromExaminedChoice pending decision and short-circuits
+    without moving any card to hand or graveyard yet. Pins the
+    resolve arm at state_ops_resolve.rs:6366-6394 (in particular the
+    `pending_decisions.push(PickCardFromExaminedChoice {...})` short-
+    circuit path -- the actual hand/graveyard routing happens in the
+    decision-drain phase, not the resolve arm).
+    """
+    rust_state, _source_id = _build_rust_look_top_n_put_in_hand_state(n=2)
+    assert rust_state.stack_size() == 1
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    p0_gy_before = rust_state.graveyard_sizes[0]
+    rust_state.resolve_top_of_stack_pause()
+    assert rust_state.stack_size() == 0
+    assert rust_state.has_pending_decision() is True
+    # Library shrinks by n (2 cards removed off the top into the
+    # pending decision).
+    assert rust_state.library_sizes[0] == p0_lib_before - 2
+    # Hand AND graveyard untouched until the decision drains.
+    assert rust_state.hand_sizes[0] == p0_hand_before
+    assert rust_state.graveyard_sizes[0] == p0_gy_before
+    # Pending decision shape: PickCardFromExaminedChoice with 2 cards.
+    pds = rust_state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "PickCardFromExaminedChoice"
+    assert len(pds[0]["cards"]) == 2
+
+
+def test_rust_look_top_n_put_in_hand_default_strategy_picks_top_card_to_hand():
+    """Rust regression pin: `auto_resolve_pending_decisions("default")`
+    on the PickCardFromExaminedChoice routes cards[0] (the topmost
+    popped) to hand and the rest to graveyard. Mirrors Python's
+    no-agent-seated fallback in
+    LookTopNPutOneInHandRestToGraveyard.resolve at
+    library_lookat.py:266-267 (`if hand_card is None: hand_card =
+    examined[0]`). Pins state_ops_decisions.rs:210-220 (the
+    PickCardFromExaminedChoice arm of auto_resolve_pending_decisions).
+    """
+    rust_state, _source_id = _build_rust_look_top_n_put_in_hand_state(n=2)
+    rust_state.resolve_top_of_stack_pause()
+    p0_lib_after_pause = rust_state.library_sizes[0]
+    p0_hand_after_pause = rust_state.hand_sizes[0]
+    p0_gy_after_pause = rust_state.graveyard_sizes[0]
+    rust_state.auto_resolve_pending_decisions("default")
+    assert rust_state.has_pending_decision() is False
+    # +1 to hand (the chosen top card).
+    assert rust_state.hand_sizes[0] == p0_hand_after_pause + 1
+    # +1 to graveyard (the other examined card).
+    assert rust_state.graveyard_sizes[0] == p0_gy_after_pause + 1
+    # Library unchanged from the pause point (already had n removed).
+    assert rust_state.library_sizes[0] == p0_lib_after_pause
+
+
+def test_rust_look_top_n_put_in_hand_short_library_no_underflow():
+    """Rust regression pin: library shorter than `n` does not underflow
+    -- only the available cards are popped into the pending decision.
+    Pins the `count.min(lib_len)` slicing in the resolve arm at
+    state_ops_resolve.rs:6378 on a 1-card library + n=2 query.
+    Sister pin to the LookAtTopNRevealOrCounter short-library pin
+    (round 20).
+    """
+    rust_state, _source_id = _build_rust_look_top_n_put_in_hand_state(
+        n=2, library_size=1,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    rust_state.resolve_top_of_stack_pause()
+    # Only 1 card removed (lib_len=1; n=2 was capped via .min()).
+    assert rust_state.library_sizes[0] == p0_lib_before - 1
+    pds = rust_state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "PickCardFromExaminedChoice"
+    assert len(pds[0]["cards"]) == 1
+    # Drain via default strategy: the single card goes to hand
+    # (cards[0]); no rest goes to graveyard.
+    p0_hand_after_pause = rust_state.hand_sizes[0]
+    p0_gy_after_pause = rust_state.graveyard_sizes[0]
+    rust_state.auto_resolve_pending_decisions("default")
+    assert rust_state.has_pending_decision() is False
+    assert rust_state.hand_sizes[0] == p0_hand_after_pause + 1
+    assert rust_state.graveyard_sizes[0] == p0_gy_after_pause
+
+
+def test_rust_look_top_n_put_in_hand_n_zero_silent_noop():
+    """Rust regression pin: n=0 is a valid zero-card resolve -- the
+    resolve arm pushes an EMPTY PickCardFromExaminedChoice and the
+    drain runs the resolve_pick_card_to_hand helper with chosen_idx=0
+    over an empty cards Vec. The cards.rs:3756-3760 parser allows
+    n>=0 (only NEGATIVE n raises). Library and hand both unchanged.
+    """
+    rust_state, _source_id = _build_rust_look_top_n_put_in_hand_state(
+        n=0, library_size=5,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    rust_state.resolve_top_of_stack_pause()
+    # Library unchanged (n=0).
+    assert rust_state.library_sizes[0] == p0_lib_before
+    # PickCardFromExaminedChoice queued with empty cards.
+    pds = rust_state.pending_decisions()
+    assert len(pds) == 1
+    assert pds[0]["kind"] == "PickCardFromExaminedChoice"
+    assert len(pds[0]["cards"]) == 0
+    # Drain: hand still unchanged; graveyard still unchanged.
+    rust_state.auto_resolve_pending_decisions("default")
+    assert rust_state.has_pending_decision() is False
+    assert rust_state.hand_sizes[0] == p0_hand_before
+    assert rust_state.library_sizes[0] == p0_lib_before
+
+
+def test_rust_look_top_n_put_in_hand_cross_controller_routing_p1_source():
+    """Rust regression pin: a p1-controlled source on p1's bf with a
+    p1 library: the resolve arm picks from the SOURCE-controller's
+    library (p1's), NOT the active player's (p0). active_player
+    stays at p0; the routing must derive controller from the
+    source's location, not from active_player.
+
+    Pins the `current_resolve_source_controller.unwrap_or(active_
+    player)` swap at state_ops_resolve.rs:6373-6376 -- a bug that
+    read active_player directly would mill p0's library and route
+    p0's card into p0's hand instead of touching p1's zones at all.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=("Library Filler Bears (2/2)",) * 5,
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "p1 LookTopN-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "look_top_n_put_one_in_hand_rest_to_graveyard",
+                        "n": 2,
+                    },
+                }
+            ],
+        },
+        1,  # owner = p1
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p1_lib_before = rust_state.library_sizes[1]
+    p0_hand_before = rust_state.hand_sizes[0]
+    p1_hand_before = rust_state.hand_sizes[1]
+    p1_gy_before = rust_state.graveyard_sizes[1]
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack_pause()
+    rust_state.auto_resolve_pending_decisions("default")
+    # p1's library shrank by 2 (the look-2). p0's library untouched.
+    assert rust_state.library_sizes[1] == p1_lib_before - 2
+    assert rust_state.library_sizes[0] == p0_lib_before
+    # p1's hand grew by 1; p0's hand untouched.
+    assert rust_state.hand_sizes[1] == p1_hand_before + 1
+    assert rust_state.hand_sizes[0] == p0_hand_before
+    # p1's graveyard grew by 1.
+    assert rust_state.graveyard_sizes[1] == p1_gy_before + 1
+
+
+# --- Cross-engine end-to-end synthetic ETB probe ---
+
+
+def test_cross_engine_look_top_n_put_in_hand_synthetic_etb_parity(
+    parity_smoke,
+):
+    """BLOCKED-BRIDGE-ARM slice -- cross-engine end-to-end synthetic
+    probe. Drives the
+    ``Effect::LookTopNPutOneInHandRestToGraveyard`` arm + the Python
+    ``LookTopNPutOneInHandRestToGraveyard`` class through both
+    engines via an ETB-trigger carrier; pins post-resolve hand/
+    graveyard routing agrees on both sides.
+
+    Probe shape (mirrors the round-20 LookAtTopN cross-engine
+    pattern):
+
+      1. Spec a 5-Bears library on p0 (vanilla bears so no rider
+         interactions on the examined cards' triggers).
+      2. Inject a Creature with the LookTopNPutOneInHandRest ETB
+         (n=2 -- the Codecracker Hound shape) onto p0's bf. The ETB
+         trigger fires on its own arrival; the trigger lands on the
+         stack on both engines.
+      3. Drain both stacks. Rust's auto-resolve drain on the
+         resulting PickCardFromExaminedChoice picks cards[0]
+         (default strategy at state_ops_decisions.rs:210-220).
+         Python's resolve hits the no-agent-seated path
+         (`agent is None` returns chosen_id=None ->
+         examined[0] fallback at library_lookat.py:266-267).
+      4. Cross-engine: p0's hand grew by 1 (the chosen top card);
+         p0's graveyard grew by 1 (the other examined card); p0's
+         library shrank by 2; lives unchanged.
+
+    Real-EoE consumer (mirrors): Codecracker Hound -- "When this
+    creature enters, look at the top two cards of your library. Put
+    one into your hand and the other into your graveyard." Same
+    n=2, no rider, no other effect composed.
+
+    Out of scope (deferred per round-17/18/19 synthetic-only-when-
+    riders-cascade precedent):
+
+      * Real Codecracker-Hound cross-engine probe -- needs cast-
+        from-hand mana pipeline OR full inject-and-fire-ENTERS
+        shape with the EoE printing's printing_id round-trip.
+        Synthetic probe here exercises the full bridge pathway;
+        the EoE-printing-specific real probe is a per-card slice.
+      * Reveal-time observer assertions on the chosen card's
+        identity (cards[0] picks the same ord-0 card on both
+        engines via the deterministic-top-of-library convention).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=("Library Filler Bears (2/2)",) * 5,
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "LookTopN-PutInHand-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "look_top_n_put_one_in_hand_rest_to_graveyard",
+                        "n": 2,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_p0_gy_before = rust_state.graveyard_sizes[0]
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.library_lookat import (
+        LookTopNPutOneInHandRestToGraveyard,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    creature_printing = CardPrinting(
+        name="LookTopN-PutInHand-Trigger Creature",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=LookTopNPutOneInHandRestToGraveyard(n=2),
+            ),
+        ),
+    )
+    py_source = py_state.new_object(
+        creature_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_p0_gy_before = len(py_state.players[0].graveyard)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    assert rust_state.has_pending_decision() is False
+
+    # ---- Cross-engine post-state ----
+    rust_p0_hand_after = rust_state.hand_sizes[0]
+    rust_p0_lib_after = rust_state.library_sizes[0]
+    rust_p0_gy_after = rust_state.graveyard_sizes[0]
+    py_p0_hand_after = len(py_state.players[0].hand)
+    py_p0_lib_after = len(py_state.players[0].library)
+    py_p0_gy_after = len(py_state.players[0].graveyard)
+
+    assert rust_p0_hand_after == rust_p0_hand_before + 1, (
+        f"Rust hand should grow by 1 (chosen card to hand); "
+        f"before={rust_p0_hand_before}, after={rust_p0_hand_after}"
+    )
+    assert py_p0_hand_after == py_p0_hand_before + 1, (
+        f"Python hand should grow by 1 (chosen card to hand); "
+        f"before={py_p0_hand_before}, after={py_p0_hand_after}"
+    )
+    assert rust_p0_gy_after == rust_p0_gy_before + 1, (
+        f"Rust graveyard should grow by 1 (other examined card to "
+        f"graveyard); before={rust_p0_gy_before}, "
+        f"after={rust_p0_gy_after}"
+    )
+    assert py_p0_gy_after == py_p0_gy_before + 1, (
+        f"Python graveyard should grow by 1 (other examined card to "
+        f"graveyard); before={py_p0_gy_before}, "
+        f"after={py_p0_gy_after}"
+    )
+    assert rust_p0_lib_after == rust_p0_lib_before - 2, (
+        f"Rust library should shrink by 2; "
+        f"before={rust_p0_lib_before}, after={rust_p0_lib_after}"
+    )
+    assert py_p0_lib_after == py_p0_lib_before - 2, (
+        f"Python library should shrink by 2; "
+        f"before={py_p0_lib_before}, after={py_p0_lib_after}"
+    )
+    # Cross-engine deltas agree.
+    assert (
+        rust_p0_hand_after - rust_p0_hand_before
+        == py_p0_hand_after - py_p0_hand_before
+    )
+    assert (
+        rust_p0_gy_after - rust_p0_gy_before
+        == py_p0_gy_after - py_p0_gy_before
+    )
+    assert (
+        rust_p0_lib_after - rust_p0_lib_before
+        == py_p0_lib_after - py_p0_lib_before
+    )
+    assert list(rust_state.life_totals) == [20, 20]
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

@@ -3231,6 +3231,84 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             max_mv=int(eff_dict.get("max_mv", 0)),
             may_fail=bool(eff_dict.get("may_fail", True)),
         )
+    if kind == "look_top_n_put_one_in_hand_rest_to_graveyard":
+        # **Round-21 BLOCKED-BRIDGE-ARM slice -- LookTopNPutOneInHand
+        # RestToGraveyard (Codecracker Hound + Commune-with-Evil
+        # family).** Rust substrate already landed via round 28
+        # (parse at cards.rs:3744-3761 + resolve at
+        # state_ops_resolve.rs:6366-6394 +
+        # PendingDecision::PickCardFromExaminedChoice +
+        # submit_pick_card_decision dispatcher); this slice wires the
+        # cross-engine bridge translator so the printed-text "look at
+        # the top N cards of your library; put one into your hand and
+        # the rest into your graveyard" surface round-trips end-to-end
+        # on the existing real-EoE consumer (Codecracker Hound n=2).
+        #
+        # Round-19 audit refresh listed this kind under §2.4 BLOCKED-
+        # BRIDGE-ARM ("look_top_n_put_one_in_hand_rest_to_graveyard
+        # bridge arm" -- 1 EoE card: Codecracker Hound). Same
+        # precedent as round 18 (SetBasePT) + round 19 (MayDo) +
+        # round-20 sister-slices (AttachTo / EquipTo /
+        # OptionalSacArtifact / LookAtTopNRevealOrCounter):
+        # substrate-already-on-main + bridge-arm-was-the-staleness-
+        # gap.
+        #
+        # **Field shape (no renames).** Python's
+        # ``LookTopNPutOneInHandRestToGraveyard(n: int = 4)``
+        # (effects/generic/library_lookat.py:227) and Rust's
+        # ``Effect::LookTopNPutOneInHandRestToGraveyard { n: i32 }``
+        # carry the SAME field name. Bridge passes `n` through
+        # verbatim with `int(...)` coercion. `n` is REQUIRED -- the
+        # bridge raises on missing `n` to mirror Rust's parse_effect
+        # contract at cards.rs:3744-3760 (required `n` field with
+        # PyValueError on missing). Python's class-level default of 4
+        # (Commune-with-Evil shape) is NOT used by the bridge; the
+        # bridge enforces explicit `n` to keep the dict-shape contract
+        # aligned with Rust's parse path -- mirrors the round-20
+        # LookAtTopNRevealOrCounter `n`-required precedent.
+        #
+        # **Resolve semantics (cross-engine).** Both engines split the
+        # resolve into a "look + queue choice" phase + an "answer
+        # choice + apply" phase, but the wire-shape differs:
+        # Rust pushes `PendingDecision::PickCardFromExaminedChoice`
+        # at state_ops_resolve.rs:6387-6393 and short-circuits; the
+        # choice is drained via
+        # `submit_pick_card_decision(chosen_id)`. Python's
+        # `LookTopNPutOneInHandRestToGraveyard.resolve` synchronously
+        # calls `agent.choose_card_from_library(...)` and resolves
+        # inline: chosen card moves to hand + reveal_to_all (Python-
+        # side log/observability with no Rust surface yet); the rest
+        # move to graveyard in popped order. Both converge on the
+        # post-resolve observable: one card to hand + the remainder
+        # in graveyard. Empty-library-after-removing-some case is
+        # handled cleanly on both engines (Rust's
+        # `count.min(lib_len)` guard at state_ops_resolve.rs:6378;
+        # Python's `examined = p.library[:self.n]` slicing is
+        # naturally bounded; Python's empty-examined returns silently
+        # at line 253-254).
+        #
+        # **Real EoE consumer** unblocked: Codecracker Hound
+        # ("When this creature enters, look at the top two cards of
+        # your library. Put one into your hand and the other into your
+        # graveyard." -- n=2). The bridge dict shape is
+        # ``{"kind": "look_top_n_put_one_in_hand_rest_to_graveyard",
+        # "n": 2}``. Codecracker Hound has no UEOT keyword rider on
+        # the trigger and no other effect composed with the look-N
+        # primitive -- it's a clean single-effect ETB consumer ideal
+        # for the bare bridge arm.
+        from mtg_bot.effects.generic.library_lookat import (
+            LookTopNPutOneInHandRestToGraveyard,
+        )
+        if "n" not in eff_dict:
+            raise ValueError(
+                "look_top_n_put_one_in_hand_rest_to_graveyard bridge "
+                "arm: missing required field 'n' (mirrors Rust "
+                "parse_effect's required-n contract at cards.rs:3744-"
+                "3760)"
+            )
+        return LookTopNPutOneInHandRestToGraveyard(
+            n=int(eff_dict["n"]),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
