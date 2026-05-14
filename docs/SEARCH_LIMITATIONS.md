@@ -1634,6 +1634,150 @@ as cheap. Perf neutral on the fix.
 
 ---
 
+## Rust port — `Effect::PumpCreaturesOpponentsControlUntilCasterNextTurn` cleanup-gate divergence (Mouth of the Storm)
+
+**Location**:
+`rust/src/cards.rs` (variant declaration in the `Effect` enum
++ `parse_effect` arm + `effect_to_pydict` arm —
+`PumpCreaturesOpponentsControlUntilCasterNextTurn`),
+`rust/src/state_ops_resolve.rs` (resolve arm — pushes the SAME
+`UeotModifier::PowerToughnessBonus` the bare-EOT sibling pushes
+instead of a tagged-lifetime payload),
+`rust/src/state.rs:188-226` (`UeotModifier` enum — implicitly
+`expires_at = "cleanup"` per the doc-comment at `state.rs:182-187`),
+`src/mtg_bot/effects/generic/pump.py:779-891`
+(Python's `PumpCreaturesOpponentsControlUntilEOT` with the
+`until_caster_next_turn=True` branch that routes through
+`grant_pt_pump_until_player_next_turn` — layer-7c registry entry
+tagged `expires_at="controller_untap"` /
+`expires_at_player_id` = caster).
+
+Pinned by:
+`tests/test_parity_smoke.py::test_cross_engine_real_eoe_mouth_of_the_storm_etb_extended_duration_debuff_anthem_parity`
+(real-EoE ETB probe — pins the SHARED post-resolve effective-P/T
+agreement between the engines; explicitly out-of-scope: the
+cross-turn cleanup-gate divergence) plus the four synthetic
+regression pins at
+`tests_rust/test_ueot.py::test_*pump_creatures_opponents_control_until_caster_next_turn*`.
+
+**What we do today**: Rust's resolve arm for the new
+`Effect::PumpCreaturesOpponentsControlUntilCasterNextTurn` variant
+(Mouth-of-the-Storm sibling — "creatures your opponents control
+get -3/-0 until your next turn") pushes the SAME
+`UeotModifier::PowerToughnessBonus` payload the bare-EOT sibling
+pushes. The `UeotModifier` enum is implicitly cleanup-step
+expiration (drained wholesale by `clear_ueot_modifiers_all` /
+`cleanup_step_for_active_player`); there's no per-modifier
+lifetime tag yet. So Rust drops the debuff at the casting-turn
+cleanup, while Python keeps it through the opponent's full
+subsequent turn and only expires it at the start of the source-
+controller's NEXT turn.
+
+**Why this is wrong under current CR**: the printed oracle text
+on Mouth of the Storm is "until YOUR NEXT TURN", not "until end
+of turn". The duration is part of the rules text. Python honors
+it via the `until_caster_next_turn=True` branch on the unified
+Pump dataclass; Rust's first-slice resolve arm flattens both
+durations onto the same cleanup-step lifetime and so terminates
+the debuff one full opponent-turn early.
+
+**Why we shipped substrate-only**: extending `UeotModifier` with
+a tagged-lifetime field cascades through:
+  * the four effective-P/T / effective-keyword readers in
+    `rust/src/state.rs`;
+  * the two cleanup primitives (`clear_ueot_modifiers_all` and
+    `cleanup_step_for_active_player`) — both must learn to
+    selectively drain by lifetime;
+  * a new untap-step hook in `rust/src/state_ops_steps.rs` that
+    expires "until your next turn" modifiers when the source-
+    controller's untap step fires;
+  * GameState-level bookkeeping for the per-modifier
+    `expires_at_player_id` field (today the modifier is fully
+    self-contained — adding a player-id forces the cleanup
+    primitives to know who's untapping).
+
+That cascade is well beyond a single per-EoE-card slice's budget
+(estimated 60-100 LOC across 4 files + new test pins for each
+reader). Per the established Option-B precedent (Rounds 12-15 —
+Rescue Skiff / Seam Rip / Blooming Stinger), we ship the Effect
+variant + bridge arm now so:
+  1. Mouth of the Storm routes through the Python engine cleanly
+     (the bridge translates Rust's discriminator to Python's
+     `until_caster_next_turn=True`).
+  2. The Rust-side discriminator is in place — the cleanup-gate
+     follow-up slice swaps ONLY the `UeotModifier` push line in
+     `state_ops_resolve.rs` for a tagged-lifetime payload; every
+     parse arm, every effect_to_pydict round-trip, every test
+     pin, every bridge call site already targets the right
+     discriminator and won't need to change.
+
+**Failure mode**: when Mouth of the Storm resolves on Rust, the
+opponent's creatures lose their -3/-0 debuff at the casting
+turn's cleanup. On Python they keep it through their full turn
+and lose it at the controller's NEXT untap step. Strength gap:
+Rust over-values the opponent's combat strength on the opponent's
+following turn (incorrectly thinks the debuff is gone), Python
+correctly keeps the debuff applied. The bot trained against Rust
+self-play would under-value Mouth of the Storm relative to its
+true CR-compliant strength, since the extended-duration upside
+(an opponent attack-step where the debuff still applies) is
+invisible.
+
+**Cross-engine smoke surfacing**: the real-EoE Mouth of the
+Storm probe exercises the post-resolve agreement (both engines
+push the modifier; Bait Bears go from 2/2 to (-1)/2 effective
+on both engines). The cross-turn divergence is explicitly
+documented in the probe docstring and is NOT asserted (asserting
+parity there would fail until the cleanup-gate slice lands).
+
+**Why it's OK for now**: the divergence is observable only on
+the (Mouth of the Storm in play ∧ at least one round-trip across
+the casting-turn cleanup → opponent's turn) intersection. Mouth
+of the Storm is a 7-mana uncommon — late-game tempo play, fires
+once on entry; the divergent intersection is gameplay-real but
+its window opens late and closes at the controller's untap. The
+post-resolve substrate (modifier APPLIED, effective P/T pumped /
+debuffed) is bit-identical between engines. The cross-engine
+probe pins the agreement; the divergence note in the probe
+docstring + this entry document the gap.
+
+**Fix scope when prioritized**: medium.
+1. Extend `rust/src/state.rs::UeotModifier` with a per-variant
+   lifetime tag — either a sibling enum
+   `UeotLifetime { Cleanup, UntilPlayerNextUntap { player_id: u8 } }`
+   carried as a second field on each `UeotModifier::*`, or split
+   the variants into Cleanup-vs-UntilPlayerNextUntap parallel
+   families. Pick the variant-shape change that minimizes
+   reader-side disruption (the four readers in `state.rs` and
+   the two cleanup primitives all do exhaustive matches).
+2. Update `clear_ueot_modifiers_all` and
+   `cleanup_step_for_active_player` to drain ONLY the cleanup-
+   tagged modifiers; survive the until-player-next-untap-tagged
+   ones.
+3. Add an untap-step hook in `rust/src/state_ops_steps.rs`'s
+   `run_untap_step` that drains until-player-next-untap-tagged
+   modifiers WHOSE `player_id` matches the active player.
+4. Swap the `UeotModifier::PowerToughnessBonus` push in
+   `state_ops_resolve.rs`'s
+   `Effect::PumpCreaturesOpponentsControlUntilCasterNextTurn`
+   resolve arm to the until-player-next-untap-tagged variant
+   with `player_id = source_controller`.
+5. Flip the cross-turn-divergence note in the probe docstring
+   to a parity assertion: both engines, post-opponent-turn,
+   debuff still applied; post-controller-untap, debuff cleared.
+6. Remove THIS SEARCH_LIMITATIONS entry.
+
+**Impact estimate**: bounded to (Mouth of the Storm + any future
+"until your next turn" mass-debuff card) × (cross-cleanup-step
+window). Strength cost: small per real-game encounter — Mouth of
+the Storm is a one-off 7-mana ETB; the missing extended-duration
+window is ~one combat-step's worth of mis-valuation per cast.
+Perf cost on the fix: small — the cleanup primitives already
+walk every battlefield object; selective drain is ~5 extra LOC
+in the inner loop.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
