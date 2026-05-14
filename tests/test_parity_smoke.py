@@ -41324,6 +41324,686 @@ def test_cross_engine_attach_to_target_creature_synthetic_etb_parity(
     assert py_state.players[1].life == 20
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice (round-19 audit refresh) -- "you may
+# sacrifice an artifact. If you do, [inner]" composer.
+#
+# Rust's Effect::OptionalSacArtifactForEffect { inner_effect } at
+# cards.rs:1371 (parser cards.rs:3656-3671, resolve at
+# state_ops_resolve.rs:5551-5630) shipped end-to-end before this
+# slice; this slice ships the cross-engine bridge arm + the
+# regression pins that exercise it.
+#
+# Real-EoE consumer of the bare composer shape: Selfcraft Mechan
+# ("you may sacrifice an artifact" half of the trigger) + Larval
+# Scoutlander (composed with a deferred SearchLibraryForBasicLand
+# Tapped inner). Selfcraft's reflexive "When you do, put a +1/+1
+# counter on target creature and draw a card" rider lives on a
+# separate reflexive trigger and is a deferred slice (needs
+# reflexive-trigger substrate verification on both engines); the
+# bare arm below exercises the may-sac-then-inner half on a
+# synthetic ETB with a DrawCards inner so the substrate is
+# observably driven without needing the reflexive composition.
+# =====================================================================
+
+
+def test_rust_optional_sac_artifact_for_effect_basic_drains_artifact_and_fires_inner():
+    """BLOCKED-BRIDGE-ARM slice -- basic OptionalSacArtifact pin.
+    A creature source on p0's bf with a Mox-shape Artifact also on
+    p0's bf: ETB trigger fires OptionalSac(DrawCards(1)), drains.
+    The Mox is sacrificed (moved to p0's graveyard) AND p0's hand
+    grows by 1 (the inner DrawCards fires after the sacrifice).
+
+    Pins the resolve arm's:
+      - source-controller derivation via the per-zone scan
+        (state_ops_resolve.rs:5552-5566) finds the source on p0's bf
+      - first-artifact pick (state_ops_resolve.rs:5582-5593) picks
+        the Mox (the only artifact on the controller's bf)
+      - sacrifice mechanics (CR 400.7 reset of obj fields, push to
+        graveyard, mark_left_battlefield_if_nonland) work cleanly
+      - apply_effect recursion fires the inner DrawCards
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Mox-shape artifact: pre-seat on p0's bf.
+    mox_id = rust_state.register_and_inject_object(
+        {
+            "name": "Mana Mox (Artifact)",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 0},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # OptionalSac source: a Robot Artificer (Artifact Creature). Note
+    # its OWN entry would also be a legal sacrifice candidate, BUT
+    # Rust's first-artifact pick walks bf in insertion order so the
+    # Mox (inserted FIRST) is picked over the source.
+    rust_state.register_and_inject_object(
+        {
+            "name": "OptionalSac-Trigger Robot",
+            "card_types": ["Artifact", "Creature"],
+            "subtypes": ["Robot", "Artificer"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "optional_sac_artifact_for_effect",
+                        "inner_effect": {
+                            "kind": "draw_cards", "count": 1,
+                        },
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: source's arrival should fire SourceIsSelf ENTERS and "
+        "land OptionalSacArtifactForEffect on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    p0_hand_before = rust_state.hand_sizes[0]
+    p0_lib_before = rust_state.library_sizes[0]
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Mox sacrificed -> p0's graveyard.
+    p0_gy_ids = [e["id"] for e in rust_state.graveyard_snapshot(0)]
+    assert mox_id in p0_gy_ids, (
+        f"Rust: Mox (id={mox_id}) should be in p0's graveyard after "
+        f"OptionalSac fires; got gy_ids={p0_gy_ids}"
+    )
+    # Inner DrawCards(1) fired -> p0's hand grew by 1, library shrank by 1.
+    assert rust_state.hand_sizes[0] == p0_hand_before + 1, (
+        f"Rust: p0 hand should grow by 1 (inner DrawCards(1)); "
+        f"got before={p0_hand_before} after={rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.library_sizes[0] == p0_lib_before - 1, (
+        f"Rust: p0 library should shrink by 1; got before={p0_lib_before} "
+        f"after={rust_state.library_sizes[0]}"
+    )
+
+
+def test_rust_optional_sac_artifact_no_artifact_silently_fizzles_full_no_op():
+    """BLOCKED-BRIDGE-ARM slice -- no-artifact silent-fizzle pin.
+    If source-controller has NO artifact on bf (the source itself is
+    a Creature-only, not Artifact), the OptionalSac arm short-
+    circuits with "no artifact -> no-op" -- neither sacrifices
+    anything NOR fires the inner DrawCards. Pins the resolve arm's
+    "let Some(artifact_id) = artifact_id else { return Ok(()); }"
+    silent-skip branch (state_ops_resolve.rs:5594-5596).
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # CREATURE-ONLY source (no Artifact card-type on the printing).
+    # When the source resolves its OptionalSac, no artifact is on
+    # p0's bf -> resolve arm fizzles silently.
+    rust_state.register_and_inject_object(
+        {
+            "name": "OptionalSac-Trigger Bears (creature-only)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "optional_sac_artifact_for_effect",
+                        "inner_effect": {
+                            "kind": "draw_cards", "count": 1,
+                        },
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    p0_hand_before = rust_state.hand_sizes[0]
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_gy_size_before = len(rust_state.graveyard_snapshot(0))
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Full no-op: no sacrifice, no inner DrawCards fire.
+    assert len(rust_state.graveyard_snapshot(0)) == p0_gy_size_before, (
+        "Rust: p0's graveyard should be unchanged (no artifact to "
+        "sacrifice -> no-op short-circuit)"
+    )
+    assert rust_state.hand_sizes[0] == p0_hand_before, (
+        "Rust: p0's hand should be unchanged (no-op short-circuit "
+        "skips the inner DrawCards too)"
+    )
+    assert rust_state.library_sizes[0] == p0_lib_before
+
+
+def test_rust_optional_sac_artifact_picks_first_in_bf_order():
+    """BLOCKED-BRIDGE-ARM slice -- bf-iteration-order pin. With TWO
+    artifacts on source-controller's bf, the resolve arm's
+    ``find_map`` picks the FIRST one (insertion order, NOT random,
+    NOT chosen). Pins the deterministic-pick property of the resolve
+    arm (state_ops_resolve.rs:5582-5593's bf.iter().find_map(...)).
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Insert TWO artifacts: Mox FIRST then Sol Ring SECOND. Resolve
+    # arm walks in insertion order, picking Mox.
+    mox_id = rust_state.register_and_inject_object(
+        {
+            "name": "First Artifact (Mox)",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 0},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    sol_ring_id = rust_state.register_and_inject_object(
+        {
+            "name": "Second Artifact (Sol Ring)",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "OptionalSac-Trigger Bears",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "optional_sac_artifact_for_effect",
+                        "inner_effect": {
+                            "kind": "draw_cards", "count": 1,
+                        },
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Mox picked (first in bf iteration order); Sol Ring still on bf.
+    p0_gy_ids = [e["id"] for e in rust_state.graveyard_snapshot(0)]
+    assert mox_id in p0_gy_ids, (
+        f"Rust: Mox (id={mox_id}, first-inserted artifact) should be "
+        f"sacrificed; got gy_ids={p0_gy_ids}"
+    )
+    p0_bf_ids = [
+        e["id"] for e in rust_state.battlefield_snapshot()
+        if e["controller_id"] == 0
+    ]
+    assert sol_ring_id in p0_bf_ids, (
+        f"Rust: Sol Ring (id={sol_ring_id}, second-inserted) should "
+        f"still be on p0's bf; got p0 bf ids={p0_bf_ids}"
+    )
+
+
+def test_rust_optional_sac_artifact_cross_controller_routing_p1_source_on_p0_turn():
+    """BLOCKED-BRIDGE-ARM slice -- cross-controller routing pin. A
+    p1-controlled OptionalSac source on p1's bf with a p1 Mox: the
+    OptionalSac resolve picks from the SOURCE-controller's bf (p1's),
+    NOT the active player's (p0). active_player stays at p0; the
+    routing must derive controller from the source's location.
+
+    Pins state_ops_resolve.rs:5552-5567's per-zone scan that
+    captures src_controller from the bf the source is found on,
+    NOT from state.active_player. A bug that read active_player
+    instead would pick from p0's bf (empty in this scenario) and
+    short-circuit no-op, leaving the Mox un-sacrificed.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=(),
+        p1_library=("Library Filler Bears (2/2)",) * 5,
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # active_player stays default (p0). Mox + source land on p1's bf.
+    mox_id = rust_state.register_and_inject_object(
+        {
+            "name": "p1 Mox",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 0},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        1,  # owner = p1
+        ZONE_BATTLEFIELD,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "p1 OptionalSac-Trigger Bears",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "optional_sac_artifact_for_effect",
+                        "inner_effect": {
+                            "kind": "draw_cards", "count": 1,
+                        },
+                    },
+                }
+            ],
+        },
+        1,  # owner = p1
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    p1_hand_before = rust_state.hand_sizes[1]
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Mox sacrificed to p1's graveyard (NOT p0's).
+    p1_gy_ids = [e["id"] for e in rust_state.graveyard_snapshot(1)]
+    p0_gy_ids = [e["id"] for e in rust_state.graveyard_snapshot(0)]
+    assert mox_id in p1_gy_ids, (
+        f"Rust: Mox should land in p1's graveyard (source-controller "
+        f"derivation routes to p1); got p1_gy_ids={p1_gy_ids}, "
+        f"p0_gy_ids={p0_gy_ids}"
+    )
+    # Inner DrawCards routes to p1 (the source-controller).
+    assert rust_state.hand_sizes[1] == p1_hand_before + 1, (
+        f"Rust: p1's hand should grow by 1 (DrawCards inner routed "
+        f"to source-controller p1); got p1 hand "
+        f"before={p1_hand_before} after={rust_state.hand_sizes[1]}"
+    )
+
+
+def test_rust_optional_sac_artifact_inner_targeting_forwarded():
+    """BLOCKED-BRIDGE-ARM slice -- targeting-forward pin. With a
+    GainLife inner (no targets needed), the OptionalSac arm's
+    apply_effect recursion fires the inner end-to-end and grows the
+    source-controller's life by the inner's amount. Pins that the
+    apply_effect recursion path preserves source_obj_id so the
+    inner's controller-derivation reads the SAME source as the outer
+    OptionalSac arm.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Mox (sacrificable)",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 0},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "OptionalSac+GainLife Source",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "optional_sac_artifact_for_effect",
+                        "inner_effect": {
+                            "kind": "gain_life", "amount": 3,
+                        },
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    assert rust_state.life_totals[0] == 20
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Inner GainLife(3) fired -> p0's life grew from 20 to 23.
+    assert rust_state.life_totals[0] == 23, (
+        f"Rust: p0 life should be 23 after OptionalSac->GainLife(3); "
+        f"got {rust_state.life_totals[0]}"
+    )
+
+
+def test_cross_engine_optional_sac_artifact_synthetic_etb_parity(
+    parity_smoke,
+):
+    """BLOCKED-BRIDGE-ARM slice -- cross-engine end-to-end synthetic
+    probe. Drives the ``Effect::OptionalSacArtifactForEffect`` arm +
+    the ``OptionalSacArtifactForEffect`` Python class through both
+    engines via an ETB-trigger carrier; pins post-resolve outcomes
+    agree on both sides.
+
+    Probe shape:
+      1. Spec a 5-Bears library on p0 (DrawCards inner doesn't fizzle).
+      2. Pre-seat a Mox-shape Artifact on p0's bf.
+      3. Inject a Robot Artificer source with an
+         OptionalSacArtifact(DrawCards(1)) ETB onto p0's bf. The ETB
+         trigger fires on its own arrival; the trigger lands on the
+         stack on both engines.
+      4. Drain both stacks. Rust auto-sacrifices the Mox (first-
+         artifact pick) + fires the inner DrawCards. Python's
+         OptionalSacArtifactForEffect.resolve calls
+         Agent.choose_yes_no (default-True) + Agent.choose_sacrifice
+         (shim returns first option, the Mox) + fires the inner.
+      5. Cross-engine: Mox on each side's graveyard; p0's hand grew
+         by 1; lives unchanged.
+
+    Real-EoE consumer of the bare composer shape (without the
+    reflexive rider): Selfcraft Mechan ("you may sacrifice an
+    artifact" half) + Larval Scoutlander (composed with deferred
+    SearchLibraryForBasicLandTapped inner). Selfcraft's "When you
+    do, put a +1/+1 counter on target creature and draw a card"
+    reflexive rider needs reflexive-trigger substrate verification
+    and is a separate slice; this probe drives the bare may-sac-
+    then-inner composition with a DrawCards inner.
+
+    Out of scope (documented):
+
+      * Selfcraft Mechan reflexive "When you do, put a +1/+1 counter
+        on target creature and draw a card" rider -- needs reflexive-
+        trigger substrate verification on both engines + a separate
+        ``put_plus_one_counter_on_target_creature`` / DrawCards
+        composer; deferred.
+      * Larval Scoutlander composition (OptionalSacArtifact +
+        SearchLibraryForBasicLandTapped) -- needs the
+        SearchLibraryForBasicLandTapped bridge arm (its substrate is
+        on Rust at cards.rs:217 but the bridge arm is missing);
+        deferred until that arm lands.
+      * "No" decision routing cross-engine -- needs a no-answering
+        agent shim on Python that mirrors Rust's "decline" path.
+        Rust today auto-yeses (no may-pause); the Python may-decline
+        path isn't asymmetric-driven by this probe.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_mox_id = rust_state.register_and_inject_object(
+        {
+            "name": "Sacrificable Mox",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 0},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "OptionalSac-Trigger Robot",
+            "card_types": ["Artifact", "Creature"],
+            "subtypes": ["Robot", "Artificer"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "optional_sac_artifact_for_effect",
+                        "inner_effect": {
+                            "kind": "draw_cards", "count": 1,
+                        },
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: source's arrival should fire SourceIsSelf ENTERS and "
+        "land OptionalSacArtifactForEffect on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p0_lib_before = rust_state.library_sizes[0]
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.combinators import OptionalSacArtifactForEffect
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.predicates import IsSelf
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import Zone
+
+    # Pre-seat a Mox on p0's bf so OptionalSac has something to pick.
+    mox_printing = CardPrinting(
+        name="Sacrificable Mox",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_mox = py_state.new_object(
+        mox_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_mox.summoning_sick = False
+    py_mox.tapped = False
+    py_mox.damage = 0
+    py_mox.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_mox)
+
+    # Seat a yes+first-pick agent on p0 so the may-sac decides yes
+    # and picks the Mox (the first option). Mirrors Rust's
+    # auto-yes-and-first deterministic behavior.
+    from tests.parity._picker_shims import _SacrificeFirstAgent
+
+    class _YesAgent(_SacrificeFirstAgent):
+        def choose_yes_no(self, state, player_id, prompt):
+            return True
+
+    py_state.players[0].agent = _YesAgent()
+
+    robot_printing = CardPrinting(
+        name="OptionalSac-Trigger Robot",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Artifact Creature -- Robot Artificer",
+        supertypes=(),
+        card_types=("Artifact", "Creature"),
+        subtypes=("Robot", "Artificer"),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=OptionalSacArtifactForEffect(
+                    inner_effect=DrawCards(amount=1),
+                ),
+            ),
+        ),
+    )
+    py_robot = py_state.new_object(
+        robot_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_robot.summoning_sick = False
+    py_robot.tapped = False
+    py_robot.damage = 0
+    py_robot.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_robot)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p0_lib_before = len(py_state.players[0].library)
+    _trigger_etb_abilities(py_state, py_robot)
+    assert len(py_state.stack) == 1, (
+        "Python: source's arrival should fire IsSelf ENTERS and land "
+        "OptionalSacArtifactForEffect on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Cross-engine post-state ----
+    # Mox sacrificed (in p0's graveyard) on both sides.
+    rust_p0_gy_ids = [
+        e["id"] for e in rust_state.graveyard_snapshot(0)
+    ]
+    assert rust_mox_id in rust_p0_gy_ids, (
+        f"Rust: Mox (id={rust_mox_id}) should be in p0's graveyard; "
+        f"got {rust_p0_gy_ids}"
+    )
+    py_p0_gy_ids = [o.id for o in py_state.players[0].graveyard]
+    assert py_mox.id in py_p0_gy_ids, (
+        f"Python: Mox (id={py_mox.id}) should be in p0's graveyard; "
+        f"got {py_p0_gy_ids}"
+    )
+    # Inner DrawCards(1) fired on both sides.
+    rust_p0_hand_after = rust_state.hand_sizes[0]
+    rust_p0_lib_after = rust_state.library_sizes[0]
+    py_p0_hand_after = len(py_state.players[0].hand)
+    py_p0_lib_after = len(py_state.players[0].library)
+    assert rust_p0_hand_after == rust_p0_hand_before + 1, (
+        f"Rust p0 hand should grow by 1 (inner DrawCards(1)); "
+        f"before={rust_p0_hand_before} after={rust_p0_hand_after}"
+    )
+    assert rust_p0_lib_after == rust_p0_lib_before - 1
+    assert py_p0_hand_after == py_p0_hand_before + 1, (
+        f"Python p0 hand should grow by 1; "
+        f"before={py_p0_hand_before} after={py_p0_hand_after}"
+    )
+    assert py_p0_lib_after == py_p0_lib_before - 1
+    # Cross-engine deltas agree.
+    assert (
+        rust_p0_hand_after - rust_p0_hand_before
+        == py_p0_hand_after - py_p0_hand_before
+    )
+    assert (
+        rust_p0_lib_after - rust_p0_lib_before
+        == py_p0_lib_after - py_p0_lib_before
+    )
+    # Lives unchanged on both sides (DrawCards inner doesn't touch life).
+    assert list(rust_state.life_totals) == [20, 20]
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

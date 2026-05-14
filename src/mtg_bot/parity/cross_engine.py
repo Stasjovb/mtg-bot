@@ -2920,6 +2920,108 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             EquipToTargetCreatureYouControl,
         )
         return EquipToTargetCreatureYouControl()
+    if kind == "optional_sac_artifact_for_effect":
+        # BLOCKED-BRIDGE-ARM slice (round-19 audit refresh) -- "you may
+        # sacrifice an artifact. If you do, [inner_effect]." composer.
+        # Rust's
+        # ``Effect::OptionalSacArtifactForEffect { inner_effect:
+        # Box<Effect> }`` (cards.rs:1371, parser at cards.rs:3656-3671)
+        # already shipped end-to-end (parse + resolve at
+        # state_ops_resolve.rs:5551-5630); this slice just wires the
+        # cross-engine bridge translator so probes can drive both arms
+        # with one dict on both engines. Rust substrate landed before
+        # this slice; this slice is BRIDGE-ARM-ONLY.
+        #
+        # Translates ``{"kind": "optional_sac_artifact_for_effect",
+        # "inner_effect": <effect_dict>}`` to Python
+        # ``OptionalSacArtifactForEffect(inner_effect=<Effect>)`` from
+        # ``effects/combinators.py:299``. Field name agrees on both
+        # engines (``inner_effect``); no rename in the bridge -- this
+        # is the SECOND composer arm with a name-stable inner field
+        # (the may_do arm above renames Rust's ``inner_effect`` to
+        # Python's ``inner``; this arm leaves the name alone because
+        # Python's ``OptionalSacArtifactForEffect.inner_effect``
+        # mirrors the Rust naming).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm at
+        # state_ops_resolve.rs:5551-5630 picks the FIRST artifact on
+        # source-controller's bf and sacrifices it deterministically
+        # (no may-or-may-not pause), then recursively applies the
+        # inner. No artifact = full no-op (no inner either). Python's
+        # ``OptionalSacArtifactForEffect.resolve`` first asks the
+        # controller's ``Agent.choose_yes_no`` and, on yes, picks via
+        # ``Agent.choose_sacrifice`` (or first-option fallback when
+        # agent is None), routes through ``turn.sacrifice``, then
+        # invokes ``inner_effect.resolve(state, controller_id,
+        # targets)``. The two engines diverge on the may-or-not pause
+        # wire-shape (Rust auto-yes-and-first; Python asks the agent)
+        # but converge on the post-resolve observable when the agent
+        # answers yes + picks the first option (mirroring Rust's
+        # deterministic-first behavior). Probes that need to drive
+        # parity install a yes-answering agent on the source's
+        # controller (the test ``DummyAgent.choose_yes_no -> True`` +
+        # ``choose_sacrifice -> first`` shim mirrors Rust's
+        # auto-yes-and-first behavior).
+        #
+        # **Targeting forwarding.** Python's class delegates
+        # ``requires_target`` / ``legal_targets`` to ``inner_effect``
+        # so inner effects with their own target requirements
+        # (``DealDamage(target=...)``, ``PutPlusOneCounterOnCreature``,
+        # ...) work cleanly. The ``targets`` tuple passed to
+        # ``resolve`` is forwarded to the inner intact. Rust's
+        # ``apply_effect`` recursion preserves the same source_obj_id
+        # so any inner that reads ``state.resolving_source`` (or
+        # equivalent) sees the OUTER source, not the sacrificed
+        # artifact -- matches Python's resolve-time behavior.
+        #
+        # **Recursive translation.** ``inner_effect`` is itself an
+        # effect-dict; we recurse into ``_ta_dict_to_python_effect``
+        # for it. This unlocks the
+        # ``OptionalSacArtifactForEffect(Sequence([
+        # PutPlusOneCounter, DrawCards]))`` Selfcraft-Mechan-shape
+        # composition end-to-end as long as each leaf arm is on the
+        # bridge.
+        #
+        # **Real-EoE consumer** unblocked by this composer:
+        # - Selfcraft Mechan: "When this creature enters, you may
+        #   sacrifice an artifact. When you do, put a +1/+1 counter
+        #   on target creature and draw a card." The "when you do"
+        #   trigger composition spans BOTH the OptionalSacArtifact
+        #   wrapper AND a separate reflexive trigger on the sacrifice
+        #   event; the bare wrapper here is half the story. Synthetic
+        #   ETB probe drives ``OptionalSacArtifactForEffect(DrawCards
+        #   {1})`` -- the "may sac" half resolved on the same
+        #   trigger, NOT the reflexive "when you do" rider. The
+        #   reflexive composition is a separate slice (needs
+        #   reflexive-trigger substrate verification on both engines).
+        # - Larval Scoutlander (audited at §2.4): "When this creature
+        #   enters, you may sacrifice an artifact. If you do, search
+        #   your library for up to two basic land cards, put them
+        #   onto the battlefield tapped..." Composes
+        #   ``OptionalSacArtifactForEffect(SearchLibraryForBasicLand
+        #   Tapped{2})`` -- the SearchLibraryForBasicLandTapped
+        #   bridge arm is a deferred follow-up; its substrate exists
+        #   on Rust but the bridge arm is missing. Once that lands,
+        #   Larval Scoutlander composes for free.
+        #
+        # **Sacrificed artifact = source itself?** Selfcraft Mechan
+        # is a Robot Artificer (Artifact Creature), so ITS OWN ENTRY
+        # would be a legal sacrifice candidate -- the resolve picks
+        # the FIRST artifact on the controller's bf, which on
+        # synthetic probes that seat ONLY the source as the sole
+        # artifact would sacrifice the source itself. Real-game play
+        # typically has other artifacts on bf; the synthetic probe
+        # below seats a separate Mox-shape artifact + the source
+        # creature so the picker has a non-source choice. Rust's
+        # picker walks bf in insertion order; Python's
+        # ``choose_sacrifice`` agent picks the first id we hand it.
+        # The probe seats the Mox FIRST so both engines pick the Mox.
+        from mtg_bot.effects.combinators import (
+            OptionalSacArtifactForEffect,
+        )
+        inner_dict = eff_dict["inner_effect"]
+        inner = _ta_dict_to_python_effect(inner_dict)
+        return OptionalSacArtifactForEffect(inner_effect=inner)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
