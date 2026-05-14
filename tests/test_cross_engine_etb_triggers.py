@@ -4048,5 +4048,190 @@ def test_rust_parser_accepts_set_base_pt_until_eot_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_may_do_translates_to_python():
+    """BLOCKED-RUST-EFFECT slice -- may_do composer bridge.
+    Rust ``{"kind": "may_do", "inner_effect": <effect_dict>,
+    "prompt": <str>}`` translates to Python ``MayDo(inner=<Effect>,
+    prompt=<str>)``.
+
+    **Field-name translation**: Rust ``inner_effect`` -> Python
+    ``inner``. Pin verifies the rename happens correctly and the
+    nested effect dict is recursively translated through the same
+    bridge function (so any leaf arm composes for free).
+
+    Looter-shape ``MayDo(DiscardSelf{1})`` is the Melded-Moxite
+    do_action half (the IfYouDo wrapper around it lives at the
+    composer level and is already on the bridge).
+    """
+    from mtg_bot.effects.combinators import MayDo
+    from mtg_bot.effects.generic.discard import DiscardSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "may_do",
+            "inner_effect": {"kind": "discard_self", "amount": 1},
+            "prompt": "you may discard a card",
+        }
+    )
+    assert isinstance(e, MayDo)
+    assert isinstance(e.inner, DiscardSelf)
+    assert e.inner.amount == 1
+    assert e.prompt == "you may discard a card"
+
+
+def test_bridge_may_do_default_prompt_empty():
+    """Missing ``prompt`` field defaults to empty string. Mirrors
+    Rust's parse_effect arm at cards.rs:3734-3741 which uses
+    ``String::new()`` when the field is omitted, and Python's
+    ``MayDo(inner: Effect, prompt: str = "")`` dataclass default.
+    Both engines treat empty prompt as a request for the inner
+    effect's ``describe()`` to surface as the agent prompt; the
+    default agrees end-to-end.
+    """
+    from mtg_bot.effects.combinators import MayDo
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "may_do",
+            "inner_effect": {"kind": "draw_cards", "count": 2},
+            # prompt intentionally omitted -- defaults to empty string
+        }
+    )
+    assert isinstance(e, MayDo)
+    assert isinstance(e.inner, DrawCards)
+    assert e.inner.amount == 2
+    assert e.prompt == ""
+
+
+def test_bridge_may_do_missing_inner_effect_raises():
+    """Missing ``inner_effect`` field raises KeyError out of the
+    bridge -- mirrors Rust's parse_effect arm at cards.rs:3722-3727
+    which raises PyValueError on the missing required field. A
+    ``MayDo`` with no inner action is meaningless on both engines
+    (the prompt would have nothing to gate); the bridge enforces the
+    same contract so a typo surfaces immediately rather than
+    silently translating to a degenerate effect.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect(
+            {"kind": "may_do", "prompt": "you may"}
+        )
+
+
+def test_bridge_may_do_composable_in_if_you_do():
+    """Round-trip in an IfYouDo composer to pin the looter-shape
+    nesting end-to-end: ``IfYouDo(MayDo(DiscardSelf), DrawCards{2})``
+    -- the Melded-Moxite "you may discard a card; if you do, draw
+    two cards" oracle. Both composer arms (``if_you_do`` and
+    ``may_do``) recursively dispatch through
+    ``_ta_dict_to_python_effect``; pinning the nested case ensures
+    the looter pattern works through the bridge translator without
+    field-rename or recursion bugs surfacing only at the composed
+    level.
+    """
+    from mtg_bot.effects.combinators import IfYouDo, MayDo
+    from mtg_bot.effects.generic.discard import DiscardSelf
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "if_you_do",
+            "do_action": {
+                "kind": "may_do",
+                "inner_effect": {
+                    "kind": "discard_self", "amount": 1,
+                },
+                "prompt": "",
+            },
+            "then_action": {"kind": "draw_cards", "count": 2},
+        }
+    )
+    assert isinstance(e, IfYouDo)
+    assert isinstance(e.do_action, MayDo)
+    assert isinstance(e.do_action.inner, DiscardSelf)
+    assert e.do_action.inner.amount == 1
+    assert isinstance(e.then_action, DrawCards)
+    assert e.then_action.amount == 2
+
+
+def test_bridge_may_do_composable_in_sequence():
+    """Round-trip inside a Sequence composer to pin nesting symmetry
+    with the if_you_do nesting test. Sequence's recursive translator
+    must descend into ``inner_effect`` correctly even when the
+    MayDo is the second child of the sequence (not just the top
+    level), pinning that the field-rename branch isn't position-
+    sensitive in the parser.
+    """
+    from mtg_bot.effects.combinators import MayDo, Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "draw_cards", "count": 1},
+                {
+                    "kind": "may_do",
+                    "inner_effect": {
+                        "kind": "draw_cards", "count": 1,
+                    },
+                    "prompt": "",
+                },
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DrawCards)
+    assert isinstance(e.effects[1], MayDo)
+    assert isinstance(e.effects[1].inner, DrawCards)
+    assert e.effects[1].inner.amount == 1
+
+
+def test_rust_parser_accepts_may_do_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts a may_do
+    composer (with inner_effect + prompt) inside a triggered_ability
+    dict. Mirrors the if_you_do / set_base_pt_until_eot lockstep
+    gates -- keeps the bridge from drifting away from Rust's
+    parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3722-3746``
+    accepts the dict shape; ``inner_effect`` is required,
+    ``prompt`` defaults to the empty string when omitted.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- MayDo Composer",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "may_do",
+                    "inner_effect": {
+                        "kind": "draw_cards", "count": 1,
+                    },
+                    "prompt": "",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
