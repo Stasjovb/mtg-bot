@@ -2167,6 +2167,169 @@ def test_rust_parser_accepts_exile_target_creature_until_source_leaves_in_trigge
     assert pid == 0
 
 
+def test_bridge_deal_damage_translates_to_python_deal_damage_with_creature_slot():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "deal_damage", "amount": 2, "target": {"kind": "any_creature"}}``
+    translates to Python
+    ``DealDamage(amount=2, targets=(TargetSpec(IsCreature()),))``.
+
+    Unblocks Lightning Bolt / Shock / Galvanic Blast-shape ETB burn
+    triggers on the cross-engine bridge. The Rust effect variant
+    exists at ``rust/src/cards.rs:631`` vicinity
+    (``Effect::DealDamage { amount: i32, target: TargetFilter }``);
+    its parse_effect arm at ``cards.rs:2804-2812`` requires both an
+    ``amount`` field and a ``target`` dict; the resolve arm at
+    ``state_ops_resolve.rs:740-790`` carries the I67 controller-of-
+    effect substrate (defender = 1 - controller, where controller
+    derives from current_resolve_source_controller).
+
+    Distinct from the existing ``deal_damage_any_target`` arm
+    (``DealDamageAnyTarget``, unit "any target" filter, deterministic
+    Rust at-resolve picking): this ``deal_damage`` arm is filter-
+    parametric (caller picks AnyCreature OR AnyPlayer at register
+    time) and uses the standard PUSH-time agent-driven target
+    selection on the Python side.
+    """
+    from mtg_bot.effects.generic.damage import DealDamage
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "deal_damage",
+            "amount": 2,
+            "target": {"kind": "any_creature"},
+        }
+    )
+    assert isinstance(e, DealDamage)
+    # Amount round-trips from the dict.
+    assert e.amount == 2
+    # The bridge constructs a single TargetSpec slot with an
+    # IsCreature() filter; mirrors the AnyCreature first-slice
+    # symbol from the Rust side.
+    assert len(e.targets) == 1
+    slot = e.targets[0]
+    assert isinstance(slot, TargetSpec)
+    assert isinstance(slot.filter, IsCreature)
+    # Default count_min/count_max for a TargetSpec is 1/1 (the
+    # "exactly one" target shape that mirrors Rust's first-slice
+    # picker which always selects bf[0] of the defender).
+    assert slot.count_min == 1
+    assert slot.count_max == 1
+
+
+def test_bridge_deal_damage_translates_to_python_deal_damage_with_player_slot():
+    """Phase 5 bridge extension WIDER variant: Rust
+    ``{"kind": "deal_damage", "amount": 3, "target": {"kind": "any_player"}}``
+    translates to Python
+    ``DealDamage(amount=3, targets=(TargetSpec(IsPlayer()),))``.
+
+    Unblocks Lava Spike / Searing Blaze (player half) / Skullcrack-
+    shape ETB burn-the-player triggers on the cross-engine bridge.
+    Rust's resolve arm honors ``TargetFilter::AnyPlayer`` directly
+    (state_ops_resolve.rs:768-770) by damaging the defending player.
+    Python's ``DealDamage`` base class is filter-parametric on
+    ``targets[0].filter`` so swapping ``IsCreature()`` for
+    ``IsPlayer()`` reuses the same resolve walk; the picker emits
+    one ``("player", id)`` legal target on the 2-player harness, and
+    ``_apply_damage`` routes to the player's life total.
+
+    First bridge arm to honor the WIDER ``any_player`` filter shape
+    (siblings ``destroy_target`` / ``exile_target`` /
+    ``return_to_hand`` are filter-narrow-by-design — you can't
+    destroy / exile / bounce a player in MTG).
+    """
+    from mtg_bot.effects.generic.damage import DealDamage
+    from mtg_bot.effects.object_predicates import IsPlayer
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "deal_damage",
+            "amount": 3,
+            "target": {"kind": "any_player"},
+        }
+    )
+    assert isinstance(e, DealDamage)
+    assert e.amount == 3
+    # The bridge constructs a single TargetSpec slot with an
+    # IsPlayer() filter; mirrors the AnyPlayer first-slice symbol
+    # from the Rust side.
+    assert len(e.targets) == 1
+    slot = e.targets[0]
+    assert isinstance(slot, TargetSpec)
+    assert isinstance(slot.filter, IsPlayer)
+    assert slot.count_min == 1
+    assert slot.count_max == 1
+
+
+def test_bridge_deal_damage_rejects_unsupported_target_filter_kind():
+    """The bridge mirrors the Rust parser's accepted-kind allowlist
+    for target filters (cards.rs:2790-2799 accepts only ``any_player``
+    and ``any_creature``). The deal_damage arm honors BOTH (unlike
+    sibling destroy_target / exile_target / return_to_hand which only
+    honor any_creature); an unknown filter kind raises a ValueError
+    pointing at Rust's parse_target_filter allowlist.
+
+    This pin documents the bridge-side surface contract: future
+    additions to ``parse_target_filter`` (e.g., ``any_artifact``,
+    ``any_nonland_permanent``) need a paired bridge update on this
+    arm before they can land cross-engine.
+    """
+    import pytest
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="any_player"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "deal_damage",
+                "amount": 1,
+                "target": {"kind": "any_artifact"},
+            }
+        )
+
+
+def test_rust_parser_accepts_deal_damage_in_triggered_ability():
+    """Pin the Rust parser surface for the ``deal_damage`` effect
+    kind. The bridge's dict shape must register cleanly on the Rust
+    side too; this lockstep gate keeps the Python bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing ``destroy_target`` / ``exile_target`` /
+    ``return_to_hand`` parser-surface pins -- all four arms require
+    a companion ``target`` field; deal_damage additionally requires
+    ``amount``. The Rust parse_effect arm at ``cards.rs:2804-2812``
+    accepts the
+    ``{"kind": "deal_damage", "amount": N, "target": {"kind":
+    "any_creature"}}`` shape on a triggered-ability carrier.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- DealDamage",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "R": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage",
+                    "amount": 2,
+                    "target": {"kind": "any_creature"},
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 def test_bridge_destroy_target_translates_to_python_destroy_with_creature_slot():
     """Phase 5 bridge extension: Rust
     ``{"kind": "destroy_target", "target": {"kind": "any_creature"}}``
