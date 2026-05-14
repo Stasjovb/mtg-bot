@@ -85,20 +85,97 @@ thus in the **regression-pin** dimension: any future change to Rust's
 the real-game flow will surface here even if the synthetic Phase 5
 selectors keep passing.
 
+## Mulligan parity (round-14, this slice)
+
+Closed by `feature/phase6-mulligan-parity`:
+
+- **`MulliganDeterministicAgent`** — frozen-dataclass agent that
+  produces byte-identical mulligan/keep + bottom-pick decisions on
+  both engines. Configured by `target_hand_size` (0..7); target=7
+  is the default no-mulligan keep, target=N for N<7 means "mulligan
+  exactly 7-N times then keep, bottom 7-N cards". Bottom strategy
+  is `"first"` (positional, hand[:n]); the only currently-supported
+  option, mirrors Rust's `bottom_cards_from_hand(n)` orientation.
+- **`setup_matched_game(mulligans=True, mulligan_agent=..., mulligan_seed=...)`**
+  — drops the `NotImplementedError`. Drives a deterministic London-
+  mulligan loop on both engines using paired `random.Random(iter_seed)`
+  instances per (player, mulls_taken) iteration. Each engine's
+  in-mulligan Fisher-Yates consumes the same `_randbelow` sequence
+  (MT determinism for identical seeds); post-shuffle libraries are
+  bit-identical across engines.
+- **Mulligan loop construction**: per-iteration uses Rust's
+  `mulligan_to_n(7)` (shuffle+redraw, no bottom) plus a
+  Python-side helper `_python_mulligan_iteration` that mirrors the
+  same drain → shuffle → redraw shape consuming the shared rng.
+  Final keep applies `bottom_cards_from_hand(n)` on Rust + the
+  positional `_python_bottom_cards` on Python. Splitting shuffle
+  from bottom mirrors Python's `simulate.setup_game` mulligan-loop
+  shape; using `mulligan_atomic` would require progressively-larger
+  bottom sets per intermediate iteration, which is meaningless
+  because only the final iteration's bottom is preserved.
+- **Test surface**: 5 new tests in `tests/test_trajectory_parity.py`
+  — default-agent no-op keep, `target_hand_size=6` (one mull each
+  side then walk turn 1), `target_hand_size=5` (two mulls each side),
+  reproducibility (same seed → identical state), differentiation
+  (different seed → different state). Plus 5 new defensive tests in
+  `tests/test_trajectory.py` for the agent's validation surface.
+
+## Divergences surfaced in round-14
+
+Two real cross-engine quirks turned up while wiring this:
+
+1. **Hand-drain order in mulligan**: Python's `simulate.setup_game`
+   uses `p.hand.pop()` (LIFO — hand[6] returned first); Rust's
+   `mulligan_atomic` / `mulligan_to_n` uses `hand.drain(..)` (FIFO —
+   hand[0] returned first). Pre-shuffle library tail order would
+   diverge if the parity helper used Python's LIFO drain. The
+   round-14 helper uses FIFO to match Rust. The Python production
+   `setup_game` is unchanged (its LIFO drain is fine because Python
+   alone shuffles right after — only the cross-engine harness needs
+   the orientation match).
+2. **Per-instance flag reset on bottom**: Rust's
+   `bottom_cards_from_hand` resets `tapped`, `summoning_sick`,
+   `damage`, `counters`, `attached_to`, `exiled_with_source` on each
+   bottomed object. Python's bottom step (in `simulate.setup_game`)
+   does NOT — but on Python a hand card carries the GameObject default
+   `summoning_sick=True`, which would persist into the library and
+   surface as a per-object field divergence on the bottomed cards.
+   The round-14 helper's `_python_bottom_cards` mirrors Rust's reset
+   to keep the post-bottom field views byte-equal. The Python
+   production `setup_game` is again unchanged.
+
+Both quirks are *parity-harness specific*: production Python code
+is correct on its own terms; the harness must mirror Rust's exact
+choices to produce byte-equal field views, even where Python and
+Rust each independently produce semantically-equivalent results.
+
 ## Infrastructure gaps blocking Phase 6 progress
 
 1. ~~**No shared `setup_game` mirror.**~~ **CLOSED** by
    `feature/phase6-parity-trajectory-module` —
    `mtg_bot.parity.trajectory.setup_matched_game` is now the
-   single entrypoint. The mulligans path (`mulligans=True`) is the
-   remaining open work, gated to gap #2 below.
-2. **No mulligan parity.** `setup_matched_game` raises
-   `NotImplementedError` on `mulligans=True`. Closing this requires a
-   cross-engine `MulliganAgent` that produces deterministic
-   mulligan/bottom decisions on both sides AND a shared
-   shuffle-the-hand-back-into-library primitive on the Rust side
-   (Python's setup uses `random.Random.shuffle` on `p.library`; Rust's
-   `make_state` is one-shot — no mid-setup shuffle entrypoint exists).
+   single entrypoint.
+2. ~~**No mulligan parity.**~~ **CLOSED** by
+   `feature/phase6-mulligan-parity` (round-14, this slice). See
+   "Mulligan parity (round-14, this slice)" section above for the
+   full ship summary. Residual API gaps that would unblock richer
+   mulligan strategies (out of scope for this slice):
+   - **Non-positional bottom strategies** would require either Rust
+     hand-reordering (no API today — would need
+     `reorder_hand(player_id, ids)`) or extending
+     `bottom_cards_from_hand` to take explicit ids rather than count.
+     Currently only `bottom_strategy="first"` is supported because
+     it lines up trivially with Rust's positional default.
+   - **State-conditional mulligan agents** (e.g., the heuristic
+     `Agent.choose_mulligan` from `mtg_bot.mulligan`) need a way to
+     read the post-shuffle hand on Rust before deciding. Today's
+     deterministic agent sidesteps this by deciding solely on
+     `mulls_taken`. A Rust-side `peek_hand(player_id) -> list[dict]`
+     pymethod (or extending the existing `hand_snapshot`) plus a
+     bridge that drives both engines with a single Python decision
+     would close this. The round-14 deterministic agent is enough
+     for trajectory tests; state-conditional agents are a follow-up
+     when production-shape mulligan probes are needed.
 3. **No real-game combat-decision selector.** Phase 5's
    `combat_selector` family drives synthetic 7-card decks; the
    round-13 trajectory tests drive real-game-sized combat manually
@@ -116,16 +193,22 @@ selectors keep passing.
 
 ## Suggested next slice
 
-The natural next slice is gap #2 closure: extend `setup_matched_game`
-to honor `mulligans=True` by accepting a `MulliganAgent`-style param
-(defaults to a "never-mulligan" agent matching the current behavior)
-plus a Rust-side hand-shuffle-back primitive. Test surface: a
-deterministic-mulligan-three-times agent on both sides, assert
-post-bottom hand sizes + library orderings agree. The mulligan-parity
-slice will surface whatever cross-engine divergences live in the
-`shuffle-hand-back-into-library` + `bottom-from-hand` paths — both
-are currently untested at the cross-engine level.
+Gap #1 + gap #2 are closed. The natural next slice is gap #3 (the
+trajectory-side combat selector): promote the inline declare/block
+scripts from the round-13/14 trajectory tests into a
+`parity.trajectory.combat_selector` that reads the active player's
+bf and emits attacker/blocker dicts automatically. Test surface:
+re-write `test_attack_at_turn_7_parity` and
+`test_combat_damage_at_turn_7_parity` to use the selector, then add
+1-2 new tests with multiple attackers / blockers to surface any
+combat-step bookkeeping bugs that the inline-script versions don't
+exercise (interleaved declare order, vigilance, first-strike).
 
-After mulligans, gap #3 (the trajectory-side combat selector) is the
-ergonomics follow-up; gap #4 is a one-line vocabulary normalization
-with a near-zero test surface.
+Gap #4 (`source_id` vs `card_id` action-dict vocabulary) is a
+one-line normalization with a near-zero test surface — add it
+opportunistically when next touching `_dict_to_python_action`.
+
+The Rust API gaps documented under gap #2's residuals
+(non-positional bottom, state-conditional mulligan agents) are
+candidate Rust slices for future rounds when production-shape
+mulligan probes are needed.
