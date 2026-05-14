@@ -768,6 +768,78 @@ pub enum Effect {
     /// modifier auto-expires at the next cleanup step via the r27
     /// CR 514.3 UEOT-clear pass.
     PumpTargetCreatureUntilEOT { power_bonus: i32, toughness_bonus: i32 },
+    /// **BLOCKED-RUST-EFFECT slice — Fight effect arm.** "Target
+    /// creature you control fights target creature an opponent
+    /// controls" (CR 701.12). Both fighters deal damage equal to
+    /// their power to the other simultaneously; per CR 701.12c, if
+    /// either fighter has left the battlefield by resolve time, no
+    /// damage is dealt at all (the fight fizzles).
+    ///
+    /// Mirrors Python's `FightTargetCreatureWithTargetCreature`
+    /// generic-fight class shipped in the same slice (a sibling of
+    /// `EnchantedCreatureFightsTargetEffect`, which is the
+    /// Aura-attached-creature-fights-opponent shape used by
+    /// Meltstrider's Resolve specifically).
+    ///
+    /// **Target semantics — first-slice deterministic.** The
+    /// SOURCE-side fighter is the FIRST creature on the source-
+    /// controller's battlefield (smallest Vec index). The
+    /// OPPONENT-side fighter is the FIRST creature on the
+    /// opponent's battlefield (1 - source_controller, smallest
+    /// Vec index). This mirrors the same first-creature-on-bf
+    /// scan PumpTargetCreatureUntilEOT (caster side) and
+    /// DealDamageAnyTarget (opponent side) use. Neither side
+    /// has explicit target choice today; the future decision-
+    /// callback slice plumbs explicit target picks through.
+    ///
+    /// **Source-controller resolution.** Routes through the
+    /// I67 controller-of-effect substrate
+    /// (`current_resolve_source_controller` with active_player
+    /// fallback) so cross-controller fight (a flicker re-ETB
+    /// firing while the OTHER seat is active) routes correctly:
+    /// the source-side scan is on the SOURCE'S controller's bf,
+    /// not the active player's bf. Same shape as the
+    /// PumpTargetCreatureUntilEOT cross-controller routing.
+    ///
+    /// **Mechanism.** Compute both fighters' effective power BEFORE
+    /// applying any damage (CR 701.12 — simultaneous damage event).
+    /// If both targets exist at resolve time, deal each fighter's
+    /// power as damage to the other via `deal_damage` (the per-
+    /// object damage marker the `state_ops_damage` slice exposes).
+    /// SBAs are not run inline by this arm; they fire on the next
+    /// SBA pass after the resolve, by which point both damage
+    /// markers are in place — deathtouch-style "both die" outcomes
+    /// surface when the SBA loop runs.
+    ///
+    /// **Fizzle cases (silent — no damage applied).**
+    /// - Source-controller untrackable (source object not in any
+    ///   tracked zone) — silent fizzle.
+    /// - Source-controller has no creatures on bf — silent fizzle.
+    /// - Opponent has no creatures on bf — silent fizzle.
+    /// - Either fighter's printing carries `power: None` (non-
+    ///   creature, edge case the creature-filter scan should
+    ///   prevent but defensive `unwrap_or(0)` keeps us safe).
+    ///
+    /// **Schema simplification vs Python's full Fight family.**
+    /// Python's full Fight class hierarchy carries variants for
+    /// "fights up to one" (optional target), "fights with trample
+    /// / deathtouch", "fights twice", and the Aura-shape
+    /// (enchanted creature fights). The Rust first-slice only
+    /// carries the bare bilateral-fight shape ("creature you
+    /// control fights creature opponent controls"). The Aura
+    /// shape (Meltstrider's Resolve specifically) is documented
+    /// as a deferred follow-up in
+    /// `docs/EOE_PROBE_READINESS_AUDIT.md` — it needs the
+    /// Aura-attachment substrate routed through the source's
+    /// `attached_to` field, which the current Aura ETB-trigger
+    /// path does not yet plumb end-to-end on Rust. Other
+    /// variants (with-trample, with-deathtouch, optional)
+    /// compose via future Effect arms.
+    ///
+    /// **Empty-bf no-op shape.** `(0, 0)` doesn't apply here (no
+    /// numeric fields) — the fizzle on missing fighters is the
+    /// no-op equivalent.
+    FightTargetCreatureWithTargetCreature,
     /// **Round 28 highest-frequency-class coverage.** Run multiple
     /// effects in order as a single composite effect. Mirrors
     /// Python's `Sequence(effects: tuple[Effect, ...])`
@@ -3501,6 +3573,19 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             };
             Ok(Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus })
         }
+        "fight_target_creature_with_target_creature" => {
+            // BLOCKED-RUST-EFFECT slice — Fight effect arm. Unit
+            // variant; the bilateral source-creature-fights-opponent-
+            // creature shape is baked into the variant identity, so
+            // no fields beyond `kind`. Extra dict fields are silently
+            // ignored for round-trip dict-shape consistency (mirrors
+            // every other unit-variant parse arm).
+            //
+            // Mirrors Python's `FightTargetCreatureWithTargetCreature`
+            // generic-fight class shipped on the bridge in the same
+            // slice.
+            Ok(Effect::FightTargetCreatureWithTargetCreature)
+        }
         "return_creature_from_your_graveyard_to_hand" => {
             // Unit variant; no fields beyond `kind`.
             Ok(Effect::ReturnCreatureFromYourGraveyardToHand)
@@ -5366,6 +5451,9 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item("kind", "pump_target_creature_until_eot")?;
             d.set_item("power_bonus", *power_bonus)?;
             d.set_item("toughness_bonus", *toughness_bonus)?;
+        }
+        Effect::FightTargetCreatureWithTargetCreature => {
+            d.set_item("kind", "fight_target_creature_with_target_creature")?;
         }
         Effect::PumpCreaturesYouControlUntilEOT { power_bonus, toughness_bonus } => {
             d.set_item("kind", "pump_creatures_you_control_until_eot")?;
