@@ -44068,6 +44068,342 @@ def test_cross_engine_look_top_n_put_in_hand_synthetic_etb_parity(
     assert py_state.players[1].life == 20
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- put_plus_one_counter_on_each_of_up_to_n_
+# target_creatures (round 21).
+#
+# Rust's Effect::PutPlusOneCounterOnEachOfUpToNTargetCreatures
+# { max_n: i32 } already shipped end-to-end via round 28 (parse at
+# cards.rs:4128-4149 + resolve at state_ops_resolve.rs:5339-5415);
+# this slice ships the cross-engine bridge translator + the
+# regression pins that exercise it.
+#
+# Real-EoE consumer of the bare ETB shape: Weftblade Enhancer --
+# "When this creature enters, put a +1/+1 counter on each of up to
+# two target creatures." (max_n=2, no UEOT rider, no other effect
+# composed). Single clean consumer; no rider cascades.
+#
+# Pin layout (in test_parity_smoke.py): 5 Rust regression pins
+# (basic 2-creature pick + max_n=0 silent no-op + empty-bf silent
+# fizzle + cross-controller routing + cap-at-bf-size when bf has
+# fewer than max_n creatures). Cross-engine end-to-end probe
+# deferred per round-17/18/19 synthetic-only-when-riders-cascade
+# precedent -- the target-count-range Decision pipeline + multi-
+# target agent shim is its own surface (the bare bridge-arm slice
+# ships the translator + Rust regression pins; the cross-engine
+# probe lands when a multi-target shim slice ships). The 7
+# bridge-translator pins live in test_cross_engine_etb_triggers.py
+# per the established split.
+# =====================================================================
+
+
+def _build_rust_up_to_n_counters_state(
+    max_n: int = 2,
+    n_baits_p0: int = 2,
+    n_baits_p1: int = 0,
+):
+    """Helper: build a Rust state with a PutPlusOneCounterOnEachOfUpTo
+    NTargetCreatures creature carrier on p0's bf + N bait Bears on
+    p0's bf + M bait Bears on p1's bf. Returns
+    (rust_state, source_id, p0_bait_ids, p1_bait_ids).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    p0_bait_ids = []
+    for i in range(n_baits_p0):
+        bid = rust_state.register_and_inject_object(
+            {
+                "name": f"p0 Bait Bears {i} (2/2)",
+                "card_types": ["Creature"],
+                "mana_cost": {"generic": 1, "G": 1},
+                "power": 2,
+                "toughness": 2,
+                "effects": [],
+                "triggered_abilities": [],
+            },
+            0,
+            ZONE_BATTLEFIELD,
+        )
+        p0_bait_ids.append(bid)
+    p1_bait_ids = []
+    for i in range(n_baits_p1):
+        bid = rust_state.register_and_inject_object(
+            {
+                "name": f"p1 Bait Bears {i} (2/2)",
+                "card_types": ["Creature"],
+                "mana_cost": {"generic": 1, "G": 1},
+                "power": 2,
+                "toughness": 2,
+                "effects": [],
+                "triggered_abilities": [],
+            },
+            1,
+            ZONE_BATTLEFIELD,
+        )
+        p1_bait_ids.append(bid)
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "UpToN-Counters-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+                        "max_n": max_n,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id, p0_bait_ids, p1_bait_ids
+
+
+def _rust_get_counters(rust_state, obj_id):
+    """Inspector helper: read +1/+1 counters for an object on either
+    player's bf via battlefield_snapshot(). Returns the counter int
+    or None if the object isn't found.
+    """
+    for entry in rust_state.battlefield_snapshot():
+        if entry["id"] == obj_id:
+            return entry["counters"]
+    return None
+
+
+def test_rust_up_to_n_counters_basic_two_creatures():
+    """Rust regression pin: basic max_n=2 with 2 bait creatures on
+    p0's bf -- both baits get +1 counter (Weftblade Enhancer shape).
+    Pins state_ops_resolve.rs:5339-5415's controller-bf-first scan +
+    saturating_add(1) per picked creature.
+    """
+    rust_state, source_id, p0_baits, _p1_baits = (
+        _build_rust_up_to_n_counters_state(max_n=2, n_baits_p0=2)
+    )
+    assert rust_state.stack_size() == 1
+    counters_before = [
+        _rust_get_counters(rust_state, b) for b in p0_baits
+    ]
+    src_counters_before = _rust_get_counters(rust_state, source_id)
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    counters_after = [
+        _rust_get_counters(rust_state, b) for b in p0_baits
+    ]
+    src_counters_after = _rust_get_counters(rust_state, source_id)
+    # Both baits got +1 counter.
+    assert all(
+        a == b + 1 for a, b in zip(counters_after, counters_before)
+    ), (
+        f"Expected each bait to gain +1 counter; before={counters_before}, "
+        f"after={counters_after}"
+    )
+    # Source itself is a Creature on the same bf -- but the picker walks
+    # bf in iter order. With baits at bf[0:2] and source at bf[2], the
+    # max_n=2 limit picks the first 2 creatures (the baits) and stops
+    # before reaching source. Source counters unchanged.
+    assert src_counters_after == src_counters_before, (
+        f"Source should NOT gain a counter (max_n=2 limit reached "
+        f"before scanner walked to source's bf slot); "
+        f"before={src_counters_before}, after={src_counters_after}"
+    )
+
+
+def test_rust_up_to_n_counters_max_n_zero_silent_noop():
+    """Rust regression pin: max_n=0 silently no-ops (Rust's resolve
+    arm at state_ops_resolve.rs:5340-5342 short-circuits on
+    max_n <= 0). No counter changes on any bf creature.
+    """
+    rust_state, source_id, p0_baits, _p1_baits = (
+        _build_rust_up_to_n_counters_state(max_n=0, n_baits_p0=2)
+    )
+    assert rust_state.stack_size() == 1
+    counters_before = [
+        _rust_get_counters(rust_state, b) for b in p0_baits
+    ]
+    src_counters_before = _rust_get_counters(rust_state, source_id)
+    rust_state.resolve_top_of_stack()
+    counters_after = [
+        _rust_get_counters(rust_state, b) for b in p0_baits
+    ]
+    src_counters_after = _rust_get_counters(rust_state, source_id)
+    assert counters_after == counters_before
+    assert src_counters_after == src_counters_before
+
+
+def test_rust_up_to_n_counters_no_creatures_silent_fizzle():
+    """Rust regression pin: empty bf (only source on bf, but source IS
+    a creature here -- so it gets the counter as the only creature on
+    cidx's bf). Zero-bait scenario: pick walks, finds the source as
+    the only creature on cidx, picks it as picked_ids[0]. Source
+    gets +1 counter; no fizzle in this configuration.
+
+    This is a corner case worth pinning -- the resolve arm doesn't
+    exclude the source from the legal-target scan (no "exclude self"
+    flag). Documented divergence from real MTG (a card "put a +1/+1
+    counter on each of up to N target creatures" would not normally
+    target itself as the source of the resolving ability, but Rust's
+    first-slice picker doesn't model that distinction).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "UpToN-Counters-Trigger Creature (lonely)",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+                        "max_n": 2,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    src_counters_before = _rust_get_counters(rust_state, source_id)
+    rust_state.resolve_top_of_stack()
+    src_counters_after = _rust_get_counters(rust_state, source_id)
+    # Source is the ONLY creature on cidx -- it gets picked.
+    assert src_counters_after == src_counters_before + 1, (
+        f"Source should gain +1 counter when it's the only creature "
+        f"on cidx's bf (Rust picker doesn't exclude source); "
+        f"before={src_counters_before}, after={src_counters_after}"
+    )
+
+
+def test_rust_up_to_n_counters_overflow_to_opponent_bf():
+    """Rust regression pin: when source-controller's bf has fewer
+    creatures than max_n, the picker walks opponent's bf for the
+    remainder. Setup: max_n=3; p0 has 1 bait + source (=2 creatures
+    on cidx); p1 has 2 baits. The picker should pick:
+      [cidx bait, source, p1 bait] -- 3 picks, controller-first.
+
+    Pins state_ops_resolve.rs:5377's `for &pidx in &[cidx, oidx]`
+    iterator -- the second-player bf walk only fires when the first-
+    player walk hasn't filled the picked_ids quota.
+    """
+    rust_state, source_id, p0_baits, p1_baits = (
+        _build_rust_up_to_n_counters_state(
+            max_n=3, n_baits_p0=1, n_baits_p1=2,
+        )
+    )
+    assert rust_state.stack_size() == 1
+    p0_bait_before = _rust_get_counters(rust_state, p0_baits[0])
+    src_before = _rust_get_counters(rust_state, source_id)
+    p1_baits_before = [_rust_get_counters(rust_state, b) for b in p1_baits]
+    rust_state.resolve_top_of_stack()
+    # cidx (p0) had [bait, source] = 2 creatures; both picked.
+    # oidx (p1) had [bait0, bait1] = 2 creatures; only first picked
+    # (limit=3, already have 2).
+    assert _rust_get_counters(rust_state, p0_baits[0]) == p0_bait_before + 1
+    assert _rust_get_counters(rust_state, source_id) == src_before + 1
+    assert _rust_get_counters(rust_state, p1_baits[0]) == p1_baits_before[0] + 1
+    # Second p1 bait NOT picked (max_n=3 quota filled).
+    assert _rust_get_counters(rust_state, p1_baits[1]) == p1_baits_before[1]
+
+
+def test_rust_up_to_n_counters_cross_controller_routing_p1_source():
+    """Rust regression pin: a p1-controlled source on p1's bf with
+    p1 bait creatures: the resolve arm picks from the SOURCE-
+    controller's bf (p1's) FIRST, not active_player's (p0's). Pins
+    state_ops_resolve.rs:5343-5371's source-controller scan.
+
+    Setup: active_player stays p0; source + 1 bait on p1's bf;
+    1 bait on p0's bf. With max_n=2, picker should pick both p1
+    creatures (p1 bait + source) before walking to p0's bf, even
+    though p0 is active. p0's bait stays untouched.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    p0_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "p0 Bait Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p1_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "p1 Bait Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "p1 UpToN-Counters-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+                        "max_n": 2,
+                    },
+                }
+            ],
+        },
+        1,  # owner = p1
+        ZONE_BATTLEFIELD,
+    )
+    p0_bait_before = _rust_get_counters(rust_state, p0_bait_id)
+    p1_bait_before = _rust_get_counters(rust_state, p1_bait_id)
+    src_before = _rust_get_counters(rust_state, source_id)
+    rust_state.resolve_top_of_stack()
+    # cidx=1 (p1's bf had [p1_bait, source] = 2 creatures); both picked.
+    assert _rust_get_counters(rust_state, p1_bait_id) == p1_bait_before + 1
+    assert _rust_get_counters(rust_state, source_id) == src_before + 1
+    # p0's bait NOT picked (max_n=2 quota filled by p1's bf walk).
+    assert _rust_get_counters(rust_state, p0_bait_id) == p0_bait_before
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
