@@ -1524,3 +1524,75 @@ def test_extra_json_preserves_underscore_keys_in_top_level(
     body = client.get("/api/runs/with_marker").get_json()
     assert body["_some_internal_marker"] == "abc"
     assert body["win_rate"] == 0.5
+
+
+def test_config_json_replay_fields_fan_out_to_top_level(
+    client, progress_dir: Path,
+):
+    """``replays_dir`` + the two ``capture_every_*`` rates live in
+    iterate's ``config_json`` (cycle rows don't carry them in
+    ``run_progress.extra_json``). The UI's
+    ``if (!run.replays_dir) → 'replay capture: off'`` branch needs
+    them surfaced at the top level so iter cards label correctly when
+    capture is configured."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_004_cycle", kind="iterate", status="running",
+            started_at="2026-05-13T05:00:00+00:00",
+            config_json=json.dumps({
+                "kind": "cycle",
+                "iter_idx": 4,
+                "replays_dir": "replays",
+                "capture_every_self_play": 20,
+                "capture_every_eval": 0,
+            }),
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/iter_004_cycle").get_json()
+    assert body["replays_dir"] == "replays"
+    assert body["capture_every_self_play"] == 20
+    assert body["capture_every_eval"] == 0
+
+
+def test_config_json_replay_fields_absent_when_not_in_config(
+    client, progress_dir: Path,
+):
+    """When ``config_json`` doesn't carry the replay fields (older
+    iterate rows that predate the fan-out, or non-iterate runs), the
+    UI dict must NOT invent values — the JS branch correctly falls
+    back to "off"."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "eval_v4_vs_v3", kind="eval", status="running",
+            started_at="2026-05-14T01:00:00+00:00",
+            config_json=json.dumps({"new_version": "v4", "old_version": "v3"}),
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/eval_v4_vs_v3").get_json()
+    assert "replays_dir" not in body
+    assert "capture_every_self_play" not in body
+    assert "capture_every_eval" not in body
+
+
+def test_config_json_malformed_blob_does_not_break_endpoint(
+    client, progress_dir: Path,
+):
+    """A non-JSON ``config_json`` blob (legacy / corrupted row)
+    must not 500 the endpoint. The except branch swallows the parse
+    error; the rest of the UI dict still surfaces."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_bogus_cycle", kind="iterate", status="running",
+            started_at="2026-05-13T05:00:00+00:00",
+            config_json="{not-json",
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/iter_bogus_cycle").get_json()
+    assert body["run_id"] == "iter_bogus_cycle"
+    assert "replays_dir" not in body

@@ -640,6 +640,9 @@ def test_cycle_config_dict_shape():
         deck_pool=Path("data/decks.json.gz"),
         seed=0,
         n_iterations=5,
+        replays_dir=Path("replays"),
+        capture_every_self_play=0.05,
+        capture_every_eval=0.0,
     )
     out = cli_iterate._cycle_config_dict(
         args=args, iter_idx_one_based=2, best_version="v3",
@@ -653,6 +656,11 @@ def test_cycle_config_dict_shape():
     # Path.__str__ yields os-native separators (Windows uses
     # backslashes); compare via Path round-trip rather than literal.
     assert Path(out["deck_pool"]) == Path("data/decks.json.gz")
+    # Replay-capture fields must be present so the UI can render the
+    # capture state without consulting iterate's argparse defaults.
+    assert Path(out["replays_dir"]) == Path("replays")
+    assert out["capture_every_self_play"] == 0.05
+    assert out["capture_every_eval"] == 0.0
 
 
 def test_self_play_config_dict_shape():
