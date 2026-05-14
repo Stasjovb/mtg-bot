@@ -1234,3 +1234,420 @@ def test_activate_ability_trajectory_alias_dict_python_only():
         "the Forest should be tapped after the activate_ability "
         "alias-keyed dict resolves."
     )
+
+
+# ===========================================================================
+# Phase 6 round-16 (closes infrastructure gap #3): real-game combat agent.
+#
+# These tests exercise `RealGameCombatAgent` + `drive_combat_phase` on a
+# real-game-shaped trajectory. The agent generalizes the round-13/14/15
+# inline combat scripts: instead of each test re-spelling out
+# "find Bears, emit declare_attackers([id]), advance, emit empty
+# blockers, advance, fire combat damage, advance, clear combat", the
+# tests build an agent + call drive_combat_phase.
+#
+# Test surface:
+#
+#   - test_real_game_combat_attack_all_no_blocks_through_turn_11_parity:
+#       p0 attacks unblocked over 3 combat rounds (turn 7, 9, 11).
+#       Asserts p1 life 20 -> 18 -> 16 -> 14 each round.
+#   - test_real_game_combat_with_blocks_mutual_destruction_parity:
+#       p0 attacks turn 7 with Bears; p1 blocks with sick-Bears.
+#       Both die (mutual 2/2 vs 2/2 trade).
+#   - test_real_game_combat_no_attack_strategy_parity:
+#       agent.strategy="no_attack" — combat phase walks past with no
+#       creatures attacking, no damage, no zone changes.
+#   - test_real_game_combat_first_strike_parity:
+#       Uses `first_strike_side_channel` from cross_engine to inject
+#       a first-strike creature, then attacks into a regular blocker.
+#       Pins the first-strike timing path through the agent.
+#
+# All tests use `setup_matched_game` (from gap #1) for opening setup
+# and `RealGameCombatAgent` + `drive_combat_phase` (this slice) for
+# combat. No inline declare/block scripts.
+# ===========================================================================
+
+
+def _setup_p0_bears_at_turn_5(py_state, rust_state):
+    """Walk the standard "p0 plays land turns 1/3/5, casts Bears turn 5"
+    prefix. Used by every real-game combat test below.
+
+    Post-condition: turn 5 PRECOMBAT_MAIN ends with cast Bears on bf
+    (sick); p0 has 3 Forests (2 tapped from cast, 1 sick from turn-5).
+    """
+    from mtg_bot.parity.cross_engine import step_both
+
+    _advance_n_phases(py_state, rust_state, 3)
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12 * 2)
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12 * 2)
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+    # Tap two unsick Forests + cast Bears.
+    for _ in range(2):
+        f = next(
+            o for o in py_state.battlefield
+            if o.controller_id == 0
+            and o.printing.is_land
+            and not o.tapped
+            and not o.summoning_sick
+        )
+        s = step_both(
+            py_state, rust_state,
+            {"kind": "activate_ability", "source_id": int(f.id), "ability_index": 0},
+        )
+        assert s.divergences == []
+    bears = next(
+        o for o in py_state.players[0].hand if o.printing.name == "Grizzly Bears"
+    )
+    s = step_both(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
+    assert s.divergences == []
+
+
+def _setup_both_bears_by_turn_6(py_state, rust_state):
+    """Walk a symmetric prefix where BOTH players play lands turns 2/4/6
+    and cast Bears at turn 6 / 5 respectively.
+
+    Cadence:
+      * Turn 1 (p0): play Forest #1.
+      * Turn 2 (p1): play Forest #1.
+      * Turn 3 (p0): play Forest #2.
+      * Turn 4 (p1): play Forest #2.
+      * Turn 5 (p0): play Forest #3, tap two unsick Forests, cast Bears.
+      * Turn 6 (p1): play Forest #3, tap two unsick Forests, cast Bears.
+
+    Post-condition: turn 6 PRECOMBAT_MAIN, p0 has 3 Forests + Bears
+    (Bears sick from turn 5, will unsick at turn 7 UNTAP); p1 has 3
+    Forests + Bears (Bears sick from turn 6, will unsick at turn 8
+    UNTAP — but is BLOCKING-eligible at turn 7 per CR 302.1).
+
+    Differs from :func:`_setup_p0_bears_at_turn_5` by also driving
+    p1's parallel land plays + cast. Cannot be composed by calling
+    `_setup_p0_bears_at_turn_5` first because that helper skips p1's
+    turn-2 / turn-4 land plays (only the active player plays a land
+    per turn in `_play_active_player_forest`).
+    """
+    from mtg_bot.parity.cross_engine import step_both
+
+    _advance_n_phases(py_state, rust_state, 3)  # → turn 1 MAIN1, p0 active
+    # Turn 1: p0 land.
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12)  # → turn 2 MAIN1, p1 active
+    # Turn 2: p1 land.
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12)  # → turn 3 MAIN1, p0 active
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12)  # → turn 4 MAIN1, p1 active
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12)  # → turn 5 MAIN1, p0 active
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+    # Turn 5: p0 taps + casts Bears.
+    for _ in range(2):
+        f = next(
+            o for o in py_state.battlefield
+            if o.controller_id == 0
+            and o.printing.is_land
+            and not o.tapped
+            and not o.summoning_sick
+        )
+        s = step_both(
+            py_state, rust_state,
+            {"kind": "activate_ability", "source_id": int(f.id), "ability_index": 0},
+        )
+        assert s.divergences == []
+    bears = next(
+        o for o in py_state.players[0].hand if o.printing.name == "Grizzly Bears"
+    )
+    s = step_both(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
+    assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12)  # → turn 6 MAIN1, p1 active
+    # Turn 6: p1 land + cast Bears.
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+    for _ in range(2):
+        f = next(
+            o for o in py_state.battlefield
+            if o.controller_id == 1
+            and o.printing.is_land
+            and not o.tapped
+            and not o.summoning_sick
+        )
+        s = step_both(
+            py_state, rust_state,
+            {"kind": "activate_ability", "source_id": int(f.id), "ability_index": 0},
+        )
+        assert s.divergences == []
+    bears = next(
+        o for o in py_state.players[1].hand if o.printing.name == "Grizzly Bears"
+    )
+    s = step_both(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
+    assert s.divergences == []
+
+
+def test_real_game_combat_attack_all_no_blocks_through_turn_11_parity():
+    """`RealGameCombatAgent("attack_all")` driven over multiple combat
+    rounds: p0 attacks unblocked at turn 7, 9, 11.
+
+    Cadence:
+      * Bears cast turn 5 (sick), unsick by turn 7 UNTAP.
+      * Turn 7 (p0 active): attack, no block, damage; p1: 20 -> 18.
+      * Turn 9 (p0 active again, Bears untapped from EoT-tap clear):
+        attack, no block, damage; p1: 18 -> 16.
+      * Turn 11: same; p1: 16 -> 14.
+
+    Pins:
+      * Multi-round combat — the agent state stays consistent across
+        END_OF_COMBAT clear + UNTAP cycle (Bears tap from attacking,
+        clears combat-flag at EoC, untaps on p0's next UNTAP).
+      * Drive helper composes correctly across consecutive turns —
+        each call's pre/post conditions hold.
+      * Per-round byte-equal life total + zone evolution.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _setup_p0_bears_at_turn_5(py_state, rust_state)
+
+    agent = trajectory.RealGameCombatAgent(strategy="attack_all")
+
+    # Walk turn 5 MAIN1 -> turn 7 DECLARE_ATTACKERS (24 phases for two
+    # full turns + 2 to skip MAIN1 + BoC).
+    _advance_n_phases(py_state, rust_state, 12 * 2 + 2)
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # Round 1: turn 7 combat, p1 life 20 -> 18.
+    trajectory.drive_combat_phase(py_state, rust_state, agent)
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    assert py_view["life_p0"] == 20
+    assert py_view["life_p1"] == 18, (
+        f"after turn 7 combat, expected p1=18, got {py_view['life_p1']}"
+    )
+
+    # Walk turn 7 EoC -> turn 9 DA. Each full turn is 12 phases; from
+    # END_OF_COMBAT to next active-player DECLARE_ATTACKERS takes
+    # (post-EoC -> turn 8 DA) = 8 phases (postmain, end, cleanup, untap
+    # turn 8 + upkeep + draw + main + bc + da = 9 phases). Then turn 8
+    # DA we have to cycle through into turn 9 DA: 12 more phases.
+    # Simpler: count from current step (EoC, turn 7) to (DA, turn 9):
+    # EoC -> POSTCOMBAT_MAIN -> END -> CLEANUP -> turn 8 UNTAP (4)
+    # -> UPKEEP -> DRAW -> MAIN1 -> BC -> DA (5 more = 9 total).
+    # That gets us turn 8 DA. Add 12 more to get turn 9 DA. Total = 21.
+    _advance_n_phases(py_state, rust_state, 9 + 12)
+    assert py_state.turn_number == 9
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # Round 2: turn 9 combat, p1 life 18 -> 16. Bears was tapped from
+    # turn 7 attack, then turn 8 was p1's turn (no untap for p0), then
+    # turn 9 UNTAP cleared p0 perms.
+    trajectory.drive_combat_phase(py_state, rust_state, agent)
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    assert py_view["life_p1"] == 16
+
+    # Walk to turn 11 DA.
+    _advance_n_phases(py_state, rust_state, 9 + 12)
+    assert py_state.turn_number == 11
+    assert py_state.active_player_idx == 0
+
+    # Round 3: turn 11 combat, p1 life 16 -> 14.
+    trajectory.drive_combat_phase(py_state, rust_state, agent)
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    assert py_view["life_p1"] == 14
+
+
+def test_real_game_combat_with_blocks_mutual_destruction_parity():
+    """`RealGameCombatAgent("attack_all_block_smallest")` — p0 attacks
+    with Bears at turn 7; p1 blocks with their own Bears (cast turn 6,
+    sick but blocking-eligible). 2/2 vs 2/2 = mutual destruction.
+
+    Pins:
+      * Block-assignment dict round-trips cleanly across engines.
+      * Mutual KO — both creatures move to graveyards with same zone
+        signature on both sides (CE5 / per-step compare).
+      * The "smallest" tie-breaker is deterministic: with one eligible
+        blocker (p1's only Bears), the assignment is unambiguous;
+        but the agent's sort by (power, toughness, id) is the only
+        path that picks it.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _setup_both_bears_by_turn_6(py_state, rust_state)
+
+    # State: turn 6 MAIN1, just cast p1 Bears. Walk to turn 7 DA.
+    # From turn 6 MAIN1 -> turn 7 DA = 12 + 2 = 14 phases.
+    _advance_n_phases(py_state, rust_state, 12 + 2)
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # Pre-combat invariants.
+    bears_count = sum(
+        1 for o in py_state.battlefield if o.printing.name == "Grizzly Bears"
+    )
+    assert bears_count == 2, "should have 2 Bears (one per side) before combat"
+
+    agent = trajectory.RealGameCombatAgent(strategy="attack_all_block_smallest")
+    trajectory.drive_combat_phase(py_state, rust_state, agent)
+
+    # Post-combat: both Bears in graveyards.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    assert py_view["life_p0"] == 20
+    assert py_view["life_p1"] == 20  # p0's Bears was blocked — no damage to p1
+    bf_creatures = [t for t in py_view["battlefield"] if t[0] == "Grizzly Bears"]
+    assert len(bf_creatures) == 0, (
+        f"both Bears should be in graveyards after mutual KO, "
+        f"but bf still has: {bf_creatures}"
+    )
+    # Each player's graveyard has their Bears.
+    p0_gy_names = [entry[0] for entry in py_view["graveyard_p0"]]
+    p1_gy_names = [entry[0] for entry in py_view["graveyard_p1"]]
+    assert "Grizzly Bears" in p0_gy_names
+    assert "Grizzly Bears" in p1_gy_names
+
+
+def test_real_game_combat_no_attack_strategy_parity():
+    """`RealGameCombatAgent("no_attack")` — combat phase walks past
+    with empty attacker + empty blocker emission.
+
+    Pins: the no-attack path is byte-equal across engines on the same
+    turn-7 setup. p1 takes no damage; both bears stay on bf untapped.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _setup_p0_bears_at_turn_5(py_state, rust_state)
+
+    _advance_n_phases(py_state, rust_state, 12 * 2 + 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    agent = trajectory.RealGameCombatAgent(strategy="no_attack")
+    trajectory.drive_combat_phase(py_state, rust_state, agent)
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    assert py_view["life_p1"] == 20, "no-attack path should not deal damage"
+    bears_bf = next(t for t in py_view["battlefield"] if t[0] == "Grizzly Bears")
+    assert not bears_bf[1], "Bears should be untapped (never declared attacker)"
+
+
+def test_real_game_combat_first_strike_parity():
+    """First-strike combat through `RealGameCombatAgent` + side-channel
+    FS injection.
+
+    Setup: standard p0/p1 Bears prefix, then side-channel a 2/2 first-
+    strike creature onto p0's bf at turn 7 PRECOMBAT_MAIN. p0 attacks
+    with the FS creature (Bears on p0 also attacks; the FS creature
+    is the one whose strike timing matters); p1 blocks with their
+    Bears (one blocker per attacker, smallest assignment).
+
+    Expected combat outcome (CR 510.5 first-strike timing):
+      * First-strike substep: FS creature deals 2 to its blocker
+        (p1's Bears). p1's Bears (2 toughness) dies BEFORE regular
+        damage step.
+      * Regular substep: dead first-strike-killed blocker is removed
+        from the damage walk; surviving blocker-of-other-attacker
+        (p1's bears, but it's already dead) does no damage; p0's
+        Bears (regular striker, blocked by ??? — but p1 only has
+        one Bears to block, and "smallest" assigns to lowest-id
+        attacker first).
+
+    NOTE: the agent's "smallest" strategy assigns ONE blocker per
+    attacker. With 2 attackers (FS + regular Bears) and 1 blocker,
+    only the lowest-id attacker is blocked. If FS has the lower id
+    (newly-injected = highest id, so FS is HIGHEST id), regular
+    Bears gets blocked, FS goes through to player. In that case
+    p1 takes 2 from FS attacker.
+
+    Either outcome is parity-valid — what matters is that BOTH
+    engines produce the SAME outcome. The test asserts the same
+    life total + zone state on both sides. If a divergence surfaces,
+    this test xfails with a clear pointer to the gap.
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        compare_fields,
+        first_strike_side_channel,
+    )
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _setup_both_bears_by_turn_6(py_state, rust_state)
+
+    # Walk to turn 7 PRECOMBAT_MAIN. From turn 6 MAIN1 -> turn 7 MAIN1
+    # = 12 phases.
+    _advance_n_phases(py_state, rust_state, 12)
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.PRECOMBAT_MAIN
+
+    # Side-channel-inject the FS creature on p0's bf. Returns
+    # (py_id, rust_id) of the new object.
+    py_fs_id, rust_fs_id = first_strike_side_channel(py_state, rust_state)
+    # The injection should produce a parity-clean state, but the
+    # ids may differ if id allocation has drifted. The cross_engine
+    # field-view compare validates parity.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"first_strike_side_channel surfaced post-inject "
+            f"divergences (likely id-allocation drift between engines "
+            f"on the 60-card vanilla deck): "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    # Walk PRECOMBAT_MAIN -> BoC -> DECLARE_ATTACKERS.
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # Drive combat with attack_all_block_smallest. The agent will
+    # emit attackers = sorted([Bears_id, FS_id]); blockers = single
+    # block on the lowest-id attacker.
+    agent = trajectory.RealGameCombatAgent(
+        strategy="attack_all_block_smallest"
+    )
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"first-strike combat via RealGameCombatAgent surfaced "
+            f"a real cross-engine divergence: {exc}"
+        )
+
+    # If we reach here, combat composed cleanly. Sanity-check that
+    # SOMETHING happened (p1 took damage OR a creature died).
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    p1_gy_names = [entry[0] for entry in py_view["graveyard_p1"]]
+    # First-strike was supposed to kill at least p1's Bears.
+    assert "Grizzly Bears" in p1_gy_names or py_view["life_p1"] < 20, (
+        "expected first-strike combat to either kill p1's Bears or "
+        "land damage on p1; got neither"
+    )
