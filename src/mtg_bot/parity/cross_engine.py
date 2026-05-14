@@ -3391,6 +3391,74 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 "4144-4148)"
             )
         return PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=max_n)
+    if kind == "put_plus_one_counter_on_self":
+        # **Round-22 BLOCKED-BRIDGE-ARM slice -- "put a +1/+1 counter
+        # on this creature" (PutPlusOneCounterOnSelf family).** Rust
+        # substrate ``Effect::PutPlusOneCounterOnSelf { amount: i32 }``
+        # (cards.rs:260, parser at cards.rs:3287-3306, resolve at
+        # state_ops_resolve.rs:2601-2635) has been on main since
+        # round 23 (the round-23 "self-anchored counters" landing);
+        # this slice closes the cross-engine bridge gap. Sister to
+        # the round-21 ``put_plus_one_counter_on_each_of_up_to_n``
+        # arm but for the pure self-target shape (no target picker --
+        # the recipient is always ``state.resolving_source``).
+        #
+        # Round-22 fresh discovery walk (post-round-21) found this
+        # kind missing from the bridge. 13 EoE consumers via simple
+        # oracle scan: Tezzeret Cruel Captain, Pulsar Squadron Ace,
+        # Sunstar Lightsmith, etc.
+        #
+        # **Field shape (default-handling).** Python's
+        # ``PutPlusOneCounterOnSelf(amount: int = 1)``
+        # (effects/generic/counters.py:783-810) and Rust's variant
+        # carry the SAME ``amount`` field with the SAME default (1).
+        # Bridge mirrors Rust's parse_effect default-handling shape
+        # (cards.rs:3287-3306): ``amount`` is OPTIONAL on the bridge,
+        # defaulting to 1 when omitted. Mirrors the round-23 sister
+        # ``DiscardSelf`` / ``EachOpponentDiscards`` /
+        # ``TargetOpponentLosesLife`` default-handling precedent
+        # (vs the required-field shape of ``Surveil`` / ``Mill`` /
+        # the up-to-N-counters round-21 arm).
+        #
+        # **Negative amount.** Rust's parser raises PyValueError on
+        # amount < 0 (cards.rs:3296-3300); the bridge mirrors that
+        # contract for symmetric translation-time errors. amount == 0
+        # is valid on both engines and yields a silent no-op (Rust's
+        # resolve at state_ops_resolve.rs:2607-2609 short-circuits;
+        # Python's class accepts 0 cleanly via add_plus_one_counters).
+        #
+        # **Resolve semantics (parity-relevant).** Both engines look
+        # up the ability's source (Rust: walks battlefield by
+        # ``source_obj_id``; Python: reads ``state.resolving_source``)
+        # and add the +1/+1 counter to that object. Source not on a
+        # battlefield zone -> silent no-op on both engines (Rust's
+        # ``found_player`` short-circuit at state_ops_resolve.rs:
+        # 2616-2626 mirrors Python's ``source is None`` early return).
+        #
+        # **Real EoE consumer** unblocked: Sunstar Lightsmith --
+        # "Whenever Sunstar Lightsmith attacks, put a +1/+1 counter
+        # on it." (amount=1 implicit default). The bridge dict shape
+        # is ``{"kind": "put_plus_one_counter_on_self"}`` (amount
+        # omitted -> defaults to 1) or ``{"kind": "put_plus_one_
+        # counter_on_self", "amount": 1}`` (explicit). Cross-engine
+        # end-to-end probe deferred per round-17/18/19 synthetic-
+        # only-when-riders-cascade precedent (the attack-trigger
+        # event-firing path is its own surface beyond the bare
+        # bridge-arm slice).
+        from mtg_bot.effects.generic.counters import (
+            PutPlusOneCounterOnSelf,
+        )
+        if "amount" in eff_dict:
+            amount = int(eff_dict["amount"])
+        else:
+            amount = 1
+        if amount < 0:
+            raise ValueError(
+                "put_plus_one_counter_on_self bridge arm: amount must "
+                f"be non-negative, got {amount} (mirrors Rust "
+                "parse_effect contract at cards.rs:3296-3300)"
+            )
+        return PutPlusOneCounterOnSelf(amount=amount)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

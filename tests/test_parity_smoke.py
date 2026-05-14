@@ -44404,6 +44404,154 @@ def test_rust_up_to_n_counters_cross_controller_routing_p1_source():
     assert _rust_get_counters(rust_state, p0_bait_id) == p0_bait_before
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- put_plus_one_counter_on_self (round 22).
+#
+# Rust's Effect::PutPlusOneCounterOnSelf { amount: i32 } already
+# shipped end-to-end via round 23 (parse at cards.rs:3287-3306 +
+# resolve at state_ops_resolve.rs:2601-2635); this slice ships the
+# cross-engine bridge translator + the regression pins that
+# exercise it. The bridge arm closes a gap discovered by the
+# round-22 fresh discovery walk (Rust kind emitted by to_dict but
+# no matching `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumers of the bare ETB shape: 13 EoE cards include
+# Sunstar Lightsmith, Pulsar Squadron Ace, Tezzeret Cruel Captain
+# (oracle scan match: "put a +1/+1 counter on it/this creature/~").
+#
+# Pin layout (in test_parity_smoke.py): 4 Rust regression pins
+# (basic ETB amount=1 + amount=0 silent no-op + amount=2 multi-add
+# + cross-controller routing -- p1's source on p0's turn). Cross-
+# engine end-to-end probe deferred per round-17/18/19 synthetic-
+# only-when-riders-cascade precedent (the attack-trigger event-
+# firing path on Sunstar Lightsmith is its own surface beyond the
+# bare bridge-arm slice). The 6 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_put_plus_one_counter_on_self_state(
+    amount: int = 1, source_owner: int = 0,
+):
+    """Helper: build a Rust state with a single carrier creature on
+    `source_owner`'s bf carrying an ETB triggered ability that fires
+    PutPlusOneCounterOnSelf with the given amount. Returns
+    (rust_state, source_id).
+
+    The ETB trigger fires on register_and_inject_object so the
+    PendingTrigger is on the stack; resolve_top_of_stack() advances
+    the resolution and applies the effect.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "PutPlusOneCounterOnSelf-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "put_plus_one_counter_on_self",
+                        "amount": amount,
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_put_plus_one_counter_on_self_basic_amount_one():
+    """Rust regression pin: basic amount=1 -- the source gets exactly
+    one +1/+1 counter (Sunstar Lightsmith / Pulsar Squadron Ace
+    shape). Pins state_ops_resolve.rs:2601-2635's source-locator +
+    saturating_add(1) on the source's counters field.
+    """
+    rust_state, source_id = _build_rust_put_plus_one_counter_on_self_state(
+        amount=1
+    )
+    assert rust_state.stack_size() == 1
+    src_before = _rust_get_counters(rust_state, source_id)
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    src_after = _rust_get_counters(rust_state, source_id)
+    assert src_after == src_before + 1, (
+        f"Source should gain exactly +1 counter; before={src_before}, "
+        f"after={src_after}"
+    )
+
+
+def test_rust_put_plus_one_counter_on_self_amount_zero_silent_noop():
+    """Rust regression pin: amount=0 silently no-ops (Rust's resolve
+    arm at state_ops_resolve.rs:2607-2609 short-circuits on amount==0).
+    No counter changes on the source.
+    """
+    rust_state, source_id = _build_rust_put_plus_one_counter_on_self_state(
+        amount=0
+    )
+    assert rust_state.stack_size() == 1
+    src_before = _rust_get_counters(rust_state, source_id)
+    rust_state.resolve_top_of_stack()
+    src_after = _rust_get_counters(rust_state, source_id)
+    assert src_after == src_before, (
+        f"amount=0 should silently no-op; before={src_before}, "
+        f"after={src_after}"
+    )
+
+
+def test_rust_put_plus_one_counter_on_self_amount_two():
+    """Rust regression pin: amount=2 adds 2 counters in one resolve
+    (saturating_add(2) on the source's counters field). Pins the
+    multi-add path beyond the trivial amount=1 case.
+    """
+    rust_state, source_id = _build_rust_put_plus_one_counter_on_self_state(
+        amount=2
+    )
+    assert rust_state.stack_size() == 1
+    src_before = _rust_get_counters(rust_state, source_id)
+    rust_state.resolve_top_of_stack()
+    src_after = _rust_get_counters(rust_state, source_id)
+    assert src_after == src_before + 2, (
+        f"Source should gain +2 counters; before={src_before}, "
+        f"after={src_after}"
+    )
+
+
+def test_rust_put_plus_one_counter_on_self_cross_controller_routing():
+    """Rust regression pin: source owned by p1 (with p0 as
+    active_player by default) -- the source-locator scan walks BOTH
+    players' battlefields per state_ops_resolve.rs:2616-2622, so the
+    counter still lands on the p1-owned source even when p0 is
+    active_player. Pins the cross-controller routing case (p1's
+    ETB resolving on p0's turn -- mirrors the I82 / I83 controller-
+    of-effect contract sister-tests).
+    """
+    rust_state, source_id = _build_rust_put_plus_one_counter_on_self_state(
+        amount=1, source_owner=1,
+    )
+    assert rust_state.stack_size() == 1
+    src_before = _rust_get_counters(rust_state, source_id)
+    rust_state.resolve_top_of_stack()
+    src_after = _rust_get_counters(rust_state, source_id)
+    assert src_after == src_before + 1, (
+        f"p1-owned source should gain +1 counter even when p0 is "
+        f"active_player; before={src_before}, after={src_after}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
