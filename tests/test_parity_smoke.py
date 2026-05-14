@@ -34379,6 +34379,379 @@ def test_cross_engine_synthetic_etb_discard_card_cross_controller_routes_to_sour
     assert rust_p0_hand_names_after == py_p0_hand_names
 
 
+def test_cross_engine_real_eoe_galactic_wayfarer_etb_create_lander_artifact_token_parity(
+    parity_smoke,
+):
+    """Probe: Galactic Wayfarer (EoE Creature -- Human Scout) ETB
+    ``create a Lander token`` -- SAME-CONTROLLER cross-engine parity
+    for the create_token bridge arm on a Creature carrier producing
+    a Lander ARTIFACT-only token (Artifact card_type, Lander subtype,
+    NO Creature card_type and NO P/T -- a non-creature artifact token,
+    distinct from every other create_token consumer probed today).
+
+    Sister probes on the create_token bridge arm:
+
+      * ``test_cross_engine_real_eoe_honored_knight_captain_etb_create_soldier_token_parity``
+        (tests/test_parity_smoke.py:30979) -- 1/1 white Human Soldier
+        Creature token spawned by a Creature -- Human Advisor Knight
+        carrier. Token is a pure Creature (no Artifact card_type).
+      * ``test_cross_engine_real_eoe_knight_luminary_etb_create_soldier_token_parity``
+        (tests/test_parity_smoke.py:25931) -- 1/1 white Human Soldier
+        Creature token spawned by a Creature -- Human Knight (Warp)
+        carrier. Token is a pure Creature.
+      * ``test_cross_engine_real_eoe_wedgelight_rammer_etb_create_robot_artifact_creature_token_parity``
+        (tests/test_parity_smoke.py:25117) -- 2/2 colorless Robot
+        ARTIFACT-CREATURE token (BOTH Artifact AND Creature
+        card_types) spawned by an Artifact -- Spacecraft carrier.
+      * ``test_cross_engine_synthetic_etb_create_token_same_controller_routes_to_source_controller_parity``
+        (tests/test_parity_smoke.py:22832) -- 1/1 white Soldier
+        Creature token spawned by a 2/2 Creature carrier (synthetic
+        I81 same-controller routing).
+      * ``test_cross_engine_synthetic_etb_create_token_cross_controller_routes_to_source_controller_parity``
+        (tests/test_parity_smoke.py:20460) -- I81 cross-controller
+        flicker, same 1/1 Soldier Creature token shape.
+
+    This probe extends create_token coverage to a NEW token shape
+    axis: the spawned token is a NON-CREATURE artifact (Artifact
+    card_type only, no Creature card_type, no P/T). Every prior
+    create_token consumer on the bridge spawned a Creature-typed
+    token (pure Creature for Soldier-shape; Artifact + Creature for
+    Robot-shape). Lander is a pure Artifact -- spelled out in the
+    EoE reminder text as ``"It's an artifact with '{2}, {T},
+    Sacrifice this token: Search your library for a basic land card,
+    put it onto the battlefield tapped, then shuffle.'"``. The
+    Sacrifice + Search-library activated ability rides on the token
+    PRINTING (registered via ``register_token_printing``); the ETB
+    create_token bridge arm itself is shape-agnostic w.r.t. the
+    spawned printing's card_types -- it routes the spawn through
+    the same I81 controller-of-effect plumbing regardless of whether
+    the token is Creature-typed.
+
+    Real-EoE consumer alignment: Galactic Wayfarer's printed oracle
+    text is ``When this creature enters, create a Lander token.
+    (It's an artifact with "{2}, {T}, Sacrifice this token: Search
+    your library for a basic land card, put it onto the battlefield
+    tapped, then shuffle.")``. This probe exclusively exercises the
+    ETB-create_token surface; the Lander's activated ability (the
+    actual ramp activation) is out of scope -- it rides on
+    activated-cost + tap-cost + sacrifice-cost + tutor substrate the
+    bridge has no arms for today.
+
+    **Why a fresh slice and not Wedgelight Rammer / Honored Knight-
+    Captain expansion.** The existing same-controller create_token
+    sister probes pin a CREATURE-typed token shape (Soldier 1/1 or
+    Robot 2/2 artifact-creature). Broadening either to a non-
+    creature artifact token would either over-parameterize the
+    existing probe (multiple printing-id-shapes in one) or muddy
+    its docstring. A fresh probe lets the documentation cleanly
+    capture WHY this shape matters: it pins the bridge's create_token
+    contract is invariant w.r.t. the spawned token's CARD-TYPE
+    composition -- spawning a non-creature artifact token round-trips
+    cross-engine identically to spawning a Creature or
+    Artifact-Creature token.
+
+    Trigger shape (mirrors the Wedgelight Rammer sister, only the
+    printing-id metadata differs):
+
+        Event: enters
+        Predicate: source_is_self
+        Effect: create_token(count=1, token_printing_id=<lander pid>)
+
+    Probe shape (inject-and-fire-ENTERS, same-controller):
+
+      1. **active_player=P0** (default). P0 is also the SOURCE's
+         controller, so ``current_resolve_source_controller``
+         resolves to ``Some(0)`` AND the back-compat fallback
+         (``active_player``) AGREES at 0. This is the same-
+         controller surface; the cross-controller leg is pinned by
+         the I81 sister probe.
+
+      2. **Register Lander artifact token printing** on Rust (gets a
+         pid via ``rust_state.registry_size``); register the matching
+         Python ``CardPrinting`` (built directly via ``CardPrinting``
+         constructor since ``make_token_creature`` is creature-only
+         and Lander is a non-creature artifact) against that pid via
+         ``register_token_printing(pid, py_lander)``.
+
+      3. **Inject Galactic Wayfarer onto P0's bf** with controller=0.
+         ENTERS fires; the trigger lands on the stack carrying
+         controller=0.
+
+      4. **Drain both stacks.** The trigger resolves; the post-I81
+         CreateToken arm routes the spawn to P0's bf under P0's
+         control on Rust, and Python's
+         ``CreateToken.resolve(state, controller_id=0, ...)`` spawns
+         under P0 the same way.
+
+      5. **Cross-engine assert (post-resolve parity):**
+         - P0's bf grew by exactly +2 (Galactic Wayfarer + freshly-
+           spawned Lander artifact token).
+         - P1's bf is unchanged.
+         - The fresh token's ``controller_id`` is 0 on both engines.
+         - The fresh token's printing name matches across engines.
+
+    Out of scope:
+
+      * Lander's activated ramp ability ({2}, {T}, Sacrifice ->
+        basic land tutor) -- activated cost + tap cost + sacrifice
+        cost + tutor substrate; no bridge arms. The token is
+        registered with this ability shape on the printing for
+        round-trip fidelity, but no activation is exercised.
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Cross-controller routing -- pinned by the I81 sister probe
+        (the create_token bridge arm's contract is independent of
+        which token shape rides on it).
+      * count != 1 -- the bridge arm carries the count through;
+        existing same-controller sister probes pin count=1 and the
+        I81 cross-controller probe pins count=1.
+      * Tapped / attacking / each_player riders on the spawned
+        token -- Python-only flags with no Rust mirror today; the
+        bridge constructs the bare shape with all riders defaulted
+        off.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Galactic Wayfarer on P0's battlefield (unchanged from
+        inject; controller=0).
+      * One Lander Token on P0's battlefield (newly spawned;
+        controller=0; printing name matches across engines;
+        Artifact card_type only, no Creature card_type, no P/T).
+      * P1's battlefield: empty.
+      * No residual stack on either engine.
+      * Life totals unchanged on both seats.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+
+    # ---- Rust side: register Lander artifact token, then inject
+    # Galactic Wayfarer onto P0's bf. ----
+    ZONE_LIBRARY = 1
+    ZONE_BATTLEFIELD = 2
+    rust_lander_token_dict = {
+        # Galactic Wayfarer's printed oracle text: "create a Lander
+        # token. (It's an artifact with '{2}, {T}, Sacrifice this
+        # token: Search your library for a basic land card, ...')".
+        # The token is a NON-CREATURE artifact: Artifact card_type
+        # ONLY, no Creature card_type, no P/T (CR 111.4 spawn shape
+        # for non-creature artifact tokens). The activated ramp
+        # ability rides on the token printing's effects but is not
+        # exercised by this probe (out of scope).
+        "name": "Lander Token (Galactic Wayfarer ETB)",
+        "card_types": ["Artifact"],
+        "subtypes": ["Lander"],
+    }
+    rust_token_pid = rust_state.registry_size  # next free pid
+    rust_state.register_and_inject_object(
+        rust_lander_token_dict, 1, ZONE_LIBRARY,
+    )
+
+    rust_wayfarer_trigger_dict = {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token",
+            "count": 1,
+            "token_printing_id": rust_token_pid,
+        },
+    }
+    rust_wayfarer_dict = {
+        "name": "Galactic Wayfarer",
+        # Creature -- Human Scout. Power/toughness 3/3 informational
+        # only; inject-and-fire bypasses combat.
+        "card_types": ["Creature"],
+        "subtypes": ["Human", "Scout"],
+        "mana_cost": {"generic": 2, "G": 1},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+        "triggered_abilities": [rust_wayfarer_trigger_dict],
+    }
+
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_bf_p0_before = rust_state.battlefield_sizes[0]
+    rust_bf_p1_before = rust_state.battlefield_sizes[1]
+
+    # Inject onto P0's bf with controller=0. ENTERS fires; the
+    # trigger lands on the stack carrying controller=0 (same as
+    # active_player here).
+    rust_state.register_and_inject_object(
+        rust_wayfarer_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Galactic Wayfarer's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land CreateToken on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: register the Python token printing against
+    # Rust's pid via the bridge, build Galactic Wayfarer's printing
+    # using the bridge translator on the SAME trigger dict, then
+    # inject onto P0's bf and dispatch ENTERS. ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings, register_token_printing,
+    )
+
+    # Lander is a non-creature artifact token; ``make_token_creature``
+    # is creature-only and would force a Creature card_type plus P/T.
+    # Build the printing directly to keep the token's card_types
+    # composition (Artifact only) faithful to the Rust dict shape.
+    py_lander_token = CardPrinting(
+        name="Lander Token (Galactic Wayfarer ETB)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line="Token Artifact -- Lander",
+        supertypes=("Token",),
+        card_types=("Artifact",),
+        subtypes=("Lander",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    clear_token_printings()
+    register_token_printing(rust_token_pid, py_lander_token)
+    py_wayfarer_trigger = _ta_dict_to_python_triggered_ability(
+        rust_wayfarer_trigger_dict
+    )
+    py_wayfarer_printing = CardPrinting(
+        name="Galactic Wayfarer",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("G", 1),)),
+        type_line="Creature -- Human Scout",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Human", "Scout"),
+        power=3,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(py_wayfarer_trigger,),
+    )
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_bf_p0_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+
+    py_wayfarer = py_state.new_object(
+        py_wayfarer_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_wayfarer.summoning_sick = False
+    py_wayfarer.tapped = False
+    py_wayfarer.damage = 0
+    py_wayfarer.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_wayfarer)
+    _trigger_etb_abilities(py_state, py_wayfarer)
+    assert len(py_state.stack) == 1, (
+        "Python: Galactic Wayfarer's arrival should fire the "
+        "IsSelf ENTERS trigger and land CreateToken on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # Drain both stacks.
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust observable: P0's bf grew by carrier + 1 token = +2;
+    # P1's bf unchanged.
+    rust_bf_p0_after = rust_state.battlefield_sizes[0]
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p0_after == rust_bf_p0_before + 2, (
+        f"Rust same-controller create_token: P0's bf should gain "
+        f"Galactic Wayfarer + 1 Lander Token = +2 from baseline. "
+        f"Got bf_p0_before={rust_bf_p0_before}, "
+        f"bf_p0_after={rust_bf_p0_after}"
+    )
+    assert rust_bf_p1_after == rust_bf_p1_before, (
+        f"Rust: P1's bf should be unchanged. Got "
+        f"bf_p1_before={rust_bf_p1_before}, "
+        f"bf_p1_after={rust_bf_p1_after}"
+    )
+    rust_bf_snap = rust_state.battlefield_snapshot()
+    rust_lander_tokens = [
+        d for d in rust_bf_snap
+        if d["printing_name"]
+        == "Lander Token (Galactic Wayfarer ETB)"
+    ]
+    assert len(rust_lander_tokens) == 1, (
+        f"Rust: expected exactly 1 Lander Token on the bf; got "
+        f"{len(rust_lander_tokens)}"
+    )
+    assert rust_lander_tokens[0]["controller_id"] == 0, (
+        f"Rust same-controller contract: spawned Lander Token's "
+        f"controller_id must be 0 (source's controller). Got "
+        f"controller_id={rust_lander_tokens[0]['controller_id']}"
+    )
+
+    # Python observable: same shape.
+    py_bf_p0_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert py_bf_p0_after == py_bf_p0_before + 2, (
+        f"Python: P0's bf should gain Galactic Wayfarer + 1 Lander "
+        f"Token = +2. Got bf_p0_before={py_bf_p0_before}, "
+        f"bf_p0_after={py_bf_p0_after}"
+    )
+    assert py_bf_p1_after == py_bf_p1_before, (
+        f"Python: P1's bf should be unchanged. Got "
+        f"bf_p1_before={py_bf_p1_before}, "
+        f"bf_p1_after={py_bf_p1_after}"
+    )
+    py_lander_tokens = [
+        o for o in py_state.battlefield
+        if o.printing.name
+        == "Lander Token (Galactic Wayfarer ETB)"
+    ]
+    assert len(py_lander_tokens) == 1, (
+        f"Python: expected exactly 1 Lander Token on the bf; got "
+        f"{len(py_lander_tokens)}"
+    )
+    assert py_lander_tokens[0].controller_id == 0, (
+        f"Python: spawned Lander Token's controller_id must be 0. "
+        f"Got controller_id={py_lander_tokens[0].controller_id}"
+    )
+
+    # Cross-engine: lives unchanged on both sides (create_token
+    # doesn't touch life totals).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine bf-size parity (the post-drain observable).
+    assert rust_bf_p0_after == py_bf_p0_after
+    assert rust_bf_p1_after == py_bf_p1_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
