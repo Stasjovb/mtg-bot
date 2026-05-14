@@ -30976,6 +30976,377 @@ def test_cross_engine_synthetic_etb_each_opponent_sacrifices_creature_cross_cont
     assert py_beta is not None
 
 
+def test_cross_engine_real_eoe_honored_knight_captain_etb_create_soldier_token_parity(
+    parity_smoke,
+):
+    """Probe: Honored Knight-Captain (EoE Creature -- Human Advisor
+    Knight) ETB ``create a 1/1 white Human Soldier creature token``
+    -- SAME-CONTROLLER cross-engine parity for the create_token
+    bridge arm on a Creature carrier producing a Human Soldier
+    creature token (P/T 1/1, Soldier subtype).
+
+    Sister probes on the create_token bridge arm:
+
+      * ``test_cross_engine_real_eoe_knight_luminary_etb_create_soldier_token_parity``
+        (tests/test_parity_smoke.py:25931) -- THE direct sister: same
+        canonical 1/1-Soldier shape, on a Creature -- Human Knight
+        carrier with Warp. This probe is its real-EoE pair on a
+        Creature -- Human Advisor Knight carrier with a different
+        secondary ability (Sacrifice + search-library Equipment
+        tutor instead of Warp), demonstrating that the bridge's
+        create_token contract is invariant across two real-EoE
+        printings sharing the same trigger-text rendering but
+        differing in supertype / subtype / mana cost / secondary
+        abilities.
+      * ``test_cross_engine_synthetic_etb_create_token_same_controller_routes_to_source_controller_parity``
+        (tests/test_parity_smoke.py:22832) -- 1/1 white Soldier
+        Creature token spawned by a 2/2 generic Creature carrier
+        under the Honored-Knight-Captain *name* in its docstring;
+        synthetic-shape probe predating this real-EoE printing-id
+        slice.
+      * ``test_cross_engine_real_eoe_wedgelight_rammer_etb_create_robot_artifact_creature_token_parity``
+        (tests/test_parity_smoke.py:25117) -- 2/2 Robot artifact-
+        creature token spawned by an Artifact -- Spacecraft carrier;
+        different token shape.
+      * ``test_cross_engine_synthetic_etb_create_token_cross_controller_routes_to_source_controller_parity``
+        (tests/test_parity_smoke.py:20460) -- I81 cross-controller
+        flicker, same 1/1 Soldier token shape.
+
+    This probe extends create_token coverage to the THIRD real-EoE
+    consumer of the canonical 1/1-Soldier shape:
+
+      * Carrier card type: Creature (Human Advisor Knight). Identical
+        creature-carrier ENTERS dispatch the Knight Luminary sister
+        exercises; this probe pins that the bridge contract is
+        invariant across multiple distinct real-EoE printings
+        sharing the same trigger shape. Honored Knight-Captain
+        carries an Advisor Knight subtype + a Sacrifice activated
+        Equipment-tutor; Knight Luminary is a Human Knight with
+        Warp. The synthetic-vs-real-EoE difference is observable
+        only in the carrier's name + supertypes / subtypes / mana
+        cost / secondary abilities, not in the create_token effect
+        or the post-resolve battlefield shape.
+      * Token shape: 1/1 white Human Soldier creature token --
+        identical to the Knight Luminary sister. The dict registers
+        ``Creature`` in ``card_types`` plus the Soldier subtype;
+        the Python side calls ``make_token_creature(...,
+        subtypes=("Soldier",))``.
+
+    Real-EoE consumer alignment: Honored Knight-Captain's printed
+    oracle text is ``When this creature enters, create a 1/1 white
+    Human Soldier creature token. {4}{W}{W}, Sacrifice this
+    creature: Search your library for an Equipment card, put it
+    onto the battlefield, then shuffle.``. The Sacrifice +
+    Search-library activated ability is out of scope -- it rides on
+    activated-cost + tutor substrate the bridge has no arms for
+    today. This probe exclusively exercises the ETB-create_token
+    surface, mirroring the Knight Luminary sister's scope boundary
+    (Warp also out of scope there).
+
+    **Why a fresh slice and not Knight Luminary expansion.** The
+    Knight Luminary sister is a strict single-printing probe on a
+    Human Knight carrier; broadening it to multiple real-EoE
+    printings would over-parameterize the existing probe and muddy
+    its docstring. A fresh probe lets the documentation cleanly
+    capture WHY this shape matters: it pins the bridge's
+    printing-id substrate against a THIRD real-EoE consumer of the
+    same canonical 1/1-Soldier shape (multiple-EoE-printings-of-
+    same-shape parity is a meaningful claim because Rust
+    ``Registry`` keys by pid, not by name -- nothing structurally
+    enforces that two printings sharing oracle text must produce
+    identical token-spawn behavior; the trio-probe pattern PINS
+    that they do).
+
+    Trigger shape (mirrors the Knight Luminary sister, only the
+    carrier-name metadata differs):
+
+        Event: enters
+        Predicate: source_is_self
+        Effect: create_token(count=1, token_printing_id=<soldier pid>)
+
+    Probe shape (inject-and-fire-ENTERS, same-controller):
+
+      1. **active_player=P0** (default). P0 is also the SOURCE's
+         controller, so ``current_resolve_source_controller``
+         resolves to ``Some(0)`` AND the back-compat fallback
+         (``active_player``) AGREES at 0. This is the same-
+         controller surface; the cross-controller leg is pinned by
+         the I81 sister probe.
+
+      2. **Register Soldier token printing** on Rust (gets a pid
+         via ``rust_state.registry_size``); register the matching
+         Python ``CardPrinting`` (built via
+         ``make_token_creature(..., subtypes=("Soldier",))``)
+         against that pid via
+         ``register_token_printing(pid, py_soldier)``.
+
+      3. **Inject Honored Knight-Captain onto P0's bf** with
+         controller=0. ENTERS fires; the trigger lands on the
+         stack carrying controller=0.
+
+      4. **Drain both stacks.** The trigger resolves; the post-I81
+         CreateToken arm routes the spawn to P0's bf under P0's
+         control on Rust, and Python's
+         ``CreateToken.resolve(state, controller_id=0, ...)``
+         spawns under P0 the same way.
+
+      5. **Cross-engine assert (post-resolve parity):**
+         - P0's bf grew by exactly +2 (Honored Knight-Captain +
+           freshly-spawned Soldier token).
+         - P1's bf is unchanged.
+         - The fresh token's ``controller_id`` is 0 on both
+           engines.
+         - The fresh token's printing name matches across engines.
+
+    Out of scope:
+
+      * Sacrifice + Search-library Equipment activated ability --
+        activated cost + tutor substrate; no bridge arms.
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Cross-controller routing -- pinned by the I81 sister probe
+        (the create_token bridge arm's contract is independent of
+        which token shape rides on it).
+      * count != 1 -- the bridge arm carries the count through;
+        existing same-controller sister probes pin count=1 and the
+        I81 cross-controller probe pins count=1.
+      * Tapped / attacking / each_player riders on the spawned
+        token -- Python-only flags with no Rust mirror today; the
+        bridge constructs the bare shape with all riders defaulted
+        off.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Honored Knight-Captain on P0's battlefield (unchanged from
+        inject; controller=0).
+      * One Soldier Token on P0's battlefield (newly spawned;
+        controller=0; printing name matches across engines).
+      * P1's battlefield: empty.
+      * No residual stack on either engine.
+      * Life totals unchanged on both seats.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+
+    # ---- Rust side: register Soldier token, then inject Honored
+    # Knight-Captain onto P0's bf. ----
+    ZONE_LIBRARY = 1
+    ZONE_BATTLEFIELD = 2
+    rust_soldier_token_dict = {
+        "name": "Soldier Token (Honored Knight-Captain ETB)",
+        "card_types": ["Creature"],
+        "subtypes": ["Human", "Soldier"],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_token_pid = rust_state.registry_size  # next free pid
+    rust_state.register_and_inject_object(
+        rust_soldier_token_dict, 1, ZONE_LIBRARY,
+    )
+
+    rust_honored_trigger_dict = {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token",
+            "count": 1,
+            "token_printing_id": rust_token_pid,
+        },
+    }
+    rust_honored_dict = {
+        "name": "Honored Knight-Captain",
+        # Creature -- Human Advisor Knight. The Sacrifice activated
+        # Equipment-tutor ability is out of scope (no bridge arm);
+        # mana cost is informational only -- inject-and-fire
+        # bypasses the cast pipeline.
+        "card_types": ["Creature"],
+        "subtypes": ["Human", "Advisor", "Knight"],
+        "mana_cost": {"generic": 1, "W": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [rust_honored_trigger_dict],
+    }
+
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_bf_p0_before = rust_state.battlefield_sizes[0]
+    rust_bf_p1_before = rust_state.battlefield_sizes[1]
+
+    # Inject onto P0's bf with controller=0. ENTERS fires; the
+    # trigger lands on the stack carrying controller=0 (same as
+    # active_player here).
+    rust_state.register_and_inject_object(
+        rust_honored_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Honored Knight-Captain's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land CreateToken on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: register the Python token printing against
+    # Rust's pid via the bridge, build Honored Knight-Captain's
+    # printing using the bridge translator on the SAME trigger dict,
+    # then inject onto P0's bf and dispatch ENTERS. ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import (
+        CardPrinting, ManaCost, make_token_creature,
+    )
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings, register_token_printing,
+    )
+
+    py_soldier_token = make_token_creature(
+        name="Soldier Token (Honored Knight-Captain ETB)",
+        power=1,
+        toughness=1,
+        subtypes=("Human", "Soldier"),
+    )
+    clear_token_printings()
+    register_token_printing(rust_token_pid, py_soldier_token)
+    py_honored_trigger = (
+        _ta_dict_to_python_triggered_ability(
+            rust_honored_trigger_dict
+        )
+    )
+    py_honored_printing = CardPrinting(
+        name="Honored Knight-Captain",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("W", 1),)),
+        type_line="Creature -- Human Advisor Knight",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Human", "Advisor", "Knight"),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+        triggered_abilities=(py_honored_trigger,),
+    )
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_bf_p0_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+
+    py_honored = py_state.new_object(
+        py_honored_printing,
+        owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    py_honored.summoning_sick = False
+    py_honored.tapped = False
+    py_honored.damage = 0
+    py_honored.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_honored)
+    _trigger_etb_abilities(py_state, py_honored)
+    assert len(py_state.stack) == 1, (
+        "Python: Honored Knight-Captain's arrival should fire the "
+        "IsSelf ENTERS trigger and land CreateToken on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # Drain both stacks.
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust observable: P0's bf grew by carrier + 1 token = +2;
+    # P1's bf unchanged.
+    rust_bf_p0_after = rust_state.battlefield_sizes[0]
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p0_after == rust_bf_p0_before + 2, (
+        f"Rust same-controller create_token: P0's bf should gain "
+        f"Honored Knight-Captain + 1 Soldier Token = +2 from "
+        f"baseline. Got bf_p0_before={rust_bf_p0_before}, "
+        f"bf_p0_after={rust_bf_p0_after}"
+    )
+    assert rust_bf_p1_after == rust_bf_p1_before, (
+        f"Rust: P1's bf should be unchanged. Got "
+        f"bf_p1_before={rust_bf_p1_before}, "
+        f"bf_p1_after={rust_bf_p1_after}"
+    )
+    rust_bf_snap = rust_state.battlefield_snapshot()
+    rust_soldier_tokens = [
+        d for d in rust_bf_snap
+        if d["printing_name"]
+        == "Soldier Token (Honored Knight-Captain ETB)"
+    ]
+    assert len(rust_soldier_tokens) == 1, (
+        f"Rust: expected exactly 1 Soldier Token on the bf; got "
+        f"{len(rust_soldier_tokens)}"
+    )
+    assert rust_soldier_tokens[0]["controller_id"] == 0, (
+        f"Rust same-controller contract: spawned Soldier Token's "
+        f"controller_id must be 0 (source's controller). Got "
+        f"controller_id={rust_soldier_tokens[0]['controller_id']}"
+    )
+
+    # Python observable: same shape.
+    py_bf_p0_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert py_bf_p0_after == py_bf_p0_before + 2, (
+        f"Python: P0's bf should gain Honored Knight-Captain + 1 "
+        f"Soldier Token = +2. Got bf_p0_before={py_bf_p0_before}, "
+        f"bf_p0_after={py_bf_p0_after}"
+    )
+    assert py_bf_p1_after == py_bf_p1_before, (
+        f"Python: P1's bf should be unchanged. Got "
+        f"bf_p1_before={py_bf_p1_before}, "
+        f"bf_p1_after={py_bf_p1_after}"
+    )
+    py_soldier_tokens = [
+        o for o in py_state.battlefield
+        if o.printing.name
+        == "Soldier Token (Honored Knight-Captain ETB)"
+    ]
+    assert len(py_soldier_tokens) == 1, (
+        f"Python: expected exactly 1 Soldier Token on the bf; got "
+        f"{len(py_soldier_tokens)}"
+    )
+    assert py_soldier_tokens[0].controller_id == 0, (
+        f"Python: spawned Soldier Token's controller_id must be 0. "
+        f"Got controller_id={py_soldier_tokens[0].controller_id}"
+    )
+
+    # Cross-engine: lives unchanged on both sides (create_token
+    # doesn't touch life totals).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine bf-size parity (the post-drain observable).
+    assert rust_bf_p0_after == py_bf_p0_after
+    assert rust_bf_p1_after == py_bf_p1_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
