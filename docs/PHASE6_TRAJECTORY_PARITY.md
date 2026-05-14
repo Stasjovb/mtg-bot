@@ -186,27 +186,130 @@ Rust each independently produce semantically-equivalent results.
    driver instead of each test re-inlining the script. Not blocking
    per se, but increasingly an ergonomics tax as the trajectory
    suite grows.
-4. **Inconsistent action-dict vocabulary.** `_dict_to_python_action`
-   uses `card_id` for `play_land`/`cast_spell` but `source_id` for
-   `activate_ability`. Real-game trajectory tests building actions
-   programmatically have to know this per-kind.
+4. ~~**Inconsistent action-dict vocabulary.**~~ **CLOSED** by
+   `feature/phase6-action-dict-vocab` (round-15, this slice). See
+   "Action-dict vocabulary normalization (round-15, this slice)"
+   section below for the full ship summary.
+
+## Action-dict vocabulary normalization (round-15, this slice)
+
+Closed by `feature/phase6-action-dict-vocab`:
+
+The action-dict id-key vocabulary is per-kind asymmetric — `card_id`
+for `play_land` / `cast_spell` (and `turn_face_up` /
+`unlock_room_half`); `source_id` for `activate_ability`;
+`spacecraft_id` for `activate_station`. **The asymmetry is consistent
+on both Python AND Rust** — Python's dataclass field names
+(`PlayLand.card_id`, `ActivateAbility.source_id`, ...) match Rust's
+enum variant fields (`Action::PlayLand { card_id }`,
+`Action::ActivateAbility { source_id }`, ...). This is intentional
+and captures real semantic distinction:
+
+- `card_id` reads naturally for "the card in hand I'm playing /
+  casting / flipping / unlocking".
+- `source_id` reads naturally for "the permanent on the battlefield
+  whose ability is firing" — could be a creature, an artifact, an
+  enchantment, a land, never just "a card".
+
+**Decision rationale: Option C (dual-honor + canonical builder
+helper).** The brief offered three options:
+
+- Option A (standardize on `card_id` everywhere): would force a
+  Python dataclass field rename (`ActivateAbility.source_id` →
+  `card_id`) AND a Rust enum field rename, with cascading
+  search-loop + bridge changes. Loses the "permanent vs card"
+  semantic. Big blast radius.
+- Option B (standardize on `source_id` everywhere): same blast
+  radius, opposite direction. Loses the "card I'm playing"
+  semantic.
+- **Option C (dual-honor + canonical builder)** — picked. The
+  asymmetry is *correct* on both engines; the only real pain is
+  programmatic builders memorizing the per-kind shape. A canonical
+  builder helper + dual-honor on the Python bridge solves the
+  ergonomic gap without touching either engine's data model. Zero
+  Rust-side coupling cost (avoids conflict with parallel Rust
+  slices).
+
+Slice contents:
+
+- **`_CANONICAL_ACTION_ID_KEY` table** in
+  `mtg_bot.parity.cross_engine` — single source of truth for the
+  per-kind canonical id-key vocabulary. Documents the mapping
+  (play_land/cast_spell/turn_face_up/unlock_room_half →
+  `card_id`; activate_ability → `source_id`; activate_station →
+  `spacecraft_id`).
+- **`_canonical_action_dict(kind, **kwargs)`** — programmatic-builder
+  helper that accepts the GameObject id under the friendly alias
+  `id` and routes it to the kind's canonical key. Validates kind
+  membership; rejects no-id kinds passing `id`; rejects id-required
+  kinds omitting `id`. Other kwargs pass through (e.g., kicker /
+  warp / impending flags on cast_spell).
+- **`_resolve_id_with_alias(action_dict, kind)`** — bridge-side
+  resolver that reads the primary id honoring both the canonical
+  key AND the cross-vocabulary alias (`source_id` on
+  play_land/cast_spell, `card_id` on activate_ability).
+- **`_dict_to_python_action`** updated to use
+  `_resolve_id_with_alias` on play_land / cast_spell /
+  activate_ability. Soft-deprecation transition aid: hand-rolled
+  Python-side dicts that pick the "wrong" key still resolve. Rust
+  stays strict (canonical key only) — documented in the function
+  docstring. Always prefer `_canonical_action_dict` for dicts that
+  cross both engines.
+- **Test surface** (15 new tests):
+  - `tests/test_parity_smoke.py` — 13 tests covering the builder's
+    happy paths (play_land, cast_spell, activate_ability, no-id
+    kinds), validation (unknown kinds, bad id pairings),
+    dual-honor (alias acceptance for both directions,
+    canonical-takes-precedence when both present, missing-id
+    KeyError contract preserved), and a drift-detection test that
+    pins the per-kind canonical-key table.
+  - `tests/test_trajectory_parity.py` — 2 tests:
+    - `test_activate_ability_trajectory_via_canonical_builder` —
+      end-to-end real-game trajectory using
+      `_canonical_action_dict` for every action (lands across
+      turns 1/3/5, two Forest mana activations, cast Bears). Pins
+      cross-engine parity on the builder-emitted dicts.
+    - `test_activate_ability_trajectory_alias_dict_python_only` —
+      Python-bridge-only contract: an alias-keyed activate_ability
+      dict (`card_id` instead of `source_id`) still taps the
+      Forest on the Python side. Documented to NOT cross the Rust
+      boundary.
+
+Gate: **379 passing** (was 364; +15 net). No divergences surfaced.
+
+## Divergences surfaced in round-15
+
+**None.** The activate_ability trajectory test runs cleanly across
+the full real-game prefix (opening hand, three land plays, two
+mana activations, cast Bears) with byte-equal field views on every
+step. This extends the round-13 finding: the cross-engine bridge is
+parity-clean on the activate_ability path the same way it is on
+play_land / cast_spell / declare_attackers.
+
+The trajectory test's value is two-fold:
+
+1. **Builder regression-pin** — any future change to
+   `_canonical_action_dict`'s per-kind routing (e.g., emitting
+   `card_id` for `activate_ability` by mistake) would surface
+   immediately as a Rust-side parse error since Rust is strict on
+   the canonical key.
+2. **Activate_ability trajectory regression-pin** — any future
+   Rust-side change to the mana-ability primitive that breaks the
+   Forest tap-for-mana flow surfaces here.
 
 ## Suggested next slice
 
-Gap #1 + gap #2 are closed. The natural next slice is gap #3 (the
-trajectory-side combat selector): promote the inline declare/block
-scripts from the round-13/14 trajectory tests into a
-`parity.trajectory.combat_selector` that reads the active player's
-bf and emits attacker/blocker dicts automatically. Test surface:
-re-write `test_attack_at_turn_7_parity` and
-`test_combat_damage_at_turn_7_parity` to use the selector, then add
-1-2 new tests with multiple attackers / blockers to surface any
-combat-step bookkeeping bugs that the inline-script versions don't
-exercise (interleaved declare order, vigilance, first-strike).
-
-Gap #4 (`source_id` vs `card_id` action-dict vocabulary) is a
-one-line normalization with a near-zero test surface — add it
-opportunistically when next touching `_dict_to_python_action`.
+Gap #1 + gap #2 + gap #4 are closed. The natural next slice is
+gap #3 (the trajectory-side combat selector): promote the inline
+declare/block scripts from the round-13/14/15 trajectory tests
+into a `parity.trajectory.combat_selector` that reads the active
+player's bf and emits attacker/blocker dicts automatically. Test
+surface: re-write `test_attack_at_turn_7_parity` and
+`test_combat_damage_at_turn_7_parity` to use the selector, then
+add 1-2 new tests with multiple attackers / blockers to surface
+any combat-step bookkeeping bugs that the inline-script versions
+don't exercise (interleaved declare order, vigilance,
+first-strike).
 
 The Rust API gaps documented under gap #2's residuals
 (non-positional bottom, state-conditional mulligan agents) are

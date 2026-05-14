@@ -1035,3 +1035,202 @@ def test_combat_damage_at_turn_7_parity():
     clear_combat_both(py_state, rust_state)
     py_view, rust_view = _step_views(py_state, rust_state)
     assert compare_fields(py_view, rust_view) == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 gap #4 closure (round-15): activate_ability trajectory using the
+# canonical action-dict builder.
+#
+# Exercises the activate_ability path end-to-end via `_canonical_action_dict`
+# rather than inline literal dicts. This pins the canonical-builder bridge
+# round-trip on a real-game-shaped trajectory: build the dict via
+# `_canonical_action_dict("activate_ability", id=N, ability_index=0)`,
+# step both engines, assert byte-equal field views.
+#
+# The shape mirrors the existing test_cast_creature_at_turn_5_parity but
+# uses the canonical builder for every dict (lands, activations, cast)
+# so a regression in the builder's per-kind routing surfaces here. Also
+# pins that the builder's output is byte-equal to what the inline-literal
+# trajectory tests produce — i.e., the builder is a no-op refactor of
+# the per-kind dict shape, not a behavior change.
+# ---------------------------------------------------------------------------
+
+
+def test_activate_ability_trajectory_via_canonical_builder():
+    """End-to-end trajectory using `_canonical_action_dict` for every
+    action: walk to turn 5 PRECOMBAT_MAIN, play 3 Forests across
+    turns 1/3/5 (active player p0 gets turns 1/3/5), tap two Forests
+    via `_canonical_action_dict("activate_ability", id=N,
+    ability_index=0)`, cast Bears via `_canonical_action_dict(
+    "cast_spell", id=N)`. Asserts per-step parity throughout.
+
+    Pins: the canonical builder produces dicts that round-trip
+    cleanly through both `_dict_to_python_action` AND Rust's
+    `parse_action`. A regression in the builder's per-kind routing
+    (e.g., emitting `card_id` for `activate_ability`) would surface
+    immediately as a Rust-side parse error.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        _canonical_action_dict,
+        step_both,
+    )
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    # Walk turn 1 PASS_PRIORITY -> PRECOMBAT_MAIN, play Forest.
+    _advance_n_phases(py_state, rust_state, 3)
+    forest = next(
+        o for o in py_state.players[0].hand if o.printing.name == "Forest"
+    )
+    s = step_both(
+        py_state, rust_state,
+        _canonical_action_dict("play_land", id=int(forest.id)),
+    )
+    assert s.divergences == [], (
+        f"play_land via canonical builder surfaced divergences: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+    )
+    # Advance to turn 3 active player (p0). Each full turn is 12 phases;
+    # advance two full turns to get back to p0 PRECOMBAT_MAIN.
+    _advance_n_phases(py_state, rust_state, 12 * 2)
+    forest = next(
+        o for o in py_state.players[0].hand if o.printing.name == "Forest"
+    )
+    s = step_both(
+        py_state, rust_state,
+        _canonical_action_dict("play_land", id=int(forest.id)),
+    )
+    assert s.divergences == []
+    # Turn 5 active player (p0) — 3rd Forest play.
+    _advance_n_phases(py_state, rust_state, 12 * 2)
+    forest = next(
+        o for o in py_state.players[0].hand if o.printing.name == "Forest"
+    )
+    s = step_both(
+        py_state, rust_state,
+        _canonical_action_dict("play_land", id=int(forest.id)),
+    )
+    assert s.divergences == []
+
+    # Now tap two Forests for mana via the canonical builder. The
+    # canonical key for activate_ability is `source_id`, but the
+    # builder lets us pass the friendly `id` alias.
+    for tap_idx in range(2):
+        untapped_forest = next(
+            o for o in py_state.battlefield
+            if o.controller_id == 0
+            and o.printing.is_land
+            and not o.tapped
+            and not o.summoning_sick
+        )
+        action_dict = _canonical_action_dict(
+            "activate_ability",
+            id=int(untapped_forest.id),
+            ability_index=0,
+        )
+        # Sanity: builder routed `id` to `source_id` (the canonical key
+        # for activate_ability, which Rust's parse_action requires).
+        assert "source_id" in action_dict
+        assert "card_id" not in action_dict
+        assert action_dict["source_id"] == int(untapped_forest.id)
+
+        s = step_both(py_state, rust_state, action_dict)
+        assert s.divergences == [], (
+            f"tap #{tap_idx} via canonical builder surfaced "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+        )
+
+    # Cast Grizzly Bears via the canonical builder.
+    bears = next(
+        o for o in py_state.players[0].hand
+        if o.printing.name == "Grizzly Bears"
+    )
+    cast_dict = _canonical_action_dict("cast_spell", id=int(bears.id))
+    # Sanity: builder routed `id` to `card_id` (the canonical key for
+    # cast_spell).
+    assert "card_id" in cast_dict
+    assert "source_id" not in cast_dict
+    assert cast_dict["card_id"] == int(bears.id)
+    s = step_both(py_state, rust_state, cast_dict)
+    assert s.divergences == [], (
+        f"cast_spell via canonical builder surfaced divergences: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+    )
+
+    # End-state check: bf has three Forests + Grizzly Bears (sick).
+    py_view = s.py_view
+    assert len(py_view["battlefield"]) == 4
+    bf_names = sorted(t[0] for t in py_view["battlefield"])
+    assert bf_names == ["Forest", "Forest", "Forest", "Grizzly Bears"]
+
+
+def test_activate_ability_trajectory_alias_dict_python_only():
+    """`_dict_to_python_action`'s dual-honor accepts the cross-vocabulary
+    alias on the Python side: `card_id` for `activate_ability` resolves
+    to `ActivateAbility.source_id`. This is the soft-deprecation
+    transition aid — hand-rolled Python-side builders that pick the
+    "wrong" key still work.
+
+    NOTE: this is a Python-bridge-only contract — feeding the same
+    alias-keyed dict to Rust raises a parse error (Rust is strict).
+    The test exercises the Python-only path: build the dict with the
+    alias, apply via `_dict_to_python_action` + `py_apply_action`,
+    assert the activated state on Python.
+    """
+    from mtg_bot.actions import apply_action as py_apply_action
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        _canonical_action_dict,
+        _dict_to_python_action,
+        advance_phase_python,
+        step_both,
+    )
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    # Walk to turn 1 PRECOMBAT_MAIN; play Forest cross-engine via the
+    # canonical builder so both states stay in sync.
+    _advance_n_phases(py_state, rust_state, 3)
+    forest = next(
+        o for o in py_state.players[0].hand if o.printing.name == "Forest"
+    )
+    s = step_both(
+        py_state, rust_state,
+        _canonical_action_dict("play_land", id=int(forest.id)),
+    )
+    assert s.divergences == []
+    # Advance Python alone to turn 3 (where the Forest is no longer
+    # summoning-sick) — this test is about the Python-bridge alias
+    # surface, not cross-engine parity, so we drop into Python-only
+    # for the activation step.
+    for _ in range(12 * 2):
+        advance_phase_python(py_state)
+    forest_bf = next(
+        o for o in py_state.battlefield
+        if o.controller_id == 0
+        and o.printing.is_land
+        and not o.tapped
+        and not o.summoning_sick
+    )
+
+    # Build the dict with the WRONG (alias) key — `card_id` instead
+    # of the canonical `source_id` — and apply on Python only.
+    alias_dict = {
+        "kind": "activate_ability",
+        "card_id": int(forest_bf.id),  # alias for source_id
+        "ability_index": 0,
+    }
+    py_action = _dict_to_python_action(alias_dict)
+    py_apply_action(py_state, 0, py_action)
+
+    # The Forest should now be tapped on Python.
+    forest_bf_after = next(
+        o for o in py_state.battlefield if o.id == forest_bf.id
+    )
+    assert forest_bf_after.tapped, (
+        "Python-side dual-honor alias did not route to source_id — "
+        "the Forest should be tapped after the activate_ability "
+        "alias-keyed dict resolves."
+    )

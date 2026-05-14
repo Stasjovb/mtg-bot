@@ -3303,6 +3303,136 @@ class CrossEngineStep:
     divergences: list[FieldDivergence] = field(default_factory=list)
 
 
+#: Canonical per-kind id-key vocabulary for action dicts. The mapping
+#: documents the *normalized* key each kind uses to name its primary
+#: GameObject id. The asymmetry — ``card_id`` for hand-zone-sourced
+#: actions vs ``source_id`` for bf-zone-sourced ability activation —
+#: is intentional and mirrored on both Python (``PlayLand.card_id`` /
+#: ``CastSpell.card_id`` / ``ActivateAbility.source_id`` dataclass
+#: fields) AND Rust (``Action::PlayLand { card_id }`` /
+#: ``Action::CastSpell { card_id }`` /
+#: ``Action::ActivateAbility { source_id }`` enum variants). The
+#: rationale: ``card_id`` reads naturally for "the card in hand I'm
+#: playing", while ``source_id`` reads naturally for "the permanent on
+#: the battlefield whose ability is firing" — the source can be a
+#: creature, an artifact, an enchantment, a land, never just "a card".
+#:
+#: Programmatic action-dict builders (trajectory tests, future
+#: selectors) should use :func:`_canonical_action_dict` so they don't
+#: have to memorize the per-kind shape. The bridge
+#: (:func:`_dict_to_python_action`) ALSO honors the cross-vocabulary
+#: keys (``source_id`` on ``play_land`` / ``cast_spell``, ``card_id``
+#: on ``activate_ability``) as a soft-deprecation transition aid for
+#: hand-rolled dicts that pick the "wrong" key by accident — see the
+#: dual-honor logic in the function body. The Rust side is strict
+#: (only the canonical key parses), so any dict produced by
+#: ``_canonical_action_dict`` round-trips cleanly through
+#: ``parse_action`` while a cross-keyed Python dict only works on
+#: the Python side. Phase 6 infrastructure gap #4 closure (round-15).
+_CANONICAL_ACTION_ID_KEY: dict[str, str] = {
+    "play_land": "card_id",
+    "cast_spell": "card_id",
+    "turn_face_up": "card_id",
+    "unlock_room_half": "card_id",
+    "activate_ability": "source_id",
+    "activate_station": "spacecraft_id",
+}
+
+
+def _canonical_action_dict(kind: str, **kwargs) -> dict:
+    """Construct a properly-keyed action dict for cross-engine use.
+
+    Programmatic builders (trajectory tests, future selectors) should
+    reach for this rather than constructing the dict literal inline,
+    because the per-kind id-key vocabulary is asymmetric (see
+    :data:`_CANONICAL_ACTION_ID_KEY`). The helper accepts the
+    GameObject id under the friendly alias ``id`` and routes it to
+    the kind's canonical key (``card_id`` for ``play_land`` /
+    ``cast_spell`` / ``turn_face_up`` / ``unlock_room_half``,
+    ``source_id`` for ``activate_ability``, ``spacecraft_id`` for
+    ``activate_station``). Other kwargs pass through verbatim.
+
+    Examples
+    --------
+    >>> _canonical_action_dict("play_land", id=42)
+    {'kind': 'play_land', 'card_id': 42}
+    >>> _canonical_action_dict("activate_ability", id=42, ability_index=0)
+    {'kind': 'activate_ability', 'source_id': 42, 'ability_index': 0}
+    >>> _canonical_action_dict("cast_spell", id=7, kicked=True)
+    {'kind': 'cast_spell', 'card_id': 7, 'kicked': True}
+    >>> _canonical_action_dict("declare_attackers", attacker_ids=[1, 2])
+    {'kind': 'declare_attackers', 'attacker_ids': [1, 2]}
+
+    Kinds without a primary id (``pass_priority``,
+    ``declare_attackers``, ``declare_blockers``) accept no ``id``
+    kwarg — pass through their domain-specific kwargs directly.
+
+    Raises
+    ------
+    ValueError
+        If ``kind`` is unknown to either the canonical-id table or
+        the no-id allowlist (``pass_priority``, ``declare_attackers``,
+        ``declare_blockers``), OR if ``id`` is supplied for a kind
+        whose dict has no primary-id slot, OR if ``id`` is omitted for
+        a kind that requires it.
+    """
+    no_id_kinds = {"pass_priority", "declare_attackers", "declare_blockers"}
+    if kind not in _CANONICAL_ACTION_ID_KEY and kind not in no_id_kinds:
+        raise ValueError(
+            f"unknown action kind for canonical builder: {kind!r}; "
+            f"valid kinds: "
+            f"{sorted(set(_CANONICAL_ACTION_ID_KEY) | no_id_kinds)}"
+        )
+    out: dict = {"kind": kind}
+    obj_id = kwargs.pop("id", None)
+    if kind in no_id_kinds:
+        if obj_id is not None:
+            raise ValueError(
+                f"action kind {kind!r} takes no primary id; "
+                f"got id={obj_id!r}"
+            )
+    else:
+        if obj_id is None:
+            raise ValueError(
+                f"action kind {kind!r} requires the primary id "
+                f"(pass `id=<int>`)"
+            )
+        out[_CANONICAL_ACTION_ID_KEY[kind]] = int(obj_id)
+    out.update(kwargs)
+    return out
+
+
+def _resolve_id_with_alias(action_dict: dict, kind: str) -> int:
+    """Read the primary id from ``action_dict`` honoring both the
+    canonical key for ``kind`` AND the cross-vocabulary alias.
+
+    The canonical mapping is :data:`_CANONICAL_ACTION_ID_KEY`. The
+    cross-vocabulary alias accepted on the Python bridge:
+
+    * ``play_land`` / ``cast_spell`` canonical ``card_id`` — also
+      accepts ``source_id`` as an alias.
+    * ``activate_ability`` canonical ``source_id`` — also accepts
+      ``card_id`` as an alias.
+
+    This is the soft-deprecation transition aid: hand-rolled dicts
+    that picked the "wrong" key still work on the Python side. The
+    Rust side is strict (only the canonical key parses), so any
+    cross-keyed dict only works as long as it never crosses the
+    Rust boundary.
+
+    Raises ``KeyError`` (matching the legacy strict-key behavior)
+    if neither the canonical key nor the alias is present.
+    """
+    canonical = _CANONICAL_ACTION_ID_KEY[kind]
+    if canonical in action_dict:
+        return int(action_dict[canonical])
+    alias = "source_id" if canonical == "card_id" else "card_id"
+    if alias in action_dict:
+        return int(action_dict[alias])
+    # Mirror dict[]'s KeyError so the legacy contract holds.
+    raise KeyError(canonical)
+
+
 def _dict_to_python_action(action_dict: dict):
     """Convert a Rust-style action dict to a Python ``Action`` instance.
 
@@ -3317,6 +3447,24 @@ def _dict_to_python_action(action_dict: dict):
 
     Unknown kinds raise ``ValueError`` to mirror Rust's strict-parse
     contract.
+
+    **Vocabulary normalization (Phase 6 gap #4 closure).** The id-key
+    vocabulary is per-kind asymmetric — ``card_id`` for
+    ``play_land`` / ``cast_spell``, ``source_id`` for
+    ``activate_ability`` — to mirror the dataclass field names and
+    the Rust enum variant fields. To smooth ergonomics for
+    programmatic builders that may pick either key by accident, this
+    function ALSO honors the cross-vocabulary alias (``source_id`` on
+    ``play_land`` / ``cast_spell``, ``card_id`` on
+    ``activate_ability``) — see :func:`_resolve_id_with_alias`. Use
+    :func:`_canonical_action_dict` to build dicts without having to
+    remember the per-kind shape.
+
+    Note: the alias-honor only works on the Python side of the
+    bridge. The Rust ``parse_action`` is strict (canonical key only),
+    so a dict that uses the alias will succeed here but fail when
+    fed to ``rust_state.apply_action``. Always prefer
+    :func:`_canonical_action_dict` for dicts that cross both engines.
     """
     from mtg_bot.actions import (
         ActivateAbility, CastSpell, DeclareAttackers, DeclareBlockers,
@@ -3327,12 +3475,12 @@ def _dict_to_python_action(action_dict: dict):
     if kind == "pass_priority":
         return PassPriority()
     if kind == "play_land":
-        return PlayLand(card_id=int(action_dict["card_id"]))
+        return PlayLand(card_id=_resolve_id_with_alias(action_dict, kind))
     if kind == "cast_spell":
-        return CastSpell(card_id=int(action_dict["card_id"]))
+        return CastSpell(card_id=_resolve_id_with_alias(action_dict, kind))
     if kind == "activate_ability":
         return ActivateAbility(
-            source_id=int(action_dict["source_id"]),
+            source_id=_resolve_id_with_alias(action_dict, kind),
             ability_index=int(action_dict["ability_index"]),
         )
     if kind == "declare_attackers":
