@@ -4440,5 +4440,197 @@ def test_rust_parser_accepts_equip_to_target_creature_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_optional_sac_artifact_for_effect_translates_to_python():
+    """BLOCKED-BRIDGE-ARM slice (round-19 audit refresh) -- "you may
+    sacrifice an artifact. If you do, [inner]" composer. Rust
+    ``{"kind": "optional_sac_artifact_for_effect", "inner_effect":
+    <effect_dict>}`` translates to Python
+    ``OptionalSacArtifactForEffect(inner_effect=<Effect>)``.
+
+    Field name agrees on both engines (``inner_effect``); no rename
+    in the bridge. The inner effect recurses through the same
+    translator so any leaf arm composes for free. Pin verifies the
+    nested DrawCards inner is correctly translated and stored as
+    ``inner_effect``.
+    """
+    from mtg_bot.effects.combinators import OptionalSacArtifactForEffect
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_sac_artifact_for_effect",
+            "inner_effect": {"kind": "draw_cards", "count": 1},
+        }
+    )
+    assert isinstance(e, OptionalSacArtifactForEffect)
+    assert isinstance(e.inner_effect, DrawCards)
+    assert e.inner_effect.amount == 1
+
+
+def test_bridge_optional_sac_artifact_missing_inner_effect_raises():
+    """Missing ``inner_effect`` field raises KeyError. Mirrors
+    Rust's parse_effect arm at cards.rs:3656-3661 which raises
+    PyValueError on missing required field; the bridge enforces
+    the same contract so a typo in a fixture surfaces immediately
+    rather than silently constructing an OptionalSac wrapper around
+    a None inner that would crash on resolve.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect(
+            {"kind": "optional_sac_artifact_for_effect"}
+        )
+
+
+def test_bridge_optional_sac_artifact_inner_effect_recurses():
+    """Recursive translation pin: the inner effect dict is walked
+    through ``_ta_dict_to_python_effect`` again. Pins the recursive
+    path against accidental shallow translation (passing the dict
+    through unchanged, or constructing the wrapper with a dict
+    instead of an Effect instance). A nested gain_life with a
+    distinct ``amount`` field round-trips into a real GainLife
+    instance, not a dict.
+    """
+    from mtg_bot.effects.combinators import OptionalSacArtifactForEffect
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_sac_artifact_for_effect",
+            "inner_effect": {"kind": "gain_life", "amount": 3},
+        }
+    )
+    assert isinstance(e, OptionalSacArtifactForEffect)
+    # Inner is a real GainLife instance (NOT a dict).
+    assert isinstance(e.inner_effect, GainLife)
+    assert e.inner_effect.amount == 3
+
+
+def test_bridge_optional_sac_artifact_with_sequence_inner():
+    """Selfcraft-Mechan-shape composition pin: the inner effect is a
+    Sequence wrapping multiple leaf arms. Pins the composer
+    composition end-to-end -- ``OptionalSacArtifactForEffect(
+    Sequence([GainLife{1}, DrawCards{1}]))`` round-trips with the
+    Sequence preserved + each leaf at its proper class/amount.
+
+    This is the composer shape Selfcraft Mechan would use if the
+    "When you do, put a +1/+1 counter on target creature and draw a
+    card" rider were folded into a single OptionalSac wrapper
+    (Selfcraft's actual oracle uses a separate reflexive trigger,
+    but the composition syntax is identical).
+    """
+    from mtg_bot.effects.combinators import (
+        OptionalSacArtifactForEffect,
+        Sequence,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_sac_artifact_for_effect",
+            "inner_effect": {
+                "kind": "sequence",
+                "effects": [
+                    {"kind": "gain_life", "amount": 1},
+                    {"kind": "draw_cards", "count": 1},
+                ],
+            },
+        }
+    )
+    assert isinstance(e, OptionalSacArtifactForEffect)
+    assert isinstance(e.inner_effect, Sequence)
+    assert len(e.inner_effect.effects) == 2
+    assert isinstance(e.inner_effect.effects[0], GainLife)
+    assert e.inner_effect.effects[0].amount == 1
+    assert isinstance(e.inner_effect.effects[1], DrawCards)
+    assert e.inner_effect.effects[1].amount == 1
+
+
+def test_bridge_optional_sac_artifact_composable_in_sequence():
+    """Round-trip in a Sequence COMPOSER (Sequence wraps the
+    OptionalSac, not vice-versa). Pins that the OptionalSac arm
+    composes correctly when it's a child of a parent Sequence:
+    ``Sequence([OptionalSacArtifact(GainLife{2}), DrawCards{1}])``.
+    Sequence's recursive translator walks each child via the same
+    ``_ta_dict_to_python_effect``, so this also exercises the
+    OptionalSac arm INSIDE the recursive Sequence translator path.
+    """
+    from mtg_bot.effects.combinators import (
+        OptionalSacArtifactForEffect,
+        Sequence,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "optional_sac_artifact_for_effect",
+                    "inner_effect": {
+                        "kind": "gain_life", "amount": 2,
+                    },
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], OptionalSacArtifactForEffect)
+    assert isinstance(e.effects[0].inner_effect, GainLife)
+    assert e.effects[0].inner_effect.amount == 2
+    assert isinstance(e.effects[1], DrawCards)
+    assert e.effects[1].amount == 1
+
+
+def test_rust_parser_accepts_optional_sac_artifact_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``optional_sac_artifact_for_effect`` composer (with
+    ``inner_effect`` nested) inside a triggered_ability dict.
+    Mirrors the may_do / set_base_pt_until_eot lockstep gates --
+    keeps the bridge from drifting away from Rust's parse_effect
+    coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3656-3671``
+    accepts the dict shape; ``inner_effect`` is required and is
+    recursively parsed via ``parse_effect``.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- OptionalSacArtifact",
+        "card_types": ["Artifact", "Creature"],
+        "subtypes": ["Robot", "Artificer"],
+        "mana_cost": {"generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "optional_sac_artifact_for_effect",
+                    "inner_effect": {
+                        "kind": "draw_cards", "count": 1,
+                    },
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
