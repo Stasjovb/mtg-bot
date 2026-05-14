@@ -13,6 +13,120 @@ printings) to rank the gaps by **how many future probes each gap
 unblocks**, so the next probe wave can attack the highest-yield gap
 first.
 
+---
+
+## Current state (as of 2026-05-13, main `ebb5c6ec`)
+
+Headline inventory measured directly off `main` at refresh time
+(supersedes the §1 table below — that table was last recomputed at
+`a2755769`, ~36 slices and 9 rounds ago):
+
+| Bucket | Count |
+| --- | --- |
+| **Total EoE printings with `enters`-event triggers** | **93** |
+| Cross-engine ETB probe tests on main (`test_cross_engine_real_eoe_*` + `test_cross_engine_synthetic_etb_*`) | **68** |
+| - Real-EoE probes (`test_cross_engine_real_eoe_*`) | 39 |
+| - Synthetic ETB probes (`test_cross_engine_synthetic_etb_*`) | 29 |
+| - Cross-controller routing probes (subset of the above, synthetic) | 21 |
+| - Divergence pins (subset of real-EoE) | 2 (Pinnacle Kill-Ship empty-bf, Susurian Dirgecraft token-first) |
+| Distinct real-EoE printings probed on main | **34** |
+| Bridge-side effect arms wired in `_ta_dict_to_python_effect` | **32** |
+| Cross-controller I-fix matrix coverage | 21 effect-arm routings (create_token, return-from-gy-to-hand, return-from-gy-to-battlefield, damage_any_target, surveil, deal_damage_to_opponent_creature, mill, each_opponent_discards, mill_target_player, create_robot_artifact_creature_token, surveil-mill-path, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, destroy_target, exile_target, owner_puts_target_on_top_or_bottom, return_to_hand, each_opponent_sacrifices_creature, deal_damage, tap_target, discard_card) |
+
+Bridge effect-arms shipped in `_ta_dict_to_python_effect` (in
+source order in `src/mtg_bot/parity/cross_engine.py`):
+
+`draw_cards`, `gain_life`, `damage_each_opponent`, `deal_damage`,
+`deal_damage_any_target`, `surveil`, `discard_self`,
+`each_opponent_discards`, `deal_damage_to_opponent_creature`, `mill`,
+`pump_target_creature_until_eot`,
+`put_plus_one_counter_on_creature_you_control`,
+`return_creature_from_your_graveyard_to_hand`,
+`return_artifact_or_creature_from_your_graveyard_to_hand`,
+`return_creature_or_spacecraft_from_your_graveyard_to_hand`,
+`sequence`, `if_you_do`,
+`pump_creatures_opponents_control_until_eot`,
+`each_opponent_sacrifices_creature`, `each_opponent_mills_cards`,
+`put_plus_one_counter_on_each_creature_you_control`,
+`return_creature_from_your_graveyard_to_battlefield`, `create_token`,
+`mill_target_player`, `exile_target_creature_until_source_leaves`,
+`discard_card`, `tap_target`, `destroy_target`, `exile_target`,
+`exile_opponents_nonland_permanent_until_leaves`, `return_to_hand`,
+`owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library`.
+
+**Headline-count delta vs the `a2755769` snapshot** (the §1 table
+below):
+
+- BLOCKED-BRIDGE-ARM: **27 -> ~5**. Of the 27 cards listed in
+  §2.4, 17 have shipped real-EoE probes (Pinnacle Kill-Ship, Nova
+  Hellkite, Virus Beetle, Seedship Broodtender, Starbreach Whale,
+  Wurmwall Sweeper, Thawbringer-ETB, Sinister Cryologist, Dubious
+  Delicacy, Atmospheric Greenhouse, Rayblade Trooper, Drix
+  Fatemaker, Fell Gravship, Interceptor Mechan, Uthros Scanship,
+  Melded Moxite, Susurian Dirgecraft); plus the 4 §2.3
+  branch-unblock cards Honored Knight-Captain, Knight Luminary,
+  Wedgelight Rammer also shipped. The remaining bridge-arm-only
+  pending list is small: Mouth of the Storm (bridge arm shipped
+  but Rust extended-duration variant blocks the real-EoE probe —
+  see substrate-gap update below), Weftblade Enhancer (up-to-N
+  targets), Blade of the Swarm (choose_one_mode + self-counter),
+  Starfield Shepherd / The Seriema (search_library_for_card —
+  in flight on `feature/phase5-ce-bridge-search-library`),
+  Codecracker Hound (look-top-N), Larval Scoutlander
+  (optional-sac + search-basic-land).
+- BLOCKED-SUBSTRATE: **8 -> ~9**. Mouth of the Storm has been
+  reclassified into this bucket (the synthetic
+  `pump_creatures_opponents_control_until_eot` arm shipped, but
+  the real-EoE consumer divergence vs the Rust trigger needs an
+  extended-duration variant on the Rust side — round-4 finding).
+  EachOpponentSacrificesCreature was unblocked once
+  `each_opponent_sacrifices_creature` shipped + the
+  Susurian-Dirgecraft `token-first` divergence pin captured the
+  iterator-order divergence.
+- BLOCKED-RUST-EFFECT: **42 -> 42** (steady). No Rust-side effect
+  arms have landed in this cohort; the surface is unchanged. Two
+  cards (Banishing Light, Hardlight Containment) shifted *out* of
+  this bucket once round-9 agent Q discovered they map onto the
+  already-shipped `exile_opponents_nonland_permanent_until_leaves`
+  arm — correcting the audit's prior "EoE has no bare-shape
+  printing" claim.
+- SHIPPED probes (cross-engine ETB only): **8 real-EoE -> 34
+  real-EoE (+26)**, plus a brand-new synthetic + cross-controller
+  surface (29 + 21) totaling **68 cross-engine ETB probes** vs
+  the original ~10.
+
+Three review-gated branches called out in §4.1 of the original
+audit (`feature/phase5-create-token-bridge`,
+`feature/etb-subject-substrate`, `feature/dies-event-harness`)
+are still unmerged on origin as of this refresh; create_token
+itself has effectively shipped via the per-card slice route
+(Honored Knight-Captain, Knight Luminary, Wedgelight Rammer all
+landed on main without merging the master branch).
+
+**New substrate gaps surfaced by recent rounds** (not in original §2.5):
+
+- Mouth of the Storm needs a Rust extended-duration variant of
+  `PumpCreaturesOpponentsControlUntilEOT` so the bridge arm's
+  duration matches the trigger semantics on the real card (the
+  synthetic probe established the bridge plumbing, the real-EoE
+  probe surfaced the duration mismatch — round 4).
+- Susurian Dirgecraft pinned an iterator-order divergence in
+  `each_opponent_sacrifices_creature`: when an opponent controls
+  both a token and a non-token creature, Rust prefers the token
+  first while Python's chooser picks the non-token. Captured by
+  `test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_divergence_pin`.
+- Pinnacle Kill-Ship pinned a divergence in
+  `deal_damage_any_target` when the bridge picks up a Spacecraft
+  source whose triggered effect is optional and the battlefield
+  contains zero legal targets (Rust skips, Python emits a no-op
+  damage event). Captured by
+  `test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_optional_empty_bf_divergence_pin`.
+
+The §1 table and the per-card §2.x tables below are the
+as-of-`a2755769` historical inventory. Use the table at the top of
+this section for current totals; treat the legacy sections as
+documentary context.
+
 ## Companion docs
 
 - [`docs/RUST_ETB_TRIGGER_AUDIT.md`](RUST_ETB_TRIGGER_AUDIT.md) —
@@ -102,6 +216,22 @@ Table columns:
 
 ### 2.1 Already probed (PROBED on main)
 
+**Refresh note (2026-05-13):** this table captures the state at
+`a2755769`. Since then 24 additional real-EoE cards have been
+probed (see the inline `[SHIPPED]` annotations in §2.3 and §2.4
+below). Full current list of distinct real-EoE printings probed
+on main (34 total): alpharael_dreaming_acolyte,
+atmospheric_greenhouse, banishing_light, cryogen_relic (ETB half),
+debris_field_crusher, drix_fatemaker, dubious_delicacy,
+eumidian_terrabotanist, fell_gravship, germinating_wurm,
+haliya_guided_by_light, hardlight_containment, honored_knight_captain,
+interceptor_mechan, kav_landseeker, knight_luminary, mechan_assembler,
+melded_moxite, nebula_dragon, nova_hellkite, pinnacle_kill_ship,
+quantum_riddler, rayblade_trooper, seedship_broodtender,
+sinister_cryologist, starbreach_whale, susurian_dirgecraft,
+tannuk_memorial_ensign, thawbringer (ETB half), uthros_scanship,
+virus_beetle, wedgelight_rammer, weftstalker_ardent, wurmwall_sweeper.
+
 | Card | Predicate | Effect | Probe lands |
 | --- | --- | --- | --- |
 | Germinating Wurm | SourceIsSelf | GainLife{2} | probe(phase5): Germinating Wurm |
@@ -114,6 +244,8 @@ Table columns:
 | Alpharael, Dreaming Acolyte | SourceIsSelf | DrawCards{2} | probe(phase5): Alpharael Dreaming Acolyte |
 | Nebula Dragon | SourceIsSelf | DealDamageAnyTarget{3} | probe(phase5): Nebula Dragon ETB any-target burn (f258114f) |
 | Debris Field Crusher | SourceIsSelf | DealDamageAnyTarget{3} | probe(phase5): Debris Field Crusher ETB any-target burn (5b6c184e) |
+| Banishing Light | SourceIsSelf | ExileOpponentsNonlandPermanentUntilLeaves | probe(phase5): Banishing Light (cee80270) — first real-EoE consumer of the I80 arm; corrected the audit's "no bare-shape printing" claim |
+| Hardlight Containment | SourceIsSelf | ExileOpponentsNonlandPermanentUntilLeaves (Aura) | probe(phase5): Hardlight Containment (d9246140) — second consumer; first Aura-subtype carrier |
 
 ### 2.2 Probed via unmerged review-gated branch (PROBED-BRANCH)
 
@@ -130,10 +262,10 @@ additional substrate work.
 
 | Card | Predicate | Effect | Blocked by |
 | --- | --- | --- | --- |
-| Honored Knight-Captain | SourceIsSelf | CreateToken{1, 1/1 W Soldier} | create-token bridge branch |
-| Knight Luminary | SourceIsSelf | CreateToken{1, 1/1 W Soldier} | create-token bridge branch |
-| Wedgelight Rammer | SourceIsSelf | CreateToken{1, 2/2 Robot} | create-token bridge branch |
-| Galactic Wayfarer | SourceIsSelf | CreateToken{1, Lander} | create-token bridge branch |
+| Honored Knight-Captain | SourceIsSelf | CreateToken{1, 1/1 W Soldier} | **[SHIPPED]** create_token arm landed via per-card slice (didn't need master branch merge) |
+| Knight Luminary | SourceIsSelf | CreateToken{1, 1/1 W Soldier} | **[SHIPPED]** same arm, second consumer |
+| Wedgelight Rammer | SourceIsSelf | CreateToken{1, 2/2 Robot} | **[SHIPPED]** Robot artifact-creature token shape |
+| Galactic Wayfarer | SourceIsSelf | CreateToken{1, Lander} | create-token bridge branch (Lander shape pending) |
 | Eusocial Engineering | Subject(IsLand) AND ControlledByYou | CreateToken{1, 2/2 Robot} | create-token + landfall (etb-subject-substrate already covers landfall predicate; full create_token already in branch) |
 | Tezzeret, Cruel Captain | Subject(IsArtifact) AND ControlledByYou | (loyalty-counter ≈ AddCounters on self-source) | etb-subject-substrate AND a "counter on planeswalker" variant — only the predicate is review-gated; the counter-on-source variant needs a small arm extension (see §2.5) |
 
@@ -147,34 +279,40 @@ gap, mirroring the existing `draw_cards` / `gain_life` /
 `damage_each_opponent` shape. Each card listed needs its predicate to
 also be wired (most use SourceIsSelf, which already works on main).
 
+**Annotation legend (added 2026-05-13 refresh):** `[SHIPPED]` =
+real-EoE probe landed on main; `[SHIPPED + DIVERGENCE PIN]` =
+probe landed plus a paired divergence-pin test; `[SUBSTRATE]` =
+bridge arm shipped but the real-EoE consumer surfaced a substrate
+gap (see §2.5 update); `[IN FLIGHT]` = active worktree on origin.
+
 | Card | Predicate (Rust shape) | Effect (Rust shape) | Blocked by bridge gap |
 | --- | --- | --- | --- |
-| Pinnacle Kill-Ship | SourceIsSelf | DealDamageAnyTarget{10} (single creature) | (none — bridge arm landed; needs probe slice only) |
-| Nova Hellkite | SourceIsSelf | DealDamageOpponentCreature{1} | damage-to-opponent-creature bridge arm |
-| Virus Beetle | SourceIsSelf | EachOpponentDiscards{1} | each_opponent_discards bridge arm |
-| Seedship Broodtender | SourceIsSelf | Mill{3} (self-controller) | mill bridge arm |
-| Starbreach Whale | SourceIsSelf | Surveil{2} | surveil bridge arm |
-| Wurmwall Sweeper | SourceIsSelf | Surveil{2} | surveil bridge arm |
-| Thawbringer (ETB half) | SourceIsSelf | Surveil{1} | surveil bridge arm (LEAVES/DIES half also needs harness, see §2.5) |
+| Pinnacle Kill-Ship | SourceIsSelf | DealDamageAnyTarget{10} (single creature) | **[SHIPPED + DIVERGENCE PIN]** real-EoE probe + empty-bf divergence pin |
+| Nova Hellkite | SourceIsSelf | DealDamageOpponentCreature{1} | **[SHIPPED]** damage-to-opponent-creature arm + probe |
+| Virus Beetle | SourceIsSelf | EachOpponentDiscards{1} | **[SHIPPED]** each_opponent_discards arm + probe |
+| Seedship Broodtender | SourceIsSelf | Mill{3} (self-controller) | **[SHIPPED]** mill arm + probe (incl. empty-library mid-mill variant) |
+| Starbreach Whale | SourceIsSelf | Surveil{2} | **[SHIPPED]** surveil arm + probe (incl. mill-path variant) |
+| Wurmwall Sweeper | SourceIsSelf | Surveil{2} | **[SHIPPED]** surveil arm + probe |
+| Thawbringer (ETB half) | SourceIsSelf | Surveil{1} | **[SHIPPED]** surveil arm + probe (count=1 variant); LEAVES/DIES half still needs harness (§2.5) |
 | Icetill Explorer (landfall) | Subject(IsLand) AND ControlledByYou | Mill{1} | mill bridge arm (subject-substrate branch covers predicate) |
-| Sinister Cryologist | SourceIsSelf | PumpTargetCreatureUntilEOT{-3, 0} | pump-target-creature-until-eot bridge arm |
-| Dubious Delicacy | SourceIsSelf | PumpTargetCreatureUntilEOT{-3, -3} | pump-target-creature-until-eot bridge arm (signed-toughness variant) |
-| Mouth of the Storm | SourceIsSelf | PumpCreaturesOpponentsControlUntilEOT{-3, 0} | pump-opponents-creatures bridge arm |
-| Atmospheric Greenhouse | SourceIsSelf | PutPlusOneCounterOnEachCreatureYouControl{1} | mass-counter bridge arm |
-| Rayblade Trooper (ETB half) | SourceIsSelf | PutPlusOneCounterOnCreatureYouControl{1} | counter-on-target-your-creature bridge arm |
-| Drix Fatemaker | SourceIsSelf | PutPlusOneCounterOnCreatureYouControl{1} (any creature) | counter-on-target-creature bridge arm |
+| Sinister Cryologist | SourceIsSelf | PumpTargetCreatureUntilEOT{-3, 0} | **[SHIPPED]** pump-target-creature-until-eot arm + probe (asymmetric debuff variant) |
+| Dubious Delicacy | SourceIsSelf | PumpTargetCreatureUntilEOT{-3, -3} | **[SHIPPED]** pump-target-creature-until-eot arm + probe (signed-toughness variant) |
+| Mouth of the Storm | SourceIsSelf | PumpCreaturesOpponentsControlUntilEOT{-3, 0} | **[SUBSTRATE]** bridge arm shipped; real-EoE probe blocked on Rust extended-duration variant — see §2.5 update |
+| Atmospheric Greenhouse | SourceIsSelf | PutPlusOneCounterOnEachCreatureYouControl{1} | **[SHIPPED]** mass-counter arm + probe |
+| Rayblade Trooper (ETB half) | SourceIsSelf | PutPlusOneCounterOnCreatureYouControl{1} | **[SHIPPED]** counter-on-target-your-creature arm + probe |
+| Drix Fatemaker | SourceIsSelf | PutPlusOneCounterOnCreatureYouControl{1} (any creature) | **[SHIPPED]** second consumer of the same arm |
 | Weftblade Enhancer | SourceIsSelf | PutPlusOneCounterOnEachOfUpToNTargetCreatures{2} | up-to-N-counter-targets bridge arm |
 | Blade of the Swarm | SourceIsSelf | ChooseOneMode{[PutPlusOneCountersOnSelf{2}, ...]} | choose-one-mode bridge arm (+ self-counter arm) |
-| Starfield Shepherd | SourceIsSelf | SearchLibraryForCard{...} | search-library-for-card bridge arm |
-| The Seriema | SourceIsSelf | SearchLibraryForCard{legendary creature} | search-library-for-card bridge arm |
-| Fell Gravship | SourceIsSelf | Sequence{[Mill{3}, ReturnCreatureFromYourGraveyardToHand]} | sequence + mill + return-from-gy-to-hand bridge arms |
-| Interceptor Mechan | SourceIsSelf | ReturnCreatureFromYourGraveyardToHand | return-from-gy-to-hand bridge arm |
-| Uthros Scanship | SourceIsSelf | Sequence{[DrawCards{2}, DiscardSelf{1}]} | discard_self bridge arm (draw_cards already wired) |
+| Starfield Shepherd | SourceIsSelf | SearchLibraryForCard{...} | **[IN FLIGHT]** `feature/phase5-ce-bridge-search-library` |
+| The Seriema | SourceIsSelf | SearchLibraryForCard{legendary creature} | **[IN FLIGHT]** same branch |
+| Fell Gravship | SourceIsSelf | Sequence{[Mill{3}, ReturnCreatureFromYourGraveyardToHand]} | **[SHIPPED]** sequence + mill + return-from-gy arms + probe |
+| Interceptor Mechan | SourceIsSelf | ReturnCreatureFromYourGraveyardToHand | **[SHIPPED]** return-from-gy-to-hand arm + probe (artifact-or-creature subtype variant) |
+| Uthros Scanship | SourceIsSelf | Sequence{[DrawCards{2}, DiscardSelf{1}]} | **[SHIPPED]** discard_self arm + probe (sequence draw-then-discard variant) |
 | Codecracker Hound | SourceIsSelf | LookTopNPutOneInHandRestToGraveyard{2} | look-top-N-put-one-in-hand bridge arm |
 | Larval Scoutlander | SourceIsSelf | OptionalSacArtifactForEffect{SearchLibraryForBasicLandTapped{2}} | optional-sac + search-basic-land bridge arms |
-| Melded Moxite | SourceIsSelf | IfYouDo{cost=DiscardSelf, then=DrawCards{2}} | if-you-do + discard_self bridge arms |
+| Melded Moxite | SourceIsSelf | IfYouDo{cost=DiscardSelf, then=DrawCards{2}} | **[SHIPPED]** if-you-do + discard_self arms + probe |
 | Astelli Reclaimer | SourceIsSelf | (return-noncreature-card-from-gy-with-MV≤X-to-bf) | new Rust arm; see §2.6 |
-| Susurian Dirgecraft | SourceIsSelf | EachOpponentSacrificesCreature | each-opponent-sacrifices-creature bridge arm |
+| Susurian Dirgecraft | SourceIsSelf | EachOpponentSacrificesCreature | **[SHIPPED + DIVERGENCE PIN]** each-opp-sac arm + probe + token-first divergence pin |
 
 Effective bridge-arm gaps (group-by):
 
