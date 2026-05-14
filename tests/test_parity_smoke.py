@@ -32671,6 +32671,390 @@ def test_cross_engine_real_eoe_thawbringer_etb_surveil_1_parity(
     assert rust_state.has_pending_decision() is False
 
 
+def test_cross_engine_synthetic_etb_tap_target_cross_controller_routes_to_source_controller_opponent_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``tap_target`` (any_creature filter)
+    trigger fired by a permanent CONTROLLED BY P1 while
+    ACTIVE_PLAYER=P0 -- the cross-controller leg of the round-8
+    ``tap_target`` bridge arm (commits a4803aee / 59a05729). Both
+    engines must scan P1's opponent set = [P0]'s bf for a creature
+    to tap, NOT P1's own bf (where the tapper sits, untapped).
+    Pre-fix Rust would have derived defender from active_player=P0
+    (defender=1), scanned P1's bf for bf[0] = the tapper itself,
+    and tapped its own (the I71 controller-of-effect bug). Post-
+    fix Rust derives source-controller=1 from
+    ``current_resolve_source_controller``, defender = 1 - 1 = 0,
+    scans P0's bf for bf[0] = Bait Bear, and taps it. Python's
+    always-correct trigger.controller_id=1 path makes the cross-
+    engine pin sharp.
+
+    **The substrate.** Per the round-8 bridge arm landed at commit
+    59a05729 (``bridge(phase5): tap_target bridge arm + 3 pin
+    tests``): Rust's ``Effect::TapTarget { target: TargetFilter }``
+    resolve arm (state_ops_resolve.rs:1277-1324) carries the I71
+    controller-of-effect fix: defender = 1 - controller, where
+    controller derives from ``current_resolve_source_controller``
+    (with active_player fallback). The mutation applied is
+    ``tapped = true`` on the target (idempotent on already-tapped;
+    no error if already tapped). Sibling closure to I70
+    ExileTarget / I75 DestroyTarget / I76 ReturnToHand / I72
+    UntapTarget -- identical defender-swap shape; differs only in
+    the mutation. Python's ``Tap`` base class
+    (effects/generic/tap.py:30) drives off ``targets: tuple`` with
+    ``TargetSpec(IsCreature())``; the targeting pipeline picks at
+    PUSH time via the source-controller's agent ``choose_target``
+    over legal_targets, and ``Tap.resolve`` invokes
+    ``tap_permanent(state, obj)`` at fire time per CR 608.2b.
+
+    **Sister probes.** No same-controller cross-engine probe
+    landed alongside the round-8 bridge arm -- the 3 pin tests on
+    the arm covered the bridge translation surface and the Rust
+    parser surface but not the end-to-end resolve walk. Earlier
+    round-7 cross-controller probes for the I70/I75/I76 sibling
+    arms (destroy_target, exile_target, return_to_hand) established
+    the defender-swap probe template; this slice closes the cross-
+    controller gap on the new ``tap_target`` arm. Sister probes
+    for round 8 on the same template: deal_damage cross-controller
+    (already merged, commit 5695e5e7) and discard_card cross-
+    controller.
+
+    **Why synthetic, not a real EoE card.** The bridge arm's pin
+    tests already covered the bridge translation surface; the
+    cross-controller pin needs a load-bearing inject-and-fire
+    harness, which the synthetic ``Cross-Controller Tapper Bear``
+    delivers without a separate real-card consumer probe. Mirrors
+    the synthetic-Bear pattern from the round-7 destroy_target /
+    exile_target / return_to_hand cross-controller probes.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Inject Bait Bear (vanilla 2/2, untapped) onto P0's bf**
+         -- the SOURCE-controller's opponent on the post-fix
+         surface. Pre-fix Rust would have iterated P0's opponents
+         (= [P1]) and scanned P1's bf for bf[0] = the tapper
+         itself (and tapped IT). Post-fix Rust derives source-
+         controller = 1 and iterates [0]'s bf, finding Bait Bear.
+
+      3. **Inject Cross-Controller Tapper Bear (the tapper) onto
+         P1's bf** with controller=1 (Rust's
+         ``register_and_inject_object``; Python's ``new_object`` +
+         bf append + manual ``_trigger_etb_abilities``). The
+         injection's ENTERS dispatch fires the SourceIsSelf
+         trigger; the trigger lands on the stack with controller=1
+         (the SOURCE's controller). Both injection helpers leave
+         their objects untapped by default.
+
+      4. **Seat ``_PickFirstOpponentTargetAgent`` on P1** (the
+         SOURCE's controller, which is whose agent gets called
+         for the choose_target on the trigger's controller_id=1
+         path). The agent's opponent-controller filter mirrors
+         Rust's defender-side scan exactly on the 2-player harness
+         -- legal_targets is restricted to P1's opponents (= P0)'s
+         creatures by the IsCreature() slot filter, and the shim
+         picks the first such target (Bait Bear).
+
+      5. **Drain both stacks.** The trigger resolves: Rust's
+         current_resolve_source_controller derivation finds the
+         tapper on P1's bf, derives source-controller=1, computes
+         defender = 0, picks P0's bf[0] = Bait Bear, sets its
+         tapped=true. Python's resolve uses the trigger's
+         controller_id=1 directly, the agent's pick comes from
+         the legal_targets list (Bait Bear), and
+         ``tap_permanent`` flips Bait Bear's tapped flag.
+
+      6. **Cross-engine assert (post-fix contract):**
+         - Bait Bear on P0's bf is TAPPED on both engines.
+         - The tapper itself on P1's bf is UNTAPPED on both
+           engines (the load-bearing pre-vs-post-fix observable:
+           pre-fix Rust would have tapped the tapper itself).
+         - Lives unchanged on both seats.
+         - No residual stack on either engine.
+
+    **Pre-fix vs post-fix observable.**
+    Pre-fix Rust would have:
+      - Derived the defender via active_player=P0, defender=1-0=1,
+        scanned P1's bf for bf[0] = the tapper itself, and tapped
+        it. The tapper's tapped flag flips to True; Bait Bear
+        stays untapped. (Rust's tap arm has no same-as-source
+        guard -- the I71 family explicitly notes this asymmetry
+        with its sibling arms; tapping yourself is legal MTG.)
+    Post-fix Rust derives source-controller=1 from
+    current_resolve_source_controller, computes defender=0, picks
+    P0's bf[0] = Bait Bear, taps it. The tapper stays untapped.
+    The OBSERVABLE distinguishing the two: post-fix Bait Bear is
+    tapped AND the tapper is untapped; pre-fix Bait Bear is
+    untapped AND the tapper is tapped. Two-slot diverging
+    observable -- the cross-engine pin lands on either side.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-
+        ENTERS pattern bypasses the mana pipeline.
+      * The ``any_player`` filter variant -- not applicable;
+        tap_target is filter-narrow-by-design (Rust raises
+        PyValueError on AnyPlayer at register time).
+      * Stun-counter rider variants (TapTargetOpponentPermanent
+        AndStunIt etc.) -- separate Rust variants / separate
+        I-fix surfaces.
+      * Idempotent re-tap of an already-tapped target -- both
+        engines short-circuit to no-op; this probe drives the
+        untapped->tapped path which is the load-bearing routing
+        observable.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller Tapper Bear on P1's battlefield
+        (controller=1; unchanged from inject; tapped=False).
+      * Bait Bear on P0's battlefield (tapped=True).
+      * P0 / P1 lives: unchanged at 20.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines (the
+    # whole point of the probe is the cross-controller case where
+    # the SOURCE's controller != active_player).
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    # Inject the bait creature on P0's bf FIRST -- the SOURCE-
+    # controller's opponent (since the tapper will live on P1).
+    rust_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bear (cross-controller tap_target probe)",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_tapper_dict = {
+        "name": "Cross-Controller Tapper Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "tap_target",
+                    "target": {"kind": "any_creature"},
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p1_bf_before = rust_state.battlefield_sizes[1]
+    # Inject the tapper onto P1's bf with controller=1. ENTERS fires
+    # via the deferred-dispatch queue; the SourceIsSelf trigger lands
+    # on the stack with controller=1 (the SOURCE's controller).
+    rust_tapper_id = rust_state.register_and_inject_object(
+        rust_tapper_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller Tapper Bear's arrival on P1 should "
+        "fire the SourceIsSelf ENTERS trigger and land "
+        "TapTarget on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.tap import Tap
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.game import Zone
+
+    # Bait Bear on P0's bf -- the SOURCE-controller-opponent.
+    bait_printing = CardPrinting(
+        name="Bait Bear (cross-controller tap_target probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+
+    tapper_printing = CardPrinting(
+        name="Cross-Controller Tapper Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=Tap(targets=(TargetSpec(IsCreature()),)),
+            ),
+        ),
+    )
+    # The trigger's controller is P1 (the SOURCE's controller), so
+    # P1's agent is what choose_target gets called against. Mirror
+    # the round-7 destroy_target / exile_target / return_to_hand
+    # cross-controller probes' _PickFirstOpponentTargetAgent shim
+    # but seat it on P1 (NOT P0) -- the slot's filter restricts
+    # legal_targets to P1's opponents = [P0]'s creatures, and the
+    # shim picks the first such target (Bait Bear).
+    py_state.players[1].agent = _PickFirstOpponentTargetAgent()
+
+    py_tapper = py_state.new_object(
+        tapper_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_tapper.summoning_sick = False
+    py_tapper.tapped = False
+    py_tapper.damage = 0
+    py_tapper.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_tapper)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_tapper)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller Tapper Bear's arrival on P1 "
+        "should fire the IsSelf ENTERS trigger and land "
+        "Tap on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Post-drain: lives unchanged on both seats. Bait Bear (on P0's
+    # bf) is TAPPED on both engines AND the tapper itself stays
+    # UNTAPPED -- the load-bearing cross-controller routing pin:
+    # pre-fix Rust would have tapped the tapper itself (defender
+    # derived as P1's bf, bf[0] = tapper-self).
+    assert rust_state.get_life(0) == rust_p0_life_before, (
+        f"Rust p0 life should be unchanged ({rust_p0_life_before}); "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before, (
+        f"Rust p1 life should be unchanged ({rust_p1_life_before}); "
+        f"got {rust_state.get_life(1)}"
+    )
+    rust_bf = rust_state.battlefield_snapshot()
+    rust_bait_entry = next(
+        (e for e in rust_bf if int(e["id"]) == rust_bait_id), None,
+    )
+    rust_tapper_entry = next(
+        (e for e in rust_bf if int(e["id"]) == rust_tapper_id), None,
+    )
+    assert rust_bait_entry is not None, (
+        "Rust: Bait Bear (id={}) must still be on the battlefield "
+        "after resolve".format(rust_bait_id)
+    )
+    assert rust_tapper_entry is not None, (
+        "Rust: Tapper (id={}) must still be on the battlefield "
+        "after resolve".format(rust_tapper_id)
+    )
+    assert rust_bait_entry["tapped"] is True, (
+        "Rust cross-controller routing contract: Bait Bear on P0's "
+        "bf should be tapped post-resolve (the tapper's SOURCE-"
+        "controller is P1, defender=0, the scan lands on Bait "
+        "Bear). A pre-fix Rust would have derived the defender "
+        "from active_player=P0 (defender=1), scanned P1's bf "
+        "(bf[0] = the tapper itself), and tapped IT instead. "
+        f"Got tapped={rust_bait_entry['tapped']}"
+    )
+    assert rust_tapper_entry["tapped"] is False, (
+        "Rust cross-controller routing contract: the tapper itself "
+        "on P1's bf should remain UNTAPPED post-resolve (the post-"
+        "fix scan looks at P0's bf, not P1's, so the tapper is "
+        "never a candidate). Pre-fix Rust would have tapped this "
+        "object. "
+        f"Got tapped={rust_tapper_entry['tapped']}"
+    )
+    # P1's bf carries the tapper (and only the tapper).
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p1_after == rust_p1_bf_before + 1, (
+        f"Rust: P1's bf should grow by exactly 1 (the tapper). "
+        f"before={rust_p1_bf_before} after={rust_bf_p1_after}"
+    )
+
+    # Python observable: same shape.
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert py_bait.tapped is True, (
+        "Python: Bait Bear on P0's bf should be tapped post-"
+        f"resolve. Got tapped={py_bait.tapped}"
+    )
+    assert py_tapper.tapped is False, (
+        "Python: the tapper itself should remain UNTAPPED. "
+        f"Got tapped={py_tapper.tapped}"
+    )
+
+    # Cross-engine: same lives, same tapped flags, same post-drain
+    # bf sizes.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    assert rust_bait_entry["tapped"] == py_bait.tapped
+    assert rust_tapper_entry["tapped"] == py_tapper.tapped
+    py_p0_bf_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_p1_bf_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert rust_state.battlefield_sizes[0] == py_p0_bf_after
+    assert rust_state.battlefield_sizes[1] == py_p1_bf_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
