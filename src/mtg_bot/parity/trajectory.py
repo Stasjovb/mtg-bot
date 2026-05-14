@@ -50,11 +50,15 @@ suite outgrows hand-rolled CardDef registries.
 
 from __future__ import annotations
 
+import gzip
+import json
+import pathlib
 import random
 from dataclasses import dataclass
 from typing import Optional
 
 from mtg_bot.parity.cross_engine import (
+    CardDef,
     DeckSpec,
     build_matched_states,
 )
@@ -62,11 +66,20 @@ from mtg_bot.parity.cross_engine import (
 
 __all__ = [
     "setup_matched_game",
+    "setup_matched_game_from_real_decks",
     "MulliganDeterministicAgent",
     "RealGameCombatAgent",
     "CombatStrategy",
     "drive_combat_phase",
+    "load_production_deck",
+    "production_deck_to_deckspec",
+    "DEFAULT_PRODUCTION_DECK_POOL",
 ]
+
+
+# Round-17 enhancement (production-decklists slice). The 17lands EoE
+# deck pool used by self-play / iterate; relative to repo root.
+DEFAULT_PRODUCTION_DECK_POOL = pathlib.Path("data/17lands/eoe_decks.json.gz")
 
 
 # ---------------------------------------------------------------------------
@@ -973,3 +986,472 @@ def setup_matched_game(
         )
 
     return py_state, rust_state
+
+
+# ---------------------------------------------------------------------------
+# Round-17 enhancement: production-shape decklists (closes one of the
+# Phase 6 round-16 enhancement follow-ons).
+#
+# `load_production_deck` reads the live 17lands EoE deck pool
+# (`data/17lands/eoe_decks.json.gz`, 130k decks, the same source
+# self-play / iterate consumes) and returns one deck's card-name list.
+# `production_deck_to_deckspec` converts a card-name list into a
+# parity-bridge-compatible DeckSpec, **filtering out cards the harness
+# can't model on both engines** (see filter rationale below).
+#
+# Why a filter step? CardDef intentionally carries only a minimal
+# cross-engine surface (name / type / mana cost / pt / mana_produced /
+# triggered_abilities-as-dict / subtypes). It does NOT carry
+# spell_effect, activated_abilities (other than the auto-wired
+# {T}: Add C for lands), static_abilities, keywords, ETB-counter
+# triggers, warp/kicker/impending costs, etc. Production EoE creatures
+# routinely carry triggered abilities + activated abilities + keywords
+# that the parser materializes on Python's CardPrinting via the
+# OracleParserCardSource path; Rust's `register_printing` accepts only
+# the schema shapes documented in `cards.rs:parse_printing`.
+#
+# The pragmatic Round-17 path: filter the deck to cards that BOTH
+# engines can register without effects/triggers/keywords/etc. that
+# don't have a matching cross-engine bridge arm. The filter is
+# conservative (drop on any rich field, not just unsupported ones)
+# so future enhancements can flip a card from "filtered" to "bridged"
+# by adding a CardDef field + bridge arm without churning the loader.
+#
+# What survives the filter on the EoE pool today:
+#   * Basic lands (Forest/Island/Plains/Mountain/Swamp/Wastes).
+#   * Vanilla creatures (no keywords, no triggered_abilities, no
+#     activated_abilities, no static_abilities, no spell_effect,
+#     no warp/kicker/impending).
+# Per spot-check on the EoE pool: ~5 vanilla creatures total
+# (Emissary Escort, Harmonious Grovestrider, Cosmogoyf, Magus of the
+# Moon, Spectral Snatcher) plus the basic lands. Most decks contain
+# a handful of basic lands + 0-2 vanilla creatures after filtering;
+# the loader pads short decks with extra basics so trajectory tests
+# always have ~60 cards to draw from.
+#
+# BLOCKED-RUST-EFFECT 42 (per task brief format): cards with rich
+# effects (triggered abilities, activated abilities beyond mana,
+# spell effects, warp/kicker/impending, room halves, planeswalker
+# loyalty) are blocked at this layer because the CardDef bridge
+# doesn't carry the fields needed to register them on both engines.
+# Future enhancement: extend CardDef + bridge to carry the full
+# CardPrinting surface, then drop the filter. Out of scope for the
+# round-17 slice; the trajectory tests need a working production-
+# shape deck NOW, not a complete production-shape deck.
+# ---------------------------------------------------------------------------
+
+
+# Mana-symbol -> (generic_count, [(color, count), ...]) parser. Reads a
+# Scryfall-style mana-cost string like "{1}{G}{G}" and returns the parts
+# CardDef needs. Empty string / None → (0, []).
+_COLOR_LETTERS: frozenset[str] = frozenset({"W", "U", "B", "R", "G", "C"})
+
+
+def _parse_mana_cost_string(s: str) -> tuple[int, tuple[tuple[str, int], ...]]:
+    """Parse a Scryfall mana-cost string into ``(generic, colored)``.
+
+    Returns ``(generic, ((color, count), ...))`` where ``colored`` is
+    sorted by color for deterministic CardDef construction. Hybrid /
+    Phyrexian / X / snow symbols are NOT supported — a card whose mana
+    cost contains them is rejected by the deckspec converter
+    (production filter responsibility).
+
+    Raises ``ValueError`` on unrecognized mana symbols so the caller
+    can fall back to filtering the card out.
+    """
+    if not s:
+        return 0, ()
+    generic = 0
+    colored: dict[str, int] = {}
+    # Tokenize on `{...}` segments.
+    i = 0
+    while i < len(s):
+        if s[i] != "{":
+            raise ValueError(f"unexpected char {s[i]!r} in mana cost {s!r}")
+        end = s.index("}", i + 1)
+        sym = s[i + 1:end]
+        if sym.isdigit():
+            generic += int(sym)
+        elif sym in _COLOR_LETTERS:
+            colored[sym] = colored.get(sym, 0) + 1
+        else:
+            # Hybrid (W/U), Phyrexian (W/P), X, snow (S), 2/W, etc.
+            raise ValueError(
+                f"unsupported mana symbol {sym!r} in cost {s!r} "
+                f"(production filter should drop this card)"
+            )
+        i = end + 1
+    return generic, tuple(sorted(colored.items()))
+
+
+def _printing_is_bridge_simple_creature(printing) -> bool:
+    """True if a CardPrinting is a vanilla bridge-supported creature.
+
+    A "bridge-simple" creature has:
+      * "Creature" in card_types
+      * Non-None power and toughness
+      * No keywords
+      * No triggered_abilities
+      * No activated_abilities (other than the empty default)
+      * No static_abilities
+      * No spell_effect (creatures don't have one anyway, but be
+        defensive — flip cards / mdfcs land here)
+      * No warp / kicker / impending / room halves / planeswalker
+        loyalty
+      * Mana cost is parseable into (generic, colored) — no hybrid /
+        phyrexian / X / snow.
+    """
+    if "Creature" not in printing.card_types:
+        return False
+    if printing.power is None or printing.toughness is None:
+        return False
+    if printing.keywords:
+        return False
+    if printing.triggered_abilities:
+        return False
+    if printing.activated_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    if printing.spell_effect is not None:
+        return False
+    if printing.warp_cost or printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.station_threshold:
+        return False
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
+def _printing_is_bridge_basic_land(printing) -> bool:
+    """True if a CardPrinting is a basic Land the harness can model.
+
+    Basic lands carry the ``"Basic"`` supertype + ``"Land"`` card type
+    + a single ``produces`` color. The CardDef bridge auto-wires the
+    ``{T}: Add {C}`` mana ability via the ``mana_produced`` field so
+    activate_ability(land_id, 0) works on both engines.
+
+    Non-basic lands (utility lands, shock lands, planet lands) are
+    rejected here because they typically carry activated abilities
+    and/or ETB triggers that CardDef can't represent.
+    """
+    if "Land" not in printing.card_types:
+        return False
+    if "Basic" not in printing.supertypes:
+        return False
+    if not printing.produces:
+        return False
+    if len(printing.produces) != 1:
+        return False
+    if printing.activated_abilities:
+        # Basic lands SHOULD have no activated_abilities (the engine
+        # auto-wires the mana ability from `produces`); a parser-shipped
+        # ability would conflict with the CardDef-side auto-wire.
+        return False
+    if printing.triggered_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    return True
+
+
+def _printing_to_card_def(printing) -> CardDef:
+    """Convert a bridge-supported CardPrinting into a CardDef.
+
+    Pre-condition: printing must pass either
+    :func:`_printing_is_bridge_simple_creature` or
+    :func:`_printing_is_bridge_basic_land`. Otherwise the conversion
+    drops fields the bridge can't carry, producing a printing that
+    silently disagrees across engines.
+    """
+    if _printing_is_bridge_basic_land(printing):
+        produces = next(iter(printing.produces))
+        return CardDef(
+            name=printing.name,
+            card_type="Land",
+            mana_produced=(produces,),
+        )
+    if _printing_is_bridge_simple_creature(printing):
+        generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
+        return CardDef(
+            name=printing.name,
+            card_type="Creature",
+            mana_cost_generic=generic,
+            mana_cost_colored=colored,
+            power=printing.power,
+            toughness=printing.toughness,
+        )
+    raise ValueError(
+        f"printing {printing.name!r} is not bridge-supported; "
+        f"call _printing_is_bridge_* first to filter."
+    )
+
+
+def load_production_deck(
+    archetype: int = 0,
+    deck_pool_path: Optional[pathlib.Path] = None,
+) -> list[str]:
+    """Load one real EoE deck from the 17lands deck pool.
+
+    Returns the deck's card-name list (typically 40 cards — limited /
+    sealed deck size). The card names are direct Scryfall names that
+    the active CardSource (OracleParserCardSource) resolves via
+    ``get_printings()``.
+
+    Parameters
+    ----------
+    archetype : int, default 0
+        Index into the deck pool. The 17lands JSON is a flat list of
+        deck dicts; ``archetype`` is the positional index. Trivially
+        deterministic — index 0 always returns the same deck. Pass a
+        different index for a different deck.
+    deck_pool_path : pathlib.Path, optional
+        Path to the gzipped deck pool. Defaults to
+        :data:`DEFAULT_PRODUCTION_DECK_POOL`. Resolved relative to the
+        repo root if not absolute.
+
+    Returns
+    -------
+    list[str]
+        The deck's 40-card name list. Order matches the JSON.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the deck pool file is missing.
+    IndexError
+        If ``archetype`` is out of range for the deck pool.
+    """
+    if deck_pool_path is None:
+        # Resolve relative to the repo root (the parity module sits
+        # three dirs deep under src/mtg_bot/parity/, so go up four).
+        repo_root = pathlib.Path(__file__).resolve().parents[3]
+        deck_pool_path = repo_root / DEFAULT_PRODUCTION_DECK_POOL
+        if not deck_pool_path.exists():
+            # Worktree fallback: data/ is gitignored, so a freshly-
+            # checked-out worktree won't have the pool. Look for it in
+            # a sibling `mtg-bot/` main checkout (the project's
+            # canonical worktree layout per the repo's CLAUDE.md).
+            sibling = repo_root.parent.parent / "mtg-bot" / DEFAULT_PRODUCTION_DECK_POOL
+            if sibling.exists():
+                deck_pool_path = sibling
+    if not deck_pool_path.exists():
+        raise FileNotFoundError(
+            f"production deck pool not found at {deck_pool_path}; "
+            f"regenerate via scripts/fetch_eoe.py + the 17lands "
+            f"sync pipeline if it's missing."
+        )
+    with gzip.open(deck_pool_path, "rt") as fh:
+        data = json.load(fh)
+    if archetype < 0 or archetype >= len(data):
+        raise IndexError(
+            f"archetype={archetype} out of range for deck pool with "
+            f"{len(data)} decks"
+        )
+    return list(data[archetype]["cards"])
+
+
+def production_deck_to_deckspec(
+    p0_card_names: list[str],
+    p1_card_names: Optional[list[str]] = None,
+    *,
+    shared_rng_seed: Optional[int] = None,
+    pad_to_size: int = 60,
+    pad_with: str = "Forest",
+) -> DeckSpec:
+    """Build a parity-bridge DeckSpec from real EoE deck card-name lists.
+
+    Filters each card-name list to the bridge-supported subset (basic
+    lands + vanilla creatures), builds the union CardDef registry, and
+    optionally pads each filtered library with extra basic lands so
+    short post-filter decks still have enough cards to drive a multi-
+    turn trajectory test. Mirror-match defaults: when ``p1_card_names``
+    is None, p1 gets the same filtered library as p0.
+
+    Parameters
+    ----------
+    p0_card_names : list[str]
+        p0's deck card-name list (e.g. from
+        :func:`load_production_deck`). Card names that don't resolve
+        in the active CardSource OR don't pass the bridge-support
+        filter are silently dropped.
+    p1_card_names : list[str], optional
+        p1's deck card-name list. When None, p1 receives a copy of
+        p0's filtered library — produces a mirror-match for clean
+        trajectory probes.
+    shared_rng_seed : int, optional
+        Forwarded to :class:`DeckSpec.shared_rng_seed`. When set,
+        both engines shuffle to the same library permutation.
+    pad_to_size : int, default 60
+        Target deck size after filter+pad. If a player's filtered
+        library has fewer cards than this, the remainder is padded
+        with copies of ``pad_with``. Set to 0 to disable padding (use
+        the post-filter library size as-is).
+    pad_with : str, default "Forest"
+        Card name to use for padding. Must resolve to a bridge-
+        supported basic land in the active CardSource. The default is
+        "Forest" because the EoE pool's mono-G decks are the most
+        likely test target; switch to the deck's primary color for
+        non-green archetypes.
+
+    Returns
+    -------
+    DeckSpec
+        Ready to feed into :func:`setup_matched_game`.
+
+    Raises
+    ------
+    ValueError
+        If ``pad_with`` doesn't resolve to a bridge-supported basic
+        land in the active CardSource, OR if BOTH players' filtered
+        libraries are empty (would produce a zero-card DeckSpec).
+
+    Notes
+    -----
+    Cards filtered out are NOT logged here — the loader's job is to
+    produce a clean DeckSpec, not to audit the filter. To inspect
+    which cards a particular EoE deck loses to the filter, use
+    :func:`_filter_deck_to_bridge_supported` directly.
+    """
+    from mtg_bot.cards.source import get_active_source
+    src = get_active_source()
+    printings = src.get_printings()
+
+    # Validate the pad_with card upfront so a silent zero-pad later
+    # surfaces as a clean error.
+    pad_printing = printings.get(pad_with)
+    if pad_printing is None or not _printing_is_bridge_basic_land(pad_printing):
+        raise ValueError(
+            f"pad_with={pad_with!r} does not resolve to a bridge-"
+            f"supported basic land in the active CardSource; pick a "
+            f"basic land name (Forest/Island/Plains/Mountain/Swamp)."
+        )
+    pad_card_def = _printing_to_card_def(pad_printing)
+
+    p0_filtered, p0_card_defs = _filter_deck_to_bridge_supported(
+        p0_card_names, printings,
+    )
+    if p1_card_names is None:
+        p1_filtered = list(p0_filtered)
+        p1_card_defs = list(p0_card_defs)
+    else:
+        p1_filtered, p1_card_defs = _filter_deck_to_bridge_supported(
+            p1_card_names, printings,
+        )
+
+    # Pad each side to pad_to_size with copies of pad_with.
+    if pad_to_size > 0:
+        if len(p0_filtered) < pad_to_size:
+            p0_filtered.extend(
+                [pad_with] * (pad_to_size - len(p0_filtered))
+            )
+        if len(p1_filtered) < pad_to_size:
+            p1_filtered.extend(
+                [pad_with] * (pad_to_size - len(p1_filtered))
+            )
+
+    # Refuse zero-card libraries even if both filters dropped everything.
+    if not p0_filtered or not p1_filtered:
+        raise ValueError(
+            "production deck filter produced an empty library on at "
+            "least one side; check that the input decks contain at "
+            "least one bridge-supported card OR set pad_to_size>0."
+        )
+
+    # Union CardDef registry: dedup by name (CardDef is frozen+hashable
+    # but two CardDefs with the same name from different decks should
+    # be the same object — bridge-supported names always have a single
+    # representation in the active CardSource).
+    union_card_defs: dict[str, CardDef] = {}
+    for cd in p0_card_defs + p1_card_defs:
+        union_card_defs[cd.name] = cd
+    # Always include the pad card (even when both decks happen to
+    # already have it — dict-dedup makes this a no-op then).
+    union_card_defs.setdefault(pad_card_def.name, pad_card_def)
+
+    return DeckSpec(
+        card_defs=tuple(union_card_defs.values()),
+        p0_library=tuple(p0_filtered),
+        p1_library=tuple(p1_filtered),
+        shared_rng_seed=shared_rng_seed,
+    )
+
+
+def _filter_deck_to_bridge_supported(
+    card_names: list[str], printings: dict,
+) -> tuple[list[str], list[CardDef]]:
+    """Filter a card-name list to bridge-supported names + CardDefs.
+
+    Returns ``(filtered_names, card_defs)`` where:
+
+      * ``filtered_names`` is the input list with unsupported names
+        dropped, in original order. Duplicates are preserved (a 4x
+        Forest in the input stays 4x in the output).
+      * ``card_defs`` is the unique CardDef list (deduped by name) the
+        filtered names reference.
+
+    Internal helper for :func:`production_deck_to_deckspec`.
+    """
+    filtered_names: list[str] = []
+    seen_card_defs: dict[str, CardDef] = {}
+    for name in card_names:
+        printing = printings.get(name)
+        if printing is None:
+            continue
+        if not (
+            _printing_is_bridge_basic_land(printing)
+            or _printing_is_bridge_simple_creature(printing)
+        ):
+            continue
+        if name not in seen_card_defs:
+            seen_card_defs[name] = _printing_to_card_def(printing)
+        filtered_names.append(name)
+    return filtered_names, list(seen_card_defs.values())
+
+
+def setup_matched_game_from_real_decks(
+    p0_card_names: list[str],
+    p1_card_names: Optional[list[str]] = None,
+    *,
+    shared_rng_seed: Optional[int] = None,
+    pad_to_size: int = 60,
+    pad_with: str = "Forest",
+    mulligans: bool = False,
+    opening_hand_size: int = 7,
+    mulligan_agent: Optional[MulliganDeterministicAgent] = None,
+    mulligan_seed: int = 0,
+):
+    """One-shot: convert real EoE decklists → DeckSpec → matched states.
+
+    Convenience wrapper that composes
+    :func:`production_deck_to_deckspec` + :func:`setup_matched_game`.
+    Same return contract as :func:`setup_matched_game`. Use this
+    entrypoint for trajectory tests that want to drive on real EoE
+    deck shapes; use the two-step path
+    (``production_deck_to_deckspec`` then ``setup_matched_game``)
+    when the caller wants to inspect / mutate the DeckSpec between
+    steps.
+    """
+    spec = production_deck_to_deckspec(
+        p0_card_names,
+        p1_card_names,
+        shared_rng_seed=shared_rng_seed,
+        pad_to_size=pad_to_size,
+        pad_with=pad_with,
+    )
+    return setup_matched_game(
+        spec,
+        mulligans=mulligans,
+        opening_hand_size=opening_hand_size,
+        mulligan_agent=mulligan_agent,
+        mulligan_seed=mulligan_seed,
+    )

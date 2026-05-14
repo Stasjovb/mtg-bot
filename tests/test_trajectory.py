@@ -640,3 +640,181 @@ def test_combat_agent_optimal_no_loss_attack_no_defender_creatures_attacks_all()
     agent = RealGameCombatAgent(strategy="optimal_no_loss_attack")
     attackers = agent.pick_attackers(py_state)
     assert sorted(attackers) == sorted([int(a.id), int(b.id)])
+
+
+# ---------------------------------------------------------------------------
+# Round-17 enhancement: production-deck loader unit tests.
+#
+# Cover the loader's happy path + filter behavior + validation surface.
+# The trajectory tests in test_trajectory_parity.py exercise the
+# end-to-end real-EoE-deck → matched-game flow.
+# ---------------------------------------------------------------------------
+
+
+def test_load_production_deck_returns_card_name_list():
+    """load_production_deck(0) returns the first deck's card-name list."""
+    from mtg_bot.parity.trajectory import load_production_deck
+
+    cards = load_production_deck(0)
+    assert isinstance(cards, list)
+    # 17lands EoE decks are 40 cards (sealed deck size).
+    assert len(cards) == 40
+    assert all(isinstance(c, str) for c in cards)
+
+
+def test_load_production_deck_negative_archetype_rejected():
+    """archetype < 0 raises IndexError."""
+    from mtg_bot.parity.trajectory import load_production_deck
+
+    with pytest.raises(IndexError, match="out of range"):
+        load_production_deck(-1)
+
+
+def test_load_production_deck_oversized_archetype_rejected():
+    """archetype >= len(pool) raises IndexError."""
+    from mtg_bot.parity.trajectory import load_production_deck
+
+    with pytest.raises(IndexError, match="out of range"):
+        load_production_deck(10**9)
+
+
+def test_load_production_deck_missing_pool_raises():
+    """A nonexistent deck pool path raises FileNotFoundError."""
+    import pathlib
+    from mtg_bot.parity.trajectory import load_production_deck
+
+    with pytest.raises(FileNotFoundError, match="not found"):
+        load_production_deck(0, deck_pool_path=pathlib.Path("/nonexistent/x.json.gz"))
+
+
+def test_production_deck_to_deckspec_filters_unsupported_cards():
+    """Cards that don't pass the bridge-support filter are dropped from
+    the per-player libraries, but the union card_defs registry only
+    contains bridge-supported names."""
+    from mtg_bot.parity.trajectory import (
+        load_production_deck,
+        production_deck_to_deckspec,
+    )
+
+    cards = load_production_deck(0)
+    spec = production_deck_to_deckspec(cards, shared_rng_seed=42)
+    # All card_defs are basic Lands or vanilla Creatures (the only two
+    # bridge-supported shapes).
+    for cd in spec.card_defs:
+        assert cd.card_type in ("Land", "Creature")
+        if cd.card_type == "Creature":
+            assert cd.power is not None
+            assert cd.toughness is not None
+        if cd.card_type == "Land":
+            # Basic lands carry exactly one mana_produced color.
+            assert len(cd.mana_produced) == 1
+
+
+def test_production_deck_to_deckspec_pads_to_target_size():
+    """Short decks pad with the configured basic land to pad_to_size."""
+    from mtg_bot.parity.trajectory import (
+        load_production_deck,
+        production_deck_to_deckspec,
+    )
+
+    cards = load_production_deck(0)
+    spec = production_deck_to_deckspec(
+        cards, shared_rng_seed=42, pad_to_size=60, pad_with="Forest",
+    )
+    assert len(spec.p0_library) == 60
+    assert len(spec.p1_library) == 60
+
+
+def test_production_deck_to_deckspec_no_padding_when_pad_to_size_zero():
+    """pad_to_size=0 keeps the post-filter library size as-is."""
+    from mtg_bot.parity.trajectory import (
+        load_production_deck,
+        production_deck_to_deckspec,
+    )
+
+    cards = load_production_deck(0)
+    spec = production_deck_to_deckspec(
+        cards, shared_rng_seed=42, pad_to_size=0,
+    )
+    # Post-filter size (no padding) — almost always less than 40 since
+    # the filter drops most cards.
+    assert len(spec.p0_library) <= 40
+    assert len(spec.p0_library) > 0
+
+
+def test_production_deck_to_deckspec_invalid_pad_with_rejected():
+    """pad_with that doesn't resolve to a basic land raises ValueError."""
+    from mtg_bot.parity.trajectory import (
+        load_production_deck,
+        production_deck_to_deckspec,
+    )
+
+    cards = load_production_deck(0)
+    with pytest.raises(ValueError, match="basic land"):
+        production_deck_to_deckspec(
+            cards, shared_rng_seed=42, pad_with="Definitely Not A Card",
+        )
+
+
+def test_production_deck_to_deckspec_mirror_match_default():
+    """When p1 names is None, p1 receives p0's filtered library."""
+    from mtg_bot.parity.trajectory import (
+        load_production_deck,
+        production_deck_to_deckspec,
+    )
+
+    cards = load_production_deck(0)
+    spec = production_deck_to_deckspec(cards, shared_rng_seed=42)
+    assert spec.p0_library == spec.p1_library
+
+
+def test_production_deck_to_deckspec_asymmetric_decks():
+    """When p1 names differ, the libraries can diverge (asymmetric)."""
+    from mtg_bot.parity.trajectory import (
+        load_production_deck,
+        production_deck_to_deckspec,
+    )
+
+    p0_cards = load_production_deck(0)
+    p1_cards = load_production_deck(1)
+    spec = production_deck_to_deckspec(
+        p0_cards, p1_cards, shared_rng_seed=42,
+    )
+    # The decks may filter to identical shapes by coincidence on the
+    # very-restrictive bridge filter (lots of basic lands), but the
+    # union card_defs should at least be valid.
+    assert len(spec.card_defs) >= 1
+    assert len(spec.p0_library) == 60
+    assert len(spec.p1_library) == 60
+
+
+def test_setup_matched_game_from_real_decks_parity_clean():
+    """End-to-end smoke: real EoE deck → matched states with byte-equal
+    field views."""
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view,
+        compare_fields,
+        parity_smoke,
+    )
+    from mtg_bot.parity.trajectory import (
+        load_production_deck,
+        setup_matched_game_from_real_decks,
+    )
+
+    cards = load_production_deck(0)
+    py_state, rust_state = setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42,
+    )
+    py_view = build_python_field_view(py_state)
+    rust_view = parity_smoke()._build_field_view(rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"production-deck setup diverges: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in divs]}"
+    )
+    # 7-card opening hands.
+    assert len(py_view["hand_p0"]) == 7
+    assert len(py_view["hand_p1"]) == 7
+    # 53-card libraries (60 - 7 dealt).
+    assert len(py_view["library_p0"]) == 53
+    assert len(py_view["library_p1"]) == 53
