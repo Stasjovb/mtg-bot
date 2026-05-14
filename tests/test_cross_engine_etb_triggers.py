@@ -2585,5 +2585,115 @@ def test_rust_parser_accepts_return_to_hand_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_owner_puts_target_artifact_or_creature_on_top_or_bottom_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library"}``
+    translates to Python
+    ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary()``.
+
+    Unblocks Lost-in-Space-shape ETB owner-puts-on-library triggers
+    on the cross-engine bridge. The Rust effect variant exists at
+    ``rust/src/cards.rs:1170`` (unit variant
+    ``Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``);
+    its parse_effect arm at ``cards.rs:3306-3309`` takes no fields;
+    the resolve arm at ``state_ops_resolve.rs:5067`` carries the
+    I78 controller-of-effect fix (defender = 1 - controller, where
+    controller derives from current_resolve_source_controller).
+    Sibling closure to I70 / I75 / I76 / I79 / I80 -- same
+    defender-swap shape; differs only in destination zone (owner's
+    library top-or-bottom for I78 vs exile / hand / graveyard for
+    the siblings) and adds an OWNER-side top-vs-bottom choice via
+    the agent's ``choose_mode`` hook.
+    """
+    from mtg_bot.effects.generic.zone_moves import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library"}
+    )
+    assert isinstance(
+        e, OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary
+    )
+    # Bare-shape default: nonland_permanent=False (the printed
+    # "artifact or creature" filter, NOT the wider "any nonland
+    # permanent" widening). The Rust unit variant has no rider
+    # mirror today; the bridge constructs the bare default shape,
+    # matching Rust's any-artifact-or-creature scan.
+    assert e.nonland_permanent is False
+
+
+def test_bridge_owner_puts_target_artifact_or_creature_on_top_or_bottom_ignores_extra_fields():
+    """Extra dict fields are ignored -- the bridge translator
+    mirrors the Rust unit-variant convention (no fields beyond
+    ``kind``) and constructs the bare-default Python shape
+    regardless of whether the dict carries extra keys. Mirrors the
+    ``exile_target_creature_until_source_leaves`` /
+    ``exile_opponents_nonland_permanent_until_leaves`` /
+    ``return_creature_from_your_graveyard_to_hand`` arm convention
+    (all unit variants).
+    """
+    from mtg_bot.effects.generic.zone_moves import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({
+        "kind": "owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library",
+        # Extra keys that future rider-widened Rust variants might
+        # carry; the bare-shape arm ignores them.
+        "nonland_permanent": True,
+        "extra_key_should_be_ignored": True,
+        "another_unused_field": 42,
+    })
+    assert isinstance(
+        e, OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary
+    )
+    # Bare-shape arm constructs nonland_permanent=False even when
+    # the dict carries an explicit nonland_permanent rider -- the
+    # rider has no Rust mirror yet, so the bridge surface drops it
+    # for round-trip dict-shape consistency with what Rust's
+    # parser accepts.
+    assert e.nonland_permanent is False
+
+
+def test_rust_parser_accepts_owner_puts_target_artifact_or_creature_on_top_or_bottom_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library``
+    effect kind. The bridge's dict shape must register cleanly on
+    the Rust side too; this lockstep gate keeps the Python bridge
+    from drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing
+    ``exile_target_creature_until_source_leaves`` /
+    ``exile_opponents_nonland_permanent_until_leaves`` parser-
+    surface pins -- all three are unit-variant arms with no
+    companion fields. The Rust parse_effect arm at
+    ``cards.rs:3306-3309`` accepts the bare ``{"kind":
+    "owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library"}``
+    shape on a triggered-ability carrier.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- OwnerPutsTopOrBottom",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
