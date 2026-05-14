@@ -37616,6 +37616,390 @@ def test_cross_engine_real_eoe_glacier_godmaw_etb_create_lander_artifact_token_l
     assert rust_bf_p1_after == py_bf_p1_after
 
 
+def test_cross_engine_real_eoe_seam_rip_etb_exile_nonland_permanent_max_mv_2_until_leaves_parity(
+    parity_smoke,
+):
+    """Probe: Seam Rip (EoE Enchantment, {W}) ETB ``exile target
+    nonland permanent an opponent controls with mana value 2 or
+    less until this enchantment leaves the battlefield`` -- FIRST
+    real-EoE consumer of the round-14 rider-widened
+    ``exile_opponents_nonland_permanent_with_max_mv_until_leaves``
+    bridge arm.
+
+    Sister probes on the bare (no-MV-cap) sibling arm:
+
+      * ``test_cross_engine_real_eoe_banishing_light_etb_exile_nonland_permanent_until_leaves_parity``
+        -- the FIRST real-EoE consumer of the bare
+        ``exile_opponents_nonland_permanent_until_leaves`` arm
+        (no MV cap; Banishing Light Enchantment carrier).
+      * ``test_cross_engine_real_eoe_hardlight_containment_etb_exile_target_creature_until_leaves_parity``
+        -- SECOND real-EoE consumer of the bare arm
+        (no MV cap; Hardlight Containment Aura carrier).
+
+    **Why this slice unblocks Seam Rip specifically.** Pre-round-14
+    the bridge had only the bare-shape arm; Seam Rip's printed
+    "with mana value 2 or less" rider had no Rust mirror. A naive
+    Seam Rip dispatch through the bare bridge arm would construct
+    ``ExileOpponentsNonlandPermanentUntilLeaves(max_mv=0)`` (no
+    cap) on Python and the unit-variant Rust arm (no cap), making
+    Seam Rip behave like Banishing Light -- the printed MV-cap
+    narrowing would be silently dropped. Round-14 lands the
+    sibling Rust variant + bridge arm so the cap flows through
+    end-to-end; this probe is the first real-EoE consumer.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this enchantment enters, exile target nonland
+         permanent an opponent controls with mana value 2 or less
+         until this enchantment leaves the battlefield."
+
+    Probe direction: **same-controller** (P0 source, P1 victim) --
+    same shape as the Banishing Light / Hardlight Containment
+    slices. P0 controls Seam Rip; the ETB-trigger picks an
+    opponent-controlled non-land permanent on P1's bf with MV <= 2
+    and exiles it.
+
+    Predicate decomposition:
+
+        SourceIsSelf
+
+    Effect: ``exile_opponents_nonland_permanent_with_max_mv_until_leaves``
+    -- carries ``max_mv: 2`` on the dict, mirroring Seam Rip's
+    printed cap. The bridge translates this to
+    ``ExileOpponentsNonlandPermanentUntilLeaves(max_mv=2)`` on
+    Python (the existing dataclass already supports the field)
+    and to the new
+    ``Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves
+    { max_mv: 2 }`` Rust variant.
+
+    Carrier card-type:
+        Enchantment (no Aura subtype; pure global Enchantment).
+        Same shape as Banishing Light. The MV-cap rider is the
+        load-bearing axis here, not the carrier type.
+
+    Probe shape (inject-and-fire-ENTERS, mirrors Banishing Light
+    with the bridge dict shape swapped to the rider variant and
+    the bait MV chosen to match the cap):
+
+      1. Pre-seat a vanilla bait Artifact on P1's bf with
+         mana_cost {generic: 1} (MV=1, AT-cap under Seam Rip's
+         max_mv=2). The artifact is non-creature non-land non-
+         enchantment so the picker has exactly one eligible
+         target on each engine (the bait).
+      2. Inject Seam Rip onto P0's bf. The ETB-trigger lands the
+         rider-variant effect on the stack.
+      3. Seat ``_PickFirstOpponentTargetCreaturePreferredAgent``
+         on P0; the agent picks the P1-controlled bait artifact
+         from legal_targets (only entry).
+      4. Drain both stacks. Bait artifact exiled to P1's exile
+         with source-link stamped.
+      5. Source-leaves recall: bait returns to P1's bf via
+         ``return_paired_exiles_for(source_id)`` /
+         ``_release_exiled_until_leaves(state, source_id)``.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Above-cap permanents -- the probe seats only an at-cap
+        bait so the picker resolves cleanly. The above-cap
+        rejection path is exercised by the synthetic Rust
+        regression pin
+        ``test_exile_opps_nonland_max_mv_above_cap_fizzles``
+        (tests_rust/test_resolve.py).
+      * Cross-controller routing -- exercised by the synthetic
+        Rust pin
+        ``test_exile_opps_nonland_max_mv_cross_controller_routing``.
+      * Source-leaves auto-fire on a real bf-leaving zone change
+        -- this probe exercises the manual hooks
+        (``return_paired_exiles_for`` +
+        ``_release_exiled_until_leaves``) per the same
+        out-of-scope note as the Banishing Light slice.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Seam Rip on P0's bf (controller=0).
+      * P0 bf: 1 (only the Enchantment).
+      * P1 bf: 0 (bait artifact left).
+      * P1 exile: 1 (bait artifact here, source-link stamped).
+      * Lives unchanged on both seats.
+      * No residual stack / pending decision.
+
+    Then post-recall:
+
+      * P1 bf: 1 (bait artifact back).
+      * P1 exile: 0.
+      * Rust returns count == 1 from the recall hook.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import (
+        _PickFirstOpponentTargetCreaturePreferredAgent,
+    )
+
+    # No CardDef-based libraries; everything injected directly.
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side: inject the at-cap bait artifact on P1's bf ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Seam Rip Bait Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},  # MV=1, AT-cap (max_mv=2)
+        "effects": [],
+        "triggered_abilities": [],
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: vanilla bait Artifact inject must NOT push anything "
+        "onto the stack (no triggers). "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    rust_p0_bf_before = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_before = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p0_bf_before == 0
+    assert rust_p1_bf_before == 1
+    rust_p0_exile_before = len(rust_state.exile_snapshot(0))
+    rust_p1_exile_before = len(rust_state.exile_snapshot(1))
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_exile_before == 0
+    assert rust_p1_exile_before == 0
+
+    # Inject Seam Rip onto P0's bf. The ETB carries the rider-
+    # variant effect with max_mv=2 (Seam Rip's printed cap).
+    rust_source_dict = {
+        "name": "Seam Rip",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"W": 1},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+                    "max_mv": 2,
+                },
+            }
+        ],
+    }
+    rust_source_id = rust_state.register_and_inject_object(
+        rust_source_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Seam Rip's arrival on P0 should fire the SourceIsSelf "
+        "ENTERS trigger and land "
+        "ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: mirror setup ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.exile import (
+        ExileOpponentsNonlandPermanentUntilLeaves,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="Seam Rip Bait Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=()),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    py_p1_bf_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    py_p0_exile_before = len(py_state.players[0].exile)
+    py_p1_exile_before = len(py_state.players[1].exile)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p1_bf_before == 1
+    assert py_p0_exile_before == 0
+    assert py_p1_exile_before == 0
+
+    # Source: Seam Rip Enchantment carrier on P0's bf, with the
+    # max_mv=2 rider on the ETB effect. Python-side carries the
+    # rider directly via the ``max_mv`` field on the dataclass.
+    source_printing = CardPrinting(
+        name="Seam Rip",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=(("W", 1),)),
+        type_line="Enchantment",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ExileOpponentsNonlandPermanentUntilLeaves(max_mv=2),
+            ),
+        ),
+    )
+
+    py_state.players[0].agent = (
+        _PickFirstOpponentTargetCreaturePreferredAgent()
+    )
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Seam Rip's arrival on P0 should fire the IsSelf "
+        "ENTERS trigger and land "
+        "ExileOpponentsNonlandPermanentUntilLeaves(max_mv=2) on the "
+        f"stack. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust post-state: bait left P1's bf, landed in P1's exile.
+    rust_p0_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p0_bf_after == 1, (
+        f"Rust: P0's bf should still hold the Seam Rip source. "
+        f"after p0_bf={rust_p0_bf_after}"
+    )
+    assert rust_p1_bf_after == 0, (
+        f"Rust round-14 max_mv=2 contract: P1's bf should drop the "
+        f"at-cap (MV=1) bait artifact. "
+        f"after p1_bf={rust_p1_bf_after}"
+    )
+    rust_p1_exile_after = rust_state.exile_snapshot(1)
+    assert len(rust_p1_exile_after) == rust_p1_exile_before + 1, (
+        f"Rust round-14 contract: P1's exile should grow by 1 (bait "
+        f"artifact). before={rust_p1_exile_before} "
+        f"after={len(rust_p1_exile_after)}"
+    )
+    assert (
+        rust_p1_exile_after[0]["printing_name"]
+        == "Seam Rip Bait Artifact"
+    )
+    assert int(rust_p1_exile_after[0]["id"]) == rust_bait_id, (
+        f"Rust: exiled object id should match the original bait. "
+        f"expected={rust_bait_id} "
+        f"got={rust_p1_exile_after[0]['id']}"
+    )
+    assert len(rust_state.exile_snapshot(0)) == rust_p0_exile_before
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+
+    # Python post-state.
+    py_p0_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert py_p0_bf_after == 1, (
+        f"Python: P0's bf should still hold the Seam Rip source. "
+        f"after p0_bf={py_p0_bf_after}"
+    )
+    assert py_p1_bf_after == 0, (
+        f"Python: P1's bf should drop the bait artifact. "
+        f"after p1_bf={py_p1_bf_after}"
+    )
+    assert len(py_state.players[1].exile) == py_p1_exile_before + 1
+    assert (
+        py_state.players[1].exile[0].printing.name
+        == "Seam Rip Bait Artifact"
+    )
+    assert py_state.players[1].exile[0].id == py_bait.id
+    assert len(py_state.players[0].exile) == py_p0_exile_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # ---- Source-leaves recall: bait returns to P1's bf ----
+    rust_returned = rust_state.return_paired_exiles_for(rust_source_id)
+    assert rust_returned == 1, (
+        f"Rust source-leaves recall should return exactly 1 paired "
+        f"exile (the bait artifact); got {rust_returned}"
+    )
+    rust_p1_bf_post_recall = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    rust_p1_exile_post_recall = len(rust_state.exile_snapshot(1))
+    assert rust_p1_bf_post_recall == 1, (
+        f"Rust post-recall: P1's bf should hold the returned bait. "
+        f"got={rust_p1_bf_post_recall}"
+    )
+    assert rust_p1_exile_post_recall == 0, (
+        f"Rust post-recall: P1's exile should be empty. "
+        f"got={rust_p1_exile_post_recall}"
+    )
+
+    from mtg_bot.turn import _release_exiled_until_leaves
+    _release_exiled_until_leaves(py_state, py_source.id)
+    py_p1_bf_post_recall = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    py_p1_exile_post_recall = len(py_state.players[1].exile)
+    assert py_p1_bf_post_recall == 1, (
+        f"Python post-recall: P1's bf should hold the returned "
+        f"bait. got={py_p1_bf_post_recall}"
+    )
+    assert py_p1_exile_post_recall == 0, (
+        f"Python post-recall: P1's exile should be empty. "
+        f"got={py_p1_exile_post_recall}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
