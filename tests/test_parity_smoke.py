@@ -28047,6 +28047,539 @@ def test_cross_engine_synthetic_etb_exile_target_creature_until_source_leaves_cr
     )
 
 
+def test_cross_engine_synthetic_etb_exile_opponents_nonland_permanent_until_leaves_cross_controller_routes_to_source_controller_opponent_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB
+    ``exile_opponents_nonland_permanent_until_leaves``
+    (ExileOpponentsNonlandPermanentUntilLeaves) trigger fired by
+    a permanent CONTROLLED BY P1 while ACTIVE_PLAYER=P0 -- the
+    I80 controller-of-effect fix's cross-engine flicker on the
+    new ``exile_opponents_nonland_permanent_until_leaves`` bridge
+    arm (commit c7173905). Both engines must exile the bait
+    artifact on P0's bf (the SOURCE's controller's OPPONENT,
+    ``defender = 1 - controller``), NOT a non-land permanent on
+    P1's bf (which would happen if the resolve derived
+    ``defender = 1 - active_player`` on the pre-I80 substrate).
+
+    **The I80 substrate.** Per the bridge arm comment in
+    ``_ta_dict_to_python_effect`` (cross_engine.py): pre-I80
+    Rust's ``Effect::ExileOpponentsNonlandPermanentUntilLeaves``
+    resolve arm at ``state_ops_resolve.rs:5645-5754`` derived
+    ``defender = 1 - state.active_player`` directly. Wrong when
+    the resolving spell / triggered ability has a controller !=
+    active_player. The I80 fix routes that derivation through
+    ``current_resolve_source_controller`` (with active_player
+    fallback for direct ``apply_effect_pub`` callers), so cross-
+    controller ExileOpponentsNonlandPermanentUntilLeaves
+    correctly targets the SOURCE's controller's OPPONENT's first
+    non-land permanent. Sibling closure to I65 / I77 / I78 /
+    I79 / I81 -- identical defender-swap shape; differs from
+    I79 only in the target filter ("not a Land" vs "is a
+    Creature").
+
+    Python's
+    ``ExileOpponentsNonlandPermanentUntilLeaves.resolve(state,
+    controller_id, targets)`` (effects/generic/exile.py:617) is
+    target-required via the ``targets[0]`` ``("permanent",
+    target_id)`` pick. The agent on the source's controller picks
+    the opponent-controlled non-land permanent from
+    ``legal_targets`` (which emits one ``("permanent", id)``
+    entry per opponent-controlled non-land bf object). The
+    ``_PickFirstOpponentTargetCreaturePreferredAgent`` shim's
+    opponent-controlled filter walks legal_targets and picks the
+    first non-player entry whose controller != player_id; it
+    works for ``("permanent", id)`` shapes too (the shim's
+    "creature-preferred" name reflects its origin substrate but
+    the actual implementation is filter-shape-agnostic for any
+    non-player target kind).
+
+    **Why synthetic, not a real EoE card.** The
+    ``exile_opponents_nonland_permanent_until_leaves`` arm
+    bridges Banishing-Light / Oblivion-Ring / Hardlight-
+    Containment-shape oracle text. EoE doesn't ship a bare-
+    rider-shape ETB exile-non-land-until-leaves enchantment
+    today (the field's printings carry MV-cap riders), so a
+    synthetic 2/2 Spacecraft (artifact carrier mirroring the
+    cross-controller exile-creature-until-leaves probe shape)
+    with the bridged trigger keeps this probe self-contained
+    and exercises the bare-default Python shape (max_mv=0 = no
+    cap) the bridge constructs. Mirrors the I79 cross-
+    controller probe (commit 5aefc9df) shape exactly.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Pre-seat a vanilla bait artifact on P0's bf** (Cross-
+         Controller Bait Artifact, an inert non-creature
+         artifact). P0 controls the bait; it's the only
+         eligible opponent-non-land permanent from the source's
+         perspective. Choosing an artifact (not a creature)
+         load-bears: I79 narrows to creatures while I80 widens
+         to any non-land permanent. The artifact would silent-
+         fizzle under the I79 picker but resolves cleanly under
+         I80 -- pinning the I80 filter widening as well as the
+         controller-of-effect routing.
+
+      3. **Inject Cross-Controller OppsExiler Spacecraft (the
+         source) onto P1's bf** with controller=1 (Rust's
+         ``register_and_inject_object``; Python's ``new_object``
+         + bf append + manual ``_trigger_etb_abilities``). The
+         injection's ENTERS dispatch fires the SourceIsSelf
+         trigger; the trigger lands on the stack with
+         controller=1 (the SOURCE's controller).
+
+      4. **Seat
+         ``_PickFirstOpponentTargetCreaturePreferredAgent`` on
+         P1** (the source's controller, who picks the target
+         non-land permanent). The agent's opponent-controller
+         filter returns ``("permanent", bait_id)`` from the
+         legal_targets pool (which contains exactly one entry:
+         the P0-controlled bait artifact), mirroring Rust's
+         deterministic ``defender = 1 - controller = 0``
+         first-non-land scan.
+
+      5. **Drain both stacks.** The trigger resolves: Rust's
+         post-I80 arm reads
+         ``current_resolve_source_controller = Some(1)``,
+         computes ``defender = 0``, scans P0's bf top-to-bottom
+         for the first non-land permanent, finds the bait
+         artifact, and exiles it to P0's exile zone with
+         ``exiled_with_source = Some(source_obj_id)``. Python's
+         ``ExileOpponentsNonlandPermanentUntilLeaves().resolve(
+         state, 1, (("permanent", bait_id),))`` does the same
+         on the equivalent state, stamping
+         ``bait.exiled_by_source = source.id`` before invoking
+         ``move_off_battlefield``.
+
+      6. **Cross-engine assert (post-I80 contract):**
+         - Bait artifact no longer on P0's bf (left bf).
+         - Bait artifact in P0's exile zone.
+         - Source spacecraft still on P1's bf (inject anchor).
+         - P1's bf size unchanged at 1 (just the source).
+         - P1's exile zone unchanged (empty).
+         - Lives unchanged on both seats.
+
+      7. **Source-leaves recall:** invoke
+         ``rust_state.return_paired_exiles_for(source_id)`` and
+         Python's ``_release_exiled_until_leaves(state,
+         source_id)`` -- both should return exactly 1 object
+         (the bait artifact) to P0's bf, proving the
+         ``exiled_with_source`` / ``exiled_by_source`` link was
+         stamped correctly on each engine.
+
+    **Pre-I80 vs post-I80 observable.**
+    Pre-fix Rust would have:
+      - Derived ``defender = 1 - active_player = 1 - 0 = 1``,
+        scanned P1's bf for the first non-land permanent,
+        FOUND the source spacecraft itself (an Artifact on
+        P1's bf), and self-exiled it. Bait artifact on P0
+        stays on P0's bf; P1 loses its source. The pre-fix
+        observable diverges from post-fix on TWO seat slots
+        simultaneously: P0's bf doesn't shrink (post-fix it
+        does) and P1's bf shrinks by 1 (post-fix it doesn't).
+    Post-fix Rust correctly derives defender = 1 - controller
+    = 1 - 1 = 0 (the SOURCE's controller's opponent). Scans
+    P0's bf, finds the bait artifact, exiles it. Python's
+    behavior is bit-equal because its
+    ``ExileOpponentsNonlandPermanentUntilLeaves`` takes the
+    target via the targeting pipeline (which reads the trigger's
+    controller field when resolving the source-controller's
+    agent pick).
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-
+        ENTERS pattern bypasses the mana pipeline.
+      * Empty defender's bf with a fallback target -- the Rust
+        first-slice picker silent-fizzles if no non-land
+        permanent is on the defender's bf; this probe seats
+        exactly one bait so the picker resolves cleanly.
+      * Multiple eligible non-land bait permanents (target
+        ordering on a 2-permanent defender bf) -- the
+        substrate's first-bf-non-land pick is implicit in
+        ``_PickFirstOpponentTargetCreaturePreferredAgent``'s
+        legal_targets[0] traversal.
+      * ``max_mv`` MV-cap rider -- the bare-shape arm
+        constructs the safe-default max_mv=0 (no cap) per the
+        bridge arm comment; rider-widened variants will land
+        as separate Rust Effect variants + separate bridge
+        arms.
+      * Source-leaves auto-fire on a real bf-leaving zone
+        change -- this probe exercises the manual hooks
+        (``return_paired_exiles_for`` +
+        ``_release_exiled_until_leaves``) since auto-firing on
+        every bf-leaving zone change is a follow-up slice on
+        Rust per the docstring at state_ops_resolve.rs:6866.
+      * LTB triggers fanning out from the bait's
+        ``move_off_battlefield`` -- the bait is vanilla; no
+        LTB triggers fire on either engine.
+      * Land bait on the defender's bf -- the I80 filter
+        ("not a Land") would reject lands; this probe seats
+        only the artifact, so the filter is exercised by the
+        positive-eligibility scan, not the rejection.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller OppsExiler Spacecraft on P1's
+        battlefield (controller=1; unchanged from inject).
+      * P0 battlefield: empty (bait artifact left).
+      * P0 exile: 1 (bait artifact here, with source-link
+        stamped).
+      * P1 battlefield: 1 (only the source spacecraft).
+      * P1 exile: 0 (untouched).
+      * Lives unchanged on both seats.
+      * No residual stack on either engine.
+
+    Then post-recall:
+
+      * P0 battlefield: 1 (bait artifact back, summoning_sick
+        on Rust where the recall stamps it; Python's recall
+        path goes through put_into_battlefield which also
+        stamps summoning_sick on the recalled object).
+      * P0 exile: 0 (bait artifact removed).
+      * Both engines return count == 1 from the recall hook.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import (
+        _PickFirstOpponentTargetCreaturePreferredAgent,
+    )
+
+    # No card defs needed for the libraries -- the probe injects
+    # both the source AND the bait directly onto bfs. Empty
+    # libraries / hands keep the harness minimal.
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side: inject the bait artifact onto P0's bf first ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Cross-Controller Bait Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "triggered_abilities": [],
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: vanilla bait Artifact inject must NOT push anything "
+        "onto the stack (no triggers). "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    # Pre-trigger snapshot (post-bait-inject, pre-source-inject).
+    rust_p0_bf_before = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    assert rust_p0_bf_before == 1, (
+        f"Rust: bait should be on P0's bf. "
+        f"got p0_bf={rust_p0_bf_before}"
+    )
+    rust_p0_exile_before = len(rust_state.exile_snapshot(0))
+    rust_p1_exile_before = len(rust_state.exile_snapshot(1))
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_exile_before == 0
+    assert rust_p1_exile_before == 0
+
+    # Inject the source onto P1's bf with controller=1. ENTERS fires
+    # via the deferred-dispatch queue; the SourceIsSelf trigger lands
+    # on the stack with controller=1 (the SOURCE's controller).
+    rust_source_dict = {
+        "name": "Cross-Controller OppsExiler Spacecraft",
+        "card_types": ["Artifact"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "effects": [],
+        "power": 0,
+        "toughness": 0,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "exile_opponents_nonland_permanent_until_leaves",
+                },
+            }
+        ],
+    }
+    rust_source_id = rust_state.register_and_inject_object(
+        rust_source_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller OppsExiler Spacecraft's arrival on "
+        "P1 should fire the SourceIsSelf ENTERS trigger and land "
+        "ExileOpponentsNonlandPermanentUntilLeaves on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: same setup ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.exile import (
+        ExileOpponentsNonlandPermanentUntilLeaves,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    # Vanilla bait Artifact on P0's bf.
+    bait_printing = CardPrinting(
+        name="Cross-Controller Bait Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=()),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    py_p0_bf_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p0_exile_before = len(py_state.players[0].exile)
+    py_p1_exile_before = len(py_state.players[1].exile)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p0_bf_before == 1
+    assert py_p0_exile_before == 0
+    assert py_p1_exile_before == 0
+
+    # Source spacecraft on P1's bf (controller=1).
+    source_printing = CardPrinting(
+        name="Cross-Controller OppsExiler Spacecraft",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("W", 1),)),
+        type_line="Artifact -- Spacecraft",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=("Spacecraft",),
+        power=0,
+        toughness=0,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ExileOpponentsNonlandPermanentUntilLeaves(),
+            ),
+        ),
+    )
+
+    # Custom agent for P1 (the source's controller): mirror Rust's
+    # deterministic first-bf-non-land pick. The agent's opponent-
+    # controlled filter returns ``("permanent", bait_id)`` from the
+    # legal_targets pool [("permanent", bait_id)].
+    py_state.players[1].agent = (
+        _PickFirstOpponentTargetCreaturePreferredAgent()
+    )
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller OppsExiler Spacecraft's arrival "
+        "on P1 should fire the IsSelf ENTERS trigger and land "
+        "ExileOpponentsNonlandPermanentUntilLeaves on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state on Rust: bait left P0's bf, landed in
+    # P0's exile zone. Source still on P1's bf. P1 exile / lives
+    # untouched. The load-bearing cross-controller routing pin:
+    # pre-fix Rust would have computed defender = 1 - active_player
+    # = 1 (P1), scanned P1's bf, found the source artifact, self-
+    # exiled IT, leaving P0's bf and P1's source-slot wrong on
+    # both seats. Post-fix Rust exiles from P0's bf correctly.
+    rust_p0_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p0_bf_after == 0, (
+        f"Rust I80 cross-controller exile_opponents_nonland_"
+        f"permanent_until_leaves contract: P0's bf should drop "
+        f"the bait artifact (defender = 1 - controller = 1 - 1 = "
+        f"0; the source's controller's opponent is P0). Pre-fix "
+        f"would have computed defender = 1 - active_player = 1 - "
+        f"0 = 1, scanned P1's bf, self-exiled the source, and "
+        f"left P0's bf at its pre-trigger size. "
+        f"after p0_bf={rust_p0_bf_after}"
+    )
+    assert rust_p1_bf_after == 1, (
+        f"Rust: P1's bf should still hold the source Spacecraft "
+        f"(post-fix: bait got exiled, not the source). "
+        f"after p1_bf={rust_p1_bf_after}"
+    )
+    rust_p0_exile_after = rust_state.exile_snapshot(0)
+    assert len(rust_p0_exile_after) == rust_p0_exile_before + 1, (
+        f"Rust I80 cross-controller exile_opponents_nonland_"
+        f"permanent_until_leaves contract: P0's exile should grow "
+        f"by 1 (the bait artifact lands here). "
+        f"before={rust_p0_exile_before} "
+        f"after={len(rust_p0_exile_after)}"
+    )
+    assert (
+        rust_p0_exile_after[0]["printing_name"]
+        == "Cross-Controller Bait Artifact"
+    ), (
+        f"Rust: P0's exile top should be the bait artifact. "
+        f"got name={rust_p0_exile_after[0]['printing_name']!r}"
+    )
+    assert int(rust_p0_exile_after[0]["id"]) == rust_bait_id, (
+        f"Rust: exiled object id should match the original bait "
+        f"id. expected={rust_bait_id} "
+        f"got={rust_p0_exile_after[0]['id']}"
+    )
+    assert len(rust_state.exile_snapshot(1)) == rust_p1_exile_before, (
+        f"Rust: P1's exile should be unchanged at "
+        f"{rust_p1_exile_before}. "
+        f"after={len(rust_state.exile_snapshot(1))}"
+    )
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+
+    # Per-engine post-state on Python: same shape.
+    py_p0_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert py_p0_bf_after == 0, (
+        f"Python: P0's bf should drop the bait artifact. "
+        f"after p0_bf={py_p0_bf_after}"
+    )
+    assert py_p1_bf_after == 1, (
+        f"Python: P1's bf should still hold the source Spacecraft. "
+        f"after p1_bf={py_p1_bf_after}"
+    )
+    assert len(py_state.players[0].exile) == py_p0_exile_before + 1, (
+        f"Python: P0's exile should grow by 1. "
+        f"before={py_p0_exile_before} "
+        f"after={len(py_state.players[0].exile)}"
+    )
+    assert (
+        py_state.players[0].exile[0].printing.name
+        == "Cross-Controller Bait Artifact"
+    )
+    assert py_state.players[0].exile[0].id == py_bait.id, (
+        f"Python: exiled object id should match the original bait "
+        f"id. expected={py_bait.id} "
+        f"got={py_state.players[0].exile[0].id}"
+    )
+    assert len(py_state.players[1].exile) == py_p1_exile_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # Cross-engine: per-zone parity on counts + lives.
+    assert len(rust_state.exile_snapshot(0)) == len(
+        py_state.players[0].exile
+    )
+    assert len(rust_state.exile_snapshot(1)) == len(
+        py_state.players[1].exile
+    )
+    assert rust_p0_bf_after == py_p0_bf_after
+    assert rust_p1_bf_after == py_p1_bf_after
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # ---- Source-leaves recall pin (proves the link was stamped) ----
+    # Manual hook on both engines. Rust's
+    # ``return_paired_exiles_for(source_id)`` reads
+    # ``exiled_with_source``; Python's
+    # ``_release_exiled_until_leaves(state, source_id)`` reads
+    # ``exiled_by_source``. The bookkeeping field-name differs
+    # (per the bridge arm comment) but the manual recall hook
+    # returns the same single object on both engines, proving the
+    # link was stamped correctly during resolve.
+    from mtg_bot.turn import _release_exiled_until_leaves
+
+    rust_returned = rust_state.return_paired_exiles_for(rust_source_id)
+    assert rust_returned == 1, (
+        f"Rust: return_paired_exiles_for should return 1 (the "
+        f"bait artifact). got={rust_returned}"
+    )
+    _release_exiled_until_leaves(py_state, py_source.id)
+
+    # Post-recall: bait artifact back on P0's bf; exile drained.
+    rust_p0_bf_post_recall = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    py_p0_bf_post_recall = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    assert rust_p0_bf_post_recall == 1, (
+        f"Rust: bait should be back on P0's bf post-recall. "
+        f"got p0_bf={rust_p0_bf_post_recall}"
+    )
+    assert py_p0_bf_post_recall == 1, (
+        f"Python: bait should be back on P0's bf post-recall. "
+        f"got p0_bf={py_p0_bf_post_recall}"
+    )
+    assert len(rust_state.exile_snapshot(0)) == rust_p0_exile_before, (
+        f"Rust: P0's exile should drain post-recall. "
+        f"got={len(rust_state.exile_snapshot(0))}"
+    )
+    assert len(py_state.players[0].exile) == py_p0_exile_before, (
+        f"Python: P0's exile should drain post-recall. "
+        f"got={len(py_state.players[0].exile)}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
