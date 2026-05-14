@@ -2167,6 +2167,102 @@ def test_rust_parser_accepts_exile_target_creature_until_source_leaves_in_trigge
     assert pid == 0
 
 
+def test_bridge_discard_card_translates_to_python_target_opponent_discards():
+    """Phase 5 bridge extension WIDER variant: Rust
+    ``{"kind": "discard_card", "target": {"kind": "any_player"}}``
+    translates to Python
+    ``TargetOpponentDiscards(count=1)``.
+
+    Unblocks Mind Rot / Wrench Mind / Specter-bonk-shape ETB discard
+    triggers on the cross-engine bridge. The Rust effect variant
+    exists at the ``Effect::DiscardCard { target: TargetFilter }``
+    arm; its parse_effect arm at ``cards.rs:2890-2897`` requires a
+    ``target`` dict; the resolve arm at
+    ``state_ops_resolve.rs:1607-1660`` carries the I74 controller-
+    of-effect fix (defender = 1 - controller, where controller
+    derives from current_resolve_source_controller).
+
+    **First bridge arm to honor ONLY the wider any_player filter**
+    (siblings honor only any_creature; the deal_damage arm honors
+    both). Rust's resolve arm explicitly raises PyValueError on
+    AnyCreature at state_ops_resolve.rs:1608-1611 -- discard is
+    semantically a player-targeted effect.
+
+    Distinct from the existing ``each_opponent_discards`` arm
+    (multi-target sweep): this ``discard_card`` arm is single-target
+    Mind-Rot shape ("target player discards a card"). Rust's
+    first-slice picks the discarder's hand[0] deterministically;
+    Python defers to the discarder's agent ``choose_discard``.
+    """
+    from mtg_bot.effects.generic.discard import TargetOpponentDiscards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "discard_card", "target": {"kind": "any_player"}}
+    )
+    assert isinstance(e, TargetOpponentDiscards)
+    # Default count=1 mirrors Rust's first-slice "discards exactly
+    # one card" semantics (the Rust variant has no count field).
+    assert e.count == 1
+
+
+def test_bridge_discard_card_rejects_unsupported_target_filter_kind():
+    """The bridge mirrors the Rust parser's accepted-kind allowlist
+    for target filters (cards.rs:2790-2799 accepts only ``any_player``
+    and ``any_creature``). The discard_card arm is filter-narrow-by-
+    design to the OPPOSITE shape from destroy_target / exile_target /
+    return_to_hand / tap_target: only ``any_player`` is honored.
+    Rust raises a runtime PyValueError on AnyCreature at
+    state_ops_resolve.rs:1608-1611; the bridge surface rejects
+    ``any_creature`` AT REGISTER time (loud failure) rather than
+    letting it fall through to Rust's runtime resolve raise.
+    """
+    import pytest
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="any_creature"):
+        _ta_dict_to_python_effect(
+            {"kind": "discard_card", "target": {"kind": "any_creature"}}
+        )
+
+
+def test_rust_parser_accepts_discard_card_in_triggered_ability():
+    """Pin the Rust parser surface for the ``discard_card`` effect
+    kind. The bridge's dict shape must register cleanly on the Rust
+    side too; this lockstep gate keeps the Python bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing destroy_target / exile_target /
+    return_to_hand / tap_target / deal_damage parser-surface pins --
+    all six arms require a companion ``target`` field. The Rust
+    parse_effect arm at ``cards.rs:2890-2897`` accepts the
+    ``{"kind": "discard_card", "target": {"kind": "any_player"}}``
+    shape on a triggered-ability carrier.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- DiscardCard",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "discard_card",
+                    "target": {"kind": "any_player"},
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 def test_bridge_tap_target_translates_to_python_tap_with_creature_slot():
     """Phase 5 bridge extension: Rust
     ``{"kind": "tap_target", "target": {"kind": "any_creature"}}``
