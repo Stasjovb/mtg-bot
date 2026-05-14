@@ -2212,6 +2212,109 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 f"non-negative, got {max_mv}"
             )
         return ExileOpponentsNonlandPermanentUntilLeaves(max_mv=max_mv)
+    if kind == "grant_keywords_to_target_creature_until_eot":
+        # **Round-15 (post-r14) rider-widened bridge arm
+        # (multi-keyword + exclude_source).** Mirrors Rust's
+        # ``Effect::GrantKeywordsToTargetCreatureUntilEOT
+        # { keywords: Vec<String>, exclude_source: bool }``
+        # (cards.rs new variant). Sister bridge arm to a
+        # would-be ``grant_keyword_to_target_creature_until_eot``
+        # (single-keyword) arm — the round-28 single-keyword
+        # Rust variant has no Python bridge consumer in EoE; the
+        # rider-widened multi-keyword + "another" sub-shape lands
+        # via this arm directly.
+        #
+        # **EoE consumer.** Blooming Stinger ({1}{G} Plant Scorpion)
+        # is the unique EoE source for the ``exclude_source=true``
+        # shape; oracle: "Deathtouch / When this creature enters,
+        # another target creature you control gains deathtouch
+        # until end of turn." Bridge dict shape:
+        # ``{"kind": "grant_keywords_to_target_creature_until_eot",
+        #    "keywords": ["deathtouch"], "exclude_source": True}``.
+        #
+        # **Python class shape divergence (documented).** The Python
+        # parser at ``cards/parser/effects.py:6302-6315`` maps the
+        # Blooming Stinger oracle to
+        # ``PumpTargetCreatureUntilEOT(power_bonus=0,
+        # toughness_bonus=0, granted_keywords=frozenset({...}),
+        # you_control_only=True, exclude_self=True)`` — i.e. the
+        # keyword-grant-only sub-shape of the unified Pump primitive
+        # (P/T bonuses both zero, the grant body carries the load).
+        # Rust's new arm is a dedicated grant-keywords variant
+        # without P/T bonus fields because its raison d'être is the
+        # pure-keyword-grant lane; the bridge constructs the Python
+        # class with ``power_bonus=0`` / ``toughness_bonus=0``
+        # explicit so the round-trip behavior is parity-faithful
+        # (no spurious P/T bonus). The Python-side
+        # ``you_control_only=True`` is also wired (mirrors the
+        # source-controller-bf scan on Rust); the bridge sets it
+        # alongside ``exclude_self`` from the dict's
+        # ``exclude_source`` field (Python uses ``exclude_self``,
+        # Rust uses ``exclude_source`` — same semantics, naming
+        # convention adapted at the bridge boundary).
+        #
+        # **Field-name translation.** Rust's ``exclude_source: bool``
+        # forwards to Python's ``exclude_self: bool``. The semantic
+        # is identical: skip the resolving spell/ability source
+        # itself in the legal-target pool. The naming difference
+        # reflects each engine's local convention (Rust uses
+        # "source" throughout the apply_effect parameter list;
+        # Python's effects subsystem uses "self" for "the source
+        # of the resolving effect" because the Effect object is
+        # often referred to as ``self`` in resolve methods).
+        #
+        # **Required field contract.** Rust's parse_effect arm
+        # requires non-empty ``keywords`` list (raises PyValueError
+        # on missing / empty / empty-string entries); the bridge
+        # mirrors that contract by raising ValueError on missing
+        # or empty list. Optional ``exclude_source`` defaults to
+        # False on both engines.
+        #
+        # **Round-trip.** Rust's ``effect_to_pydict`` emits
+        # ``{"kind": "grant_keywords_to_target_creature_until_eot",
+        # "keywords": [...], "exclude_source": <bool>}``; the
+        # bridge consumes the same shape. Forward-compatible with
+        # future Rust riders on this arm — additional rider flags
+        # (attacking_only, legendary_only, opponents_only) would
+        # land as separate ``kind`` values per the round-12 /
+        # round-13 / round-14 additive-variant convention, OR as
+        # additional optional bool fields on this same arm if the
+        # parametric shape stays clean.
+        from mtg_bot.effects.generic.pump import (
+            PumpTargetCreatureUntilEOT,
+        )
+        if "keywords" not in eff_dict:
+            raise ValueError(
+                "cross_engine grant_keywords_to_target_creature_until_eot "
+                "bridge: missing required 'keywords' field"
+            )
+        keywords_raw = eff_dict["keywords"]
+        if not isinstance(keywords_raw, (list, tuple)):
+            raise ValueError(
+                f"cross_engine grant_keywords_to_target_creature_until_eot "
+                f"bridge: 'keywords' must be a list, got "
+                f"{type(keywords_raw).__name__}"
+            )
+        if len(keywords_raw) == 0:
+            raise ValueError(
+                "cross_engine grant_keywords_to_target_creature_until_eot "
+                "bridge: 'keywords' must be non-empty"
+            )
+        for kw in keywords_raw:
+            if not isinstance(kw, str) or not kw:
+                raise ValueError(
+                    f"cross_engine grant_keywords_to_target_creature_until_eot "
+                    f"bridge: every 'keywords' entry must be a non-empty "
+                    f"string, got {kw!r}"
+                )
+        exclude_source = bool(eff_dict.get("exclude_source", False))
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=0,
+            toughness_bonus=0,
+            granted_keywords=frozenset(keywords_raw),
+            you_control_only=True,
+            exclude_self=exclude_source,
+        )
     if kind == "return_to_hand":
         # "Return target creature to its owner's hand." Rust's
         # ``Effect::ReturnToHand { target: TargetFilter }``
