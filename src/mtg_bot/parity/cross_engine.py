@@ -3309,6 +3309,88 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return LookTopNPutOneInHandRestToGraveyard(
             n=int(eff_dict["n"]),
         )
+    if kind == "put_plus_one_counter_on_each_of_up_to_n_target_creatures":
+        # **Round-21 BLOCKED-BRIDGE-ARM slice -- "put a +1/+1 counter
+        # on each of up to N target creatures" (Weftblade Enhancer
+        # family).** Rust substrate
+        # ``Effect::PutPlusOneCounterOnEachOfUpToNTargetCreatures
+        # { max_n: i32 }`` (cards.rs:1316 + parser at
+        # cards.rs:4128-4149 + resolve at state_ops_resolve.rs:5339-
+        # 5415) has been on main since round 28; this slice closes
+        # the cross-engine bridge gap so probes can drive both arms
+        # with one dict on both engines. Same pattern as the round-
+        # 20/21 sister-slices (substrate-already-on-main, bridge-
+        # arm-was-the-staleness-gap).
+        #
+        # Round-19 audit refresh listed this kind under §2.4 BLOCKED-
+        # BRIDGE-ARM ("put_plus_one_counter_on_each_of_up_to_N_target_
+        # creatures bridge arm" -- 1 EoE card: Weftblade Enhancer).
+        #
+        # **Field shape (no rename).** Python's
+        # ``PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n: int
+        # = 2)`` (effects/generic/counters.py:179) and Rust's variant
+        # carry the SAME ``max_n`` field with the SAME default (2,
+        # Weftblade-Enhancer shape). Bridge passes `max_n` through
+        # verbatim with `int(...)` coercion. `max_n` is REQUIRED on
+        # the bridge to mirror Rust's parse_effect contract at
+        # cards.rs:4128-4149 (required `max_n` field with PyValueError
+        # on missing). Python's class-level default of 2 is NOT used
+        # by the bridge; the bridge enforces explicit `max_n` to keep
+        # the dict-shape contract aligned with Rust's parse path --
+        # mirrors the round-20 LookAtTopNRevealOrCounter `n`-required
+        # precedent.
+        #
+        # **Resolve semantics (cross-engine asymmetry).** Rust's
+        # resolve arm at state_ops_resolve.rs:5339-5415 picks the
+        # first `max_n` creatures from source-controller's bf FIRST,
+        # then opponent's bf, applying +1/+1 to each. Python's class
+        # is target-driven: requires_target=True, target_count_range=
+        # (0, max_n); the Decision pipeline asks the agent for up to
+        # max_n targets and resolve loops over the chosen tuple.
+        # The TWO engines converge on the same observable when the
+        # Python agent picks the same first-N creatures as Rust's
+        # iterator (controller-bf-first; cross-engine probe would
+        # need a multi-target picker shim that mirrors Rust's pick
+        # order). Cross-engine end-to-end probe deferred per round-
+        # 17/18/19 synthetic-only-when-riders-cascade precedent --
+        # the target-count-range Decision pipeline + multi-target
+        # agent shim is its own surface (the bare bridge-arm slice
+        # ships the translator + Rust regression pins; the cross-
+        # engine probe lands when a multi-target shim slice ships).
+        #
+        # **Negative max_n.** Rust's parser raises PyValueError on
+        # max_n < 0 (cards.rs:4144-4148); the bridge mirrors that
+        # contract for symmetric translation-time errors. max_n == 0
+        # is valid on both engines and yields a silent no-op (Rust's
+        # resolve at state_ops_resolve.rs:5340-5342 short-circuits;
+        # Python's target_count_range returns (0, 0) -> 0 targets
+        # picked -> resolve no-ops).
+        #
+        # **Real EoE consumer** unblocked: Weftblade Enhancer --
+        # "When this creature enters, put a +1/+1 counter on each of
+        # up to two target creatures." (max_n=2, no UEOT rider, no
+        # other effect composed). The bridge dict shape is
+        # ``{"kind": "put_plus_one_counter_on_each_of_up_to_n_target_
+        # creatures", "max_n": 2}``.
+        from mtg_bot.effects.generic.counters import (
+            PutPlusOneCounterOnEachOfUpToNTargetCreatures,
+        )
+        if "max_n" not in eff_dict:
+            raise ValueError(
+                "put_plus_one_counter_on_each_of_up_to_n_target_creatures "
+                "bridge arm: missing required field 'max_n' (mirrors "
+                "Rust parse_effect's required-max_n contract at "
+                "cards.rs:4128-4149)"
+            )
+        max_n = int(eff_dict["max_n"])
+        if max_n < 0:
+            raise ValueError(
+                "put_plus_one_counter_on_each_of_up_to_n_target_creatures "
+                f"bridge arm: max_n must be non-negative, got {max_n} "
+                "(mirrors Rust parse_effect contract at cards.rs:"
+                "4144-4148)"
+            )
+        return PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=max_n)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
