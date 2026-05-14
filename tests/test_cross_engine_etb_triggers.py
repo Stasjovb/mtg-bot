@@ -3226,6 +3226,193 @@ def test_rust_parser_accepts_exile_opponents_nonland_permanent_with_max_mv_until
     assert pid == 0
 
 
+def test_bridge_grant_keywords_to_target_creature_until_eot_translates_to_python():
+    """Round-15 bridge extension: Rust
+    ``{"kind": "grant_keywords_to_target_creature_until_eot",
+       "keywords": ["deathtouch"], "exclude_source": True}``
+    translates to Python ``PumpTargetCreatureUntilEOT(power_bonus=0,
+    toughness_bonus=0, granted_keywords=frozenset({"deathtouch"}),
+    you_control_only=True, exclude_self=True)``.
+
+    Rider-widened bridge arm for the round-28 single-keyword
+    grant-keyword-target-UEOT cluster. Real EoE consumer:
+    Blooming Stinger ({1}{G} Plant Scorpion, "When this creature
+    enters, another target creature you control gains deathtouch
+    until end of turn.").
+
+    The Rust effect variant exists at the new
+    ``Effect::GrantKeywordsToTargetCreatureUntilEOT
+    { keywords: Vec<String>, exclude_source: bool }`` slot in
+    cards.rs; its parse_effect arm requires a non-empty list of
+    non-empty keyword strings; the resolve arm in
+    state_ops_resolve.rs inherits the controller-of-effect resolution
+    from the single-keyword sibling and adds the exclude_source skip
+    + per-keyword UeotModifier::GrantKeyword push.
+
+    Python's ``PumpTargetCreatureUntilEOT`` class
+    (effects/generic/pump.py) carries the keyword-grant-only
+    sub-shape via ``granted_keywords=frozenset({...})`` with
+    P/T bonuses both zero; ``you_control_only`` + ``exclude_self``
+    flags narrow the legal-target pool to "another target creature
+    you control" — the bridge translates Rust's ``exclude_source``
+    onto the Python ``exclude_self`` flag (same semantics, naming
+    convention adapted at the boundary).
+    """
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({
+        "kind": "grant_keywords_to_target_creature_until_eot",
+        "keywords": ["deathtouch"],
+        "exclude_source": True,
+    })
+    assert isinstance(e, PumpTargetCreatureUntilEOT)
+    # P/T bonuses pinned at 0 — the keyword-grant-only sub-shape.
+    assert e.power_bonus == 0
+    assert e.toughness_bonus == 0
+    # Granted keywords flow through verbatim as a frozenset.
+    assert e.granted_keywords == frozenset({"deathtouch"})
+    # Targeting flags wired correctly. The bridge always sets
+    # you_control_only=True (Rust's resolve arm scans the
+    # source-controller's bf, which is the cross-engine semantic
+    # match for "you control"); exclude_source on the dict maps to
+    # exclude_self on the Python class.
+    assert e.you_control_only is True
+    assert e.exclude_self is True
+
+
+def test_bridge_grant_keywords_to_target_creature_until_eot_forwards_arbitrary_keywords():
+    """Round-15: the bridge translator forwards arbitrary keyword
+    LISTS into the Python constructor — pin a few sweep cases so a
+    regression that hard-codes the keyword set (e.g. always
+    {"deathtouch"}) is caught immediately. Single-element + multi-
+    element lists both round-trip; the Python frozenset preserves
+    every entry. Mirrors the parametric-bridge-arm precedent
+    (round-14 max_mv arbitrary-cap forwarding).
+    """
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    cases = [
+        ["deathtouch"],
+        ["flying"],
+        ["haste", "trample"],
+        ["lifelink", "vigilance", "first_strike"],
+    ]
+    for kws in cases:
+        e = _ta_dict_to_python_effect({
+            "kind": "grant_keywords_to_target_creature_until_eot",
+            "keywords": kws,
+            "exclude_source": False,
+        })
+        assert isinstance(e, PumpTargetCreatureUntilEOT)
+        assert e.granted_keywords == frozenset(kws), (
+            f"bridge must forward keywords verbatim; "
+            f"expected {frozenset(kws)}, got {e.granted_keywords}"
+        )
+        assert e.exclude_self is False
+
+
+def test_bridge_grant_keywords_to_target_creature_until_eot_rejects_missing_keywords():
+    """Round-15: missing ``keywords`` list is a ValueError on the
+    bridge side, mirroring Rust's parse_effect arm which raises
+    PyValueError on a missing required field. The bridge does NOT
+    silently fall through to an empty grant — that would mask a
+    dict-shape producer bug as a no-op effect.
+
+    Sister pins for the empty-list / empty-string-entry shapes
+    also raise (mirroring Rust's defensive guards). Default
+    ``exclude_source`` (missing) is allowed — defaults to False
+    on both engines.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="missing required 'keywords'"):
+        _ta_dict_to_python_effect({
+            "kind": "grant_keywords_to_target_creature_until_eot",
+        })
+
+    # Empty list rejected.
+    with pytest.raises(ValueError, match="must be non-empty"):
+        _ta_dict_to_python_effect({
+            "kind": "grant_keywords_to_target_creature_until_eot",
+            "keywords": [],
+        })
+
+    # Empty-string entry rejected.
+    with pytest.raises(ValueError, match="non-empty string"):
+        _ta_dict_to_python_effect({
+            "kind": "grant_keywords_to_target_creature_until_eot",
+            "keywords": ["deathtouch", ""],
+        })
+
+
+def test_rust_parser_accepts_grant_keywords_to_target_creature_until_eot_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``grant_keywords_to_target_creature_until_eot`` effect kind on
+    a triggered-ability carrier. The bridge's dict shape must
+    register cleanly on the Rust side too; this lockstep gate keeps
+    the Python bridge from drifting away from Rust's parse_effect
+    coverage.
+
+    Mirrors the round-14 ``exile_opponents_nonland_permanent_with_
+    max_mv_until_leaves`` parser-surface pin. The Rust parse_effect
+    arm requires a non-empty ``keywords`` list (each entry non-
+    empty); we exercise both single-keyword + ``exclude_source=True``
+    (Blooming Stinger's printed shape) and multi-keyword +
+    ``exclude_source=False`` (forward-compatible card shape) to pin
+    that the field forwarding is literal rather than clamped.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+
+    # Blooming-Stinger-shape: single-keyword + exclude_source=True.
+    d_stinger = {
+        "name": "Round 15 Bridge Pin -- GrantKeywordsBlooming",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "grant_keywords_to_target_creature_until_eot",
+                    "keywords": ["deathtouch"],
+                    "exclude_source": True,
+                },
+            }
+        ],
+    }
+    pid_stinger = reg.register_printing(d_stinger)
+    assert pid_stinger == 0
+
+    # Forward-compatible multi-keyword shape, no exclude_source.
+    d_multi = {
+        "name": "Round 15 Bridge Pin -- GrantKeywordsMulti",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "power": 1,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "grant_keywords_to_target_creature_until_eot",
+                    "keywords": ["flying", "trample"],
+                },
+            }
+        ],
+    }
+    pid_multi = reg.register_printing(d_multi)
+    assert pid_multi == 1
+
+
 def test_bridge_return_to_hand_translates_to_python_bounce_with_creature_slot():
     """Phase 5 bridge extension: Rust
     ``{"kind": "return_to_hand", "target": {"kind": "any_creature"}}``
