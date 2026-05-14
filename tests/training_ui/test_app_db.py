@@ -1543,17 +1543,17 @@ def test_config_json_replay_fields_fan_out_to_top_level(
             config_json=json.dumps({
                 "kind": "cycle",
                 "iter_idx": 4,
-                "replays_dir": "training_progress/replays",
-                "capture_every_self_play": 0.05,
-                "capture_every_eval": 0.0,
+                "replays_dir": "replays",
+                "capture_every_self_play": 20,
+                "capture_every_eval": 0,
             }),
         )
     finally:
         conn.close()
     body = client.get("/api/runs/iter_004_cycle").get_json()
-    assert body["replays_dir"] == "training_progress/replays"
-    assert body["capture_every_self_play"] == 0.05
-    assert body["capture_every_eval"] == 0.0
+    assert body["replays_dir"] == "replays"
+    assert body["capture_every_self_play"] == 20
+    assert body["capture_every_eval"] == 0
 
 
 def test_config_json_replay_fields_absent_when_not_in_config(
