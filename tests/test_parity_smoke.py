@@ -36601,6 +36601,400 @@ def test_cross_engine_real_eoe_biotech_specialist_etb_create_lander_artifact_tok
     assert rust_bf_p1_after == py_bf_p1_after
 
 
+def test_cross_engine_real_eoe_glacier_godmaw_etb_create_lander_artifact_token_leviathan_carrier_parity(
+    parity_smoke,
+):
+    """Probe: Glacier Godmaw (EoE Creature -- Leviathan) ETB
+    ``create a Lander token`` -- SAME-CONTROLLER cross-engine
+    parity for the create_token bridge arm on a high-CMC
+    Leviathan creature carrier (mono-G {5}{G}{G}, 6/6) carrying
+    Trample as a static keyword and a Landfall trigger sibling.
+    Only the ETB-create_token leg is wired; the static keyword is
+    informational and the Landfall sibling is out of scope.
+
+    Sister probes on the create_token bridge arm:
+
+      * ``test_cross_engine_real_eoe_galactic_wayfarer_etb_create_lander_artifact_token_parity``
+        -- Lander shape on a Creature -- Human Scout carrier (mono-G,
+        {2}{G}, 3 CMC).
+      * ``test_cross_engine_real_eoe_biomechan_engineer_etb_create_lander_artifact_token_insect_artificer_carrier_parity``
+        -- Lander shape on a Creature -- Insect Artificer carrier
+        (G/U, {G}{U}, 2 CMC).
+      * ``test_cross_engine_real_eoe_biotech_specialist_etb_create_lander_artifact_token_insect_scientist_carrier_parity``
+        -- Lander shape on a Creature -- Insect Scientist carrier
+        (R/G, {R}{G}, 2 CMC).
+      * ``test_cross_engine_real_eoe_bioengineered_future_etb_create_lander_artifact_token_enchantment_carrier_parity``
+        -- Lander shape on an Enchantment carrier (mono-G,
+        {3}{G}{G}, 5 CMC).
+      * ``test_cross_engine_real_eoe_honored_knight_captain_etb_create_soldier_token_parity``
+        -- Creature -> Creature-typed Soldier token.
+      * ``test_cross_engine_real_eoe_knight_luminary_etb_create_soldier_token_parity``
+        -- Creature -> Creature-typed Soldier token.
+      * ``test_cross_engine_real_eoe_wedgelight_rammer_etb_create_robot_artifact_creature_token_parity``
+        -- Artifact-Spacecraft -> Artifact-Creature Robot token.
+
+    This probe extends create_token coverage along TWO new axes
+    simultaneously:
+
+      1. **Carrier subtype**: ``Leviathan`` is novel for this arm
+         (no prior real-EoE create_token Creature consumer carries
+         it). The Creature-carrier subtype roster on this arm now
+         spans Human Scout, Human Advisor Knight, Human Knight,
+         Insect Artificer, Insect Scientist, and Leviathan.
+      2. **CMC magnitude**: at {5}{G}{G} (CMC 7), Glacier Godmaw is
+         the heaviest-cost Creature carrier yet probed. Prior real-
+         EoE Creature carriers landed at CMC 2 (Biomechan, Biotech),
+         CMC 3 (Galactic Wayfarer), and CMC 4-5 (Honored Knight-
+         Captain, Knight Luminary). Glacier Godmaw doubles the
+         heaviest prior CMC, pinning that the create_token
+         contract is invariant w.r.t. carrier CMC magnitude.
+
+    Additionally, Glacier Godmaw is the FIRST real-EoE create_token
+    Creature carrier whose printed text bundles a STATIC KEYWORD
+    (Trample) at the same printing as the ETB trigger. Trample
+    rides on the printing's keyword set independent of the
+    triggered-ability dispatch, so the SourceIsSelf ENTERS path is
+    bit-equal to a keyword-less carrier -- but the Trample's
+    presence in the carrier's printed text is exactly the kind of
+    detail the readiness-audit tail-coverage reasoning predicts
+    will not affect bridge-arm parity. This probe pins that
+    prediction empirically.
+
+    Real-EoE consumer alignment: Glacier Godmaw's printed oracle
+    text is ``Trample / When this creature enters, create a Lander
+    token. (It's an artifact with "{2}, {T}, Sacrifice this token:
+    Search your library for a basic land card, put it onto the
+    battlefield tapped, then shuffle.") / Landfall -- Whenever a
+    land you control enters, creatures you control get +1/+1 and
+    gain vigilance and haste until end of turn.``. This probe
+    exclusively exercises the ETB-create_token surface; the
+    Trample keyword is informational only (no static-keyword
+    substrate on either engine treats Trample as anything but a
+    combat-time effective-keyword read), and the Landfall trigger
+    sibling is out of scope -- it requires a land-event trigger
+    harness + a multi-target mass-pump-with-keyword-grant arm
+    (``mass_pump_until_eot_with_keywords`` or equivalent), neither
+    of which exists on the bridge today. The Lander's activated
+    ramp ability rides on the token PRINTING (registered, not
+    exercised).
+
+    **Why a fresh slice and not Galactic Wayfarer expansion.** The
+    Galactic Wayfarer sister probe is a strict mono-G CMC-3 Human
+    Scout Lander-token shape with no static keywords; broadening
+    it to also cover CMC-7 Leviathan carriers with Trample would
+    over-parameterize the existing probe and muddy its docstring.
+    A fresh probe lets the documentation cleanly capture WHY this
+    shape matters: it pins the bridge's create_token contract is
+    invariant w.r.t. (a) carrier CMC magnitude (the create_token
+    arm reads no CMC field) and (b) carrier static-keyword presence
+    (the trigger-dispatch leg ignores the printing's keyword set).
+
+    Trigger shape (mirrors all prior Lander-token sisters; only the
+    carrier-metadata + printing-id differs):
+
+        Event: enters
+        Predicate: source_is_self
+        Effect: create_token(count=1, token_printing_id=<lander pid>)
+
+    Probe shape (inject-and-fire-ENTERS, same-controller):
+
+      1. **active_player=P0** (default). P0 is also the SOURCE's
+         controller, so ``current_resolve_source_controller``
+         resolves to ``Some(0)`` AND the back-compat fallback
+         (``active_player``) AGREES at 0. This is the same-
+         controller surface; the cross-controller leg is pinned by
+         the I81 sister probe.
+
+      2. **Register Lander artifact token printing** on Rust (gets
+         a pid via ``rust_state.registry_size``); register the
+         matching Python ``CardPrinting`` (built directly via
+         ``CardPrinting`` constructor since Lander is a non-creature
+         artifact) against that pid via
+         ``register_token_printing(pid, ...)``.
+
+      3. **Inject Glacier Godmaw onto P0's bf** with controller=0
+         (no Trample keyword on the Rust dict -- the bridge dict
+         carries no keyword field today, and the carrier's
+         keyword set is irrelevant to the SourceIsSelf ENTERS
+         dispatch; this is documented in the out-of-scope list
+         below). ENTERS fires; the trigger lands on the stack
+         carrying controller=0.
+
+      4. **Drain both stacks.** The trigger resolves; the post-I81
+         CreateToken arm routes the spawn to P0's bf under P0's
+         control on Rust, and Python's
+         ``CreateToken.resolve(state, controller_id=0, ...)`` spawns
+         under P0 the same way.
+
+      5. **Cross-engine assert (post-resolve parity):**
+         - P0's bf grew by exactly +2 (Glacier Godmaw +
+           freshly-spawned Lander artifact token).
+         - P1's bf is unchanged.
+         - The fresh token's ``controller_id`` is 0 on both
+           engines.
+         - The fresh token's printing name matches across engines.
+
+    Out of scope:
+
+      * Trample static keyword -- read at combat-time only; the
+        ETB trigger-dispatch is keyword-agnostic. Both engines
+        ignore the keyword field on a non-combat path. Not wired
+        on the bridge dict here (would require a keyword-set
+        substrate the bridge does not yet expose to the trigger
+        path).
+      * Landfall trigger sibling -- separate bridge widening: needs
+        a land-ETB event harness + multi-target mass-pump-until-
+        EOT-with-keyword-grant arm. Inject-and-fire-ENTERS bypasses
+        any land event and never fires this trigger.
+      * Lander's activated ramp ability -- activated cost + tap
+        cost + sacrifice cost + tutor substrate; no bridge arms.
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Cross-controller routing -- pinned by the I81 sister probe.
+      * count != 1 -- the bridge arm carries the count through;
+        all sister probes pin count=1.
+      * Tapped / attacking / each_player riders on the spawned
+        token -- Python-only flags with no Rust mirror today.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Glacier Godmaw on P0's battlefield (unchanged from inject;
+        controller=0).
+      * One Lander Token on P0's battlefield (newly spawned;
+        controller=0; printing name matches across engines).
+      * P1's battlefield: empty.
+      * No residual stack on either engine.
+      * Life totals unchanged on both seats.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+
+    # ---- Rust side: register Lander artifact token, then inject
+    # Glacier Godmaw onto P0's bf. ----
+    ZONE_LIBRARY = 1
+    ZONE_BATTLEFIELD = 2
+    rust_lander_token_dict = {
+        # Glacier Godmaw's reminder text: "It's an artifact with
+        # '{2}, {T}, Sacrifice this token: Search your library for
+        # a basic land card, ...'". Non-creature artifact: Artifact
+        # card_type ONLY, no Creature, no P/T.
+        "name": "Lander Token (Glacier Godmaw ETB)",
+        "card_types": ["Artifact"],
+        "subtypes": ["Lander"],
+    }
+    rust_token_pid = rust_state.registry_size  # next free pid
+    rust_state.register_and_inject_object(
+        rust_lander_token_dict, 1, ZONE_LIBRARY,
+    )
+
+    rust_godmaw_trigger_dict = {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token",
+            "count": 1,
+            "token_printing_id": rust_token_pid,
+        },
+    }
+    rust_godmaw_dict = {
+        "name": "Glacier Godmaw",
+        # Creature -- Leviathan carrier (novel subtype on this
+        # arm). Mono-G {5}{G}{G} (CMC 7), 6/6. Trample is a static
+        # keyword that the bridge dict does not carry today and is
+        # irrelevant to the ETB trigger-dispatch (see the
+        # out-of-scope list above). The Landfall sibling is also
+        # out of scope.
+        "card_types": ["Creature"],
+        "subtypes": ["Leviathan"],
+        "power": 6,
+        "toughness": 6,
+        "mana_cost": {"generic": 5, "G": 2},
+        "effects": [],
+        "triggered_abilities": [rust_godmaw_trigger_dict],
+    }
+
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_bf_p0_before = rust_state.battlefield_sizes[0]
+    rust_bf_p1_before = rust_state.battlefield_sizes[1]
+
+    # Inject onto P0's bf with controller=0. ENTERS fires; the
+    # trigger lands on the stack carrying controller=0 (same as
+    # active_player here).
+    rust_state.register_and_inject_object(
+        rust_godmaw_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Glacier Godmaw's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land CreateToken on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: register the Python token printing against
+    # Rust's pid via the bridge, build Glacier Godmaw's printing
+    # using the bridge translator on the SAME trigger dict, then
+    # inject onto P0's bf and dispatch ENTERS. ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings, register_token_printing,
+    )
+
+    # Lander is a non-creature artifact token (see all prior
+    # sisters); build the printing directly.
+    py_lander_token = CardPrinting(
+        name="Lander Token (Glacier Godmaw ETB)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line="Token Artifact -- Lander",
+        supertypes=("Token",),
+        card_types=("Artifact",),
+        subtypes=("Lander",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    clear_token_printings()
+    register_token_printing(rust_token_pid, py_lander_token)
+    py_godmaw_trigger = _ta_dict_to_python_triggered_ability(
+        rust_godmaw_trigger_dict
+    )
+    py_godmaw_printing = CardPrinting(
+        name="Glacier Godmaw",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=5, colored=(("G", 2),)),
+        type_line="Creature -- Leviathan",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Leviathan",),
+        power=6,
+        toughness=6,
+        produces=frozenset(),
+        triggered_abilities=(py_godmaw_trigger,),
+    )
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_bf_p0_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_before = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+
+    py_godmaw = py_state.new_object(
+        py_godmaw_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_godmaw.summoning_sick = False
+    py_godmaw.tapped = False
+    py_godmaw.damage = 0
+    py_godmaw.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_godmaw)
+    _trigger_etb_abilities(py_state, py_godmaw)
+    assert len(py_state.stack) == 1, (
+        "Python: Glacier Godmaw's arrival should fire the "
+        "IsSelf ENTERS trigger and land CreateToken on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # Drain both stacks.
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust observable: P0's bf grew by carrier + 1 token = +2;
+    # P1's bf unchanged.
+    rust_bf_p0_after = rust_state.battlefield_sizes[0]
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p0_after == rust_bf_p0_before + 2, (
+        f"Rust same-controller create_token: P0's bf should gain "
+        f"Glacier Godmaw + 1 Lander Token = +2 from baseline. "
+        f"Got bf_p0_before={rust_bf_p0_before}, "
+        f"bf_p0_after={rust_bf_p0_after}"
+    )
+    assert rust_bf_p1_after == rust_bf_p1_before, (
+        f"Rust: P1's bf should be unchanged. Got "
+        f"bf_p1_before={rust_bf_p1_before}, "
+        f"bf_p1_after={rust_bf_p1_after}"
+    )
+    rust_bf_snap = rust_state.battlefield_snapshot()
+    rust_lander_tokens = [
+        d for d in rust_bf_snap
+        if d["printing_name"]
+        == "Lander Token (Glacier Godmaw ETB)"
+    ]
+    assert len(rust_lander_tokens) == 1, (
+        f"Rust: expected exactly 1 Lander Token on the bf; got "
+        f"{len(rust_lander_tokens)}"
+    )
+    assert rust_lander_tokens[0]["controller_id"] == 0, (
+        f"Rust same-controller contract: spawned Lander Token's "
+        f"controller_id must be 0 (source's controller). Got "
+        f"controller_id={rust_lander_tokens[0]['controller_id']}"
+    )
+
+    # Python observable: same shape.
+    py_bf_p0_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert py_bf_p0_after == py_bf_p0_before + 2, (
+        f"Python: P0's bf should gain Glacier Godmaw + 1 Lander "
+        f"Token = +2. Got bf_p0_before={py_bf_p0_before}, "
+        f"bf_p0_after={py_bf_p0_after}"
+    )
+    assert py_bf_p1_after == py_bf_p1_before, (
+        f"Python: P1's bf should be unchanged. Got "
+        f"bf_p1_before={py_bf_p1_before}, "
+        f"bf_p1_after={py_bf_p1_after}"
+    )
+    py_lander_tokens = [
+        o for o in py_state.battlefield
+        if o.printing.name
+        == "Lander Token (Glacier Godmaw ETB)"
+    ]
+    assert len(py_lander_tokens) == 1, (
+        f"Python: expected exactly 1 Lander Token on the bf; got "
+        f"{len(py_lander_tokens)}"
+    )
+    assert py_lander_tokens[0].controller_id == 0, (
+        f"Python: spawned Lander Token's controller_id must be 0. "
+        f"Got controller_id={py_lander_tokens[0].controller_id}"
+    )
+
+    # Cross-engine: lives unchanged on both sides (create_token
+    # doesn't touch life totals).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine bf-size parity (the post-drain observable).
+    assert rust_bf_p0_after == py_bf_p0_after
+    assert rust_bf_p1_after == py_bf_p1_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
