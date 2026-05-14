@@ -60,7 +60,340 @@ from mtg_bot.parity.cross_engine import (
 )
 
 
-__all__ = ["setup_matched_game", "MulliganDeterministicAgent"]
+__all__ = [
+    "setup_matched_game",
+    "MulliganDeterministicAgent",
+    "RealGameCombatAgent",
+    "CombatStrategy",
+    "drive_combat_phase",
+]
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 round-16: real-game combat agent (closes infrastructure gap #3).
+#
+# Round-13/14/15 trajectory tests drive multi-turn real-game combat using
+# inline scripts: each test re-spells out "find Bears with name == ...,
+# emit declare_attackers with [int(bears.id)], walk DA -> DB, emit
+# declare_blockers with [], side-channel combat damage, ...". As the
+# trajectory suite grows beyond a single attacker / single combat round,
+# inlining repeats and ad-hoc per-test combat scripts become the dominant
+# noise.
+#
+# RealGameCombatAgent is the round-16 promotion: a config-driven combat
+# decision source that walks the battlefield + per-object flags on each
+# call and emits the right action-dict for the current step. Same shape
+# as the round-14 MulliganDeterministicAgent — frozen-dataclass config,
+# stateless decision functions, Python-only (the action-dicts cross both
+# engines via the same `step_both` path the inline scripts use).
+#
+# Strategy vocabulary:
+#   - "attack_all"            — every unsick + untapped non-summoning-sick
+#                               creature attacks; defender doesn't block.
+#                               Same shape as combat_selector's attacker
+#                               branch.
+#   - "attack_all_block_smallest" — attackers as above; defender blocks
+#                               each attacker with their SMALLEST
+#                               available creature (by power, then
+#                               toughness, then id).
+#   - "no_attack"             — skip combat entirely; emit empty
+#                               declare_attackers + empty declare_blockers.
+#                               Pins the no-combat baseline path.
+#
+# The agent does NOT advance phases — it only emits the action-dict for
+# the current decision (declare_attackers OR declare_blockers OR pass).
+# Callers compose the agent with `_advance_n_phases` / `step_both` /
+# `resolve_combat_damage_python` etc. to drive a full combat round.
+# ---------------------------------------------------------------------------
+
+CombatStrategy = str  # one of: "attack_all", "attack_all_block_smallest", "no_attack"
+
+_VALID_COMBAT_STRATEGIES: frozenset[str] = frozenset(
+    {"attack_all", "attack_all_block_smallest", "no_attack"}
+)
+
+
+@dataclass(frozen=True)
+class RealGameCombatAgent:
+    """Cross-engine deterministic combat policy for real-game trajectories.
+
+    Closes Phase 6 infrastructure gap #3: a config-driven combat
+    decision source that drives multi-turn real-game combat via a
+    deterministic strategy. Same shape as
+    :class:`MulliganDeterministicAgent` — stateless, observation-driven,
+    same emission on both engines.
+
+    Parameters
+    ----------
+    strategy : str, default "attack_all"
+        One of:
+
+        * ``"attack_all"`` — at DECLARE_ATTACKERS, every unsick + untapped
+          creature the active player controls attacks the opponent; at
+          DECLARE_BLOCKERS, defender declines to block (empty
+          assignments).
+        * ``"attack_all_block_smallest"`` — same attacker selection;
+          at DECLARE_BLOCKERS, defender blocks each attacker with their
+          SMALLEST available creature, sorted by ``(power, toughness,
+          id)``. One blocker per attacker (no multi-block); if defender
+          has fewer eligible blockers than attackers, the lowest-id
+          attackers get blocked first.
+        * ``"no_attack"`` — at DECLARE_ATTACKERS, emit empty attacker
+          set; at DECLARE_BLOCKERS, emit empty assignments. Combat
+          becomes a no-op; useful for tests that want to drive land
+          drops + creature ETBs across multiple turns without combat
+          damage.
+
+    Notes
+    -----
+    The agent reads the PYTHON state (``py_state``) for decision
+    construction. Both engines maintain byte-equal field views by the
+    Phase 5 / Phase 6 invariants, so reading from Python and applying
+    on both engines via :func:`mtg_bot.parity.cross_engine.step_both`
+    produces identical post-state. (The same shape Phase 5's
+    ``combat_selector`` uses internally — it reads ``py_state``, emits
+    the action-dict, the harness applies it on both sides.)
+
+    The agent does NOT touch RNG. Combat decisions are pure functions
+    of the visible battlefield + per-object flags. Two calls with the
+    same agent + same observable state produce identical output.
+
+    The agent does NOT advance phases. The caller composes phase
+    advances around the agent's emit. The
+    :func:`drive_combat_phase` helper composes the standard pattern
+    (DECLARE_ATTACKERS -> DECLARE_BLOCKERS -> COMBAT_DAMAGE ->
+    END_OF_COMBAT) for callers that don't need step-by-step control.
+    """
+
+    strategy: CombatStrategy = "attack_all"
+
+    def __post_init__(self) -> None:  # pragma: no cover — frozen guard
+        if self.strategy not in _VALID_COMBAT_STRATEGIES:
+            raise ValueError(
+                f"strategy={self.strategy!r} not supported. "
+                f"Valid: {sorted(_VALID_COMBAT_STRATEGIES)}"
+            )
+
+    # -- Decision functions --------------------------------------------------
+
+    def pick_attackers(self, py_state) -> list[int]:
+        """Pick the active player's attacker ids for DECLARE_ATTACKERS.
+
+        Returns a sorted list of ids. ``"no_attack"`` always returns
+        ``[]``. ``"attack_all"`` and ``"attack_all_block_smallest"``
+        return every unsick + untapped Creature controlled by the
+        active player that hasn't already been declared as an attacker
+        this turn (the ``not o.attacking`` guard prevents double-emit
+        on a re-visit to the step).
+        """
+        if self.strategy == "no_attack":
+            return []
+        active_idx = py_state.active_player_idx
+        return sorted(
+            int(o.id) for o in py_state.battlefield
+            if o.controller_id == active_idx
+            and "Creature" in o.printing.card_types
+            and not o.tapped
+            and not o.summoning_sick
+            and not getattr(o, "attacking", False)
+        )
+
+    def pick_blocks(self, py_state) -> list[list[int]]:
+        """Pick the defender's block assignments for DECLARE_BLOCKERS.
+
+        Returns a list of ``[blocker_id, attacker_id]`` pairs — the
+        same shape Rust's ``Action::DeclareBlockers`` accepts and
+        Python's ``DeclareBlockers(assignments=...)`` consumes after
+        the harness's tuple-conversion.
+
+        ``"no_attack"`` and ``"attack_all"`` return ``[]`` (no blocks).
+        ``"attack_all_block_smallest"`` walks attackers in id-sort order
+        and assigns the defender's smallest-power-then-toughness-then-id
+        creature to each, one blocker per attacker. Already-assigned
+        blockers are removed from the eligible pool so we don't
+        double-assign.
+
+        Smallest-creature selection is deterministic: sorted by
+        ``(power, toughness, id)`` so ties break the same way on every
+        call. Power is read from ``printing.power`` (synthetic vanilla
+        decks have static p/t; +1/+1 counters and continuous effects
+        are NOT modeled here — the Phase 6 trajectory deck shape uses
+        pure vanilla creatures).
+        """
+        if self.strategy != "attack_all_block_smallest":
+            return []
+
+        attackers = [
+            o for o in py_state.battlefield
+            if getattr(o, "attacking", False)
+        ]
+        if not attackers:
+            return []
+
+        active_idx = py_state.active_player_idx
+        defender_idx = 1 - active_idx
+
+        # Defender's eligible blockers: untapped Creatures defender
+        # controls. CR 509.1b — tapped creatures can't block. CR 302.1
+        # allows summoning-sick creatures TO block (sickness only
+        # blocks tap-to-attack and tap-to-activate), so we keep
+        # summoning-sick creatures eligible to block. Filter out
+        # creatures already assigned blocking somewhere via the
+        # per-object ``blocking`` flag (in case of re-visits).
+        eligible = [
+            o for o in py_state.battlefield
+            if o.controller_id == defender_idx
+            and "Creature" in o.printing.card_types
+            and not o.tapped
+            and not getattr(o, "blocking", False)
+        ]
+        if not eligible:
+            return []
+
+        # Sort by (power, toughness, id). printing.power can be None
+        # for non-creatures, but the eligible list is filtered to
+        # Creatures so power is set. Cast to int for the sort key.
+        def _smallest_key(o):
+            p = int(getattr(o.printing, "power", 0) or 0)
+            t = int(getattr(o.printing, "toughness", 0) or 0)
+            return (p, t, int(o.id))
+
+        eligible_sorted = sorted(eligible, key=_smallest_key)
+
+        # Walk attackers in id order (matches the attacker emit order
+        # from pick_attackers); assign smallest available blocker.
+        attackers_by_id = sorted(attackers, key=lambda o: int(o.id))
+        assignments: list[list[int]] = []
+        used_blocker_ids: set[int] = set()
+        for atk in attackers_by_id:
+            for blk in eligible_sorted:
+                if int(blk.id) in used_blocker_ids:
+                    continue
+                assignments.append([int(blk.id), int(atk.id)])
+                used_blocker_ids.add(int(blk.id))
+                break  # one blocker per attacker for this strategy
+            # If no blocker available, attacker goes through unblocked.
+        return assignments
+
+
+def drive_combat_phase(
+    py_state, rust_state, agent: RealGameCombatAgent,
+) -> None:
+    """Drive one combat phase end-to-end with the supplied agent.
+
+    Pre-condition: ``py_state.step == Step.DECLARE_ATTACKERS`` (i.e.,
+    the caller has already advanced phases past PRECOMBAT_MAIN ->
+    BEGINNING_OF_COMBAT). Post-condition:
+    ``py_state.step == Step.END_OF_COMBAT`` with combat state cleared
+    and parity asserted on every intermediate compare.
+
+    Composes the standard "attacker emit -> advance -> blocker emit ->
+    advance -> combat damage -> advance -> clear combat" sequence the
+    round-13/14/15 inline scripts spell out by hand. Each step asserts
+    byte-equal field views on both engines; the first divergence
+    raises an AssertionError naming the step.
+
+    The advance from END_OF_COMBAT into POSTCOMBAT_MAIN is NOT done
+    here — the caller drives that via ``_advance_n_phases`` so the
+    helper's post-condition is the same as the inline scripts'.
+
+    For ``"no_attack"`` strategy: emits ``declare_attackers`` with
+    empty list, walks past blockers + damage steps with no-op effect.
+    """
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python,
+        clear_combat_both,
+        compare_fields,
+        deal_combat_damage_rust,
+        resolve_combat_damage_python,
+        step_both,
+    )
+    from mtg_bot.turn import Step
+
+    if py_state.step != Step.DECLARE_ATTACKERS:
+        raise ValueError(
+            f"drive_combat_phase requires step=DECLARE_ATTACKERS; "
+            f"got step={py_state.step.name}"
+        )
+
+    # 1. DECLARE_ATTACKERS — emit attacker dict.
+    attackers = agent.pick_attackers(py_state)
+    s = step_both(
+        py_state, rust_state,
+        {"kind": "declare_attackers", "attacker_ids": attackers},
+    )
+    if s.divergences:
+        raise AssertionError(
+            f"declare_attackers (step=DA, attackers={attackers}) "
+            f"surfaced divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+        )
+
+    # 2. DA -> DB advance.
+    advance_phase_python(py_state)
+    rust_state.advance_phase()
+    assert py_state.step == Step.DECLARE_BLOCKERS, (
+        f"expected DECLARE_BLOCKERS after advance, got {py_state.step.name}"
+    )
+
+    # 3. DECLARE_BLOCKERS — emit blocker dict.
+    assignments = agent.pick_blocks(py_state)
+    s = step_both(
+        py_state, rust_state,
+        {"kind": "declare_blockers", "assignments": assignments},
+    )
+    if s.divergences:
+        raise AssertionError(
+            f"declare_blockers (assignments={assignments}) surfaced "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+        )
+
+    # 4. DB -> COMBAT_DAMAGE advance.
+    advance_phase_python(py_state)
+    rust_state.advance_phase()
+    assert py_state.step == Step.COMBAT_DAMAGE, (
+        f"expected COMBAT_DAMAGE after advance, got {py_state.step.name}"
+    )
+
+    # 5. COMBAT_DAMAGE — side-channel damage on both engines.
+    fired_py = resolve_combat_damage_python(py_state)
+    if fired_py:
+        deal_combat_damage_rust(rust_state)
+    # Post-damage compare.
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view,
+        parity_smoke,
+    )
+    ps = parity_smoke()
+    py_view = build_python_field_view(py_state)
+    rust_view = ps._build_field_view(rust_state)
+    divs = compare_fields(py_view, rust_view)
+    if divs:
+        raise AssertionError(
+            f"post combat-damage divergences: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+        )
+
+    # 6. COMBAT_DAMAGE -> END_OF_COMBAT advance.
+    advance_phase_python(py_state)
+    rust_state.advance_phase()
+    assert py_state.step == Step.END_OF_COMBAT, (
+        f"expected END_OF_COMBAT after advance, got {py_state.step.name}"
+    )
+
+    # 7. Clear combat state on both engines (matches the
+    # ``simulate.run_step`` END_OF_COMBAT hook). Without this Rust's
+    # ``self.attackers`` would persist past the turn.
+    clear_combat_both(py_state, rust_state)
+    py_view = build_python_field_view(py_state)
+    rust_view = ps._build_field_view(rust_state)
+    divs = compare_fields(py_view, rust_view)
+    if divs:
+        raise AssertionError(
+            f"post clear-combat divergences: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+        )
 
 
 @dataclass(frozen=True)
