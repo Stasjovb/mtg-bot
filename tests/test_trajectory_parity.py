@@ -1651,3 +1651,217 @@ def test_real_game_combat_first_strike_parity():
         "expected first-strike combat to either kill p1's Bears or "
         "land damage on p1; got neither"
     )
+
+
+# ===========================================================================
+# Phase 6 round-17 enhancement: production-shape decklist trajectories.
+#
+# These tests drive the trajectory machinery on REAL EoE decks loaded
+# from data/17lands/eoe_decks.json.gz (the same source self-play /
+# iterate consume), via the round-17 helpers in mtg_bot.parity.trajectory:
+#   - load_production_deck(archetype) — load one EoE deck's name list.
+#   - production_deck_to_deckspec(...) — filter to bridge-supported
+#     cards + pad to 60 + build matched DeckSpec.
+#   - setup_matched_game_from_real_decks(...) — one-shot wrapper.
+#
+# The bridge filter (see slice 2 commit + trajectory.py docstring) is
+# conservative: only basic lands + vanilla creatures survive. EoE
+# vanilla creatures are scarce (~5 in the whole pool); most production
+# decks reduce to "basic lands + 0-2 vanilla creatures" after filter.
+# These tests pin that the filtered shape DOES round-trip cleanly
+# across engines on a real-game-shaped trajectory.
+# ===========================================================================
+
+
+def test_real_eoe_deck_setup_matched_game_parity():
+    """Load a real EoE deck (archetype 0), build matched states, assert
+    byte-equal field views.
+
+    Pins: the production-deck loader produces a parity-clean opening
+    state on both engines. Same shape as the round-13 vanilla-60
+    seed but driven by a REAL EoE decklist (and the registry built
+    from real CardPrinting data filtered through the round-17 bridge).
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+
+    cards = trajectory.load_production_deck(0)
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42,
+    )
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"production-deck setup diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
+    assert len(py_view["hand_p0"]) == 7
+    assert len(py_view["hand_p1"]) == 7
+    # Library is 60 (padded) - 7 dealt = 53 on both sides.
+    assert len(py_view["library_p0"]) == 53
+    assert len(py_view["library_p1"]) == 53
+
+
+def test_real_eoe_deck_no_op_first_turn_parity():
+    """Drive turn 1's full no-op walk on a real EoE deck; assert byte-
+    equal field views at every phase boundary.
+
+    Same invariants as the synthetic-60 ``test_no_op_first_turn_parity``
+    but on the real-EoE-loaded shape. Surfaces any cross-engine
+    bookkeeping bug that requires a non-mono-color registry to manifest
+    (basic lands of multiple colors register on Rust + Python with
+    different ``mana_produced`` colors; the round-13 vanilla-60 deck
+    is mono-G so this case wasn't probed).
+    """
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python,
+        compare_fields,
+    )
+    from mtg_bot.parity import trajectory
+
+    cards = trajectory.load_production_deck(0)
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42,
+    )
+
+    # Walk 12 phase advances: 11 to walk turn 1 UNTAP -> CLEANUP, then
+    # one more for the CLEANUP -> turn 2 UNTAP wrap.
+    for advance_idx in range(12):
+        advance_phase_python(py_state)
+        rust_state.advance_phase()
+        py_view, rust_view = _step_views(py_state, rust_state)
+        divs = compare_fields(py_view, rust_view)
+        assert divs == [], (
+            f"advance #{advance_idx} ({py_view['step']!r}, turn "
+            f"{py_view['turn']}) on real EoE deck surfaced "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+        )
+    # Post-walk: at turn 2 UNTAP with active player p1.
+    py_view, _rust_view = _step_views(py_state, rust_state)
+    assert py_view["turn"] == 2
+    assert py_view["step"] == "UNTAP"
+
+
+def test_real_eoe_deck_play_basic_land_turn_1_parity():
+    """Walk to turn 1 PRECOMBAT_MAIN on a real EoE deck and play
+    whatever basic land the active player has in hand.
+
+    The 17lands deck pool's first deck (archetype 0) is a 3-color
+    UWG-archetype with several basic Forests / Islands / Plains in
+    its 40-card list — after the round-17 filter + pad to 60, p0's
+    opening hand is highly likely to contain a basic land. Asserts
+    the play_land action round-trips cleanly cross-engine on the
+    production-shape registry.
+    """
+    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity import trajectory
+
+    cards = trajectory.load_production_deck(0)
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42,
+    )
+    _advance_n_phases(py_state, rust_state, 3)
+    # Find ANY basic land in p0's hand (the production-deck filter
+    # ensures lands in the registry are basic).
+    p0_hand = py_state.players[0].hand
+    land = next(
+        (o for o in p0_hand if o.printing.is_land),
+        None,
+    )
+    assert land is not None, (
+        f"seed=42 opening hand for p0 contains no basic land: "
+        f"{[o.printing.name for o in p0_hand]}"
+    )
+    s = step_both(
+        py_state, rust_state,
+        {"kind": "play_land", "card_id": int(land.id)},
+    )
+    assert s.divergences == [], (
+        f"production-deck play_land surfaced divergences: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+    )
+    # The land is on the bf and p0 hand is down to 6.
+    py_view = s.py_view
+    assert len(py_view["battlefield"]) == 1
+    assert py_view["battlefield"][0][0] == land.printing.name
+    assert len(py_view["hand_p0"]) == 6
+
+
+# ---------------------------------------------------------------------------
+# Round-17 enhancement: trajectory tests for the new RealGameCombatAgent
+# strategies (block_with_largest_able, attack_with_unblockable_creatures_only,
+# optimal_no_loss_attack). Mirror shape of the round-16 strategy tests but
+# exercise the new strategies on the synthetic-60 vanilla deck.
+# ---------------------------------------------------------------------------
+
+
+def test_real_game_combat_block_with_largest_able_parity():
+    """``RealGameCombatAgent("block_with_largest_able")`` with one
+    attacker + one blocker: same byte-equal outcome as
+    ``attack_all_block_smallest`` because there's only one blocker,
+    so "smallest" and "largest" coincide.
+
+    Pins: the new strategy round-trips cleanly cross-engine on the
+    synthetic-60 trajectory shape. With multiple blockers the
+    behavior diverges from smallest, but the synthetic-60 deck only
+    has 1 Bears per player after the standard prefix. Test passes
+    today; future enhancement adds a multi-blocker test once a
+    deckspec with 2+ blockers per player exists.
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _setup_both_bears_by_turn_6(py_state, rust_state)
+
+    _advance_n_phases(py_state, rust_state, 12 + 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    agent = trajectory.RealGameCombatAgent(strategy="block_with_largest_able")
+    trajectory.drive_combat_phase(py_state, rust_state, agent)
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    # Mutual KO: both Bears in graveyards (same 2/2 vs 2/2 trade as
+    # smallest-blocker test).
+    p0_gy_names = [entry[0] for entry in py_view["graveyard_p0"]]
+    p1_gy_names = [entry[0] for entry in py_view["graveyard_p1"]]
+    assert "Grizzly Bears" in p0_gy_names
+    assert "Grizzly Bears" in p1_gy_names
+
+
+def test_real_game_combat_optimal_no_loss_attack_skips_unsafe_parity():
+    """``RealGameCombatAgent("optimal_no_loss_attack")`` skips attacks
+    where the defender's bf has a creature that can trade up.
+
+    Setup: both players have a Bears 2/2 on bf (turn 7 on the
+    standard prefix). p0's Bears (toughness=2) is UNSAFE because
+    p1's Bears (power=2) can trade. Strategy declines to attack;
+    p1's life stays 20 on both engines.
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _setup_both_bears_by_turn_6(py_state, rust_state)
+
+    _advance_n_phases(py_state, rust_state, 12 + 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    agent = trajectory.RealGameCombatAgent(strategy="optimal_no_loss_attack")
+    trajectory.drive_combat_phase(py_state, rust_state, agent)
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    # p1 took no damage — p0 declined to attack.
+    assert py_view["life_p1"] == 20
+    # Bears still on bf, not in any graveyard.
+    p0_gy = [entry[0] for entry in py_view["graveyard_p0"]]
+    p1_gy = [entry[0] for entry in py_view["graveyard_p1"]]
+    assert "Grizzly Bears" not in p0_gy
+    assert "Grizzly Bears" not in p1_gy
