@@ -1776,6 +1776,9 @@ pub fn make_synthetic_state(
         // ``CardPrinting.subtypes=("Forest",)`` at
         // ``cross_engine.py:6337`` for the synthetic Forest printing.
         subtypes: vec!["Forest".to_string()],
+        // Forest's printed type line is "Basic Land — Forest"
+        // (CR 205.4 supertype). Round-30 supertypes substrate.
+        supertypes: vec!["Basic".to_string()],
         keywords: Vec::new(),
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
@@ -1800,6 +1803,9 @@ pub fn make_synthetic_state(
         // (CR 205.3m creature subtype) — mirrors Python's
         // ``subtypes=("Bear",)`` at ``cross_engine.py:6585``.
         subtypes: vec!["Bear".to_string()],
+        // Round-30 supertypes substrate: Grizzly Bears has no
+        // supertype prefix on its type line.
+        supertypes: Vec::new(),
         keywords: Vec::new(),
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),
@@ -1837,6 +1843,9 @@ pub fn make_synthetic_state(
         // synthetic state's Elves shim is already an oversimplification
         // (see the comment above on its activated-ability shape).
         subtypes: vec!["Elf".to_string()],
+        // Round-30 supertypes substrate: Llanowar Elves has no
+        // supertype prefix on its type line.
+        supertypes: Vec::new(),
         keywords: Vec::new(),
         etb_effects: Vec::new(),
         triggered_abilities: Vec::new(),

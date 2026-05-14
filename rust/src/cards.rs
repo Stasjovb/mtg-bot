@@ -2973,6 +2973,38 @@ pub struct CardPrinting {
     /// `#[serde(default)]`-equivalent shape — keeps every pre-substrate
     /// registry-dict caller working without modification).
     pub subtypes: Vec<String>,
+    /// MTG card supertypes: "Basic", "Legendary", "Snow", "World",
+    /// "Token". Empty Vec when the type line has no supertype prefix
+    /// (most cards). Stored as Title Case strings exactly as printed
+    /// — case-sensitive comparison via
+    /// `supertypes.iter().any(|s| s == "Legendary")` is the canonical
+    /// consumer pattern.
+    ///
+    /// **Use cases.** Distinguishes basic vs non-basic lands
+    /// (`is_basic_land` = `card_types contains "Land"` AND
+    /// `supertypes contains "Basic"`); legendary-rule processing
+    /// (`is_legendary` = `supertypes contains "Legendary"`); tutor
+    /// filters that scope by supertype (`legendary_creature` filter
+    /// in `Effect::SearchLibraryForCard`).
+    ///
+    /// Mirrors Python's `CardPrinting.supertypes: tuple[str, ...]`
+    /// at `src/mtg_bot/cards/base.py:499`. Registry-dict input under
+    /// the `supertypes` key; missing key parses to empty Vec
+    /// (back-compat — every pre-supertypes registry dict implicitly
+    /// omits the key, matches the `subtypes` substrate's parse shape).
+    ///
+    /// **Round 30 substrate.** Added to unblock the
+    /// `legendary_creature` filter on `Effect::SearchLibraryForCard`
+    /// (round-21 bridge slice's deferred filter list — see
+    /// state_ops_resolve.rs `SearchLibraryForCard` arm). Pre-Round-30
+    /// the field didn't exist; the legacy `is_basic_land` proxy in
+    /// `SearchLibraryForBasicLandTapped`'s arm comment is now
+    /// historical (it still uses `card_types contains "Land"` because
+    /// every EoE basic land has card_types=["Land"] and no compound
+    /// non-basic land routes through that arm — keeping the proxy
+    /// avoids a behavior change for any in-flight fixture without
+    /// `supertypes` set).
+    pub supertypes: Vec<String>,
     /// Static keyword abilities printed on the card. Stored as
     /// lowercase strings ("flying", "vigilance", "trample",
     /// "first strike", "double strike", "deathtouch", "lifelink",
@@ -4752,6 +4784,30 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    // Supertypes substrate (Round 30): `supertypes` defaults to empty
+    // Vec when absent (back-compat — every pre-Round-30 registry dict
+    // implicitly omits the key). Same parse shape as `subtypes`.
+    // Stored as Title Case strings exactly as printed ("Basic",
+    // "Legendary", "Snow", "World", "Token"); consumers do
+    // case-sensitive `contains`.
+    let supertypes = match dict.get_item("supertypes")? {
+        Some(st_any) => {
+            let iter = st_any.try_iter().map_err(|_| {
+                PyValueError::new_err(
+                    "supertypes must be an iterable of supertype strings",
+                )
+            })?;
+            let mut out = Vec::new();
+            for item in iter {
+                let s: String = item?.extract().map_err(|_| {
+                    PyValueError::new_err("supertypes entries must be strings")
+                })?;
+                out.push(s);
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     let keywords = match dict.get_item("keywords")? {
         Some(kw_any) => {
             let iter = kw_any.try_iter().map_err(|_| {
@@ -4878,6 +4934,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         mana_produced,
         card_types,
         subtypes,
+        supertypes,
         keywords,
         etb_effects,
         triggered_abilities,
@@ -5806,6 +5863,14 @@ impl Registry {
     /// `CardPrinting.subtypes: tuple[str, ...]`.
     fn get_printing_subtypes(&self, id: u32) -> PyResult<Vec<String>> {
         Ok(self.lookup(id)?.subtypes.clone())
+    }
+
+    /// MTG card supertypes: "Basic", "Legendary", "Snow", "World",
+    /// "Token". Empty when the type line has no supertype prefix.
+    /// Mirrors Python's `CardPrinting.supertypes: tuple[str, ...]`.
+    /// Round-30 substrate addition.
+    fn get_printing_supertypes(&self, id: u32) -> PyResult<Vec<String>> {
+        Ok(self.lookup(id)?.supertypes.clone())
     }
 
     /// Static printed keywords (lowercase): "flying", "vigilance",
