@@ -748,9 +748,13 @@ def _cycle_replays_payload(
     rows that predate the fan-out still render).
 
     Descendants come from a recursive CTE on ``runs.parent_run_id``;
-    shards under stages are reached transitively. Each descendant's
-    subdir is globbed non-recursively (captures are leaves), and
-    the union becomes the cycle's listing.
+    shards are NOT separate ``runs`` rows (they live as
+    ``run_progress`` rows keyed on ``(stage_run_id, shard_label)``),
+    so for each descendant we ALSO read its per-shard labels and
+    synthesize the subdir name as ``<descendant_id>_shard_<label>``
+    (``distributed.py`` line 4977's ``run_id_full`` convention).
+    Each subdir is globbed non-recursively (captures are leaves),
+    and the union becomes the cycle's listing.
 
     Returns the same envelope shape as the non-cycle branch so the
     JS doesn't need a discriminator: ``replays_dir`` (root str),
@@ -758,7 +762,7 @@ def _cycle_replays_payload(
     """
     replays_root_str = run.get("replays_dir") or "replays"
     replays_root = Path(replays_root_str)
-    descendants: list[str] = []
+    subdir_ids: list[str] = []
     conn = _open_conn(progress_dir)
     if conn is not None:
         try:
@@ -775,17 +779,30 @@ def _cycle_replays_payload(
                 (run_id,),
             )
             descendants = [row[0] for row in cur.fetchall()]
+            for descendant_id in descendants:
+                subdir_ids.append(descendant_id)
+                shard_rows = conn.execute(
+                    """
+                    SELECT shard_label FROM run_progress
+                    WHERE run_id = ? AND shard_label IS NOT NULL
+                    """,
+                    (descendant_id,),
+                ).fetchall()
+                for (shard_label,) in shard_rows:
+                    subdir_ids.append(
+                        f"{descendant_id}_shard_{shard_label}",
+                    )
         finally:
             conn.close()
     replays: list[dict[str, str]] = []
-    for descendant_id in descendants:
-        subdir = replays_root / descendant_id
+    for subdir_id in subdir_ids:
+        subdir = replays_root / subdir_id
         if not subdir.is_dir():
             continue
         for path in sorted(subdir.glob("*.json.gz")):
             replays.append({
                 "filename": path.name,
-                "subpath": f"{descendant_id}/{path.name}",
+                "subpath": f"{subdir_id}/{path.name}",
             })
     return {
         "replays_dir": str(replays_root),
