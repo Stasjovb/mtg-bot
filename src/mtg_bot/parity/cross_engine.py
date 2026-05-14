@@ -245,6 +245,106 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return DealDamageEachOpponent(
             amount=eff_dict.get("amount", 0),
         )
+    if kind == "deal_damage":
+        # "Deal N damage to target X." Rust's
+        # ``Effect::DealDamage { amount: i32, target: TargetFilter }``
+        # is the single-target burn arm; its ``parse_effect`` arm at
+        # cards.rs:2804-2812 requires both an ``amount`` field and a
+        # ``target`` dict (parsed via ``parse_target_filter``). The
+        # resolve arm at state_ops_resolve.rs:740-790 honors BOTH
+        # AnyPlayer and AnyCreature filter shapes via separate match
+        # arms (a true parametric-target arm — distinct from the
+        # sibling ``destroy_target`` / ``exile_target`` /
+        # ``return_to_hand`` arms which only honor AnyCreature). The
+        # defender derivation routes through the I67 controller-of-
+        # effect substrate (``current_resolve_source_controller`` with
+        # active_player fallback) so cross-controller burn (a flicker
+        # re-ETB firing while the OTHER seat is active) targets the
+        # SOURCE's controller's opponent correctly.
+        #
+        # **Rust target-pick semantics.** For ``AnyPlayer``, Rust
+        # damages the defending player directly (the source's
+        # controller's opponent). For ``AnyCreature``, Rust scans the
+        # defender's bf for ``bf[0]`` (the same first-slice picker
+        # shortcut used by destroy_target / exile_target / return_to_
+        # hand — bare ``AnyCreature`` actually picks bf[0] regardless
+        # of card-type filter at this layer).
+        #
+        # **Python target-pick semantics.** Python's ``DealDamage``
+        # base class (effects/generic/damage.py:30) drives off
+        # ``targets: tuple`` -- a tuple of ``TargetSpec`` slots. For
+        # the AnyCreature filter, the bridge constructs
+        # ``DealDamage(amount=N, targets=(TargetSpec(IsCreature()),))``;
+        # for AnyPlayer, ``DealDamage(amount=N,
+        # targets=(TargetSpec(IsPlayer()),))``. The targeting pipeline
+        # picks at PUSH time via ``push_triggered_ability`` -> the
+        # source-controller's ``agent.choose_target`` over the
+        # legal_targets pool, and ``DealDamage.resolve`` re-verifies
+        # the slot's filter at fire time per CR 608.2b before invoking
+        # ``_apply_damage(state, chosen, amount)``.
+        #
+        # Probes that drive this arm cross-engine seat
+        # ``_PickFirstOpponentTargetAgent`` (or the creature-preferred
+        # variant) on the source's controller -- the agent's
+        # opponent-controller filter mirrors Rust's defender-side scan
+        # exactly on the 2-player harness.
+        #
+        # **Filter narrowness asymmetry note.** Mirrors the
+        # destroy_target / exile_target / return_to_hand arm notes:
+        # Rust's first-slice ``AnyCreature`` picker doesn't actually
+        # filter to creatures (picks ``bf[0]`` blindly); Python's
+        # ``IsCreature()`` slot filter does. On synthetic probes that
+        # seat only creatures on the defender's bf, this asymmetry
+        # collapses. The ``AnyPlayer`` filter has no such asymmetry
+        # — both engines pick the defending player directly.
+        #
+        # **Distinct from ``deal_damage_any_target``** (the
+        # ``DealDamageAnyTarget`` arm, already on the bridge). That
+        # variant is a unit "any target" filter (creature OR player,
+        # CR 115.4) with deterministic Rust at-resolve picking; the
+        # ``deal_damage`` arm here is filter-parametric (the caller
+        # picks AnyCreature OR AnyPlayer at register time) and uses
+        # the standard PUSH-time agent-driven target selection on
+        # the Python side.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:2804-2812)
+        # which requires ``amount`` and ``target``. Filter-kind
+        # allowlist honors BOTH ``any_creature`` and ``any_player``
+        # (the full parse_target_filter accept set at
+        # cards.rs:2790-2799) since the Rust resolve arm honors both;
+        # this is the first bridge arm to cover the wider
+        # ``any_player`` variant.
+        from mtg_bot.effects.generic.damage import DealDamage
+        from mtg_bot.effects.object_predicates import IsCreature, IsPlayer
+        from mtg_bot.effects.targets import TargetSpec
+        amount = eff_dict.get("amount", 0)
+        target_dict = eff_dict.get("target")
+        # Lenient-default behavior mirrors the destroy_target /
+        # exile_target / return_to_hand arms (missing ``target``
+        # defaults to ``any_creature``); bridge consumers SHOULD pass
+        # ``target`` explicitly to keep round-trip dict-shape
+        # consistency with what Rust's parser accepts.
+        target_kind = (
+            target_dict.get("kind", "any_creature")
+            if isinstance(target_dict, dict)
+            else "any_creature"
+        )
+        if target_kind == "any_creature":
+            slot_filter = IsCreature()
+        elif target_kind == "any_player":
+            slot_filter = IsPlayer()
+        else:
+            raise ValueError(
+                f"cross_engine deal_damage bridge: unsupported "
+                f"target filter kind {target_kind!r} (Rust's "
+                f"parse_target_filter at cards.rs:2790-2799 accepts "
+                f"only 'any_player' and 'any_creature'; deal_damage "
+                f"honors both)"
+            )
+        return DealDamage(
+            amount=amount,
+            targets=(TargetSpec(slot_filter),),
+        )
     if kind == "deal_damage_any_target":
         # Targeted "deals N damage to any target" (CR 115.4 — the
         # legal-target kinds are creature / planeswalker / battle /
