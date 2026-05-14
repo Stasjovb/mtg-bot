@@ -4957,7 +4957,7 @@ def test_mark_shard_progress_failed_swallows_write_errors(
 # Pin: every per-shard SSH call goes through ``_run_subprocess`` with a
 # bounded ``timeout`` so a Tailscale-keeps-the-TCP-alive hang can't wedge
 # the orchestrator forever. The default is _DEFAULT_SHARD_SSH_TIMEOUT_S
-# (90 min); the orchestrator threads through the value provided by the
+# (360 min); the orchestrator threads through the value provided by the
 # caller. If the timeout fires, master's per-shard try/except catches
 # ``TimeoutExpired`` and the rsync-recovery flow runs in finally.
 
@@ -4979,8 +4979,8 @@ def test_shard_ssh_timeout_default_is_finite_and_threaded(monkeypatch):
     # default constant should be > 0 and finite.
     assert dmod._DEFAULT_SHARD_SSH_TIMEOUT_S > 0
     assert dmod._DEFAULT_SHARD_SSH_TIMEOUT_S < 24 * 60 * 60  # < 1 day
-    # 90-min default specifically is the documented value.
-    assert dmod._DEFAULT_SHARD_SSH_TIMEOUT_S == 90 * 60
+    # 360-min default specifically is the documented value.
+    assert dmod._DEFAULT_SHARD_SSH_TIMEOUT_S == 360 * 60
 
 
 def test_run_shard_remote_uses_supplied_ssh_timeout(monkeypatch, tmp_path):
