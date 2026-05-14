@@ -106,11 +106,52 @@ __all__ = [
 # `resolve_combat_damage_python` etc. to drive a full combat round.
 # ---------------------------------------------------------------------------
 
-CombatStrategy = str  # one of: "attack_all", "attack_all_block_smallest", "no_attack"
+CombatStrategy = str  # see _VALID_COMBAT_STRATEGIES
 
+# Round-17 enhancement (production-decklists slice): three new strategies
+# that exercise richer attacker / blocker logic than the round-16
+# attack_all / attack_all_block_smallest / no_attack triad. Each new
+# strategy is a pure function of observable battlefield state — no
+# new RNG, no per-side asymmetry, agent stays stateless.
+#
+# - "attack_with_unblockable_creatures_only" — only declare attackers
+#   that carry an evasion keyword (flying / unblockable / shadow / ...)
+#   the cross-engine harness understands. Defender does not block
+#   (vacuously — the attackers can't be legally blocked anyway, but
+#   we emit the empty assignment to make the no-block path explicit).
+#   Useful for trajectory probes that want a guaranteed-through-attack
+#   shape without involving block-assignment plumbing.
+# - "block_with_largest_able" — mirror of attack_all_block_smallest,
+#   but defender picks their LARGEST creature per attacker (sorted by
+#   (power desc, toughness desc, id asc)). Pins the inverted block
+#   selector — verifies that the agent's block-assignment shape doesn't
+#   accidentally hardcode "smallest" anywhere.
+# - "optimal_no_loss_attack" — only attack if the defender CAN'T block
+#   back-and-kill the attacker. For a vanilla creature with power P
+#   and toughness T, an attack is "no-loss" if no defender creature has
+#   power >= T (defender can't trade up: no single blocker can kill
+#   the attacker). Defender then declines blocking (empty assignments).
+#   Surfaces a non-trivial state-dependent attacker policy without
+#   needing to model deeper combat math.
 _VALID_COMBAT_STRATEGIES: frozenset[str] = frozenset(
-    {"attack_all", "attack_all_block_smallest", "no_attack"}
+    {
+        "attack_all",
+        "attack_all_block_smallest",
+        "no_attack",
+        "attack_with_unblockable_creatures_only",
+        "block_with_largest_able",
+        "optimal_no_loss_attack",
+    }
 )
+
+# Evasion keywords the harness recognizes for the
+# "attack_with_unblockable_creatures_only" strategy. Limited to the
+# keywords the cross-engine bridge wires symmetrically (same keyword
+# on Python's CardPrinting.keywords frozenset and Rust's
+# battlefield_has_keyword check). "flying" / "unblockable" / "shadow"
+# are the obvious ones; menace is NOT evasion-strict (it just requires
+# 2+ blockers, so it CAN be blocked and is excluded here).
+_EVASION_KEYWORDS: frozenset[str] = frozenset({"flying", "unblockable", "shadow"})
 
 
 @dataclass(frozen=True)
@@ -143,6 +184,27 @@ class RealGameCombatAgent:
           becomes a no-op; useful for tests that want to drive land
           drops + creature ETBs across multiple turns without combat
           damage.
+        * ``"attack_with_unblockable_creatures_only"`` — at
+          DECLARE_ATTACKERS, only declare attackers that carry an
+          evasion keyword (``"flying"`` / ``"unblockable"`` /
+          ``"shadow"``) the cross-engine bridge understands. At
+          DECLARE_BLOCKERS, emit empty assignments. Useful for
+          trajectory probes that want a guaranteed-unblocked attack
+          shape (e.g. lifelink trample probes that need the attacker
+          to land combat damage on the player).
+        * ``"block_with_largest_able"`` — mirror of
+          ``"attack_all_block_smallest"`` but defender picks their
+          LARGEST creature per attacker (sorted by ``(power desc,
+          toughness desc, id asc)``). Pins the inverted block selector;
+          attacker selection is identical to ``"attack_all"``.
+        * ``"optimal_no_loss_attack"`` — at DECLARE_ATTACKERS, only
+          declare attackers the defender CAN'T trade up against. For
+          a vanilla attacker with toughness T, the attack is "no-loss"
+          if no defender creature has ``power >= T`` (no single blocker
+          can kill the attacker). Defender then declines blocking
+          (empty assignments) — pins the attacker side. The "optimal"
+          label is light: no continuous-effect / counter / removal
+          tracking; just a static p/t comparison on the visible bf.
 
     Notes
     -----
@@ -179,24 +241,79 @@ class RealGameCombatAgent:
     def pick_attackers(self, py_state) -> list[int]:
         """Pick the active player's attacker ids for DECLARE_ATTACKERS.
 
-        Returns a sorted list of ids. ``"no_attack"`` always returns
-        ``[]``. ``"attack_all"`` and ``"attack_all_block_smallest"``
-        return every unsick + untapped Creature controlled by the
-        active player that hasn't already been declared as an attacker
-        this turn (the ``not o.attacking`` guard prevents double-emit
-        on a re-visit to the step).
+        Returns a sorted list of ids.
+
+        Strategy-specific filtering on top of the common eligibility
+        gate (untapped + unsick + not-already-attacking Creature
+        controlled by the active player):
+
+        * ``"no_attack"`` returns ``[]`` unconditionally.
+        * ``"attack_all"`` / ``"attack_all_block_smallest"`` /
+          ``"block_with_largest_able"`` return every eligible attacker.
+          (``block_with_largest_able`` only differs on the BLOCKER
+          side — it shares ``attack_all``'s attacker selection.)
+        * ``"attack_with_unblockable_creatures_only"`` returns only
+          eligible attackers carrying one of the
+          :data:`_EVASION_KEYWORDS`. Reads the keyword from
+          ``o.printing.keywords`` (Python's frozenset spelling — same
+          place :func:`mtg_bot.combat.effective_keywords` reads from
+          for the no-modifier case).
+        * ``"optimal_no_loss_attack"`` returns only eligible attackers
+          for which no defender creature on the bf has
+          ``power >= attacker.toughness``. Walks the defender's bf
+          per-attacker to compare static p/t only — no continuous
+          effect / counter modeling.
         """
         if self.strategy == "no_attack":
             return []
         active_idx = py_state.active_player_idx
-        return sorted(
-            int(o.id) for o in py_state.battlefield
+        defender_idx = 1 - active_idx
+        eligible = [
+            o for o in py_state.battlefield
             if o.controller_id == active_idx
             and "Creature" in o.printing.card_types
             and not o.tapped
             and not o.summoning_sick
             and not getattr(o, "attacking", False)
-        )
+        ]
+
+        if self.strategy == "attack_with_unblockable_creatures_only":
+            eligible = [
+                o for o in eligible
+                if _EVASION_KEYWORDS & set(
+                    getattr(o.printing, "keywords", frozenset())
+                )
+            ]
+        elif self.strategy == "optimal_no_loss_attack":
+            # Defender's eligible blockers (untapped Creatures defender
+            # controls — sick can still block per CR 302.1, so the
+            # filter mirrors pick_blocks's eligibility test).
+            defender_blockers = [
+                o for o in py_state.battlefield
+                if o.controller_id == defender_idx
+                and "Creature" in o.printing.card_types
+                and not o.tapped
+            ]
+            # An attacker is "no-loss" if no defender blocker has
+            # power >= attacker.toughness. Defender's largest power on
+            # bf is the bound; if that's < attacker.toughness, no single
+            # blocker can kill the attacker (multi-block sums power
+            # but defender CHOOSES whether to block, so "no-loss"
+            # against a non-blocking defender holds vacuously).
+            max_def_power = max(
+                (
+                    int(getattr(b.printing, "power", 0) or 0)
+                    for b in defender_blockers
+                ),
+                default=0,
+            )
+            eligible = [
+                o for o in eligible
+                if int(getattr(o.printing, "toughness", 0) or 0)
+                > max_def_power
+            ]
+
+        return sorted(int(o.id) for o in eligible)
 
     def pick_blocks(self, py_state) -> list[list[int]]:
         """Pick the defender's block assignments for DECLARE_BLOCKERS.
@@ -206,21 +323,32 @@ class RealGameCombatAgent:
         Python's ``DeclareBlockers(assignments=...)`` consumes after
         the harness's tuple-conversion.
 
-        ``"no_attack"`` and ``"attack_all"`` return ``[]`` (no blocks).
+        ``"no_attack"``, ``"attack_all"``,
+        ``"attack_with_unblockable_creatures_only"``, and
+        ``"optimal_no_loss_attack"`` return ``[]`` (no blocks).
+
         ``"attack_all_block_smallest"`` walks attackers in id-sort order
         and assigns the defender's smallest-power-then-toughness-then-id
         creature to each, one blocker per attacker. Already-assigned
         blockers are removed from the eligible pool so we don't
         double-assign.
 
-        Smallest-creature selection is deterministic: sorted by
+        ``"block_with_largest_able"`` mirrors the smallest selector but
+        sorts the eligible pool by ``(power desc, toughness desc, id
+        asc)`` so the LARGEST creature blocks first. The attacker walk
+        order (id-sort) is unchanged.
+
+        Block-eligible-creature selection is deterministic: sorted by
         ``(power, toughness, id)`` so ties break the same way on every
         call. Power is read from ``printing.power`` (synthetic vanilla
         decks have static p/t; +1/+1 counters and continuous effects
         are NOT modeled here — the Phase 6 trajectory deck shape uses
         pure vanilla creatures).
         """
-        if self.strategy != "attack_all_block_smallest":
+        if self.strategy not in (
+            "attack_all_block_smallest",
+            "block_with_largest_able",
+        ):
             return []
 
         attackers = [
@@ -253,12 +381,22 @@ class RealGameCombatAgent:
         # Sort by (power, toughness, id). printing.power can be None
         # for non-creatures, but the eligible list is filtered to
         # Creatures so power is set. Cast to int for the sort key.
-        def _smallest_key(o):
-            p = int(getattr(o.printing, "power", 0) or 0)
-            t = int(getattr(o.printing, "toughness", 0) or 0)
-            return (p, t, int(o.id))
+        # ``block_with_largest_able`` reverses the (power, toughness)
+        # axes so the largest creature sorts FIRST; ties on (power,
+        # toughness) still break by id ascending so the agent's
+        # output is deterministic regardless of bf insertion order.
+        if self.strategy == "block_with_largest_able":
+            def _key(o):
+                p = int(getattr(o.printing, "power", 0) or 0)
+                t = int(getattr(o.printing, "toughness", 0) or 0)
+                return (-p, -t, int(o.id))
+        else:
+            def _key(o):
+                p = int(getattr(o.printing, "power", 0) or 0)
+                t = int(getattr(o.printing, "toughness", 0) or 0)
+                return (p, t, int(o.id))
 
-        eligible_sorted = sorted(eligible, key=_smallest_key)
+        eligible_sorted = sorted(eligible, key=_key)
 
         # Walk attackers in id order (matches the attacker emit order
         # from pick_attackers); assign smallest available blocker.

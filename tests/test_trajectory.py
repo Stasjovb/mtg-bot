@@ -449,3 +449,194 @@ def test_no_seed_no_shuffle_path():
     # All seven Forests should be on top of the unshuffled lib → all
     # in the opening hand on both sides.
     assert all(t[0] == "Forest" for t in py_view["hand_p0"])
+
+
+# ---------------------------------------------------------------------------
+# Round-17 enhancement (production-decklists slice): unit tests for the
+# three new RealGameCombatAgent strategies.
+#
+# All three new strategies operate on a synthetic in-memory bf so the
+# tests stay tight and don't depend on the multi-turn trajectory walk.
+# ---------------------------------------------------------------------------
+
+
+def _make_creature(state, *, name, power, toughness, controller, keywords=()):
+    """Build a vanilla Creature CardPrinting + materialize on bf.
+
+    Helper used by the round-17 strategy unit tests. Wraps the
+    ``new_object`` + ``state.battlefield.append`` sequence with the
+    standard "no sickness, untapped, no damage, fresh ETB timestamp"
+    initialization.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    printing = CardPrinting(
+        name=name,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=power,
+        toughness=toughness,
+        produces=frozenset(),
+        keywords=frozenset(keywords),
+    )
+    obj = state.new_object(printing, owner_id=controller, zone=Zone.BATTLEFIELD)
+    obj.summoning_sick = False
+    obj.tapped = False
+    obj.attacking = False
+    obj.blocking = False
+    obj.etb_timestamp = state.next_timestamp
+    state.next_timestamp += 1
+    state.battlefield.append(obj)
+    return obj
+
+
+def test_combat_agent_attack_unblockable_only_filters_to_evasion():
+    """``"attack_with_unblockable_creatures_only"`` only declares
+    attackers carrying an evasion keyword."""
+    from mtg_bot.parity.trajectory import (
+        RealGameCombatAgent,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+
+    # Three p0 creatures: a vanilla, a flier, an unblockable.
+    grunt = _make_creature(
+        py_state, name="Bear Grunt", power=2, toughness=2, controller=0,
+    )
+    flier = _make_creature(
+        py_state, name="Bear Falcon", power=2, toughness=2, controller=0,
+        keywords=("flying",),
+    )
+    sneaky = _make_creature(
+        py_state, name="Bear Spy", power=2, toughness=2, controller=0,
+        keywords=("unblockable",),
+    )
+
+    agent = RealGameCombatAgent(
+        strategy="attack_with_unblockable_creatures_only",
+    )
+    attackers = agent.pick_attackers(py_state)
+    assert int(grunt.id) not in attackers
+    assert int(flier.id) in attackers
+    assert int(sneaky.id) in attackers
+    # Empty blocks regardless.
+    assert agent.pick_blocks(py_state) == []
+
+
+def test_combat_agent_attack_unblockable_only_with_no_evasion_returns_empty():
+    """No evasion creatures on bf → no attackers."""
+    from mtg_bot.parity.trajectory import (
+        RealGameCombatAgent,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+    _make_creature(
+        py_state, name="Bear Grunt", power=2, toughness=2, controller=0,
+    )
+    agent = RealGameCombatAgent(
+        strategy="attack_with_unblockable_creatures_only",
+    )
+    assert agent.pick_attackers(py_state) == []
+
+
+def test_combat_agent_block_with_largest_able_pairs_largest_first():
+    """``"block_with_largest_able"`` assigns the LARGEST blocker to
+    the lowest-id attacker first (mirror of the smallest selector).
+    """
+    from mtg_bot.parity.trajectory import (
+        RealGameCombatAgent,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+
+    atk_a = _make_creature(
+        py_state, name="Bear A", power=2, toughness=2, controller=0,
+    )
+    atk_b = _make_creature(
+        py_state, name="Bear B", power=2, toughness=2, controller=0,
+    )
+    blk_small = _make_creature(
+        py_state, name="Bear Small", power=1, toughness=1, controller=1,
+    )
+    blk_big = _make_creature(
+        py_state, name="Bear Big", power=4, toughness=4, controller=1,
+    )
+    atk_a.attacking = True
+    atk_b.attacking = True
+
+    agent = RealGameCombatAgent(strategy="block_with_largest_able")
+    assignments = agent.pick_blocks(py_state)
+    assert len(assignments) == 2
+    by_blocker = {b: a for b, a in assignments}
+    # Largest blocker (4/4 Bear Big) pairs with the LOWEST-id attacker.
+    assert by_blocker[int(blk_big.id)] == int(atk_a.id)
+    assert by_blocker[int(blk_small.id)] == int(atk_b.id)
+
+
+def test_combat_agent_optimal_no_loss_attack_avoids_losing_attackers():
+    """``"optimal_no_loss_attack"`` only attacks if no defender creature
+    can kill the attacker on the back-block.
+
+    Setup: p0 has a 3/3 (safe — defender's biggest is a 2/2) and a 2/2
+    (unsafe — defender's 2/2 can trade up). Strategy should declare
+    only the 3/3.
+    """
+    from mtg_bot.parity.trajectory import (
+        RealGameCombatAgent,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+
+    safe = _make_creature(
+        py_state, name="Bear Tank", power=3, toughness=3, controller=0,
+    )
+    unsafe = _make_creature(
+        py_state, name="Bear Cub", power=2, toughness=2, controller=0,
+    )
+    _make_creature(
+        py_state, name="Defender Bear", power=2, toughness=2, controller=1,
+    )
+
+    agent = RealGameCombatAgent(strategy="optimal_no_loss_attack")
+    attackers = agent.pick_attackers(py_state)
+    assert int(safe.id) in attackers
+    assert int(unsafe.id) not in attackers
+    # No blocks regardless.
+    assert agent.pick_blocks(py_state) == []
+
+
+def test_combat_agent_optimal_no_loss_attack_no_defender_creatures_attacks_all():
+    """When defender has no creatures, every eligible attacker is safe
+    (vacuously no blocker can trade). All eligible attackers declare.
+    """
+    from mtg_bot.parity.trajectory import (
+        RealGameCombatAgent,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+
+    a = _make_creature(
+        py_state, name="Bear A", power=1, toughness=1, controller=0,
+    )
+    b = _make_creature(
+        py_state, name="Bear B", power=2, toughness=2, controller=0,
+    )
+
+    agent = RealGameCombatAgent(strategy="optimal_no_loss_attack")
+    attackers = agent.pick_attackers(py_state)
+    assert sorted(attackers) == sorted([int(a.id), int(b.id)])
