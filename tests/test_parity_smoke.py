@@ -40181,6 +40181,608 @@ def test_cross_engine_set_base_pt_until_eot_synthetic_etb_parity(
     assert py_state.players[1].life == 20
 
 
+# =====================================================================
+# BLOCKED-RUST-EFFECT slice -- may_do composer arm (round 19).
+#
+# Rust's ``Effect::MayDo { inner_effect: Box<Effect>, prompt: String }``
+# (cards.rs:1579) was already on main from round 28 (parse +
+# to_dict + resolve + PendingDecision::MayDoChoice + submit_may_do_
+# decision dispatcher); this slice wires the cross-engine bridge
+# translator so the looter-shape ``IfYouDo(MayDo(DiscardSelf),
+# DrawCards{2})`` round-trips end-to-end. The Melded-Moxite "you may
+# discard a card. If you do, draw two cards." oracle is the unblocked
+# real-EoE consumer.
+#
+# Rust regression pins: 5 pins exercising the resolve arm's pending-
+# decision shape, the strategy dispatcher, the controller routing,
+# and an end-to-end IfYouDo(MayDo(...), ...) composition pin. Cross-
+# engine probe is synthetic (the bare MayDo(DrawCards) shape has no
+# real-EoE consumer that doesn't ALSO need IfYouDo + DiscardSelf
+# composition, and that IfYouDo synthetic is Slice 4 of the round 28
+# composer rollout -- not re-tested here).
+# =====================================================================
+
+
+def _build_rust_may_do_state(inner_effect_dict: dict, prompt: str = ""):
+    """Helper: build a Rust state with a MayDo(<inner>) ETB-trigger
+    Artifact source on p0's bf, with a 5-card library on each player
+    so DrawCards-shaped inner effects don't fizzle on empty library.
+
+    Returns (rust_state, source_id).
+
+    The source is an Artifact (not a creature) so the trigger payload
+    just runs may_do; no SBA / combat interactions to control for.
+    Mirrors the SetBasePT-helper artifact-source pattern.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    # Library filler -- 5 vanilla Bears per player so DrawCards inner
+    # effects don't fizzle on an empty library.
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=("Library Filler Bears (2/2)",) * 5,
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "MayDo-Trigger Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "may_do",
+                        "inner_effect": inner_effect_dict,
+                        "prompt": prompt,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_may_do_pushes_pending_decision_on_resolve():
+    """BLOCKED-RUST-EFFECT slice -- MayDo resolve pushes a
+    ``PendingDecision::MayDoChoice`` and short-circuits without
+    applying the inner effect. Pins the resolve arm's
+    cards.rs:6341-6349 push semantics: the inner effect is NOT
+    applied at resolve time -- the controller must drain the
+    decision via submit_may_do_decision or
+    auto_resolve_pending_decisions to fire (or skip) the inner.
+
+    Probe: ETB-trigger Artifact with MayDo(DrawCards(1)). Resolve
+    the ETB trigger off the stack via resolve_top_of_stack_pause
+    (so the pending-decision queue stays populated). Pin: stack
+    empty, has_pending_decision == True, p0 hand size unchanged
+    (no draw applied yet because the may-do hasn't been answered).
+    """
+    rust_state, _source_id = _build_rust_may_do_state(
+        {"kind": "draw_cards", "count": 1},
+        prompt="you may draw a card",
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: artifact's arrival should fire SourceIsSelf ENTERS "
+        "and land MayDo on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    p0_hand_before = rust_state.hand_sizes[0]
+    p0_lib_before = rust_state.library_sizes[0]
+    # PAUSE variant: pop the trigger off the stack but DON'T auto-
+    # resolve the resulting MayDoChoice. This pins the substrate
+    # invariant (one PendingDecision per Effect arm).
+    rust_state.resolve_top_of_stack_pause()
+    assert rust_state.stack_size() == 0, (
+        "Rust: trigger should have popped off stack during pause-"
+        "resolve. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    assert rust_state.has_pending_decision() is True, (
+        "Rust: MayDo resolve should push a pending decision; "
+        "pause-resolve leaves it on the queue. "
+        "has_pending_decision returned False"
+    )
+    # Pre-decision: inner effect NOT applied yet -- p0's hand is
+    # unchanged from before the resolve.
+    assert rust_state.hand_sizes[0] == p0_hand_before, (
+        "Rust: inner DrawCards should NOT have fired before the "
+        "MayDo decision was answered. "
+        f"hand_before={p0_hand_before}, "
+        f"hand_after_pause={rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.library_sizes[0] == p0_lib_before
+
+
+def test_rust_may_do_default_strategy_says_yes_and_fires_inner():
+    """BLOCKED-RUST-EFFECT slice -- ``auto_resolve_pending_decisions(
+    "default")`` answers MayDo with "yes" and fires the inner
+    effect (state_ops_decisions.rs:192-208). Pins the default
+    dispatcher matches Python's no-agent-seated default
+    (Agent.choose_yes_no returns True).
+
+    Probe: same ETB Artifact + MayDo(DrawCards(1)); drain via
+    "default" -> p0's hand grows by 1, library shrinks by 1.
+    """
+    rust_state, _source_id = _build_rust_may_do_state(
+        {"kind": "draw_cards", "count": 1},
+    )
+    rust_state.resolve_top_of_stack_pause()
+    p0_hand_before = rust_state.hand_sizes[0]
+    p0_lib_before = rust_state.library_sizes[0]
+    rust_state.auto_resolve_pending_decisions("default")
+    assert rust_state.has_pending_decision() is False, (
+        "Rust: MayDoChoice should drain via default strategy; "
+        "has_pending_decision returned True after auto-resolve"
+    )
+    assert rust_state.hand_sizes[0] == p0_hand_before + 1, (
+        "Rust: default strategy should fire the inner DrawCards(1); "
+        f"hand_before={p0_hand_before}, "
+        f"hand_after={rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.library_sizes[0] == p0_lib_before - 1
+
+
+def test_rust_may_do_no_strategy_skips_inner():
+    """BLOCKED-RUST-EFFECT slice -- ``auto_resolve_pending_decisions(
+    "may_do_no")`` answers MayDo with "no" and DROPS the decision
+    without firing the inner effect (state_ops_decisions.rs:192-208,
+    "may_do_no" -> false branch). Pins the asymmetric branch of the
+    dispatcher works -- without this pin, a buggy dispatcher that
+    always took the "yes" branch would still pass the default-strategy
+    test above.
+
+    Probe: same ETB Artifact + MayDo(DrawCards(1)); drain via
+    "may_do_no" -> p0's hand and library are BOTH unchanged.
+    """
+    rust_state, _source_id = _build_rust_may_do_state(
+        {"kind": "draw_cards", "count": 1},
+    )
+    rust_state.resolve_top_of_stack_pause()
+    p0_hand_before = rust_state.hand_sizes[0]
+    p0_lib_before = rust_state.library_sizes[0]
+    rust_state.auto_resolve_pending_decisions("may_do_no")
+    assert rust_state.has_pending_decision() is False, (
+        "Rust: MayDoChoice should drain via may_do_no strategy "
+        "(decision dropped, inner not applied)"
+    )
+    assert rust_state.hand_sizes[0] == p0_hand_before, (
+        "Rust: may_do_no strategy should NOT fire the inner; "
+        f"hand_before={p0_hand_before}, "
+        f"hand_after={rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.library_sizes[0] == p0_lib_before, (
+        "Rust: may_do_no strategy should leave library untouched"
+    )
+
+
+def test_rust_may_do_cross_controller_routing_p1_source_on_p0_turn():
+    """BLOCKED-RUST-EFFECT slice -- cross-controller routing pin.
+    The MayDo arm reads the source's controller via
+    ``current_resolve_source_controller`` (state_ops_resolve.rs:6341-
+    6349) and pushes the PendingDecision with that controller. So a
+    p1-source MayDo(DrawCards) on p0's turn answers "yes" via the
+    default strategy and routes the DrawCards to p1's hand
+    (controller-of-effect on the inner-effect apply path -- the
+    apply_effect_pub_with_controller call at state_ops_decisions.rs:
+    202-207 threads the controller through to the inner DrawCards).
+
+    Probe: set up a MayDo(DrawCards(1)) trigger source on p1's bf;
+    leave active_player at 0. Resolve the trigger + drain the
+    pending decision with default. p1's hand grows by 1, p1's
+    library shrinks by 1; p0's hand is untouched. Pins the
+    controller-of-effect routing on the inner DrawCards under the
+    MayDo wrapper.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=("Library Filler Bears (2/2)",) * 5,
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "p1 MayDo-Trigger Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "may_do",
+                        "inner_effect": {
+                            "kind": "draw_cards", "count": 1,
+                        },
+                        "prompt": "",
+                    },
+                }
+            ],
+        },
+        1,  # controller = p1
+        ZONE_BATTLEFIELD,
+    )
+    # active_player default is 0 (p0); we DELIBERATELY don't change
+    # it -- the cross-controller routing must read the SOURCE's
+    # controller (p1), not active_player.
+    assert rust_state.stack_size() == 1
+    p0_hand_before = rust_state.hand_sizes[0]
+    p1_hand_before = rust_state.hand_sizes[1]
+    p1_lib_before = rust_state.library_sizes[1]
+    # resolve_top_of_stack auto-drains pending decisions with
+    # "keep_all_on_top" which routes MayDo to "yes" (the
+    # state_ops_decisions match arm at line 192-194 takes the yes
+    # branch on any non-may_do_no strategy).
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    assert rust_state.has_pending_decision() is False
+    # p1 (the source's controller) drew, NOT p0.
+    assert rust_state.hand_sizes[1] == p1_hand_before + 1, (
+        "Rust: cross-controller routing -- p1's source means p1's "
+        "MayDo answers yes and routes DrawCards to p1's hand. "
+        f"p1_hand_before={p1_hand_before}, "
+        f"p1_hand_after={rust_state.hand_sizes[1]}"
+    )
+    assert rust_state.library_sizes[1] == p1_lib_before - 1
+    # p0 (active player but NOT source controller) is untouched.
+    assert rust_state.hand_sizes[0] == p0_hand_before, (
+        "Rust: p0 is active_player but NOT the source's controller; "
+        "DrawCards should NOT route to p0's hand. "
+        f"p0_hand_before={p0_hand_before}, "
+        f"p0_hand_after={rust_state.hand_sizes[0]}"
+    )
+
+
+def test_rust_may_do_inside_if_you_do_looter_composition():
+    """BLOCKED-RUST-EFFECT slice -- end-to-end composition pin for
+    the Melded-Moxite looter pattern: ``IfYouDo(MayDo(DiscardSelf),
+    DrawCards{2})``. This is the highest-leverage observable for the
+    bridge slice -- pins that the IfYouDo gate fires correctly when
+    the inner MayDo answers yes.
+
+    The composition shape: MayDo wraps DiscardSelf; on "yes" the
+    discard fires (returns true on success); IfYouDo gates the
+    DrawCards then-action on the do_action's apply (round-28
+    first-slice limitation: do_action is implicitly success-on-yes
+    -- the yes branch of MayDo unconditionally treats the inner as
+    completing). Probe: pre-seat a card in p0's hand for DiscardSelf
+    to consume; ETB-trigger Artifact with the IfYouDo composition;
+    drain via default. Expect: p0 hand goes from N -> N - 1
+    (discard) + 2 (draw) == N + 1; p0 library shrinks by 2.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=("Library Filler Bears (2/2)",) * 5,
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    # Pre-seat a discard-victim card in p0's hand. DiscardSelf with
+    # amount=1 picks the first hand object (auto-resolve default).
+    discard_victim_id = rust_state.register_and_inject_object(
+        {
+            "name": "Discard Victim",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_HAND,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "Looter ETB Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "if_you_do",
+                        "do_action": {
+                            "kind": "may_do",
+                            "inner_effect": {
+                                "kind": "discard_self",
+                                "amount": 1,
+                            },
+                            "prompt": "",
+                        },
+                        "then_action": {
+                            "kind": "draw_cards",
+                            "count": 2,
+                        },
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    p0_hand_before = rust_state.hand_sizes[0]
+    p0_lib_before = rust_state.library_sizes[0]
+    # Drain trigger + auto-resolve pending decisions cascade via the
+    # default strategy. The "default" path takes:
+    #   1) IfYouDoChoice -> "yes" (state_ops_decisions.rs:256-258
+    #      "if_you_do_no | may_do_no" -> false; default -> true).
+    #      Both do_action (MayDo(DiscardSelf)) and then_action
+    #      (DrawCards(2)) get applied via apply_effect_pub_with_
+    #      controller. The MayDo do_action pushes ANOTHER pending
+    #      decision (MayDoChoice) which sits on the queue while the
+    #      then_action also queues / runs.
+    #   2) MayDoChoice (from the do_action) -> "yes" (default).
+    #      Inner DiscardSelf fires -> discards the victim card.
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    assert rust_state.has_pending_decision() is False, (
+        "Rust: all pending decisions (IfYouDoChoice + nested "
+        "MayDoChoice) should drain via default strategy"
+    )
+    # Discard victim no longer in p0's hand.
+    ZONE_GRAVEYARD = 3
+    assert rust_state.find_object_zone(discard_victim_id) == ZONE_GRAVEYARD, (
+        "Rust: DiscardSelf via the MayDo gate should have moved "
+        "the victim to p0's graveyard. "
+        f"Got find_object_zone={rust_state.find_object_zone(discard_victim_id)}"
+    )
+    # Net hand delta: -1 (discard) + 2 (draw) = +1.
+    assert rust_state.hand_sizes[0] == p0_hand_before + 1, (
+        "Rust: looter composition should net +1 to p0's hand "
+        "(discard 1, draw 2). "
+        f"hand_before={p0_hand_before}, "
+        f"hand_after={rust_state.hand_sizes[0]}"
+    )
+    # Library shrank by 2 (the two cards drawn).
+    assert rust_state.library_sizes[0] == p0_lib_before - 2, (
+        "Rust: looter composition should shrink p0's library by 2 "
+        "(the two cards drawn via the IfYouDo then_action). "
+        f"lib_before={p0_lib_before}, "
+        f"lib_after={rust_state.library_sizes[0]}"
+    )
+
+
+def test_cross_engine_may_do_synthetic_etb_parity(parity_smoke):
+    """BLOCKED-RUST-EFFECT slice -- cross-engine end-to-end synthetic
+    probe for the bare ``MayDo(DrawCards(1))`` ETB shape. Drives the
+    ``Effect::MayDo`` arm + the ``MayDo`` Python class through both
+    engines via an ETB-trigger carrier; pins that "yes" answer routes
+    correctly on both engines and grows p0's hand by exactly 1.
+
+    No bare-EoE consumer of the unwrapped MayDo today -- the looter-
+    shape ``IfYouDo(MayDo(DiscardSelf), DrawCards{2})`` is the actual
+    Melded-Moxite oracle. The IfYouDo wrapper is exercised by the
+    Rust regression pin above (test_rust_may_do_inside_if_you_do_
+    looter_composition); a cross-engine end-to-end test of the
+    composition would also exercise the IfYouDo bridge arm + the
+    DiscardSelf bridge arm + their composer end-to-end, which adds
+    rider surface beyond the may_do bridge under test in this slice.
+    Per the round-17 + round-18 precedent (synthetic-only when riders
+    cascade), this slice ships the bare-arm cross-engine probe and
+    documents the looter-composition cross-engine probe as a
+    follow-up slice.
+
+    Probe shape (mirrors the SetBasePT inject-and-fire-ENTERS pattern,
+    augmented with library setup so DrawCards has cards to pull):
+
+      1. Spec a 5-Bears library on each player (DrawCards inner
+         doesn't fizzle).
+      2. Inject an Artifact with a MayDo(DrawCards(1)) ETB onto p0's
+         bf. The ETB trigger fires on its own arrival; the trigger
+         lands on the stack on both engines.
+      3. Drain both stacks. Rust auto-resolves the resulting MayDo
+         pending-decision via "keep_all_on_top" -> yes branch (the
+         state_ops_decisions.rs match arm at line 192-194 takes the
+         yes branch on any non-may_do_no strategy). Python's MayDo.
+         resolve calls Agent.choose_yes_no which returns True by
+         default (Agent base class default).
+      4. Cross-engine: p0's hand grew by 1 on both sides; p0's
+         library shrank by 1; lives unchanged.
+
+    Out of scope (documented):
+
+      * Looter cross-engine ``IfYouDo(MayDo(DiscardSelf), DrawCards
+        {2})`` -- needs the IfYouDo + DiscardSelf cross-engine
+        synthetic probes pre-existing as gated rider surface;
+        already pinned via Rust regression in this slice.
+      * "No" decision routing cross-engine -- needs a yes/no agent
+        shim on Python that mirrors Rust's ``may_do_no`` strategy.
+        The Rust regression pin
+        ``test_rust_may_do_no_strategy_skips_inner`` covers the
+        Rust side; Python parity is exercised only on the "yes"
+        path here.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=("Library Filler Bears (2/2)",) * 5,
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "MayDo-Trigger Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "may_do",
+                        "inner_effect": {
+                            "kind": "draw_cards", "count": 1,
+                        },
+                        "prompt": "",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: artifact's arrival should fire SourceIsSelf ENTERS "
+        "and land MayDo on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p0_lib_before = rust_state.library_sizes[0]
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.combinators import MayDo
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    artifact_printing = CardPrinting(
+        name="MayDo-Trigger Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=MayDo(inner=DrawCards(amount=1)),
+            ),
+        ),
+    )
+    py_source = py_state.new_object(
+        artifact_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p0_lib_before = len(py_state.players[0].library)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: artifact's arrival should fire IsSelf ENTERS and "
+        "land MayDo on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks ----
+    # Rust: resolve_top_of_stack auto-drains pending decisions with
+    # the "keep_all_on_top" strategy which routes MayDo to "yes" via
+    # the state_ops_decisions.rs:192-194 fall-through. Python's
+    # MayDo.resolve consults Agent.choose_yes_no (base class default
+    # returns True).
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    assert rust_state.has_pending_decision() is False, (
+        "Rust: MayDoChoice should drain inline via the "
+        "resolve_top_of_stack auto-drain (keep_all_on_top -> yes)"
+    )
+
+    # ---- Cross-engine post-state ----
+    # Both sides grew p0's hand by 1 (the MayDo answered yes -> the
+    # inner DrawCards(1) fired).
+    rust_p0_hand_after = rust_state.hand_sizes[0]
+    rust_p0_lib_after = rust_state.library_sizes[0]
+    py_p0_hand_after = len(py_state.players[0].hand)
+    py_p0_lib_after = len(py_state.players[0].library)
+    assert rust_p0_hand_after == rust_p0_hand_before + 1, (
+        f"Rust p0 hand should grow by 1 (MayDo->yes->DrawCards(1)); "
+        f"got before={rust_p0_hand_before} after={rust_p0_hand_after}"
+    )
+    assert rust_p0_lib_after == rust_p0_lib_before - 1, (
+        f"Rust p0 library should shrink by 1; "
+        f"got before={rust_p0_lib_before} after={rust_p0_lib_after}"
+    )
+    assert py_p0_hand_after == py_p0_hand_before + 1, (
+        f"Python p0 hand should grow by 1 (MayDo->yes->DrawCards(1)); "
+        f"got before={py_p0_hand_before} after={py_p0_hand_after}"
+    )
+    assert py_p0_lib_after == py_p0_lib_before - 1, (
+        f"Python p0 library should shrink by 1; "
+        f"got before={py_p0_lib_before} after={py_p0_lib_after}"
+    )
+    # Cross-engine deltas agree.
+    assert (
+        rust_p0_hand_after - rust_p0_hand_before
+        == py_p0_hand_after - py_p0_hand_before
+    )
+    assert (
+        rust_p0_lib_after - rust_p0_lib_before
+        == py_p0_lib_after - py_p0_lib_before
+    )
+    # Lives unchanged on both sides (MayDo(DrawCards) only affects
+    # hand+library).
+    assert list(rust_state.life_totals) == [20, 20]
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
