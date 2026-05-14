@@ -1085,6 +1085,56 @@ pub enum Effect {
     /// modifier auto-expires at the next CR 514.3 cleanup-step pass.
     /// `(0, 0)` short-circuits; empty opponent bf fizzles silently.
     PumpCreaturesOpponentsControlUntilEOT { power_bonus: i32, toughness_bonus: i32 },
+    /// **Mouth-of-the-Storm sibling — extended-duration variant.**
+    /// Same shape as `PumpCreaturesOpponentsControlUntilEOT` (mass
+    /// +/-power / +/-toughness on every creature controlled by the
+    /// source-controller's opponents) but the printed duration is
+    /// "until your next turn" rather than the bare "until end of
+    /// turn". The Python sibling
+    /// `PumpCreaturesOpponentsControlUntilEOT(until_caster_next_turn=
+    /// True, ...)` writes the modifier through
+    /// `grant_pt_pump_until_player_next_turn` (layer-7c registry
+    /// entry tagged `expires_at="controller_untap"`,
+    /// `expires_at_player_id` = source-controller); the modifier
+    /// survives the casting turn's cleanup AND the opponent's full
+    /// subsequent turn, expiring only at the start (`run_untap_step`)
+    /// of the source-controller's next turn.
+    ///
+    /// **Real-EoE consumer:** Mouth of the Storm
+    /// (EoE Creature, {6}{U} Elemental):
+    ///   "When this creature enters, creatures your opponents
+    ///    control get -3/-0 until your next turn."
+    ///
+    /// **Substrate-only first slice — cleanup-gate divergence
+    /// deferred.** The current `UeotModifier` enum is implicitly
+    /// `expires_at = "cleanup"` (drained wholesale by
+    /// `clear_ueot_modifiers_all`/`cleanup_step_for_active_player`);
+    /// adding a tagged-lifetime field cascades through the four
+    /// effective-P/T / effective-keyword readers in `state.rs`,
+    /// the two cleanup primitives, and a new untap-step hook.
+    /// That cascade is out of this slice's budget. The first-slice
+    /// resolve arm pushes the SAME `UeotModifier::PowerToughnessBonus`
+    /// the bare sibling pushes — the post-resolve effective-P/T
+    /// observable matches the bare sibling exactly. The divergence
+    /// (Python keeps the debuff into the opponent's turn; Rust
+    /// drops it at the casting-turn cleanup) is documented in
+    /// `docs/SEARCH_LIMITATIONS.md` and is a follow-up Rust slice
+    /// (the parametric duration field on `UeotModifier`).
+    ///
+    /// The discriminator-only sibling matters NOW because:
+    ///   1. The bridge can route Mouth of the Storm cleanly
+    ///      (extended-duration variant -> Python's
+    ///      `until_caster_next_turn=True`).
+    ///   2. Once the cleanup-gate slice lands, only THIS variant's
+    ///      resolve arm changes — every call site, every parse arm,
+    ///      every test pin already targets the right discriminator.
+    ///
+    /// `(0, 0)` short-circuits; empty opponent bf fizzles silently
+    /// (mirrors the bare sibling).
+    PumpCreaturesOpponentsControlUntilCasterNextTurn {
+        power_bonus: i32,
+        toughness_bonus: i32,
+    },
     /// **Round 28 coverage extension.** Put a target card from a
     /// graveyard on the bottom of its owner's library. Mirrors
     /// Python's `PutCardFromGraveyardOnBottomOfLibrary`
@@ -4161,6 +4211,34 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             };
             Ok(Effect::PumpCreaturesOpponentsControlUntilEOT { power_bonus, toughness_bonus })
         }
+        "pump_creatures_opponents_control_until_caster_next_turn" => {
+            // Mouth-of-the-Storm sibling — same field shape as the
+            // bare-EOT arm above; the discriminator alone carries
+            // the extended-duration distinction (Python translates
+            // it to `until_caster_next_turn=True`). The cleanup-
+            // gate divergence is documented on the variant + in
+            // SEARCH_LIMITATIONS.md.
+            let power_bonus: i32 = match dict.get_item("power_bonus")? {
+                Some(p) => p.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "pump_creatures_opponents_control_until_caster_next_turn.power_bonus must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            let toughness_bonus: i32 = match dict.get_item("toughness_bonus")? {
+                Some(t) => t.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "pump_creatures_opponents_control_until_caster_next_turn.toughness_bonus must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            Ok(Effect::PumpCreaturesOpponentsControlUntilCasterNextTurn {
+                power_bonus,
+                toughness_bonus,
+            })
+        }
         "search_library_for_card" => {
             // Python's SearchLibraryForCard(filter_name, max_mv=0,
             // may_fail=True).
@@ -5340,6 +5418,14 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::PumpCreaturesOpponentsControlUntilEOT { power_bonus, toughness_bonus } => {
             d.set_item("kind", "pump_creatures_opponents_control_until_eot")?;
+            d.set_item("power_bonus", *power_bonus)?;
+            d.set_item("toughness_bonus", *toughness_bonus)?;
+        }
+        Effect::PumpCreaturesOpponentsControlUntilCasterNextTurn {
+            power_bonus,
+            toughness_bonus,
+        } => {
+            d.set_item("kind", "pump_creatures_opponents_control_until_caster_next_turn")?;
             d.set_item("power_bonus", *power_bonus)?;
             d.set_item("toughness_bonus", *toughness_bonus)?;
         }
