@@ -3022,6 +3022,72 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         inner_dict = eff_dict["inner_effect"]
         inner = _ta_dict_to_python_effect(inner_dict)
         return OptionalSacArtifactForEffect(inner_effect=inner)
+    if kind == "look_at_top_n_reveal_or_counter":
+        # **Round-20 bridge arm — LookAtTopNRevealOrCounter (Pulsar
+        # Squadron Ace + Living Phone family).** The Rust substrate
+        # already landed via round 28-29 (parse + to_dict + resolve +
+        # PendingDecision::LookAtTopNRevealOrCounterChoice +
+        # submit_look_at_top_n_decision dispatcher); this slice wires
+        # the cross-engine bridge translator so the printed-text
+        # "look at the top N cards; you may reveal one matching FILTER
+        # and put it into your hand; bottom the rest in a random
+        # order; otherwise put a +1/+1 counter on this creature"
+        # surface round-trips end-to-end on the existing real-EoE
+        # consumers (Pulsar Squadron Ace n=5 spacecraft + Living Phone
+        # n=4 creature max_power=2 counter_on_miss=False).
+        #
+        # Round-19 audit refresh reclassified this kind from
+        # BLOCKED-RUST-EFFECT to BLOCKED-BRIDGE-ARM -- the Rust effect
+        # variant `Effect::LookAtTopNRevealOrCounter { n, filter_name,
+        # max_power, counter_on_miss }` (cards.rs:2152) was already on
+        # main from rounds 28-29; this slice closes the bridge gap
+        # alone. Same precedent as round 18 (SetBasePT) + round 19
+        # (MayDo) + round-20 sister-slices (AttachTo / EquipTo /
+        # OptionalSacArtifact): substrate-already-on-main + bridge-
+        # arm-was-the-staleness-gap.
+        #
+        # **Field shape (no renames).** Python's
+        # `LookAtTopNRevealOrCounter(n: int = 5, filter_name: str =
+        # "spacecraft", max_power: int = 0, counter_on_miss: bool =
+        # True)` (effects/generic/library_lookat.py:30) and Rust's
+        # `Effect::LookAtTopNRevealOrCounter { n, filter_name,
+        # max_power, counter_on_miss }` (cards.rs:2152) carry the
+        # SAME field names with the SAME defaults. Bridge passes
+        # through verbatim with `eff_dict.get(...)` defaults that
+        # match Python's class-level defaults -- no field-name rename,
+        # no value translation. `n` is REQUIRED -- the bridge raises
+        # on missing `n` to mirror Rust's parse_effect contract
+        # (cards.rs:4210).
+        #
+        # **Resolve semantics (cross-engine).** Both engines split
+        # the resolve into a "look + queue choice" phase + a "answer
+        # choice + apply" phase, but the wire-shape differs:
+        # Rust pushes `PendingDecision::LookAtTopNRevealOrCounter
+        # Choice` and short-circuits; Python synchronously calls
+        # `agent.choose_card_from_library(...)` and resolves inline.
+        # Both converge on the post-resolve observable: one card to
+        # hand or none + remainder bottomed + counter-on-miss when
+        # no reveal + source on bf.
+        #
+        # **Real EoE consumers** unblocked: Pulsar Squadron Ace
+        # (creature {1}{W}, n=5 spacecraft counter_on_miss=True);
+        # Living Phone (Sorcery, n=4 creature max_power=2
+        # counter_on_miss=False).
+        from mtg_bot.effects.generic.library_lookat import (
+            LookAtTopNRevealOrCounter,
+        )
+        if "n" not in eff_dict:
+            raise ValueError(
+                "look_at_top_n_reveal_or_counter bridge arm: missing "
+                "required field 'n' (mirrors Rust parse_effect's "
+                "required-n contract at cards.rs:4210)"
+            )
+        return LookAtTopNRevealOrCounter(
+            n=int(eff_dict["n"]),
+            filter_name=eff_dict.get("filter_name", "spacecraft"),
+            max_power=int(eff_dict.get("max_power", 0)),
+            counter_on_miss=bool(eff_dict.get("counter_on_miss", True)),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
