@@ -624,7 +624,13 @@ def _per_shard_to_machines(
         m: dict[str, Any] = {
             "label": row.get("shard_label"),
             "n_games_done": row.get("n_games_done"),
+            "n_games_total": row.get("n_games_total"),
+            "elapsed_seconds": row.get("elapsed_seconds"),
             "crashed": row.get("crashed"),
+            "timed_out": row.get("timed_out"),
+            "wins_new": row.get("wins_new"),
+            "wins_old": row.get("wins_old"),
+            "draws": row.get("draws"),
         }
         extra_raw = row.get("extra_json")
         if extra_raw:
