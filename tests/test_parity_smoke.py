@@ -2171,6 +2171,213 @@ def test_cross_engine_dict_to_python_action_handles_declare_blockers(
     assert action_empty.assignments == ()
 
 
+# ---------------------------------------------------------------------------
+# Phase 6 gap #4 closure: canonical action-dict builder + dual-honor.
+#
+# The action-dict id-key vocabulary is per-kind asymmetric — `card_id` for
+# `play_land`/`cast_spell`, `source_id` for `activate_ability`. This is
+# intentional and consistent on both Python's dataclasses AND Rust's enum
+# variants. Programmatic builders historically had to memorize the per-kind
+# shape; these tests pin the new `_canonical_action_dict` helper that
+# routes the GameObject id under the friendly alias `id` to the canonical
+# key, plus the dual-honor logic in `_dict_to_python_action` that accepts
+# both the canonical key AND the cross-vocabulary alias on the Python side
+# (Rust stays strict).
+# ---------------------------------------------------------------------------
+
+
+def test_canonical_action_dict_play_land_routes_id_to_card_id(parity_smoke):
+    """`_canonical_action_dict("play_land", id=N)` produces the
+    canonical `card_id`-keyed dict that Rust's `parse_action` accepts.
+    """
+    from mtg_bot.parity.cross_engine import _canonical_action_dict
+
+    d = _canonical_action_dict("play_land", id=42)
+    assert d == {"kind": "play_land", "card_id": 42}
+
+
+def test_canonical_action_dict_cast_spell_routes_id_to_card_id(parity_smoke):
+    """Same for `cast_spell`. Optional kwargs (kicker / warp / etc.)
+    pass through verbatim.
+    """
+    from mtg_bot.parity.cross_engine import _canonical_action_dict
+
+    d = _canonical_action_dict("cast_spell", id=7)
+    assert d == {"kind": "cast_spell", "card_id": 7}
+
+    d_kicked = _canonical_action_dict("cast_spell", id=7, kicked=True)
+    assert d_kicked == {"kind": "cast_spell", "card_id": 7, "kicked": True}
+
+
+def test_canonical_action_dict_activate_ability_routes_id_to_source_id(
+    parity_smoke,
+):
+    """`_canonical_action_dict("activate_ability", id=N, ability_index=M)`
+    routes `id` to `source_id` (the canonical key for activate_ability).
+    """
+    from mtg_bot.parity.cross_engine import _canonical_action_dict
+
+    d = _canonical_action_dict("activate_ability", id=42, ability_index=0)
+    assert d == {
+        "kind": "activate_ability", "source_id": 42, "ability_index": 0,
+    }
+
+
+def test_canonical_action_dict_no_id_kinds(parity_smoke):
+    """Kinds without a primary id (`pass_priority`, `declare_attackers`,
+    `declare_blockers`) accept no `id` kwarg; their domain-specific
+    kwargs pass through.
+    """
+    from mtg_bot.parity.cross_engine import _canonical_action_dict
+
+    assert _canonical_action_dict("pass_priority") == {"kind": "pass_priority"}
+    assert _canonical_action_dict(
+        "declare_attackers", attacker_ids=[1, 2]
+    ) == {"kind": "declare_attackers", "attacker_ids": [1, 2]}
+    assert _canonical_action_dict(
+        "declare_blockers", assignments=[[5, 3]]
+    ) == {"kind": "declare_blockers", "assignments": [[5, 3]]}
+
+
+def test_canonical_action_dict_unknown_kind_raises(parity_smoke):
+    """Unknown action kinds raise ValueError with a helpful message
+    listing the valid kinds — mirrors Rust's strict-parse contract.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _canonical_action_dict
+
+    with pytest.raises(ValueError, match="unknown action kind"):
+        _canonical_action_dict("not_a_real_kind", id=1)
+
+
+def test_canonical_action_dict_no_id_kind_with_id_raises(parity_smoke):
+    """Passing `id` to a kind that has no primary-id slot (e.g.,
+    `pass_priority`) is a programming error and raises ValueError —
+    helps catch bugs where a builder accidentally passes `id` to the
+    wrong kind.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _canonical_action_dict
+
+    with pytest.raises(ValueError, match="takes no primary id"):
+        _canonical_action_dict("pass_priority", id=1)
+
+
+def test_canonical_action_dict_id_required_kind_without_id_raises(
+    parity_smoke,
+):
+    """Omitting `id` for a kind that requires it (e.g., `play_land`)
+    raises ValueError — the canonical dict needs the primary id to
+    route to the canonical key.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _canonical_action_dict
+
+    with pytest.raises(ValueError, match="requires the primary id"):
+        _canonical_action_dict("play_land")
+    with pytest.raises(ValueError, match="requires the primary id"):
+        _canonical_action_dict("activate_ability", ability_index=0)
+
+
+def test_dict_to_python_action_play_land_honors_source_id_alias(parity_smoke):
+    """Dual-honor: `_dict_to_python_action` accepts `source_id` as an
+    alias for `card_id` on `play_land` (the cross-vocabulary alias).
+    Lets hand-rolled programmatic builders that pick the "wrong" key
+    by accident still resolve on the Python bridge.
+    """
+    from mtg_bot.actions import PlayLand
+    from mtg_bot.parity.cross_engine import _dict_to_python_action
+
+    action = _dict_to_python_action(
+        {"kind": "play_land", "source_id": 42}
+    )
+    assert isinstance(action, PlayLand)
+    assert action.card_id == 42
+
+
+def test_dict_to_python_action_cast_spell_honors_source_id_alias(parity_smoke):
+    """Same dual-honor for `cast_spell`."""
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.parity.cross_engine import _dict_to_python_action
+
+    action = _dict_to_python_action(
+        {"kind": "cast_spell", "source_id": 7}
+    )
+    assert isinstance(action, CastSpell)
+    assert action.card_id == 7
+
+
+def test_dict_to_python_action_activate_ability_honors_card_id_alias(
+    parity_smoke,
+):
+    """Reverse direction: `activate_ability` accepts `card_id` as an
+    alias for `source_id` on the Python bridge.
+    """
+    from mtg_bot.actions import ActivateAbility
+    from mtg_bot.parity.cross_engine import _dict_to_python_action
+
+    action = _dict_to_python_action(
+        {"kind": "activate_ability", "card_id": 42, "ability_index": 0}
+    )
+    assert isinstance(action, ActivateAbility)
+    assert action.source_id == 42
+    assert action.ability_index == 0
+
+
+def test_dict_to_python_action_canonical_key_takes_precedence(parity_smoke):
+    """When BOTH the canonical key AND the alias are present, the
+    canonical key wins. Documents the tiebreak so a dict that carries
+    both (e.g., a defensive builder that emits both keys) doesn't
+    silently pick the wrong one.
+    """
+    from mtg_bot.parity.cross_engine import _dict_to_python_action
+
+    action = _dict_to_python_action(
+        {"kind": "play_land", "card_id": 1, "source_id": 999}
+    )
+    assert action.card_id == 1
+
+
+def test_dict_to_python_action_missing_id_raises_keyerror(parity_smoke):
+    """Legacy strict-key behavior preserved: a dict with neither the
+    canonical key nor the alias raises KeyError on the canonical name
+    (matches the pre-dual-honor `int(action_dict["card_id"])`
+    behavior).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _dict_to_python_action
+
+    with pytest.raises(KeyError, match="card_id"):
+        _dict_to_python_action({"kind": "play_land"})
+    with pytest.raises(KeyError, match="source_id"):
+        _dict_to_python_action(
+            {"kind": "activate_ability", "ability_index": 0}
+        )
+
+
+def test_canonical_action_dict_table_matches_rust_contract(parity_smoke):
+    """The `_CANONICAL_ACTION_ID_KEY` table documents the per-kind
+    canonical key. Pin the expected entries so a future drift
+    (e.g., adding a new action kind without updating the table)
+    surfaces as a test failure rather than silently breaking
+    programmatic builders.
+    """
+    from mtg_bot.parity.cross_engine import _CANONICAL_ACTION_ID_KEY
+
+    assert _CANONICAL_ACTION_ID_KEY == {
+        "play_land": "card_id",
+        "cast_spell": "card_id",
+        "turn_face_up": "card_id",
+        "unlock_room_half": "card_id",
+        "activate_ability": "source_id",
+        "activate_station": "spacecraft_id",
+    }
+
+
 def test_cross_engine_resolve_combat_damage_python_no_attackers_noop(
     parity_smoke,
 ):
