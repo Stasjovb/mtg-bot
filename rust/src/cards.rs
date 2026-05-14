@@ -1386,6 +1386,56 @@ pub enum Effect {
     /// to owner's exile. Manual return via
     /// `return_paired_exiles_for(source_id)`.
     ExileOpponentsNonlandPermanentUntilLeaves,
+    /// **Round 14 rider-widened "until leaves" exile (additive
+    /// sibling variant — Option B).** Same shape as
+    /// `ExileOpponentsNonlandPermanentUntilLeaves` but admits a
+    /// `max_mv` mana-value cap on the target permanent. Mirrors
+    /// Python's
+    /// `ExileOpponentsNonlandPermanentUntilLeaves(max_mv=N)` rider
+    /// (`effects/generic/exile.py:587`) — `max_mv > 0` restricts
+    /// the legal-target pool to permanents with mana value ≤
+    /// `max_mv`; the bare-shape sibling above (no `max_mv`) handles
+    /// the no-cap case.
+    ///
+    /// **EoE consumer (audit).** Seam Rip (EoE) — "When this
+    /// enchantment enters, exile target nonland permanent an
+    /// opponent controls with mana value 2 or less until this
+    /// enchantment leaves the battlefield." Carrier Enchantment
+    /// at `{W}`. The capped variant differs from the bare-shape
+    /// Banishing Light / Hardlight Containment shape only in the
+    /// per-permanent MV cap on the legal-target pool.
+    ///
+    /// **First-slice deterministic target.** First permanent on the
+    /// defender's bf whose `card_types` does NOT contain "Land" AND
+    /// whose printing's mana value is ≤ `max_mv`. CR 117.x: mana
+    /// value reads off the printing's static mana cost (Rust:
+    /// `printing.mana_cost.total()`); X-cost cards count X as 0
+    /// while in exile / graveyard / library / hand, matching the
+    /// printed-cost reading. No eligible permanent → silent fizzle
+    /// (e.g. defender's bf is empty, all bf permanents are lands,
+    /// or all non-land permanents have MV > max_mv).
+    ///
+    /// **Mechanism.** Identical to the bare sibling: stamp
+    /// `exiled_with_source = Some(source_obj_id)` on the moved
+    /// object, push to owner's exile zone, queue
+    /// `pending_leaves_dispatches` for LTB fan-out. Manual return
+    /// via `return_paired_exiles_for(source_id)`. CR 400.7
+    /// zone-change reset (tapped, summoning_sick=true per r28 CE1,
+    /// damage, counters, attached_to) preserved.
+    ///
+    /// **Controller-of-effect.** Mirrors the I80 fix on the bare
+    /// sibling: `controller = current_resolve_source_controller`
+    /// (with `active_player` fallback); `defender = 1 - controller`.
+    /// On p0's turn, p1's controlled trigger exiles a P0 permanent
+    /// with MV ≤ max_mv.
+    ///
+    /// **Schema simplification vs Python.** Carries `max_mv: i32`
+    /// only. Other Python-side riders that would naturally extend
+    /// here (cross-controller widening, source-leaves auto-fire) are
+    /// out of scope of this variant; the schema mirror is
+    /// intentionally minimal, additive widenings get separate
+    /// variants per the round-12 / round-13 / this-round precedent.
+    ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves { max_mv: i32 },
     /// **Round 28 may-do decision wrapper.** "You may [inner effect]."
     /// Mirrors Python's `MayDo(Effect, prompt)` family (the
     /// `effects/generic/may_do.py` umbrella — "you may sacrifice a
@@ -3454,6 +3504,34 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "exile_opponents_nonland_permanent_until_leaves" => {
             Ok(Effect::ExileOpponentsNonlandPermanentUntilLeaves)
         }
+        "exile_opponents_nonland_permanent_with_max_mv_until_leaves" => {
+            // **Round 14 rider-widened parse arm.** Carries
+            // `max_mv: i32` (required, non-negative). Mirrors
+            // Python's `ExileOpponentsNonlandPermanentUntilLeaves(max_mv=N)`
+            // (`effects/generic/exile.py:587`). max_mv=0 would mean
+            // "no cap" but the bare sibling already covers that
+            // case; the rider variant requires max_mv > 0 by
+            // convention to keep the two shapes disjoint at the
+            // dict-shape layer.
+            let max_mv: i32 = match dict.get_item("max_mv")? {
+                Some(v) => v.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "exile_opponents_nonland_permanent_with_max_mv_until_leaves.max_mv must be an integer (got: {e})"
+                    ))
+                })?,
+                None => {
+                    return Err(PyValueError::new_err(
+                        "exile_opponents_nonland_permanent_with_max_mv_until_leaves: missing required 'max_mv' field",
+                    ));
+                }
+            };
+            if max_mv < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "exile_opponents_nonland_permanent_with_max_mv_until_leaves: max_mv must be non-negative, got {max_mv}"
+                )));
+            }
+            Ok(Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves { max_mv })
+        }
         "may_do" => {
             let nested = dict.get_item("inner_effect")?.ok_or_else(|| {
                 PyValueError::new_err(
@@ -4203,7 +4281,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage"
         ))),
     }
 }
@@ -5225,6 +5303,13 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::ExileOpponentsNonlandPermanentUntilLeaves => {
             d.set_item("kind", "exile_opponents_nonland_permanent_until_leaves")?;
+        }
+        Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves { max_mv } => {
+            d.set_item(
+                "kind",
+                "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+            )?;
+            d.set_item("max_mv", *max_mv)?;
         }
         Effect::MayDo { inner_effect, prompt } => {
             d.set_item("kind", "may_do")?;
