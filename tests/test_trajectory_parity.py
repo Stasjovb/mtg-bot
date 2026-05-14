@@ -496,3 +496,401 @@ def test_setup_matched_game_rejects_mulligans():
     spec = _vanilla_60_deckspec(seed=42)
     with pytest.raises(NotImplementedError, match="MulliganAgent"):
         trajectory.setup_matched_game(spec, mulligans=True)
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — extended trajectory: play a land EVERY active-player turn
+# through turn 5.
+#
+# The cadence on a vanilla mirror match (p0 on the play, alternating turns):
+# p0 active on turns 1, 3, 5; p1 active on turns 2, 4. After turn 5 MAIN1
+# the battlefield carries five Forests — three p0-controlled, two p1-
+# controlled, in ETB order. This pins the bf-ordering invariant (CE4
+# closure, etb_timestamp on every new permanent matches across engines)
+# across a five-deep stack of permanents from a real opening prefix.
+#
+# Surfaces any cross-engine bookkeeping bug that requires more than two
+# permanents to manifest — the existing test 4 caps at two.
+# ---------------------------------------------------------------------------
+
+
+def _advance_n_phases(py_state, rust_state, n: int) -> None:
+    """Walk ``n`` phase advances on both engines, asserting per-step parity."""
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python,
+        compare_fields,
+    )
+
+    for _ in range(n):
+        advance_phase_python(py_state)
+        rust_state.advance_phase()
+        py_view, rust_view = _step_views(py_state, rust_state)
+        divs = compare_fields(py_view, rust_view)
+        assert divs == [], (
+            f"phase advance ({py_view['step']!r}, turn "
+            f"{py_view['turn']}) surfaced divergences: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+        )
+
+
+def _play_active_player_forest(py_state, rust_state):
+    """Helper: play a Forest from the active player's hand. Returns the
+    :class:`CrossEngineStep` so the caller can assert on divergences."""
+    from mtg_bot.parity.cross_engine import step_both
+
+    active = py_state.active_player_idx
+    forest = next(
+        o for o in py_state.players[active].hand
+        if o.printing.name == "Forest"
+    )
+    return step_both(
+        py_state, rust_state,
+        {"kind": "play_land", "card_id": int(forest.id)},
+    )
+
+
+def test_play_land_each_turn_3_through_5_parity():
+    """Drive the play-a-land-each-active-turn pattern through turn 5.
+
+    Setup is :func:`setup_matched_game` (closes infra gap #1). Turn 1
+    p0 plays Forest, turn 2 p1 plays Forest (those two land plays
+    overlap with test 4's coverage). Then turn 3 p0 + turn 4 p1 +
+    turn 5 p0 — three additional land plays, each followed by a full
+    phase walk to the next active-player MAIN1 with per-step parity
+    assertions.
+
+    Pins:
+      * Five battlefield permanents accumulate without surfacing a
+        zone-ordering / etb_timestamp / controller_id divergence.
+      * Active-player swap fires correctly on every CLEANUP -> UNTAP
+        wrap (turn_number bumps; active_player toggles).
+      * No turn-3+ summoning-sickness clearing bug (Forests cast
+        prior turns must be untapped + unsick by their controller's
+        next UNTAP).
+    """
+    from mtg_bot.parity import trajectory
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Walk to MAIN1 of turn 1 (UNTAP -> UPKEEP -> DRAW -> MAIN1 = 3).
+    _advance_n_phases(py_state, rust_state, 3)
+
+    # Play a Forest on turns 1, 2, 3, 4, 5 in active-player order.
+    # Each "12 advances" wraps MAIN1 -> next MAIN1.
+    for expected_turn, expected_active in [
+        (1, 0), (2, 1), (3, 0), (4, 1), (5, 0),
+    ]:
+        assert py_state.turn_number == expected_turn, (
+            f"expected turn {expected_turn}, got {py_state.turn_number}"
+        )
+        assert py_state.active_player_idx == expected_active
+        assert py_state.step.name == "PRECOMBAT_MAIN"
+        s = _play_active_player_forest(py_state, rust_state)
+        assert s.divergences == [], (
+            f"turn-{expected_turn} play_land surfaced divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+        )
+        # Stop walking after the turn-5 land — keeps the post-state
+        # exactly at "turn 5 MAIN1, just played Forest".
+        if expected_turn < 5:
+            _advance_n_phases(py_state, rust_state, 12)
+
+    # Final: 5 Forests on bf, 3 p0 + 2 p1.
+    py_view = _step_views(py_state, rust_state)[0]
+    assert len(py_view["battlefield"]) == 5
+    bf_controllers = sorted(t[6] for t in py_view["battlefield"])
+    assert bf_controllers == [0, 0, 0, 1, 1]
+    assert all(t[0] == "Forest" for t in py_view["battlefield"])
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — cast a Grizzly Bears at turn 5 (earliest viable cast turn for
+# the on-the-play player, see note below).
+#
+# Cadence: p0 plays Forest turn 1, 3, 5. By turn 5 MAIN1 p0 controls
+# three Forests — turn-1 + turn-3 unsick (both have crossed at least one
+# of their own UNTAP steps), turn-5 still sick. Two unsick Forests are
+# enough for the 1G + 1 generic Bears cost.
+#
+# Note: the original Phase 6 task brief said "cast at turn 4". On the
+# on-the-play schedule p1's turn 4 has only one unsick Forest (turn-2;
+# the turn-4 land is sick). p0's earliest viable cast is turn 5 (the
+# one-mana-short turn 3 case has only one unsick Forest too — turn-1
+# Forest unsick at turn-3 UNTAP, but turn-3 land is freshly sick).
+# Adjusting the test to turn 5 keeps the trajectory honest with the
+# real summoning-sick semantics both engines model.
+# ---------------------------------------------------------------------------
+
+
+def test_cast_creature_at_turn_5_parity():
+    """Cast a Grizzly Bears at turn 5 PRECOMBAT_MAIN; assert summoning-
+    sickness + bf zone movement agree across engines.
+
+    Prefix: lands turn 1, 3, 5 (p0). At MAIN1 of turn 5 tap two
+    unsick Forests for {G}{G}, then cast Bears. Post-cast: bf has
+    3 Forests + 1 Bears, the Bears is summoning_sick=True on both
+    engines (matches CE bridge invariant for newly-resolved
+    creatures).
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import step_both
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    _advance_n_phases(py_state, rust_state, 3)  # → turn 1 MAIN1
+
+    # Turn 1 p0 land.
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12 * 2)  # → turn 3 MAIN1
+
+    # Turn 3 p0 land.
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12 * 2)  # → turn 5 MAIN1
+
+    # Turn 5 p0 land.
+    s = _play_active_player_forest(py_state, rust_state)
+    assert s.divergences == []
+
+    # Tap two unsick Forests (turn-1 + turn-3 Forests; turn-5 is sick).
+    for tap_idx in range(2):
+        untapped_forest = next(
+            o for o in py_state.battlefield
+            if o.controller_id == 0
+            and o.printing.is_land
+            and not o.tapped
+            and not o.summoning_sick
+        )
+        s = step_both(
+            py_state, rust_state,
+            {
+                "kind": "activate_ability",
+                "source_id": int(untapped_forest.id),
+                "ability_index": 0,
+            },
+        )
+        assert s.divergences == [], (
+            f"tap #{tap_idx} surfaced divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+        )
+
+    # Cast Grizzly Bears.
+    bears = next(
+        o for o in py_state.players[0].hand
+        if o.printing.name == "Grizzly Bears"
+    )
+    s = step_both(
+        py_state, rust_state,
+        {"kind": "cast_spell", "card_id": int(bears.id)},
+    )
+    assert s.divergences == [], (
+        f"cast_spell Bears surfaced divergences: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+    )
+
+    py_view = s.py_view
+    assert len(py_view["battlefield"]) == 4
+    bf_names = sorted(t[0] for t in py_view["battlefield"])
+    assert bf_names == ["Forest", "Forest", "Forest", "Grizzly Bears"]
+    # The Bears object is summoning_sick on the post-cast bf.
+    bears_bf = next(t for t in py_view["battlefield"] if t[0] == "Grizzly Bears")
+    # bf 8-tuple field 2 is the ``sick`` slot; both engines emit an
+    # int (1/0) from the field-view recipe rather than a bool.
+    assert bears_bf[2], "Bears should be summoning_sick on post-cast bf"
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — attack with the cast Bears at turn 7 DECLARE_ATTACKERS.
+#
+# Bears was cast turn 5, sick through turn 6, unsick at turn-7 UNTAP.
+# Turn 7 DECLARE_ATTACKERS: declare Bears as attacker, walk DA -> DB
+# (declare empty assignments — defender has no creatures), walk DB ->
+# COMBAT_DAMAGE.
+#
+# Note: the original brief said "attack at turn 5". The earliest viable
+# attack on this deck is turn 7 (Bears cast turn 5 + summoning sickness
+# clears two turns later on the controller's next UNTAP). Same scheduling
+# slip as test 7.
+#
+# Also surfaces the attacker-tapped invariant — Bears is tapped after
+# declare_attackers fires (no vigilance).
+# ---------------------------------------------------------------------------
+
+
+def test_attack_at_turn_7_parity():
+    """Walk to turn 7 DECLARE_ATTACKERS, declare Bears as attacker,
+    walk through DECLARE_BLOCKERS, assert per-step parity.
+
+    Pins: declare_attackers' tapped-flag mutation matches across
+    engines; the empty-blockers DECLARE_BLOCKERS arm produces
+    parity-equivalent state on both sides.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import step_both
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _advance_n_phases(py_state, rust_state, 3)
+    s = _play_active_player_forest(py_state, rust_state); assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12 * 2)
+    s = _play_active_player_forest(py_state, rust_state); assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12 * 2)
+    s = _play_active_player_forest(py_state, rust_state); assert s.divergences == []
+    # Tap two Forests + cast Bears (mirrors test 7).
+    for _ in range(2):
+        f = next(
+            o for o in py_state.battlefield
+            if o.controller_id == 0 and o.printing.is_land
+            and not o.tapped and not o.summoning_sick
+        )
+        s = step_both(
+            py_state, rust_state,
+            {"kind": "activate_ability", "source_id": int(f.id), "ability_index": 0},
+        )
+        assert s.divergences == []
+    bears = next(o for o in py_state.players[0].hand if o.printing.name == "Grizzly Bears")
+    s = step_both(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
+    assert s.divergences == []
+
+    # Walk turn 5 MAIN1 -> turn 7 MAIN1 (24 advances). Each per-step
+    # parity check is enforced by _advance_n_phases.
+    _advance_n_phases(py_state, rust_state, 12 * 2)
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step.name == "PRECOMBAT_MAIN"
+
+    # Advance MAIN1 -> BoC -> DECLARE_ATTACKERS (2 advances).
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step.name == "DECLARE_ATTACKERS"
+
+    # Declare Bears as attacker.
+    bears_obj = next(
+        o for o in py_state.battlefield if o.printing.name == "Grizzly Bears"
+    )
+    assert not bears_obj.summoning_sick, "Bears should be unsick at turn 7"
+    assert not bears_obj.tapped, "Bears should be untapped before attack"
+
+    s = step_both(
+        py_state, rust_state,
+        {"kind": "declare_attackers", "attacker_ids": [int(bears_obj.id)]},
+    )
+    assert s.divergences == [], (
+        f"declare_attackers surfaced divergences: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+    )
+    # Bears is now tapped on both engines.
+    py_view = s.py_view
+    bears_bf = next(t for t in py_view["battlefield"] if t[0] == "Grizzly Bears")
+    # bf 8-tuple field 1 is the ``tapped`` slot; engines emit int.
+    assert bears_bf[1], "Bears should be tapped after declare_attackers"
+
+    # Advance DA -> DB.
+    _advance_n_phases(py_state, rust_state, 1)
+    assert py_state.step.name == "DECLARE_BLOCKERS"
+
+    # Empty declare_blockers (defender has no creatures).
+    s = step_both(
+        py_state, rust_state,
+        {"kind": "declare_blockers", "assignments": []},
+    )
+    assert s.divergences == [], (
+        f"declare_blockers (empty) surfaced divergences: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — combat damage at turn 7 COMBAT_DAMAGE.
+#
+# Continues test 8's prefix: Bears attacks unblocked, COMBAT_DAMAGE step
+# fires the Rust + Python damage helpers (side-channel, neither engine
+# auto-resolves combat damage from advance_phase). p1's life drops
+# 20 -> 18 on both engines.
+# ---------------------------------------------------------------------------
+
+
+def test_combat_damage_at_turn_7_parity():
+    """Bears attacks unblocked, deal 2 damage to p1 at COMBAT_DAMAGE.
+
+    Pins: per-engine combat damage helpers stay in sync — p1 life
+    drops the same amount on both sides, and the post-damage SBA
+    pass produces matching is_over / has_lost flags.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        clear_combat_both,
+        compare_fields,
+        deal_combat_damage_rust,
+        resolve_combat_damage_python,
+        step_both,
+    )
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _advance_n_phases(py_state, rust_state, 3)
+    s = _play_active_player_forest(py_state, rust_state); assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12 * 2)
+    s = _play_active_player_forest(py_state, rust_state); assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 12 * 2)
+    s = _play_active_player_forest(py_state, rust_state); assert s.divergences == []
+    for _ in range(2):
+        f = next(
+            o for o in py_state.battlefield
+            if o.controller_id == 0 and o.printing.is_land
+            and not o.tapped and not o.summoning_sick
+        )
+        s = step_both(
+            py_state, rust_state,
+            {"kind": "activate_ability", "source_id": int(f.id), "ability_index": 0},
+        )
+        assert s.divergences == []
+    bears = next(o for o in py_state.players[0].hand if o.printing.name == "Grizzly Bears")
+    s = step_both(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
+    assert s.divergences == []
+
+    _advance_n_phases(py_state, rust_state, 12 * 2)
+    _advance_n_phases(py_state, rust_state, 2)  # MAIN1 -> DA
+
+    bears_obj = next(
+        o for o in py_state.battlefield if o.printing.name == "Grizzly Bears"
+    )
+    s = step_both(
+        py_state, rust_state,
+        {"kind": "declare_attackers", "attacker_ids": [int(bears_obj.id)]},
+    )
+    assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 1)  # DA -> DB
+    s = step_both(
+        py_state, rust_state,
+        {"kind": "declare_blockers", "assignments": []},
+    )
+    assert s.divergences == []
+    _advance_n_phases(py_state, rust_state, 1)  # DB -> COMBAT_DAMAGE
+    assert py_state.step.name == "COMBAT_DAMAGE"
+
+    # Side-channel combat damage on both engines (mirrors
+    # combat_selector's COMBAT_DAMAGE branch).
+    fired_py = resolve_combat_damage_python(py_state)
+    assert fired_py is True, "Python should report damage fired"
+    deal_combat_damage_rust(rust_state)
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"post combat-damage divergences: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
+    # Damage assertions.
+    assert py_view["life_p0"] == 20, "p0 untouched"
+    assert py_view["life_p1"] == 18, "p1 took 2 from Bears"
+    assert rust_view["life_p1"] == 18
+
+    # Clean up combat for hygienic future probes (matches what
+    # combat_selector does at END_OF_COMBAT).
+    _advance_n_phases(py_state, rust_state, 1)  # CD -> EOC
+    clear_combat_both(py_state, rust_state)
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
