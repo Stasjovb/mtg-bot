@@ -966,6 +966,43 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ReturnCreatureFromYourGraveyardToHand,
         )
         return ReturnCreatureFromYourGraveyardToHand(or_spacecraft=True)
+    if kind == "return_enchantment_or_creature_from_your_graveyard_to_hand":
+        # **Phase 5 rider-widened bridge arm (or_enchantment).**
+        # Mirrors Rust's
+        # ``Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToHand``
+        # (cards.rs new variant). Sister bridge arm to or_artifact
+        # and or_spacecraft. Unit variant — no companion fields
+        # beyond ``kind``.
+        #
+        # **Filter delta vs sibling arms.** Enchantment is a CARD
+        # TYPE (not a subtype like Spacecraft, and not the same
+        # card-type as Artifact). The Rust filter reads
+        # ``printing.card_types.contains("Enchantment")`` for the
+        # second branch — same shape as the or_artifact arm but a
+        # different type-name. Python's mirror is the
+        # ``or_enchantment=True`` rider on
+        # ``ReturnCreatureFromYourGraveyardToHand`` which flows
+        # through ``_gy_card_matches`` (graveyard.py:46 — admits
+        # ``p.is_enchantment`` alongside the creature primary). A
+        # plain Artifact / Spacecraft (no Enchantment card-type)
+        # is NOT admitted by this rider — discriminator vs the
+        # sibling arms.
+        #
+        # **EoE consumer.** Rescue Skiff (EoE) is the unique EoE
+        # source with the "creature or enchantment card from your
+        # graveyard" rider, but its destination is the BATTLEFIELD,
+        # not the hand. The to-battlefield variant of the rider
+        # (``ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield``)
+        # is a separate slice; this to-hand bridge arm lands here
+        # for substrate symmetry alongside the existing or_artifact
+        # / or_spacecraft to-hand arms. Synthetic-shape probes
+        # cover the leaf bridge end-to-end; the first real-EoE
+        # consumer of the to-hand variant re-enters via this same
+        # arm with no further bridge work.
+        from mtg_bot.effects.generic.bounce import (
+            ReturnCreatureFromYourGraveyardToHand,
+        )
+        return ReturnCreatureFromYourGraveyardToHand(or_enchantment=True)
     if kind == "sequence":
         # **Phase 5 composer bridge arm (sequence).**
         # Mirrors Rust's ``Effect::Sequence { effects: Vec<Effect> }``

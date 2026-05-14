@@ -379,18 +379,25 @@ class ReturnCreatureFromYourGraveyardToHand(ReturnFromGraveyard):
         object.__setattr__(self, "destination", "hand")
 
     def describe(self) -> str:
-        # Preserve the legacy printed phrasing exactly.
+        # Preserve the legacy printed phrasing exactly. Extras live
+        # in the rider order honored by ``ReturnFromGraveyard.describe``
+        # (parent — graveyard.py:299): or_artifact widens to
+        # "artifact or creature", or_enchantment to "creature or
+        # enchantment", or_spacecraft to "creature or Spacecraft".
         extras = []
         if self.or_artifact:
             extras.append("artifact")
+        if self.or_enchantment:
+            extras.append("enchantment")
         if self.or_spacecraft:
             extras.append("Spacecraft")
         if extras:
-            type_phrase = (
-                "artifact or creature"
-                if "artifact" in extras
-                else "creature or Spacecraft"
-            )
+            if "artifact" in extras:
+                type_phrase = "artifact or creature"
+            elif "enchantment" in extras:
+                type_phrase = "creature or enchantment"
+            else:
+                type_phrase = "creature or Spacecraft"
         else:
             type_phrase = "creature"
         if self.max_mv > 0:

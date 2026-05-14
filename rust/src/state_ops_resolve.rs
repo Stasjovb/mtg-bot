@@ -3146,6 +3146,81 @@ fn apply_effect(
             obj.exiled_with_source = None;
             Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
         }
+        // **Phase 5 rider-widened return-to-hand: enchantment-or-
+        // creature variant.** Sibling to the artifact-or-creature
+        // and creature-or-spacecraft arms. Filter delta: the
+        // disjunction is `Creature OR Enchantment` — both branches
+        // read off `printing.card_types` (Enchantment is a CARD
+        // TYPE, not a subtype, so this differs from the Spacecraft
+        // arm which reads `printing.subtypes` for the second
+        // branch).
+        //
+        // **Controller-of-effect.** Inherits the I82 contract:
+        // `controller_idx` derives from
+        // `current_resolve_source_controller`, falling back to
+        // `active_player` for direct apply_effect_pub callers. The
+        // graveyard scan and hand push both anchor to the source's
+        // controller — cross-controller routing (p1's ETB resolving
+        // on p0's turn) Just Works.
+        //
+        // **Disjunction shape.** The legal-target filter widens
+        // from `card_types.contains("Creature")` to
+        // `card_types.contains("Creature") ||
+        //  card_types.contains("Enchantment")`. Enchantment-
+        // creatures (printings carrying BOTH types — the EoE
+        // pool's "Enchantment Creature — ..." printings) match at
+        // the first branch and are pulled.
+        //
+        // **EoE consumer (audit).** Rescue Skiff (EoE) is the
+        // unique EoE source carrying the "creature or enchantment
+        // card from your graveyard" rider, but its destination is
+        // the BATTLEFIELD, not the hand — Rescue Skiff itself
+        // unblocks via the to-battlefield sibling that lands as a
+        // separate slice. This to-hand variant is the direct
+        // sibling of the existing `or_artifact` / `or_spacecraft`
+        // to-hand arms and lands here for substrate symmetry: as
+        // soon as a real-EoE consumer of "creature or enchantment
+        // card from your graveyard to your hand" appears in a
+        // future set on the audit, the bridge is already in place.
+        Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToHand => {
+            let _ = source_obj_id;
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
+            let target_obj_id: Option<u32> = state.players[controller_idx]
+                .graveyard
+                .iter()
+                .find_map(|obj| match state.registry.lookup(obj.printing_id) {
+                    Some(printing)
+                        if printing.card_types.iter().any(|t| t == "Creature")
+                            || printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Enchantment") =>
+                    {
+                        Some(obj.id)
+                    }
+                    _ => None,
+                });
+            let Some(target_id) = target_obj_id else {
+                return Ok(());
+            };
+            let graveyard_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].graveyard);
+            let pos = graveyard_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in graveyard but not on re-scan");
+            let mut obj = graveyard_mut.remove(pos);
+            obj.zone = ZONE_HAND;
+            obj.tapped = false;
+            obj.summoning_sick = true;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            Arc::make_mut(&mut state.players[controller_idx].hand).push(obj);
+        }
         // **Controller resolution (I83 follow-up to the
         // I59 / I60 / I63 / I64 / I65 / I66 / I67 / I68 / I69 /
         // I70 / I71 / I72 / I73 / I74 / I75 / I76 / I77 / I78 /

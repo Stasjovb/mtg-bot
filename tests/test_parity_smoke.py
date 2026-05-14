@@ -16718,6 +16718,309 @@ def test_cross_engine_real_eoe_interceptor_mechan_etb_return_artifact_or_creatur
     assert len(py_state.stack) == 0
 
 
+def test_cross_engine_rescue_skiff_shape_etb_return_enchantment_or_creature_to_hand_parity(
+    parity_smoke,
+):
+    """Probe: Rescue-Skiff-shape ETB ``return target creature or
+    enchantment card from your graveyard to your hand`` parity --
+    SUBSTRATE-symmetry probe for the rider-widened return-to-hand
+    cluster (sister to the Interceptor Mechan or_artifact probe and
+    the Fell Gravship or_spacecraft suffix probe).
+
+    **EoE consumer status (audit divergence note).** Rescue Skiff
+    (EoE) is the unique EoE source carrying the "creature or
+    enchantment card from your graveyard" rider, but its
+    destination is the BATTLEFIELD (not the hand). The
+    to-battlefield variant of the rider
+    (``ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield``)
+    is a separate slice; this to-hand probe carries a Rescue-Skiff-
+    SHAPED source (Spacecraft with the same enchantment-or-creature
+    rider) but with destination=hand to exercise the to-hand
+    sibling that lands here as part of the to-hand rider cluster.
+
+    The probe is therefore SHAPE-aligned with Interceptor Mechan
+    and Fell Gravship suffix; it pins the bridge end-to-end through
+    the new Rust variant + bridge translation + Python
+    ``or_enchantment=True`` rider on a
+    ``ReturnCreatureFromYourGraveyardToHand``. The moment a real-
+    EoE consumer of "creature or enchantment card from your
+    graveyard to your hand" appears in a future set on the audit,
+    this probe doubles as the substrate baseline for that
+    consumer.
+
+    Bridges the
+    ``return_enchantment_or_creature_from_your_graveyard_to_hand``
+    effect kind end-to-end. The audit lists no destination-=-hand
+    consumer in EoE; the leaf effect composes directly off the
+    bare-arm + or_enchantment=True (no Sequence / IfYouDo nesting)
+    so it is end-to-end probeable from the rider arm alone.
+
+    Predicate decomposition:
+
+        SourceIsSelf
+
+    Effect:
+    ``return_enchantment_or_creature_from_your_graveyard_to_hand``
+    -- NEW on the bridge as of the companion commits on this
+    branch. The Rust effect variant carries the I82 controller-of-
+    effect contract (``controller_idx`` derives from
+    ``current_resolve_source_controller``); the Python side
+    translates to
+    ``ReturnCreatureFromYourGraveyardToHand(or_enchantment=True)``.
+
+    **Rider-widening discriminator.** The bare unit-variant arm
+    would skip an enchantment-only graveyard (no creatures match
+    the filter); the or_artifact / or_spacecraft sibling arms would
+    also skip a plain Enchantment (Enchantment is not Artifact, and
+    the printing carries no Spacecraft subtype). The or_enchantment
+    rider widens the filter to admit Enchantment cards; this probe
+    seeds the graveyard with a NON-CREATURE enchantment so the
+    rider is the load-bearing path -- if the bridge ever regressed
+    to the bare unit variant or the wrong sibling arm, the
+    enchantment would not qualify and the trigger would fizzle.
+
+    Probe shape (inject-and-fire-ENTERS):
+
+      1. Pre-seed p0's graveyard with a vanilla Enchantment card.
+         Load-bearing test datum: only the or_enchantment rider
+         admits it.
+      2. Inject Rescue-Skiff-shape source on p0's battlefield.
+         Trigger fires; one
+         ReturnEnchantmentOrCreatureFromYourGraveyardToHand lands
+         on the stack with its target deterministically picked.
+      3. Drain both stacks. Both engines: enchantment moves from
+         p0's graveyard to p0's hand.
+      4. Cross-engine assert: empty p0 graveyard, single Skiff Recur
+         Bait Enchantment in p0's hand, Rescue-Skiff source still
+         on p0's bf.
+
+    Out of scope: Flying / Station / cast cost / multi-card
+    graveyard pick / empty-graveyard silent-skip / Rescue Skiff's
+    real to-battlefield destination.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Rescue-Skiff source on p0's battlefield.
+      * Skiff Recur Bait Enchantment in p0's hand.
+      * p0 graveyard empty.
+      * No residual stack.
+      * Life totals unchanged.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+
+    recur_bait_enchantment = CardDef(
+        name="Skiff Recur Bait Enchantment",
+        card_type="Enchantment",
+        mana_cost_generic=2,
+    )
+    rescue_skiff_shape = CardDef(
+        name="Rescue Skiff Recur Trigger",
+        card_type="Artifact",
+        mana_cost_generic=5,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "return_enchantment_or_creature_from_your_graveyard_to_hand"
+                    ),
+                },
+            },
+        ),
+    )
+    spec = DeckSpec(
+        card_defs=(recur_bait_enchantment, rescue_skiff_shape),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    ZONE_GRAVEYARD = 3
+    rust_enchantment_dict = {
+        "name": "Skiff Recur Bait Enchantment",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+    }
+    rust_skiff_dict = {
+        "name": "Rescue Skiff Recur Trigger",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 5},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "return_enchantment_or_creature_from_your_graveyard_to_hand"
+                    ),
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_state.register_and_inject_object(
+        rust_enchantment_dict, 0, ZONE_GRAVEYARD
+    )
+    rust_state.register_and_inject_object(
+        rust_skiff_dict, 0, ZONE_BATTLEFIELD
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Rescue-Skiff-shape source's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "ReturnEnchantmentOrCreatureFromYourGraveyardToHand on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    enchantment_printing = CardPrinting(
+        name="Skiff Recur Bait Enchantment",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=()),
+        type_line="Enchantment",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+    )
+    skiff_printing = CardPrinting(
+        name="Rescue Skiff Recur Trigger",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=5, colored=()),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ReturnCreatureFromYourGraveyardToHand(
+                    or_enchantment=True
+                ),
+            ),
+        ),
+    )
+
+    # Pick-first-legal-target shim for the or_enchantment rider arm.
+    py_state.players[0].agent = _PickFirstLegalTargetAgent()
+
+    # Seed p0's graveyard with the enchantment bait.
+    py_bait = py_state.new_object(
+        enchantment_printing, owner_id=0, zone=Zone.GRAVEYARD,
+    )
+    py_state.players[0].graveyard.append(py_bait)
+
+    py_skiff = py_state.new_object(
+        skiff_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_skiff.summoning_sick = False
+    py_skiff.tapped = False
+    py_skiff.damage = 0
+    py_skiff.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_skiff)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_skiff)
+    assert len(py_state.stack) == 1, (
+        "Python: Rescue-Skiff-shape source's arrival should fire "
+        "the IsSelf ENTERS trigger and land "
+        "ReturnCreatureFromYourGraveyardToHand(or_enchantment=True) "
+        f"on the stack. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain: enchantment moved from p0's gy to p0's hand on
+    # both engines.
+    assert rust_state.hand_sizes[0] == 1, (
+        f"Rust: p0 hand should contain the recurred enchantment; "
+        f"got hand_size={rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == 0, (
+        f"Rust: p0 graveyard should be empty after the return; "
+        f"got graveyard_size={rust_state.graveyard_sizes[0]}"
+    )
+    assert rust_state.battlefield_sizes[0] == 1, (
+        f"Rust: p0 bf should still hold the Rescue-Skiff source; "
+        f"got bf_size={rust_state.battlefield_sizes[0]}"
+    )
+
+    assert len(py_state.players[0].hand) == 1, (
+        f"Python: p0 hand should contain the recurred enchantment; "
+        f"got hand_size={len(py_state.players[0].hand)}"
+    )
+    py_hand_name = py_state.players[0].hand[0].printing.name
+    assert py_hand_name == "Skiff Recur Bait Enchantment", (
+        f"Python: p0 hand should contain the bait enchantment; "
+        f"got {py_hand_name}"
+    )
+    assert len(py_state.players[0].graveyard) == 0, (
+        f"Python: p0 graveyard should be empty after the return; "
+        f"got graveyard_size={len(py_state.players[0].graveyard)}"
+    )
+    py_bf_p0 = [
+        o for o in py_state.battlefield if o.controller_id == 0
+    ]
+    assert len(py_bf_p0) == 1, (
+        f"Python: p0 bf should still hold the Rescue-Skiff source; "
+        f"got bf_size={len(py_bf_p0)}"
+    )
+    assert py_bf_p0[0].printing.name == "Rescue Skiff Recur Trigger", (
+        f"Python: p0 bf survivor should be the Rescue-Skiff source; "
+        f"got {py_bf_p0[0].printing.name}"
+    )
+
+    # Cross-engine: lives unchanged on both sides.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Cross-engine: hand / graveyard / bf sizes match.
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+
 def test_cross_engine_real_eoe_uthros_scanship_etb_sequence_draw_discard_parity(
     parity_smoke,
 ):

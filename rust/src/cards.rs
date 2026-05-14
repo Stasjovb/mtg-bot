@@ -865,6 +865,54 @@ pub enum Effect {
     /// rider flags (`or_artifact`, `or_enchantment`, untargeted_all,
     /// plus_one_counter, log_suffix). Bare `or_spacecraft` only.
     ReturnCreatureOrSpacecraftFromYourGraveyardToHand,
+    /// **Phase 5 rider-widened return-to-hand (Option B — additive
+    /// bespoke arm).** Return the first creature OR enchantment card
+    /// from the source-controller's graveyard to that player's hand.
+    /// Mirrors Python's
+    /// `ReturnCreatureFromYourGraveyardToHand(or_enchantment=True)`
+    /// (`bounce.py:356`) — the rider widens the legal-target pool
+    /// to admit enchantment cards alongside creatures.
+    ///
+    /// **EoE consumer (audit).** Rescue Skiff (EoE) carries the
+    /// "creature or enchantment card from your graveyard" rider on
+    /// its ETB trigger but with the destination set to the
+    /// battlefield (not hand); the destination-to-hand variant of
+    /// the rider is the natural sibling of the existing
+    /// `or_artifact` / `or_spacecraft` to-hand arms and lands here
+    /// as part of the to-hand rider cluster. A separate
+    /// `ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield`
+    /// arm (mirror of this one with destination=battlefield) is the
+    /// future slice that closes the loop on Rescue Skiff itself.
+    ///
+    /// **Filter contract.** A graveyard card qualifies iff its
+    /// printing's `card_types` contains "Creature" OR "Enchantment".
+    /// (CR 400 / 506 — type predicates read off the printing's
+    /// static card_types; the Rust registry stores card_types as
+    /// the Scryfall type-line components on the LHS of the em-dash.)
+    /// Sister enchantment-creatures (printing carrying BOTH
+    /// "Enchantment" AND "Creature") match the disjunction at the
+    /// first hit and are pulled. Cards with neither type are
+    /// skipped. The scan preserves the unit-variant's iterator
+    /// order (`state.players[controller_idx].graveyard.iter().find_map`),
+    /// so test predictability matches the existing arms exactly.
+    ///
+    /// **Controller-of-effect.** Mirrors the I82 fix: source/dest
+    /// derive from `current_resolve_source_controller`
+    /// (falls back to active_player for direct apply_effect_pub
+    /// callers). On p0's turn, p1's controlled trigger scans p1's
+    /// graveyard and pushes to p1's hand.
+    ///
+    /// **Zone-change reset (CR 400.7).** Same as the sibling
+    /// variants: `tapped`, `summoning_sick`, `damage`, `counters`,
+    /// `attached_to`, `exiled_with_source` all reset on move to
+    /// hand. summoning_sick=true matches the round-28 CE1
+    /// universal-true default for hand-zone objects.
+    ///
+    /// **Schema simplification vs Python.** Drops `max_mv` and the
+    /// other rider flags (`or_artifact`, `or_spacecraft`,
+    /// untargeted_all, plus_one_counter, log_suffix). Bare
+    /// `or_enchantment` only.
+    ReturnEnchantmentOrCreatureFromYourGraveyardToHand,
     /// **Round 28 coverage extension.** Put `amount` +1/+1 counter(s)
     /// on each creature the source's controller controls. Mirrors
     /// Python's `PutPlusOneCounterOnEachCreatureYouControl(amount: int = 1)`
@@ -3253,6 +3301,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // — extra dict fields are silently ignored.
             Ok(Effect::ReturnCreatureOrSpacecraftFromYourGraveyardToHand)
         }
+        "return_enchantment_or_creature_from_your_graveyard_to_hand" => {
+            // **Phase 5 rider-widened parse arm.** Unit variant; the
+            // disjunction (enchantment OR creature) is baked into the
+            // variant identity itself, so no fields beyond `kind`.
+            // Mirrors Python's
+            // `ReturnCreatureFromYourGraveyardToHand(or_enchantment=True)`
+            // — extra dict fields are silently ignored for round-trip
+            // dict-shape consistency.
+            Ok(Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToHand)
+        }
         "put_plus_one_counter_on_each_creature_you_control" => {
             // Python's PutPlusOneCounterOnEachCreatureYouControl
             // dataclass has amount: int = 1. Mirror that.
@@ -5001,6 +5059,12 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item(
                 "kind",
                 "return_creature_or_spacecraft_from_your_graveyard_to_hand",
+            )?;
+        }
+        Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToHand => {
+            d.set_item(
+                "kind",
+                "return_enchantment_or_creature_from_your_graveyard_to_hand",
             )?;
         }
         Effect::PutPlusOneCounterOnEachCreatureYouControl { amount } => {
