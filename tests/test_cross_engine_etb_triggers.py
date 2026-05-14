@@ -3881,5 +3881,172 @@ def test_rust_parser_accepts_owner_puts_target_artifact_or_creature_on_top_or_bo
     assert pid == 0
 
 
+def test_bridge_set_base_pt_until_eot_translates_to_python():
+    """BLOCKED-RUST-EFFECT slice -- layer 7b base-P/T override.
+    Rust ``{"kind": "set_base_pt_until_eot", "power": N, "toughness":
+    M}`` translates to Python ``SetBasePTUntilEOT(power=N,
+    toughness=M)``.
+
+    Field names agree on both engines (``power``, ``toughness``);
+    no rename in the bridge. Mirrors Rust's parse_effect arm
+    (cards.rs:3879-3909) which requires both fields with no
+    defaults. The Python class is the layer-7b sibling of
+    PumpTargetCreatureUntilEOT (layer-7c) -- same target-pick shape
+    (source-controller's first creature), different composition
+    layer (overrides the base instead of stacking on top).
+    """
+    from mtg_bot.effects.generic.pump import SetBasePTUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "set_base_pt_until_eot", "power": 4, "toughness": 4}
+    )
+    assert isinstance(e, SetBasePTUntilEOT)
+    assert e.power == 4
+    assert e.toughness == 4
+
+
+def test_bridge_set_base_pt_until_eot_negative_values_legal():
+    """Negative power / toughness round-trip cleanly.
+    Mirrors Rust's parse_effect arm (no parse-time guard on
+    negatives) and Python's dataclass (no raise-on-negative). A
+    debuff-shaped "becomes base -2/-2" is meaningful (the creature
+    dies to SBA toughness <= 0 when SBA fires); the bridge does not
+    sanitize.
+    """
+    from mtg_bot.effects.generic.pump import SetBasePTUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "set_base_pt_until_eot", "power": -2, "toughness": -2}
+    )
+    assert isinstance(e, SetBasePTUntilEOT)
+    assert e.power == -2
+    assert e.toughness == -2
+
+
+def test_bridge_set_base_pt_until_eot_asymmetric_values():
+    """Asymmetric (power != toughness) values round-trip cleanly.
+    Pins that the bridge doesn't accidentally collapse the two
+    fields onto a single value or swap them. ``power=1, toughness=4``
+    is the canonical "becomes a 1/4" defender-shape; the Python
+    class stores them in field order, no swap.
+    """
+    from mtg_bot.effects.generic.pump import SetBasePTUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "set_base_pt_until_eot", "power": 1, "toughness": 4}
+    )
+    assert isinstance(e, SetBasePTUntilEOT)
+    assert e.power == 1
+    assert e.toughness == 4
+
+
+def test_bridge_set_base_pt_until_eot_missing_power_raises():
+    """Missing ``power`` field raises KeyError. Mirrors Rust's
+    parse_effect arm which raises PyValueError on missing required
+    field; the bridge enforces the same contract so a typo in a
+    fixture surfaces immediately rather than silently defaulting to
+    0/0 (which would be a "becomes base 0/0" override and die to SBA
+    -- a different observable than a fizzle, and a likely bug
+    rather than an intent).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect(
+            {"kind": "set_base_pt_until_eot", "toughness": 4}
+        )
+
+
+def test_bridge_set_base_pt_until_eot_missing_toughness_raises():
+    """Missing ``toughness`` field raises KeyError. Sister test to
+    the missing-power case; both fields are independently required
+    on both engines.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect(
+            {"kind": "set_base_pt_until_eot", "power": 4}
+        )
+
+
+def test_bridge_set_base_pt_until_eot_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``{"kind": "sequence", "effects": [{"kind":
+    "set_base_pt_until_eot", "power": 4, "toughness": 4}, {"kind":
+    "draw_cards", "count": 1}]}`` translates to ``Sequence(effects=(
+    SetBasePTUntilEOT(power=4, toughness=4), DrawCards(amount=1)))``.
+    Pins the parametric arm against accidental field-loss in the
+    Sequence translator (Sequence recursively dispatches into
+    ``_ta_dict_to_python_effect`` per child, so this also exercises
+    the recursive path).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.pump import SetBasePTUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "set_base_pt_until_eot",
+                    "power": 4,
+                    "toughness": 4,
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], SetBasePTUntilEOT)
+    assert e.effects[0].power == 4
+    assert e.effects[0].toughness == 4
+
+
+def test_rust_parser_accepts_set_base_pt_until_eot_in_triggered_ability():
+    """Pin the Rust parser surface for the ``set_base_pt_until_eot``
+    effect kind on a triggered_ability carrier. The bridge dict
+    shape must register cleanly on the Rust side too; this lockstep
+    gate keeps the bridge from drifting away from Rust's
+    parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3879-3909``
+    accepts the dict shape with required ``power`` and ``toughness``
+    integer fields.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- SetBasePTUntilEOT",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "G": 1},
+        "power": 3,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "set_base_pt_until_eot",
+                    "power": 4,
+                    "toughness": 4,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

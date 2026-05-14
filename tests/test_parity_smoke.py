@@ -39591,6 +39591,596 @@ def test_cross_engine_fight_target_creature_synthetic_etb_parity(
     assert py_state.players[1].life == 20
 
 
+# =====================================================================
+# BLOCKED-RUST-EFFECT slice -- SetBasePTUntilEOT effect arm regression
+# pins.
+#
+# Synthetic Rust + cross-engine probes for the layer-7b base-P/T
+# override (CR 613.4). The Rust `Effect::SetBasePTUntilEOT` variant +
+# composer wiring already shipped end-to-end (cards.rs:1851 +
+# state_ops_resolve.rs:6531-6579 + state_ops_combat.rs:267-388); this
+# slice ships the cross-engine bridge arm + the regression pins that
+# exercise it.
+#
+# No real-EoE consumer of the bare bilateral SetBasePTUntilEOT shape
+# today. Genemorph Imago uses landfall + a conditional-threshold
+# variant (`SetBasePTConditionalUntilEOT` -- 3/3 default, 6/6 if you
+# control 6+ lands) which needs both the etb-subject-substrate
+# branch (Subject(IsLand) predicate) AND a new Rust conditional
+# Effect arm. Both are tracked as deferred follow-ups in
+# `docs/EOE_PROBE_READINESS_AUDIT.md`. This slice ships synthetic-only
+# end-to-end coverage; the consumer cascade is the documented gap.
+# =====================================================================
+
+
+def _build_rust_set_base_pt_state(power: int = 4, toughness: int = 4):
+    """Helper: build a Rust state with a SetBasePTUntilEOT ETB-trigger
+    source on p0's bf and ONE Bears creature on p0's bf as the
+    bait target.
+
+    Returns (rust_state, source_id, p0_bait_id).
+
+    The source is an ARTIFACT (not a creature), so the FIRST-creature
+    scan on p0's bf picks the bait Bears unambiguously rather than
+    the source itself. Mirrors the Fight-test artifact-source pattern.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    p0_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "SetBasePT-Trigger Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "set_base_pt_until_eot",
+                        "power": power,
+                        "toughness": toughness,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id, p0_bait_id
+
+
+def test_rust_set_base_pt_until_eot_basic_overrides_printed_base():
+    """BLOCKED-RUST-EFFECT slice -- basic SetBasePT pin. A 2/2 Bears
+    targeted with "becomes base 4/4 UEOT" reads as 4/4 (not 6/6 --
+    the printed 2/2 base is REPLACED with 4/4, not added to it).
+
+    Pins the layer-7b override semantics:
+      - The arm pushes a UeotModifier::SetBasePT onto the target.
+      - The composer reads the override as the new BASE
+        (battlefield_creature_power / _toughness ignore the printed
+        2/2 once the SetBasePT entry is present).
+      - Source itself (an Artifact) is NOT picked as the target
+        (the scan filters to card_types containing "Creature").
+    """
+    rust_state, source_id, bait_id = _build_rust_set_base_pt_state(
+        power=4, toughness=4,
+    )
+    # Source's ENTERS lands the SetBasePT trigger on the stack.
+    assert rust_state.stack_size() == 1, (
+        "Rust: source's arrival should fire the SourceIsSelf ENTERS "
+        "trigger and land SetBasePTUntilEOT on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    # Pre-state pin: bait Bears reads its printed 2/2.
+    assert rust_state.effective_power(bait_id) == 2
+    assert rust_state.effective_toughness(bait_id) == 2
+    # Resolve.
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Post-state: bait Bears reads 4/4 (printed base REPLACED, not
+    # additively bumped to 6/6).
+    assert rust_state.effective_power(bait_id) == 4, (
+        "Rust: bait Bears effective_power should be 4 after "
+        "SetBasePT layer-7b override (NOT 6 -- the printed 2/2 base "
+        "is REPLACED, not additively pumped). "
+        f"Got effective_power={rust_state.effective_power(bait_id)}"
+    )
+    assert rust_state.effective_toughness(bait_id) == 4, (
+        "Rust: bait Bears effective_toughness should be 4 after "
+        "SetBasePT layer-7b override. "
+        f"Got effective_toughness={rust_state.effective_toughness(bait_id)}"
+    )
+
+
+def test_rust_set_base_pt_until_eot_smaller_base_replaces_larger_printed():
+    """BLOCKED-RUST-EFFECT slice -- smaller-base override pin. A 5/5
+    Hill Giant targeted with "becomes base 1/1 UEOT" reads as 1/1
+    (the printed 5/5 base is REPLACED with the smaller 1/1, not
+    clamped or maxed).
+
+    Pins layer-7b's last-applied-wins semantics work in the
+    "downsize" direction too (asymmetric to the upsize case --
+    a pure additive layer would not be able to express this).
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Hill Giant (5/5)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 4, "R": 1},
+            "power": 5,
+            "toughness": 5,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "SetBasePT(1/1)-Trigger Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "set_base_pt_until_eot",
+                        "power": 1,
+                        "toughness": 1,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    assert rust_state.effective_power(bait_id) == 1, (
+        "Rust: Hill Giant effective_power should be 1 after "
+        "SetBasePT(1/1) override (printed 5/5 REPLACED, not "
+        "clamped to max). "
+        f"Got effective_power={rust_state.effective_power(bait_id)}"
+    )
+    assert rust_state.effective_toughness(bait_id) == 1, (
+        "Rust: Hill Giant effective_toughness should be 1 after "
+        "SetBasePT(1/1) override. "
+        f"Got effective_toughness={rust_state.effective_toughness(bait_id)}"
+    )
+
+
+def test_rust_set_base_pt_until_eot_no_creature_silently_fizzles():
+    """BLOCKED-RUST-EFFECT slice -- empty-bf-creatures pin. If the
+    source-controller has NO creatures on bf (only the source
+    artifact itself), the arm silently fizzles -- no crash, no
+    state mutation beyond the trigger drain.
+
+    Pins the resolve arm's "let Some(target_id) = target_id else
+    { return Ok(()); }" silent-skip branch (state_ops_resolve.rs:
+    6565-6567).
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Inject the SetBasePT-trigger artifact source ALONE -- no bait
+    # creature on p0's bf. Source is an artifact, not a creature, so
+    # the source itself isn't a valid target either.
+    artifact_source_id = rust_state.register_and_inject_object(
+        {
+            "name": "SetBasePT-Trigger Artifact (lonely)",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "set_base_pt_until_eot",
+                        "power": 4,
+                        "toughness": 4,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    # Resolve. Source-controller scan finds NO creature on p0's bf.
+    # Silent fizzle -- no panic, no state mutation.
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Lives unchanged (the arm doesn't touch life).
+    assert list(rust_state.life_totals) == [20, 20]
+    # Source artifact still on p0's bf, untouched (the arm's silent
+    # fizzle leaves all state intact). effective_power returns None
+    # for non-creatures, so we verify presence via battlefield_sizes
+    # + the find_object_zone integer instead.
+    ZONE_BATTLEFIELD_INT = 2
+    assert rust_state.find_object_zone(artifact_source_id) == ZONE_BATTLEFIELD_INT, (
+        "Rust: source artifact must remain on a battlefield zone "
+        "after the fizzle. "
+        f"Got find_object_zone={rust_state.find_object_zone(artifact_source_id)}"
+    )
+    # And p0's bf has exactly one entry (the lonely artifact).
+    assert list(rust_state.battlefield_sizes)[0] == 1, (
+        "Rust: p0's battlefield should contain only the lonely "
+        "artifact source after the fizzle. "
+        f"Got bf_sizes={list(rust_state.battlefield_sizes)}"
+    )
+
+
+def test_rust_set_base_pt_until_eot_cross_controller_routing_p1_source_on_p0_turn():
+    """BLOCKED-RUST-EFFECT slice -- cross-controller routing pin.
+    Source-controller is resolved by SCANNING ZONES for the source
+    object (mirrors PumpTargetCreatureUntilEOT's source-side scan),
+    NOT by reading active_player. So a SetBasePT effect whose source
+    is on p1's bf routes the target-pick scan to p1's bf (NOT p0's
+    bf), even on p0's turn.
+
+    Probe: build state with the source on p1's bf and bait creatures
+    on BOTH players' bfs (a 5/5 on p0, a 2/2 on p1). The arm picks
+    p1's 2/2 as the target (source-controller's first creature),
+    not p0's 5/5. Pins the scan honors the source's actual
+    controller, not active_player.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # p0's bf: 5/5 Hill Giant -- decoy target (must NOT be picked).
+    p0_decoy_id = rust_state.register_and_inject_object(
+        {
+            "name": "p0 Hill Giant (5/5)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 4, "R": 1},
+            "power": 5,
+            "toughness": 5,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # p1's bf: 2/2 Bears -- the actual target.
+    p1_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "p1 Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    # p1's SetBasePT-trigger artifact (controller=1).
+    rust_state.register_and_inject_object(
+        {
+            "name": "p1 SetBasePT-Trigger Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "set_base_pt_until_eot",
+                        "power": 4,
+                        "toughness": 4,
+                    },
+                }
+            ],
+        },
+        1,  # controller = p1
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    # Pre-state: both bait creatures read their printed bases.
+    assert rust_state.effective_power(p0_decoy_id) == 5
+    assert rust_state.effective_power(p1_bait_id) == 2
+    # active_player default is 0 (p0); we DELIBERATELY don't change
+    # it to make the cross-controller routing observable -- pre-fix
+    # behavior would scan p0's bf as source-controller (wrong);
+    # post-fix scans p1's bf (the source's actual controller).
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # p1's 2/2 (source-controller's first creature) was picked and
+    # is now 4/4.
+    assert rust_state.effective_power(p1_bait_id) == 4, (
+        "Rust: cross-controller routing -- p1's source means p1's "
+        "2/2 is the source-controller's first creature; it should "
+        "be SetBasePT-overridden to 4/4. "
+        f"Got effective_power={rust_state.effective_power(p1_bait_id)}"
+    )
+    assert rust_state.effective_toughness(p1_bait_id) == 4
+    # p0's 5/5 (decoy) was NOT picked -- still reads its printed 5/5.
+    assert rust_state.effective_power(p0_decoy_id) == 5, (
+        "Rust: cross-controller routing -- p0's 5/5 is NOT on the "
+        "source-controller's bf; should NOT be overridden. "
+        f"Got effective_power={rust_state.effective_power(p0_decoy_id)}"
+    )
+    assert rust_state.effective_toughness(p0_decoy_id) == 5
+
+
+def test_rust_set_base_pt_until_eot_cleared_at_cleanup():
+    """BLOCKED-RUST-EFFECT slice -- UEOT expiry pin. The SetBasePT
+    override clears at PHASE_CLEANUP (CR 514.2 + the
+    `clear_ueot_modifiers_all` cleanup pass). After cleanup, the
+    bait reads its printed P/T again.
+
+    Pins the UEOT framework integration: SetBasePT lives on the
+    UeotModifier stack and is swept by the same cleanup-step pass
+    that clears PowerToughnessBonus / GrantKeyword / BecomesLandCreature.
+    """
+    rust_state, _source_id, bait_id = _build_rust_set_base_pt_state(
+        power=4, toughness=4,
+    )
+    rust_state.resolve_top_of_stack()
+    # During the turn: the override reads 4/4.
+    assert rust_state.effective_power(bait_id) == 4
+    assert rust_state.effective_toughness(bait_id) == 4
+    # Advance to cleanup. `clear_ueot_modifiers_all` is the direct
+    # UEOT-sweep primitive (state_ops_cleanup.rs:165) that
+    # `cleanup_step_for_active_player` delegates to as part of the
+    # CR 514 cleanup-step bundle. Calling the primitive directly
+    # exercises the SetBasePT-modifier expiry without dragging in
+    # the discard-to-hand-size + damage-clear halves of the full
+    # cleanup step.
+    rust_state.clear_ueot_modifiers_all()
+    # Post-cleanup: bait reads its printed 2/2 again.
+    assert rust_state.effective_power(bait_id) == 2, (
+        "Rust: SetBasePT override should clear at end-of-turn "
+        "cleanup; bait Bears should read printed 2/2. "
+        f"Got effective_power={rust_state.effective_power(bait_id)}"
+    )
+    assert rust_state.effective_toughness(bait_id) == 2
+
+
+def test_cross_engine_set_base_pt_until_eot_synthetic_etb_parity(
+    parity_smoke,
+):
+    """BLOCKED-RUST-EFFECT slice -- cross-engine end-to-end synthetic
+    probe. Drives the `Effect::SetBasePTUntilEOT` arm + the
+    `SetBasePTUntilEOT` Python class through both engines via an
+    ETB-trigger carrier; pins post-resolve effective P/T agrees on
+    both sides.
+
+    No real-EoE consumer of the bare SetBasePTUntilEOT shape today.
+    Genemorph Imago's landfall trigger uses a conditional-threshold
+    variant (`SetBasePTConditionalUntilEOT` -- 3/3 default, 6/6 if
+    you control 6+ lands) which needs both the etb-subject-substrate
+    branch (Subject(IsLand) predicate) AND a new Rust conditional
+    Effect arm; both are deferred follow-ups -- see
+    `docs/EOE_PROBE_READINESS_AUDIT.md` and `docs/SEARCH_LIMITATIONS.md`.
+
+    Probe shape (mirrors the Dubious-Delicacy / Fight inject-and-
+    fire-ENTERS pattern):
+
+      1. Pre-seat one bait Bears creature (vanilla 2/2) on p0's bf.
+      2. Inject an Artifact with the SetBasePT(4, 4) ETB onto p0's
+         bf. The ETB trigger fires on its own arrival; the trigger
+         lands on the stack on both engines.
+      3. Drain both stacks. Bait Bears now reads 4/4 (base
+         override, NOT additive pump).
+      4. Cross-engine: same effective P/T on both sides.
+
+    Out of scope (documented):
+
+      * Real-EoE Genemorph-Imago landfall + conditional-threshold
+        variant -- needs etb-subject-substrate + a new Rust
+        SetBasePTConditional Effect arm. Tracked as deferred
+        follow-up.
+      * "Becomes a {creature_type}" type-line rider variants
+        (Equipment "Whenever equipped attacks, that creature has
+        base 1/1 UEOT" -- separate effect arm, no type rider on
+        the bare SetBasePT shape).
+      * Composition with PumpTargetCreatureUntilEOT (layer-7c stacks
+        on top of the SetBasePT base). Already pinned by the UEOT
+        framework's existing layer-composition tests; not re-tested
+        through this bridge.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_p0_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # Pre-state pin: bait reads printed 2/2 on Rust.
+    assert rust_state.effective_power(rust_p0_bait_id) == 2
+    assert rust_state.effective_toughness(rust_p0_bait_id) == 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "SetBasePT-Trigger Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "set_base_pt_until_eot",
+                        "power": 4,
+                        "toughness": 4,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: artifact's arrival should fire SourceIsSelf ENTERS "
+        "and land SetBasePTUntilEOT on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import SetBasePTUntilEOT
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+
+    bait_printing = CardPrinting(
+        name="Bait Bears (2/2)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    # Pre-state pin: bait reads printed 2/2 on Python.
+    assert effective_power(py_state, py_bait) == 2
+    assert effective_toughness(py_state, py_bait) == 2
+
+    artifact_printing = CardPrinting(
+        name="SetBasePT-Trigger Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=SetBasePTUntilEOT(power=4, toughness=4),
+            ),
+        ),
+    )
+    # Seat the picker shim on p0 (the source's controller) BEFORE
+    # firing the ETB so the Python target pipeline picks the bait
+    # Bears via ``agent.choose_target`` at PUSH time (mirrors Rust's
+    # at-apply-time first-creature-on-source-controller-bf pick).
+    # The agent must be in place before _trigger_etb_abilities runs
+    # because push_triggered_ability resolves targets eagerly.
+    from tests.parity._picker_shims import (
+        _PickFirstControlledCreatureAgent,
+    )
+    py_state.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    py_source = py_state.new_object(
+        artifact_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: artifact's arrival should fire IsSelf ENTERS and "
+        "land SetBasePTUntilEOT on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Cross-engine post-state ----
+    # Bait Bears now reads 4/4 (base override, NOT 6/6 additive).
+    rust_p0_power_after = rust_state.effective_power(rust_p0_bait_id)
+    rust_p0_tough_after = rust_state.effective_toughness(rust_p0_bait_id)
+    py_p0_power_after = effective_power(py_state, py_bait)
+    py_p0_tough_after = effective_toughness(py_state, py_bait)
+    assert rust_p0_power_after == 4, (
+        f"Rust bait Bears effective_power should be 4 (base override "
+        f"NOT additive); got {rust_p0_power_after}"
+    )
+    assert rust_p0_tough_after == 4, (
+        f"Rust bait Bears effective_toughness should be 4; got "
+        f"{rust_p0_tough_after}"
+    )
+    assert py_p0_power_after == 4, (
+        f"Python bait Bears effective_power should be 4; got "
+        f"{py_p0_power_after}"
+    )
+    assert py_p0_tough_after == 4, (
+        f"Python bait Bears effective_toughness should be 4; got "
+        f"{py_p0_tough_after}"
+    )
+    # Cross-engine agreement.
+    assert rust_p0_power_after == py_p0_power_after
+    assert rust_p0_tough_after == py_p0_tough_after
+    # Lives unchanged -- the arm only writes a base-PT override.
+    assert list(rust_state.life_totals) == [20, 20]
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
