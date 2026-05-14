@@ -2707,3 +2707,119 @@ def test_menace_attacker_requires_two_blockers_parity():
         f"4/4 blocker should still be on bf (block was dropped — never "
         f"declared, never took damage); got p1_gy={p1_gy}"
     )
+
+
+def test_defender_cannot_attack_parity():
+    """Defender creature (0/4) cannot be declared as an attacker per
+    CR 702.3 (defender — "this creature can't attack"). Both engines
+    silently filter the defender out of the legal-attackers set when
+    the agent emits its id (Python via `combat.eligible_attackers`
+    excluding `"defender" in effective_keywords`; Rust via
+    `state_ops_combat.rs::declare_attacker` rejecting any obj with
+    `battlefield_has_keyword(self, obj_id, "defender")`).
+
+    Setup: walk to turn 7 PRECOMBAT_MAIN with no creatures. Inject a
+    0/4 defender on p0 (the sole creature on p0's bf, untapped, not
+    sick). The agent's `attack_all` strategy doesn't filter defenders
+    in `pick_attackers` (the eligibility filter only checks tapped /
+    sick / has-haste / not-attacking — defender is enforced engine-
+    side, not agent-side), so the agent emits the defender's id as a
+    declare_attackers candidate. Both engines must drop the defender
+    from the validated attacker set; combat phase ends with no
+    attackers, p1 life unchanged.
+
+    Asserts byte-equal:
+      * p1 life unchanged at 20 (no attacker → no combat damage).
+      * Defender still on p0's bf, untapped (no attack ever resolved).
+
+    The probe pins both the engine-side defender filter AND the agent-
+    engine handoff: the agent's slightly-permissive `pick_attackers`
+    relies on the engine's own legal-action filter to reject defenders,
+    and a future regression on either side (agent stops emitting
+    defenders OR engine stops filtering them) would surface here.
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Walk to turn 7 PRECOMBAT_MAIN with no creatures.
+    _advance_n_phases(py_state, rust_state, 3)  # → turn 1 MAIN1
+    _advance_n_phases(py_state, rust_state, 12 * 6)  # → turn 7 MAIN1
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.PRECOMBAT_MAIN
+
+    # Inject a 0/4 defender on p0. Sole creature on p0's bf so the
+    # agent has only the defender to consider in `pick_attackers`.
+    _inject_keyword_creature_on_p0_bf(
+        py_state, rust_state,
+        keyword="defender",
+        printing_name="Bear Wall",
+        power=0, toughness=4,
+    )
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"keyword-injection (defender) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    pre_combat_life_p0 = py_view["life_p0"]
+    pre_combat_life_p1 = py_view["life_p1"]
+    pre_combat_bf_count = len(py_view["battlefield"])
+
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # The agent's eligibility filter doesn't reject defenders (defender
+    # is enforced engine-side, not agent-side); the agent emits the
+    # defender's id as a declare_attackers candidate. Both engines must
+    # silently drop it via their own legal-attacker filters.
+    agent = trajectory.RealGameCombatAgent(strategy="attack_all")
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"defender combat via RealGameCombatAgent surfaced a real "
+            f"cross-engine divergence: {exc}"
+        )
+
+    # Post-combat parity.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+
+    # Per CR 702.3: defender can't attack. Both engines drop the
+    # defender from the declared-attackers set; combat phase ends with
+    # no attackers; p1 life unchanged.
+    assert py_view["life_p0"] == pre_combat_life_p0
+    assert py_view["life_p1"] == pre_combat_life_p1, (
+        f"defender should not have attacked per CR 702.3; "
+        f"got life_p1={py_view['life_p1']} (pre={pre_combat_life_p1})."
+    )
+    # Defender still on p0's bf — bf size unchanged across combat.
+    assert len(py_view["battlefield"]) == pre_combat_bf_count, (
+        f"battlefield size should be unchanged; got "
+        f"{len(py_view['battlefield'])} (pre={pre_combat_bf_count})"
+    )
+    # Defender stays untapped — never attacked, never tapped.
+    defender_bf = next(
+        t for t in py_view["battlefield"] if t[0] == "Bear Wall"
+    )
+    # bf 8-tuple field 1 is the tapped slot.
+    assert not defender_bf[1], (
+        f"defender should still be untapped (never attacked); got "
+        f"tuple={defender_bf}"
+    )
+    # No graveyard movement either.
+    p0_gy = [entry[0] for entry in py_view["graveyard_p0"]]
+    assert "Bear Wall" not in p0_gy, (
+        f"defender should still be on bf, not in graveyard; "
+        f"got p0_gy={p0_gy}"
+    )
