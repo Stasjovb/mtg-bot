@@ -3105,6 +3105,127 @@ def test_rust_parser_accepts_exile_opponents_nonland_permanent_until_leaves_in_t
     assert pid == 0
 
 
+def test_bridge_exile_opponents_nonland_permanent_with_max_mv_until_leaves_translates_to_python():
+    """Round-14 bridge extension: Rust
+    ``{"kind": "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+    "max_mv": 2}`` translates to Python
+    ``ExileOpponentsNonlandPermanentUntilLeaves(max_mv=2)``.
+
+    Sister bridge arm to the bare
+    ``exile_opponents_nonland_permanent_until_leaves``; the rider
+    variant carries a ``max_mv`` mana-value cap field that flows
+    through into the Python class's ``max_mv`` attribute. Real
+    EoE consumer: Seam Rip ({W} Enchantment, ETB exile target
+    nonland permanent an opponent controls with mana value 2 or
+    less until this enchantment leaves the battlefield).
+
+    The Rust effect variant exists at the new
+    ``Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves
+    { max_mv: i32 }`` slot in cards.rs; its parse_effect arm
+    requires a ``max_mv`` int field (non-negative); the resolve
+    arm in state_ops_resolve.rs inherits the I80 controller-of-
+    effect fix and adds the per-permanent MV-cap check. Python's
+    ``ExileOpponentsNonlandPermanentUntilLeaves`` class
+    (effects/generic/exile.py:587) carries ``max_mv: int = 0``
+    where 0 = no cap and N > 0 caps at N; both legal_targets()
+    and resolve() honor the cap.
+    """
+    from mtg_bot.effects.generic.exile import (
+        ExileOpponentsNonlandPermanentUntilLeaves,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({
+        "kind": "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+        "max_mv": 2,
+    })
+    assert isinstance(e, ExileOpponentsNonlandPermanentUntilLeaves)
+    # The rider field flows through — distinct from the bare
+    # sibling's bridge arm which constructs max_mv=0 unconditionally.
+    assert e.max_mv == 2
+
+
+def test_bridge_exile_opponents_nonland_permanent_with_max_mv_until_leaves_forwards_arbitrary_caps():
+    """Round-14: the bridge translator forwards arbitrary
+    ``max_mv`` values into the Python constructor — pin a few
+    spread-out caps so a regression that hard-codes the value
+    (e.g. always 2) is caught immediately. Mirrors the
+    parametric-bridge-arm precedent (e.g. the ``draw_cards`` arm
+    forwards arbitrary count values).
+    """
+    from mtg_bot.effects.generic.exile import (
+        ExileOpponentsNonlandPermanentUntilLeaves,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    for max_mv_value in (1, 3, 5, 10):
+        e = _ta_dict_to_python_effect({
+            "kind": "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+            "max_mv": max_mv_value,
+        })
+        assert isinstance(e, ExileOpponentsNonlandPermanentUntilLeaves)
+        assert e.max_mv == max_mv_value, (
+            f"bridge must forward max_mv verbatim; "
+            f"expected {max_mv_value}, got {e.max_mv}"
+        )
+
+
+def test_bridge_exile_opponents_nonland_permanent_with_max_mv_until_leaves_rejects_missing_max_mv():
+    """Round-14: missing ``max_mv`` is a ValueError on the bridge
+    side, mirroring Rust's parse_effect arm which raises
+    PyValueError on a missing required field. The bridge does NOT
+    silently fall through to ``max_mv=0`` — that would mask a
+    dict-shape producer bug as a no-cap effect.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="missing required 'max_mv'"):
+        _ta_dict_to_python_effect({
+            "kind": "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+        })
+
+
+def test_rust_parser_accepts_exile_opponents_nonland_permanent_with_max_mv_until_leaves_in_triggered_ability():
+    """Pin the Rust parser surface for the
+    ``exile_opponents_nonland_permanent_with_max_mv_until_leaves``
+    effect kind on a triggered-ability carrier. The bridge's
+    dict shape must register cleanly on the Rust side too; this
+    lockstep gate keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Mirrors the bare-sibling parser-surface pin
+    (test_rust_parser_accepts_exile_opponents_nonland_permanent_
+    until_leaves_in_triggered_ability) but adds the required
+    ``max_mv`` field. The Rust parse_effect arm requires
+    ``max_mv: i32`` (non-negative); we exercise both the
+    happy-path 2 (Seam Rip's printed cap) and a larger value to
+    pin that the field is forwarded literally rather than
+    clamped.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Round 14 Bridge Pin -- ExileOppsNonlandWithMaxMvUntilLeaves",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"W": 1},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+                    "max_mv": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 def test_bridge_return_to_hand_translates_to_python_bounce_with_creature_slot():
     """Phase 5 bridge extension: Rust
     ``{"kind": "return_to_hand", "target": {"kind": "any_creature"}}``

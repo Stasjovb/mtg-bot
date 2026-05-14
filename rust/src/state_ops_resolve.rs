@@ -5945,6 +5945,94 @@ fn apply_effect(
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
         }
+        // Round-14 rider-widened "until leaves" exile (Option B —
+        // additive sibling variant). Same shape as the bare
+        // `ExileOpponentsNonlandPermanentUntilLeaves` arm above;
+        // adds the `max_mv` mana-value cap to the legal-target
+        // pool. EoE consumer: Seam Rip (`{W}` Enchantment, ETB
+        // exile target nonland permanent an opponent controls
+        // with mana value 2 or less until this enchantment leaves
+        // the battlefield).
+        //
+        // **Controller-of-effect.** Mirrors the bare sibling's
+        // I80 fix: controller derives from
+        // `current_resolve_source_controller` (with `active_player`
+        // fallback); defender = 1 - controller.
+        //
+        // **MV-cap evaluation.** Reads off the printing's static
+        // mana cost (CR 117.x): the sum of generic + W + U + B + R
+        // + G. Uses the same per-color-channel sum pattern as
+        // `Effect::SearchLibraryForCard` "creature_small" arm at
+        // ~line 4658. X-cost cards have X stored as 0 in the
+        // printing's `mana_cost.generic` field (per the registry's
+        // parse_mana_cost contract), matching CR 202.3b's "X is
+        // treated as 0 in zones other than the stack".
+        //
+        // **Bookkeeping invariants.** Same as the bare sibling:
+        // stamps `exiled_with_source = Some(source_obj_id)`,
+        // pushes onto owner's exile zone, queues
+        // `pending_leaves_dispatches` for LTB fan-out. CR 400.7
+        // zone-change reset (tapped, summoning_sick=true per r28
+        // CE1, damage, counters, attached_to) preserved.
+        Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves { max_mv } => {
+            let max_mv_local = *max_mv;
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            let defender = 1 - controller;
+            let target_id: Option<u32> = {
+                let bf = &state.players[defender].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.lookup(obj.printing_id)?;
+                    let is_land = printing.card_types.iter().any(|t| t == "Land");
+                    if is_land {
+                        return None;
+                    }
+                    let mc = &printing.mana_cost;
+                    let total = mc.generic as i32
+                        + mc.white as i32
+                        + mc.blue as i32
+                        + mc.black as i32
+                        + mc.red as i32
+                        + mc.green as i32;
+                    if total > max_mv_local {
+                        return None;
+                    }
+                    Some(obj.id)
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // fizzle — no eligible permanent
+            };
+            let owner_idx: usize = {
+                let obj = state.players[defender]
+                    .battlefield
+                    .iter()
+                    .find(|o| o.id == target_id)
+                    .expect("target_id was just found in bf");
+                obj.controller as usize
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[defender].battlefield);
+            let pos = bf_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in bf but missing on re-scan");
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_EXILE;
+            obj.tapped = false;
+            obj.summoning_sick = true; // r28 CE1 universal-true default
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = Some(source_obj_id);
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+            Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
+            mark_left_battlefield_if_nonland(state, printing_id);
+            state.pending_leaves_dispatches.push(leaving_obj_id);
+        }
         // Round-28 may-do decision wrapper. "You may [inner_effect]."
         // Pushes a PendingDecision::MayDoChoice onto the queue and
         // short-circuits. The controller drains via

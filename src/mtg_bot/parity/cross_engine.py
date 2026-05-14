@@ -2081,16 +2081,16 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # the cross-controller probe slice's notes for the picker
         # selection rationale).
         #
-        # **Rider widenings.** Rust's variant has no ``max_mv``
-        # mirror today — the MV-cap field is a Python-side-only
-        # rider that fans out to a follow-on Rust variant once an
-        # EoE printing needs it (mirrors the
-        # ``return_creature_from_your_graveyard_to_hand`` /
-        # ``return_artifact_or_creature_from_your_graveyard_to_hand``
-        # split shape). The bridge constructs the bare default
-        # shape (max_mv=0 = no cap), which observably matches
-        # Rust's any-non-land-permanent scan when synthetic probes
-        # seat only eligible bait.
+        # **Rider widenings.** Rust's bare unit variant has no
+        # ``max_mv`` mirror — the bridge constructs the bare
+        # default shape (max_mv=0 = no cap), which observably
+        # matches Rust's any-non-land-permanent scan when synthetic
+        # probes seat only eligible bait. **Round-14 follow-on:**
+        # the MV-cap rider lands as a separate Rust variant
+        # ``Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves
+        # { max_mv: i32 }`` with kind
+        # ``exile_opponents_nonland_permanent_with_max_mv_until_leaves``
+        # (Seam Rip's unblocker); see the next bridge arm below.
         #
         # **Filter differences from I79.** I79 filters target
         # creatures via ``IsCreature`` (Python) /
@@ -2135,6 +2135,83 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ExileOpponentsNonlandPermanentUntilLeaves,
         )
         return ExileOpponentsNonlandPermanentUntilLeaves()
+    if kind == "exile_opponents_nonland_permanent_with_max_mv_until_leaves":
+        # **Round 14 rider-widened bridge arm (max_mv cap).** Mirrors
+        # Rust's
+        # ``Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves
+        # { max_mv }`` (cards.rs new variant). Sister bridge arm to
+        # the bare ``exile_opponents_nonland_permanent_until_leaves``
+        # above; the rider variant carries a ``max_mv: i32`` field
+        # (required, non-negative) that caps the legal-target pool
+        # to permanents with mana value ≤ max_mv.
+        #
+        # **EoE consumer.** Seam Rip (EoE) is the unique EoE source
+        # carrying the per-permanent MV cap on the existing
+        # Banishing-Light / Hardlight-Containment exile-until-leaves
+        # shape; oracle: "When this enchantment enters, exile target
+        # nonland permanent an opponent controls with mana value 2
+        # or less until this enchantment leaves the battlefield."
+        # Bridge dict shape: ``{"kind":
+        # "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+        # "max_mv": 2}``.
+        #
+        # **Filter delta vs bare sibling.** The bare sibling at
+        # ``exile_opponents_nonland_permanent_until_leaves`` admits
+        # any non-land permanent on the defender's bf (no MV cap);
+        # the rider variant additionally requires
+        # ``printing.mana_cost.total <= max_mv``. Python's
+        # ``ExileOpponentsNonlandPermanentUntilLeaves`` class at
+        # ``effects/generic/exile.py:587`` carries the ``max_mv``
+        # field directly — ``max_mv=0`` (the dataclass default and
+        # the bare sibling's bridge construction) means no cap;
+        # ``max_mv > 0`` restricts the pool. The bridge translator
+        # forwards the dict's ``max_mv`` value into the Python
+        # constructor for both legal_targets() and resolve()
+        # filtering.
+        #
+        # **Required field.** The Rust parse_effect arm requires
+        # ``max_mv`` on the dict (raises PyValueError on missing or
+        # negative); the bridge mirrors that contract by raising on
+        # missing or negative. A missing max_mv is a programming
+        # error in the dict-shape producer, not a silent fall-
+        # through to the bare sibling.
+        #
+        # **Controller-of-effect / LTB / pairing semantics.** Same
+        # as the bare sibling — see the bare arm's docstring above
+        # for the full I80 / pending_leaves_dispatches /
+        # exiled_with_source bookkeeping discussion. The MV cap
+        # only widens the legal-target filter; the post-pick exile
+        # mechanism is shared.
+        #
+        # **Round-trip.** Rust's ``effect_to_pydict`` emits
+        # ``{"kind": "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+        # "max_mv": N}``; the bridge consumes the same shape.
+        # Forward-compatible with future Rust riders on this arm —
+        # those would land as separate ``kind`` values per the
+        # round-12 / round-13 / round-14 additive-variant convention.
+        from mtg_bot.effects.generic.exile import (
+            ExileOpponentsNonlandPermanentUntilLeaves,
+        )
+        if "max_mv" not in eff_dict:
+            raise ValueError(
+                "cross_engine exile_opponents_nonland_permanent_with"
+                "_max_mv_until_leaves bridge: missing required "
+                "'max_mv' field"
+            )
+        max_mv = eff_dict["max_mv"]
+        if not isinstance(max_mv, int):
+            raise ValueError(
+                f"cross_engine exile_opponents_nonland_permanent_with"
+                f"_max_mv_until_leaves bridge: 'max_mv' must be int, "
+                f"got {type(max_mv).__name__}"
+            )
+        if max_mv < 0:
+            raise ValueError(
+                f"cross_engine exile_opponents_nonland_permanent_with"
+                f"_max_mv_until_leaves bridge: 'max_mv' must be "
+                f"non-negative, got {max_mv}"
+            )
+        return ExileOpponentsNonlandPermanentUntilLeaves(max_mv=max_mv)
     if kind == "return_to_hand":
         # "Return target creature to its owner's hand." Rust's
         # ``Effect::ReturnToHand { target: TargetFilter }``

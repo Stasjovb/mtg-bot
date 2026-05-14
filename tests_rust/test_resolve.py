@@ -14815,6 +14815,180 @@ def test_exile_opps_nonland_only_lands_on_source_controllers_opponent_fizzles(en
 
 
 # ====================================================================
+# Round-14 ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves rider —
+# regression pins.
+#
+# Sibling additive variant to the bare
+# ExileOpponentsNonlandPermanentUntilLeaves arm above; adds the
+# `max_mv` mana-value cap on the legal-target pool. Real EoE
+# consumer: Seam Rip ({W} Enchantment, ETB exile target nonland
+# permanent an opponent controls with mana value 2 or less until
+# this enchantment leaves the battlefield).
+#
+# Synthetic seed (`make_synthetic_state`): each player's bf is 5
+# Forests (Land, MV=0) then 5 Grizzly Bears (Creature, MV=2,
+# generic=1 + green=1). The first non-land permanent on p0's bf
+# is id 5 (Bears) and on p1's bf is id 72 (Bears). max_mv=2
+# admits Bears (at-cap); max_mv=1 rejects Bears (above cap and
+# only Forests remain — Forests are lands so they're still
+# rejected by the is_land filter, yielding silent fizzle).
+# ====================================================================
+
+
+def _seam_rip_dict_max_mv_2():
+    """A Seam-Rip-shape Enchantment whose ETB exiles an opponent's
+    nonland permanent with mana value 2 or less until the source
+    leaves. max_mv=2 — Bears (MV=2) qualify at-cap."""
+    return {
+        "name": "Test Seam Rip max_mv=2",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"W": 1},
+        "etb_effects": [
+            {
+                "kind": "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+                "max_mv": 2,
+            }
+        ],
+    }
+
+
+def _seam_rip_dict_max_mv_1():
+    """A narrower-cap Seam-Rip-shape Enchantment — max_mv=1 rejects
+    Grizzly Bears (MV=2). Used to pin the above-cap fizzle."""
+    return {
+        "name": "Test Seam Rip max_mv=1",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"W": 1},
+        "etb_effects": [
+            {
+                "kind": "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+                "max_mv": 1,
+            }
+        ],
+    }
+
+
+def test_exile_opps_nonland_max_mv_at_cap_exiles_bears(engine):
+    """**Happy-path pin: target with MV at cap is legal.** Seam Rip
+    max_mv=2; Grizzly Bears MV=2 (1 generic + 1 green); the at-cap
+    target qualifies. P0-controlled source on p0's turn exiles p1's
+    first non-land permanent (id 72, Bears).
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p1_first_nonland_id = 72  # p1's bf[5] (Bears, controller=1)
+
+    src_id = state.register_and_inject_object(
+        _seam_rip_dict_max_mv_2(), 0, ZONE_HAND
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()  # Enchantment enters bf, ETB triggers
+    state.resolve_top_of_stack()  # ETB trigger resolves
+
+    # Bears (MV=2) at-cap exiled.
+    assert state.find_object_zone(p1_first_nonland_id) == ZONE_EXILE_I80
+    # Source on p0's bf.
+    assert state.find_object_zone(src_id) == ZONE_BATTLEFIELD
+
+    # Paired return via the same `exiled_with_source` link as the
+    # bare sibling.
+    returned = state.return_paired_exiles_for(src_id)
+    assert returned == 1
+    assert state.find_object_zone(p1_first_nonland_id) == ZONE_BATTLEFIELD
+
+
+def test_exile_opps_nonland_max_mv_above_cap_fizzles(engine):
+    """**Above-cap pin: target with MV > cap is illegal / silent
+    fizzle.** Seam Rip max_mv=1; Grizzly Bears MV=2 (above cap);
+    Forests are lands (rejected by the is_land filter); no eligible
+    permanent → silent fizzle. Source stays on bf, no exile growth.
+    """
+    state = engine.make_synthetic_state()
+    p1_first_nonland_id = 72
+    p1_exile_before = len(state.exile_snapshot(1))
+
+    src_id = state.register_and_inject_object(
+        _seam_rip_dict_max_mv_1(), 0, ZONE_HAND
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()  # Enchantment enters bf, ETB triggers
+    state.resolve_top_of_stack()  # ETB trigger fizzles silently
+
+    # Bears stayed on p1's bf — above the MV cap.
+    assert state.find_object_zone(p1_first_nonland_id) == ZONE_BATTLEFIELD
+    # Source still on p0's bf.
+    assert state.find_object_zone(src_id) == ZONE_BATTLEFIELD
+    # P1's exile size untouched.
+    assert len(state.exile_snapshot(1)) == p1_exile_before
+
+
+def test_exile_opps_nonland_max_mv_cross_controller_routing(engine):
+    """**Cross-controller pin: I80 controller-of-effect inheritance.**
+    On p0's turn (active_player=0), a Seam-Rip-shape Enchantment
+    whose controller is p1 must exile a p0 non-land permanent —
+    mirrors the bare sibling's I80 regression pin. max_mv=2 admits
+    p0's Bears (id 5).
+    """
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    p0_first_nonland_id = 5  # p0's bf[5] (Bears, controller=0)
+    p1_first_nonland_id = 72  # p1's bf[5] (Bears, controller=1)
+
+    src_id = state.register_and_inject_object(
+        _seam_rip_dict_max_mv_2(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1 (p1), active_player still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()  # Enchantment enters bf, ETB triggers
+    state.resolve_top_of_stack()  # ETB trigger resolves
+
+    # Post-fix: p0's Bears exiled (defender = 1 - controller = 0).
+    assert state.find_object_zone(p0_first_nonland_id) == ZONE_EXILE_I80
+    # P1's Bears untouched.
+    assert state.find_object_zone(p1_first_nonland_id) == ZONE_BATTLEFIELD
+
+
+def test_exile_opps_nonland_max_mv_zero_cap_fizzles_on_bears(engine):
+    """**Default-shape pin: max_mv=0 admits no creature with cost > 0.**
+    The rider variant requires `max_mv >= 0`. With max_mv=0, only
+    permanents with mana value 0 or less qualify — Grizzly Bears
+    (MV=2) does not, Forests are lands (rejected by is_land). The
+    arm fizzles silently. Pin discriminates the rider variant from
+    the bare sibling: the bare sibling has no MV cap and would
+    happily exile Bears here.
+    """
+    state = engine.make_synthetic_state()
+    p1_first_nonland_id = 72
+    p1_exile_before = len(state.exile_snapshot(1))
+
+    seam_rip_dict_max_mv_0 = {
+        "name": "Test Seam Rip max_mv=0",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"W": 1},
+        "etb_effects": [
+            {
+                "kind": "exile_opponents_nonland_permanent_with_max_mv_until_leaves",
+                "max_mv": 0,
+            }
+        ],
+    }
+    src_id = state.register_and_inject_object(
+        seam_rip_dict_max_mv_0, 0, ZONE_HAND
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()  # Enchantment enters bf, ETB triggers
+    state.resolve_top_of_stack()  # ETB trigger fizzles silently
+
+    # Bears stayed on p1's bf — above the (zero) MV cap.
+    assert state.find_object_zone(p1_first_nonland_id) == ZONE_BATTLEFIELD
+    # P1's exile size untouched.
+    assert len(state.exile_snapshot(1)) == p1_exile_before
+
+
+# ====================================================================
 # ReturnCreatureFromYourGraveyardToHand controller-of-effect fix —
 # regression pins (I82).
 #
