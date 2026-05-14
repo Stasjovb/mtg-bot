@@ -4800,9 +4800,19 @@ fn apply_effect(
         // matching filter_name; moves match to controller's hand
         // (revealing implicit). Unknown filter_name silently fizzles
         // (matches Python's _matches default-False). Deferred: shuffle
-        // (G19), Legendary/subtype filters (no supertypes/subtypes in
-        // Rust registry), may_fail interactive choice (no decision
-        // callback yet for "decline fetch").
+        // (G19), may_fail interactive choice (no decision callback yet
+        // for "decline fetch").
+        //
+        // **Round-30 supertypes/subtypes substrate.** The
+        // `legendary_creature` / `spacecraft` / `sliver` / `demon`
+        // filters that Round-21 documented as silent-fizzling are now
+        // dispatched off the new `supertypes` field
+        // (cards.rs:`CardPrinting.supertypes`) and the existing
+        // `subtypes` field. Mirrors Python's `SearchLibraryForCard.
+        // _matches` at `src/mtg_bot/effects/generic/search.py:48-81`
+        // arm-for-arm. Unknown filter still silent-fizzles via the
+        // `_ => false` fallthrough (matches Python's terminal `return
+        // False`).
         Effect::SearchLibraryForCard {
             filter_name,
             max_mv,
@@ -4871,6 +4881,45 @@ fn apply_effect(
                             }
                         }
                         "artifact" => printing.card_types.iter().any(|t| t == "Artifact"),
+                        // Round-30 supertypes-substrate dispatch. Legendary
+                        // creature card: type line carries both "Legendary"
+                        // (supertype) and "Creature" (card type). Mirrors
+                        // Python's `printing.is_creature and "Legendary" in
+                        // printing.supertypes` at search.py:50-53.
+                        "legendary_creature" => {
+                            printing.card_types.iter().any(|t| t == "Creature")
+                                && printing.supertypes.iter().any(|s| s == "Legendary")
+                        }
+                        // Round-30 subtypes-keyed dispatch. Spacecraft is a
+                        // subtype (CR 205.3p). Mirrors Python's
+                        // `printing.is_spacecraft` at search.py:70-71 which
+                        // reads `"Spacecraft" in printing.subtypes`. Note
+                        // we DON'T also gate on `card_types contains
+                        // "Artifact"` — Spacecraft printings carry the
+                        // Artifact card type today, but the filter mirrors
+                        // Python's pure-subtype check so a hypothetical
+                        // non-Artifact Spacecraft (off-set fixture, future
+                        // type-changing effect) still matches.
+                        "spacecraft" => {
+                            printing.subtypes.iter().any(|s| s == "Spacecraft")
+                        }
+                        // Round-30 subtypes-keyed dispatch. Sliver is a
+                        // creature subtype. Mirrors Python's
+                        // `"Sliver" in printing.subtypes` at search.py:72-73
+                        // (no creature-card-type gate on the Python side
+                        // either — the subtype implies the creature type
+                        // for any well-formed printing, and the bridge
+                        // mirrors that contract bit-for-bit).
+                        "sliver" => {
+                            printing.subtypes.iter().any(|s| s == "Sliver")
+                        }
+                        // Round-30 subtypes-keyed dispatch. Demon is a
+                        // creature subtype (Demonic Counsel from Duskmourn).
+                        // Mirrors Python's `"Demon" in printing.subtypes`
+                        // at search.py:79-80.
+                        "demon" => {
+                            printing.subtypes.iter().any(|s| s == "Demon")
+                        }
                         _ => false, // unknown filter → fizzle
                     };
                     if matches {

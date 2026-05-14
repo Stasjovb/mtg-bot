@@ -1098,12 +1098,17 @@ pub enum Effect {
     /// `SearchLibraryForCard(filter_name, max_mv=0, may_fail=True)`
     /// (`search.py:30` — 9 EoE cards).
     ///
-    /// **First-slice filter vocabulary.** Rust supports a subset of
-    /// Python's filters constrained by available registry fields
-    /// (Rust has no `supertypes` / `subtypes` registry today):
+    /// **Filter vocabulary** (post Round-30 supertypes/subtypes
+    /// substrate). Rust dispatches on the same string set Python does
+    /// at `search.py:_matches` — arm-for-arm parity:
     ///   - `"basic_land"` → `card_types` contains `"Land"`
-    ///     (approximation; Rust can't distinguish basic vs non-basic
-    ///     without supertypes).
+    ///     (legacy proxy; the historical reason was the missing
+    ///     supertypes field, which the Round-30 substrate now carries.
+    ///     Kept on the legacy proxy because every EoE basic land has
+    ///     `card_types=["Land"]` with no compound non-basic land
+    ///     routing this dispatch path, and changing the proxy now
+    ///     would break in-flight fixtures whose CardDef omits the
+    ///     supertypes hint).
     ///   - `"basic_plains"` / `"basic_island"` / `"basic_swamp"` /
     ///     `"basic_mountain"` / `"basic_forest"` → `printing.name`
     ///     equals the canonical basic name.
@@ -1112,12 +1117,18 @@ pub enum Effect {
     ///     means "creatures with cost <= 0" (rarely matches; specify
     ///     a real `max_mv` value).
     ///   - `"artifact"` → `card_types` contains `"Artifact"`.
+    ///   - `"legendary_creature"` → `card_types` contains `"Creature"`
+    ///     AND `supertypes` contains `"Legendary"` (Round-30
+    ///     substrate; powers The Seriema's tutor + Starfield Shepherd's
+    ///     dual-clause inner half).
+    ///   - `"spacecraft"` → `subtypes` contains `"Spacecraft"`
+    ///     (Round-30 substrate).
+    ///   - `"sliver"` → `subtypes` contains `"Sliver"` (Round-30
+    ///     substrate).
+    ///   - `"demon"` → `subtypes` contains `"Demon"` (Round-30
+    ///     substrate; powers Demonic Counsel from Duskmourn).
     ///   - unknown filter → silent fizzle (matches Python's
     ///     `_matches` returning False for unknown).
-    ///
-    /// **Deferred filters**: `legendary_creature`, `sliver`, `demon`,
-    /// `spacecraft` — these require supertypes / subtypes which
-    /// aren't on the Rust registry yet. Silent fizzle for now.
     ///
     /// **Deterministic first-match pick (top-to-bottom).** Library
     /// Vec is bottom-first (lib[len-1] = top); scan via `iter().rev()`.
