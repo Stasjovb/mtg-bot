@@ -3159,6 +3159,78 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 "Rust parse_effect contract at cards.rs:3280-3284)"
             )
         return SearchLibraryForBasicLandTapped(count=count)
+    if kind == "search_library_for_card":
+        # **Round-21 BLOCKED-BRIDGE-ARM slice -- bridge for
+        # SearchLibraryForCard (Starfield Shepherd + The Seriema +
+        # Spineseeker Centipede + future tutor consumers).** Rust
+        # substrate ``Effect::SearchLibraryForCard { filter_name,
+        # max_mv, may_fail }`` (cards.rs:1136 + parser at
+        # cards.rs:4327-4363 + resolve in state_ops_resolve.rs)
+        # has been on main; this slice closes the cross-engine
+        # bridge gap so probes can drive both arms with one dict.
+        # Same pattern as the round-21 sister slice
+        # search_library_for_basic_land_tapped (substrate-already-
+        # on-main, bridge-arm-was-the-staleness-gap).
+        #
+        # **Field shape (no rename).** Python's
+        # ``SearchLibraryForCard(filter_name: str, max_mv: int = 0,
+        # may_fail: bool = True)`` (effects/generic/search.py:30)
+        # and Rust's variant carry the SAME field names with the
+        # SAME defaults (max_mv=0, may_fail=True). ``filter_name``
+        # is REQUIRED on both engines -- the bridge raises on
+        # missing ``filter_name`` to mirror Rust parse_effect's
+        # contract at cards.rs:4336-4341.
+        #
+        # **Filter taxonomy.** Python's ``_matches`` (search.py:48-81)
+        # accepts: legendary_creature, basic_<color> (per-color
+        # basic), basic_land (any basic), creature_small (uses
+        # max_mv), artifact, spacecraft, sliver, demon. Rust's
+        # filter dispatch resolves the same string set. Bridge
+        # passes filter_name verbatim; an unknown filter is a
+        # silent-fail-empty-options on both engines (Rust's filter
+        # match falls through to no-match; Python's ``_matches``
+        # returns False for unknown filters -> shuffle-only resolve
+        # path).
+        #
+        # **Resolve semantics (cross-engine).** Both engines walk
+        # source-controller's library with the filter, then prompt
+        # the agent to pick a card (or decline if may_fail=True).
+        # Python calls ``Agent.choose_card_from_library``
+        # synchronously; Rust resolves via the agent shim or auto-
+        # picks deterministically. Both engines move the chosen card
+        # to hand and shuffle. ``may_fail=False`` forces the agent
+        # to pick the first option if it tries to decline (Python
+        # falls back to options[0]). Both shuffle on no-match.
+        #
+        # **Real EoE consumers** unblocked: Starfield Shepherd
+        # (filter_name="legendary_creature"); The Seriema
+        # (filter_name="legendary_creature"). The basic_<color> /
+        # basic_land / creature_small / subtype-keyed filters
+        # round-trip through the same arm and are exercised at the
+        # translator pin level (no per-filter cross-engine probe
+        # needed -- the dispatch is the same filter-string lookup
+        # on both engines).
+        #
+        # **Cross-engine probe** drives the legendary_creature
+        # filter (Starfield Shepherd / The Seriema shape -- the
+        # most-EoE-consumed shape on this arm). Real-EoE Starfield
+        # Shepherd / The Seriema probes deferred per round-17/18/19
+        # synthetic-only-when-riders-cascade precedent (the
+        # printed-card variants carry additional triggers /
+        # may_fail asymmetric agent paths that the bare bridge-arm
+        # slice doesn't need to exercise).
+        from mtg_bot.effects.generic.search import SearchLibraryForCard
+        if "filter_name" not in eff_dict:
+            raise ValueError(
+                "search_library_for_card bridge arm: missing required "
+                "field 'filter_name' (mirrors Rust parse_effect's "
+                "required-filter-name contract at cards.rs:4336-4341)"
+            )
+        return SearchLibraryForCard(
+            filter_name=str(eff_dict["filter_name"]),
+            max_mv=int(eff_dict.get("max_mv", 0)),
+            may_fail=bool(eff_dict.get("may_fail", True)),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
