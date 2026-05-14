@@ -1202,6 +1202,124 @@ def test_rust_parser_accepts_return_creature_or_spacecraft_in_triggered_ability(
     assert pid == 0
 
 
+def test_bridge_return_enchantment_or_creature_translates_to_python():
+    """Phase 5 rider bridge: Rust
+    ``{"kind": "return_enchantment_or_creature_from_your_graveyard_to_hand"}``
+    translates to Python
+    ``ReturnCreatureFromYourGraveyardToHand(or_enchantment=True)``.
+
+    Sister bridge to the or_artifact / or_spacecraft to-hand arms.
+    The audit's unique EoE consumer of the
+    "creature or enchantment card from your graveyard" rider is
+    Rescue Skiff, but Rescue Skiff's destination is the BATTLEFIELD
+    (not the hand) — Rescue Skiff itself unblocks via the
+    to-battlefield sibling (separate slice). This bridge arm lands
+    here for substrate symmetry alongside the existing or_artifact
+    / or_spacecraft to-hand arms.
+
+    Discriminator vs the or_artifact / or_spacecraft arms:
+    Enchantment is a CARD TYPE (not a subtype), and a plain Artifact
+    or Spacecraft is NOT admitted by this rider. Python's
+    ``_gy_card_matches`` honors the ``or_enchantment`` flag
+    specifically (graveyard.py:46) which reads
+    ``printing.is_enchantment`` -> ``"Enchantment" in card_types``.
+    """
+    from mtg_bot.effects.generic.bounce import (
+        ReturnCreatureFromYourGraveyardToHand,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "return_enchantment_or_creature_from_your_graveyard_to_hand"}
+    )
+    assert isinstance(e, ReturnCreatureFromYourGraveyardToHand)
+    # Primary type stays creature; or_enchantment widens the pool
+    # to admit Enchantment cards alongside Creature.
+    assert e.creature is True
+    assert e.destination == "hand"
+    assert e.or_enchantment is True
+    # Other riders stay off — discriminator. A plain Artifact or
+    # Spacecraft is NOT admitted by this rider.
+    assert e.or_artifact is False
+    assert e.or_spacecraft is False
+    assert e.max_mv == 0
+    assert e.min_n == 1
+    assert e.max_n == 1
+    assert e.target_kind == "graveyard_creature"
+
+
+def test_bridge_return_enchantment_or_creature_round_trips_through_rust():
+    """Round-trip pin: Rust accepts the kind via parse_effect, and
+    the to-dict serializer round-trips it back to the same string.
+    Mirrors the parser-surface pins for the unit variant and the
+    or_artifact / or_spacecraft sibling arms.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Return Enchantment Or Creature",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": (
+                    "return_enchantment_or_creature_from_your_graveyard_to_hand"
+                ),
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_accepts_return_enchantment_or_creature_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    or_enchantment rider-widened kind in a triggered_ability dict.
+    Mirrors the parser-surface pins for the or_artifact /
+    or_spacecraft sibling arms.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin — Trigger Return Enchantment Or Creature",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"generic": 3},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "return_enchantment_or_creature_from_your_graveyard_to_hand"
+                    ),
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_bridge_return_enchantment_or_creature_describe_matches_oracle():
+    """The bridged Python effect's ``describe()`` text matches the
+    oracle phrasing. Pins the legacy printed phrasing through the
+    rider — load-bearing for the audit's 'creature or enchantment
+    card' substring search and the Python class's stringification
+    contract.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "return_enchantment_or_creature_from_your_graveyard_to_hand"}
+    )
+    desc = e.describe()
+    assert "creature or enchantment" in desc.lower()
+    assert "graveyard" in desc
+    assert "hand" in desc
+
+
 # ===== Phase 5 composer bridge pins (sequence) =====
 #
 # Rust's ``Effect::Sequence { effects: Vec<Effect> }`` carries an
