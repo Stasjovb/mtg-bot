@@ -450,42 +450,49 @@ def test_play_land_each_turn_through_turn_2_parity():
 
 
 # ---------------------------------------------------------------------------
-# Test 5 (xfail): real-game ``setup_game`` mirror across engines.
+# Test 5: real-game ``setup_game`` mirror across engines.
 #
-# Every Phase 6 test in this seed has to manually reach into both engines
-# to deal opening hands (``_draw_opening_hand``). That works for vanilla
-# decks but does NOT cover mulligans, doesn't run the real Python
-# ``setup_game`` (which seeds ``state.rng`` + initial draw), and crucially
-# doesn't have a Rust-side analog. Phase 6 follow-up should ship a single
-# ``parity.trajectory.setup_matched_game(decks, seed, mulligans=...)``
-# helper that produces the same starting state on both engines, threading
-# the shared RNG through both setup paths uniformly.
+# Closed by feature/phase6-parity-trajectory-module: ships
+# ``mtg_bot.parity.trajectory.setup_matched_game(decks, seed,
+# mulligans=...)`` as the canonical entrypoint that hides the per-engine
+# opening-draw side-channel behind a single call. This test now asserts
+# the closure: the helper exists, returns matched states, and the post-
+# setup field views agree byte-for-byte.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Phase 6 infrastructure gap: no shared cross-engine setup_game "
-        "mirror. Python's mtg_bot.simulate.setup_game runs a real "
-        "opening-draw + (optional) London-mulligan loop using state.rng; "
-        "Rust's make_state takes pre-built decklist arrays and shuffles "
-        "internally. The two setup paths are NOT bit-equivalent at the "
-        "API level — the seed wires draws via _draw_opening_hand as a "
-        "side-channel mirror. A first-class trajectory.setup_matched_game "
-        "helper is the natural Phase 6 follow-up; until it lands this "
-        "test pins the gap as known."
-    ),
-    strict=True,
-)
 def test_shared_setup_game_helper_exists():
-    """Demonstrator: a shared cross-engine setup_game helper would
-    let trajectory tests build matched states from a (decks, seed)
-    pair without per-engine draw side-channels. None exists today.
-    """
-    from mtg_bot.parity import trajectory  # type: ignore[attr-defined]
+    """Closure of Phase 6 infrastructure gap #1.
 
-    # Expected API shape (does not exist):
-    #   py_state, rust_state = trajectory.setup_matched_game(
-    #       decks=[deck0, deck1], seed=42, mulligans=False,
-    #   )
+    ``trajectory.setup_matched_game`` is the single entrypoint that
+    produces a parity-synced opening state on both engines. Mulligans
+    remain reserved for the follow-up slice (gap #2).
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+
     assert hasattr(trajectory, "setup_matched_game")
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"setup_matched_game opening state diverges: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in divs]}"
+    )
+    assert len(py_view["hand_p0"]) == 7
+    assert len(py_view["hand_p1"]) == 7
+    assert len(py_view["library_p0"]) == 53
+    assert len(py_view["library_p1"]) == 53
+    assert py_view["turn"] == 1
+    assert py_view["step"] == "UNTAP"
+
+
+def test_setup_matched_game_rejects_mulligans():
+    """Mulligans are reserved for a follow-up slice (gap #2)."""
+    from mtg_bot.parity import trajectory
+
+    spec = _vanilla_60_deckspec(seed=42)
+    with pytest.raises(NotImplementedError, match="MulliganAgent"):
+        trajectory.setup_matched_game(spec, mulligans=True)
