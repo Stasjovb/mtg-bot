@@ -551,6 +551,13 @@ def build_iterate_schema(
                 {
                     "name": "shards-config", "type": "path",
                     "default": "shards_config.json",
+                    # always_emit because the schema hint default
+                    # diverges from iterate's argparse default
+                    # (``None`` = master-only). Without this, keeping
+                    # the hint value means the flag is OMITTED and
+                    # iterate silently runs master-only — the user's
+                    # "distributed run" expectation breaks.
+                    "always_emit": True,
                     "help": (
                         "Path to a JSON shards config. When set, each "
                         "iter's self-play step runs in pull-mode; "
@@ -560,6 +567,7 @@ def build_iterate_schema(
                 {
                     "name": "bundle-url", "type": "string",
                     "default": "http://desktop-j05412i:5099/repo.bundle",
+                    "always_emit": True,
                     "help": (
                         "URL of master's git-bundle endpoint. Each "
                         "remote shard fetches a fresh bundle before "
@@ -570,6 +578,7 @@ def build_iterate_schema(
                 {
                     "name": "queue-url", "type": "string",
                     "default": "http://desktop-j05412i:5099",
+                    "always_emit": True,
                     "help": (
                         "Base URL of master's pull-mode work queue. "
                         "Required when --shards-config is set."
