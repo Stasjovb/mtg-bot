@@ -38549,6 +38549,373 @@ def test_cross_engine_real_eoe_blooming_stinger_etb_grant_deathtouch_to_another_
     )
 
 
+def test_cross_engine_real_eoe_mouth_of_the_storm_etb_extended_duration_debuff_anthem_parity(
+    parity_smoke,
+):
+    """Probe: Mouth of the Storm (EoE Creature, {6}{U} Elemental)
+    ETB ``creatures your opponents control get -3/-0 until your
+    next turn`` -- FIRST real-EoE consumer of the new
+    ``pump_creatures_opponents_control_until_caster_next_turn``
+    Rust sibling variant + bridge arm.
+
+    Sister probes / synthetic coverage:
+
+      * Synthetic Rust regression pins (defaults round-trip,
+        debuff-applies, zero-noop short-circuit, distinct-from-bare
+        discriminator) at
+        ``tests_rust/test_ueot.py::test_*pump_creatures_opponents_control_until_caster_next_turn*``.
+      * Cross-engine bridge pins at
+        ``tests/test_cross_engine_etb_triggers.py::test_bridge_pump_creatures_opponents_control_until_caster_next_turn_*``.
+
+    **Why this slice unblocks Mouth of the Storm specifically.**
+    Pre-this-slice the bridge had only the bare-EOT debuff anthem
+    arm (``pump_creatures_opponents_control_until_eot``); Mouth's
+    printed ``UNTIL YOUR NEXT TURN`` extended duration routes
+    through Python's ``until_caster_next_turn=True`` flag which
+    had NO Rust counterpart (Rust's bare variant carried only
+    power_bonus / toughness_bonus -- no extended-duration field).
+    Translating Mouth to the bare arm would observably diverge at
+    the start of the controller's NEXT turn (Python keeps the
+    debuff; Rust dropped it at the casting turn's cleanup). This
+    slice ships the sibling Rust variant + bridge arm so the
+    extended-duration discriminator flows end-to-end.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "Flying
+         Ward {2} (Whenever this creature becomes the target of a
+         spell or ability an opponent controls, counter it unless
+         that player pays {2}.)
+         When this creature enters, creatures your opponents
+         control get -3/-0 until your next turn."
+
+    This probe focuses on the ETB-trigger debuffing P1's creatures;
+    the printed Flying / Ward keywords on Mouth itself are
+    independently surfaced via the keyword machinery and are NOT
+    substrate concerns of this slice.
+
+    Probe direction: **opposite-controller** (P0 source, P1
+    targets) -- the debuff hits every creature P1 controls. P0
+    controls Mouth of the Storm; the ETB-trigger applies the
+    -3/-0 modifier to all P1 creatures (the pre-seated bait
+    Bears).
+
+    Predicate decomposition:
+
+        SourceIsSelf
+
+    Effect: ``pump_creatures_opponents_control_until_caster_next_turn``
+    -- carries ``power_bonus: -3, toughness_bonus: 0`` on the dict,
+    mirroring Mouth's printed shape. The bridge translates this to
+    ``PumpCreaturesOpponentsControlUntilEOT(power_bonus=-3,
+    toughness_bonus=0, until_caster_next_turn=True)`` on Python
+    (the extended-duration sub-shape of the unified Pump
+    dataclass; routes the modifier through
+    ``grant_pt_pump_until_player_next_turn``) and to the new
+    ``Effect::PumpCreaturesOpponentsControlUntilCasterNextTurn
+    { power_bonus: -3, toughness_bonus: 0 }`` Rust variant.
+
+    Carrier card-type:
+        Creature (Elemental). Distinct from the Stinger / Skiff /
+        Seam-Rip carriers in the rounds-12-15 cohort -- the load-
+        bearing difference is the EXTENDED DURATION discriminator
+        (the bridge's first end-to-end sibling-Effect arm where
+        the discriminator alone carries the parametric distinction
+        and the field shapes match the bare sibling exactly).
+
+    Probe shape (inject-and-fire-ENTERS, mirrors the existing ETB
+    probes but with the bridge dict shape swapped to the
+    extended-duration sibling):
+
+      1. Pre-seat a vanilla bait Bears creature on P1's bf as the
+         debuff target. The bait does NOT have any pre-existing
+         UEOT modifier on its ueot_modifiers Vec / on the
+         layer-7c registry; the post-resolve effective P/T is
+         the load-bearing observable.
+      2. Inject Mouth of the Storm onto P0's bf. The ETB-trigger
+         lands the sibling-variant effect on the stack.
+      3. Drain both stacks. P1's bait Bears now carries the
+         -3/-0 debuff; P0's creatures untouched (the resolve arm
+         scans P0's OPPONENTS' bf, not P0's own).
+
+    Out of scope (documented divergence):
+
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Mouth's printed Flying + Ward {2} keywords -- separate
+        observables independent of this slice.
+      * **Cross-turn cleanup-gate divergence.** Rust's first-
+        slice resolve arm pushes the SAME ``UeotModifier::
+        PowerToughnessBonus`` payload the bare-EOT sibling
+        pushes (the cleanup-step lifetime). Python's resolve
+        routes the modifier through
+        ``grant_pt_pump_until_player_next_turn`` (layer-7c
+        registry entry tagged ``expires_at="controller_untap"``)
+        which keeps the debuff through P1's full turn. So:
+            * **Post-resolve (this probe's assertion window):**
+              both engines agree -- the bait has effective_power
+              <= 0 (the 2/2 -3/-0 calculation), effective_toughness
+              still 2.
+            * **At the casting turn's cleanup:** Rust drops the
+              modifier (clear_ueot_modifiers_all drains
+              UeotModifier::PowerToughnessBonus wholesale);
+              Python keeps it (the layer-7c registry entry has
+              expires_at="controller_untap", not "cleanup").
+            * **At the start of P0's NEXT untap step:** Python
+              drops it; Rust already lost it one turn earlier.
+        This probe ASSERTS only the post-resolve agreement; the
+        cross-turn divergence is documented in
+        docs/SEARCH_LIMITATIONS.md and is the subject of a
+        deferred follow-up Rust slice (UeotModifier
+        lifetime-tag + cleanup-primitive selective drain + new
+        untap-step hook in run_untap_step).
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Mouth of the Storm on P0's bf (controller=0).
+      * Bait Bears on P1's bf (controller=1).
+      * Bait Bears NOW has effective_power <= 0 and
+        effective_toughness == 2 (the -3/-0 debuff applied).
+      * Mouth's own effective_power == 6 (P0's own creature is
+        NOT debuffed -- the resolve arm scans the source-
+        controller's OPPONENTS' bf only).
+      * Lives unchanged on both seats.
+      * No residual stack / pending decision.
+
+    Audit-doc note for the deferred follow-up:
+
+      The cross-turn cleanup-gate divergence (Rust drops the
+      modifier at the casting-turn cleanup; Python keeps it
+      through P1's full turn and only drops it at P0's untap)
+      is the single remaining gap on this slice. The Rust
+      cleanup-gate slice is medium-sized (UeotModifier lifetime
+      tag cascades through 4 readers in state.rs, the two
+      cleanup primitives, and a new untap-step hook); when it
+      lands, this probe's "out of scope" section flips to
+      additional advance-phase + post-cleanup parity
+      assertions, and the SEARCH_LIMITATIONS entry is removed.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    # No CardDef-based libraries; everything injected directly.
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side: inject the bait Bears on P1's bf ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Mouth Bait Bears",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [],
+        "triggered_abilities": [],
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: vanilla bait Bears inject must NOT push anything "
+        "onto the stack (no triggers). "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    # Pre-state pin: bait has its printed P/T.
+    assert rust_state.effective_power(rust_bait_id) == 2, (
+        "Rust: pre-state, bait Bears must have printed power=2."
+    )
+    assert rust_state.effective_toughness(rust_bait_id) == 2, (
+        "Rust: pre-state, bait Bears must have printed toughness=2."
+    )
+
+    # Inject Mouth of the Storm onto P0's bf. The ETB carries the
+    # extended-duration debuff anthem effect with
+    # power_bonus=-3, toughness_bonus=0 (Mouth's printed shape).
+    rust_source_dict = {
+        "name": "Mouth of the Storm",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 6, "U": 1},
+        "power": 6,
+        "toughness": 6,
+        # NB: omit Mouth's printed Flying + Ward {2} keywords on the
+        # synthetic printing -- the load-bearing observable here is
+        # the DEBUFF on the bait. The keyword surfaces are
+        # independently exercised by the keyword machinery elsewhere
+        # and aren't this slice's concern.
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_creatures_opponents_control_until_caster_next_turn",
+                    "power_bonus": -3,
+                    "toughness_bonus": 0,
+                },
+            }
+        ],
+    }
+    rust_source_id = rust_state.register_and_inject_object(
+        rust_source_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Mouth's arrival on P0 should fire the SourceIsSelf "
+        "ENTERS trigger and land "
+        "PumpCreaturesOpponentsControlUntilCasterNextTurn on the "
+        f"stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: mirror setup ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import (
+        PumpCreaturesOpponentsControlUntilEOT,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import (
+        Zone, effective_power, effective_toughness,
+    )
+
+    bait_printing = CardPrinting(
+        name="Mouth Bait Bears",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    # Pre-state pin: bait has printed P/T.
+    assert effective_power(py_state, py_bait) == 2, (
+        "Python: pre-state, bait Bears must have printed power=2."
+    )
+    assert effective_toughness(py_state, py_bait) == 2, (
+        "Python: pre-state, bait Bears must have printed toughness=2."
+    )
+
+    # Source: Mouth of the Storm Creature carrier on P0's bf, with
+    # the extended-duration debuff-anthem ETB. Python-side carries
+    # the rider directly via the until_caster_next_turn=True flag on
+    # the unified Pump dataclass.
+    source_printing = CardPrinting(
+        name="Mouth of the Storm",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=6, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=6,
+        toughness=6,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=PumpCreaturesOpponentsControlUntilEOT(
+                    power_bonus=-3,
+                    toughness_bonus=0,
+                    until_caster_next_turn=True,
+                ),
+            ),
+        ),
+    )
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Mouth's arrival on P0 should fire the IsSelf "
+        "ENTERS trigger and land "
+        "PumpCreaturesOpponentsControlUntilEOT(until_caster_next_turn"
+        "=True, -3/-0) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Rust post-state: bait got the -3/-0 debuff ----
+    rust_bait_eff_power = rust_state.effective_power(rust_bait_id)
+    rust_bait_eff_tough = rust_state.effective_toughness(rust_bait_id)
+    # Rust's effective_power may saturate at 0 (i16 floor in the
+    # composer) or may report the raw -1; allow either as long as
+    # the debuff is observably applied (eff_power < printed power).
+    assert rust_bait_eff_power <= 0, (
+        f"Rust contract: post-resolve, bait Bears effective_power "
+        f"must be <= 0 (printed 2 - 3 from the debuff). "
+        f"got {rust_bait_eff_power}"
+    )
+    assert rust_bait_eff_tough == 2, (
+        f"Rust contract: post-resolve, bait Bears effective_toughness "
+        f"must be 2 (Mouth's debuff is -3/-0; toughness untouched). "
+        f"got {rust_bait_eff_tough}"
+    )
+    # Mouth itself (P0's creature) is NOT debuffed -- the resolve
+    # scans P0's opponents' bf only.
+    assert rust_state.effective_power(rust_source_id) == 6, (
+        "Rust contract: post-resolve, Mouth's own effective_power "
+        "must be 6 (the resolve arm scans the source-controller's "
+        "OPPONENTS' bf, not the source-controller's own bf)."
+    )
+
+    # ---- Python post-state ----
+    py_bait_eff_power = effective_power(py_state, py_bait)
+    py_bait_eff_tough = effective_toughness(py_state, py_bait)
+    assert py_bait_eff_power <= 0, (
+        f"Python contract: post-resolve, bait Bears effective_power "
+        f"must be <= 0 (the layer-7c registry entry from "
+        f"grant_pt_pump_until_player_next_turn is in place). "
+        f"got {py_bait_eff_power}"
+    )
+    assert py_bait_eff_tough == 2, (
+        f"Python contract: post-resolve, bait Bears effective_toughness "
+        f"must be 2. got {py_bait_eff_tough}"
+    )
+    # Mouth itself is NOT debuffed.
+    assert effective_power(py_state, py_source) == 6, (
+        "Python contract: post-resolve, Mouth's own effective_power "
+        "must be 6 (P0's own creature; the debuff scans P0's "
+        "OPPONENTS' bf)."
+    )
+
+    # ---- Lives unchanged on both seats ----
+    assert list(rust_state.life_totals) == [20, 20]
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
