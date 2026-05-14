@@ -31347,6 +31347,373 @@ def test_cross_engine_real_eoe_honored_knight_captain_etb_create_soldier_token_p
     assert rust_bf_p1_after == py_bf_p1_after
 
 
+def test_cross_engine_real_eoe_sinister_cryologist_etb_pump_target_creature_minus_3_0_parity(
+    parity_smoke,
+):
+    """Probe: Sinister Cryologist (EoE Creature -- Jellyfish Wizard)
+    ETB ``target creature an opponent controls gets -3/-0 until end
+    of turn`` -- SECOND real-EoE cross-engine probe on the
+    pump_target_creature_until_eot bridge arm, exercising the
+    POWER-ONLY DEBUFF variant (toughness_bonus = 0). The Dubious
+    Delicacy sister exercises the symmetric -3/-3 form on an
+    Artifact carrier; Sinister Cryologist completes the pair on a
+    Creature carrier with a power-only modifier.
+
+    Sister probe on the same bridge arm:
+
+      * ``test_cross_engine_real_eoe_dubious_delicacy_etb_pump_target_creature_parity``
+        (tests/test_parity_smoke.py:15772) -- the canonical
+        symmetric -3/-3 probe on an Artifact -- Food carrier.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this creature enters, target creature an opponent
+         controls gets -3/-0 until end of turn.
+         Warp {U} (You may cast this card from your hand for its
+         warp cost. Exile this creature at the beginning of the
+         next end step, then you may cast it from exile on a later
+         turn.)"
+
+    The Warp + cast-from-hand mana cost are out of scope -- this
+    probe exclusively exercises the ETB-trigger surface, the
+    substrate sweet-spot:
+
+      * Event: ``enters``
+      * Predicate: ``source_is_self`` (only the just-entered
+        creature's own trigger fires)
+      * Effect: ``pump_target_creature_until_eot`` power_bonus=-3
+        toughness_bonus=0 -- the asymmetric debuff variant; the
+        Dubious Delicacy sister carries -3/-3.
+
+    **The ``power_bonus=-3, toughness_bonus=0`` shape pin.** The
+    bridge arm at ``cross_engine.py:606-671`` defaults missing
+    ``power_bonus`` / ``toughness_bonus`` to 0, mirroring Rust's
+    ``parse_effect`` arm (cards.rs:3125-3147). This probe pins the
+    behavior of the ASYMMETRIC variant -- one bonus negative, the
+    other zero -- on a real-EoE printing. Independence of the two
+    fields is a meaningful claim: if either side were folded into
+    a single magnitude or sign-bit dispatch, the asymmetric form
+    would diverge silently. The probe witnesses
+    ``effective_power 4 -> 1`` (printed 4 + (-3) UEOT) AND
+    ``effective_toughness 4 -> 4`` (printed 4 + 0 UEOT, unchanged)
+    on the bait bear post-resolve, demonstrating the two fields
+    apply independently.
+
+    **Caster-side target-scan narrowing (documented divergence
+    inherited from the Dubious Delicacy probe).** Rust's
+    ``Effect::PumpTargetCreatureUntilEOT`` resolve arm
+    (``state_ops_resolve.rs:3927-3988``) scans the SOURCE
+    CONTROLLER's battlefield (the source's OWN side), not the
+    opponent's side. Sinister Cryologist's printed text says
+    "target creature an OPPONENT controls" -- the Rust scan is
+    observably narrower than the oracle (Rust targets caster's own
+    creature). This is documented as a deliberate SEARCH_LIMITATION
+    (see ``cross_engine.py:626-634``); the Python side
+    ``PumpTargetCreatureUntilEOT(opponents_only=False)`` default
+    matches Rust when the scenario forces target selection onto
+    the same side. The probe scenario constrains the target onto
+    P0's bf (caster-side bait bear) and P1's bf is empty, so the
+    only eligible target on both engines is the caster-side bait
+    bear -- the divergence is observationally invisible here.
+    A future probe widening the scan to the opponent's side will
+    pin the wider contract once the bridge plumbs ``opponents_only``
+    through the dict shape.
+
+    Predicate decomposition (same as Dubious Delicacy / Germinating
+    Wurm / Quantum Riddler / Nebula Dragon / Seedship Broodtender):
+
+        SourceIsSelf
+
+    Effect: ``pump_target_creature_until_eot(power_bonus=-3,
+    toughness_bonus=0)`` -- the bridge arm translates to
+    ``PumpTargetCreatureUntilEOT(power_bonus=-3, toughness_bonus=0)``.
+
+    Probe shape (inject-and-fire-ENTERS, same pattern as Dubious
+    Delicacy):
+
+      1. Stack p0's bf with one Bait Bear (the pump target) BEFORE
+         injecting Sinister Cryologist. The bear has printed P/T
+         4/4 so the -3/0 debuff leaves it observably alive at 1/4
+         (still positive toughness -- no SBA-death after cleanup,
+         no disambiguation needed against a separate dies-trigger
+         path). The asymmetric pick (4 -> 1 power, 4 -> 4 toughness
+         unchanged) makes the field-independence claim observable
+         on a single witness.
+
+      2. Inject Sinister Cryologist directly onto p0's battlefield
+         via ``register_and_inject_object`` (Rust) / new_object +
+         bf append + manual ``_trigger_etb_abilities`` (Python).
+         Both engines dispatch ENTERS for the just-arrived
+         creature; the SourceIsSelf predicate matches, the trigger
+         lands on the stack with its target pre-chosen (Bait Bear
+         on both sides via the caster-side scan).
+
+      3. Both engines: stack carries ONE pending
+         PumpTargetCreatureUntilEOT trigger. Drain. Resolve walk:
+         the Bait Bear's effective P/T drops to 1/4 (printed 4/4
+         + (-3, 0) UEOT modifier).
+
+      4. Cross-engine assert: both engines show Bait Bear at
+         effective power 1, effective toughness 4. The pumped
+         modifier persists on the object UNTIL cleanup (we don't
+         drive cleanup in this probe -- the effective-P/T getter
+         reflects the modifier directly). Sinister Cryologist
+         itself is unchanged at printed 2/3.
+
+    Out of scope:
+
+      * Warp -- exile-then-cast-later substrate; no bridge arm.
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Opponent-side target scan (oracle says "an opponent
+        controls") -- documented divergence; a follow-up bridge
+        slice plumbing ``opponents_only`` through the dict shape
+        will pin the wider contract.
+      * Cleanup-step expiry -- not driven here. Both engines
+        record the UEOT modifier on the object; cleanup-step
+        removal is already pinned by other tests.
+      * "Up to one target" optional-target semantics -- Sinister
+        Cryologist's printed text is non-optional ("target creature
+        an opponent controls"); this probe forces a single bait
+        bear so the optional-vs-required distinction is
+        observationally irrelevant. Optional-target plumbing is a
+        separate slice.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Sinister Cryologist on p0's battlefield (printed 2/3,
+        unchanged).
+      * Bait Bear on p0's battlefield: effective P/T 4/4 -> 1/4.
+      * p1 battlefield empty.
+      * No life changes (the ETB doesn't touch life totals).
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstControlledCreatureAgent
+
+    sinister_cryologist = CardDef(
+        name="Sinister Cryologist",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("U", 1),),
+        power=2,
+        toughness=3,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_target_creature_until_eot",
+                    "power_bonus": -3,
+                    "toughness_bonus": 0,
+                },
+            },
+        ),
+    )
+    # The pump target: a single 4/4 on p0's bf. Printed P/T 4/4 so
+    # the -3/0 modifier leaves it observably alive at 1/4 (positive
+    # toughness, no SBA-death after cleanup), AND makes the
+    # asymmetric (power-only) modifier observable on a single witness.
+    bait_bear = CardDef(
+        name="Bait Bear (4/4)",
+        card_type="Creature",
+        mana_cost_generic=3,
+        mana_cost_colored=(("G", 1),),
+        power=4,
+        toughness=4,
+    )
+    spec = DeckSpec(
+        card_defs=(sinister_cryologist, bait_bear),
+        # Empty libraries -- probe injects directly onto bf so the
+        # libraries are unobserved.
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    # Inject the bait bear FIRST so it's the target of the pump.
+    rust_bait_dict = {
+        "name": "Bait Bear (4/4)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 3, "G": 1},
+        "effects": [],
+        "power": 4,
+        "toughness": 4,
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # The bait bear has no triggered abilities, so no stack growth.
+    assert rust_state.stack_size() == 0
+
+    rust_sinister_dict = {
+        "name": "Sinister Cryologist",
+        "card_types": ["Creature"],
+        "subtypes": ["Jellyfish", "Wizard"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_target_creature_until_eot",
+                    "power_bonus": -3,
+                    "toughness_bonus": 0,
+                },
+            }
+        ],
+    }
+    # Capture pre-modifier P/T for the bait bear.
+    rust_bait_power_before = rust_state.effective_power(rust_bait_id)
+    rust_bait_tough_before = rust_state.effective_toughness(rust_bait_id)
+    assert rust_bait_power_before == 4
+    assert rust_bait_tough_before == 4
+
+    rust_state.register_and_inject_object(
+        rust_sinister_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # register_and_inject_object on ZONE_BATTLEFIELD fans out ENTERS
+    # via the deferred-dispatch queue; Sinister Cryologist's
+    # SourceIsSelf predicate matches its own arrival, so a single
+    # PumpTargetCreatureUntilEOT(-3, 0) trigger lands on the stack.
+    assert rust_state.stack_size() == 1, (
+        "Rust: Sinister Cryologist's arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "PumpTargetCreatureUntilEOT(-3, 0) on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+
+    bait_printing = CardPrinting(
+        name="Bait Bear (4/4)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=4,
+        toughness=4,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    sinister_printing = CardPrinting(
+        name="Sinister Cryologist",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("U", 1),)),
+        type_line="Creature -- Jellyfish Wizard",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Jellyfish", "Wizard"),
+        power=2,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=PumpTargetCreatureUntilEOT(
+                    power_bonus=-3, toughness_bonus=0,
+                ),
+            ),
+        ),
+    )
+
+    # Inject the bait bear FIRST.
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    # Pre-modifier P/T sanity check.
+    assert effective_power(py_state, py_bait) == 4
+    assert effective_toughness(py_state, py_bait) == 4
+
+    # Custom agent: mimic Rust's caster-side target pick. Rust's
+    # PumpTargetCreatureUntilEOT arm scans the SOURCE CONTROLLER's
+    # bf for the FIRST creature. Sibling to Dubious Delicacy's
+    # probe-side agent. Shim hoisted to
+    # tests/parity/_picker_shims.py.
+    py_state.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    py_sinister = py_state.new_object(
+        sinister_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_sinister.summoning_sick = False
+    py_sinister.tapped = False
+    py_sinister.damage = 0
+    py_sinister.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_sinister)
+    _trigger_etb_abilities(py_state, py_sinister)
+    assert len(py_state.stack) == 1, (
+        "Python: Sinister Cryologist's arrival should fire the "
+        "IsSelf ENTERS trigger and land "
+        "PumpTargetCreatureUntilEOT(-3, 0) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: the bait bear's effective P/T is 1/4
+    # (printed 4/4 + (-3, 0) UEOT modifier). Asymmetric: power
+    # changed, toughness unchanged.
+    rust_bait_power_after = rust_state.effective_power(rust_bait_id)
+    rust_bait_tough_after = rust_state.effective_toughness(rust_bait_id)
+    assert rust_bait_power_after == 1, (
+        f"Rust bait bear effective power should be 1 after the -3 "
+        f"pump (printed 4 + (-3) UEOT); got {rust_bait_power_after}"
+    )
+    assert rust_bait_tough_after == 4, (
+        f"Rust bait bear effective toughness should be UNCHANGED at "
+        f"4 (toughness_bonus=0); got {rust_bait_tough_after}"
+    )
+
+    py_bait_power_after = effective_power(py_state, py_bait)
+    py_bait_tough_after = effective_toughness(py_state, py_bait)
+    assert py_bait_power_after == 1, (
+        f"Python bait bear effective power should be 1 after the -3 "
+        f"pump; got {py_bait_power_after}"
+    )
+    assert py_bait_tough_after == 4, (
+        f"Python bait bear effective toughness should be UNCHANGED "
+        f"at 4 (toughness_bonus=0); got {py_bait_tough_after}"
+    )
+
+    # Cross-engine: same post-drain effective P/T on the bait bear.
+    assert rust_bait_power_after == py_bait_power_after
+    assert rust_bait_tough_after == py_bait_tough_after
+
+    # Lives unchanged -- the ETB pump doesn't touch life totals.
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
