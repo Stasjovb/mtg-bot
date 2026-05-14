@@ -769,6 +769,90 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             power_bonus=eff_dict.get("power_bonus", 0),
             toughness_bonus=eff_dict.get("toughness_bonus", 0),
         )
+    if kind == "set_base_pt_until_eot":
+        # BLOCKED-RUST-EFFECT slice -- layer 7b base-P/T override
+        # (CR 613.4). "Target creature has base power and toughness
+        # N/N until end of turn" (Genemorph-Imago-shape, 2+ EoE
+        # cards). Rust's
+        # ``Effect::SetBasePTUntilEOT { power: i32, toughness: i32 }``
+        # (cards.rs:1851) is the layer-7b sibling of the layer-7c
+        # ``PumpTargetCreatureUntilEOT`` arm; its resolve arm at
+        # ``state_ops_resolve.rs:6531-6579`` picks the target
+        # DETERMINISTICALLY at apply_effect time: scan the SOURCE
+        # CONTROLLER's battlefield top-to-bottom for the first object
+        # whose ``card_types`` contains "Creature", then push a
+        # ``UeotModifier::SetBasePT { power, toughness }`` onto its
+        # ``ueot_modifiers`` Vec. Empty bf (or no creatures on it)
+        # is a silent fizzle. The composer
+        # (``battlefield_creature_power`` / ``_toughness`` in
+        # ``state_ops_combat.rs:267-388``) reads the LAST SetBasePT
+        # entry as the new BASE; layer-7c additive bonuses
+        # (PowerToughnessBonus) still stack on top per CR 613.7c.
+        #
+        # **Filter direction = SOURCE-controller's bf.** Same shape
+        # as ``pump_target_creature_until_eot`` and
+        # ``put_plus_one_counter_on_creature_you_control`` -- the
+        # ``_PickFirstControlledCreatureAgent`` shim from
+        # ``tests/parity/_picker_shims.py`` picks the first own-side
+        # creature on Python; matches Rust's at-apply-time scan in
+        # 2-player games.
+        #
+        # **Distinct from layer-7c additive bonuses.** SetBasePT
+        # OVERRIDES the printed base (a 1/1 Bear targeted with
+        # "becomes base 4/4" reads as 4/4, not 5/5); a
+        # PumpTargetCreatureUntilEOT(+3/+3) on the same Bear would
+        # read as 4/4 (the 1/1 base is REPLACED with 4/4) PLUS the
+        # +3/+3 layer-7c stack = 7/7. The composer order is fixed
+        # in the Rust readers (base = SetBasePT-override OR printed,
+        # then add the 7c bonus). Probes here exercise the
+        # base-override only; the SetBasePT + PumpTargetCreatureUntilEOT
+        # composition is already pinned by the existing UEOT
+        # framework and not re-tested here.
+        #
+        # Python's ``SetBasePTUntilEOT(power: int, toughness: int)``
+        # class (effects/generic/pump.py:455) carries the same field
+        # names. Its ``resolve`` calls
+        # ``state.grant_set_base_pt_ueot(source_id, target_id,
+        # power, toughness)`` (game.py:2883) which writes a
+        # layer-7-sublayer-1 ``"set_base_pt"`` continuous-effect
+        # registry entry with ``expires_at="cleanup"``. The
+        # ``_compute_effective_pt`` reader (game.py:2141) walks the
+        # registry directly for layer-7b base-override entries.
+        # Field names agree (``power``, ``toughness``); no rename
+        # in the bridge. Negative values are legal on both engines
+        # (Rust has no parse-time guard; Python's dataclass has no
+        # raise-on-negative either).
+        #
+        # **No real-EoE consumer of the bare bilateral shape today.**
+        # The only EoE consumer of SetBasePTUntilEOT is Genemorph
+        # Imago, whose oracle is "Landfall -- Whenever a land you
+        # control enters, target creature has base power and
+        # toughness 3/3 until end of turn. If you control six or
+        # more lands, that creature has base power and toughness
+        # 6/6 until end of turn instead." That requires the landfall
+        # predicate (Subject(IsLand), gated on
+        # ``feature/etb-subject-substrate``) AND a conditional-
+        # threshold effect arm (``SetBasePTConditionalUntilEOT``,
+        # not yet on Rust); both are deferred follow-ups. This
+        # slice ships synthetic-only end-to-end coverage; the
+        # consumer cascade is documented in
+        # ``docs/EOE_PROBE_READINESS_AUDIT.md`` and
+        # ``docs/SEARCH_LIMITATIONS.md``.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3879-3909)
+        # which REQUIRES both ``power`` and ``toughness`` integer
+        # fields (no defaults -- every Python card emission spells
+        # both out). The bridge enforces the same contract: missing
+        # fields raise ``KeyError`` at translation time so a typo
+        # surfaces immediately rather than silently defaulting to
+        # 0/0 (which would be a "becomes 0/0" base override and
+        # immediately die to SBA -- a different observable outcome
+        # than a fizzle).
+        from mtg_bot.effects.generic.pump import SetBasePTUntilEOT
+        return SetBasePTUntilEOT(
+            power=eff_dict["power"],
+            toughness=eff_dict["toughness"],
+        )
     if kind == "fight_target_creature_with_target_creature":
         # BLOCKED-RUST-EFFECT slice -- Fight effect arm (CR 701.12).
         # Bilateral fight: source-controller's first creature fights
