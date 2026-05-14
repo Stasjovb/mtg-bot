@@ -232,6 +232,94 @@ def test_api_runs_reads_run_row_from_db_when_no_json(
     assert r["_db_kind"] == "eval"
 
 
+def test_api_runs_rolls_up_per_shard_when_aggregate_missing(
+    client, progress_dir: Path,
+):
+    """Distributed iterate's self-play writes per-shard
+    ``run_progress`` rows (shard_label=local/macbook/win10) but the
+    aggregate row (shard_label IS NULL) doesn't always get written.
+    The UI must SUM the per-shard counters so the user sees real
+    progress instead of ``games=None/None``.
+    """
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_003_self_play_v3", kind="self_play",
+            status="running",
+            started_at="2026-05-14T01:30:00+00:00",
+        )
+        # Per-shard rows only; NO aggregate (shard_label=NULL) row.
+        _seed_progress(
+            conn, "iter_003_self_play_v3", shard_label="local",
+            n_games_done=18, n_games_total=1000, crashed=0,
+            timed_out=2, elapsed_seconds=600.0,
+        )
+        _seed_progress(
+            conn, "iter_003_self_play_v3",
+            shard_label="greggs-macbook-pro",
+            n_games_done=70, n_games_total=1000, crashed=1,
+            timed_out=3, elapsed_seconds=550.0,
+        )
+        _seed_progress(
+            conn, "iter_003_self_play_v3",
+            shard_label="desktop-g72aptg",
+            n_games_done=8, n_games_total=1000, crashed=0,
+            timed_out=1, elapsed_seconds=500.0,
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    assert res.status_code == 200
+    runs = res.get_json()["runs"]
+    [r] = [r for r in runs if r["run_id"] == "iter_003_self_play_v3"]
+    # Sum across shards.
+    assert r["n_games_done"] == 96  # 18 + 70 + 8
+    assert r["crashed"] == 1  # 0 + 1 + 0
+    assert r["timed_out"] == 6  # 2 + 3 + 1
+    # n_games_total is MAX (replicated across shards).
+    assert r["n_games_total"] == 1000
+    # elapsed_seconds is MAX (cluster wall = longest shard).
+    assert r["elapsed_seconds"] == 600.0
+
+
+def test_api_runs_prefers_aggregate_row_over_per_shard_rollup(
+    client, progress_dir: Path,
+):
+    """When an aggregate row exists, it wins — the per-shard rollup
+    is only the FALLBACK for distributed runs that didn't write the
+    aggregate. A producer that DOES write the aggregate (eval, etc.)
+    keeps its existing semantics."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_004_self_play_v4", kind="self_play",
+            status="running",
+            started_at="2026-05-14T02:00:00+00:00",
+        )
+        # Aggregate row IS present.
+        _seed_progress(
+            conn, "iter_004_self_play_v4", shard_label=None,
+            n_games_done=500, n_games_total=2000,
+        )
+        # Per-shard rows would sum to 100 if rollup fired —
+        # they should NOT, because aggregate is present.
+        _seed_progress(
+            conn, "iter_004_self_play_v4", shard_label="local",
+            n_games_done=50, n_games_total=2000,
+        )
+        _seed_progress(
+            conn, "iter_004_self_play_v4", shard_label="mac",
+            n_games_done=50, n_games_total=2000,
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    [r] = [r for r in res.get_json()["runs"]
+           if r["run_id"] == "iter_004_self_play_v4"]
+    # Aggregate value wins; per-shard sum (100) is NOT used.
+    assert r["n_games_done"] == 500
+
+
 def test_api_runs_translates_self_play_kind_to_data_gen(
     client, progress_dir: Path,
 ):
