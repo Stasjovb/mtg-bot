@@ -1163,10 +1163,16 @@ function mainUiBase() {
 function renderReplaysFooter(el, run) {
   const footer = el.querySelector('[data-field="replays"]');
   if (!footer) return;
-  // No replays_dir means iterate ran with capture disabled for this
-  // phase — surface that explicitly so the user knows the link's
-  // absence isn't a bug.
-  if (!run.replays_dir) {
+  // Cycle rows carry the capture rates from iterate's config; "on/off"
+  // there is whether either capture-every-* rate is positive. Stage
+  // rows don't carry those fields — fall back to the legacy
+  // !replays_dir check which is the right signal at the stage level.
+  const isCycle = run._db_kind === 'iterate';
+  const captureOff = isCycle
+    ? !((run.capture_every_self_play || 0) > 0
+        || (run.capture_every_eval || 0) > 0)
+    : !run.replays_dir;
+  if (captureOff) {
     footer.innerHTML = '<span class="replays-empty">'
       + 'replay capture: off for this run</span>';
     return;
