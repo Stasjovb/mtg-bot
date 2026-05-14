@@ -596,10 +596,14 @@ def build_iterate_schema(
                 },
                 {
                     "name": "shard-ssh-timeout-min", "type": "float",
-                    "default": 90.0,
+                    "default": 360.0,
                     "help": (
                         "Hard upper-bound timeout (in MINUTES) on a "
-                        "single shard's SSH session. Default 90 min."
+                        "single shard's SSH session. Caps each remote "
+                        "SSH wrapper so a Tailscale-keeps-TCP-alive "
+                        "hang can't wedge the orchestrator. Default "
+                        "360 min covers a 1000-game Mac shard at the "
+                        "structured trunk's pace."
                     ),
                 },
             ],
