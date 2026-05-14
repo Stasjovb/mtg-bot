@@ -257,8 +257,8 @@ class RealGameCombatAgent:
         Returns a sorted list of ids.
 
         Strategy-specific filtering on top of the common eligibility
-        gate (untapped + unsick + not-already-attacking Creature
-        controlled by the active player):
+        gate (untapped + (unsick OR has haste) + not-already-attacking
+        Creature controlled by the active player):
 
         * ``"no_attack"`` returns ``[]`` unconditionally.
         * ``"attack_all"`` / ``"attack_all_block_smallest"`` /
@@ -276,6 +276,15 @@ class RealGameCombatAgent:
           ``power >= attacker.toughness``. Walks the defender's bf
           per-attacker to compare static p/t only — no continuous
           effect / counter modeling.
+
+        Round-18 enhancement: the eligibility gate now honors haste
+        (CR 702.10) — a summoning-sick creature with the ``"haste"``
+        keyword IS attack-eligible. Previously the gate was a hard
+        ``not o.summoning_sick`` filter that silently excluded haste
+        creatures. The agent reads the keyword from
+        ``o.printing.keywords`` (the same Python-side spelling
+        :func:`mtg_bot.combat.effective_keywords` consumes for the
+        no-modifier case).
         """
         if self.strategy == "no_attack":
             return []
@@ -286,7 +295,10 @@ class RealGameCombatAgent:
             if o.controller_id == active_idx
             and "Creature" in o.printing.card_types
             and not o.tapped
-            and not o.summoning_sick
+            and (
+                not o.summoning_sick
+                or "haste" in getattr(o.printing, "keywords", frozenset())
+            )
             and not getattr(o, "attacking", False)
         ]
 

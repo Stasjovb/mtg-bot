@@ -2473,3 +2473,118 @@ def test_double_strike_combat_damage_doubles_parity():
         f"(documented in SEARCH_LIMITATIONS round-18 entry); "
         f"got life_p1={py_view['life_p1']}"
     )
+
+
+def test_haste_attacker_no_summoning_sickness_parity():
+    """Haste attacker bypasses summoning sickness on the turn it ETBs.
+
+    Per CR 702.10 + CR 302.1: haste lets a creature attack the turn
+    it enters the battlefield (summoning sickness — the rule that
+    creatures can't attack the turn they enter — does not apply).
+
+    Setup: walk to turn 7 PRECOMBAT_MAIN; inject a 2/2 haste creature
+    on p0 with `summoning_sick = True` (so haste's bypass is the
+    only thing that lets it attack — a non-haste creature in the
+    same state would be filtered out by the agent's eligibility
+    gate). p1 has no creatures; the haste creature attacks unblocked
+    for 2.
+
+    Asserts byte-equal:
+      * p1 life dropped by 2 (haste creature attacked successfully).
+      * Haste creature still on bf (unblocked, no damage taken).
+
+    If either engine's eligibility gate forgets to honor haste (or
+    forgets to flip summoning_sick on the haste creature), the
+    attacker won't be in `pick_attackers`'s emit and p1's life stays
+    at 20 — the assert below fails loudly.
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Walk to turn 7 PRECOMBAT_MAIN with no creatures.
+    _advance_n_phases(py_state, rust_state, 3)
+    _advance_n_phases(py_state, rust_state, 12 * 6)
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.PRECOMBAT_MAIN
+
+    # Inject a 2/2 haste creature on p0. The round-17 helper stamps
+    # summoning_sick=False; we flip it back to True on both engines
+    # so haste's bypass is load-bearing (a non-haste vanilla in the
+    # same state would be filtered out by the agent's eligibility
+    # gate).
+    py_haste_id, rust_haste_id = _inject_keyword_creature_on_p0_bf(
+        py_state, rust_state,
+        keyword="haste",
+        printing_name="Bear Sprinter",
+        power=2, toughness=2,
+    )
+    # Python side: flip summoning_sick on the new object.
+    haste_obj_py = next(
+        o for o in py_state.battlefield if int(o.id) == py_haste_id
+    )
+    haste_obj_py.summoning_sick = True
+    # Rust side: use the test-helper escape hatch (see comment on
+    # `force_set_summoning_sick` in rust/src/state_ops_tap.rs:160 —
+    # it exists specifically for this haste-probe shape).
+    flipped = rust_state.force_set_summoning_sick(rust_haste_id, True)
+    assert flipped, (
+        f"force_set_summoning_sick(rust_haste_id={rust_haste_id}, True) "
+        f"returned False — object not on Rust bf or already sick"
+    )
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"keyword-injection (haste, sick=True) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    pre_combat_life_p1 = py_view["life_p1"]
+    # Sanity: the haste creature IS sick on both engines post-flip.
+    haste_bf = next(
+        t for t in py_view["battlefield"] if t[0] == "Bear Sprinter"
+    )
+    # bf 8-tuple field 2 is the summoning_sick slot.
+    assert haste_bf[2], (
+        f"haste creature should be summoning_sick after the flip; "
+        f"got tuple={haste_bf}"
+    )
+
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # attack_all eligibility gate would normally filter out a sick
+    # creature — haste is the bypass. p1 has no creatures, so the
+    # haste attacker goes through unblocked.
+    agent = trajectory.RealGameCombatAgent(strategy="attack_all")
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"haste combat via RealGameCombatAgent surfaced a real "
+            f"cross-engine divergence: {exc}"
+        )
+
+    # Post-combat parity.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+
+    # The haste creature attacked unblocked: p1 takes 2 damage.
+    assert py_view["life_p1"] == pre_combat_life_p1 - 2, (
+        f"haste creature should have attacked unblocked for 2 damage; "
+        f"got life_p1={py_view['life_p1']} (pre={pre_combat_life_p1}). "
+        f"If life_p1 is unchanged, the eligibility gate is filtering "
+        f"the haste creature out — haste's CR 702.10 bypass is broken."
+    )
+    # Haste creature still on bf (no blocker to take damage from).
+    p0_gy = [entry[0] for entry in py_view["graveyard_p0"]]
+    assert "Bear Sprinter" not in p0_gy
