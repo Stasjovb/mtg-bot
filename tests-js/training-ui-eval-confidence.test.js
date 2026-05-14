@@ -2,7 +2,7 @@
 // stat. Mirrors what scripts/eval_early_stop_watcher.py decides
 // server-side, so the user sees the same PASS / FAIL / undecided
 // verdict in the browser that the watcher uses to write the early-
-// stop sentinel. Verdicts (against EVAL_GATE_THRESHOLD = 0.51, the
+// stop sentinel. Verdicts (against EVAL_GATE_THRESHOLD = 0.525, the
 // JS-side mirror of the Python single source of truth — see
 // tests-js/fixtures/gate.js):
 //
@@ -135,7 +135,7 @@ describe('training UI eval-card Wilson CI verdict', () => {
 
   it('shows PASS (green) when CI lower bound > threshold', () => {
     // 90-10 over 100 decisive: p=0.90, Wilson 95% CI ≈ [0.825, 0.946].
-    // CI lower bound (0.825) > 0.51 threshold → PASS.
+    // CI lower bound (0.825) > 0.525 threshold → PASS.
     const run = evalPayload({ wins_new: 90, wins_old: 10, draws: 0 });
     const card = buildCard(run);
     const ci = card.querySelector('[data-field="ci"]');
@@ -145,7 +145,7 @@ describe('training UI eval-card Wilson CI verdict', () => {
 
   it('shows FAIL (red) when CI upper bound < threshold', () => {
     // 10-90 over 100 decisive: p=0.10, Wilson 95% CI ≈ [0.054, 0.175].
-    // CI upper bound (0.175) < 0.51 threshold → FAIL.
+    // CI upper bound (0.175) < 0.525 threshold → FAIL.
     const run = evalPayload({ wins_new: 10, wins_old: 90, draws: 0 });
     const card = buildCard(run);
     const ci = card.querySelector('[data-field="ci"]');
@@ -155,7 +155,7 @@ describe('training UI eval-card Wilson CI verdict', () => {
 
   it('shows undecided (amber) when threshold straddles the CI', () => {
     // 60-40 over 100 decisive: p=0.60, Wilson 95% CI ≈ [0.502, 0.691].
-    // 0.51 threshold sits inside [0.502, 0.691]; verdict is undecided.
+    // 0.525 threshold sits inside [0.502, 0.691]; verdict is undecided.
     const run = evalPayload({ wins_new: 60, wins_old: 40, draws: 0 });
     const card = buildCard(run);
     const ci = card.querySelector('[data-field="ci"]');
@@ -165,10 +165,10 @@ describe('training UI eval-card Wilson CI verdict', () => {
 
   it('threshold-on-boundary cases lean undecided (lower == threshold)', () => {
     // Hand-picked: at n=200 with 115-85 (57.5% point), Wilson lower
-    // bound is just under 0.51 (~0.506) → still undecided per the
-    // strict wilson_lo > threshold check. Bumping to 116-84 just
-    // clears it to PASS, which the regex below also tolerates so
-    // this test won't false-fail on minor numerical differences.
+    // bound is ~0.506, below the 0.525 threshold → undecided per
+    // the strict wilson_lo > threshold check. The regex below also
+    // tolerates PASS so this test won't false-fail on minor
+    // numerical differences if the bound nudges across in future.
     const run = evalPayload({
       wins_new: 115, wins_old: 85, draws: 0,
     });
