@@ -1355,6 +1355,57 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ReturnCreatureFromYourGraveyardToBattlefield,
         )
         return ReturnCreatureFromYourGraveyardToBattlefield()
+    if kind == "return_enchantment_or_creature_from_your_graveyard_to_battlefield":
+        # **Phase 5 rider-widened to-BATTLEFIELD bridge arm
+        # (or_enchantment).** Mirrors Rust's
+        # ``Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield``
+        # (cards.rs new variant). Sister bridge arm to the bare
+        # to-bf unit variant immediately above; the destination
+        # delta is the load-bearing difference vs the to-hand
+        # ``or_enchantment`` sibling (which pushes to hand).
+        # Unit variant — no companion fields beyond ``kind``.
+        #
+        # **Closes the loop on Rescue Skiff.** The companion to-hand
+        # ``or_enchantment`` bridge arm landed for substrate
+        # symmetry, but Rescue Skiff itself was substrate-blocked
+        # because its destination is the BATTLEFIELD. Rescue Skiff
+        # (EoE): "When this Spacecraft enters, return target
+        # creature or enchantment card from your graveyard to the
+        # battlefield." This bridge arm is the direct unblocker.
+        #
+        # **Filter delta vs sibling arms.** Enchantment is a CARD
+        # TYPE (not a subtype like Spacecraft). The Rust filter
+        # reads ``printing.card_types.contains("Enchantment")`` for
+        # the second branch — same shape as the bare to-bf unit
+        # variant but with the disjunction widened to admit
+        # enchantments. Python's mirror is the
+        # ``or_enchantment=True`` rider on
+        # ``ReturnCreatureFromYourGraveyardToBattlefield`` which
+        # flows through ``_gy_card_matches`` (graveyard.py:46 —
+        # admits ``p.is_enchantment`` alongside the creature
+        # primary) and the destination stays
+        # ``"battlefield"`` (pinned by
+        # ``ReturnCreatureFromYourGraveyardToBattlefield.__post_init__``
+        # at graveyard.py:376-380). The base's ``legal_targets``
+        # walks the controller's graveyard and emits
+        # ``("graveyard_creature", card.id)`` per matching card;
+        # the targeting pipeline picks at PUSH time via the seated
+        # agent's ``choose_target``.
+        #
+        # **describe() phrasing.** The
+        # ``ReturnCreatureFromYourGraveyardToBattlefield`` override
+        # at graveyard.py:382-389 already handles ``or_enchantment``:
+        # returns "return target creature or enchantment card from
+        # your graveyard to the battlefield" — pins the audit's
+        # "creature or enchantment" substring through the rider for
+        # the to-bf destination. No describe() shape extension
+        # needed.
+        from mtg_bot.effects.generic.graveyard import (
+            ReturnCreatureFromYourGraveyardToBattlefield,
+        )
+        return ReturnCreatureFromYourGraveyardToBattlefield(
+            or_enchantment=True
+        )
     if kind == "create_token":
         # "Create N tokens of the given printing under the source's
         # controller." Rust's ``Effect::CreateToken {count,

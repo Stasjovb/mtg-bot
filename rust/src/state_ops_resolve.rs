@@ -3356,6 +3356,122 @@ fn apply_effect(
             // resolver after the resolving spell's stack item pops.
             state.pending_etb_dispatches.push(entered_id);
         }
+        // **Phase 5 rider-widened return-to-battlefield: enchantment-
+        // or-creature variant.** Sibling to the bare to-bf unit
+        // variant immediately above. Filter delta: the disjunction
+        // is `Creature OR Enchantment` — both branches read off
+        // `printing.card_types` (Enchantment is a CARD TYPE, not a
+        // subtype). Same first-creature-in-graveyard scan order
+        // (front = oldest by push), same I83 controller-of-effect
+        // contract (`controller_idx` from
+        // `current_resolve_source_controller`, fallback to
+        // `active_player`), same CR 400.7 zone-change reset, same
+        // ETB-trigger fan-out via `pending_etb_dispatches`.
+        //
+        // **EoE consumer.** Rescue Skiff (EoE): "When this Spacecraft
+        // enters, return target creature or enchantment card from
+        // your graveyard to the battlefield." Unlike the to-hand
+        // sibling variant which has no real-EoE consumer (Rescue
+        // Skiff is to-bf, not to-hand), THIS arm is the direct
+        // unblocker for Rescue Skiff itself.
+        //
+        // **Disjunction shape.** The legal-target filter widens
+        // from `card_types.contains("Creature")` to
+        // `card_types.contains("Creature") ||
+        //  card_types.contains("Enchantment")`. Enchantment-
+        // creatures (printings carrying BOTH types — the EoE
+        // pool's "Enchantment Creature — ..." printings) match at
+        // the first branch and are pulled.
+        //
+        // **Walker reseed (CE20 Slice 5).** Same pre-read of
+        // `starting_loyalty` on the registry BEFORE the player-mut
+        // borrow as the bare to-bf arm; reseeds `loyalty_counters`
+        // on the reanimated permanent. Real practice: an
+        // Enchantment-Planeswalker would be admitted by both
+        // branches of the disjunction (Creature primary or
+        // Enchantment widening); the walker reseed correctly fires.
+        //
+        // **I83 controller stamp.** The reanimated permanent's
+        // `controller` byte stamps to `controller_idx` (the
+        // reanimation-effect's controller per CR 110.2 / 614.x),
+        // mirroring the bare to-bf arm. On p0's turn, p1's Rescue-
+        // Skiff ETB scans p1's graveyard, reanimates onto p1's
+        // battlefield, and the new permanent is correctly p1-
+        // controlled.
+        Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield => {
+            let _ = source_obj_id; // controller-targeted, not source-relative
+            let controller_idx = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player) as usize;
+            // Find first creature OR enchantment in controller's
+            // graveyard (front = smallest Vec index = top of the
+            // iteration order). Drop registry borrow before mutating.
+            let target_obj_id: Option<u32> = state.players[controller_idx]
+                .graveyard
+                .iter()
+                .find_map(|obj| match state.registry.lookup(obj.printing_id) {
+                    Some(printing)
+                        if printing.card_types.iter().any(|t| t == "Creature")
+                            || printing
+                                .card_types
+                                .iter()
+                                .any(|t| t == "Enchantment") =>
+                    {
+                        Some(obj.id)
+                    }
+                    _ => None,
+                });
+            let Some(target_id) = target_obj_id else {
+                return Ok(()); // empty / no-match: silent fizzle
+            };
+            // CE4 closure: reserve ETB timestamp before player-mut borrow.
+            let etb_ts = crate::state::reserve_etb_timestamp(state);
+            // CE20 Slice 5 (Walker loyalty — starting_loyalty ETB
+            // seeding). Pre-read the printing's walker shape on the
+            // immutable registry BEFORE the player-mut borrow.
+            let starting_loyalty: i32 = {
+                let pos_gy = state.players[controller_idx]
+                    .graveyard
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id was just found in graveyard");
+                let pid = state.players[controller_idx].graveyard[pos_gy].printing_id;
+                match state.registry.lookup(pid) {
+                    Some(printing)
+                        if printing.card_types.iter().any(|t| t == "Planeswalker") =>
+                    {
+                        printing.starting_loyalty
+                    }
+                    _ => 0,
+                }
+            };
+            let graveyard_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[controller_idx].graveyard);
+            let pos = graveyard_mut
+                .iter()
+                .position(|o| o.id == target_id)
+                .expect("target_id was just found in graveyard but not on re-scan");
+            let mut obj = graveyard_mut.remove(pos);
+            obj.zone = ZONE_BATTLEFIELD;
+            obj.tapped = false;
+            obj.summoning_sick = true;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.loyalty_counters = starting_loyalty;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            obj.etb_timestamp = etb_ts;
+            // I83 controller-of-effect stamp: reanimated permanent's
+            // `controller` byte = the reanimation-effect's controller
+            // (CR 110.2 / 614.x). Mirrors the bare to-bf arm.
+            obj.controller = controller_idx as u8;
+            let entered_id = obj.id;
+            Arc::make_mut(&mut state.players[controller_idx].battlefield).push(obj);
+            // ETB-trigger fan-out: queue ENTERS dispatch for the
+            // reanimated permanent. Drained by the surrounding
+            // resolver after the resolving spell's stack item pops.
+            state.pending_etb_dispatches.push(entered_id);
+        }
         // Round-26: EachOpponentLosesLife. CR 118.4 — "life loss"
         // (not damage). Each opponent of the SOURCE's controller
         // loses `amount` life. Punisher / drawback pattern

@@ -369,6 +369,63 @@ pub enum Effect {
     /// onto the shared primitive once cross-file private-fn calls
     /// re-open.
     ReturnCreatureFromYourGraveyardToBattlefield,
+    /// **Phase 5 rider-widened return-to-battlefield (Option B —
+    /// additive bespoke arm).** Return the first creature OR
+    /// enchantment card from the source-controller's graveyard to
+    /// that player's battlefield. Mirrors Python's
+    /// `ReturnCreatureFromYourGraveyardToBattlefield(or_enchantment=True)`
+    /// (`graveyard.py:361`) — the rider widens the legal-target
+    /// pool to admit enchantment cards alongside creatures, and the
+    /// destination is the BATTLEFIELD (vs the to-hand sibling which
+    /// pushes to hand).
+    ///
+    /// **EoE consumer (audit).** Rescue Skiff (EoE): "When this
+    /// Spacecraft enters, return target creature or enchantment
+    /// card from your graveyard to the battlefield." Unlike the
+    /// to-hand sibling arm (where Rescue Skiff does NOT consume),
+    /// THIS arm is the direct unblocker for Rescue Skiff itself.
+    ///
+    /// **Filter contract.** A graveyard card qualifies iff its
+    /// printing's `card_types` contains "Creature" OR "Enchantment".
+    /// (CR 400 / 506 — type predicates read off the printing's
+    /// static card_types; the Rust registry stores card_types as
+    /// the Scryfall type-line components on the LHS of the em-dash.)
+    /// Sister enchantment-creatures (printings carrying BOTH
+    /// "Enchantment" AND "Creature") match the disjunction at the
+    /// first hit and are pulled. Cards with neither type are
+    /// skipped. The scan preserves the unit-variant's iterator
+    /// order (`state.players[controller_idx].graveyard.iter().find_map`),
+    /// so test predictability matches the existing arms exactly.
+    ///
+    /// **Controller-of-effect.** Inherits the I83 contract (same
+    /// pattern as the bare to-bf unit variant): `controller_idx`
+    /// derives from `current_resolve_source_controller`, falling
+    /// back to `active_player` for direct `apply_effect_pub`
+    /// callers. The graveyard scan, the destination battlefield
+    /// push, AND the GameObject.controller stamp on the
+    /// reanimated permanent all anchor to the source's controller —
+    /// cross-controller routing (p1's ETB resolving on p0's turn)
+    /// Just Works.
+    ///
+    /// **Zone-change reset (CR 400.7) + summoning sickness (CR 302.1).**
+    /// Same as the bare to-bf unit variant: `tapped`,
+    /// `summoning_sick=true`, `damage`, `counters`, `attached_to`,
+    /// `exiled_with_source`, `loyalty_counters` all reset on the
+    /// move to battlefield. A fresh `etb_timestamp` is reserved
+    /// before the player-mut borrow (CE4 closure). The reanimated
+    /// permanent fires its ENTERS triggers via the deferred-
+    /// dispatch queue (`pending_etb_dispatches.push(entered_id)`)
+    /// regardless of recipient bf, mirroring the unit variant.
+    /// Walker-shape printings reseed `loyalty_counters` to the
+    /// printed `starting_loyalty` (CE20 Slice 5).
+    ///
+    /// **Schema simplification vs Python.** Drops `max_mv` and the
+    /// other rider flags (`or_artifact`, `or_spacecraft`,
+    /// untargeted_all, plus_one_counter, log_suffix). Bare
+    /// `or_enchantment` only — Rescue Skiff carries no max_mv cap
+    /// or +1/+1-counter rider on the printed text, so the bare
+    /// rider arm is sufficient for the unique EoE consumer.
+    ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield,
     /// "You discard a card" (CR 701.8). The SOURCE's controller
     /// discards `amount` cards from their hand. Punisher / drawback
     /// shape (Irreverent Gremlin pattern) — 8 cards in the EoE pool
@@ -3061,6 +3118,20 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // drop convention elsewhere in the parser.
             Ok(Effect::ReturnCreatureFromYourGraveyardToBattlefield)
         }
+        "return_enchantment_or_creature_from_your_graveyard_to_battlefield" => {
+            // **Phase 5 rider-widened parse arm.** Unit variant; the
+            // disjunction (enchantment OR creature) is baked into the
+            // variant identity itself, so no fields beyond `kind`.
+            // Mirrors Python's
+            // `ReturnCreatureFromYourGraveyardToBattlefield(or_enchantment=True)`
+            // — extra dict fields are silently ignored for round-trip
+            // dict-shape consistency. This is the to-BATTLEFIELD
+            // sibling of the existing
+            // `return_enchantment_or_creature_from_your_graveyard_to_hand`
+            // arm; the destination delta is the load-bearing difference.
+            // EoE consumer: Rescue Skiff (real-EoE).
+            Ok(Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield)
+        }
         "discard_self" => {
             // Python's `DiscardSelf(amount: int = 1)` dataclass has
             // an `amount` field defaulting to 1. Mirror that here:
@@ -4994,6 +5065,12 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::ReturnCreatureFromYourGraveyardToBattlefield => {
             d.set_item("kind", "return_creature_from_your_graveyard_to_battlefield")?;
+        }
+        Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield => {
+            d.set_item(
+                "kind",
+                "return_enchantment_or_creature_from_your_graveyard_to_battlefield",
+            )?;
         }
         Effect::DiscardSelf { amount } => {
             d.set_item("kind", "discard_self")?;

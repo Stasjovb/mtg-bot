@@ -9826,6 +9826,144 @@ def test_resolve_return_enchantment_or_creature_cross_controller_routing(engine)
     assert state.find_object_zone(p0_enchantment_id) == ZONE_GRAVEYARD
 
 
+# ===== Phase 5 to-BATTLEFIELD or_enchantment rider arm: 4 pins =====
+#
+# Sibling to the to-HAND or_enchantment block above; the destination
+# delta is the load-bearing difference. Filter is the disjunction
+# `card_types.contains("Creature") || card_types.contains("Enchantment")`
+# — both branches read off `printing.card_types` (Enchantment is a
+# CARD TYPE, not a subtype).
+#
+# Real EoE consumer: Rescue Skiff. Unlike the to-hand sibling
+# (which had no real-EoE consumer and landed for substrate
+# symmetry), this arm is the direct unblocker for Rescue Skiff
+# itself — its ETB reads "return target creature or enchantment
+# card from your graveyard to the battlefield."
+
+
+def _return_enchantment_or_creature_to_bf_dict():
+    """Synthetic 'Recur Enchantment Or Creature To Battlefield'
+    sorcery — single-effect 'return target creature or enchantment
+    card from your graveyard to the battlefield'. Used by the
+    or_enchantment to-bf rider regression pins."""
+    return {
+        "name": "Test Enchant Recur To BF",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "effects": [
+            {
+                "kind": "return_enchantment_or_creature_from_your_graveyard_to_battlefield"
+            }
+        ],
+    }
+
+
+def test_resolve_return_enchantment_or_creature_to_bf_pulls_creature(
+    synthetic_state,
+):
+    """Happy path 1: a creature card in p0's graveyard is pulled by
+    the or_enchantment-rider to-bf arm (creature branch of the
+    disjunction). Same observable as the bare to-bf unit variant
+    when the graveyard contains a creature — destination is the
+    BATTLEFIELD."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_enchantment_or_creature_to_bf_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Creature reanimated to BATTLEFIELD (delta vs to-hand sibling).
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_BATTLEFIELD
+
+
+def test_resolve_return_enchantment_or_creature_to_bf_pulls_enchantment(
+    synthetic_state,
+):
+    """Happy path 2: a non-creature enchantment card in p0's graveyard
+    is pulled by the or_enchantment-rider to-bf arm (enchantment
+    branch). Key delta from the bare to-bf unit variant — that arm
+    would silently no-op on an enchantment-only graveyard. Also a
+    discriminator vs the to-hand or_enchantment sibling — the
+    destination is BATTLEFIELD here, not HAND. Real EoE consumer:
+    Rescue Skiff."""
+    enchantment_id = synthetic_state.register_and_inject_object(
+        _vanilla_enchantment_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_enchantment_or_creature_to_bf_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Post-fix: enchantment moved to BATTLEFIELD on the enchantment
+    # branch of the disjunction. The destination delta from the
+    # to-hand sibling is the load-bearing assertion.
+    assert synthetic_state.find_object_zone(enchantment_id) == ZONE_BATTLEFIELD
+
+
+def test_resolve_return_enchantment_or_creature_to_bf_skips_artifact_no_enchantment(
+    synthetic_state,
+):
+    """Edge case / discriminator: a plain Artifact (no Creature, no
+    Enchantment) does NOT qualify. Distinct from a hypothetical
+    or_artifact-to-bf arm which WOULD pull this artifact — the
+    disjunction here is creature-or-enchantment, NOT
+    creature-or-artifact.
+
+    This pins the rider's filter as creature-or-enchantment
+    specifically (mirrors the to-hand sibling's discriminator pin)."""
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_enchantment_or_creature_to_bf_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Artifact stayed in graveyard — neither branch matched.
+    assert synthetic_state.find_object_zone(artifact_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_return_enchantment_or_creature_to_bf_cross_controller_routing(
+    engine,
+):
+    """**I83 controller-of-effect inheritance pin.** On p0's turn
+    (active_player=0), the or_enchantment-rider to-bf source cast
+    by p1 must scan p1's graveyard and push to p1's BATTLEFIELD —
+    NOT active_player's. Mirrors the bare to-bf unit-variant + the
+    to-hand sibling's I82/I83 regression pins. Load-bearing for
+    Rescue Skiff cross-controller correctness: on p0's turn, p1
+    casts Rescue Skiff -> the ETB scans p1's gy, reanimates onto
+    p1's bf with controller=p1."""
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    # Inject enchantments into each player's graveyard. The scan
+    # must find p1's, not p0's.
+    p0_enchantment_id = state.register_and_inject_object(
+        _vanilla_enchantment_dict("P0 Enchantment"), 0, ZONE_GRAVEYARD
+    )
+    p1_enchantment_id = state.register_and_inject_object(
+        _vanilla_enchantment_dict("P1 Enchantment"), 1, ZONE_GRAVEYARD
+    )
+
+    src_id = state.register_and_inject_object(
+        _return_enchantment_or_creature_to_bf_dict(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1, active still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # P1's enchantment reanimated to p1's BATTLEFIELD; p0's untouched.
+    assert state.find_object_zone(p1_enchantment_id) == ZONE_BATTLEFIELD
+    assert state.find_object_zone(p0_enchantment_id) == ZONE_GRAVEYARD
+
+
 # -------------------- Round-28 DealDamageEqualToSourcePowerAnyTarget (2 cards) --------------------
 
 
