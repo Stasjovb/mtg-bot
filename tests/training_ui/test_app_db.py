@@ -401,6 +401,146 @@ def test_api_runs_prefers_aggregate_row_over_per_shard_rollup(
     assert r["n_games_done"] == 500
 
 
+def test_api_runs_filters_to_top_level_only(
+    client, progress_dir: Path,
+):
+    """A distributed iterate writes 5+ rows (cycle / stage / 3 shards).
+    The list view must surface only the cycle row — stage + shard rows
+    are forensics-only and live in the detail endpoint."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_003_cycle", kind="iterate", status="running",
+            started_at="2026-05-14T01:30:00+00:00",
+        )
+        _seed_run(
+            conn, "iter_003_self_play_v3", kind="self_play",
+            status="running",
+            started_at="2026-05-14T01:30:30+00:00",
+            parent_run_id="iter_003_cycle",
+        )
+        for shard in ("local", "macbook", "win10"):
+            _seed_run(
+                conn,
+                f"iter_003_self_play_v3_shard_{shard}",
+                kind="self_play", status="running",
+                started_at="2026-05-14T01:31:00+00:00",
+                parent_run_id="iter_003_self_play_v3",
+            )
+        _seed_progress(
+            conn, "iter_003_self_play_v3", shard_label="local",
+            n_games_done=18, n_games_total=1000,
+            extra={"n_workers": 9},
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    runs = res.get_json()["runs"]
+    iter_runs = [r for r in runs if r["run_id"].startswith("iter_003")]
+    assert len(iter_runs) == 1
+    assert iter_runs[0]["run_id"] == "iter_003_cycle"
+
+
+def test_api_runs_cycle_card_renders_with_active_stage_kind(
+    client, progress_dir: Path,
+):
+    """The cycle row's kind is ``iterate``; the front-end has no
+    ``cycle`` render branch. The list endpoint translates the cycle's
+    kind to its active stage's UI kind (``data_gen`` for self_play)
+    and folds the stage's progress onto the cycle row."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_005_cycle", kind="iterate", status="running",
+            started_at="2026-05-14T01:00:00+00:00",
+        )
+        _seed_run(
+            conn, "iter_005_self_play_v5", kind="self_play",
+            status="running",
+            started_at="2026-05-14T01:00:30+00:00",
+            parent_run_id="iter_005_cycle",
+        )
+        _seed_progress(
+            conn, "iter_005_self_play_v5", shard_label="local",
+            n_games_done=88, n_games_total=500,
+            elapsed_seconds=600.0,
+            extra={"n_workers": 9, "n_samples": 22000},
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    [r] = [r for r in res.get_json()["runs"]
+           if r["run_id"] == "iter_005_cycle"]
+    assert r["kind"] == "data_gen"
+    assert r["n_games_done"] == 88
+    assert r["n_games_total"] == 500
+    assert r["n_workers"] == 9
+    assert r["n_samples"] == 22000
+    assert r["_active_stage_run_id"] == "iter_005_self_play_v5"
+
+
+def test_api_runs_cycle_card_prefers_running_stage_over_finished(
+    client, progress_dir: Path,
+):
+    """If a cycle has multiple stages (self_play finished, training
+    running), the active stage is the one with status=running."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_001_cycle", kind="iterate", status="running",
+            started_at="2026-05-14T00:00:00+00:00",
+        )
+        _seed_run(
+            conn, "iter_001_self_play_v0", kind="self_play",
+            status="completed",
+            started_at="2026-05-14T00:00:30+00:00",
+            ended_at="2026-05-14T00:30:00+00:00",
+            parent_run_id="iter_001_cycle",
+        )
+        _seed_run(
+            conn, "iter_001_train_v1", kind="training",
+            status="running",
+            started_at="2026-05-14T00:30:10+00:00",
+            parent_run_id="iter_001_cycle",
+        )
+        _seed_progress(
+            conn, "iter_001_train_v1",
+            extra={"current_epoch": 3, "total_epochs": 50},
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    [r] = [r for r in res.get_json()["runs"]
+           if r["run_id"] == "iter_001_cycle"]
+    assert r["kind"] == "training"
+    assert r["_active_stage_run_id"] == "iter_001_train_v1"
+
+
+def test_api_runs_non_cycle_top_level_runs_keep_their_kind(
+    client, progress_dir: Path,
+):
+    """Standalone eval / training runs (parent=NULL but kind != iterate)
+    keep their own kind unchanged."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "eval_v5_vs_v4", kind="eval", status="running",
+            started_at="2026-05-14T02:00:00+00:00",
+        )
+        _seed_progress(
+            conn, "eval_v5_vs_v4",
+            n_games_done=42, n_games_total=2000,
+            wins_new=23, wins_old=15, draws=4,
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    [r] = [r for r in res.get_json()["runs"]
+           if r["run_id"] == "eval_v5_vs_v4"]
+    assert r["kind"] == "eval"
+    assert r["n_games_done"] == 42
+
+
 def test_api_runs_translates_self_play_kind_to_data_gen(
     client, progress_dir: Path,
 ):

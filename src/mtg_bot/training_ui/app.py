@@ -192,24 +192,49 @@ def _row_to_ui_dict(
 
 
 def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
-    """All runs visible to the UI, newest-first by ``started_at``.
+    """Top-level runs visible to the UI, newest-first by
+    ``started_at``.
 
-    DB-first: every run surfaces here lives in ``runs.db``. The
-    All producers push directly to the DB via
+    DB-first: every run surfaces here lives in ``runs.db``. All
+    producers push directly to the DB via
     ``mtg_bot.cli.runs.client``; this read path is pure DB.
 
-    Per-shard runs (``shard_label`` populated) are NOT listed here —
-    the aggregate (``shard_label IS NULL``) row is the card; per-shard
-    rows surface inside the detail endpoint as sub-cards.
+    **Top-level-only filter.** iterate writes a hierarchical row
+    structure:
+
+    - ``iter_<N>_cycle`` (kind=iterate, parent=NULL) — the user-
+      visible run.
+    - ``iter_<N>_<stage>_<v>`` (kind=self_play/training/eval,
+      parent=cycle) — per-stage child.
+    - ``iter_<N>_<stage>_<v>_shard_<host>`` (kind=self_play,
+      parent=stage) — per-shard grandchild.
+
+    Returning the whole tree as flat cards produces 5–8 entries per
+    iterate launch and makes the UI unreadable. The list endpoint
+    now filters ``parent_run_id IS NULL`` so each iterate launch is
+    ONE card (the cycle row). Stage + shard rows still exist in the
+    DB for forensics and surface via the detail endpoint.
+
+    For cycle rows, the card needs to render like the **active
+    stage** would (data_gen / training / eval — the JS has no
+    ``cycle`` branch). The list path:
+
+    1. Finds the active child stage by looking for the most-recently-
+       started ``runs`` row whose ``parent_run_id`` is the cycle and
+       whose status is ``running``. Falls back to the latest
+       finished stage if no stage is running.
+    2. Rolls up that stage's progress (including the per-shard
+       fan-in already wired below — see "Distributed-row fallback").
+    3. Surfaces the stage's kind, counters, and ``machines`` array
+       on the cycle's UI dict, so the JS's existing kind-discriminated
+       rendering Just Works against the cycle row.
 
     Distributed-row fallback: when the aggregate row is missing
     (iterate's distributed self-play writes per-shard rows only —
     the ``_AggregateProgressPoller._write`` doesn't always populate
     the aggregate) the counters fall back to ``SUM`` (n_games_done,
     crashed, timed_out, wins_*, draws) or ``MAX`` (n_games_total,
-    elapsed_seconds) across the per-shard rows. Without this the UI
-    shows ``games=None/None`` on a live distributed run even though
-    the per-shard rows ARE accumulating.
+    elapsed_seconds) across the per-shard rows.
     """
     conn = _open_conn(progress_dir)
     if conn is None:
@@ -223,19 +248,92 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
             FROM runs r
             LEFT JOIN run_progress p
               ON p.run_id = r.run_id AND p.shard_label IS NULL
+            WHERE r.parent_run_id IS NULL
             ORDER BY r.started_at DESC
             """,
         ).fetchall()
-        # Identify rows whose aggregate didn't fire — n_games_done
-        # is the canonical "did the aggregate row get written"
-        # indicator (a real aggregate row, even 0/0, has the column
-        # populated; a missing aggregate leaves it NULL). For those,
-        # roll up the per-shard rows AND fetch the per-shard records
-        # themselves so the front-end can render the per-machine
-        # sub-card grid.
+        # For each cycle row, find its active stage so we can
+        # surface the stage's kind + counters on the cycle card.
+        # Prefer status='running'; fall back to most-recently-started.
+        cycle_run_ids = [
+            r["run_id"] for r in rows if r["kind"] == "iterate"
+        ]
+        cycle_active_stage: dict[str, dict[str, Any]] = {}
+        if cycle_run_ids:
+            placeholders = ",".join("?" * len(cycle_run_ids))
+            stage_rows = conn.execute(
+                f"""
+                SELECT * FROM runs
+                WHERE parent_run_id IN ({placeholders})
+                ORDER BY
+                    CASE status WHEN 'running' THEN 0 ELSE 1 END,
+                    started_at DESC
+                """,
+                cycle_run_ids,
+            ).fetchall()
+            for s in stage_rows:
+                # Keep only the first stage per cycle (the preferred
+                # one — running first, then most-recent).
+                cycle_active_stage.setdefault(
+                    s["parent_run_id"], dict(s),
+                )
+        # For each cycle row, the progress we want to roll up is on
+        # the ACTIVE STAGE, not on the cycle itself. Build a
+        # "effective run_id for progress" map: cycle_id → stage_id.
+        # For non-cycle rows it's just run_id → run_id.
+        effective_progress_run_id: dict[str, str] = {}
+        for row in rows:
+            if row["kind"] == "iterate":
+                stage = cycle_active_stage.get(row["run_id"])
+                effective_progress_run_id[row["run_id"]] = (
+                    stage["run_id"] if stage else row["run_id"]
+                )
+            else:
+                effective_progress_run_id[row["run_id"]] = (
+                    row["run_id"]
+                )
+
+        # For cycle rows, the aggregate-row JOIN above was keyed on
+        # the cycle's run_id — but the meaningful progress lives on
+        # the stage. Re-fetch the aggregate row for the stage so the
+        # cycle's headline counters reflect what's actually happening.
+        stage_progress: dict[str, dict[str, Any]] = {}
+        stage_ids_to_fetch = list({
+            sid for cycle_id, sid in effective_progress_run_id.items()
+            if cycle_id != sid
+        })
+        if stage_ids_to_fetch:
+            placeholders = ",".join("?" * len(stage_ids_to_fetch))
+            for r in conn.execute(
+                f"""
+                SELECT run_id, n_games_done, n_games_total,
+                       elapsed_seconds, crashed, timed_out,
+                       wins_new, wins_old, draws, extra_json
+                FROM run_progress
+                WHERE shard_label IS NULL
+                  AND run_id IN ({placeholders})
+                """,
+                stage_ids_to_fetch,
+            ).fetchall():
+                stage_progress[r["run_id"]] = dict(r)
+
+        # Identify rows whose effective aggregate didn't fire —
+        # n_games_done is the canonical "did the aggregate row get
+        # written" indicator (a real aggregate row, even 0/0, has
+        # the column populated; a missing aggregate leaves it NULL).
+        # For those, roll up the per-shard rows AND fetch the
+        # per-shard records themselves so the front-end can render
+        # the per-machine sub-card grid.
+        def _effective_done(row: sqlite3.Row) -> Optional[int]:
+            sid = effective_progress_run_id[row["run_id"]]
+            if sid != row["run_id"]:
+                sp = stage_progress.get(sid)
+                return sp["n_games_done"] if sp else None
+            return row["n_games_done"]
+
         missing_agg = [
-            row["run_id"] for row in rows
-            if row["n_games_done"] is None
+            effective_progress_run_id[row["run_id"]] for row in rows
+            if _effective_done(row) is None
         ]
         per_shard_rollup: dict[str, dict[str, Any]] = {}
         per_shard_records: dict[str, list[dict[str, Any]]] = {}
@@ -293,9 +391,26 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
             ("n_games_", "elapsed_seconds", "crashed", "timed_out",
              "wins_", "draws", "extra_json"),
         )}
+        # If this is a cycle row, fold its active stage in for
+        # display purposes: source progress from the stage and
+        # translate kind to the stage's UI kind so the JS renders
+        # the right card shape (data_gen / training / eval — there's
+        # no ``cycle`` JS branch). ``_db_kind`` stays ``iterate`` so
+        # downstream tooling can tell this is a cycle row.
+        effective_id = effective_progress_run_id[row["run_id"]]
+        is_cycle_with_stage = effective_id != row["run_id"]
+        stage_ui_kind: Optional[str] = None
+        stage_run_id: Optional[str] = None
+        if is_cycle_with_stage:
+            stage_row = cycle_active_stage[row["run_id"]]
+            stage_ui_kind = _DB_KIND_TO_UI.get(
+                stage_row["kind"], stage_row["kind"],
+            )
+            stage_run_id = stage_row["run_id"]
+
         # Pull counters from the aggregate row by default; fall back
         # to the per-shard rollup when the aggregate is missing.
-        rollup = per_shard_rollup.get(row["run_id"])
+        rollup = per_shard_rollup.get(effective_id)
         if rollup is not None:
             # Sum the extra_json-only fields (n_samples, n_workers,
             # p0_wins, p1_wins, ...) by walking the per-shard records.
@@ -303,7 +418,7 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
             # ``estimated_remaining_seconds`` are derived below from
             # the totals + elapsed because the JS reads them
             # directly from the run dict.
-            shard_recs = per_shard_records.get(row["run_id"], [])
+            shard_recs = per_shard_records.get(effective_id, [])
             extra_sum = {
                 "n_samples": 0,
                 "n_workers": 0,
@@ -366,6 +481,12 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
                 ),
             }
             ui_dict = _row_to_ui_dict(run_dict, progress_dict)
+            # Cycle-folding: override the UI kind with the stage's
+            # so the JS picks the right render branch. _db_kind
+            # stays the cycle's actual DB kind.
+            if stage_ui_kind is not None:
+                ui_dict["kind"] = stage_ui_kind
+                ui_dict["_active_stage_run_id"] = stage_run_id
             # Attach machines array so the per-shard sub-card grid
             # renders alongside the headline counters.
             if shard_recs:
@@ -374,18 +495,40 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
                 )
             out.append(ui_dict)
         else:
-            progress_dict = {
-                "n_games_done": row["n_games_done"],
-                "n_games_total": row["n_games_total"],
-                "elapsed_seconds": row["elapsed_seconds"],
-                "crashed": row["crashed"],
-                "timed_out": row["timed_out"],
-                "wins_new": row["wins_new"],
-                "wins_old": row["wins_old"],
-                "draws": row["draws"],
-                "extra_json": row["extra_json"],
-            }
-            out.append(_row_to_ui_dict(run_dict, progress_dict))
+            # Aggregate row was populated. For non-cycle rows, the
+            # JOINed columns on ``row`` are the right source. For
+            # cycle rows, the stage's aggregate (fetched in
+            # ``stage_progress`` above) is the source.
+            if is_cycle_with_stage:
+                sp = stage_progress.get(effective_id, {})
+                progress_dict = {
+                    "n_games_done": sp.get("n_games_done"),
+                    "n_games_total": sp.get("n_games_total"),
+                    "elapsed_seconds": sp.get("elapsed_seconds"),
+                    "crashed": sp.get("crashed"),
+                    "timed_out": sp.get("timed_out"),
+                    "wins_new": sp.get("wins_new"),
+                    "wins_old": sp.get("wins_old"),
+                    "draws": sp.get("draws"),
+                    "extra_json": sp.get("extra_json"),
+                }
+            else:
+                progress_dict = {
+                    "n_games_done": row["n_games_done"],
+                    "n_games_total": row["n_games_total"],
+                    "elapsed_seconds": row["elapsed_seconds"],
+                    "crashed": row["crashed"],
+                    "timed_out": row["timed_out"],
+                    "wins_new": row["wins_new"],
+                    "wins_old": row["wins_old"],
+                    "draws": row["draws"],
+                    "extra_json": row["extra_json"],
+                }
+            ui_dict = _row_to_ui_dict(run_dict, progress_dict)
+            if stage_ui_kind is not None:
+                ui_dict["kind"] = stage_ui_kind
+                ui_dict["_active_stage_run_id"] = stage_run_id
+            out.append(ui_dict)
     return out
 
 
