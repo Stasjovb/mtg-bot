@@ -38207,6 +38207,348 @@ def test_cross_engine_real_eoe_seam_rip_etb_exile_nonland_permanent_max_mv_2_unt
     )
 
 
+def test_cross_engine_real_eoe_blooming_stinger_etb_grant_deathtouch_to_another_target_creature_you_control_parity(
+    parity_smoke,
+):
+    """Probe: Blooming Stinger (EoE Creature, {1}{G} Plant Scorpion)
+    ETB ``another target creature you control gains deathtouch until
+    end of turn`` -- FIRST real-EoE consumer of the round-15
+    rider-widened ``grant_keywords_to_target_creature_until_eot``
+    bridge arm.
+
+    Sister probes / synthetic coverage:
+
+      * Synthetic Rust regression pins (single-keyword,
+        multi-keyword, exclude_source skip, default-exclude-source
+        discriminator, multi-cleanup) at
+        ``tests_rust/test_ueot.py::test_grant_keywords_target_*``.
+      * Cross-engine bridge pins at
+        ``tests/test_cross_engine_etb_triggers.py::test_bridge_grant_keywords_to_target_creature_until_eot_*``.
+
+    **Why this slice unblocks Blooming Stinger specifically.**
+    Pre-round-15 the bridge had NO grant-keyword arm at all
+    (the round-28 single-keyword Rust variant has no Python
+    bridge consumer in the EoE pool). Stinger's printed
+    "another target creature you control gains deathtouch UEOT"
+    needs (a) the multi-keyword list shape (forward-compatible
+    even though Stinger uses a single-element list), AND (b) the
+    ``exclude_source`` flag for the "another" qualifier so the
+    just-ETB'd Stinger itself is NOT picked as its own target.
+    Round-15 lands the sibling Rust variant + bridge arm so the
+    grant flows through end-to-end; this probe is the first
+    real-EoE consumer.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "Deathtouch
+         When this creature enters, another target creature you
+         control gains deathtouch until end of turn."
+
+    This probe focuses on the ETB-trigger granting deathtouch to
+    a separate creature; the printed inherent-deathtouch keyword
+    on Stinger itself is independently surfaced via
+    ``effective_keywords`` (the printing carries ``"deathtouch"``)
+    and is NOT a substrate concern of this slice.
+
+    Probe direction: **same-controller** (P0 source, P0 target) --
+    the grant goes to a P0-controlled creature. P0 controls
+    Blooming Stinger; the ETB-trigger picks ANOTHER P0-controlled
+    creature (the pre-seated bait Bears) and grants it deathtouch
+    UEOT.
+
+    Predicate decomposition:
+
+        SourceIsSelf
+
+    Effect: ``grant_keywords_to_target_creature_until_eot`` --
+    carries ``keywords: ["deathtouch"], exclude_source: True``
+    on the dict, mirroring Stinger's printed shape. The bridge
+    translates this to ``PumpTargetCreatureUntilEOT(power_bonus=0,
+    toughness_bonus=0, granted_keywords=frozenset({"deathtouch"}),
+    you_control_only=True, exclude_self=True)`` on Python (the
+    keyword-grant-only sub-shape of the unified Pump primitive,
+    P/T zeroed) and to the new
+    ``Effect::GrantKeywordsToTargetCreatureUntilEOT
+    { keywords: vec!["deathtouch"], exclude_source: true }``
+    Rust variant.
+
+    Carrier card-type:
+        Creature (Plant Scorpion). Distinct from the Seam Rip /
+        Banishing Light Enchantment carriers — the load-bearing
+        difference is that the source itself is on the
+        battlefield at ETB-resolve time, so the
+        ``exclude_source=true`` flag is the load-bearing axis
+        (without it, the just-ETB'd Stinger would itself be
+        picked as the first creature on its controller's bf).
+
+    Probe shape (inject-and-fire-ENTERS, mirrors the existing ETB
+    probes but with the bridge dict shape swapped to the
+    grant-keywords variant):
+
+      1. Pre-seat a vanilla bait Bears creature on P0's bf as
+         the target of the deathtouch grant. The bait does NOT
+         carry deathtouch on its printing -- the post-resolve
+         effective_keywords / has_keyword check is the load-
+         bearing observable.
+      2. Inject Blooming Stinger onto P0's bf. The ETB-trigger
+         lands the rider-variant effect on the stack.
+      3. Seat ``_PickFirstControlledCreatureAgent`` on P0; the
+         agent picks the bait Bears from legal_targets. Python's
+         ``legal_targets`` already excludes Stinger via the
+         ``exclude_self`` flag; Rust's resolve arm directly
+         skips ``source_obj_id`` in the bf scan. Both engines
+         end up granting deathtouch to the bait Bears.
+      4. Drain both stacks. Bait now carries deathtouch UEOT;
+         Stinger does NOT carry the GRANTED deathtouch (it
+         already has the printed keyword on the printing, but
+         no UEOT modifier was pushed onto its ueot_modifiers
+         Vec / no layer-6 grant_keyword registry entry written
+         against it).
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Multi-keyword lists -- exercised by the synthetic Rust
+        pin ``test_grant_keywords_target_multi_keyword_grants_all``.
+      * Cleanup-step UEOT clear -- exercised by
+        ``test_grant_keywords_target_multi_clears_at_cleanup``.
+      * Stinger's own inherent-deathtouch printing keyword -- a
+        separate observable layered on top of the granted
+        keyword; independent of this slice's substrate.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Stinger on P0's bf (controller=0).
+      * Bait Bears on P0's bf (controller=0).
+      * Bait Bears NOW carries deathtouch (granted UEOT).
+      * Stinger does NOT carry a UEOT-granted deathtouch (its
+        deathtouch comes from the printing, not the grant; the
+        grant correctly skipped it via exclude_source).
+      * Lives unchanged on both seats.
+      * No residual stack / pending decision.
+
+    Audit-doc note for the deferred sibling:
+
+      Perigee Beckoner (Bracketed alongside Blooming Stinger in
+      the round-10 substrate-blocked list) is NOT covered by this
+      slice. Its ETB grants a *triggered ability* (a custom
+      "When this creature dies, return it to bf tapped" rider),
+      not a keyword. The audit doc at
+      ``docs/EOE_PROBE_READINESS_AUDIT.md:387`` correctly tags
+      it as needing nested-trigger substrate; granted_keywords
+      doesn't apply. This slice closes Blooming Stinger only;
+      Perigee Beckoner remains substrate-blocked on the
+      grant-triggered-ability lane (tracked under
+      ``PumpAndGrantDiesReturnTrigger``).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import (
+        _PickFirstControlledCreatureAgent,
+    )
+
+    # No CardDef-based libraries; everything injected directly.
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side: inject the bait Bears on P0's bf ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Stinger Bait Bears",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [],
+        "triggered_abilities": [],
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: vanilla bait Bears inject must NOT push anything "
+        "onto the stack (no triggers). "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    # Pre-state pin: bait does NOT have deathtouch yet.
+    assert rust_state.has_keyword(rust_bait_id, "deathtouch") is False, (
+        "Rust: pre-state, bait Bears must NOT have deathtouch."
+    )
+
+    # Inject Blooming Stinger onto P0's bf. The ETB carries the
+    # rider-variant grant-keywords effect with
+    # keywords=["deathtouch"] + exclude_source=True (Stinger's
+    # printed shape).
+    rust_source_dict = {
+        "name": "Blooming Stinger",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "power": 2,
+        "toughness": 2,
+        # NB: omit the printed inherent ``deathtouch`` keyword on the
+        # synthetic printing — the load-bearing observable here is the
+        # GRANTED keyword on the bait. If we put deathtouch on Stinger's
+        # printing, the bait would still get the GRANT but Stinger
+        # would also have deathtouch (from the printing) and the
+        # exclude_source pin would be muddied. Faithful-to-oracle for
+        # *this* slice means: the grant on the OTHER target is the
+        # observable; Stinger's own printed deathtouch is exercised
+        # by the bare-keyword machinery elsewhere and isn't this
+        # slice's concern.
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "grant_keywords_to_target_creature_until_eot",
+                    "keywords": ["deathtouch"],
+                    "exclude_source": True,
+                },
+            }
+        ],
+    }
+    rust_source_id = rust_state.register_and_inject_object(
+        rust_source_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Stinger's arrival on P0 should fire the SourceIsSelf "
+        "ENTERS trigger and land "
+        "GrantKeywordsToTargetCreatureUntilEOT on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: mirror setup ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone, effective_keywords
+
+    bait_printing = CardPrinting(
+        name="Stinger Bait Bears",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    # Pre-state pin: bait does NOT have deathtouch yet.
+    assert "deathtouch" not in effective_keywords(py_state, py_bait), (
+        "Python: pre-state, bait Bears must NOT have deathtouch."
+    )
+
+    # Source: Blooming Stinger Creature carrier on P0's bf, with the
+    # grant-deathtouch ETB. Python-side carries the rider directly via
+    # the ``granted_keywords`` + ``exclude_self`` fields on the unified
+    # Pump dataclass (P/T zero — the keyword-grant-only sub-shape).
+    source_printing = CardPrinting(
+        name="Blooming Stinger",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=PumpTargetCreatureUntilEOT(
+                    power_bonus=0,
+                    toughness_bonus=0,
+                    granted_keywords=frozenset({"deathtouch"}),
+                    you_control_only=True,
+                    exclude_self=True,
+                ),
+            ),
+        ),
+    )
+
+    py_state.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Stinger's arrival on P0 should fire the IsSelf "
+        "ENTERS trigger and land "
+        "PumpTargetCreatureUntilEOT(granted_keywords={deathtouch}, "
+        "exclude_self=True) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Rust post-state: bait got the granted deathtouch ----
+    # Bait now carries deathtouch via UEOT modifier.
+    assert rust_state.has_keyword(rust_bait_id, "deathtouch") is True, (
+        "Rust round-15 contract: post-resolve, bait Bears must carry "
+        "the granted deathtouch keyword (via "
+        "UeotModifier::GrantKeyword push)."
+    )
+    # Source did NOT receive the granted keyword (exclude_source
+    # correctly skipped it).
+    assert rust_state.has_keyword(rust_source_id, "deathtouch") is False, (
+        "Rust round-15 contract: post-resolve, Stinger source must "
+        "NOT carry a UEOT-granted deathtouch (the grant was directed "
+        "at a separate target via exclude_source=True). The synthetic "
+        "Stinger printing also doesn't carry the printed inherent "
+        "keyword in this probe (see source_dict comment)."
+    )
+
+    # ---- Python post-state ----
+    py_bait_keywords = effective_keywords(py_state, py_bait)
+    assert "deathtouch" in py_bait_keywords, (
+        f"Python round-15 contract: post-resolve, bait Bears must "
+        f"carry the granted deathtouch keyword (via layer-6 "
+        f"grant_keyword registry entry). "
+        f"got effective_keywords={sorted(py_bait_keywords)}"
+    )
+    py_source_keywords = effective_keywords(py_state, py_source)
+    assert "deathtouch" not in py_source_keywords, (
+        f"Python round-15 contract: post-resolve, Stinger source "
+        f"must NOT carry a UEOT-granted deathtouch. "
+        f"got effective_keywords={sorted(py_source_keywords)}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
