@@ -502,6 +502,50 @@ def test_build_command_always_emits_architecture(
     assert argv[argv.index("--architecture") + 1] == "structured"
 
 
+def test_build_command_always_emits_distributed_fields() -> None:
+    """--shards-config, --queue-url, --bundle-url are marked
+    always_emit. Without this, when the user keeps the schema's
+    hint defaults (the production master URL / shards_config.json
+    filename), the flags get OMITTED — iterate's argparse default
+    is None for all three, so the spawned process silently runs
+    master-only instead of distributed. Bit users on a real
+    distributed-launch attempt.
+    """
+    argv = build_iterate_command(
+        {
+            "bootstrap-version": "v_test",
+            "deck-pool": "data/17lands/eoe_decks.json.gz",
+            "shards-config": "shards_config.json",
+            "bundle-url": "http://desktop-j05412i:5099/repo.bundle",
+            "queue-url": "http://desktop-j05412i:5099",
+        },
+    )
+    assert "--shards-config" in argv
+    assert "--bundle-url" in argv
+    assert "--queue-url" in argv
+    assert argv[argv.index("--shards-config") + 1] == (
+        "shards_config.json"
+    )
+
+
+def test_build_command_distributed_fields_omitted_when_blanked() -> None:
+    """Blanking a distributed field (or omitting it entirely) still
+    skips the flag — always_emit only kicks in when the user has a
+    value. A blank means "use iterate's default" which is None /
+    master-only."""
+    argv = build_iterate_command(
+        {
+            "bootstrap-version": "v_test",
+            "deck-pool": "data/17lands/eoe_decks.json.gz",
+            "shards-config": "",  # blanked
+            # bundle-url / queue-url not submitted at all
+        },
+    )
+    assert "--shards-config" not in argv
+    assert "--bundle-url" not in argv
+    assert "--queue-url" not in argv
+
+
 def test_build_schema_architecture_default_falls_back_to_shared(
     tmp_path: Path,
 ) -> None:
