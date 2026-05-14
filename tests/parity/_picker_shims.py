@@ -217,3 +217,36 @@ class _SurveilSendAllAgent(Agent):
 
     def choose_surveil(self, state, player_id, top_card_id):
         return True
+
+
+class _PickBottomLibraryAgent(Agent):
+    """Pick "bottom" when offered a top-vs-bottom library mode choice.
+
+    Mirrors Rust's
+    ``Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
+    deterministic bottom pick (state_ops_resolve.rs:5266 uses
+    ``lib_mut.push(obj)`` -- end of the Vec is the bottom of the
+    library per the post-CE3 Vec convention). Python's
+    ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary.resolve``
+    (effects/generic/zone_moves.py:87-93) calls
+    ``owner.agent.choose_mode(state, owner_id, ["top of library",
+    "bottom of library"])`` with mode index 0 = top, 1 = bottom.
+    Returning 1 unconditionally drives the bounced permanent to the
+    OWNER's library bottom, matching Rust's first-slice deterministic
+    bottom pick bit-for-bit.
+
+    Seated on the OWNER of the bait permanent (NOT the source's
+    controller) since CR 401.1 routes the card to the owner's library
+    and the choose_mode hook is called on the owner's agent. In the
+    cross-controller probe shape (source on P1, bait owned by P0),
+    this means seating ``_PickBottomLibraryAgent`` on P0.
+
+    Used by: I78 cross-controller probe
+    (owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library).
+    """
+
+    def choose_mode(self, state, player_id, mode_descriptions):
+        # mode 0 = "top of library", mode 1 = "bottom of library".
+        # Return 1 to mirror Rust's first-slice deterministic bottom
+        # pick (cards.rs:1151-1158 docstring + state_ops_resolve.rs:5266).
+        return 1
