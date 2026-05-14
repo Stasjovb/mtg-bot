@@ -5150,5 +5150,210 @@ def test_rust_parser_accepts_look_top_n_put_one_in_hand_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_put_plus_one_counter_on_each_of_up_to_n_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round-21 audit refresh) -- Weftblade
+    Enhancer family. Rust ``{"kind": "put_plus_one_counter_on_each_
+    of_up_to_n_target_creatures", "max_n": 2}`` translates to Python
+    ``PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=2)``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:4128-4149 (single
+    required `max_n` field, i32, non-negative). Field name `max_n`
+    agrees on both engines (no rename in the bridge). Pin verifies
+    the max_n field is correctly stored.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnEachOfUpToNTargetCreatures,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+            "max_n": 2,
+        }
+    )
+    assert isinstance(e, PutPlusOneCounterOnEachOfUpToNTargetCreatures)
+    assert e.max_n == 2
+
+
+def test_bridge_put_plus_one_counter_on_each_of_up_to_n_max_n_3():
+    """Bridge arm pin: max_n=3 round-trips. Pulls in a value distinct
+    from Python's class-level default (2) so a future change to the
+    Python default never masks a bridge bug -- the dict-shape contract
+    is independent of the class-level default.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnEachOfUpToNTargetCreatures,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+            "max_n": 3,
+        }
+    )
+    assert e == PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=3)
+
+
+def test_bridge_put_plus_one_counter_on_each_of_up_to_n_max_n_zero_silent_noop():
+    """Bridge arm pin: max_n=0 is a valid silent-no-op shape. Both
+    engines accept max_n=0 (Rust at cards.rs:4144 short-circuits
+    only on max_n < 0; Python's class accepts 0 cleanly with
+    target_count_range=(0,0) yielding 0 targets picked). Bridge
+    must NOT reject 0 -- only negative max_n raises.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnEachOfUpToNTargetCreatures,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+            "max_n": 0,
+        }
+    )
+    assert isinstance(e, PutPlusOneCounterOnEachOfUpToNTargetCreatures)
+    assert e.max_n == 0
+
+
+def test_bridge_put_plus_one_counter_on_each_of_up_to_n_extra_keys_ignored():
+    """Round-trip pin: extra keys on the dict are silently ignored
+    (the variant carries only one field, `max_n`). Mirrors the
+    existing bridge-arm extra-keys-ignored convention. Forward-
+    compatible with future rider-widened Rust variants -- those
+    would land as separate ``kind`` arms on this translator.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnEachOfUpToNTargetCreatures,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+            "max_n": 2,
+            "ignored_extra_field": "noise",
+        }
+    )
+    assert isinstance(e, PutPlusOneCounterOnEachOfUpToNTargetCreatures)
+    assert e.max_n == 2
+
+
+def test_bridge_put_plus_one_counter_on_each_of_up_to_n_missing_max_n_raises():
+    """Bridge arm pin: missing required `max_n` field raises ValueError
+    to mirror Rust's parse_effect contract at cards.rs:4128-4149
+    (which raises PyValueError on missing required field). Python's
+    class has a default of 2 (Weftblade-Enhancer shape), but the
+    bridge enforces explicit `max_n` to keep the dict-shape contract
+    aligned with Rust's parse path -- mirrors the round-20/21
+    LookAtTopNRevealOrCounter / LookTopNPutOneInHand precedent.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="missing required field 'max_n'"):
+        _ta_dict_to_python_effect(
+            {"kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures"}
+        )
+
+
+def test_bridge_put_plus_one_counter_on_each_of_up_to_n_negative_max_n_raises():
+    """Bridge arm pin: negative max_n raises ValueError to mirror
+    Rust's parse_effect contract at cards.rs:4144-4148 (which raises
+    PyValueError on negative max_n). Bridge mirrors the contract so
+    a typo in a fixture surfaces immediately rather than silently
+    constructing a no-op effect.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="max_n must be non-negative"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+                "max_n": -1,
+            }
+        )
+
+
+def test_bridge_put_plus_one_counter_on_each_of_up_to_n_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([PutPlusOneCounterOnEachOfUpToN(2), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    this arm against accidental dispatch loss inside Sequence -- the
+    recursive translation walks each child via the same
+    ``_ta_dict_to_python_effect`` so this also exercises the
+    recursive path for the up-to-N-counters arm.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnEachOfUpToNTargetCreatures,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+                    "max_n": 2,
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], PutPlusOneCounterOnEachOfUpToNTargetCreatures
+    )
+    assert e.effects[0].max_n == 2
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_put_plus_one_counter_on_each_of_up_to_n_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the ``{"kind":
+    "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+    "max_n": 2}`` dict shape on a triggered_ability carrier. The
+    bridge dict shape must register cleanly on the Rust side too;
+    this lockstep gate keeps the bridge from drifting away from
+    Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms (look_top_n_put_one_in_hand,
+    set_base_pt_until_eot, may_do). Rust's parse_effect arm at
+    ``rust/src/cards.rs:4128-4149`` accepts the bare dict shape
+    with a required `max_n: i32` field.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- PutPlusOneCounterOnEachOfUpToN",
+        "card_types": ["Creature"],
+        "mana_cost": {"W": 1, "generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_each_of_up_to_n_target_creatures",
+                    "max_n": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
