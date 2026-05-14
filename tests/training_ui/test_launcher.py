@@ -27,8 +27,9 @@ from flask import Flask
 from mtg_bot.training_ui.app import create_app
 from mtg_bot.training_ui.launcher import (
     ITERATE_SCHEMA, _read_launched_records, build_iterate_command,
-    build_iterate_schema, find_spawn_for_run, kill_process_tree,
-    record_spawn, spawn_iterate,
+    build_iterate_schema, clear_iter_collision_residue,
+    find_spawn_for_run, kill_process_tree, record_spawn,
+    spawn_iterate,
 )
 
 
@@ -660,6 +661,232 @@ def test_build_command_rejects_unknown_version_with_choices(
 # ---------------------------------------------------------------------
 # Spawn-PID persistence + matching + OS-kill.
 # ---------------------------------------------------------------------
+
+# ---------------------------------------------------------------------
+# Iter-collision cleanup — clear stale runs.db rows + STOP sentinels
+# that would block a re-launch after a force-killed iter.
+# ---------------------------------------------------------------------
+
+def _seed_iterate_state(registry_root: Path, completed: int) -> None:
+    """Drop a minimal iterate_state.json so _next_iter_n can read it."""
+    registry_root.mkdir(parents=True, exist_ok=True)
+    (registry_root / "iterate_state.json").write_text(
+        json.dumps({"iterations_completed": completed}),
+        encoding="utf-8",
+    )
+
+
+def _seed_db_row(
+    db_path: Path,
+    run_id: str,
+    status: str,
+    started_at: str = "2026-05-13T00:00:00+00:00",
+) -> None:
+    """Seed a minimal runs.db row. Late-imports runs_db so the
+    schema is created on first use via ``runs_db.connect``."""
+    from mtg_bot.cli.runs import db as runs_db
+    conn = runs_db.connect(db_path)
+    try:
+        with runs_db.transaction(conn):
+            conn.execute(
+                "INSERT INTO runs(run_id, kind, status, started_at, "
+                "git_commit, config_json) VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, "iterate", status, started_at, "deadbeef", "{}"),
+            )
+    finally:
+        conn.close()
+
+
+def test_clear_collision_no_registry_is_noop(tmp_path: Path) -> None:
+    """``registry_root=None`` is the test/fallback path — nothing
+    is cleaned, the helper returns empty results without raising."""
+    progress = tmp_path / "progress"
+    progress.mkdir()
+    out = clear_iter_collision_residue(
+        progress, registry_root=None, n_iterations=5,
+    )
+    assert out["cleared_rows"] == 0
+    assert out["cleared_run_ids"] == []
+    assert out["cleared_sentinels"] == []
+    assert out["next_iter_n"] is None
+
+
+def test_clear_collision_missing_state_is_noop(tmp_path: Path) -> None:
+    """No ``iterate_state.json`` → can't compute next iter → no-op."""
+    progress = tmp_path / "progress"
+    progress.mkdir()
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    out = clear_iter_collision_residue(
+        progress, registry_root=registry, n_iterations=5,
+    )
+    assert out["next_iter_n"] is None
+    assert out["cleared_rows"] == 0
+
+
+def test_clear_collision_deletes_matching_terminal_rows(
+    tmp_path: Path,
+) -> None:
+    """iterations_completed=2 → next iter is 3. Terminal rows with
+    run_id LIKE ``iter_003_%`` get DELETEd. Running rows are NOT
+    touched. Rows for OTHER iter numbers are untouched."""
+    progress = tmp_path / "progress"
+    progress.mkdir()
+    registry = tmp_path / "registry"
+    _seed_iterate_state(registry, completed=2)
+
+    db_path = progress / "runs.db"
+    # Seed: 2 terminal rows for iter_003 (should be cleared) + 1
+    # running row for iter_003 (must NOT be cleared) + 1 terminal
+    # row for iter_002 (out of range, must NOT be cleared) + 1
+    # terminal row for iter_004 (in range with n_iterations>=2,
+    # must be cleared for this test's n_iterations=2).
+    _seed_db_row(db_path, "iter_003_cycle", "killed")
+    _seed_db_row(db_path, "iter_003_self_play_v3", "failed")
+    _seed_db_row(db_path, "iter_003_running_decoy", "running")
+    _seed_db_row(db_path, "iter_002_cycle", "completed")
+    _seed_db_row(db_path, "iter_004_train_v4", "killed")
+
+    out = clear_iter_collision_residue(
+        progress, registry_root=registry, n_iterations=2,
+    )
+    assert out["next_iter_n"] == 3
+    assert out["range_end"] == 4
+    assert out["cleared_rows"] == 3
+    cleared = set(out["cleared_run_ids"])
+    assert cleared == {
+        "iter_003_cycle", "iter_003_self_play_v3", "iter_004_train_v4",
+    }
+    # Verify DB state directly.
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    try:
+        survivors = {
+            r[0] for r in conn.execute(
+                "SELECT run_id FROM runs"
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    assert "iter_003_running_decoy" in survivors  # running protected
+    assert "iter_002_cycle" in survivors  # out of range
+    assert "iter_003_cycle" not in survivors  # terminal + in range
+    assert "iter_003_self_play_v3" not in survivors
+    assert "iter_004_train_v4" not in survivors
+
+
+def test_clear_collision_deletes_stop_sentinels(tmp_path: Path) -> None:
+    """STOP sentinels for the iter-range get unlinked, both
+    zero-padded and non-padded forms. Sentinels for other iters
+    or unrelated run_ids stay."""
+    progress = tmp_path / "progress"
+    progress.mkdir()
+    registry = tmp_path / "registry"
+    _seed_iterate_state(registry, completed=2)
+
+    # In-range — should be cleared.
+    (progress / ".STOP_iter_003_cycle").write_text("x")
+    (progress / ".STOP_iter_003_self_play_v3").write_text("x")
+    (progress / ".STOP_iter_3_cycle").write_text("x")  # non-padded
+    # Out-of-range — should stay.
+    (progress / ".STOP_iter_002_cycle").write_text("keep")
+    (progress / ".STOP_eval_xyz").write_text("keep")
+
+    out = clear_iter_collision_residue(
+        progress, registry_root=registry, n_iterations=1,
+    )
+    cleared = set(out["cleared_sentinels"])
+    assert ".STOP_iter_003_cycle" in cleared
+    assert ".STOP_iter_003_self_play_v3" in cleared
+    assert ".STOP_iter_3_cycle" in cleared
+    # Survivors:
+    assert (progress / ".STOP_iter_002_cycle").is_file()
+    assert (progress / ".STOP_eval_xyz").is_file()
+    # In-range ones gone:
+    assert not (progress / ".STOP_iter_003_cycle").exists()
+
+
+def test_clear_collision_cascade_cleans_child_tables(
+    tmp_path: Path,
+) -> None:
+    """When a row in ``runs`` is deleted, the cascaded children
+    (run_progress, run_events, run_artifacts) are explicitly
+    cleaned too. Without this, an orphan run_progress row could
+    survive and confuse the UI."""
+    from mtg_bot.cli.runs import db as runs_db
+    progress = tmp_path / "progress"
+    progress.mkdir()
+    registry = tmp_path / "registry"
+    _seed_iterate_state(registry, completed=2)
+    db_path = progress / "runs.db"
+    _seed_db_row(db_path, "iter_003_cycle", "killed")
+    # Seed a run_progress row that should cascade.
+    conn = runs_db.connect(db_path)
+    try:
+        with runs_db.transaction(conn):
+            conn.execute(
+                "INSERT INTO run_progress(run_id, shard_label, "
+                "extra_json, updated_at) VALUES (?, NULL, ?, ?)",
+                ("iter_003_cycle", "{}", "2026-05-13T00:00:00+00:00"),
+            )
+    finally:
+        conn.close()
+    clear_iter_collision_residue(
+        progress, registry_root=registry, n_iterations=1,
+    )
+    # Child row should be gone.
+    conn = runs_db.connect(db_path)
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM run_progress WHERE run_id = ?",
+            ("iter_003_cycle",),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert n == 0
+
+
+def test_spawn_iterate_clears_collision_before_launch(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: spawn_iterate runs the collision sweep before
+    Popen. The response carries collision_cleanup so the frontend
+    can surface what got cleaned."""
+    progress = tmp_path / "progress"
+    progress.mkdir()
+    registry = tmp_path / "registry"
+    _seed_iterate_state(registry, completed=2)
+    db_path = progress / "runs.db"
+    _seed_db_row(db_path, "iter_003_cycle", "killed")
+    _seed_db_row(db_path, "iter_003_self_play_v3", "killed")
+    (progress / ".STOP_iter_003_cycle").write_text("x")
+
+    result = spawn_iterate(
+        {
+            "bootstrap-version": "v_smoke_only",
+            "deck-pool": str(tmp_path / "no_such.json"),
+            "n-iterations": "1",
+        },
+        progress,
+        registry_root=registry,
+    )
+    assert result["ok"] is True
+    cleanup = result["collision_cleanup"]
+    assert cleanup["next_iter_n"] == 3
+    assert cleanup["cleared_rows"] == 2
+    assert ".STOP_iter_003_cycle" in cleanup["cleared_sentinels"]
+    # And the DB rows really are gone.
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE run_id IN "
+            "('iter_003_cycle', 'iter_003_self_play_v3')"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert n == 0
+
 
 def test_record_spawn_appends_to_launched_json(tmp_path: Path) -> None:
     """record_spawn writes the spawn metadata to launched.json with

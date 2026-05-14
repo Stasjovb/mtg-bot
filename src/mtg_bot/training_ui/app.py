@@ -915,6 +915,7 @@ def create_app(
                 submitted, app.config["PROGRESS_DIR"],
                 schema=schema,
                 repo_root=app.config.get("SPAWN_CWD"),
+                registry_root=app.config.get("REGISTRY_ROOT"),
             )
         except ValueError as e:
             # Schema-validation failure (missing required, unknown key,
