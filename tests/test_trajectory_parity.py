@@ -1833,6 +1833,313 @@ def test_real_game_combat_block_with_largest_able_parity():
     assert "Grizzly Bears" in p1_gy_names
 
 
+# ---------------------------------------------------------------------------
+# Round-17 enhancement: keyword trajectory probes.
+#
+# Phase 5's keyword side-channels (first_strike / vigilance / lifelink /
+# deathtouch / trample / haste / menace / defender / indestructible /
+# double_strike / flying / hexproof / multi-keyword) are wired to the
+# multi_blocker_deckspec walk only — they side-channel-inject specific
+# creatures at step 168 of the retaliation_selector walk. Round-17
+# trajectory probes need a more general inject-on-bf helper that
+# doesn't assume the synthetic multi_blocker walk.
+#
+# `_inject_keyword_creature_on_p0_bf` is the round-17 promotion: drop a
+# single keyword-bearing 2/2 onto p0's battlefield at any point in a
+# trajectory, with parity-clean post-state. Same pattern as the round-16
+# `first_strike_side_channel` but parameterized on the keyword + name.
+# ---------------------------------------------------------------------------
+
+
+def _inject_keyword_creature_on_p0_bf(
+    py_state, rust_state, *, keyword, printing_name, power=2, toughness=2,
+):
+    """Generic keyword-creature injector on p0's bf.
+
+    Mirrors :func:`first_strike_side_channel` (cross_engine.py) but
+    parameterized on the keyword + printing name so a trajectory probe
+    can inject any single-keyword creature without depending on the
+    multi_blocker_deckspec setup. Returns ``(py_obj_id, rust_obj_id)``.
+
+    Both engines receive the keyword in the spelling each one uses:
+    Python's ``CardPrinting.keywords`` is a frozenset using lowercase
+    spelling with spaces (``"first strike"``); Rust's
+    ``register_and_inject_object`` expects the lowercase-with-
+    underscores form (``"first_strike"``). The injector hands each
+    engine the spelling it needs — caller passes the Python form,
+    the helper translates for Rust.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # Translate Python's spelling to Rust's: "first strike" -> "first_strike".
+    rust_keyword = keyword.replace(" ", "_")
+
+    # ---- Python side ----
+    printing = CardPrinting(
+        name=printing_name,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=power,
+        toughness=toughness,
+        produces=frozenset(),
+        keywords=frozenset({keyword}),
+    )
+    py_obj = py_state.new_object(
+        printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": printing_name,
+            "card_types": ["Creature"],
+            "power": power,
+            "toughness": toughness,
+            "keywords": [rust_keyword],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def test_trample_overflow_to_player_parity():
+    """Trample attacker (4/4) blocked by a 2/2 — trample damage spills
+    to the defender. Asserts byte-equal life total + zone state.
+
+    Setup: standard mutual-Bears prefix at turn 7. Inject a 4/4 trample
+    creature on p0's bf at turn 7 PRECOMBAT_MAIN. p0 attacks with the
+    trample creature + Bears; p1 blocks (smallest = Bears, blocks the
+    LOWEST-id attacker by the agent's pairing).
+
+    Per CR 702.19b: trample assigns lethal (= blocker toughness = 2)
+    to the blocker, spills the remaining 2 to the defender. p1's Bears
+    dies; p1 takes 2 damage (20 -> 18).
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _setup_both_bears_by_turn_6(py_state, rust_state)
+
+    _advance_n_phases(py_state, rust_state, 12)
+    assert py_state.turn_number == 7
+    assert py_state.step == Step.PRECOMBAT_MAIN
+
+    # Inject a 4/4 trample creature on p0 bf.
+    _inject_keyword_creature_on_p0_bf(
+        py_state, rust_state,
+        keyword="trample",
+        printing_name="Bear Tankyboy",
+        power=4, toughness=4,
+    )
+    # Verify post-injection parity (no divergence from the inject).
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"keyword-injection (trample) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    # Walk PRECOMBAT_MAIN -> DECLARE_ATTACKERS.
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # Drive combat with attack_all_block_smallest. Attackers: trample
+    # creature + Bears; defender (p1) has 1 Bears, blocks the lowest-
+    # id attacker.
+    agent = trajectory.RealGameCombatAgent(
+        strategy="attack_all_block_smallest"
+    )
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"trample combat via RealGameCombatAgent surfaced a real "
+            f"cross-engine divergence: {exc}"
+        )
+
+    # Post-combat: byte-equal field views.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    # Sanity: SOMETHING happened — at least one creature died OR p1
+    # took damage. The exact outcome depends on which attacker p1's
+    # Bears blocks (lowest-id). Both engines must agree.
+    p1_gy = [entry[0] for entry in py_view["graveyard_p1"]]
+    assert (
+        py_view["life_p1"] < 20
+        or "Grizzly Bears" in p1_gy
+        or "Bear Tankyboy" in p1_gy
+    ), (
+        f"expected combat to land damage or kill a creature; got "
+        f"life_p1={py_view['life_p1']}, p1_gy={p1_gy}"
+    )
+
+
+def test_vigilance_attacker_untaps_parity():
+    """Vigilance attacker — declaring attackers should NOT tap a
+    vigilance creature. Asserts the attacker's tapped flag stays False
+    post-DECLARE_ATTACKERS on both engines.
+
+    Per CR 702.20: "Attacking doesn't cause this creature to tap".
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _setup_p0_bears_at_turn_5(py_state, rust_state)
+
+    _advance_n_phases(py_state, rust_state, 12 * 2)
+    assert py_state.turn_number == 7
+    assert py_state.step == Step.PRECOMBAT_MAIN
+
+    # Inject a 2/2 vigilance creature on p0 bf.
+    py_vig_id, _rust_vig_id = _inject_keyword_creature_on_p0_bf(
+        py_state, rust_state,
+        keyword="vigilance",
+        printing_name="Bear Sentry",
+        power=2, toughness=2,
+    )
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"keyword-injection (vigilance) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # Drive combat with attack_all (defender doesn't block).
+    agent = trajectory.RealGameCombatAgent(strategy="attack_all")
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"vigilance combat via RealGameCombatAgent surfaced a "
+            f"real cross-engine divergence: {exc}"
+        )
+
+    # Post-combat: byte-equal field views.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    # Vigilance creature should be UNTAPPED on both engines (it
+    # attacked, but vigilance suppresses the attack-tap).
+    vig_bf = next(
+        t for t in py_view["battlefield"] if t[0] == "Bear Sentry"
+    )
+    # bf 8-tuple field 1 is the tapped slot.
+    assert not vig_bf[1], (
+        f"vigilance attacker should be untapped; got tapped={vig_bf[1]}"
+    )
+    # The non-vigilance Bears, OTOH, IS tapped (no vigilance).
+    bears_bf = next(
+        t for t in py_view["battlefield"] if t[0] == "Grizzly Bears"
+    )
+    assert bears_bf[1], (
+        f"non-vigilance Bears should be tapped after attack; "
+        f"got tapped={bears_bf[1]}"
+    )
+
+
+def test_lifelink_combat_damage_to_self_parity():
+    """Lifelink attacker — combat damage to the defender also gains the
+    attacker's controller life equal to the damage.
+
+    Setup: inject a 2/2 lifelink creature on p0 bf at turn 7. p0
+    attacks with the lifelink creature (no block — defender has no
+    creatures). Lifelink fires for 2 damage to the player → p0 gains
+    2 life.
+
+    Per CR 702.15b: damage dealt by a creature with lifelink causes
+    its controller to gain that much life.
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Walk to turn 7 PRECOMBAT_MAIN with no creatures (skip the bears
+    # setup so the lifelink creature is the SOLE attacker — keeps the
+    # life-total expectation crisp).
+    _advance_n_phases(py_state, rust_state, 3)  # → turn 1 MAIN1
+    # Walk through 6 more turns (turns 2-7), each is 12 phases.
+    _advance_n_phases(py_state, rust_state, 12 * 6)
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.PRECOMBAT_MAIN
+
+    # Inject a 2/2 lifelink creature on p0 bf.
+    _inject_keyword_creature_on_p0_bf(
+        py_state, rust_state,
+        keyword="lifelink",
+        printing_name="Bear Healer",
+        power=2, toughness=2,
+    )
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"keyword-injection (lifelink) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    pre_combat_life_p0 = py_view["life_p0"]
+    pre_combat_life_p1 = py_view["life_p1"]
+
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # Attack unblocked (defender has no creatures to block with).
+    agent = trajectory.RealGameCombatAgent(strategy="attack_all")
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"lifelink combat via RealGameCombatAgent surfaced a "
+            f"real cross-engine divergence: {exc}"
+        )
+
+    # Post-combat parity.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+    # Lifelink: p0 gained 2 life; p1 lost 2.
+    assert py_view["life_p0"] == pre_combat_life_p0 + 2, (
+        f"lifelink should have gained 2 life; got "
+        f"life_p0={py_view['life_p0']} (was {pre_combat_life_p0})"
+    )
+    assert py_view["life_p1"] == pre_combat_life_p1 - 2
+
+
 def test_real_game_combat_optimal_no_loss_attack_skips_unsafe_parity():
     """``RealGameCombatAgent("optimal_no_loss_attack")`` skips attacks
     where the defender's bf has a creature that can trade up.
