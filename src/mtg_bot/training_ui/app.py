@@ -201,6 +201,15 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
     Per-shard runs (``shard_label`` populated) are NOT listed here —
     the aggregate (``shard_label IS NULL``) row is the card; per-shard
     rows surface inside the detail endpoint as sub-cards.
+
+    Distributed-row fallback: when the aggregate row is missing
+    (iterate's distributed self-play writes per-shard rows only —
+    the ``_AggregateProgressPoller._write`` doesn't always populate
+    the aggregate) the counters fall back to ``SUM`` (n_games_done,
+    crashed, timed_out, wins_*, draws) or ``MAX`` (n_games_total,
+    elapsed_seconds) across the per-shard rows. Without this the UI
+    shows ``games=None/None`` on a live distributed run even though
+    the per-shard rows ARE accumulating.
     """
     conn = _open_conn(progress_dir)
     if conn is None:
@@ -217,6 +226,40 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
             ORDER BY r.started_at DESC
             """,
         ).fetchall()
+        # Identify rows whose aggregate didn't fire — n_games_done
+        # is the canonical "did the aggregate row get written"
+        # indicator (a real aggregate row, even 0/0, has the column
+        # populated; a missing aggregate leaves it NULL). For those,
+        # roll up the per-shard rows.
+        missing_agg = [
+            row["run_id"] for row in rows
+            if row["n_games_done"] is None
+        ]
+        per_shard_rollup: dict[str, dict[str, Any]] = {}
+        if missing_agg:
+            placeholders = ",".join("?" * len(missing_agg))
+            rollup_rows = conn.execute(
+                f"""
+                SELECT run_id,
+                    SUM(COALESCE(n_games_done, 0)) AS n_games_done,
+                    MAX(COALESCE(n_games_total, 0)) AS n_games_total,
+                    MAX(COALESCE(elapsed_seconds, 0))
+                        AS elapsed_seconds,
+                    SUM(COALESCE(crashed, 0)) AS crashed,
+                    SUM(COALESCE(timed_out, 0)) AS timed_out,
+                    SUM(COALESCE(wins_new, 0)) AS wins_new,
+                    SUM(COALESCE(wins_old, 0)) AS wins_old,
+                    SUM(COALESCE(draws, 0)) AS draws
+                FROM run_progress
+                WHERE shard_label IS NOT NULL
+                  AND run_id IN ({placeholders})
+                GROUP BY run_id
+                """,
+                missing_agg,
+            ).fetchall()
+            per_shard_rollup = {
+                r["run_id"]: dict(r) for r in rollup_rows
+            }
     finally:
         conn.close()
 
@@ -226,17 +269,36 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
             ("n_games_", "elapsed_seconds", "crashed", "timed_out",
              "wins_", "draws", "extra_json"),
         )}
-        progress_dict = {
-            "n_games_done": row["n_games_done"],
-            "n_games_total": row["n_games_total"],
-            "elapsed_seconds": row["elapsed_seconds"],
-            "crashed": row["crashed"],
-            "timed_out": row["timed_out"],
-            "wins_new": row["wins_new"],
-            "wins_old": row["wins_old"],
-            "draws": row["draws"],
-            "extra_json": row["extra_json"],
-        }
+        # Pull counters from the aggregate row by default; fall back
+        # to the per-shard rollup when the aggregate is missing.
+        rollup = per_shard_rollup.get(row["run_id"])
+        if rollup is not None:
+            progress_dict = {
+                "n_games_done": rollup["n_games_done"],
+                "n_games_total": rollup["n_games_total"],
+                "elapsed_seconds": rollup["elapsed_seconds"],
+                "crashed": rollup["crashed"],
+                "timed_out": rollup["timed_out"],
+                "wins_new": rollup["wins_new"],
+                "wins_old": rollup["wins_old"],
+                "draws": rollup["draws"],
+                # extra_json doesn't aggregate cleanly across shards;
+                # leave it None on the rollup path. Per-shard
+                # extra_json still surfaces in the detail endpoint.
+                "extra_json": None,
+            }
+        else:
+            progress_dict = {
+                "n_games_done": row["n_games_done"],
+                "n_games_total": row["n_games_total"],
+                "elapsed_seconds": row["elapsed_seconds"],
+                "crashed": row["crashed"],
+                "timed_out": row["timed_out"],
+                "wins_new": row["wins_new"],
+                "wins_old": row["wins_old"],
+                "draws": row["draws"],
+                "extra_json": row["extra_json"],
+            }
         out.append(_row_to_ui_dict(run_dict, progress_dict))
     return out
 
