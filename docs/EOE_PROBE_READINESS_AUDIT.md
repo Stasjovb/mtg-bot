@@ -373,7 +373,7 @@ Order-of-magnitude effects that recur across many cards:
 | `TapTargetAndPutStunCounter` (stun-counter substrate) | 2 (Mechanozoa, Cryogen Relic activated half) | no stun-counter shape in Rust today |
 | `LandfallWithComplexEffect` (landfall predicate + non-trivial effect) | 4 (Glacier Godmaw, Mightform Harmonizer, Genemorph Imago, Seedship Agrarian, Remnant Elemental) | predicate is in etb-subject-substrate; effect arms (mass-pump + vigilance/haste, double-power-EOT, set-base-PT, +1/+1 counter on self via landfall) need new Rust arms |
 | `SetBasePTUntilEOT` | 1 (Genemorph Imago) | Rust has `SetBasePTUntilEOT` arm; no bridge or trigger-driven wiring |
-| `Fight` (creature-vs-creature) | 1 (Meltstrider's Resolve) | no Fight Effect arm in Rust |
+| `Fight` (creature-vs-creature) | 1 (Meltstrider's Resolve) | bare bilateral form shipped (`Effect::FightTargetCreatureWithTargetCreature` + bridge + `FightTargetCreatureWithTargetCreature` Python sibling); Aura-shape (Meltstrider's Resolve specifically — source fighter is the Aura's `attached_to` enchanted creature) is the deferred follow-up — needs new `Effect::EnchantedCreatureFightsTarget` Rust variant routing through `attached_to` end-to-end. See SEARCH_LIMITATIONS.md "Fight" entry |
 | `DoubleTargetPowerUntilEOT` | 1 (Mightform Harmonizer) | no Rust arm |
 | `OptionalDiscardThenDraw` (Melded Moxite-shape `if_you_do`) | 1 (Melded Moxite — also counted in §2.4) | Rust has `IfYouDo`; just needs bridge arm |
 | `OptionalSacrificeArtifactForCounterAndDraw` (Selfcraft Mechan) | 1 (Selfcraft Mechan) | nested optional-sac + counter + draw; partly in Rust |

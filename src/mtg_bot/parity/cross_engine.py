@@ -769,6 +769,52 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             power_bonus=eff_dict.get("power_bonus", 0),
             toughness_bonus=eff_dict.get("toughness_bonus", 0),
         )
+    if kind == "fight_target_creature_with_target_creature":
+        # BLOCKED-RUST-EFFECT slice -- Fight effect arm (CR 701.12).
+        # Bilateral fight: source-controller's first creature fights
+        # opponent's first creature, both deal damage equal to their
+        # power simultaneously. Rust's
+        # ``Effect::FightTargetCreatureWithTargetCreature`` is a UNIT
+        # variant (no fields beyond ``kind``); its resolve arm at
+        # ``state_ops_resolve.rs`` picks BOTH fighters
+        # DETERMINISTICALLY at apply_effect time:
+        #   - Source-side fighter = FIRST creature on the source-
+        #     controller's battlefield (smallest Vec index).
+        #   - Opponent-side fighter = FIRST creature on the opponent's
+        #     battlefield (smallest Vec index).
+        # Empty source-side bf, empty opponent-side bf, or either side
+        # with no eligible creatures = silent fizzle (CR 701.12c
+        # "fight does NOT deal damage on either side if either fighter
+        # is missing").
+        #
+        # Python's ``FightTargetCreatureWithTargetCreature``
+        # (effects/generic/damage.py) carries the same deterministic-
+        # pick shape; mirrors Rust's resolve scan exactly. No fields
+        # to translate; the unit-variant arm is a bare class
+        # construction.
+        #
+        # **Distinct from ``EnchantedCreatureFightsTargetEffect``**
+        # (effects/bespoke.py:507) -- the Aura-shape sibling used by
+        # Meltstrider's Resolve. That class derives the source-side
+        # fighter from the resolving Aura's ``attached_to`` field;
+        # the bridge does NOT route the Aura shape through here. The
+        # Aura-shape Rust variant + bridge arm are tracked as a
+        # deferred follow-up in
+        # ``docs/EOE_PROBE_READINESS_AUDIT.md`` -- they need the
+        # Aura-attachment ETB substrate plumbed end-to-end on Rust
+        # before the cross-engine bridge can route Meltstrider's
+        # Resolve specifically.
+        #
+        # **No real-EoE consumer of the bare bilateral shape today.**
+        # Rust + bridge ship synthetic-only end-to-end coverage; the
+        # arm exists primarily as the bridge target for the new
+        # Rust variant and as the substrate for future Pounce / Prey
+        # Upon / Rabid Bite-shape cards (none in EoE). Mirrors Rust's
+        # parse arm tolerance: extra dict fields are silently ignored.
+        from mtg_bot.effects.generic.damage import (
+            FightTargetCreatureWithTargetCreature,
+        )
+        return FightTargetCreatureWithTargetCreature()
     if kind == "put_plus_one_counter_on_creature_you_control":
         # Single-target +1/+1 counter add restricted to "target
         # creature you control" (CR 122 +1/+1 counter on a single

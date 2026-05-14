@@ -40,6 +40,7 @@ from mtg_bot.effects.generic.damage import (
     DealDamageToTargetTappedCreature,
     DealNDamageToEachCreature,
     DrawCardsAndLoseLifeEqualToResolvingDamage,
+    FightTargetCreatureWithTargetCreature,
     MayHaveSourceDealDamageToTarget,
 )
 

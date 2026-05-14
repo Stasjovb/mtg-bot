@@ -1796,6 +1796,153 @@ Things tracked elsewhere that you might also want to know about:
 
 ---
 
+## Rust port — `Effect::FightTargetCreatureWithTargetCreature` first-slice scope (Aura-shape Fight deferred)
+
+**Location**:
+`rust/src/cards.rs` (variant declaration + `parse_effect` arm +
+`effect_to_pydict` arm — `FightTargetCreatureWithTargetCreature`),
+`rust/src/state_ops_resolve.rs` (resolve arm — deterministic
+caster-side + opponent-side first-creature scan, both fighters'
+effective power computed BEFORE either deal_damage call per CR
+701.12 simultaneous-damage event),
+`src/mtg_bot/effects/generic/damage.py`
+(Python `FightTargetCreatureWithTargetCreature` sibling — same
+deterministic-pick shape),
+`src/mtg_bot/parity/cross_engine.py` (bridge arm forwarding the
+unit-variant dict shape),
+`src/mtg_bot/effects/bespoke.py:507`
+(`EnchantedCreatureFightsTargetEffect` — the Aura-shape sibling
+this slice does NOT touch).
+
+Pinned by:
+`tests/test_parity_smoke.py::test_rust_fight_target_creature_*` (5
+synthetic Rust regression pins) and
+`tests/test_parity_smoke.py::test_cross_engine_fight_target_creature_synthetic_etb_parity`
+(synthetic cross-engine ETB end-to-end probe).
+
+**What we do today**: this slice ships the bare bilateral-fight
+shape ("target creature you control fights target creature an
+opponent controls", CR 701.12). Rust's resolve arm picks BOTH
+fighters deterministically — first creature on the source-
+controller's bf, first creature on the opponent's bf — and
+applies the simultaneous damage exchange. The Python sibling
+`FightTargetCreatureWithTargetCreature` mirrors that shape
+exactly so the cross-engine bridge round-trips cleanly.
+
+**What's NOT in this slice (deferred follow-ups)**:
+
+  1. **Aura-shape Fight (Meltstrider's Resolve specifically).**
+     The only EoE Fight consumer (`Meltstrider's Resolve`,
+     `data/edge_of_eternities.json:25820`) is an Aura whose ETB
+     reads "When this Aura enters, enchanted creature fights up to
+     one target creature an opponent controls." The source-side
+     fighter is the Aura's enchanted creature
+     (`aura.attached_to`), NOT a player-chosen friendly creature
+     from a generic bf scan. Python carries this shape on
+     `EnchantedCreatureFightsTargetEffect` in `bespoke.py:507`;
+     Rust has NO sibling variant today because the Aura ETB-
+     trigger substrate doesn't yet route `attached_to` through
+     to the resolve arm end-to-end (Rust's `attached_to` field
+     exists on `GameObject` but only the cleanup path reads it —
+     `state_ops_resolve.rs:977,1143,1235,1486,1656,1838,...`
+     all set it to `None` on Aura-leaves; no resolve arm reads
+     it as a target source). Adding the Aura-fight variant
+     needs (a) a new `Effect::EnchantedCreatureFightsTarget`
+     Rust variant, (b) a resolve arm that reads
+     `state.players[*].battlefield[i].attached_to` to derive
+     the source-side fighter, (c) a bridge arm forwarding to
+     `EnchantedCreatureFightsTargetEffect`, AND (d) the
+     end-to-end Aura-attachment substrate audit (whether
+     `attached_to` is set correctly when an Aura enters bf via
+     `register_and_inject_object` — currently unverified).
+
+  2. **"Up to one target" optional-target shape.** Several Fight
+     variants (Meltstrider's Resolve included) read "fights up to
+     one target" — the spell can resolve with zero targets and
+     not fizzle. Rust's first slice arm always fizzles silently
+     when either fighter is missing, which observably collapses
+     to the no-op the optional shape produces in the no-target
+     case. Probes that would distinguish the two need a
+     `requires_target` flag through the dict shape; deferred.
+
+  3. **With-trample / with-deathtouch composers.** Cards like
+     "fights and gains trample / deathtouch UEOT" compose via
+     `Sequence` once the keyword-grant Effect arms are extended
+     to fold into combat-style damage in the Rust arm (today's
+     Fight arm uses `apply_damage_marker` directly; trample
+     would need to spill excess to the defender's life total,
+     which combat damage doesn't do — and the apply_damage_marker
+     helper in this slice doesn't drive any of that).
+
+  4. **"Fights twice" (rare).** Would need a counter or a
+     duplicated Sequence of two FightTarget arms. No EoE
+     consumer; deferred until one appears.
+
+**Why it's OK (today)**:
+
+  * The bare bilateral-fight shape ships for the substrate it
+    enables (real future cards matching Pounce / Prey Upon /
+    Rabid Bite oracle text drop in cleanly without further Rust
+    changes; today's EoE pool happens to have zero of those, but
+    the cards exist in adjacent sets and the Phase 6 trajectory
+    pool may grow to include them).
+  * Meltstrider's Resolve (the only EoE Aura-fight consumer)
+    today routes through the Python engine end-to-end via the
+    `EnchantedCreatureFightsTargetEffect` bespoke class. The
+    cross-engine probe gap is observable — a probe that drives
+    Meltstrider's Resolve cross-engine would diverge because
+    Rust has no Aura-fight variant — but no probe today drives
+    it (the audit doc acknowledges the gap).
+  * The bridge dict shape `fight_target_creature_with_target_creature`
+    is RESERVED for the bare bilateral form. The Aura-fight
+    follow-up will add a SEPARATE
+    `enchanted_creature_fights_target_creature` dict kind +
+    Rust variant + bridge arm; the two shapes will not alias,
+    and adding the Aura-fight slice will not require renaming
+    or restructuring this slice's variant.
+
+**Failure mode**:
+
+  * Synthetic-only end-to-end coverage: the slice ships zero
+    real-EoE consumers, so the trajectory-replay self-play sweep
+    never exercises this arm in a real game today. A regression
+    that subtly broke the resolve arm (e.g. swapped which side
+    is caster vs opponent) would NOT show up in the parity gate
+    until a real-EoE Aura-fight probe lands — when the Aura-shape
+    follow-up ships, that probe transitively pins the bare-shape
+    arm too because they share the same simultaneous-damage
+    `apply_damage_marker` helper.
+  * Cross-controller routing pin (`test_rust_fight_target_creature_cross_controller_routing_p1_source_on_p0_turn`)
+    catches the most likely regression mode (reading active_player
+    instead of scanning zones for source-controller); other
+    regressions surface in the basic / asymmetric-power /
+    missing-fighter pins.
+
+**Fix scope estimate** (Aura-shape follow-up, the next slice):
+medium — ~150-200 LOC of Rust (new variant + resolve arm reading
+`attached_to` + parse / to_dict arms), ~50 LOC of Python (no new
+class needed; `EnchantedCreatureFightsTargetEffect` already exists),
+~30 LOC of bridge (one new arm in `cross_engine.py`), ~100 LOC of
+tests (3-4 synthetic Rust regression pins + bridge translator pin
++ cross-engine end-to-end Meltstrider's Resolve real-EoE probe).
+The Aura-attachment substrate audit (does
+`register_and_inject_object` set `attached_to` correctly on
+Aura-typed printings) is the unknown-cost prerequisite — could be
+zero work (already correct) or a 100-LOC subsidiary slice if the
+Aura-attachment path needs rework.
+
+**Impact estimate**: zero today — no real-EoE consumer of the
+bare shape and the only Aura-shape consumer (Meltstrider's
+Resolve) routes through Python only, so neither self-play nor
+trajectory-replay see the missing-Rust-variant divergence. When
+the Aura-shape follow-up lands, the trajectory-replay sweep gains
+parity coverage for Meltstrider's Resolve — currently the card is
+implicitly excluded from cross-engine probes (the audit doc
+flagged it BLOCKED-RUST-EFFECT and it stays blocked until that
+slice ships).
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,

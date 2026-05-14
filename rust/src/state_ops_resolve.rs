@@ -731,6 +731,85 @@ pub(crate) fn drain_pending_leaves_dispatches(state: &mut GameState) -> PyResult
     }
 }
 
+/// Read effective power of a battlefield creature (printed +
+/// UEOT power-bonus modifiers, sized off the SetBasePT / become-
+/// land-creature overrides per CR 613.4 layer 7b/7c). Returns 0
+/// for non-creatures or unknown ids.
+///
+/// Inlines `state_ops_combat::battlefield_creature_power` because
+/// that helper is module-private to the combat slice (per the
+/// per-slice file-isolation rule). Matches its semantics exactly:
+/// SetBasePT > BecomeLandCreature > printed_base, plus
+/// UEOT power_bonus addends. Used by the FightTargetCreatureWith
+/// TargetCreature resolve arm to size each side's contribution to
+/// the simultaneous-damage exchange.
+///
+/// **Inlining note (cross-file friction).** Same shape as the
+/// `draw_card` and `dispatch_event` inlinings already in this
+/// file — the per-slice rule forbids touching `state_ops_combat`
+/// from this slice. A follow-up consolidation slice can collapse
+/// these once that constraint relaxes; the public
+/// `state.effective_power(obj_id)` PyMethod returns the same
+/// value but is a `&self` getter not callable from `apply_effect`'s
+/// `&mut state` borrow path without splitting the borrow.
+fn read_battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
+    // Locate the object on either player's bf.
+    let mut found: Option<(usize, &GameObject)> = None;
+    for (idx, player) in state.players.iter().enumerate() {
+        if let Some(obj) = player.battlefield.iter().find(|o| o.id == obj_id) {
+            found = Some((idx, obj));
+            break;
+        }
+    }
+    let Some((player_idx, obj)) = found else {
+        return 0;
+    };
+    let Some(printing) = state.registry.printings.get(obj.printing_id as usize) else {
+        return 0;
+    };
+    let printed_base = printing.power.unwrap_or(0) as i32;
+    let _ = player_idx; // silence unused (kept for future log/debug hooks)
+    let base = obj
+        .ueot_base_pt_override()
+        .map(|(p, _)| p)
+        .or_else(|| obj.ueot_becomes_land_creature_pt().map(|(p, _)| p))
+        .unwrap_or(printed_base);
+    let bonus = obj.ueot_power_bonus();
+    let effective = base + bonus;
+    effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
+}
+
+/// Push `amount` damage onto the battlefield creature's per-instance
+/// `damage` marker (saturating add into i16). Routes through
+/// `Arc::make_mut` on the containing battlefield Vec to preserve CoW.
+/// Walks both players' battlefields; returns silently on unknown ids
+/// (silent no-op convention, mirrors the public `state.deal_damage`
+/// behavior).
+///
+/// Inlines `state_ops_damage::deal_damage` because that helper is
+/// module-private (per the per-slice file-isolation rule). The two
+/// implementations match: monotonic accumulation on the marker,
+/// saturating into i16, no SBA-firing inline. Used by the
+/// FightTargetCreatureWithTargetCreature resolve arm to apply both
+/// sides of the simultaneous-damage exchange (CR 701.12).
+fn apply_damage_marker(state: &mut GameState, obj_id: u32, amount: i16) {
+    if amount <= 0 {
+        return;
+    }
+    for player in state.players.iter_mut() {
+        if player.battlefield.iter().any(|o| o.id == obj_id) {
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut player.battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == obj_id {
+                    obj.damage = obj.damage.saturating_add(amount);
+                    return;
+                }
+            }
+        }
+    }
+}
+
 fn apply_effect(
     state: &mut GameState,
     effect: &Effect,
@@ -4303,6 +4382,128 @@ fn apply_effect(
                     });
                     break;
                 }
+            }
+        }
+        // BLOCKED-RUST-EFFECT slice — Fight effect arm. "Target
+        // creature you control fights target creature an opponent
+        // controls" (CR 701.12). Both fighters deal damage equal to
+        // their power to the other simultaneously; per CR 701.12c, if
+        // either fighter has left the battlefield by resolve time, no
+        // damage is dealt at all.
+        //
+        // Mirrors the Pump-Target-Creature target-pick shape: scan
+        // the source controller's bf for the FIRST creature (caster-
+        // side fighter), and the OPPONENT's bf for the FIRST creature
+        // (opponent-side fighter). Both creature-eligibility checks
+        // gate on `card_types contains "Creature"`.
+        //
+        // Cross-controller routing: source-controller is resolved by
+        // scanning every zone for `source_obj_id` (mirrors
+        // PumpTargetCreatureUntilEOT's source-controller lookup). If
+        // the source is untrackable (already gone from every zone —
+        // e.g. counterspelled?) it's a silent fizzle.
+        //
+        // Damage-application: compute BOTH effective-power values
+        // BEFORE applying any damage so the simultaneous-exchange
+        // semantics hold (CR 701.12 — a fighter that takes lethal
+        // still deals its damage). Skip the per-side write when the
+        // attacker's power is 0 or negative (negative power doesn't
+        // heal in MTG; the printed-power 0 case fires no damage
+        // marker change either way, but `deal_damage` would have
+        // raised on a negative argument so we explicitly clamp to
+        // skip the call). SBAs are NOT triggered inline by this
+        // arm; they fire on the next SBA pass after the resolve, by
+        // which time both damage markers are in place.
+        Effect::FightTargetCreatureWithTargetCreature => {
+            // Source-controller resolution — scan every zone for the
+            // source object. Same shape as PumpTargetCreatureUntilEOT.
+            // Untrackable source = silent fizzle (mirrors the pump
+            // arm's behavior).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source untrackable → silent fizzle
+            };
+            let opponent: u8 = 1 - controller;
+
+            // Pick the first creature on the source-controller's bf
+            // (the caster-side fighter). Mirrors
+            // PumpTargetCreatureUntilEOT's same-side scan.
+            let cidx = controller as usize;
+            let oidx = opponent as usize;
+            let registry = &state.registry;
+            let caster_fighter_id: Option<u32> = state.players[cidx]
+                .battlefield
+                .iter()
+                .find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                });
+            // Pick the first creature on the OPPONENT's bf (the
+            // opponent-side fighter). Mirrors DealDamageAnyTarget's
+            // defender-side scan but creature-only (no fall-back to
+            // damaging the player — fight is creature-vs-creature).
+            let opponent_fighter_id: Option<u32> = state.players[oidx]
+                .battlefield
+                .iter()
+                .find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                });
+            // CR 701.12c: if either fighter is missing at resolve
+            // time, the fight does NOT deal damage on either side.
+            // Silent fizzle (mirrors the pump arm's no-target
+            // behavior).
+            let (Some(a_id), Some(b_id)) = (caster_fighter_id, opponent_fighter_id) else {
+                return Ok(());
+            };
+
+            // Compute BOTH effective-power values BEFORE applying
+            // any damage (CR 701.12 simultaneous-damage event).
+            // Use the public `effective_power` getter shape
+            // (state_ops_combat.rs:516) which returns the
+            // printed-power + UEOT modifier sum, saturating into
+            // i16. None for non-creatures or unknown ids — treat
+            // as 0 defensively (the creature-filter scan above
+            // should make this unreachable).
+            let a_power = read_battlefield_creature_power(state, a_id);
+            let b_power = read_battlefield_creature_power(state, b_id);
+
+            // Apply both damages. `deal_damage` is the per-instance
+            // damage-marker primitive (state_ops_damage.rs:196). It
+            // raises on negative amount per the project's "fail
+            // loud" convention, so explicitly clamp to >=0 (negative
+            // power doesn't heal in MTG — it just deals 0 damage).
+            // The two damages are independent: a fighter that
+            // takes lethal in this exchange still dealt its damage
+            // first because we read both powers BEFORE either
+            // deal_damage call.
+            if a_power > 0 {
+                apply_damage_marker(state, b_id, a_power);
+            }
+            if b_power > 0 {
+                apply_damage_marker(state, a_id, b_power);
             }
         }
         // Round-28 highest-frequency-class coverage. Sequence walks
