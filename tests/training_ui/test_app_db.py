@@ -282,6 +282,87 @@ def test_api_runs_rolls_up_per_shard_when_aggregate_missing(
     assert r["elapsed_seconds"] == 600.0
 
 
+def test_api_runs_rollup_synthesizes_machines_and_extras(
+    client, progress_dir: Path,
+):
+    """Distributed self-play with no aggregate row should still
+    surface (a) per-machine sub-cards, (b) summed n_samples /
+    n_workers / p0/p1 wins from per-shard extra_json, and (c)
+    derived games_per_hour + estimated_remaining_seconds +
+    samples_per_hour so the front-end's data_gen card renders
+    cleanly instead of with blank fields."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_003_self_play_v3", kind="self_play",
+            status="running",
+            started_at="2026-05-14T01:30:00+00:00",
+        )
+        # Per-shard rows with structured counters + extra_json blobs
+        # carrying the non-counter fields (n_samples, n_workers,
+        # p0/p1 wins).
+        _seed_progress(
+            conn, "iter_003_self_play_v3", shard_label="local",
+            n_games_done=18, n_games_total=1000,
+            elapsed_seconds=600.0,
+            extra={
+                "n_samples": 4500, "n_workers": 9,
+                "p0_wins": 11, "p1_wins": 7, "status": "running",
+            },
+        )
+        _seed_progress(
+            conn, "iter_003_self_play_v3",
+            shard_label="greggs-macbook-pro",
+            n_games_done=70, n_games_total=1000,
+            elapsed_seconds=550.0,
+            extra={
+                "n_samples": 17000, "n_workers": 6,
+                "p0_wins": 38, "p1_wins": 32,
+                "status": "running",
+            },
+        )
+        _seed_progress(
+            conn, "iter_003_self_play_v3",
+            shard_label="desktop-g72aptg",
+            n_games_done=8, n_games_total=1000,
+            elapsed_seconds=500.0,
+            extra={
+                "n_samples": 2000, "n_workers": 4,
+                "p0_wins": 5, "p1_wins": 3, "status": "running",
+            },
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    [r] = [r for r in res.get_json()["runs"]
+           if r["run_id"] == "iter_003_self_play_v3"]
+    # Headline counters (already tested elsewhere — kept for
+    # readability).
+    assert r["n_games_done"] == 96
+    # extra_json-summed fields fan out at the top level.
+    assert r["n_samples"] == 23500  # 4500 + 17000 + 2000
+    assert r["n_workers"] == 19  # 9 + 6 + 4
+    assert r["p0_wins"] == 54  # 11 + 38 + 5
+    assert r["p1_wins"] == 42  # 7 + 32 + 3
+    # Derived rates + ETA — using MAX(elapsed)=600s, done=96.
+    assert r["games_per_hour"] == pytest.approx(
+        3600.0 * 96 / 600.0
+    )
+    # ETA: 904 remaining * 6.25s/game (600s / 96 games) ≈ 5650s.
+    assert r["estimated_remaining_seconds"] == pytest.approx(
+        904 * (600.0 / 96), abs=1.0,
+    )
+    # Per-machine breakdown for the UI's sub-card renderer.
+    machines = r["machines"]
+    assert len(machines) == 3
+    labels = {m["label"] for m in machines}
+    assert labels == {"local", "greggs-macbook-pro", "desktop-g72aptg"}
+    # Each machine carries its n_workers from the extra_json.
+    mac = next(m for m in machines if m["label"] == "greggs-macbook-pro")
+    assert mac["n_workers"] == 6
+    assert mac["n_games_done"] == 70
+
+
 def test_api_runs_prefers_aggregate_row_over_per_shard_rollup(
     client, progress_dir: Path,
 ):
