@@ -155,7 +155,16 @@ def _cycle_config_dict(
     ``runs.config_json``. Captures the iteration's identity (iter #,
     bootstrap) plus the salient hyper-parameters (search depth, game
     count, eval gate, deck pool) so an offline reader can reconstruct
-    the run's parameters from the DB alone."""
+    the run's parameters from the DB alone.
+
+    Replay-capture fields (``replays_dir`` + the two
+    ``capture_every_*`` rates) are included so the training UI can
+    surface "replay capture: on / off" and the directory captures
+    land in, without reading iterate's argparse defaults out-of-band.
+    Without these the UI's
+    ``if (!run.replays_dir) → 'replay capture: off'`` branch fires
+    on every cycle even when capture IS configured.
+    """
     return {
         "kind": "cycle",
         "iter_idx": iter_idx_one_based,
@@ -170,6 +179,9 @@ def _cycle_config_dict(
         "deck_pool": str(args.deck_pool),
         "seed": args.seed,
         "n_iterations": args.n_iterations,
+        "replays_dir": str(args.replays_dir),
+        "capture_every_self_play": args.capture_every_self_play,
+        "capture_every_eval": args.capture_every_eval,
     }
 
 

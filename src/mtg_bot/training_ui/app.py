@@ -148,6 +148,27 @@ def _row_to_ui_dict(
         "parent_run_id": run_row.get("parent_run_id"),
         "_db_kind": run_row.get("kind"),
     }
+    # Fan out a curated subset of ``config_json`` onto the UI dict.
+    # Producers stuff fields the front-end needs but the schema's
+    # structured columns don't carry into the config blob; ``replays_dir``
+    # + the two ``capture_every_*`` rates are the canonical case.
+    # Without this fan-out, ``run.replays_dir`` is always missing and
+    # the JS's ``if (!run.replays_dir) → 'replay capture: off'`` branch
+    # mislabels every cycle as no-capture.
+    config_raw = run_row.get("config_json")
+    if config_raw:
+        try:
+            cfg = json.loads(config_raw)
+            if isinstance(cfg, dict):
+                for key in (
+                    "replays_dir",
+                    "capture_every_self_play",
+                    "capture_every_eval",
+                ):
+                    if cfg.get(key) is not None:
+                        ui[key] = cfg[key]
+        except (json.JSONDecodeError, TypeError):
+            pass
     if progress_row is not None:
         for key in (
             "n_games_done", "n_games_total", "elapsed_seconds",
