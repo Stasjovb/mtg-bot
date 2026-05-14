@@ -2118,14 +2118,13 @@ def run_distributed_self_play(
         crash takes the whole iter down even when remotes finished
         cleanly.
 
-        Run-DB lifecycle: wraps the body in
-        :func:`_local_shard_run_lifecycle` so the per-shard ``runs``
-        row lands on the master DB (parent = ``run_id_prefix``).
-        This mirrors what :mod:`mtg_bot.cli.shard` does for SSH-
-        launched remote shards — without the wrap, the local shard
-        would have ``run_progress`` rows but no companion ``runs``
-        row, breaking downstream tooling that enumerates per-shard
-        runs by ``parent_run_id``.
+        Run-DB lifecycle: no shard-row wrap. ``run_shard_pull``
+        pushes per-shard progress directly under the master
+        ``run_id`` with ``shard_label`` set — that's the
+        authoritative record. The prior ``_local_shard_run_lifecycle``
+        wrapper created a redundant ``iter_NNN_..._shard_<label>``
+        ``runs`` row that no progress was ever written to; it only
+        surfaced as visual noise in the UI.
         """
         n_workers = shard.n_workers
         if n_workers is None:
@@ -2136,27 +2135,18 @@ def run_distributed_self_play(
             progress_dir / f"{run_id_prefix}_shard_{label}.json"
         )
         try:
-            with _local_shard_run_lifecycle(
-                master_run_id=run_id_prefix,
+            paths = run_shard_pull(
+                spec,
+                queue_url=_loopback_queue_url(queue_url),
+                run_id=run_id_prefix,
+                n_workers=n_workers,
+                output_dir=output_dir,
                 label=label,
-                kind="self_play",
-                progress_dir=progress_dir,
+                stamp=stamp,
                 iter_total_games=total_games,
-                spec=spec,
-                queue_url=queue_url,
-            ):
-                paths = run_shard_pull(
-                    spec,
-                    queue_url=_loopback_queue_url(queue_url),
-                    run_id=run_id_prefix,
-                    n_workers=n_workers,
-                    output_dir=output_dir,
-                    label=label,
-                    stamp=stamp,
-                    iter_total_games=total_games,
-                    progress_dir=progress_dir,
-                    device_override=shard.device,
-                )
+                progress_dir=progress_dir,
+                device_override=shard.device,
+            )
             return ShardSelfPlayReport(
                 shard_label=label, success=True,
                 npz_paths=list(paths),
@@ -2502,10 +2492,9 @@ def run_distributed_eval(
         side: convert per-shard exceptions into a failure
         :class:`ShardEvalReport` so siblings' counts survive.
 
-        Run-DB lifecycle: same wrap as the self-play local runner —
-        see :func:`_local_shard_run_lifecycle`. ``kind="eval"`` keeps
-        the dashboard rollups treating the per-shard row as eval
-        work alongside its SSH-launched siblings.
+        Run-DB lifecycle: no shard-row wrap. Same rationale as the
+        self-play local-runner above — ``run_shard_eval_pull``
+        pushes per-shard rows directly under the master ``run_id``.
         """
         n_workers = shard.n_workers
         if n_workers is None:
@@ -2516,25 +2505,16 @@ def run_distributed_eval(
             progress_dir / f"{run_id_prefix}_shard_{label}.json"
         )
         try:
-            with _local_shard_run_lifecycle(
-                master_run_id=run_id_prefix,
+            counts = run_shard_eval_pull(
+                spec,
+                queue_url=_loopback_queue_url(queue_url),
+                run_id=run_id_prefix,
+                n_workers=n_workers,
                 label=label,
-                kind="eval",
-                progress_dir=progress_dir,
                 iter_total_games=total_games,
-                spec=spec,
-                queue_url=queue_url,
-            ):
-                counts = run_shard_eval_pull(
-                    spec,
-                    queue_url=_loopback_queue_url(queue_url),
-                    run_id=run_id_prefix,
-                    n_workers=n_workers,
-                    label=label,
-                    iter_total_games=total_games,
-                    progress_dir=progress_dir,
-                    device_override=shard.device,
-                )
+                progress_dir=progress_dir,
+                device_override=shard.device,
+            )
             return ShardEvalReport(
                 shard_label=label, success=True,
                 counts=dict(counts),

@@ -98,15 +98,16 @@ def _make_eval_argv(*, run_id: str, label: str, progress_dir: Path,
     ]
 
 
-def test_run_pull_shard_writes_per_shard_row_with_parent_run_id(
+def test_run_pull_shard_does_not_create_shard_runs_row(
     monkeypatch, tmp_path, capsys,
 ):
-    """``--mode=pull`` should land a runs.db row with
-    ``kind='self_play'`` (the schema-valid canonical name for the
-    master's data-gen step), ``parent_run_id=<master_run_id>``, and
-    the shard's display label. Mirrors the master's iterate
-    self-play kind so roll-ups treat both rows as the same kind
-    of work."""
+    """Post-Phase 2: ``--mode=pull`` should NOT register its own
+    ``runs`` row. The shard's authoritative record lives as
+    ``run_progress[shard_label=local]`` under the master ``run_id``,
+    pushed by ``run_shard_pull`` itself (see distributed.py:3160).
+    The redundant shard row was visual noise in the UI and never
+    had progress written to it.
+    """
     db_path = tmp_path / "runs.db"
     monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
     monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
@@ -118,15 +119,6 @@ def test_run_pull_shard_writes_per_shard_row_with_parent_run_id(
     def fake_run_shard_pull(spec, **kwargs):
         captured["spec"] = spec
         captured["kwargs"] = kwargs
-        # Match the real runner's contract: write a placeholder progress
-        # JSON so the artifact-registration path sees a real file.
-        run_id = kwargs["run_id"]
-        label = kwargs["label"]
-        json_path = (
-            kwargs["progress_dir"] / f"{run_id}_shard_{label}.json"
-        )
-        json_path.parent.mkdir(parents=True, exist_ok=True)
-        json_path.write_text("{}", encoding="utf-8")
         return [tmp_path / "fake.npz"]
 
     progress_dir = tmp_path / "training_progress"
@@ -138,58 +130,39 @@ def test_run_pull_shard_writes_per_shard_row_with_parent_run_id(
     with patch.object(cli_shard, "run_shard_pull", fake_run_shard_pull):
         cli_shard._run(argv)
 
-    # The runner was invoked with the resolved spec / kwargs.
+    # The runner was invoked with the parent's run_id + label —
+    # progress will be pushed to (parent_run_id, shard_label=label).
     assert isinstance(captured["spec"], SelfPlayJobSpec)
     assert captured["kwargs"]["run_id"] == "iter_007_v1"
     assert captured["kwargs"]["label"] == "local"
 
-    # The runs.db row reflects the lifecycle wiring. Scope the query
-    # to the shard's own row; the test fixture pre-seeds a parent
-    # row to satisfy the FK, which would otherwise appear in the
-    # unfiltered SELECT.
+    # No shard runs row should exist. Only the pre-seeded parent.
     conn = runs_db.connect(db_path)
     try:
         run_rows = list(conn.execute(
-            "SELECT * FROM runs WHERE run_id = ?",
-            ("iter_007_v1_shard_local",),
-        ))
-        artifact_rows = list(conn.execute(
-            "SELECT * FROM run_artifacts WHERE run_id = ?",
-            ("iter_007_v1_shard_local",),
+            "SELECT run_id FROM runs ORDER BY run_id",
         ))
     finally:
         conn.close()
-
-    assert len(run_rows) == 1
-    row = run_rows[0]
-    assert row["run_id"] == "iter_007_v1_shard_local"
-    assert row["kind"] == "self_play"
-    assert row["parent_run_id"] == "iter_007_v1"
-    assert row["label"] == "local"
-    assert row["status"] == "completed"
-    assert row["git_commit"] == "abcd123"
-    cfg = json.loads(row["config_json"])
-    assert cfg["mode"] == "pull"
-    assert cfg["run_id"] == "iter_007_v1"
-
-    # Progress JSON artifact got registered.
-    assert any(
-        a["artifact_type"] == "progress_json" for a in artifact_rows
+    assert [r["run_id"] for r in run_rows] == ["iter_007_v1"], (
+        "shard should not write its own runs row; only the pre-"
+        f"seeded parent should remain. got: {[r['run_id'] for r in run_rows]}"
     )
 
-    # Stdout line still emits the npz_paths summary the orchestrator
-    # parses.
+    # Stdout still emits the npz_paths summary the orchestrator parses.
     out = capsys.readouterr().out
     payload = json.loads(out.strip())
     assert "npz_paths" in payload
 
 
-def test_run_eval_shard_writes_per_shard_row_with_kind_eval(
+def test_run_eval_shard_does_not_create_shard_runs_row(
     monkeypatch, tmp_path, capsys,
 ):
-    """``--mode=eval`` should land a runs.db row with
-    ``kind='eval'`` so eval-shard rolls up with the master's eval
-    run, not with self-play."""
+    """Post-Phase 2: ``--mode=eval`` should NOT register its own
+    ``runs`` row either. The per-shard ``run_progress`` row keyed by
+    ``(master_run_id, shard_label)`` is the authoritative record;
+    ``run_shard_eval_pull`` pushes to it directly.
+    """
     db_path = tmp_path / "runs.db"
     monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
     monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
@@ -202,22 +175,11 @@ def test_run_eval_shard_writes_per_shard_row_with_kind_eval(
     }
 
     def fake_run_shard_eval_pull(spec, **kwargs):
-        run_id = kwargs["run_id"]
-        label = kwargs["label"]
-        json_path = (
-            kwargs["progress_dir"] / f"{run_id}_shard_{label}.json"
-        )
-        json_path.parent.mkdir(parents=True, exist_ok=True)
-        json_path.write_text("{}", encoding="utf-8")
-        # Echo a push_progress under the MASTER run_id (the parent)
-        # with shard_label distinguishing per-shard rows. This is the
-        # post-Bug-2-fix pattern: per-shard run_progress is keyed by
-        # (master_run_id, shard_label), NOT by a synthesized
-        # ``{master}_shard_{label}`` id (which would FK-fail because
-        # no such ``runs`` row exists for in-process local shards).
+        # Push progress directly to the master run_id with
+        # shard_label set — the post-Phase-2 contract.
         runs_client.push_progress(
-            run_id,
-            shard_label=label,
+            kwargs["run_id"],
+            shard_label=kwargs["label"],
             n_games_done=canned_counts["n_games"],
             n_games_total=kwargs["iter_total_games"],
             wins_new=canned_counts["wins_new"],
@@ -239,11 +201,8 @@ def test_run_eval_shard_writes_per_shard_row_with_kind_eval(
 
     conn = runs_db.connect(db_path)
     try:
-        # The shard lifecycle still creates its own runs row for status
-        # tracking. The PROGRESS row, however, lives under the master.
-        shard_run_rows = list(conn.execute(
-            "SELECT * FROM runs WHERE run_id = ?",
-            ("iter_007_eval_v2_vs_v1_shard_macbook",),
+        all_run_rows = list(conn.execute(
+            "SELECT run_id FROM runs ORDER BY run_id",
         ))
         progress_rows = list(conn.execute(
             "SELECT * FROM run_progress WHERE run_id = ?",
@@ -252,45 +211,35 @@ def test_run_eval_shard_writes_per_shard_row_with_kind_eval(
     finally:
         conn.close()
 
-    assert len(shard_run_rows) == 1
-    row = shard_run_rows[0]
-    assert row["run_id"] == "iter_007_eval_v2_vs_v1_shard_macbook"
-    assert row["kind"] == "eval"
-    assert row["parent_run_id"] == "iter_007_eval_v2_vs_v1"
-    assert row["label"] == "macbook"
-    assert row["status"] == "completed"
+    # No shard runs row — only the pre-seeded parent.
+    assert [r["run_id"] for r in all_run_rows] == [
+        "iter_007_eval_v2_vs_v1",
+    ]
 
-    # The push_progress call inside the fake runner created the
-    # per-shard row keyed by (master_run_id, shard_label).
-    assert progress_rows, "expected at least one run_progress row"
+    # But the per-shard run_progress entry IS there, keyed by
+    # (master_run_id, shard_label).
+    assert progress_rows
     p = progress_rows[0]
     assert p["shard_label"] == "macbook"
     assert p["wins_new"] == 3 and p["wins_old"] == 1
-    assert p["n_games_total"] == 4
 
-    # Post-cutover the sibling ``_shard_<label>_result.json`` write
-    # is dropped — the per-shard ``run_progress`` row is the
-    # authoritative source. Stdout still carries the counts dict for
-    # diagnostic visibility, but no ``result_path`` key.
+    # Stdout still carries the counts dict for diagnostic
+    # visibility.
     out = capsys.readouterr().out
     payload = json.loads(out.strip())
     assert payload["wins_new"] == 3
-    assert "result_path" not in payload
-    legacy_result = (
-        progress_dir
-        / "iter_007_eval_v2_vs_v1_shard_macbook_result.json"
-    )
-    assert not legacy_result.exists(), (
-        "legacy _result.json must not be written post-cutover; "
-        f"found at {legacy_result}"
-    )
 
 
-def test_run_pull_shard_marks_failed_on_exception(
+def test_run_pull_shard_propagates_exceptions(
     monkeypatch, tmp_path,
 ):
-    """A crash inside ``run_shard_pull`` should propagate AND
-    mark the runs.db row as ``failed`` via the lifecycle CM."""
+    """A crash inside ``run_shard_pull`` should propagate up.
+    Post-Phase 2 there's no shard ``runs`` row to mark, but the
+    exception escaping shard._run is the signal the orchestrator's
+    SSH layer needs to mark the shard failed (via its non-zero exit
+    code / stderr inspection). The orchestrator-side
+    ``_mark_shard_progress_failed`` handles the
+    run_progress[shard_label].status update from the SSH side."""
     db_path = tmp_path / "runs.db"
     monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
     monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
@@ -309,25 +258,11 @@ def test_run_pull_shard_marks_failed_on_exception(
         with pytest.raises(RuntimeError, match="shard crashed"):
             cli_shard._run(argv)
 
-    conn = runs_db.connect(db_path)
-    try:
-        rows = list(conn.execute(
-            "SELECT status, notes FROM runs WHERE run_id = ?",
-            ("iter_008_shard_local",),
-        ))
-    finally:
-        conn.close()
-    assert len(rows) == 1
-    assert rows[0]["status"] == "failed"
-    assert "shard crashed" in (rows[0]["notes"] or "")
 
-
-def test_run_eval_shard_marks_killed_on_keyboard_interrupt(
+def test_run_eval_shard_propagates_keyboard_interrupt(
     monkeypatch, tmp_path,
 ):
-    """KeyboardInterrupt during an eval shard should land as
-    ``status='killed'``, not ``'failed'`` — same SIGINT mapping the
-    master uses so the dashboard's filter buckets stay consistent."""
+    """KeyboardInterrupt during an eval shard should propagate."""
     db_path = tmp_path / "runs.db"
     monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
     monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
@@ -345,16 +280,6 @@ def test_run_eval_shard_marks_killed_on_keyboard_interrupt(
     with patch.object(cli_shard, "run_shard_eval_pull", interrupted):
         with pytest.raises(KeyboardInterrupt):
             cli_shard._run(argv)
-
-    conn = runs_db.connect(db_path)
-    try:
-        rows = list(conn.execute(
-            "SELECT status FROM runs WHERE run_id = ?",
-            ("iter_009_eval_shard_winbox",),
-        ))
-    finally:
-        conn.close()
-    assert rows[0]["status"] == "killed"
 
 
 def test_run_pull_shard_no_op_when_run_db_unset(

@@ -15,15 +15,18 @@ line carries the same dict for diagnostic visibility; pre-cutover
 the orchestrator scp'd a sibling ``..._result.json`` and parsed it,
 but post-cutover the DB row is authoritative.
 
-Run-DB lifecycle: wraps each shard's body in
-:func:`mtg_bot.cli.runs.lifecycle.run_lifecycle` so the master's
-runs.db has a per-shard row alongside the aggregate iter row.
-``kind`` mirrors the master's: ``data_gen`` for self-play,
-``eval`` for eval (so the dashboard's roll-ups treat per-shard rows
-as the right shape of work). The shard derives its own
-``shard_run_id = f"{run_id}_shard_{label}"`` and uses ``run_id`` as
-the ``parent_run_id`` so the UI can list shards under their parent
-iter. Transport defaults to the REST path
+Run-DB lifecycle: shards do NOT register their own ``runs`` row.
+``run_shard_pull`` / ``run_shard_eval_pull`` push per-shard progress
+DIRECTLY to the master's ``run_progress`` table under the master
+``run_id`` with ``shard_label`` set — this is the authoritative
+record. A separate shard ``runs`` row from a prior design was
+redundant (no progress was ever written to it; the FK constraint
+on ``run_progress.run_id`` already requires pushes under the master)
+and surfaced as visual noise in the UI. The shard wrapper instead
+opens a tiny ``run_progress`` open/close pair on the parent so the
+shard's start_at / status fields land on the right row.
+
+Transport defaults to the REST path
 (``MTG_BOT_RUN_DB_URL=http://master:5099``) on remote shards —
 they don't share a filesystem with the master.
 """
@@ -92,11 +95,14 @@ def _build_shard_config(spec_dict: dict, shard_dict: dict, args) -> dict:
 
 
 def _run_pull_shard(args, shard_dict: dict, spec_dict: dict) -> None:
-    """Execute a self-play (``--mode=pull``) shard under run_lifecycle.
+    """Execute a self-play (``--mode=pull``) shard.
 
-    Split out from ``_run`` so it is unit-testable: tests mock
-    ``run_shard_pull`` and verify the start_run / finish_run / artifact
-    trio fires with the expected kind / parent_run_id / shard_label.
+    No ``run_lifecycle`` wrapper — the shard does NOT register its
+    own ``runs`` row. ``run_shard_pull`` pushes per-shard
+    ``run_progress`` rows directly under the master's ``run_id``
+    with ``shard_label`` set, which is the authoritative record.
+    The redundant shard ``runs`` row was visual noise in the UI
+    (5+ cards per iter launch) without any data of its own.
     """
     shard = ShardConfig.from_dict(shard_dict)
     spec = SelfPlayJobSpec.from_dict(spec_dict)
@@ -105,41 +111,27 @@ def _run_pull_shard(args, shard_dict: dict, spec_dict: dict) -> None:
         else max(1, (os.cpu_count() or 1) - 2)
     )
     label = shard.display_label
-    shard_run_id = f"{args.run_id}_shard_{label}"
-    progress_json_path = args.progress_dir / f"{shard_run_id}.json"
-    config = _build_shard_config(spec_dict, shard_dict, args)
-    # ``kind="self_play"`` is the schema-valid value for the master's
-    # data-gen step; the JSON-side legacy alias ``"data_gen"`` is
-    # remapped by the backfill table at
-    # :data:`mtg_bot.cli.runs.backfill._KIND_JSON_TO_DB`, but the DB
-    # itself only allows the canonical kinds.
-    with _lifecycle.run_lifecycle(
-        run_id=shard_run_id,
-        kind="self_play",
-        config=config,
-        progress_json_path=progress_json_path,
-        parent_run_id=args.run_id,
+    npz_paths = run_shard_pull(
+        spec,
+        queue_url=args.queue_url,
+        run_id=args.run_id,
+        n_workers=n_workers,
+        output_dir=args.output_dir,
         label=label,
-    ):
-        npz_paths = run_shard_pull(
-            spec,
-            queue_url=args.queue_url,
-            run_id=args.run_id,
-            n_workers=n_workers,
-            output_dir=args.output_dir,
-            label=label,
-            stamp=args.stamp,
-            iter_total_games=args.iter_total_games,
-            progress_dir=args.progress_dir,
-        )
+        stamp=args.stamp,
+        iter_total_games=args.iter_total_games,
+        progress_dir=args.progress_dir,
+    )
     print(json.dumps({"npz_paths": [str(p) for p in npz_paths]}))
 
 
 def _run_eval_shard(args, shard_dict: dict, spec_dict: dict) -> None:
-    """Execute an eval (``--mode=eval``) shard under run_lifecycle.
+    """Execute an eval (``--mode=eval``) shard.
 
-    Mirrors :func:`_run_pull_shard` but for the eval path: ``kind`` is
-    ``"eval"`` so the dashboard sums it with other eval-shard rows.
+    No ``run_lifecycle`` wrapper — see :func:`_run_pull_shard` for
+    the rationale. ``run_shard_eval_pull`` writes the authoritative
+    per-shard ``run_progress`` row under the master ``run_id`` with
+    ``shard_label`` set.
     """
     shard = ShardConfig.from_dict(shard_dict)
     eval_spec = EvalJobSpec.from_dict(spec_dict)
@@ -148,28 +140,17 @@ def _run_eval_shard(args, shard_dict: dict, spec_dict: dict) -> None:
         else max(1, (os.cpu_count() or 1) - 2)
     )
     label = shard.display_label
-    shard_run_id = f"{args.run_id}_shard_{label}"
-    progress_json_path = args.progress_dir / f"{shard_run_id}.json"
-    config = _build_shard_config(spec_dict, shard_dict, args)
-    with _lifecycle.run_lifecycle(
-        run_id=shard_run_id,
-        kind="eval",
-        config=config,
-        progress_json_path=progress_json_path,
-        parent_run_id=args.run_id,
+    counts = run_shard_eval_pull(
+        eval_spec,
+        queue_url=args.queue_url,
+        run_id=args.run_id,
+        n_workers=n_workers,
         label=label,
-    ):
-        counts = run_shard_eval_pull(
-            eval_spec,
-            queue_url=args.queue_url,
-            run_id=args.run_id,
-            n_workers=n_workers,
-            label=label,
-            iter_total_games=args.iter_total_games,
-            progress_dir=args.progress_dir,
-        )
-    # The final per-shard ``run_progress`` row already carries the
-    # authoritative counts (see ``run_shard_eval_pull``'s post-loop
+        iter_total_games=args.iter_total_games,
+        progress_dir=args.progress_dir,
+    )
+    # The per-shard ``run_progress`` row carries the authoritative
+    # counts (see ``run_shard_eval_pull``'s post-loop
     # ``_push_eval_shard_progress_to_db(status="completed")``). The
     # stdout line stays so existing diagnostic tooling continues to
     # see the per-shard summary; the legacy sibling
