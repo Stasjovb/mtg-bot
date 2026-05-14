@@ -373,40 +373,171 @@ plumbing, or per-object combat-flag bookkeeping that breaks the
 real-game flow will surface here even if Phase 5's synthetic
 selectors keep passing.
 
+## Round 17 enhancement work (this slice)
+
+Closed by `feature/phase6-production-decklists`:
+
+The Phase 6 trajectory-parity substrate was feature-complete after
+round 16 but useful only on synthetic mono-color vanilla decks.
+Round 17 extends the trajectory suite onto **real EoE decks** from
+the live 17lands deck pool plus richer combat scenarios.
+
+### Production-shape decklist loader (slice 1 of round 17)
+
+New helpers in `mtg_bot.parity.trajectory`:
+
+- **`load_production_deck(archetype, deck_pool_path=None)`** — reads
+  one deck from `data/17lands/eoe_decks.json.gz` (the same pool
+  self-play / iterate consume) and returns its 40-card name list.
+  Resolves the pool path relative to the worktree's repo root with
+  fallback to a sibling `mtg-bot/` main checkout (`data/` is
+  gitignored, so a fresh worktree picks up the pool from the main
+  checkout per the project's CLAUDE.md convention).
+- **`production_deck_to_deckspec(p0_card_names, p1_card_names=None,
+  *, shared_rng_seed=None, pad_to_size=60, pad_with="Forest")`** —
+  filters a card-name list to the bridge-supported subset (basic
+  lands + vanilla creatures), builds the union CardDef registry,
+  pads short post-filter libraries with copies of `pad_with` to
+  `pad_to_size`. Mirror-match defaults: when `p1_card_names` is
+  None, p1 receives p0's filtered library.
+- **`setup_matched_game_from_real_decks(...)`** — convenience
+  wrapper that composes the loader + DeckSpec converter + matched-
+  state setup. Same return contract as `setup_matched_game`.
+
+**Filter rationale.** The CardDef bridge intentionally carries a
+minimal cross-engine surface (name / type / mana cost / pt /
+mana_produced / triggered_abilities-as-dict / subtypes). It does
+NOT carry spell_effect, activated_abilities (other than the auto-
+wired `{T}: Add C` for lands), static_abilities, keywords, ETB-
+counter triggers, warp/kicker/impending costs, etc. Production EoE
+creatures routinely carry rich fields the parser materializes on
+Python's CardPrinting via the OracleParserCardSource path; Rust's
+`register_printing` accepts only the schema shapes documented in
+`cards.rs:parse_printing`. The pragmatic round-17 path: filter the
+deck to cards both engines can register without effects /
+triggers / keywords / etc. that don't have a matching cross-engine
+bridge arm.
+
+What survives the filter on the EoE pool today: basic lands
+(Forest/Island/Plains/Mountain/Swamp/Wastes) plus vanilla creatures
+(no keywords, no triggered_abilities, no activated_abilities, no
+static_abilities, no spell_effect, no warp/kicker/impending). Per
+spot-check on the EoE pool: ~5 vanilla creatures total (Emissary
+Escort, Harmonious Grovestrider, Cosmogoyf, Magus of the Moon,
+Spectral Snatcher) plus the basic lands. Most decks reduce to
+"basic lands + 0-2 vanilla creatures" after filter; the loader
+pads short decks with extra basics so trajectory tests always have
+~60 cards to draw from.
+
+### Three new RealGameCombatAgent strategies (slice 2 of round 17)
+
+Extends the round-16 `RealGameCombatAgent` with three strategies
+that exercise richer attacker / blocker logic than
+`attack_all` / `attack_all_block_smallest` / `no_attack`:
+
+- **`"attack_with_unblockable_creatures_only"`** — only declares
+  attackers carrying an evasion keyword (`flying` / `unblockable` /
+  `shadow`). Defender declines blocking. Useful for trajectory
+  probes that want a guaranteed-through attack shape (e.g. a
+  lifelink probe that needs the attacker to land combat damage on
+  the player).
+- **`"block_with_largest_able"`** — mirror of
+  `"attack_all_block_smallest"` but defender picks the LARGEST
+  creature per attacker (sorted by `(power desc, toughness desc,
+  id asc)`). Pins the inverted block selector — verifies that the
+  agent's block-assignment shape doesn't accidentally hardcode
+  "smallest" anywhere.
+- **`"optimal_no_loss_attack"`** — only declares attackers the
+  defender CAN'T trade up against (no defender creature has
+  `power >= attacker.toughness`). Static p/t only — no continuous
+  effect / counter / removal modeling. Surfaces a non-trivial
+  state-dependent attacker policy without needing to model deeper
+  combat math.
+
+### Trajectory tests (slices 3 + 4 of round 17)
+
+- **3 production-deck trajectory tests** — load EoE archetype 0,
+  setup matched states (parity-clean), walk turn 1 no-op + play
+  turn-1 land (parity-clean per phase boundary).
+- **2 new-strategy trajectory tests** — `block_with_largest_able`
+  + `optimal_no_loss_attack` driven on the synthetic mutual-Bears
+  setup.
+- **3 keyword trajectory probes** — `_inject_keyword_creature_on_p0_bf`
+  is the round-17 promotion of Phase 5's keyword side-channels
+  (parameterized on keyword + printing name); used by:
+  - `test_trample_overflow_to_player_parity` — 4/4 trample vs 2/2;
+    trample spillover to defender (CR 702.19b).
+  - `test_vigilance_attacker_untaps_parity` — vigilance attacker
+    stays untapped post-DECLARE_ATTACKERS (CR 702.20). Co-injects
+    a non-vigilance Bears so the test pins both the vigilance
+    behavior AND the non-vigilance baseline.
+  - `test_lifelink_combat_damage_to_self_parity` — 2/2 lifelink
+    attacker unblocked; p0 gains 2 life (CR 702.15b).
+
+Each keyword probe xfail-tags both the post-injection compare and
+the `drive_combat_phase` call so a real divergence surfaces as an
+xfail with a clear pointer rather than a hard failure. **All 3
+probes pass byte-equal across both engines today.**
+
+## Divergences surfaced in round-17
+
+**None.** Every new test passes byte-equal across both engines:
+
+- Production-deck setup → matched states with byte-equal field
+  views.
+- Production-deck turn 1 walk → byte-equal at every phase boundary.
+- Production-deck play_land round-trips cleanly.
+- The two new combat-strategy paths (block_with_largest,
+  optimal_no_loss_attack) round-trip cleanly on the trajectory
+  shape.
+- Trample, vigilance, and lifelink combat compose correctly with
+  the round-16 RealGameCombatAgent on the trajectory shape.
+
+The trajectory tests' value is in the **regression-pin** dimension:
+any future change to Rust's combat keyword-handling, basic-land
+multi-color registry, or trample/lifelink damage-application that
+breaks the real-game flow will surface here even if Phase 5's
+synthetic selectors keep passing.
+
+Gate: **424 passing** (was 400, +24 net).
+
 ## Suggested next slice
 
 All four Phase 6 infrastructure gaps (#1 setup_matched_game,
 #2 mulligan parity, #3 real-game combat agent, #4 action-dict
-vocabulary) are now CLOSED. The Phase 6 trajectory-parity
-substrate is feature-complete for the vanilla-deck shape.
+vocabulary) are CLOSED. Round 17 adds production-shape decklists,
+three new combat strategies, and trample/vigilance/lifelink
+trajectory probes on top of that substrate.
 
-Natural follow-ons (no longer "gaps" but candidate enhancement
-slices):
+Remaining enhancement follow-ons after round 17:
 
-- **Production-shape decklist trajectories** — the
-  `setup_matched_game_from_real_decks(decks, seed, mulligans=...)`
-  path that accepts decklist names against the live
-  `mtg_bot.cards.printings` dict and threads them into a
-  freshly-materialized DeckSpec. Lets trajectory tests probe real
-  EoE decks against the same trajectory machinery.
-- **Multi-attacker / multi-block combat surface** — the round-16
-  agent supports `attack_all` + `attack_all_block_smallest` but
-  the synthetic bears deck only ever has 1 attacker / 1 blocker
-  per round. A wider deck (Llanowar Elves + Bears + Centaur, or
-  any EoE multi-creature shape) would exercise the multi-attacker
-  / multi-block code paths Phase 5's `multi_block_combat_selector`
-  hits but the trajectory suite doesn't yet.
-- **Bilateral combat strategies** — current strategies are
-  symmetric across both players (both sides apply the same
+- **Bilateral / asymmetric combat strategies** — current strategies
+  are symmetric across both players (both sides apply the same
   attack_all rule on their respective active turns). Asymmetric
   strategies ("p0 attacks, p1 never attacks back") would let
   trajectory tests pin specific defensive patterns without
-  needing a second `RealGameCombatAgent` per player.
+  needing a second `RealGameCombatAgent` per player. Round-17
+  ships the agent shape that could carry per-side config, but the
+  strategy enum stays mirror-symmetric for now.
+- **Multi-attacker / multi-block combat surface on production
+  decks** — round-16's smallest-blocker test only exercises 1
+  attacker / 1 blocker. Round-17's `block_with_largest_able` test
+  uses the same 1-blocker shape (so smallest and largest coincide).
+  A wider production-shape deck with 2+ creatures per side would
+  exercise the largest-vs-smallest selector divergence directly.
+- **CardDef substrate extensions** — extending `CardDef` + bridge
+  to carry keywords / activated_abilities / static_abilities /
+  spell_effect would let production decks survive the filter
+  with their real-game shape intact (rather than collapsing to
+  "lands + vanilla creatures + padding"). Larger surface; would
+  unblock real-EoE-decklist trajectory probes that exercise
+  real-card combat / abilities.
 - **State-conditional mulligan agents** — see gap #2 residuals.
 - **Non-positional bottom strategies** — see gap #2 residuals.
-- **Trample / vigilance / lifelink combat probes** — first-strike
-  is exercised; the other combat keywords have synthetic Phase 5
-  selectors but no trajectory tests yet.
+- **Other combat-keyword trajectory probes** — round-17 added
+  trample / vigilance / lifelink. Deathtouch, double-strike,
+  haste, menace, defender, indestructible, hexproof, flying have
+  Phase 5 synthetic selectors but no trajectory probes yet.
 
 The Rust API gaps documented under gap #2's residuals
 (non-positional bottom, state-conditional mulligan agents) are
