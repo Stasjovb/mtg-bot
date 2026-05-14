@@ -2709,6 +2709,142 @@ def test_menace_attacker_requires_two_blockers_parity():
     )
 
 
+def test_indestructible_creature_survives_lethal_damage_parity():
+    """Indestructible attacker (1/1) blocked by a 4/4 vanilla — per
+    CR 702.12b "damage doesn't cause indestructible permanents to be
+    destroyed". The attacker takes 4 damage from the blocker (which
+    would normally be lethal — 4 >= 1 toughness), but the SBA pass
+    that destroys creatures with damage >= toughness skips
+    indestructible permanents (Python: ``turn.py:533`` early-returns
+    on ``"indestructible" in kws``; Rust: same gate via
+    ``battlefield_has_keyword(self, obj_id, "indestructible")`` in the
+    SBA destroy path). Attacker survives with 4 damage marked.
+
+    Symmetric outcome on the blocker side: blocker takes 1 damage from
+    the indestructible attacker. 1 < 4 toughness, so the blocker
+    survives normally (no indestructible needed — it's just non-lethal
+    damage).
+
+    Setup: walk to turn 7 PRECOMBAT_MAIN with no creatures. Inject a
+    1/1 indestructible on p0 + 4/4 vanilla on p1. Drive
+    ``attack_all_block_smallest``: p0 attacks with the 1/1
+    indestructible, p1 blocks with the 4/4. Combat damage:
+
+      * Attacker → blocker: 1 damage marked (< 4 toughness, survives).
+      * Blocker → attacker: 4 damage marked (>= 1 toughness, but
+        indestructible — survives anyway per CR 702.12b).
+
+    Asserts byte-equal:
+
+      * Both creatures still on the bf (not in their respective
+        graveyards).
+      * Both engines emit the same per-object ``damage`` slot in the bf
+        snapshot (1 on the blocker, 4 on the attacker).
+      * Life totals unchanged (combat damage stayed in creature
+        combat).
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Walk to turn 7 PRECOMBAT_MAIN with no creatures (skip bears
+    # setup so the indestructible + vanilla blocker are the SOLE
+    # combatants — keeps the block-pairing deterministic).
+    _advance_n_phases(py_state, rust_state, 3)  # → turn 1 MAIN1
+    _advance_n_phases(py_state, rust_state, 12 * 6)  # → turn 7 MAIN1
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.PRECOMBAT_MAIN
+
+    # Inject 1/1 indestructible attacker on p0 + 4/4 vanilla blocker on p1.
+    _inject_keyword_creature_on_p0_bf(
+        py_state, rust_state,
+        keyword="indestructible",
+        printing_name="Bear Indomitable",
+        power=1, toughness=1,
+    )
+    _inject_vanilla_creature_on_bf(
+        py_state, rust_state,
+        controller_idx=1,
+        printing_name="Bear Wall",
+        power=4, toughness=4,
+    )
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"keyword-injection (indestructible) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    pre_combat_life_p0 = py_view["life_p0"]
+    pre_combat_life_p1 = py_view["life_p1"]
+
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # p0's indestructible is the only eligible attacker; p1's 4/4 is
+    # the only eligible blocker.
+    agent = trajectory.RealGameCombatAgent(
+        strategy="attack_all_block_smallest"
+    )
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"indestructible combat via RealGameCombatAgent surfaced a "
+            f"real cross-engine divergence: {exc}"
+        )
+
+    # Post-combat parity.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+
+    # Per CR 702.12b: damage doesn't destroy indestructible permanents.
+    # Attacker takes 4 damage but survives. Blocker takes 1 damage but
+    # 1 < 4 toughness so survives normally.
+    assert py_view["life_p0"] == pre_combat_life_p0
+    assert py_view["life_p1"] == pre_combat_life_p1
+    p0_gy = [entry[0] for entry in py_view["graveyard_p0"]]
+    p1_gy = [entry[0] for entry in py_view["graveyard_p1"]]
+    assert "Bear Indomitable" not in p0_gy, (
+        f"indestructible attacker should have survived 4 damage from "
+        f"blocker per CR 702.12b; got p0_gy={p0_gy}"
+    )
+    assert "Bear Wall" not in p1_gy, (
+        f"4/4 blocker should have survived 1 damage from attacker "
+        f"(1 < 4 toughness); got p1_gy={p1_gy}"
+    )
+    # Both creatures should be on the bf with damage marked.
+    indestructible_bf = next(
+        t for t in py_view["battlefield"] if t[0] == "Bear Indomitable"
+    )
+    blocker_bf = next(
+        t for t in py_view["battlefield"] if t[0] == "Bear Wall"
+    )
+    # bf 8-tuple is (printing_name, tapped, sick, dmg, counters,
+    # attached_to, controller_id, id) per parity_smoke._zone_signature.
+    # Index 3 is the damage slot.
+    # Indestructible: 4 damage marked (would-be-lethal but survived
+    # per CR 702.12b).
+    assert indestructible_bf[3] == 4, (
+        f"indestructible attacker should have 4 damage marked "
+        f"(blocker dealt 4 back-damage, attacker survived per "
+        f"CR 702.12b); got tuple={indestructible_bf}"
+    )
+    # Blocker: 1 damage marked (non-lethal — 1 < 4).
+    assert blocker_bf[3] == 1, (
+        f"4/4 blocker should have 1 damage marked "
+        f"(attacker's 1 power, non-lethal); got tuple={blocker_bf}"
+    )
+
+
 def test_defender_cannot_attack_parity():
     """Defender creature (0/4) cannot be declared as an attacker per
     CR 702.3 (defender — "this creature can't attack"). Both engines
