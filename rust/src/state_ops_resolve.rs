@@ -6772,6 +6772,81 @@ fn apply_effect(
                 }
             }
         }
+        // Round-15 (post-r14) rider-widened sibling of
+        // GrantKeywordToTargetCreatureUntilEOT. Same controller-of-effect
+        // resolution + first-creature pick, but: (1) admits a LIST of
+        // keywords (one UeotModifier::GrantKeyword push per entry); (2)
+        // honors `exclude_source` to skip the resolving source itself in
+        // the target-pick scan ("another target creature"). Empty
+        // keywords list short-circuits to a silent no-op (parser also
+        // rejects empty at register time so this is a defensive guard,
+        // not a reachable runtime path from registered cards).
+        //
+        // **EoE consumer.** Blooming Stinger (1G Plant Scorpion) is the
+        // unique EoE source for the `exclude_source=true` shape:
+        // "When this creature enters, another target creature you
+        // control gains deathtouch until end of turn." Forward-
+        // compatible with future multi-keyword grants via the
+        // `Vec<String>` field.
+        Effect::GrantKeywordsToTargetCreatureUntilEOT { keywords, exclude_source } => {
+            if keywords.is_empty() {
+                return Ok(());
+            }
+            // Source-controller resolution (5-zone walk; identical to
+            // the single-keyword sibling above).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source untrackable → silent fizzle
+            };
+            let cidx = controller as usize;
+            // Pick first creature on controller's bf, optionally
+            // excluding the resolving source itself ("another target
+            // creature" — Blooming Stinger's exclude_source=true).
+            let target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    if *exclude_source && obj.id == source_obj_id {
+                        return None;
+                    }
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible creature → silent fizzle
+            };
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    for kw in keywords {
+                        obj.ueot_modifiers.push(UeotModifier::GrantKeyword {
+                            keyword: kw.clone(),
+                        });
+                    }
+                    break;
+                }
+            }
+        }
         Effect::EachOpponentSacrificesCreature => {
             // Source-controller resolution (mirrors EachOpponentDiscards).
             let mut source_controller: Option<u8> = None;

@@ -1304,6 +1304,256 @@ def test_grant_keyword_target_no_creature_fizzles(synthetic_state):
     state.resolve_top_of_stack()
 
 
+# ---------------------------------------------------------------- GrantKeywordsToTargetCreatureUntilEOT (round-15 rider-widened sibling)
+#
+# Multi-keyword + exclude_source widening of the round-28
+# `GrantKeywordToTargetCreatureUntilEOT` arm. EoE consumer:
+# Blooming Stinger (1G Plant Scorpion) — "When this creature enters,
+# another target creature you control gains deathtouch until end of
+# turn." Future cards with multi-keyword grants (e.g. "another target
+# creature gains flying and trample UEOT") land on the same arm.
+
+
+def _grant_keywords_target_instant_dict(
+    keywords: list[str] | None = None, exclude_source: bool = False,
+):
+    """Instant that grants `keywords` UEOT to the first creature on the
+    controller's battlefield (optionally excluding the resolving source
+    itself when `exclude_source=True`).
+
+    Instants resolve from the stack — the source is NOT on bf at
+    resolve time, so `exclude_source=True` here only changes filter
+    behavior in the corner case where the source somehow IS on bf
+    (manland animation, activated permanent abilities). The
+    creature-shape variant below (`_blooming_stinger_shape_dict`)
+    drives the "source is on bf because it just ETB'd" path.
+    """
+    if keywords is None:
+        keywords = ["deathtouch"]
+    return {
+        "name": f"Test Grant Keywords {','.join(keywords)} UEOT",
+        "mana_cost": {"G": 1},
+        "card_types": ["Instant"],
+        "effects": [
+            {
+                "kind": "grant_keywords_to_target_creature_until_eot",
+                "keywords": keywords,
+                "exclude_source": exclude_source,
+            }
+        ],
+    }
+
+
+def _blooming_stinger_shape_dict(
+    keywords: list[str] | None = None, exclude_source: bool = True,
+):
+    """Blooming-Stinger-shape creature whose ETB grants `keywords` UEOT
+    to another target creature you control. The source IS on bf at
+    ETB-resolve time (post CR 608.2m post-resolve dispatch) so
+    `exclude_source=True` is the load-bearing flag — without it the
+    arm would pick the just-ETB'd source itself."""
+    if keywords is None:
+        keywords = ["deathtouch"]
+    return {
+        "name": "Test Blooming-Stinger-shape Plant Scorpion",
+        "mana_cost": {"generic": 1, "G": 1},
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+        "effects": [],
+        "etb_effects": [
+            {
+                "kind": "grant_keywords_to_target_creature_until_eot",
+                "keywords": keywords,
+                "exclude_source": exclude_source,
+            }
+        ],
+    }
+
+
+def test_register_grant_keywords_target_default_exclude_source_false(
+    empty_registry,
+):
+    """Missing `exclude_source` defaults to False; single-keyword list
+    round-trips cleanly."""
+    pid = empty_registry.register_printing(
+        _grant_keywords_target_instant_dict(["deathtouch"])
+    )
+    effects = empty_registry.get_printing_effects(pid)
+    assert len(effects) == 1
+    assert effects[0]["kind"] == "grant_keywords_to_target_creature_until_eot"
+    assert effects[0]["keywords"] == ["deathtouch"]
+    assert effects[0]["exclude_source"] is False
+
+
+def test_register_grant_keywords_target_missing_keywords_raises(
+    empty_registry,
+):
+    """Missing required `keywords` field rejected at register time."""
+    with pytest.raises(ValueError):
+        empty_registry.register_printing(
+            {
+                "name": "bad-grant-multi",
+                "card_types": ["Instant"],
+                "effects": [
+                    {"kind": "grant_keywords_to_target_creature_until_eot"}
+                ],
+            }
+        )
+
+
+def test_register_grant_keywords_target_empty_list_raises(empty_registry):
+    """Empty `keywords` list rejected at register time (defensive
+    guard; the resolve arm also short-circuits on empty)."""
+    with pytest.raises(ValueError):
+        empty_registry.register_printing(
+            _grant_keywords_target_instant_dict(keywords=[])
+        )
+
+
+def test_register_grant_keywords_target_empty_string_in_list_raises(
+    empty_registry,
+):
+    """Any empty-string keyword in the list rejected at register time."""
+    with pytest.raises(ValueError):
+        empty_registry.register_printing(
+            _grant_keywords_target_instant_dict(keywords=["deathtouch", ""])
+        )
+
+
+def test_grant_keywords_target_single_keyword_grants_first_creature(
+    synthetic_state,
+):
+    """**Single-keyword (Blooming Stinger primary shape) pin.** Resolving
+    the spell grants 'deathtouch' UEOT to the first creature on
+    source-controller's bf. Mirrors the single-keyword sibling's
+    behavior with a list of length one."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    assert synthetic_state.has_keyword(target_id, "deathtouch") is False
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _grant_keywords_target_instant_dict(["deathtouch"]), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_keyword(target_id, "deathtouch") is True
+
+
+def test_grant_keywords_target_multi_keyword_grants_all(synthetic_state):
+    """**Multi-keyword (rider-widening core) pin.** Resolving the spell
+    grants ALL listed keywords UEOT to the same target. One
+    UeotModifier::GrantKeyword push per entry in the list."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    assert synthetic_state.has_keyword(target_id, "flying") is False
+    assert synthetic_state.has_keyword(target_id, "trample") is False
+
+    spell_id = synthetic_state.register_and_inject_object(
+        _grant_keywords_target_instant_dict(["flying", "trample"]),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.has_keyword(target_id, "flying") is True
+    assert synthetic_state.has_keyword(target_id, "trample") is True
+
+
+def test_grant_keywords_target_exclude_source_skips_source_on_bf(
+    synthetic_state,
+):
+    """**Blooming-Stinger pin: exclude_source=True skips the resolving
+    source.** The creature lands on bf via ETB resolve-then-fire, then
+    its etb_effects fire with the source ON the bf. With
+    exclude_source=True the target-pick scan must skip the source
+    itself, picking the existing first Bears on p0's bf instead.
+    Without the flag (separately tested below) the just-ETB'd source
+    would be the first-on-bf candidate."""
+    # The pre-existing first Bears on p0's bf is the eligible target.
+    pre_existing_target_id = _first_creature_id_on_battlefield(
+        synthetic_state, 0
+    )
+    assert (
+        synthetic_state.has_keyword(pre_existing_target_id, "deathtouch")
+        is False
+    )
+
+    stinger_id = synthetic_state.register_and_inject_object(
+        _blooming_stinger_shape_dict(["deathtouch"], exclude_source=True),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(stinger_id, 0)
+    synthetic_state.resolve_top_of_stack()  # ETB lands on bf, fires triggers
+    synthetic_state.resolve_top_of_stack()  # ETB trigger resolves
+
+    # Source on bf, but skipped by exclude_source.
+    assert synthetic_state.find_object_zone(stinger_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.has_keyword(stinger_id, "deathtouch") is False
+    # Pre-existing target got the keyword.
+    assert (
+        synthetic_state.has_keyword(pre_existing_target_id, "deathtouch")
+        is True
+    )
+
+
+def test_grant_keywords_target_default_exclude_source_includes_source_on_bf(
+    synthetic_state,
+):
+    """**Default-shape discriminator pin.** With exclude_source=False
+    (the default), the just-ETB'd source IS eligible — and being the
+    last-pushed object on bf, may or may not be picked depending on
+    iteration order. The synthetic state's p0 bf is Forests then
+    Grizzly Bears; the new Stinger appends after both. The arm picks
+    the FIRST creature in zone-iteration order — which is still the
+    pre-existing Bears, NOT the Stinger. The pre-existing target
+    therefore gets the keyword regardless. The discriminator value
+    is that no error is raised when source is itself eligible (the
+    arm doesn't filter source out by default)."""
+    pre_existing_target_id = _first_creature_id_on_battlefield(
+        synthetic_state, 0
+    )
+
+    stinger_id = synthetic_state.register_and_inject_object(
+        _blooming_stinger_shape_dict(["haste"], exclude_source=False),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(stinger_id, 0)
+    synthetic_state.resolve_top_of_stack()  # ETB lands on bf, fires triggers
+    synthetic_state.resolve_top_of_stack()  # ETB trigger resolves
+
+    # Pre-existing Bears is still at the front of p0's bf-iteration
+    # order, so it gets the haste grant. Pin both: pre-existing got it,
+    # stinger did NOT (it's at the back of the bf, the first-creature
+    # scan returned the pre-existing one first and the loop broke).
+    assert synthetic_state.has_keyword(pre_existing_target_id, "haste") is True
+    assert synthetic_state.has_keyword(stinger_id, "haste") is False
+
+
+def test_grant_keywords_target_multi_clears_at_cleanup(synthetic_state):
+    """**Cleanup pin.** All UEOT-granted keywords from the list clear at
+    the next cleanup step (CR 514.3 via the r27 UEOT-clear pass).
+    Pins the per-keyword GrantKeyword push correctly registers as a
+    UEOT modifier — non-UEOT modifiers wouldn't clear."""
+    target_id = _first_creature_id_on_battlefield(synthetic_state, 0)
+    spell_id = synthetic_state.register_and_inject_object(
+        _grant_keywords_target_instant_dict(["flying", "trample"]),
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.has_keyword(target_id, "flying") is True
+    assert synthetic_state.has_keyword(target_id, "trample") is True
+
+    synthetic_state.cleanup_step_for_active_player()
+
+    assert synthetic_state.has_keyword(target_id, "flying") is False
+    assert synthetic_state.has_keyword(target_id, "trample") is False
+
+
 # ---------------------------------------------------------------- SetBasePTUntilEOT (r28)
 
 
