@@ -43416,6 +43416,401 @@ def test_rust_search_library_for_card_cross_controller_routing_p1_source_on_p0_t
     assert rust_state.hand_sizes[1] == p1_hand_before + 1
 
 
+# =====================================================================
+# Round-30 supertypes/subtypes substrate slice -- positive pins for the
+# four newly-supported SearchLibraryForCard filters.
+#
+# The Rust dispatch arms widened by Round 30 are:
+#   - "legendary_creature" (supertypes-keyed; powers The Seriema)
+#   - "spacecraft"         (subtypes-keyed)
+#   - "sliver"             (subtypes-keyed)
+#   - "demon"              (subtypes-keyed; Demonic Counsel from
+#                           Duskmourn)
+#
+# Each pin follows the same shape as the round-21 slice's positive
+# pins (basic_land + creature_small + artifact): build a library with a
+# matching card buried under a non-matching prefix, inject an ETB-
+# trigger source on the controller's bf, drain the stack, assert
+# library shrank by 1 and hand grew by 1.
+# =====================================================================
+
+
+def test_rust_search_library_for_card_legendary_creature_filter_picks_legendary_creature():
+    """Round-30 supertypes substrate pin -- ``legendary_creature``
+    filter. Library: [vanilla Bears, Legendary Bear, Bears]. The
+    tutor must skip the non-Legendary head, pick the Legendary card
+    in the middle, and leave the trailing vanilla Bear alone. Pins
+    the new arm at state_ops_resolve.rs that reads
+    ``card_types contains "Creature" AND supertypes contains
+    "Legendary"``.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    legendary_bear = CardDef(
+        name="Legendary Bear (Round-30 fixture)",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("G", 1),),
+        power=3,
+        toughness=3,
+        # Round-30 substrate — explicit supertype gives the bridge
+        # the registry-dict ``supertypes: ["Legendary"]`` field.
+        supertypes=("Legendary",),
+        subtypes=("Bear",),
+    )
+    spec = DeckSpec(
+        card_defs=(bears, legendary_bear),
+        p0_library=(
+            "Library Filler Bears (2/2)",  # non-Legendary head
+            "Legendary Bear (Round-30 fixture)",  # match at index 1
+            "Library Filler Bears (2/2)",
+        ),
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Legendary-Creature Tutor Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "legendary_creature",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    rust_state.resolve_top_of_stack()
+    # Library shrank by 1 (the Legendary Bear), hand grew by 1.
+    assert rust_state.library_sizes[0] == p0_lib_before - 1
+    assert rust_state.hand_sizes[0] == p0_hand_before + 1
+
+
+def test_rust_search_library_for_card_legendary_creature_filter_skips_legendary_non_creature():
+    """Round-30 negative pin -- the ``legendary_creature`` filter
+    requires BOTH the Legendary supertype AND the Creature card type.
+    A Legendary Artifact (e.g. Sol Ring shape) must NOT match. Pins
+    the conjunctive shape of the new dispatch arm — supertype-only
+    is insufficient.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    legendary_artifact = CardDef(
+        name="Legendary Mox (Round-30 negative-pin fixture)",
+        card_type="Artifact",
+        mana_cost_generic=0,
+        supertypes=("Legendary",),
+    )
+    spec = DeckSpec(
+        card_defs=(bears, legendary_artifact),
+        # Library has only Legendary-but-non-Creature cards interleaved
+        # with vanilla creatures. The filter should match nothing.
+        p0_library=(
+            "Library Filler Bears (2/2)",
+            "Legendary Mox (Round-30 negative-pin fixture)",
+            "Library Filler Bears (2/2)",
+        ),
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Legendary-Creature Tutor Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "legendary_creature",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    rust_state.resolve_top_of_stack()
+    # Silent fizzle: no match. Library/hand unchanged.
+    assert rust_state.library_sizes[0] == p0_lib_before
+    assert rust_state.hand_sizes[0] == p0_hand_before
+
+
+def test_rust_search_library_for_card_spacecraft_filter_picks_spacecraft_subtype():
+    """Round-30 subtypes substrate pin -- ``spacecraft`` filter.
+    Library: [vanilla Bears, Spacecraft, Bears]. The tutor must skip
+    the non-Spacecraft head and pick the Spacecraft. Pins the new
+    arm reading ``subtypes contains "Spacecraft"``.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spacecraft = CardDef(
+        name="Test Spacecraft (Round-30 fixture)",
+        card_type="Artifact",
+        mana_cost_generic=3,
+        # Round-30 substrate — explicit subtype "Spacecraft" makes
+        # the printing match the spacecraft filter.
+        subtypes=("Spacecraft",),
+    )
+    spec = DeckSpec(
+        card_defs=(bears, spacecraft),
+        p0_library=(
+            "Library Filler Bears (2/2)",
+            "Test Spacecraft (Round-30 fixture)",
+            "Library Filler Bears (2/2)",
+        ),
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Spacecraft Tutor Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "spacecraft",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    rust_state.resolve_top_of_stack()
+    # Library shrank by 1, hand grew by 1.
+    assert rust_state.library_sizes[0] == p0_lib_before - 1
+    assert rust_state.hand_sizes[0] == p0_hand_before + 1
+
+
+def test_rust_search_library_for_card_sliver_filter_picks_sliver_subtype():
+    """Round-30 subtypes substrate pin -- ``sliver`` filter. Library:
+    [vanilla Bears, Sliver, Bears]. Pins the new arm reading
+    ``subtypes contains "Sliver"``.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    sliver = CardDef(
+        name="Test Sliver (Round-30 fixture)",
+        card_type="Creature",
+        mana_cost_generic=2,
+        power=2,
+        toughness=2,
+        subtypes=("Sliver",),
+    )
+    spec = DeckSpec(
+        card_defs=(bears, sliver),
+        p0_library=(
+            "Library Filler Bears (2/2)",
+            "Test Sliver (Round-30 fixture)",
+            "Library Filler Bears (2/2)",
+        ),
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Sliver Tutor Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "sliver",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    rust_state.resolve_top_of_stack()
+    assert rust_state.library_sizes[0] == p0_lib_before - 1
+    assert rust_state.hand_sizes[0] == p0_hand_before + 1
+
+
+def test_rust_search_library_for_card_demon_filter_picks_demon_subtype():
+    """Round-30 subtypes substrate pin -- ``demon`` filter. Library:
+    [vanilla Bears, Demon, Bears]. Pins the new arm reading
+    ``subtypes contains "Demon"`` (Demonic Counsel from Duskmourn
+    is the canonical real-card consumer).
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    demon = CardDef(
+        name="Test Demon (Round-30 fixture)",
+        card_type="Creature",
+        mana_cost_generic=4,
+        mana_cost_colored=(("B", 1),),
+        power=4,
+        toughness=4,
+        subtypes=("Demon",),
+    )
+    spec = DeckSpec(
+        card_defs=(bears, demon),
+        p0_library=(
+            "Library Filler Bears (2/2)",
+            "Test Demon (Round-30 fixture)",
+            "Library Filler Bears (2/2)",
+        ),
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Demon Tutor Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "demon",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_hand_before = rust_state.hand_sizes[0]
+    rust_state.resolve_top_of_stack()
+    assert rust_state.library_sizes[0] == p0_lib_before - 1
+    assert rust_state.hand_sizes[0] == p0_hand_before + 1
+
+
+def test_rust_search_library_for_card_supertypes_parse_round_trip_via_getter():
+    """Round-30 substrate parse-shape pin. Construct a registry dict
+    with explicit ``supertypes: ["Legendary"]``; the new
+    ``Registry.get_printing_supertypes`` getter must round-trip the
+    value. Pins both the parser arm at cards.rs:`parse_printing` and
+    the pyfn getter at cards.rs:`get_printing_supertypes`. Missing
+    key still parses to empty Vec for back-compat (every pre-Round-30
+    fixture omits the key).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    pid_with = reg.register_printing(
+        {
+            "name": "Legendary Bear (parse-shape pin)",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear"],
+            "supertypes": ["Legendary"],
+            "mana_cost": {"generic": 2},
+            "power": 3,
+            "toughness": 3,
+            "effects": [],
+        }
+    )
+    pid_without = reg.register_printing(
+        {
+            "name": "Vanilla Bear (parse-shape pin, no supertypes key)",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear"],
+            "mana_cost": {"generic": 2},
+            "power": 3,
+            "toughness": 3,
+            "effects": [],
+        }
+    )
+    assert reg.get_printing_supertypes(pid_with) == ["Legendary"]
+    # Missing key → empty Vec.
+    assert reg.get_printing_supertypes(pid_without) == []
+
+
 def test_cross_engine_search_library_for_card_synthetic_etb_creature_small_parity(
     parity_smoke,
 ):
