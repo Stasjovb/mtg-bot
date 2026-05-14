@@ -33055,6 +33055,441 @@ def test_cross_engine_synthetic_etb_tap_target_cross_controller_routes_to_source
     assert rust_state.battlefield_sizes[1] == py_p1_bf_after
 
 
+def test_cross_engine_real_eoe_banishing_light_etb_exile_nonland_permanent_until_leaves_parity(
+    parity_smoke,
+):
+    """Probe: Banishing Light (EoE Enchantment) ETB ``exile target
+    nonland permanent an opponent controls until this enchantment
+    leaves the battlefield`` -- FIRST real-EoE cross-engine probe
+    on the ``exile_opponents_nonland_permanent_until_leaves`` bridge
+    arm (I80 lane, landed in round 6 commit c7173905).
+
+    Until this slice, the only consumer of the
+    ``exile_opponents_nonland_permanent_until_leaves`` arm was a
+    SYNTHETIC cross-controller probe
+    (``test_cross_engine_synthetic_etb_exile_opponents_nonland_permanent_until_leaves_cross_controller_routes_to_source_controller_opponent_parity``
+    at tests/test_parity_smoke.py:28050) whose docstring asserts:
+
+        "EoE doesn't ship a bare-rider-shape ETB exile-non-land-
+         until-leaves enchantment today (the field's printings
+         carry MV-cap riders)..."
+
+    **That synthetic-probe assertion was based on a partial scan of
+    the EoE set** -- Banishing Light (Enchantment, no Aura subtype)
+    DOES ship in EoE with a bare-shape no-MV-cap "When this
+    enchantment enters, exile target nonland permanent an opponent
+    controls until this enchantment leaves the battlefield." Seam
+    Rip (the MV-cap rider sister) is the printing whose presence
+    drove the stale "EoE doesn't ship a bare shape" claim;
+    Banishing Light is the bare-shape printing that proves
+    otherwise. This probe pins the arm against the first real-EoE
+    consumer, completing the substrate's coverage from synthetic
+    cross-controller (already shipped) to real-EoE same-controller
+    (this slice).
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "When this enchantment enters, exile target nonland
+         permanent an opponent controls until this enchantment
+         leaves the battlefield."
+
+    Probe direction: **same-controller** (P0 source, P1 victim) --
+    distinct from the synthetic cross-controller probe (where the
+    source lives on P1 and the bait on P0). Same-controller is the
+    typical real-MTG flow: P0 casts Banishing Light from hand, it
+    ETBs on P0's bf, the ETB-trigger picks an opponent-controlled
+    bait permanent on P1's bf and exiles it. The I80 controller-of-
+    effect routing is observably correct on the same-controller leg
+    too (``defender = 1 - controller = 1 - 0 = 1`` = P1, mirroring
+    the bf-iter scan). The synthetic probe already pinned the
+    cross-controller leg; this slice adds the same-controller leg
+    via a real-EoE printing.
+
+    Predicate decomposition:
+
+        SourceIsSelf
+
+    Effect: ``exile_opponents_nonland_permanent_until_leaves`` --
+    same dict shape as the synthetic probe (no fields; the arm
+    bridges Rust's unit variant to Python's
+    ``ExileOpponentsNonlandPermanentUntilLeaves()`` with bare-
+    default ``max_mv=0`` = no cap, matching Banishing Light's
+    oracle text).
+
+    Carrier card-type:
+        Enchantment (no Aura subtype; pure global Enchantment).
+        Every prior real-EoE ETB-trigger probe used a Creature,
+        Artifact, or Spacecraft carrier -- this slice is the FIRST
+        Enchantment carrier on the bridge. The trigger fires
+        irrespective of carrier type (SourceIsSelf reads the object
+        identity, not its types), so the trigger-dispatch leg is
+        bit-equal to the existing Creature / Artifact probes. The
+        carrier-type axis is informational rather than load-bearing
+        for the I80 substrate.
+
+    Probe shape (inject-and-fire-ENTERS, mirrors the synthetic
+    I80 probe with the source/bait controller assignments swapped):
+
+      1. Pre-seat a vanilla bait artifact on P1's bf (the
+         opponent-non-land permanent the ETB will exile).
+         Choosing an Artifact (not a Creature) load-bears the I80
+         filter widening over I79: the artifact would silent-
+         fizzle under the I79 picker (creatures-only) but resolves
+         cleanly under the I80 picker (any non-land permanent).
+      2. Inject Banishing Light onto P0's bf via
+         ``register_and_inject_object`` (Rust) / new_object + bf
+         append + manual ``_trigger_etb_abilities`` (Python). Both
+         engines dispatch ENTERS for the just-arrived enchantment;
+         the SourceIsSelf predicate matches, the trigger lands on
+         the stack with controller=0.
+      3. Seat a target-picking agent on P0 (the source's
+         controller). The agent picks the opponent-controlled
+         non-land permanent from legal_targets (the P1-controlled
+         bait artifact -- the only eligible target).
+      4. Drain both stacks. Both engines exile the bait to P1's
+         exile zone with the source-link stamped
+         (``exiled_with_source`` / ``exiled_by_source``).
+      5. Cross-engine assert: bait left P1's bf, landed in P1's
+         exile. Source still on P0's bf. Lives untouched.
+      6. Source-leaves recall: invoke
+         ``return_paired_exiles_for(source_id)`` /
+         ``_release_exiled_until_leaves(state, source_id)`` --
+         both engines return the bait artifact to P1's bf,
+         proving the source-link was stamped.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Empty defender's bf -- this probe seats exactly one bait
+        on P1's bf so the picker resolves cleanly.
+      * Multiple eligible non-land bait permanents -- the
+        substrate's first-bf-non-land pick is implicit in the
+        agent's legal_targets[0] traversal.
+      * ``max_mv`` MV-cap rider -- Banishing Light has no MV cap;
+        the arm constructs ``max_mv=0`` (no cap) per the bridge.
+        Seam Rip's MV-cap variant is a separate bridge widening
+        (separate Rust Effect variant) and would land in its own
+        probe slice.
+      * The Aura subtype interactions (attach + ward static) --
+        Banishing Light is a non-Aura Enchantment; the carrier-
+        type axis is "global Enchantment", not "Aura". Hardlight
+        Containment (the Aura sister with narrower oracle "target
+        creature") is a separate slice candidate.
+      * Source-leaves auto-fire on a real bf-leaving zone change
+        -- this probe exercises the manual hooks
+        (``return_paired_exiles_for`` +
+        ``_release_exiled_until_leaves``) since auto-firing on
+        every bf-leaving zone change is a follow-up slice on
+        Rust per the docstring at state_ops_resolve.rs:6866.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Banishing Light on P0's bf (controller=0; unchanged from
+        inject).
+      * P0 bf: 1 (only the Enchantment).
+      * P0 exile: 0.
+      * P1 bf: 0 (bait artifact left).
+      * P1 exile: 1 (bait artifact here, source-link stamped).
+      * Lives unchanged on both seats.
+      * No residual stack / pending decision.
+
+    Then post-recall:
+
+      * P1 bf: 1 (bait artifact back).
+      * P1 exile: 0.
+      * Rust returns count == 1 from the recall hook.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import (
+        _PickFirstOpponentTargetCreaturePreferredAgent,
+    )
+
+    # No CardDef-based libraries -- the probe injects everything
+    # directly onto bfs. Empty libraries / hands keep the harness
+    # minimal (mirrors the synthetic I80 probe shape).
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side: inject the bait artifact onto P1's bf ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Banishing Light Bait Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "triggered_abilities": [],
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: vanilla bait Artifact inject must NOT push anything "
+        "onto the stack (no triggers). "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    rust_p0_bf_before = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_before = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p0_bf_before == 0
+    assert rust_p1_bf_before == 1, (
+        f"Rust: bait should be on P1's bf. got p1_bf={rust_p1_bf_before}"
+    )
+    rust_p0_exile_before = len(rust_state.exile_snapshot(0))
+    rust_p1_exile_before = len(rust_state.exile_snapshot(1))
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_exile_before == 0
+    assert rust_p1_exile_before == 0
+
+    # Inject Banishing Light (Enchantment carrier) onto P0's bf.
+    rust_source_dict = {
+        "name": "Banishing Light",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "exile_opponents_nonland_permanent_until_leaves",
+                },
+            }
+        ],
+    }
+    rust_source_id = rust_state.register_and_inject_object(
+        rust_source_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Banishing Light's arrival on P0 should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "ExileOpponentsNonlandPermanentUntilLeaves on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: mirror setup ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.exile import (
+        ExileOpponentsNonlandPermanentUntilLeaves,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="Banishing Light Bait Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=()),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    py_p0_bf_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    py_p0_exile_before = len(py_state.players[0].exile)
+    py_p1_exile_before = len(py_state.players[1].exile)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p0_bf_before == 0
+    assert py_p1_bf_before == 1
+    assert py_p0_exile_before == 0
+    assert py_p1_exile_before == 0
+
+    # Source: Banishing Light Enchantment carrier on P0's bf.
+    source_printing = CardPrinting(
+        name="Banishing Light",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("W", 1),)),
+        type_line="Enchantment",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ExileOpponentsNonlandPermanentUntilLeaves(),
+            ),
+        ),
+    )
+
+    # Target-picking agent on P0 (the source's controller). The
+    # agent's opponent-controlled filter returns
+    # ``("permanent", bait_id)`` from the legal_targets pool (which
+    # contains exactly one entry: the P1-controlled bait artifact),
+    # mirroring Rust's deterministic ``defender = 1 - controller =
+    # 1`` first-non-land scan.
+    py_state.players[0].agent = (
+        _PickFirstOpponentTargetCreaturePreferredAgent()
+    )
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Banishing Light's arrival on P0 should fire the "
+        "IsSelf ENTERS trigger and land "
+        "ExileOpponentsNonlandPermanentUntilLeaves on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust post-state: bait left P1's bf, landed in P1's exile.
+    # Source still on P0's bf.
+    rust_p0_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p0_bf_after == 1, (
+        f"Rust: P0's bf should still hold the source Enchantment. "
+        f"after p0_bf={rust_p0_bf_after}"
+    )
+    assert rust_p1_bf_after == 0, (
+        f"Rust I80 same-controller exile_opponents_nonland_"
+        f"permanent_until_leaves contract: P1's bf should drop the "
+        f"bait artifact (defender = 1 - controller = 1 - 0 = 1; "
+        f"the source's controller's opponent is P1). "
+        f"after p1_bf={rust_p1_bf_after}"
+    )
+    rust_p1_exile_after = rust_state.exile_snapshot(1)
+    assert len(rust_p1_exile_after) == rust_p1_exile_before + 1, (
+        f"Rust I80 contract: P1's exile should grow by 1 (bait "
+        f"artifact). before={rust_p1_exile_before} "
+        f"after={len(rust_p1_exile_after)}"
+    )
+    assert (
+        rust_p1_exile_after[0]["printing_name"]
+        == "Banishing Light Bait Artifact"
+    )
+    assert int(rust_p1_exile_after[0]["id"]) == rust_bait_id, (
+        f"Rust: exiled object id should match the original bait. "
+        f"expected={rust_bait_id} "
+        f"got={rust_p1_exile_after[0]['id']}"
+    )
+    assert len(rust_state.exile_snapshot(0)) == rust_p0_exile_before
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+
+    # Python post-state: same shape.
+    py_p0_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert py_p0_bf_after == 1, (
+        f"Python: P0's bf should still hold the source Enchantment. "
+        f"after p0_bf={py_p0_bf_after}"
+    )
+    assert py_p1_bf_after == 0, (
+        f"Python: P1's bf should drop the bait artifact. "
+        f"after p1_bf={py_p1_bf_after}"
+    )
+    assert len(py_state.players[1].exile) == py_p1_exile_before + 1, (
+        f"Python: P1's exile should grow by 1. "
+        f"before={py_p1_exile_before} "
+        f"after={len(py_state.players[1].exile)}"
+    )
+    assert (
+        py_state.players[1].exile[0].printing.name
+        == "Banishing Light Bait Artifact"
+    )
+    assert py_state.players[1].exile[0].id == py_bait.id
+    assert len(py_state.players[0].exile) == py_p0_exile_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # ---- Source-leaves recall: bait returns to P1's bf ----
+    rust_returned = rust_state.return_paired_exiles_for(rust_source_id)
+    assert rust_returned == 1, (
+        f"Rust source-leaves recall should return exactly 1 paired "
+        f"exile (the bait artifact); got {rust_returned}"
+    )
+    rust_p1_bf_post_recall = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    rust_p1_exile_post_recall = len(rust_state.exile_snapshot(1))
+    assert rust_p1_bf_post_recall == 1, (
+        f"Rust post-recall: P1's bf should hold the returned bait. "
+        f"got={rust_p1_bf_post_recall}"
+    )
+    assert rust_p1_exile_post_recall == 0, (
+        f"Rust post-recall: P1's exile should be empty. "
+        f"got={rust_p1_exile_post_recall}"
+    )
+
+    from mtg_bot.turn import _release_exiled_until_leaves
+    # Python's _release_exiled_until_leaves returns None (the
+    # observable is the post-call bf/exile shape, not a return
+    # value); existing probes (e.g. the synthetic I80 cross-
+    # controller probe at line 28022) don't bind a return.
+    _release_exiled_until_leaves(py_state, py_source.id)
+    py_p1_bf_post_recall = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    py_p1_exile_post_recall = len(py_state.players[1].exile)
+    assert py_p1_bf_post_recall == 1, (
+        f"Python post-recall: P1's bf should hold the returned "
+        f"bait. got={py_p1_bf_post_recall}"
+    )
+    assert py_p1_exile_post_recall == 0, (
+        f"Python post-recall: P1's exile should be empty. "
+        f"got={py_p1_exile_post_recall}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
