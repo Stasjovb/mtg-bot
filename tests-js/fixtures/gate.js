@@ -13,4 +13,4 @@
 // ``tests/training_ui/`` cover the live render path (Jinja injecting
 // the Python value) — this file just lets the JS tests exercise the
 // UI logic at the same gate value the user will see.
-export const EVAL_GATE_THRESHOLD = 0.51;
+export const EVAL_GATE_THRESHOLD = 0.525;

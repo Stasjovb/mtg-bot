@@ -23,16 +23,17 @@ language sync is the cost of having an HTML+JS UI fed by a Python
 backend. Keep ``tests-js/fixtures/gate.js`` aligned when changing
 the value here.
 
-Why 0.51 (and not 0.52 or 0.55):
+Why 0.525 (was 0.51 through iter_003):
 
 AlphaGo Zero-style gating — promote on any statistically significant
 improvement. The early-stop watcher's Wilson 95% CI lower bound is
 what gates promotion in practice (paired with the 2000-game eval
 default), so the literal threshold mostly sets where "significant"
-starts. 0.51 is close enough to 50/50 that any real improvement
-clears it; the watcher's CI does the heavy lifting on noise.
+starts. Raised from 0.51 → 0.525 post-iter_003 to require a slightly
+larger effect size before promoting; the watcher's CI continues to
+do the noise-rejection work above the new floor.
 """
 
-EVAL_GATE_THRESHOLD = 0.51
+EVAL_GATE_THRESHOLD = 0.525
 """Win-rate threshold the new NN must beat (vs current best) to be
 promoted. Single source of truth — see this module's docstring."""
