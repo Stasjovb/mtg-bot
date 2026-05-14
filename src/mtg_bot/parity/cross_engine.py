@@ -1558,6 +1558,100 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ExileTargetCreatureUntilSourceLeaves,
         )
         return ExileTargetCreatureUntilSourceLeaves()
+    if kind == "tap_target":
+        # "Tap target creature." Rust's
+        # ``Effect::TapTarget { target: TargetFilter }`` is the
+        # explicit-target tap arm (Twiddle / Sleep-on-target shape);
+        # its ``parse_effect`` arm at cards.rs:2857-2864 requires a
+        # ``target`` dict (parsed via ``parse_target_filter``). The
+        # resolve arm at state_ops_resolve.rs:1277-1324 carries the
+        # I71 controller-of-effect fix: defender = 1 - controller,
+        # where controller derives from
+        # ``current_resolve_source_controller`` (with active_player
+        # fallback). Sibling closure to I70 ExileTarget / I75
+        # DestroyTarget / I76 ReturnToHand / I78 / I79 / I80 / I72
+        # UntapTarget -- identical defender-swap shape; differs only
+        # in the mutation applied (set ``tapped = true`` on the
+        # target).
+        #
+        # **Filter-narrow-by-design.** Rust's resolve arm
+        # (state_ops_resolve.rs:1278-1282) explicitly raises a
+        # PyValueError on ``TargetFilter::AnyPlayer`` -- "TapTarget
+        # with AnyPlayer target is semantically nonsense (cannot tap
+        # a player)". The bridge mirrors this narrowness: only
+        # ``any_creature`` is honored. Sibling to the destroy_target
+        # / exile_target / return_to_hand arms which are also
+        # filter-narrow-by-design (you can't destroy / exile / bounce
+        # a player either). The newer ``deal_damage`` arm is the
+        # sole bridge arm honoring the wider ``any_player`` filter
+        # today.
+        #
+        # **Rust target-pick semantics.** The Rust resolve arm is the
+        # AnyCreature first-slice shortcut: scans the resolved
+        # defender's bf for ``bf[0]`` regardless of card-type filter
+        # at this layer. Idempotent on already-tapped targets (sets
+        # ``tapped = true`` unconditionally; no error if already
+        # tapped). Silent fizzle if the defender's bf is empty.
+        #
+        # **Python target-pick semantics.** Python's ``Tap`` base
+        # class (effects/generic/tap.py:30) drives off ``targets:
+        # tuple`` -- a tuple of ``TargetSpec`` slots. For the
+        # AnyCreature filter, the bridge constructs
+        # ``Tap(targets=(TargetSpec(IsCreature()),))``. The
+        # targeting pipeline picks at PUSH time via
+        # ``push_triggered_ability`` -> the source-controller's
+        # ``agent.choose_target`` over the legal_targets pool (every
+        # creature on the battlefield), and ``Tap.resolve``
+        # re-verifies the slot's filter at fire time per CR 608.2b
+        # before invoking ``tap_permanent(state, obj)`` (which is a
+        # no-op if the target is already tapped, mirroring Rust's
+        # idempotency).
+        #
+        # **Filter narrowness asymmetry note.** Mirrors the
+        # destroy_target / exile_target / return_to_hand arm notes:
+        # Rust's first-slice ``AnyCreature`` picker doesn't actually
+        # filter to creatures (picks ``bf[0]`` blindly); Python's
+        # ``IsCreature()`` slot filter does. On synthetic probes that
+        # seat only creatures on the defender's bf, this asymmetry
+        # collapses and both engines pick the same target.
+        #
+        # **Distinct from ``TapTargetArtifactOrCreature``.** That
+        # variant (state_ops_resolve.rs:4776) carries a wider
+        # creature-or-artifact filter at the resolver layer; the
+        # bare ``tap_target`` arm here only honors AnyCreature
+        # (matches the parser-side filter allowlist).
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:2857-2864)
+        # which requires ``target`` and downcasts to a target-filter
+        # dict.
+        from mtg_bot.effects.generic.tap import Tap
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        target_dict = eff_dict.get("target")
+        # Lenient-default behavior mirrors the destroy_target /
+        # exile_target / return_to_hand / deal_damage arms (missing
+        # ``target`` defaults to ``any_creature``); bridge consumers
+        # SHOULD pass ``target`` explicitly to keep round-trip dict-
+        # shape consistency with what Rust's parser accepts.
+        target_kind = (
+            target_dict.get("kind", "any_creature")
+            if isinstance(target_dict, dict)
+            else "any_creature"
+        )
+        if target_kind == "any_creature":
+            slot_filter = IsCreature()
+        else:
+            raise ValueError(
+                f"cross_engine tap_target bridge: unsupported "
+                f"target filter kind {target_kind!r} (Rust's "
+                f"parse_target_filter at cards.rs:2790-2799 accepts "
+                f"only 'any_player' and 'any_creature'; tap_target "
+                f"is filter-narrow-by-design and only honors "
+                f"creature-shaped filters -- Rust raises a runtime "
+                f"PyValueError on AnyPlayer at state_ops_resolve.rs:"
+                f"1278-1282 since you can't tap a player)"
+            )
+        return Tap(targets=(TargetSpec(slot_filter),))
     if kind == "destroy_target":
         # "Destroy target creature." Rust's
         # ``Effect::DestroyTarget { target: TargetFilter }``
