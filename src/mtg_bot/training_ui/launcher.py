@@ -917,6 +917,7 @@ def spawn_iterate(
     python_executable: Optional[str] = None,
     repo_root: Optional[Path] = None,
     schema: Optional[list[dict[str, Any]]] = None,
+    registry_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Spawn the iterate subprocess detached from the current process.
 
@@ -951,6 +952,28 @@ def spawn_iterate(
 
     argv = build_iterate_command(
         submitted, python_executable=python_executable, schema=schema,
+    )
+
+    # Clear runs.db rows + STOP sentinels that would collide with
+    # the iters iterate is about to start. Without this, a re-launch
+    # after a force-kill hits ``UNIQUE constraint failed`` on
+    # iterate's start_run, iterate silently fails to register, and
+    # the UI shows nothing even though iterate is running. The
+    # ``n_iterations`` value comes from the submitted args; defaults
+    # to the schema's default (5) when omitted.
+    n_iterations_raw = submitted.get("n-iterations")
+    try:
+        n_iterations = (
+            int(n_iterations_raw)
+            if n_iterations_raw not in (None, "")
+            else 5
+        )
+    except (TypeError, ValueError):
+        n_iterations = 5
+    collision_cleanup = clear_iter_collision_residue(
+        progress_dir,
+        registry_root=registry_root,
+        n_iterations=n_iterations,
     )
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -1016,6 +1039,7 @@ def spawn_iterate(
         "pretty_command": pretty_cmd,
         "console_log_path": str(log_path),
         "spawned_at": datetime.now(timezone.utc).isoformat(),
+        "collision_cleanup": collision_cleanup,
     }
     # Persist to launched.json so force_kill can OS-kill this PID
     # later. Defensive: a failure here doesn't sink the spawn
@@ -1083,6 +1107,160 @@ def _write_launched_records(
         json.dumps(trimmed, indent=2), encoding="utf-8",
     )
     os.replace(tmp, path)
+
+
+def _next_iter_n(registry_root: Path) -> Optional[int]:
+    """Return the next iter number iterate will use, by reading
+    ``iterate_state.json``'s ``iterations_completed``. Returns
+    ``None`` when the state file is missing / unreadable — the
+    caller skips the collision-clean step in that case.
+    """
+    state_path = Path(registry_root) / "iterate_state.json"
+    if not state_path.is_file():
+        return None
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        completed = int(data.get("iterations_completed", 0))
+        return completed + 1
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        return None
+
+
+def clear_iter_collision_residue(
+    progress_dir: Path,
+    *,
+    registry_root: Optional[Path],
+    n_iterations: int,
+) -> dict[str, Any]:
+    """Clear runs.db rows + STOP sentinels that would collide with
+    the iters iterate is about to start.
+
+    iterate generates cycle IDs as ``iter_<N>_cycle`` (N =
+    iterations_completed + 1) and child-stage IDs like
+    ``iter_<N>_self_play_<version>`` / ``iter_<N>_train_<v>`` /
+    ``iter_<N>_eval_<v_a>_vs_<v_b>``. Its ``start_run`` is an
+    ``INSERT`` (not UPSERT), so any pre-existing row with the same
+    run_id from a prior force-killed attempt fires
+    ``UNIQUE constraint failed`` and iterate silently fails to
+    register — the UI then shows nothing even though iterate is
+    actively running. Force-kill ALSO leaves a ``.STOP_<run_id>``
+    sentinel which makes iterate exit immediately on the next
+    re-launch.
+
+    This helper sweeps both kinds of residue for the iter range
+    iterate is about to run: ``[N, N + n_iterations - 1]``.
+    Terminal-status rows (completed / killed / failed) get DELETEd
+    along with their FK-cascaded children; ``running`` rows are
+    NEVER touched (someone might be mid-run on a different
+    machine). Sentinels matching the same iter-prefix are
+    ``unlink``'d.
+
+    Returns a dict the spawn endpoint merges into its response:
+    ``{cleared_rows, cleared_run_ids, cleared_sentinels,
+       next_iter_n, range_end}``.
+
+    Defensive: missing state.json / runs.db / progress_dir cleanly
+    returns empties rather than raising. iterate is the source of
+    truth for the cycle-id format; if the format ever changes, this
+    helper's LIKE pattern needs an update.
+    """
+    out: dict[str, Any] = {
+        "cleared_rows": 0,
+        "cleared_run_ids": [],
+        "cleared_sentinels": [],
+        "next_iter_n": None,
+        "range_end": None,
+    }
+    if registry_root is None:
+        return out
+    next_n = _next_iter_n(Path(registry_root))
+    if next_n is None:
+        return out
+    out["next_iter_n"] = next_n
+    out["range_end"] = next_n + max(1, n_iterations) - 1
+    progress_dir = Path(progress_dir)
+
+    # --- runs.db cleanup -------------------------------------------
+    db_path = progress_dir / "runs.db"
+    if db_path.is_file():
+        # Late import to avoid making the whole module require sqlite3
+        # at import time (tests for non-DB paths shouldn't need it).
+        import sqlite3
+        try:
+            conn = sqlite3.connect(db_path)
+        except sqlite3.Error:
+            conn = None
+        if conn is not None:
+            try:
+                with conn:
+                    for i in range(max(1, n_iterations)):
+                        iter_n = next_n + i
+                        # Match BOTH zero-padded ``iter_003`` form
+                        # (iterate.py's current convention) AND any
+                        # accidental non-padded form, in case of
+                        # historic drift.
+                        for pat in (
+                            f"iter_{iter_n:03d}_%",
+                            f"iter_{iter_n}_%",
+                        ):
+                            rows = conn.execute(
+                                "SELECT run_id FROM runs "
+                                "WHERE run_id LIKE ? "
+                                "AND status != 'running'",
+                                (pat,),
+                            ).fetchall()
+                            for (rid,) in rows:
+                                if rid in out["cleared_run_ids"]:
+                                    continue
+                                out["cleared_run_ids"].append(rid)
+                    if out["cleared_run_ids"]:
+                        placeholders = ",".join(
+                            "?" * len(out["cleared_run_ids"]),
+                        )
+                        # Cascade-clean child tables FIRST so the
+                        # main DELETE doesn't violate any FK.
+                        for table in (
+                            "run_progress", "run_events",
+                            "run_artifacts",
+                        ):
+                            try:
+                                conn.execute(
+                                    f"DELETE FROM {table} "
+                                    f"WHERE run_id IN ({placeholders})",
+                                    out["cleared_run_ids"],
+                                )
+                            except sqlite3.Error:
+                                # Table may not exist on a fresh DB;
+                                # skip and continue.
+                                pass
+                        conn.execute(
+                            f"DELETE FROM runs "
+                            f"WHERE run_id IN ({placeholders})",
+                            out["cleared_run_ids"],
+                        )
+                        out["cleared_rows"] = len(
+                            out["cleared_run_ids"],
+                        )
+            finally:
+                conn.close()
+
+    # --- STOP sentinel cleanup -------------------------------------
+    if progress_dir.is_dir():
+        for i in range(max(1, n_iterations)):
+            iter_n = next_n + i
+            patterns = (
+                f".STOP_iter_{iter_n:03d}_*",
+                f".STOP_iter_{iter_n}_*",
+            )
+            for pat in patterns:
+                for path in progress_dir.glob(pat):
+                    try:
+                        path.unlink()
+                        if path.name not in out["cleared_sentinels"]:
+                            out["cleared_sentinels"].append(path.name)
+                    except OSError:
+                        pass
+    return out
 
 
 def record_spawn(
@@ -1199,14 +1377,32 @@ def kill_process_tree(pid: int) -> dict[str, Any]:
                 "killed_pids": [],
                 "errors": [f"taskkill timeout for pid {pid}"],
             }
-        # Exit code 128 means "process not found" — that's a soft
-        # success for our purposes.
+        # Exit code 128 means "process not found" — soft success.
+        # Exit code 255 (or any non-zero) where stderr says the
+        # target couldn't be terminated because it isn't running is
+        # ALSO soft success — usually means taskkill /T walked into
+        # a transient child that exited mid-walk; the parent (which
+        # is what we care about) IS dead. Without this branch
+        # ``kill_process_tree`` flakes on Windows whenever a
+        # subprocess spawns short-lived helpers.
         if result.returncode == 0:
             return {"ok": True, "killed_pids": [pid], "errors": []}
-        if result.returncode == 128:
+        combined = (result.stderr or result.stdout or "").lower()
+        not_found_phrases = (
+            "no running instance",
+            "not found",
+            "could not be terminated",
+        )
+        if (
+            result.returncode == 128
+            or any(p in combined for p in not_found_phrases)
+        ):
             return {
                 "ok": True, "killed_pids": [],
-                "errors": [f"pid {pid} not found (already dead)"],
+                "errors": [
+                    f"pid {pid} not found (already dead) "
+                    f"[exit={result.returncode}]"
+                ],
             }
         return {
             "ok": False,
@@ -1242,6 +1438,7 @@ __all__ = [
     "ITERATE_SCHEMA",
     "build_iterate_command",
     "build_iterate_schema",
+    "clear_iter_collision_residue",
     "find_spawn_for_run",
     "kill_process_tree",
     "record_spawn",
