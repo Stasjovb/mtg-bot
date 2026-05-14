@@ -1493,7 +1493,7 @@ def main(argv=None) -> None:  # pragma: no cover
         ),
     )
     parser.add_argument(
-        "--shard-ssh-timeout-min", type=float, default=90.0,
+        "--shard-ssh-timeout-min", type=float, default=360.0,
         help=(
             "Hard upper-bound timeout (in MINUTES) on a single "
             "shard's SSH session. Defends against the post-shard "
@@ -1503,10 +1503,10 @@ def main(argv=None) -> None:  # pragma: no cover
             "protocol-level close. On expiry, master's per-shard "
             "try/except catches TimeoutExpired, the post-failure "
             "rsync recovers any data on disk, and the orchestration "
-            "proceeds with surviving shards' data. Default 90 min "
-            "covers ~3x the typical 500-game self-play wall plus "
-            "rsync. Tune up for very-large iterations, down for "
-            "faster failure recovery."
+            "proceeds with surviving shards' data. Default 360 min "
+            "sized for 1000 games/shard at the structured trunk's "
+            "pace (Mac ~3h, master ~9h). Tune up for very-slow "
+            "hosts, down for faster failure recovery."
         ),
     )
     parser.add_argument(

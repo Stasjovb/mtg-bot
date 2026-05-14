@@ -316,9 +316,13 @@ _QUEUE_HTTP_BACKOFF_BASE_S = 0.5     # 0.5s, then 1.0s between attempts
 # by terminating SSH as soon as the per-shard progress JSON shows
 # terminal status; THIS constant only fires when the watchdog never
 # sees a terminal status (e.g. shard died before writing one).
-# 90 min covers ~3x the typical 500-game self-play wall + rsync;
-# tunable via ``iterate_alphazero --shard-ssh-timeout-min``.
-_DEFAULT_SHARD_SSH_TIMEOUT_S = 90 * 60
+# Sized for 1000 games/shard at the structured trunk's pace
+# (iter_005 measurements: Mac ~11 s/game = ~3h, master ~35 s/game
+# = ~9h, Win10 ~82 s/game = ~22h). 360 min covers Mac comfortably;
+# Win10 still won't finish a 1000-game shard inside the floor, but
+# that's a host-speed problem, not a timeout-tuning one. Tunable
+# via ``mtg_bot iterate --shard-ssh-timeout-min``.
+_DEFAULT_SHARD_SSH_TIMEOUT_S = 360 * 60
 
 
 @dataclass(frozen=True)
