@@ -33490,6 +33490,378 @@ def test_cross_engine_real_eoe_banishing_light_etb_exile_nonland_permanent_until
     )
 
 
+def test_cross_engine_real_eoe_hardlight_containment_etb_exile_target_creature_until_leaves_parity(
+    parity_smoke,
+):
+    """Probe: Hardlight Containment (EoE Enchantment -- Aura) ETB
+    ``exile target creature an opponent controls until this Aura
+    leaves the battlefield`` -- SECOND real-EoE cross-engine probe
+    on the ``exile_opponents_nonland_permanent_until_leaves`` bridge
+    arm; sister to the Banishing Light probe (this branch's earlier
+    same-arm slice).
+
+    Sister probe on the same bridge arm:
+
+      * ``test_cross_engine_real_eoe_banishing_light_etb_exile_nonland_permanent_until_leaves_parity``
+        -- the FIRST real-EoE consumer of the I80 arm; same probe
+        shape (P0 source, P1 victim, bait artifact, Enchantment
+        carrier). Banishing Light's oracle says "target nonland
+        permanent" (matching the bridge arm's exact filter);
+        Hardlight Containment narrows the oracle to "target
+        CREATURE" while the underlying Rust effect variant is the
+        same (the printed narrowing happens at the spell's target
+        filter on cast; the resolve arm itself is the wider
+        non-land permanent scan, and the picker resolves the
+        first-eligible from the wider pool).
+
+    **Why this slice adds substrate signal beyond Banishing Light.**
+    The pair of probes pins the bridge arm against TWO real-EoE
+    printings whose printed target-filter widths differ (any-non-
+    land-permanent vs creature-only). The bridge arm constructs the
+    same Python ``ExileOpponentsNonlandPermanentUntilLeaves()``
+    bare-default for both -- the printed target-filter narrowing
+    isn't plumbed onto the per-effect variant, so the bridge is
+    observably narrower than oracle text on Hardlight Containment
+    when the opponent's bf has a non-creature non-land bait. This
+    probe scenario uses a CREATURE bait so the divergence is
+    observationally invisible (both engines pick the bait creature
+    from the wider non-land scan; it's equally eligible under both
+    the wider arm's filter and Hardlight Containment's narrower
+    oracle filter). A future widening on the bridge could plumb a
+    per-effect target filter through the dict shape; today the
+    bare-default is the contract.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "Enchant artifact you control
+         When this Aura enters, exile target creature an opponent
+         controls until this Aura leaves the battlefield.
+         Enchanted permanent has ward {1}."
+
+    Probe direction: **same-controller** (P0 source, P1 victim) --
+    same shape as the Banishing Light slice. P0 controls the
+    Hardlight Containment Aura; the ETB-trigger exiles a P1-
+    controlled bait creature.
+
+    Predicate decomposition:
+
+        SourceIsSelf
+
+    Effect: ``exile_opponents_nonland_permanent_until_leaves`` --
+    second real-EoE consumer; same dict shape as Banishing Light
+    (no fields; ``max_mv=0`` = no cap, matching Hardlight
+    Containment's oracle text which has no MV cap).
+
+    Carrier card-type:
+        Enchantment with the Aura subtype on the type_line. The
+        bridge doesn't model Aura attachment (the "Enchant artifact
+        you control" target-on-cast filter and the post-attach
+        controller-grant) -- the probe materializes Hardlight
+        Containment as an unattached Enchantment with the Aura
+        subtype on the printing's ``subtypes`` tuple. The ETB-
+        trigger fires irrespective of attachment state
+        (SourceIsSelf reads object identity, not attachment).
+        First Aura-subtype carrier on the bridge; the Banishing
+        Light slice was the first general-Enchantment carrier.
+
+    Probe shape (inject-and-fire-ENTERS, mirrors Banishing Light
+    with the bait card-type swapped from Artifact to Creature):
+
+      1. Pre-seat a vanilla bait Creature (Bear) on P1's bf.
+         Creature, not Artifact: Hardlight Containment's printed
+         oracle narrows to "target creature", and the Rust target
+         filter on the spell-cast leg would reject a non-creature
+         under the printed narrowing. The probe mirrors the
+         printed-oracle target choice by seating a creature bait,
+         keeping observability unambiguous on both engines.
+      2. Inject Hardlight Containment onto P0's bf.
+      3. Seat ``_PickFirstOpponentTargetCreaturePreferredAgent``
+         on P0; the agent picks the P1-controlled bait creature
+         from legal_targets.
+      4. Drain both stacks. Bait creature exiled to P1's exile
+         with source-link stamped.
+      5. Source-leaves recall: bait returns to P1's bf.
+
+    Out of scope:
+
+      * The Aura attachment + ward {1} static -- attachment
+        substrate is unbridged; ward static is a continuous-effect
+        substrate (separate slice).
+      * The "Enchant artifact you control" target-on-cast filter
+        -- bypassed by inject-and-fire (no cast; ETB fires from
+        direct bf injection).
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+      * Multi-permanent bait pools / non-creature bait -- the
+        probe seats exactly one creature bait so the picker
+        resolves cleanly.
+      * ``max_mv`` MV-cap rider -- absent from Hardlight
+        Containment's oracle.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Hardlight Containment on P0's bf (controller=0).
+      * P0 bf: 1 (only the Aura).
+      * P0 exile: 0.
+      * P1 bf: 0 (bait creature left).
+      * P1 exile: 1 (bait creature here, source-link stamped).
+      * Lives unchanged on both seats.
+      * No residual stack / pending decision.
+
+    Then post-recall:
+
+      * P1 bf: 1 (bait creature back).
+      * P1 exile: 0.
+      * Rust returns count == 1 from the recall hook.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import (
+        _PickFirstOpponentTargetCreaturePreferredAgent,
+    )
+
+    # No CardDef-based libraries; everything injected directly.
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side: inject the bait creature on P1's bf ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Hardlight Containment Bait Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [],
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: vanilla bait Creature inject must NOT push anything "
+        "onto the stack (no triggers). "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    rust_p0_bf_before = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_before = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p0_bf_before == 0
+    assert rust_p1_bf_before == 1
+    rust_p0_exile_before = len(rust_state.exile_snapshot(0))
+    rust_p1_exile_before = len(rust_state.exile_snapshot(1))
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_exile_before == 0
+    assert rust_p1_exile_before == 0
+
+    # Inject Hardlight Containment (Aura-subtyped Enchantment) onto
+    # P0's bf. The Aura subtype is on the printing for cosmetic
+    # parity with the oracle; the bridge doesn't fire any
+    # subtype-specific behavior on it.
+    rust_source_dict = {
+        "name": "Hardlight Containment",
+        "card_types": ["Enchantment"],
+        "subtypes": ["Aura"],
+        "mana_cost": {"generic": 1, "W": 1},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "exile_opponents_nonland_permanent_until_leaves",
+                },
+            }
+        ],
+    }
+    rust_source_id = rust_state.register_and_inject_object(
+        rust_source_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Hardlight Containment's arrival on P0 should fire "
+        "the SourceIsSelf ENTERS trigger and land "
+        "ExileOpponentsNonlandPermanentUntilLeaves on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: mirror setup ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.exile import (
+        ExileOpponentsNonlandPermanentUntilLeaves,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="Hardlight Containment Bait Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    py_p1_bf_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    py_p0_exile_before = len(py_state.players[0].exile)
+    py_p1_exile_before = len(py_state.players[1].exile)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p1_bf_before == 1
+    assert py_p0_exile_before == 0
+    assert py_p1_exile_before == 0
+
+    source_printing = CardPrinting(
+        name="Hardlight Containment",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("W", 1),)),
+        type_line="Enchantment -- Aura",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=("Aura",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=ExileOpponentsNonlandPermanentUntilLeaves(),
+            ),
+        ),
+    )
+
+    py_state.players[0].agent = (
+        _PickFirstOpponentTargetCreaturePreferredAgent()
+    )
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Hardlight Containment's arrival on P0 should fire "
+        "the IsSelf ENTERS trigger and land "
+        "ExileOpponentsNonlandPermanentUntilLeaves on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Rust post-state.
+    rust_p0_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p0_bf_after == 1, (
+        f"Rust: P0's bf should still hold the Aura source. "
+        f"after p0_bf={rust_p0_bf_after}"
+    )
+    assert rust_p1_bf_after == 0, (
+        f"Rust: P1's bf should drop the bait creature. "
+        f"after p1_bf={rust_p1_bf_after}"
+    )
+    rust_p1_exile_after = rust_state.exile_snapshot(1)
+    assert len(rust_p1_exile_after) == rust_p1_exile_before + 1, (
+        f"Rust: P1's exile should grow by 1. "
+        f"before={rust_p1_exile_before} "
+        f"after={len(rust_p1_exile_after)}"
+    )
+    assert (
+        rust_p1_exile_after[0]["printing_name"]
+        == "Hardlight Containment Bait Bear"
+    )
+    assert int(rust_p1_exile_after[0]["id"]) == rust_bait_id
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+
+    # Python post-state.
+    py_p0_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert py_p0_bf_after == 1, (
+        f"Python: P0's bf should still hold the Aura source. "
+        f"after p0_bf={py_p0_bf_after}"
+    )
+    assert py_p1_bf_after == 0, (
+        f"Python: P1's bf should drop the bait creature. "
+        f"after p1_bf={py_p1_bf_after}"
+    )
+    assert len(py_state.players[1].exile) == py_p1_exile_before + 1
+    assert (
+        py_state.players[1].exile[0].printing.name
+        == "Hardlight Containment Bait Bear"
+    )
+    assert py_state.players[1].exile[0].id == py_bait.id
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # ---- Source-leaves recall ----
+    rust_returned = rust_state.return_paired_exiles_for(rust_source_id)
+    assert rust_returned == 1, (
+        f"Rust source-leaves recall should return 1; got "
+        f"{rust_returned}"
+    )
+    rust_p1_bf_post_recall = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p1_bf_post_recall == 1
+    assert len(rust_state.exile_snapshot(1)) == 0
+
+    from mtg_bot.turn import _release_exiled_until_leaves
+    _release_exiled_until_leaves(py_state, py_source.id)
+    py_p1_bf_post_recall = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert py_p1_bf_post_recall == 1
+    assert len(py_state.players[1].exile) == 0
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
