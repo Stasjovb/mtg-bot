@@ -35512,6 +35512,340 @@ def test_cross_engine_real_eoe_all_fates_stalker_etb_exile_target_creature_until
     assert len(py_state.players[1].exile) == 0
 
 
+def test_cross_engine_real_eoe_haliya_ascendant_cadet_etb_plus_one_counter_on_target_creature_legendary_carrier_parity(
+    parity_smoke,
+):
+    """Probe: Haliya, Ascendant Cadet (EoE Legendary Creature --
+    Human Knight) ETB ``put a +1/+1 counter on target creature
+    you control`` -- THIRD real-EoE cross-engine probe on the
+    ``put_plus_one_counter_on_creature_you_control`` bridge arm.
+    Sister to the Rayblade Trooper (line 16115) and Drix Fatemaker
+    (line 31717) probes; the trio pins the bridge arm against three
+    distinct real-EoE printings sharing the same trigger-effect
+    shape.
+
+    Sister probes on the same bridge arm:
+
+      * ``test_cross_engine_real_eoe_rayblade_trooper_etb_plus_one_counter_parity``
+        (tests/test_parity_smoke.py:16115) -- the canonical first
+        probe on a 2/2 Creature carrier with a "target creature
+        you control" oracle phrasing.
+      * ``test_cross_engine_real_eoe_drix_fatemaker_etb_plus_one_counter_on_target_creature_parity``
+        (tests/test_parity_smoke.py:31717) -- 3/2 Creature -- Drix
+        Wizard carrier with the broader "target creature" (no "you
+        control") phrasing. Caster-side scan documented divergence.
+
+    Haliya, Ascendant Cadet is the third real-EoE consumer of this
+    arm and adds a NEW carrier axis: LEGENDARY supertype on a
+    Creature -- Human Knight printing (the prior two consumers are
+    non-Legendary Creatures). The legendary supertype is
+    informational on the trigger-dispatch leg -- the SourceIsSelf
+    predicate reads object identity, not supertypes -- so the
+    trigger fires identically on both engines. The legendary
+    state-based action (CR 704.5j -- "legend rule" exiles all but
+    one with the same legendary name) is out of scope; this probe
+    seats exactly one Haliya, never two.
+
+    Oracle text in ``data/edge_of_eternities.json``:
+
+        "Whenever Haliya enters or attacks, put a +1/+1 counter on
+         target creature you control.
+         Whenever one or more creatures you control with +1/+1
+         counters on them deal combat damage to a player, draw a
+         card."
+
+    The "Haliya enters OR attacks" phrasing parses into TWO
+    triggered abilities on the printing -- one Event=ENTERS, one
+    Event=ATTACKS, both with the same effect. This probe ONLY
+    exercises the ENTERS leg (the ETB-trigger axis). The ATTACKS
+    leg is out of scope (declare-attackers substrate; separate
+    probe surface). The combat-damage draw-a-card trigger is also
+    out of scope (deal-combat-damage substrate; separate event).
+    The probe builds Haliya's carrier dict with ONLY the ETB
+    trigger registered, so the other two triggers are not
+    constructed in either engine -- they would fire on entirely
+    different events anyway.
+
+    Predicate decomposition (same as Rayblade Trooper / Drix
+    Fatemaker / Germinating Wurm / Quantum Riddler / Nebula Dragon
+    / Seedship Broodtender / Dubious Delicacy / Sinister
+    Cryologist):
+
+        SourceIsSelf
+
+    Effect: ``put_plus_one_counter_on_creature_you_control(amount=1)``
+    -- identical to the Rayblade Trooper / Drix Fatemaker sisters;
+    this probe pins the bridge arm against a THIRD real-EoE
+    printing with a different name + supertype (Legendary) +
+    subtypes (Human, Knight) + mana cost + secondary abilities,
+    but the SAME bridged effect dict.
+
+    **Caster-side target-scan narrowing (documented divergence
+    inherited from the sister probes).** Rust's
+    ``Effect::PutPlusOneCounterOnCreatureYouControl`` resolve arm
+    scans the SOURCE CONTROLLER's battlefield (the source's OWN
+    side). Haliya's printed text says "target creature you
+    control" -- the Rust caster-side scan matches this oracle text
+    exactly (same surface as Rayblade Trooper, narrower than
+    Drix's). The probe scenario constrains the target onto P0's
+    bf (caster-side bait bear) and P1's bf is empty, so the only
+    eligible target on both engines is the caster-side bait bear.
+
+    Probe shape (inject-and-fire-ENTERS, mirrors Rayblade Trooper
+    / Drix Fatemaker):
+
+      1. Inject a Bait Bear onto p0's bf FIRST (so it's at index 0
+         and the deterministic scan picks it before any later-
+         injected creature). Bait bear has printed counters=0.
+
+      2. Inject Haliya, Ascendant Cadet onto p0's bf. ENTERS
+         dispatch + SourceIsSelf predicate => trigger lands on
+         stack with target pre-chosen (Bait Bear via the caster-
+         side scan, Bait Bear at index 0 on both engines).
+
+      3. Drain both stacks. Resolve walk: Bait Bear's ``counters``
+         (Rust) / ``plus_one_counters`` (Python) increments from
+         0 to 1.
+
+      4. Cross-engine assert: both engines show Bait Bear with
+         exactly one +1/+1 counter; Haliya has zero counters (the
+         trigger didn't target it).
+
+    Out of scope:
+
+      * ATTACKS-leg trigger -- "or attacks" half of the parsed
+        printing; declare-attackers substrate; separate probe
+        surface. Probe carrier dict registers ONLY the ENTERS leg.
+      * Combat-damage draw-a-card trigger -- deals_combat_damage
+        substrate; separate event from ETB.
+      * Legend rule (CR 704.5j) -- only one Haliya seated; no
+        legend-rule exile to test.
+      * Cast-from-hand mana cost -- bypassed by inject-and-fire.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Bait Bear on p0's bf with 1 +1/+1 counter.
+      * Haliya, Ascendant Cadet on p0's bf with 0 counters (Power
+        and toughness from printed P/T 2/2; this probe doesn't
+        exercise the Legendary supertype's state-based action).
+      * No life changes.
+      * No residual stack.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstControlledCreatureAgent
+
+    haliya = CardDef(
+        name="Haliya, Ascendant Cadet",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("W", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_creature_you_control",
+                    "amount": 1,
+                },
+            },
+        ),
+    )
+    # The counter target: a Bait Bear injected BEFORE Haliya so
+    # it's at index 0 of p0's bf, and the deterministic scan picks
+    # it before Haliya.
+    bait_bear = CardDef(
+        name="Bait Bear (Haliya counter target)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(haliya, bait_bear),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Bait Bear (Haliya counter target)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0
+
+    rust_haliya_dict = {
+        "name": "Haliya, Ascendant Cadet",
+        # Legendary Creature -- Human Knight. The legendary
+        # supertype is informational; the ATTACKS-leg trigger and
+        # the combat-damage draw trigger are out of scope -- only
+        # the ENTERS leg of "Whenever Haliya enters or attacks"
+        # is registered here.
+        "card_types": ["Creature"],
+        "supertypes": ["Legendary"],
+        "subtypes": ["Human", "Knight"],
+        "mana_cost": {"generic": 1, "W": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_creature_you_control",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    rust_haliya_id = rust_state.register_and_inject_object(
+        rust_haliya_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Haliya, Ascendant Cadet's own arrival should fire "
+        "the SourceIsSelf ENTERS trigger and land "
+        "PutPlusOneCounterOnCreatureYouControl(1) on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnCreatureYouControl,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="Bait Bear (Haliya counter target)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    haliya_printing = CardPrinting(
+        name="Haliya, Ascendant Cadet",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("W", 1),)),
+        type_line="Legendary Creature -- Human Knight",
+        supertypes=("Legendary",),
+        card_types=("Creature",),
+        subtypes=("Human", "Knight"),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=PutPlusOneCounterOnCreatureYouControl(amount=1),
+            ),
+        ),
+    )
+
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    assert py_bait.plus_one_counters == 0
+
+    # Caster-side target-pick shim. Same shape as the Rayblade
+    # Trooper / Drix Fatemaker probes -- filter legal_targets to
+    # creatures controlled by the agent's player_id and return
+    # the first.
+    py_state.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    py_haliya = py_state.new_object(
+        haliya_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_haliya.summoning_sick = False
+    py_haliya.tapped = False
+    py_haliya.damage = 0
+    py_haliya.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_haliya)
+    _trigger_etb_abilities(py_state, py_haliya)
+    assert len(py_state.stack) == 1, (
+        "Python: Haliya, Ascendant Cadet's own arrival should fire "
+        "the IsSelf ENTERS trigger and land "
+        "PutPlusOneCounterOnCreatureYouControl(1) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: Bait Bear has 1 +1/+1 counter; Haliya
+    # has 0 (the trigger targeted the bait, not itself, per the
+    # deterministic first-in-bf scan).
+    rust_bf = rust_state.battlefield_snapshot()
+    rust_bait_entry = next(
+        e for e in rust_bf if int(e["id"]) == rust_bait_id
+    )
+    rust_haliya_entry = next(
+        e for e in rust_bf if int(e["id"]) == rust_haliya_id
+    )
+    assert rust_bait_entry["counters"] == 1, (
+        f"Rust bait bear should have 1 +1/+1 counter; got "
+        f"{rust_bait_entry['counters']}"
+    )
+    assert rust_haliya_entry["counters"] == 0, (
+        f"Rust Haliya should have 0 counters (it wasn't the "
+        f"target); got {rust_haliya_entry['counters']}"
+    )
+
+    assert py_bait.plus_one_counters == 1, (
+        f"Python bait bear should have 1 +1/+1 counter; got "
+        f"{py_bait.plus_one_counters}"
+    )
+    assert py_haliya.plus_one_counters == 0, (
+        f"Python Haliya should have 0 counters (it wasn't the "
+        f"target); got {py_haliya.plus_one_counters}"
+    )
+
+    # Cross-engine: same counter values on the same objects.
+    assert rust_bait_entry["counters"] == py_bait.plus_one_counters
+    assert rust_haliya_entry["counters"] == py_haliya.plus_one_counters
+
+    # Lives unchanged.
+    assert rust_state.get_life(0) == 20
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
