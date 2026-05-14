@@ -3088,6 +3088,77 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             max_power=int(eff_dict.get("max_power", 0)),
             counter_on_miss=bool(eff_dict.get("counter_on_miss", True)),
         )
+    if kind == "search_library_for_basic_land_tapped":
+        # **Round-21 BLOCKED-BRIDGE-ARM slice -- bridge for
+        # SearchLibraryForBasicLandTapped.** Rust substrate
+        # ``Effect::SearchLibraryForBasicLandTapped { count: i32 }``
+        # (cards.rs:217, parser at cards.rs:3266-3286, resolve at
+        # state_ops_resolve.rs SearchLibraryForBasicLandTapped arm)
+        # has been on main since round 23 (G19/I69 closeout); this
+        # slice closes the cross-engine bridge gap so probes can
+        # drive both arms with one dict on both engines. Same pattern
+        # as the round-20 OptionalSacArtifact slice (substrate-already-
+        # on-main, bridge-arm-was-the-staleness-gap).
+        #
+        # **Field shape (no rename).** Python's
+        # ``SearchLibraryForBasicLandTapped(count: int = 1)``
+        # (effects/generic/search.py:130) and Rust's variant carry
+        # the SAME ``count`` field with the SAME default (1). Bridge
+        # passes through verbatim with ``eff_dict.get("count", 1)``;
+        # Python's class-level default + Rust's parser default match.
+        #
+        # **Resolve semantics (cross-engine).** Both engines pull the
+        # source-controller's library + put up to ``count`` basic
+        # lands onto the controller's battlefield tapped. Python's
+        # resolve at ``effects/generic/search.py:141`` walks the
+        # library in order (no shuffle in Python's first-N pick path
+        # -- Stage-3 simplification per the class docstring) and
+        # fires landfall triggers per land. Rust's resolve does the
+        # same iteration order; a post-search shuffle (CR 701.19)
+        # happens via ``state.rng`` (G19 closeout). Both engines
+        # converge on (a) same set of lands moved bf-tapped, (b)
+        # same controller, (c) any landfall consumers re-fire.
+        #
+        # **Composability.** The primary motivation for this slice
+        # is the Larval Scoutlander composition: the round-20
+        # ``optional_sac_artifact_for_effect`` arm wraps THIS arm
+        # as its inner_effect. With both bridges in place,
+        # ``OptionalSacArtifactForEffect(SearchLibraryForBasicLand
+        # Tapped(count=2))`` round-trips through
+        # ``_ta_dict_to_python_effect`` end-to-end -- the inner
+        # dict recurses into this arm, builds the
+        # SearchLibraryForBasicLandTapped Effect, and the outer
+        # OptionalSac wrapper composes around it. (Larval
+        # Scoutlander cross-engine probe deferred per round-17/18/19
+        # synthetic-only-when-riders-cascade precedent: the may-sac
+        # decision drives an asymmetric agent shim path that the
+        # bare bridge-arm slice doesn't need to exercise. The
+        # synthetic ETB probe below drives the bare arm without
+        # the OptionalSac wrapper.)
+        #
+        # **Real EoE consumers** unblocked: Larval Scoutlander
+        # (audited at §2.4 -- composes with optional_sac as inner);
+        # any future landfall-search-printing (the audit's §3 row 6
+        # "mill (controller-self) bridge arm" is a sister gap with
+        # the same Stage-3 first-N-no-shuffle simplification).
+        #
+        # **Negative count.** Mirror Rust's parser contract -- raise
+        # on count < 0 (Python's class will accept negative count
+        # silently because the for-range loop just no-ops, but
+        # surfacing it at translation time matches Rust's
+        # parse_effect at cards.rs:3280-3284). Non-negative ints +
+        # default 1 round-trip identically.
+        from mtg_bot.effects.generic.search import (
+            SearchLibraryForBasicLandTapped,
+        )
+        count = int(eff_dict.get("count", 1))
+        if count < 0:
+            raise ValueError(
+                "search_library_for_basic_land_tapped bridge arm: "
+                f"count must be non-negative, got {count} (mirrors "
+                "Rust parse_effect contract at cards.rs:3280-3284)"
+            )
+        return SearchLibraryForBasicLandTapped(count=count)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

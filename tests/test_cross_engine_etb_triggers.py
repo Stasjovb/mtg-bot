@@ -4632,5 +4632,183 @@ def test_rust_parser_accepts_optional_sac_artifact_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_search_library_for_basic_land_tapped_default_count():
+    """Round-21 BLOCKED-BRIDGE-ARM slice -- default count=1 path.
+    Rust ``{"kind": "search_library_for_basic_land_tapped"}`` with
+    no ``count`` field translates to Python
+    ``SearchLibraryForBasicLandTapped(count=1)`` via the class-level
+    default (mirrors Rust parse_effect at cards.rs:3272-3279 where
+    missing count defaults to 1).
+    """
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "search_library_for_basic_land_tapped"}
+    )
+    assert isinstance(e, SearchLibraryForBasicLandTapped)
+    assert e.count == 1
+
+
+def test_bridge_search_library_for_basic_land_tapped_explicit_count():
+    """Explicit ``count`` field flows through verbatim. Pins
+    Larval-Scoutlander-shape ``count=2`` (the printed value on the
+    real EoE consumer of the OptionalSacArtifact composition).
+    """
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "search_library_for_basic_land_tapped", "count": 2}
+    )
+    assert isinstance(e, SearchLibraryForBasicLandTapped)
+    assert e.count == 2
+
+
+def test_bridge_search_library_for_basic_land_tapped_negative_raises():
+    """Negative count surfaces at translation time, mirroring Rust's
+    parse_effect contract at cards.rs:3280-3284. Python's class
+    would accept silently (the for-range loop just no-ops on
+    negative count), but the bridge enforces the parser-side check
+    so the two engines' translation contracts stay symmetric (a
+    typo or fixture bug surfaces immediately rather than silently
+    constructing a no-op effect).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="non-negative"):
+        _ta_dict_to_python_effect(
+            {"kind": "search_library_for_basic_land_tapped", "count": -1}
+        )
+
+
+def test_bridge_search_library_for_basic_land_tapped_count_zero_no_op():
+    """Edge case pin: ``count=0`` is a legal-but-no-op shape. Both
+    engines accept it (Rust parser permits zero; Python's for-range
+    loop iterates zero times). Pins that the bridge doesn't
+    incorrectly upgrade ``0`` to ``1`` via a falsy-default check
+    (``or 1`` would lift this to 1; ``.get(..., 1)`` keeps it 0).
+    """
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "search_library_for_basic_land_tapped", "count": 0}
+    )
+    assert isinstance(e, SearchLibraryForBasicLandTapped)
+    assert e.count == 0
+
+
+def test_bridge_search_library_for_basic_land_tapped_composable_in_optional_sac():
+    """Composition pin: this arm composes as the inner_effect of the
+    round-20 ``optional_sac_artifact_for_effect`` arm. Pins the
+    Larval Scoutlander shape end-to-end --
+    ``OptionalSacArtifactForEffect(SearchLibraryForBasicLand
+    Tapped(count=2))`` round-trips with the inner correctly typed
+    + count preserved. The OptionalSac translator recurses into
+    ``_ta_dict_to_python_effect`` for the inner dict, so this also
+    exercises this arm INSIDE the recursive composer translator
+    path.
+    """
+    from mtg_bot.effects.combinators import OptionalSacArtifactForEffect
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_sac_artifact_for_effect",
+            "inner_effect": {
+                "kind": "search_library_for_basic_land_tapped",
+                "count": 2,
+            },
+        }
+    )
+    assert isinstance(e, OptionalSacArtifactForEffect)
+    assert isinstance(
+        e.inner_effect, SearchLibraryForBasicLandTapped
+    )
+    assert e.inner_effect.count == 2
+
+
+def test_bridge_search_library_for_basic_land_tapped_composable_in_sequence():
+    """Round-trip in a Sequence COMPOSER. Pins that the
+    SearchLibraryForBasicLandTapped arm composes correctly when it's
+    a child of a parent Sequence:
+    ``Sequence([SearchLibraryForBasicLandTapped(1), DrawCards(1)])``.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "search_library_for_basic_land_tapped",
+                    "count": 1,
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], SearchLibraryForBasicLandTapped
+    )
+    assert e.effects[0].count == 1
+    assert isinstance(e.effects[1], DrawCards)
+    assert e.effects[1].amount == 1
+
+
+def test_rust_parser_accepts_search_library_for_basic_land_tapped_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``search_library_for_basic_land_tapped`` dict shape inside a
+    triggered_ability dict. Mirrors the may_do /
+    optional_sac_artifact_for_effect lockstep gates -- keeps the
+    bridge from drifting away from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3266-3286``
+    accepts the dict shape; ``count`` is optional with default 1.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- SearchLibraryForBasicLandTapped",
+        "card_types": ["Creature"],
+        "subtypes": ["Bear"],
+        "mana_cost": {"generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "search_library_for_basic_land_tapped",
+                    "count": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

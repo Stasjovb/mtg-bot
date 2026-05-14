@@ -42475,6 +42475,587 @@ def test_cross_engine_look_at_top_n_synthetic_etb_no_match_counter_parity(
     assert py_state.players[1].life == 20
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- search_library_for_basic_land_tapped (round 21).
+#
+# Rust substrate ``Effect::SearchLibraryForBasicLandTapped { count }``
+# (cards.rs:217 + parser cards.rs:3266 + resolve in
+# state_ops_resolve.rs) shipped via round 23 + G19 + I69 closeout
+# (post-search shuffle via state.rng + source-controller routing).
+# This slice closes the cross-engine BRIDGE gap so probes can drive
+# both arms with one dict.
+#
+# The pins below focus on the **trigger-driven** path that the audit
+# scopes ("ETB trigger fires SearchLibraryForBasicLandTapped"); the
+# non-trigger Sorcery-cast path is already pinned by
+# tests/test_parity_smoke_edge_cases.py:852 (effect-rng-threading) +
+# tests/test_effects.py:937 (Python class behavior).
+#
+# Real-EoE consumer unblocked by this composer arm: Larval Scoutlander
+# (composes with the round-20 ``optional_sac_artifact_for_effect``
+# arm as inner). The Larval-Scoutlander cross-engine probe is
+# deferred per round-17/18/19 synthetic-only-when-riders-cascade
+# precedent (the may-sac decision drives an asymmetric agent shim
+# path that the bare bridge-arm slice doesn't need to exercise).
+# =====================================================================
+
+
+def test_rust_search_library_for_basic_land_tapped_etb_trigger_drains_one_land():
+    """Round-21 BLOCKED-BRIDGE-ARM slice -- ETB trigger drives
+    SearchLibraryForBasicLandTapped(count=1). A creature source on
+    p0's bf with two Forests on top of p0's library: ETB trigger
+    fires, the topmost Forest moves to p0's bf tapped, library
+    shrinks by 1, bf grows by 1. Pins the trigger-driven resolve
+    path (predicate=source_is_self -> push to stack -> drain ->
+    apply Effect::SearchLibraryForBasicLandTapped).
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    forest = CardDef(
+        name="Forest",
+        card_type="Land",
+        mana_produced=("G",),
+    )
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(forest, bears),
+        # Two Forests on top of p0's library so the search has
+        # something to find AND a non-Forest after to verify the
+        # picker stops after the first basic land for count=1.
+        p0_library=("Forest", "Forest", "Library Filler Bears (2/2)"),
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Source: a Bear-shape creature with a SearchLibraryForBasicLand
+    # Tapped(count=1) ETB trigger.
+    rust_state.register_and_inject_object(
+        {
+            "name": "Land-Search Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_basic_land_tapped",
+                        "count": 1,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: source's arrival should fire SourceIsSelf ENTERS and "
+        "land SearchLibraryForBasicLandTapped on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_bf_ids_before = {e["id"] for e in rust_state.battlefield_snapshot()}
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Library shrank by 1 (one basic land moved out).
+    assert rust_state.library_sizes[0] == p0_lib_before - 1, (
+        f"Rust: p0 library should shrink by 1 (one Forest moved to bf); "
+        f"got before={p0_lib_before} after={rust_state.library_sizes[0]}"
+    )
+    # Battlefield gained one new tapped Land.
+    p0_bf_after = rust_state.battlefield_snapshot()
+    new_bf_ids = {e["id"] for e in p0_bf_after} - p0_bf_ids_before
+    assert len(new_bf_ids) == 1, (
+        f"Rust: exactly one new bf object expected; got new_ids={new_bf_ids}"
+    )
+    new_obj = next(e for e in p0_bf_after if e["id"] in new_bf_ids)
+    assert new_obj.get("tapped") is True, (
+        f"Rust: searched land should enter tapped per CR; got {new_obj}"
+    )
+    assert new_obj["controller_id"] == 0, (
+        f"Rust: searched land should be controlled by source-controller p0; "
+        f"got controller_id={new_obj['controller_id']}"
+    )
+
+
+def test_rust_search_library_for_basic_land_tapped_no_basic_silently_no_ops():
+    """Empty-library / no-basic silent fizzle pin. If the source-
+    controller has NO basic lands in library, the resolve arm
+    short-circuits without putting anything onto bf and without
+    crashing. Library + bf both unchanged after the trigger drains.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(bears,),
+        # No basic lands in library; only Bears.
+        p0_library=("Library Filler Bears (2/2)",) * 5,
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Land-Search Trigger Bear (no basics in lib)",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_basic_land_tapped",
+                        "count": 1,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_bf_count_before = len(rust_state.battlefield_snapshot())
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # No basic lands found -> library + bf unchanged.
+    assert rust_state.library_sizes[0] == p0_lib_before
+    assert len(rust_state.battlefield_snapshot()) == p0_bf_count_before
+
+
+def test_rust_search_library_for_basic_land_tapped_count_two_drains_two_lands():
+    """count=2 path pin. With 3 Forests on top of p0's library, an
+    ETB-trigger SearchLibraryForBasicLandTapped(count=2) moves
+    exactly 2 of them to bf (one per loop iteration in the resolve
+    arm), library shrinks by 2.
+
+    This is the printed shape on Larval Scoutlander's inner
+    (``count=2``); pins the multi-land iteration without going
+    through the OptionalSac wrapper (the wrapper is already pinned
+    in round-20's slice).
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    forest = CardDef(
+        name="Forest",
+        card_type="Land",
+        mana_produced=("G",),
+    )
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(forest, bears),
+        p0_library=(
+            "Forest", "Forest", "Forest",
+            "Library Filler Bears (2/2)",
+        ),
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Land-Search Trigger Bear (count=2)",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_basic_land_tapped",
+                        "count": 2,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_bf_count_before = len(rust_state.battlefield_snapshot())
+    rust_state.resolve_top_of_stack()
+    assert rust_state.library_sizes[0] == p0_lib_before - 2, (
+        f"Rust: p0 library should shrink by 2 (count=2 drains 2 lands); "
+        f"got before={p0_lib_before} after={rust_state.library_sizes[0]}"
+    )
+    # Two new bf objects, both tapped.
+    bf_after = rust_state.battlefield_snapshot()
+    assert len(bf_after) == p0_bf_count_before + 2
+    new_bf = bf_after[-2:]
+    for o in new_bf:
+        assert o.get("tapped") is True, (
+            f"Rust: count=2-searched lands should each enter tapped; got {o}"
+        )
+        assert o["controller_id"] == 0
+
+
+def test_rust_search_library_for_basic_land_tapped_cross_controller_routing_p1_source_on_p0_turn():
+    """Cross-controller routing pin: source on p1's bf during p0's
+    turn. The search arm pulls from p1's library (the source-
+    controller), not p0's library. Pins the source-controller
+    derivation closed by I69 (route via source_controller, not
+    active_player).
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    forest = CardDef(
+        name="Forest",
+        card_type="Land",
+        mana_produced=("G",),
+    )
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(forest, bears),
+        # p0 has bears (no basics). p1 has a Forest on top -> the
+        # search must find it via source-controller routing.
+        p0_library=("Library Filler Bears (2/2)",) * 3,
+        p1_library=("Forest", "Library Filler Bears (2/2)"),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Inject the source onto p1's bf (controller=1).
+    rust_state.register_and_inject_object(
+        {
+            "name": "p1-Owned Land-Search Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_basic_land_tapped",
+                        "count": 1,
+                    },
+                }
+            ],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p1_lib_before = rust_state.library_sizes[1]
+    rust_state.resolve_top_of_stack()
+    # p0's library should be unchanged (NOT pulled despite being
+    # active_player).
+    assert rust_state.library_sizes[0] == p0_lib_before, (
+        f"Rust: p0 library should be unchanged (source is on p1's bf); "
+        f"got before={p0_lib_before} after={rust_state.library_sizes[0]}"
+    )
+    # p1's library should shrink by 1 (Forest moved to bf).
+    assert rust_state.library_sizes[1] == p1_lib_before - 1, (
+        f"Rust: p1 library should shrink by 1 (source-controller routing); "
+        f"got before={p1_lib_before} after={rust_state.library_sizes[1]}"
+    )
+
+
+def test_rust_search_library_for_basic_land_tapped_count_zero_no_op():
+    """count=0 edge-case pin. Both engines accept count=0 as a
+    legal-but-no-op. Library + bf unchanged. Pins that the for-
+    range loop iterates zero times (Rust) and the parser doesn't
+    upgrade 0 to a default 1 silently.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
+
+    forest = CardDef(
+        name="Forest",
+        card_type="Land",
+        mana_produced=("G",),
+    )
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(forest, bears),
+        p0_library=("Forest", "Library Filler Bears (2/2)"),
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Land-Search Trigger Bear (count=0)",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_basic_land_tapped",
+                        "count": 0,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    p0_lib_before = rust_state.library_sizes[0]
+    p0_bf_count_before = len(rust_state.battlefield_snapshot())
+    rust_state.resolve_top_of_stack()
+    # Zero iterations -> library + bf unchanged.
+    assert rust_state.library_sizes[0] == p0_lib_before
+    assert len(rust_state.battlefield_snapshot()) == p0_bf_count_before
+
+
+def test_cross_engine_search_library_for_basic_land_tapped_synthetic_etb_parity(
+    parity_smoke,
+):
+    """Round-21 BLOCKED-BRIDGE-ARM slice -- cross-engine end-to-end
+    synthetic probe. Drives the
+    ``Effect::SearchLibraryForBasicLandTapped`` Rust arm + the
+    ``SearchLibraryForBasicLandTapped`` Python class through both
+    engines via an ETB-trigger carrier; pins post-resolve outcomes
+    agree on both sides.
+
+    Probe shape:
+      1. Spec a 3-card library on p0: (Forest, Forest, Bears). The
+         topmost Forest is the deterministic pick on both engines
+         (Stage-3 simplification: no shuffle in Python; Rust pulls
+         the topmost basic land).
+      2. Inject a Bear-shape source with a SearchLibraryForBasicLand
+         Tapped(count=1) ETB onto p0's bf. The trigger fires on its
+         own arrival; lands on the stack on both engines.
+      3. Drain both stacks. Each engine moves the topmost Forest from
+         p0's library to p0's bf tapped.
+      4. Cross-engine: same library size delta (-1), same bf size
+         delta (+1), the new bf object is a tapped Land controlled
+         by p0.
+
+    Real-EoE consumer of the bare arm (without the OptionalSac
+    wrapper): any future direct landfall-search printing. The
+    Larval Scoutlander composition (OptionalSacArtifact +
+    SearchLibraryForBasicLandTapped) cross-engine probe is
+    deferred -- it requires an asymmetric may-sac agent shim path
+    (Python ``choose_yes_no`` + ``choose_sacrifice`` vs Rust auto-
+    yes-and-first). Round-20's optional_sac slice already pinned
+    the wrapper; this slice pins the inner. The composition itself
+    is cross-translated by the bridge translator pin
+    ``test_bridge_search_library_for_basic_land_tapped_composable_in_optional_sac``.
+
+    Out of scope (documented):
+      * Post-search shuffle parity -- Python's class is Stage-3
+        no-shuffle (per SEARCH_LIMITATIONS entry 15). Rust shuffles
+        via state.rng; the cross-engine library order would diverge
+        AFTER the search resolves. The pin compares library-size
+        deltas + the new-bf-object identity rather than full library
+        order. tests/test_parity_smoke_edge_cases.py:852 already
+        pins the Rust shuffle against the Python MT reference.
+      * Multi-land count + landfall-trigger cascades -- count=2
+        Rust regression pin above already exercises the multi-land
+        iteration; cross-engine multi-land probes would need a
+        landfall consumer to test the per-land trigger cascade,
+        which is a separate slice.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    forest = CardDef(
+        name="Forest",
+        card_type="Land",
+        mana_produced=("G",),
+    )
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(forest, bears),
+        p0_library=("Forest", "Forest", "Library Filler Bears (2/2)"),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Land-Search ETB Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_basic_land_tapped",
+                        "count": 1,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_p0_bf_count_before = len(rust_state.battlefield_snapshot())
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.game import Zone
+
+    bear_printing = CardPrinting(
+        name="Land-Search ETB Trigger Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Creature -- Bear Druid",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear", "Druid"),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=SearchLibraryForBasicLandTapped(count=1),
+            ),
+        ),
+    )
+    py_bear = py_state.new_object(
+        bear_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bear.summoning_sick = False
+    py_bear.tapped = False
+    py_bear.damage = 0
+    py_bear.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bear)
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_p0_bf_count_before = len(py_state.battlefield)
+    _trigger_etb_abilities(py_state, py_bear)
+    assert len(py_state.stack) == 1, (
+        "Python: source's arrival should fire IsSelf ENTERS and land "
+        "SearchLibraryForBasicLandTapped on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Cross-engine post-state ----
+    rust_p0_lib_after = rust_state.library_sizes[0]
+    rust_p0_bf_count_after = len(rust_state.battlefield_snapshot())
+    py_p0_lib_after = len(py_state.players[0].library)
+    py_p0_bf_count_after = len(py_state.battlefield)
+
+    # Library shrank by 1 on both sides.
+    assert rust_p0_lib_after == rust_p0_lib_before - 1, (
+        f"Rust p0 lib delta should be -1; before={rust_p0_lib_before} "
+        f"after={rust_p0_lib_after}"
+    )
+    assert py_p0_lib_after == py_p0_lib_before - 1, (
+        f"Python p0 lib delta should be -1; before={py_p0_lib_before} "
+        f"after={py_p0_lib_after}"
+    )
+    # Battlefield grew by 1 on both sides.
+    assert rust_p0_bf_count_after == rust_p0_bf_count_before + 1, (
+        f"Rust p0 bf delta should be +1; before={rust_p0_bf_count_before} "
+        f"after={rust_p0_bf_count_after}"
+    )
+    assert py_p0_bf_count_after == py_p0_bf_count_before + 1, (
+        f"Python p0 bf delta should be +1; before={py_p0_bf_count_before} "
+        f"after={py_p0_bf_count_after}"
+    )
+    # Cross-engine deltas agree.
+    assert (
+        rust_p0_lib_after - rust_p0_lib_before
+        == py_p0_lib_after - py_p0_lib_before
+    )
+    assert (
+        rust_p0_bf_count_after - rust_p0_bf_count_before
+        == py_p0_bf_count_after - py_p0_bf_count_before
+    )
+    # New bf object on Rust side: tapped + p0-controlled. Pin the
+    # last-inserted-on-bf object as the searched land.
+    rust_new_bf = rust_state.battlefield_snapshot()[-1]
+    assert rust_new_bf["controller_id"] == 0
+    assert rust_new_bf.get("tapped") is True
+    # New bf object on Python side: tapped + p0-controlled.
+    py_new_bf = py_state.battlefield[-1]
+    assert py_new_bf.controller_id == 0
+    assert py_new_bf.tapped is True
+    # Lives unchanged on both sides.
+    assert list(rust_state.life_totals) == [20, 20]
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
