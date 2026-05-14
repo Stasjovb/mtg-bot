@@ -4233,5 +4233,212 @@ def test_rust_parser_accepts_may_do_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_attach_to_target_creature_you_control_translates_to_python():
+    """BLOCKED-BRIDGE-ARM slice (round-19 audit refresh) -- Equipment
+    ETB attach. Rust ``{"kind": "attach_to_target_creature_you_control"}``
+    translates to Python ``AttachToTargetCreatureYouControl()``.
+
+    Mirrors Rust's parse_effect arm (cards.rs:3676-3678) which is a
+    UNIT VARIANT (no fields). The bridge translator ignores every
+    other key on the dict for round-trip dict-shape consistency. The
+    Python class carries an OPTIONAL ``granted_keywords_ueot`` rider
+    not exercised by the bare arm; the default empty frozenset()
+    matches Rust's no-keyword-grant unit variant.
+    """
+    from mtg_bot.effects.generic.attach import (
+        AttachToTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "attach_to_target_creature_you_control"}
+    )
+    assert isinstance(e, AttachToTargetCreatureYouControl)
+    # Default rider value -- the bare bridge arm does NOT carry the
+    # UEOT keyword grant (would compose via separate arm).
+    assert e.granted_keywords_ueot == frozenset()
+
+
+def test_bridge_attach_to_target_creature_extra_keys_ignored():
+    """Round-trip pin: extra keys on the dict are silently ignored
+    (the unit variant takes no fields). Mirrors the
+    owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library
+    arm shape -- forward-compatible with future rider-widened Rust
+    variants that would land as separate ``kind`` arms.
+    """
+    from mtg_bot.effects.generic.attach import (
+        AttachToTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "attach_to_target_creature_you_control",
+            "ignored_extra_field": "noise",
+        }
+    )
+    assert isinstance(e, AttachToTargetCreatureYouControl)
+    assert e.granted_keywords_ueot == frozenset()
+
+
+def test_bridge_equip_to_target_creature_you_control_translates_to_python():
+    """BLOCKED-BRIDGE-ARM slice (round-19 audit refresh) -- Equip
+    activated-ability resolution (CR 702.6). Rust
+    ``{"kind": "equip_to_target_creature_you_control"}`` translates
+    to Python ``EquipToTargetCreatureYouControl()``.
+
+    Sister bridge arm to ``attach_to_target_creature_you_control``;
+    Python's ``EquipToTargetCreatureYouControl`` is a SUBCLASS of
+    ``AttachToTargetCreatureYouControl`` with identical resolve
+    behavior but a distinct ``describe`` string. The two are
+    isinstance-compatible (Equip IS-A Attach) -- pin verifies the
+    bridge returns the more-specific subclass type, not the parent,
+    so log tooling can distinguish ETB-attach from paid Equip
+    activation correctly.
+    """
+    from mtg_bot.effects.generic.attach import (
+        AttachToTargetCreatureYouControl,
+        EquipToTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "equip_to_target_creature_you_control"}
+    )
+    # Specific subclass, not the parent.
+    assert type(e) is EquipToTargetCreatureYouControl
+    # IS-A parent (subclass relationship preserved).
+    assert isinstance(e, AttachToTargetCreatureYouControl)
+    # Distinct describe string for log-tooling disambiguation.
+    assert e.describe() != AttachToTargetCreatureYouControl().describe()
+
+
+def test_bridge_attach_and_equip_arms_distinct_kinds():
+    """Cross-arm discriminator pin: the bridge does NOT collapse the
+    two ``kind`` strings onto one Python class. The ETB-shape attach
+    and the activated-ability paid Equip are SEPARATE Rust variants
+    + SEPARATE Python classes; confirming each kind dispatches to
+    its own class prevents accidental cross-wiring (e.g. a typo on
+    one arm masking via the other).
+    """
+    from mtg_bot.effects.generic.attach import (
+        AttachToTargetCreatureYouControl,
+        EquipToTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    attach = _ta_dict_to_python_effect(
+        {"kind": "attach_to_target_creature_you_control"}
+    )
+    equip = _ta_dict_to_python_effect(
+        {"kind": "equip_to_target_creature_you_control"}
+    )
+    # The attach arm returns the bare parent type, NOT the Equip
+    # subclass.
+    assert type(attach) is AttachToTargetCreatureYouControl
+    # The equip arm returns the more-specific subclass.
+    assert type(equip) is EquipToTargetCreatureYouControl
+    # Distinct types.
+    assert type(attach) is not type(equip)
+
+
+def test_bridge_attach_to_target_creature_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([AttachTo, DrawCards])`` translates correctly via the
+    recursive Sequence translator. Pins the unit-variant arm against
+    accidental dispatch loss inside Sequence (recursive translation
+    walks each child via the same ``_ta_dict_to_python_effect`` so
+    this also exercises the recursive path).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.attach import (
+        AttachToTargetCreatureYouControl,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "attach_to_target_creature_you_control"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert type(e.effects[0]) is AttachToTargetCreatureYouControl
+    assert isinstance(e.effects[1], DrawCards)
+    assert e.effects[1].amount == 1
+
+
+def test_rust_parser_accepts_attach_to_target_creature_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bare
+    ``{"kind": "attach_to_target_creature_you_control"}`` dict shape
+    on a triggered_ability carrier. The bridge dict shape must
+    register cleanly on the Rust side too; this lockstep gate keeps
+    the bridge from drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing
+    ``owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library``
+    parser-surface pin -- both are unit-variant arms with no
+    companion fields. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3676-3678`` accepts the bare unit dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- AttachTo Equipment",
+        "card_types": ["Artifact"],
+        "subtypes": ["Equipment"],
+        "mana_cost": {"generic": 2},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "attach_to_target_creature_you_control",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_accepts_equip_to_target_creature_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bare
+    ``{"kind": "equip_to_target_creature_you_control"}`` dict shape
+    on a triggered_ability carrier. Sister to the AttachTo lockstep
+    pin -- pins the Equip variant separately so a typo on either
+    arm surfaces via this gate.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3679-3681``
+    accepts the bare unit dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- EquipTo Equipment",
+        "card_types": ["Artifact"],
+        "subtypes": ["Equipment"],
+        "mana_cost": {"generic": 2},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "equip_to_target_creature_you_control",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

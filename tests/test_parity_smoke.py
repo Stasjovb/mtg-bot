@@ -40783,6 +40783,547 @@ def test_cross_engine_may_do_synthetic_etb_parity(parity_smoke):
     assert py_state.players[1].life == 20
 
 
+def _rust_attached_to(rust_state, obj_id):
+    """Inspector helper: read ``attached_to`` for an object on either
+    bf via ``battlefield_snapshot()``. Returns the linked target id
+    or None if the object isn't found / has no attachment.
+
+    The Rust binding doesn't expose a direct ``attached_to(id)``
+    method; ``battlefield_snapshot()`` returns a list of dicts with
+    every per-object field including ``attached_to``. Walk both
+    players' bf to locate the source (controller is implicit in
+    the snapshot's ``controller_id`` field).
+    """
+    for entry in rust_state.battlefield_snapshot():
+        if entry["id"] == obj_id:
+            return entry["attached_to"]
+    return None
+
+
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice (round-19 audit refresh) -- Equipment ETB
+# attach + Equip activated-ability resolution.
+#
+# Rust's Effect::AttachToTargetCreatureYouControl (cards.rs:1428,
+# parser cards.rs:3676-3678, resolve at state_ops_resolve.rs:5767-
+# 5814) and Effect::EquipToTargetCreatureYouControl (cards.rs:1452,
+# parser cards.rs:3679-3681, resolve at state_ops_resolve.rs:5834+)
+# both shipped end-to-end before this slice; this slice ships the
+# cross-engine bridge arm + the regression pins that exercise it.
+#
+# Real-EoE consumer of the bare ETB-attach shape: Meltstrider's Gear
+# ("When this Equipment enters, attach it to target creature you
+# control" -- no UEOT keyword rider on the trigger; the +2/+1 / reach
+# is on the equipped-creature static effect, not the ETB). Squire's
+# Lightblade + Illvoi Light Jammer ETBs carry UEOT keyword riders
+# deferred per round-17 / round-18 synthetic-only-when-riders-cascade
+# precedent (no GrantKeywordsUntilEOT bridge arm yet); Auxiliary
+# Boosters bundles attach with a token-create + self-attach to the
+# new token (different composition shape, deferred). The cross-
+# engine probe below uses the synthetic-Equipment shape (no UEOT
+# rider) which round-trips identically to Meltstrider's Gear's
+# trigger.
+# =====================================================================
+
+
+def test_rust_attach_to_target_creature_you_control_basic():
+    """BLOCKED-BRIDGE-ARM slice -- basic AttachTo pin. An Equipment
+    Artifact source on p0's bf with a 2/2 bait Bears creature ALSO
+    on p0's bf: ETB trigger fires, drains, source.attached_to is
+    stamped to the bait Bears.
+
+    Pins the resolve arm's:
+      - source-on-bf scan picks up the Equipment correctly
+      - first-creature filter on source-controller's bf picks the
+        Bears (NOT the source itself, which is an Artifact not a
+        Creature)
+      - attached_to gets stamped to the bait id
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "Equip-Trigger Equipment",
+            "card_types": ["Artifact"],
+            "subtypes": ["Equipment"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "attach_to_target_creature_you_control",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: equipment's arrival should fire SourceIsSelf ENTERS "
+        "and land AttachToTargetCreatureYouControl on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Inspect the source's attached_to via the inspector.
+    src_attached = _rust_attached_to(rust_state, source_id)
+    assert src_attached == bait_id, (
+        f"Rust: source.attached_to should be {bait_id} (the bait "
+        f"Bears) after AttachTo resolves; got {src_attached}"
+    )
+
+
+def test_rust_attach_to_target_creature_you_control_no_creature_silently_fizzles():
+    """BLOCKED-BRIDGE-ARM slice -- empty-bf-creatures pin. If the
+    source's controller has NO creatures on bf (only the source
+    Equipment itself, which is an Artifact not a Creature), the
+    arm silently fizzles -- no crash, attached_to stays None.
+
+    Pins the resolve arm's "let Some(target_id) = target_id else
+    { return Ok(()); }" silent-skip branch
+    (state_ops_resolve.rs:5803-5805).
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "Equip-Trigger Equipment (lonely)",
+            "card_types": ["Artifact"],
+            "subtypes": ["Equipment"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "attach_to_target_creature_you_control",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Source.attached_to stays unset.
+    assert _rust_attached_to(rust_state, source_id) is None, (
+        "Rust: source.attached_to should remain None when no "
+        "eligible creature exists on source-controller's bf"
+    )
+
+
+def test_rust_attach_to_target_creature_picks_first_creature_skipping_other_artifact():
+    """BLOCKED-BRIDGE-ARM slice -- artifact-skip pin. With an
+    Artifact AND a Bears on source-controller's bf (bf order:
+    artifact-first then bears), the AttachTo resolve picks the
+    Bears -- the artifact (non-creature) is filtered out, NOT
+    picked as the first-slice target.
+
+    Pins the resolve arm's
+    ``card_types.iter().any(|t| t == "Creature")`` filter line at
+    state_ops_resolve.rs:5796-5800. A bug that dropped the
+    creature-filter would pick the artifact as bf[0] (or bf[1])
+    instead of walking past it.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Inject an Artifact (non-creature) FIRST so it's at bf[0].
+    rust_state.register_and_inject_object(
+        {
+            "name": "Decoy Artifact (non-creature)",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    bears_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "Equip-Trigger Equipment",
+            "card_types": ["Artifact"],
+            "subtypes": ["Equipment"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "attach_to_target_creature_you_control",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Picked the Bears (not the decoy artifact, not the source).
+    assert _rust_attached_to(rust_state, source_id) == bears_id, (
+        f"Rust: AttachTo should pick the Bears creature "
+        f"(id={bears_id}), skipping the decoy artifact and the "
+        f"source itself; got {_rust_attached_to(rust_state, source_id)}"
+    )
+
+
+def test_rust_equip_to_target_creature_you_control_basic():
+    """BLOCKED-BRIDGE-ARM slice -- basic EquipTo pin (sister to the
+    AttachTo basic pin). Same shape: Equipment Artifact source on
+    p0's bf with a Bears bait creature, ETB trigger fires
+    EquipTo, drains, source.attached_to is stamped to the bait.
+
+    Pins the EquipTo resolve arm's first-eligible-creature fallback
+    walk (state_ops_resolve.rs:5834+). The CE20 Slice-4 payload-
+    target-id path is NOT exercised by this ETB-shape probe (no
+    activator seeds the slot when the ETB fires); the fallback
+    walk is the load-bearing branch for this carrier.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "EquipTo-Trigger Equipment",
+            "card_types": ["Artifact"],
+            "subtypes": ["Equipment"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "equip_to_target_creature_you_control",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    assert _rust_attached_to(rust_state, source_id) == bait_id, (
+        f"Rust: EquipTo should stamp source.attached_to to "
+        f"{bait_id}; got {_rust_attached_to(rust_state, source_id)}"
+    )
+
+
+def test_rust_attach_to_target_creature_cross_controller_routing_p1_source_on_p0_turn():
+    """BLOCKED-BRIDGE-ARM slice -- cross-controller routing pin. A
+    p1-controlled Equipment on p1's bf with a p1 bait Bears: the
+    AttachTo resolve picks from the SOURCE-controller's bf
+    (p1's), NOT the active player's (p0). active_player stays at
+    p0; the routing must derive controller from the source's
+    location, not from active_player.
+
+    Pins state_ops_resolve.rs:5772-5781's source-on-bf scan that
+    captures the player_idx from the bf the source is found on,
+    NOT from state.active_player. A bug that read active_player
+    instead would pick from p0's bf (empty in this scenario) and
+    silently fizzle, leaving attached_to None.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # active_player stays default (p0). Bait + source land on p1's bf.
+    bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "p1 Bait Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        1,  # owner = p1
+        ZONE_BATTLEFIELD,
+    )
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "p1 Equip-Trigger Equipment",
+            "card_types": ["Artifact"],
+            "subtypes": ["Equipment"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "attach_to_target_creature_you_control",
+                    },
+                }
+            ],
+        },
+        1,  # owner = p1
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Picks from p1's bf -- NOT active_player (p0)'s.
+    assert _rust_attached_to(rust_state, source_id) == bait_id, (
+        f"Rust: AttachTo cross-controller routing should pick from "
+        f"source-controller (p1)'s bf, picking bait id={bait_id}; "
+        f"got attached_to={_rust_attached_to(rust_state, source_id)}"
+    )
+
+
+def test_cross_engine_attach_to_target_creature_synthetic_etb_parity(
+    parity_smoke,
+):
+    """BLOCKED-BRIDGE-ARM slice -- cross-engine end-to-end synthetic
+    probe. Drives the ``Effect::AttachToTargetCreatureYouControl``
+    arm + the ``AttachToTargetCreatureYouControl`` Python class
+    through both engines via an ETB-trigger carrier; pins post-
+    resolve attached_to agrees on both sides.
+
+    Probe shape (mirrors the SetBasePT inject-and-fire-ENTERS
+    pattern): pre-seat one bait Bears on p0's bf, inject an
+    Equipment Artifact with the AttachTo ETB onto p0's bf. The ETB
+    trigger fires on its own arrival; the trigger lands on the
+    stack on both engines. Drain both stacks. Source's attached_to
+    now points to the bait Bears on both sides.
+
+    Real-EoE consumer of this shape (without the UEOT keyword
+    rider): Meltstrider's Gear -- "When this Equipment enters,
+    attach it to target creature you control" + a separate "Equipped
+    creature gets +2/+1 and has reach" static rider that's NOT
+    part of the ETB trigger. The static-equipped pump rider lives
+    on a separate continuous-effects path and is out of scope for
+    this bridge probe; the attach itself is the bare arm exercised
+    here.
+
+    Out of scope (documented):
+
+      * UEOT keyword-grant rider (Squire's Lightblade "first strike",
+        Illvoi Light Jammer "hexproof") -- needs a future
+        ``GrantKeywordsUntilEOT`` arm on Rust + a composer-arm
+        bridge wiring; deferred per round-17 / round-18 synthetic-
+        only-when-riders-cascade precedent.
+      * Token-create + self-attach (Auxiliary Boosters: "create a
+        2/2 Robot artifact creature token and attach this Equipment
+        to it") -- needs CreateToken parameterization + a different
+        composition shape; deferred.
+      * Equipped-creature continuous-effects pump (the static rider
+        on the equipment) -- separate continuous-effects path,
+        already exercised by other bridge arms.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_p0_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bears (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_source_id = rust_state.register_and_inject_object(
+        {
+            "name": "AttachTo-Trigger Equipment",
+            "card_types": ["Artifact"],
+            "subtypes": ["Equipment"],
+            "mana_cost": {"generic": 2},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "attach_to_target_creature_you_control",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: equipment's arrival should fire SourceIsSelf ENTERS "
+        "and land AttachToTargetCreatureYouControl on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.attach import (
+        AttachToTargetCreatureYouControl,
+    )
+    from mtg_bot.effects.predicates import IsSelf
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="Bait Bears (2/2)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+
+    # Seat the picker shim on p0 (the source's controller) BEFORE
+    # firing the ETB so the Python target pipeline picks the bait
+    # Bears via ``agent.choose_target`` at PUSH time (mirrors Rust's
+    # at-apply-time first-creature-on-source-controller-bf pick).
+    from tests.parity._picker_shims import (
+        _PickFirstControlledCreatureAgent,
+    )
+    py_state.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    equipment_printing = CardPrinting(
+        name="AttachTo-Trigger Equipment",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Artifact -- Equipment",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=("Equipment",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=AttachToTargetCreatureYouControl(),
+            ),
+        ),
+    )
+    py_source = py_state.new_object(
+        equipment_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: equipment's arrival should fire IsSelf ENTERS and "
+        "land AttachToTargetCreatureYouControl on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Cross-engine post-state ----
+    # Source's attached_to now points to the bait Bears.
+    rust_attached = _rust_attached_to(rust_state, rust_source_id)
+    py_attached = py_source.attached_to
+    assert rust_attached == rust_p0_bait_id, (
+        f"Rust source.attached_to should be {rust_p0_bait_id} "
+        f"(the bait Bears); got {rust_attached}"
+    )
+    assert py_attached == py_bait.id, (
+        f"Python source.attached_to should be {py_bait.id} "
+        f"(the bait Bears); got {py_attached}"
+    )
+    # Lives unchanged -- the AttachTo arm only stamps attached_to.
+    assert list(rust_state.life_totals) == [20, 20]
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

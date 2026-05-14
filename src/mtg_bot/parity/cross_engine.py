@@ -2796,6 +2796,130 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
         )
         return OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary()
+    if kind == "attach_to_target_creature_you_control":
+        # BLOCKED-BRIDGE-ARM slice (round-19 audit refresh) -- Equipment
+        # ETB attach (CR 303.4 / 301.5; Equipment-attach is a battlefield-
+        # only relationship, separate from CR 702.6 Equip activated-
+        # ability resolution). "When this Equipment enters, attach it
+        # to target creature you control" -- the Equipment's own ETB
+        # picks a creature on the source's controller's bf and stamps
+        # ``attached_to``. Rust's
+        # ``Effect::AttachToTargetCreatureYouControl`` (cards.rs:1428,
+        # parser at cards.rs:3676-3678) is a UNIT VARIANT (no fields);
+        # its resolve arm at ``state_ops_resolve.rs:5767-5814`` locates
+        # the source on a battlefield, captures the controller, picks
+        # the FIRST creature on that controller's bf that ISN'T the
+        # source itself (an Equipment can't attach to itself), and
+        # stamps ``attached_to = Some(target_id)``. Silent fizzle when
+        # the source isn't on a bf (wrong resolution path) or no
+        # eligible creature exists. Rust substrate landed end-to-end
+        # before this slice; this slice is BRIDGE-ARM-ONLY.
+        #
+        # Python's ``AttachToTargetCreatureYouControl`` class
+        # (effects/generic/attach.py:31) carries an OPTIONAL
+        # ``granted_keywords_ueot: frozenset[str] = frozenset()``
+        # field for the UEOT keyword-grant rider used by Squire's
+        # Lightblade ("first strike until end of turn") and Illvoi
+        # Light Jammer ("hexproof until end of turn"). The bare bridge
+        # arm here does NOT carry the rider -- the bare arm matches
+        # Rust's no-field unit variant exactly. Cards that need the
+        # UEOT keyword rider would compose via a future
+        # ``GrantKeywordsUntilEOT`` arm; that rider-bearing variant is
+        # a deferred follow-up (not yet on Rust as a single-arm shape)
+        # and not required for this bridge slice. Meltstrider's Gear
+        # ("When this Equipment enters, attach it to target creature
+        # you control" -- no UEOT rider on the trigger) is the
+        # cleanest real-EoE consumer of the bare shape; Auxiliary
+        # Boosters bundles attach with a token-create + self-attach
+        # to the new token (different composition shape, deferred).
+        #
+        # **Filter direction = SOURCE-controller's bf.** Same shape as
+        # ``pump_target_creature_until_eot`` and
+        # ``set_base_pt_until_eot`` -- the
+        # ``_PickFirstControlledCreatureAgent`` shim from
+        # ``tests/parity/_picker_shims.py`` picks the first own-side
+        # creature on Python; matches Rust's at-apply-time first-
+        # creature-on-source-controller-bf scan in 2-player games. The
+        # Equipment source is itself an Artifact (not a creature) so
+        # the scan filter naturally skips it without needing an
+        # explicit "not self" guard on the Python pick path.
+        #
+        # **Python resolve via target tuple, not at-resolve scan.**
+        # Python's ``AttachToTargetCreatureYouControl.resolve`` reads
+        # the target from the ``targets`` tuple passed in by the
+        # targeting pipeline (PUSH-time pick via
+        # ``push_triggered_ability`` -> ``agent.choose_target``).
+        # ``requires_target`` returns True; ``legal_targets`` walks
+        # the controller's bf for creatures. The shim agent picks the
+        # first own-side creature, which on a synthetic probe with one
+        # bait creature on the source-controller's bf agrees with
+        # Rust's at-resolve first-creature scan bit-for-bit.
+        #
+        # **Equipment-not-Equipment guard.** Python's resolve checks
+        # ``"Equipment" not in source.printing.subtypes`` and returns
+        # silently if the source isn't an Equipment. Rust does NOT
+        # gate on the Equipment subtype at the resolve arm -- the
+        # arm just stamps ``attached_to`` on whatever object the
+        # source is. On synthetic probes the source IS an Equipment;
+        # this asymmetry is documented but not exercised by the bare
+        # bridge probe.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3676-3678)
+        # which is a unit variant -- no fields. The bridge translator
+        # ignores every other key on the dict for round-trip dict-
+        # shape consistency. Forward-compatible with future rider-
+        # widened Rust variants -- those would land as separate
+        # ``kind`` arms on this translator (one per Rust Effect
+        # variant), mirroring the established split convention
+        # (``deal_damage`` vs ``deal_damage_any_target``,
+        # ``exile_target`` vs ``exile_target_with_max_mv``).
+        from mtg_bot.effects.generic.attach import (
+            AttachToTargetCreatureYouControl,
+        )
+        return AttachToTargetCreatureYouControl()
+    if kind == "equip_to_target_creature_you_control":
+        # BLOCKED-BRIDGE-ARM slice (round-19 audit refresh) -- Equip
+        # activated-ability resolution (CR 702.6). Sister bridge arm to
+        # ``attach_to_target_creature_you_control``; Python's
+        # ``EquipToTargetCreatureYouControl`` class
+        # (effects/generic/attach.py:117) is a SUBCLASS of
+        # ``AttachToTargetCreatureYouControl`` with identical resolve
+        # behavior but a distinct ``describe`` string for log-tooling
+        # disambiguation between ETB-attach and a paid Equip activation.
+        # Rust's ``Effect::EquipToTargetCreatureYouControl``
+        # (cards.rs:1452, parser at cards.rs:3679-3681) is a separate
+        # unit variant with a distinct resolve arm
+        # (state_ops_resolve.rs:5834+) that reads the activator's
+        # chosen target from ``state.current_resolve_payload_target_id``
+        # for the targeted-activation path (CE20 follow-up Slice 4 --
+        # paid Equip activations seed the slot before the resolve arm
+        # fires) and falls back to the first-eligible-creature walk for
+        # back-compat callers. Both engines stamp the same
+        # ``attached_to`` field; the distinction is purely for log
+        # tooling. Both Rust variants were already on main before this
+        # slice; this slice is BRIDGE-ARM-ONLY.
+        #
+        # **Why a separate bridge arm.** The ETB-shape attach
+        # (Squire's Lightblade / Illvoi Light Jammer / Meltstrider's
+        # Gear ETB triggers) emits the
+        # ``attach_to_target_creature_you_control`` dict; the
+        # activated-ability paid Equip emits the
+        # ``equip_to_target_creature_you_control`` dict. Both are
+        # exercised by the same Equipment cards (Equipment carries
+        # both an ETB trigger AND an activated Equip ability).
+        # Pinning both arms separately mirrors Rust's separate-
+        # variant split and keeps the bridge translator's variant
+        # fan-out exhaustive.
+        #
+        # Same field-shape (unit variant, no fields), same picker
+        # semantics (source-controller's first creature), same
+        # silent-fizzle behavior on no eligible target. The bridge
+        # translator ignores every other key on the dict for round-
+        # trip dict-shape consistency.
+        from mtg_bot.effects.generic.attach import (
+            EquipToTargetCreatureYouControl,
+        )
+        return EquipToTargetCreatureYouControl()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
