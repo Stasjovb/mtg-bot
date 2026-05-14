@@ -230,12 +230,15 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
         # is the canonical "did the aggregate row get written"
         # indicator (a real aggregate row, even 0/0, has the column
         # populated; a missing aggregate leaves it NULL). For those,
-        # roll up the per-shard rows.
+        # roll up the per-shard rows AND fetch the per-shard records
+        # themselves so the front-end can render the per-machine
+        # sub-card grid.
         missing_agg = [
             row["run_id"] for row in rows
             if row["n_games_done"] is None
         ]
         per_shard_rollup: dict[str, dict[str, Any]] = {}
+        per_shard_records: dict[str, list[dict[str, Any]]] = {}
         if missing_agg:
             placeholders = ",".join("?" * len(missing_agg))
             rollup_rows = conn.execute(
@@ -260,6 +263,27 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
             per_shard_rollup = {
                 r["run_id"]: dict(r) for r in rollup_rows
             }
+            # Fetch the raw per-shard records too so the rendering
+            # path can synthesize `machines` array + sum the extras
+            # (n_samples, n_workers, p0_wins, p1_wins, ...) from
+            # extra_json that the structured counter columns don't
+            # cover.
+            shard_rows = conn.execute(
+                f"""
+                SELECT run_id, shard_label, n_games_done,
+                       n_games_total, elapsed_seconds, crashed,
+                       timed_out, wins_new, wins_old, draws,
+                       extra_json
+                FROM run_progress
+                WHERE shard_label IS NOT NULL
+                  AND run_id IN ({placeholders})
+                """,
+                missing_agg,
+            ).fetchall()
+            for r in shard_rows:
+                per_shard_records.setdefault(
+                    r["run_id"], [],
+                ).append(dict(r))
     finally:
         conn.close()
 
@@ -273,6 +297,60 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
         # to the per-shard rollup when the aggregate is missing.
         rollup = per_shard_rollup.get(row["run_id"])
         if rollup is not None:
+            # Sum the extra_json-only fields (n_samples, n_workers,
+            # p0_wins, p1_wins, ...) by walking the per-shard records.
+            # ``games_per_hour`` / ``samples_per_hour`` /
+            # ``estimated_remaining_seconds`` are derived below from
+            # the totals + elapsed because the JS reads them
+            # directly from the run dict.
+            shard_recs = per_shard_records.get(row["run_id"], [])
+            extra_sum = {
+                "n_samples": 0,
+                "n_workers": 0,
+                "p0_wins": 0,
+                "p1_wins": 0,
+            }
+            saw_extra: dict[str, bool] = {
+                k: False for k in extra_sum
+            }
+            for sr in shard_recs:
+                raw = sr.get("extra_json")
+                if not raw:
+                    continue
+                try:
+                    ej = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(ej, dict):
+                    continue
+                for k in extra_sum:
+                    v = ej.get(k)
+                    if isinstance(v, (int, float)):
+                        extra_sum[k] += v
+                        saw_extra[k] = True
+            # Synthesize a partial extra_json blob so _row_to_ui_dict's
+            # fan-out surfaces the summed fields onto the run dict.
+            synthesized_extra = {
+                k: extra_sum[k] for k, saw in saw_extra.items() if saw
+            }
+            # Derived rates + ETA.
+            done = rollup["n_games_done"] or 0
+            total = rollup["n_games_total"] or 0
+            elapsed = rollup["elapsed_seconds"] or 0.0
+            if done > 0 and elapsed > 0:
+                synthesized_extra["games_per_hour"] = (
+                    3600.0 * done / elapsed
+                )
+                if total > done:
+                    remaining_games = total - done
+                    avg_per_game = elapsed / done
+                    synthesized_extra["estimated_remaining_seconds"] = (
+                        remaining_games * avg_per_game
+                    )
+            if saw_extra["n_samples"] and elapsed > 0:
+                synthesized_extra["samples_per_hour"] = (
+                    3600.0 * extra_sum["n_samples"] / elapsed
+                )
             progress_dict = {
                 "n_games_done": rollup["n_games_done"],
                 "n_games_total": rollup["n_games_total"],
@@ -282,11 +360,19 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
                 "wins_new": rollup["wins_new"],
                 "wins_old": rollup["wins_old"],
                 "draws": rollup["draws"],
-                # extra_json doesn't aggregate cleanly across shards;
-                # leave it None on the rollup path. Per-shard
-                # extra_json still surfaces in the detail endpoint.
-                "extra_json": None,
+                "extra_json": (
+                    json.dumps(synthesized_extra)
+                    if synthesized_extra else None
+                ),
             }
+            ui_dict = _row_to_ui_dict(run_dict, progress_dict)
+            # Attach machines array so the per-shard sub-card grid
+            # renders alongside the headline counters.
+            if shard_recs:
+                ui_dict["machines"] = _per_shard_to_machines(
+                    shard_recs,
+                )
+            out.append(ui_dict)
         else:
             progress_dict = {
                 "n_games_done": row["n_games_done"],
@@ -299,7 +385,7 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
                 "draws": row["draws"],
                 "extra_json": row["extra_json"],
             }
-        out.append(_row_to_ui_dict(run_dict, progress_dict))
+            out.append(_row_to_ui_dict(run_dict, progress_dict))
     return out
 
 
