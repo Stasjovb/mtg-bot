@@ -15,44 +15,190 @@ first.
 
 ---
 
-## Current state (as of 2026-05-13, main `ebb5c6ec`)
+## Current state (as of 2026-05-14, main `39d01c02`) — round-19 refresh
 
-Headline inventory measured directly off `main` at refresh time
-(supersedes the §1 table below — that table was last recomputed at
-`a2755769`, ~36 slices and 9 rounds ago):
+Headline inventory measured directly off `main` at round-19 refresh
+time. Supersedes both the round-10 refresh (was at `ebb5c6ec`) and
+the §1 table below (last recomputed at `a2755769`, now ~22 slices
+and 9 rounds ago).
 
 | Bucket | Count |
 | --- | --- |
 | **Total EoE printings with `enters`-event triggers** | **93** |
-| Cross-engine ETB probe tests on main (`test_cross_engine_real_eoe_*` + `test_cross_engine_synthetic_etb_*`) | **68** |
-| - Real-EoE probes (`test_cross_engine_real_eoe_*`) | 39 |
+| Cross-engine ETB probe tests on main (`test_cross_engine_real_eoe_*` + `test_cross_engine_synthetic_etb_*`) | **80** |
+| - Real-EoE probes (`test_cross_engine_real_eoe_*`) | 51 |
 | - Synthetic ETB probes (`test_cross_engine_synthetic_etb_*`) | 29 |
 | - Cross-controller routing probes (subset of the above, synthetic) | 21 |
 | - Divergence pins (subset of real-EoE) | 2 (Pinnacle Kill-Ship empty-bf, Susurian Dirgecraft token-first) |
-| Distinct real-EoE printings probed on main | **34** |
-| Bridge-side effect arms wired in `_ta_dict_to_python_effect` | **32** |
+| Distinct real-EoE printings probed on main | **48** |
+| Bridge-side effect arms wired in `_ta_dict_to_python_effect` | **40** |
 | Cross-controller I-fix matrix coverage | 21 effect-arm routings (create_token, return-from-gy-to-hand, return-from-gy-to-battlefield, damage_any_target, surveil, deal_damage_to_opponent_creature, mill, each_opponent_discards, mill_target_player, create_robot_artifact_creature_token, surveil-mill-path, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, destroy_target, exile_target, owner_puts_target_on_top_or_bottom, return_to_hand, each_opponent_sacrifices_creature, deal_damage, tap_target, discard_card) |
 
-Bridge effect-arms shipped in `_ta_dict_to_python_effect` (in
-source order in `src/mtg_bot/parity/cross_engine.py`):
+### Distinct real-EoE printings probed on main (48 total)
+
+`alpharael_dreaming_acolyte`, `all_fates_stalker`,
+`atmospheric_greenhouse`, `banishing_light`,
+`bioengineered_future`, `biomechan_engineer`, `biotech_specialist`,
+`blooming_stinger`, `cryogen_relic` (ETB half),
+`debris_field_crusher`, `drix_fatemaker`, `dubious_delicacy`,
+`eumidian_terrabotanist`, `fell_gravship`, `galactic_wayfarer`,
+`germinating_wurm`, `glacier_godmaw`, `haliya_ascendant_cadet`,
+`haliya_guided_by_light`, `hardlight_containment`,
+`honored_knight_captain`, `interceptor_mechan`, `kav_landseeker`,
+`knight_luminary`, `mechan_assembler`, `melded_moxite`,
+`mouth_of_the_storm`, `nebula_dragon`, `nova_hellkite`,
+`pinnacle_kill_ship`, `quantum_riddler`, `rayblade_trooper`,
+`rescue_skiff`, `seam_rip`, `seedship_broodtender`,
+`sinister_cryologist`, `starbreach_whale`, `susurian_dirgecraft`,
+`tannuk_memorial_ensign`, `thawbringer` (ETB half),
+`uthros_scanship`, `virus_beetle`, `wedgelight_rammer`,
+`weftstalker_ardent`, `wurmwall_sweeper`. (+14 vs round-10 refresh.)
+
+### Bridge effect-arms shipped in `_ta_dict_to_python_effect` (40 total)
+
+In source order in `src/mtg_bot/parity/cross_engine.py`. **Bold**
+marks arms that landed since the round-10 refresh (`ebb5c6ec` →
+`39d01c02`):
 
 `draw_cards`, `gain_life`, `damage_each_opponent`, `deal_damage`,
 `deal_damage_any_target`, `surveil`, `discard_self`,
-`each_opponent_discards`, `deal_damage_to_opponent_creature`, `mill`,
-`pump_target_creature_until_eot`,
+`each_opponent_discards`, `deal_damage_to_opponent_creature`,
+`mill`, `pump_target_creature_until_eot`,
+**`set_base_pt_until_eot`** (round 18),
+**`fight_target_creature_with_target_creature`** (`feature/rust-fight-effect`),
 `put_plus_one_counter_on_creature_you_control`,
 `return_creature_from_your_graveyard_to_hand`,
 `return_artifact_or_creature_from_your_graveyard_to_hand`,
 `return_creature_or_spacecraft_from_your_graveyard_to_hand`,
+**`return_enchantment_or_creature_from_your_graveyard_to_hand`**,
 `sequence`, `if_you_do`,
 `pump_creatures_opponents_control_until_eot`,
+**`pump_creatures_opponents_control_until_caster_next_turn`**,
 `each_opponent_sacrifices_creature`, `each_opponent_mills_cards`,
 `put_plus_one_counter_on_each_creature_you_control`,
-`return_creature_from_your_graveyard_to_battlefield`, `create_token`,
-`mill_target_player`, `exile_target_creature_until_source_leaves`,
-`discard_card`, `tap_target`, `destroy_target`, `exile_target`,
-`exile_opponents_nonland_permanent_until_leaves`, `return_to_hand`,
+`return_creature_from_your_graveyard_to_battlefield`,
+**`return_enchantment_or_creature_from_your_graveyard_to_battlefield`**,
+`create_token`, `mill_target_player`,
+`exile_target_creature_until_source_leaves`, `discard_card`,
+`tap_target`, `destroy_target`, `exile_target`,
+`exile_opponents_nonland_permanent_until_leaves`,
+**`exile_opponents_nonland_permanent_with_max_mv_until_leaves`**,
+**`grant_keywords_to_target_creature_until_eot`**, `return_to_hand`,
 `owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library`.
+
+---
+
+## ROUND-19 BLOCKED-RUST-EFFECT staleness re-audit (headline finding)
+
+Following round-18's SetBasePT discovery (Rust substrate had
+already landed; only the bridge arm was missing — agent II shipped
+the bridge in 1 commit), this refresh walks the §2.6
+BLOCKED-RUST-EFFECT 42-card inventory item-by-item against the
+current `rust/src/cards.rs` Effect enum to find more arms whose
+Rust substrate has silently landed since the audit was written.
+
+### Headline finding
+
+**4 §2.6 entries (covering ~7 cards) are
+ALREADY-SUBSTRATED-ON-RUST and should be reclassified to either
+PROBED or BLOCKED-BRIDGE-ARM.** Each cell could ship in 1-2 hours
+of bridge-arm work rather than the 1-2 weeks of new Rust the
+audit's §2.6 categorization implied.
+
+| §2.6 entry | Rust substrate | Status change |
+| --- | --- | --- |
+| `SetBasePTUntilEOT` (Genemorph Imago — 1 card) | `Effect::SetBasePTUntilEOT` at `cards.rs:1851` | **SHIPPED** in round 18 (`feature/bridge-set-base-pt-until-eot`); has 1 synthetic ETB cross-engine probe + 7 translator pins + 5 Rust regression pins. **Move to PROBED** (synthetic ETB only — Genemorph-Imago landfall variant + conditional-threshold variant deferred per merge-commit notes; counts as bridge-arm-only follow-up). |
+| `Fight` bare bilateral form (Meltstrider's Resolve — 1 card) | `Effect::FightTargetCreatureWithTargetCreature` at `cards.rs:842` | **SHIPPED** in `feature/rust-fight-effect`; bridge wired + 9 synthetic regression pins. **Move bare-form to PROBED**; Aura-shape (needs new `Effect::EnchantedCreatureFightsTarget` per SEARCH_LIMITATIONS.md) stays BLOCKED-RUST-EFFECT. |
+| `OptionalDiscardThenDraw` / Melded Moxite shape (1 card) | `Effect::IfYouDo` at `cards.rs:1646` + `Effect::DiscardSelf` at `cards.rs:469` | **SHIPPED** — Melded Moxite has a real-EoE probe on main: `test_cross_engine_real_eoe_melded_moxite_etb_if_you_do_discard_draw_parity`. **Move to PROBED.** Audit double-counted under §2.4 + §2.6; only §2.4 was correct. |
+| `AttachToTargetCreatureYouControl` / `EquipToTargetCreatureYouControl` (Auxiliary Boosters, Illvoi Light Jammer, Meltstrider's Gear, Squire's Lightblade — 4 cards) | `Effect::AttachToTargetCreatureYouControl` at `cards.rs:1425`; `Effect::EquipToTargetCreatureYouControl` at `cards.rs:1452` (both with parsers at `cards.rs:3677`/`3680`) | **MOVE TO BLOCKED-BRIDGE-ARM.** Both Rust unit-variant arms exist with parsers; bridge `_ta_dict_to_python_effect` does NOT wire `attach_to_target_creature_you_control` or `equip_to_target_creature_you_control`. Two ~30-LOC bridge-arm slices unblock all 4 cards. |
+
+### Other §2.6 entries with partial Rust substrate
+
+These are not as cleanly reclassifiable, but the audit's
+"true new Rust code" framing overstates the work:
+
+| §2.6 entry | Rust substrate | Bridge gap |
+| --- | --- | --- |
+| `OptionalSacrificeArtifactForCounterAndDraw` (Selfcraft Mechan — 1 card) | `Effect::OptionalSacArtifactForEffect { inner_effect }` at `cards.rs:1371` (parser at `cards.rs:3668`) | Wrapper substrated; inner counter+draw composes via existing `Effect::Sequence` over `PutPlusOneCounterOnSelf` + `DrawCards` (both already substrated + bridge-wired). **One bridge arm slice for the wrapper** unblocks Selfcraft Mechan. Move to BLOCKED-BRIDGE-ARM. |
+| `ChoiceTrigger` / Pulsar Squadron Ace (1 card) | `Effect::LookAtTopNRevealOrCounter` at `cards.rs:2152` (parser at `cards.rs:4272`) | Rust arm exists with parser. Pulsar Squadron Ace's specific revelation-of-Spacecraft variant likely needs a sub-mode parameter, but the substrate dispatch + reveal-or-counter shape is already there. **Move to BLOCKED-BRIDGE-ARM** with sub-mode follow-up risk. |
+| `OptionalCreateTwoTokensOrSelfPump` (Terrapact Intimidator — 1 card) | `Effect::MayDo { effect, prompt }` at `cards.rs:1579` (parser at `cards.rs:3742`) | Wrapper substrated; "create two tokens" sub-mode needs `CreateToken` parameterization for the specific token type. Bridge missing both `may_do` arm AND the create-token parameterization. **Halfway-substrated** — one bridge slice for `may_do` plus per-token parameterization. |
+| `LandfallWithComplexEffect` (Glacier Godmaw, Mightform Harmonizer, Genemorph Imago, Seedship Agrarian, Remnant Elemental — 5 cards) | Predicate substrate (Subject family) ALREADY SHIPPED via `feature/etb-subject-substrate`; **Glacier Godmaw landfall lander-token PROBED on main** (`test_cross_engine_real_eoe_glacier_godmaw_etb_create_lander_artifact_token_leviathan_carrier_parity`) | Per-card effect arms differ: Mightform Harmonizer needs new `Effect::DoubleTargetPowerUntilEOT` (true new Rust). Genemorph Imago landfall = compose existing `SetBasePTUntilEOT` (round 18) with landfall predicate (bridge follow-up). Remnant Elemental = compose existing `PutPlusOneCounterOnSelf` + Subject predicate (bridge composition). Seedship Agrarian needs a new arm. **2 of 5 are bridge-only**, 1 PROBED, 2 still need true new Rust. |
+| `Roving Actuator` void-style exile-then-cast-copy | `Effect::ConditionalIfVoid { then_effect, else_effect }` at `cards.rs:2045` (parser at `cards.rs:4203`) | Void condition substrated. Exile-then-cast-copy still needs new Rust. **Partial unblock** (the trigger shell can lift; the cast-copy effect is the residual gap). |
+| `Famished Worldsire` look-X-and-put-lands-tapped | `Effect::DealDamageEqualToSourcePowerAnyTarget` at `cards.rs:1269` shows the X-from-source-power pattern exists; `Effect::SearchLibraryForBasicLandTapped { count }` at `cards.rs:217` exists for the lands-tapped half | Specific "look-X-then-put-lands-tapped" composition needs new Rust, but the X-plumbing pattern is unblocked. **Partial unblock.** |
+| `Tractor Beam` TapEnchantedYouControlAndDontUntap | `Effect::TapEnchantedPermanent` at `cards.rs:1476` (parser at `cards.rs:3686`) | Tap-enchanted substrated. Control-swap + don't-untap composition still needs new Rust. **Partial unblock.** |
+| `DestroyNoncreatureThenAOEDamage` (Extinguisher Battleship — 1 card) | `Effect::DestroyTargetNonlandPermanent` at `cards.rs:635`; `Effect::DamageEachCreature` at `cards.rs:145`; `Effect::Sequence` at `cards.rs:872` | All component arms substrated! Bridge has `sequence` already; missing `destroy_target_nonland_permanent` and `damage_each_creature` arms. **Could move to BLOCKED-BRIDGE-ARM** with two bridge-arm slices + one composition probe. (Conservatively kept in BLOCKED-RUST-EFFECT for now since the audit didn't enumerate the component arms; flagging for follow-up.) |
+| `CreateLanderToken` parameterized family (13 cards in §2.6) | `Effect::CreateToken { count, token_printing_id }` at `cards.rs:154`; `Effect::CreateTokenCopyOfTargetCreatureYouControl` at `cards.rs:1355` | Create-token base SHIPPED + multiple lander-token printings already PROBED via per-card slices (Galactic Wayfarer, Bioengineered Future, Biomechan Engineer, Biotech Specialist, Glacier Godmaw, plus the Honored Knight-Captain / Knight Luminary / Wedgelight Rammer subset from §2.3). The remaining BLOCKED set in this row is much smaller than 13 — closer to **5 cards** for the unprobed token shapes (Auxiliary Boosters with attach, Dauntless Scrapbot with exile-each-gy, Infinite Guideline Station, Sunstar Expansionist, Terrapact Intimidator with may_do). |
+
+### Truly BLOCKED-RUST-EFFECT residue (confirmed no Rust arm)
+
+| §2.6 entry | Status |
+| --- | --- |
+| `TapTargetAndPutStunCounter` (Mechanozoa, Cryogen Relic activated half — 2 cards) | No StunCounter substrate in Rust. Confirmed BLOCKED-RUST-EFFECT. |
+| `DoubleTargetPowerUntilEOT` (Mightform Harmonizer — 1 card) | No Rust arm. Confirmed. |
+| `CastFromExileWithCostHike` (Lightstall Inquisitor — 1 card) | No Rust arm. Confirmed. |
+| `SacUnlessYouTap` (Command Bridge — 1 card) | No Rust arm. Confirmed (first land-ETB in audit). |
+| `ReturnPermanentCardWithMVXorLessFromGY` (Astelli Reclaimer — 1 card) | No mana-value-condition GY-return arm in Rust. Confirmed. |
+| `DealDamageToAnyTargetEqualToArtifactCount` (Warmaker Gunship — 1 card) | No X-from-artifact-count plumbing. Adjacent `DealDamageEqualToSourcePowerAnyTarget` exists (different denominator) but artifact-count specifically needs its own arm. Confirmed. |
+| `PumpAndGrantDiesReturnTrigger` (Perigee Beckoner — 1 card) | No nested-trigger-grant substrate. Confirmed. |
+| `TwoMobileSubjects` (Monoist Circuit-Feeder — 1 card) | No simultaneous-two-target substrate. Confirmed. |
+| `EachOpponentExilesFromHand` (Lightstall Inquisitor — 1 card; same card as cast-from-exile entry above) | No Rust arm. Confirmed. |
+| `EnchantedDealsDamageThenPropagate` (Pain for All — 1 card) | No self-replicating damage substrate. Confirmed. |
+| `ExileEachOpponentGYAndCreateToken` (Dauntless Scrapbot — 1 card) | No exile-each-graveyard substrate. Confirmed. |
+| `Faller's Faithful` (`damage-this-turn` tracking — §2.7) | No damage-this-turn ledger. Confirmed. |
+| Aura-shape `Fight` for Meltstrider's Resolve | Needs `Effect::EnchantedCreatureFightsTarget` — Rust does NOT have it, only the bare bilateral form. Confirmed per `SEARCH_LIMITATIONS.md`. |
+
+### Headline-impact summary (round-19 re-audit)
+
+- **BLOCKED-RUST-EFFECT count: 42 → ~28** (reduction of ~14):
+  - 3 cards moved to PROBED (`SetBasePTUntilEOT`, bare `Fight`,
+    Melded Moxite — already had probes the audit didn't credit).
+  - 4 cards moved to BLOCKED-BRIDGE-ARM (Auxiliary Boosters,
+    Illvoi Light Jammer, Meltstrider's Gear, Squire's Lightblade —
+    via `AttachTo`/`EquipTo` substrate).
+  - 1 card moved to BLOCKED-BRIDGE-ARM (Selfcraft Mechan —
+    `OptionalSacArtifactForEffect` substrate).
+  - 1 card moved to BLOCKED-BRIDGE-ARM (Pulsar Squadron Ace —
+    `LookAtTopNRevealOrCounter` substrate; sub-mode follow-up risk).
+  - 1 card moved to PROBED (Glacier Godmaw — landfall create-token
+    variant from §2.6's "LandfallWithComplexEffect" bucket).
+  - The "DestroyNoncreatureThenAOEDamage" (Extinguisher Battleship)
+    + Terrapact Intimidator entries flagged for follow-up
+    (substrate exists; bridge composition pending).
+- **BLOCKED-BRIDGE-ARM count: ~5 → ~12** (the 6 newly-reclassified
+  entries above bring the bridge-arm-only backlog up — but this
+  is the *cheap* backlog; each card ships in 1-2 hours of bridge-
+  arm slice work).
+- **PROBED on main: 34 → 48** (+14 distinct real-EoE printings vs
+  prior refresh).
+
+### Pattern + recommendation
+
+The pattern matches round-18's SetBasePT finding precisely: the
+audit's §2.6 buckets were measured at `a2755769` before substantial
+Rust work landed (rust-tdd-base + rust-tdd-integrated branches
+through r19, plus targeted slices like `feature/rust-fight-effect`
+and the round-18 SetBasePT-bridge slice itself). Each subsequent
+round of Rust effect work reduces the actually-blocking count
+without the audit catching up.
+
+**Recommendation: trigger the next audit refresh on Rust-side
+merges into main, not on elapsed rounds.** A nightly cron diffing
+`rust/src/cards.rs::Effect` arm count + `_ta_dict_to_python_effect`
+arm count against the audit's tally would surface staleness
+automatically. Without that, each Rust merge adds shadow-
+substrate that misleads probe-slice planning into expecting Rust
+work that's already done.
+
+The §1 table and the per-card §2.x tables below remain the
+as-of-`a2755769` historical inventory. Use the headline section
+above for current totals; treat the legacy sections as
+documentary context.
+
+## Historical: round-10 refresh narrative (as-of `ebb5c6ec`, 2026-05-13)
+
+Kept verbatim for cross-round reference; the round-19 headline
+section above supersedes the counts. Use the round-19 section for
+current planning.
 
 **Headline-count delta vs the `a2755769` snapshot** (the §1 table
 below):
