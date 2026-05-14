@@ -1596,3 +1596,213 @@ def test_config_json_malformed_blob_does_not_break_endpoint(
     body = client.get("/api/runs/iter_bogus_cycle").get_json()
     assert body["run_id"] == "iter_bogus_cycle"
     assert "replays_dir" not in body
+
+
+def test_cycle_replays_aggregate_via_parent_run_id(
+    client, progress_dir: Path, tmp_path: Path,
+):
+    """Cycle ``/replays`` walks ``runs.parent_run_id`` to find stage
+    + shard descendants and globs each descendant's subdir. The cycle's
+    own ``replays_dir`` (``config_json``-side) is the BARE ROOT; we
+    must not enumerate flat files at that root, only the per-descendant
+    subdirs. Subdir names match the descendant ``run_id`` (iterate's
+    fs convention)."""
+    replays_root = tmp_path / "replays"
+    # Two stage descendants, one shard descendant under a stage. All
+    # three have their own capture subdirs under the cycle root.
+    sp_dir = replays_root / "iter_009_self_play_v5"
+    ev_dir = replays_root / "iter_009_eval_v5_vs_v4"
+    sp_shard_dir = replays_root / "iter_009_self_play_v5_shard_local"
+    for d in (sp_dir, ev_dir, sp_shard_dir):
+        d.mkdir(parents=True)
+    (sp_dir / "game_seed0_idx0020.json.gz").write_bytes(b"")
+    (sp_dir / "game_seed0_idx0040.json.gz").write_bytes(b"")
+    (ev_dir / "game_seed1_idx0000.json.gz").write_bytes(b"")
+    (sp_shard_dir / "game_seed2_idx0000.json.gz").write_bytes(b"")
+    # Bare-root flat file that must NOT surface (legacy leftover):
+    (replays_root / "legacy_probe.json.gz").write_bytes(b"")
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_009_cycle", kind="iterate", status="running",
+            started_at="2026-05-13T05:00:00+00:00",
+            config_json=json.dumps({
+                "kind": "cycle", "iter_idx": 9,
+                "replays_dir": str(replays_root),
+                "capture_every_self_play": 20,
+                "capture_every_eval": 50,
+            }),
+        )
+        _seed_run(
+            conn, "iter_009_self_play_v5", kind="self_play",
+            status="running",
+            started_at="2026-05-13T05:01:00+00:00",
+            parent_run_id="iter_009_cycle",
+        )
+        _seed_run(
+            conn, "iter_009_eval_v5_vs_v4", kind="eval", status="running",
+            started_at="2026-05-13T05:02:00+00:00",
+            parent_run_id="iter_009_cycle",
+        )
+        _seed_run(
+            conn, "iter_009_self_play_v5_shard_local", kind="self_play",
+            status="running",
+            started_at="2026-05-13T05:01:30+00:00",
+            parent_run_id="iter_009_self_play_v5",  # transitive
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/iter_009_cycle/replays").get_json()
+    assert body["count"] == 4
+    subpaths = sorted(r["subpath"] for r in body["replays"])
+    assert subpaths == [
+        "iter_009_eval_v5_vs_v4/game_seed1_idx0000.json.gz",
+        "iter_009_self_play_v5/game_seed0_idx0020.json.gz",
+        "iter_009_self_play_v5/game_seed0_idx0040.json.gz",
+        "iter_009_self_play_v5_shard_local/game_seed2_idx0000.json.gz",
+    ]
+    # The legacy flat file at the bare root must NOT be in the list.
+    assert all("legacy_probe" not in s for s in subpaths)
+
+
+def test_cycle_replays_empty_when_no_descendants(
+    client, progress_dir: Path, tmp_path: Path,
+):
+    """A cycle that hasn't started any stage runs yet (or whose
+    descendants have no replays_dir on disk) returns count=0 — not
+    a 500, and not the bare-root flat files."""
+    replays_root = tmp_path / "replays"
+    replays_root.mkdir()
+    (replays_root / "stray.json.gz").write_bytes(b"")
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_010_cycle", kind="iterate", status="running",
+            started_at="2026-05-13T05:00:00+00:00",
+            config_json=json.dumps({
+                "kind": "cycle", "iter_idx": 10,
+                "replays_dir": str(replays_root),
+                "capture_every_self_play": 20,
+                "capture_every_eval": 0,
+            }),
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/iter_010_cycle/replays").get_json()
+    assert body["count"] == 0
+    assert body["replays"] == []
+    assert str(replays_root) == body["replays_dir"]
+
+
+def test_cycle_replays_skips_missing_descendant_subdirs(
+    client, progress_dir: Path, tmp_path: Path,
+):
+    """A descendant whose subdir doesn't exist yet on disk (capture
+    rate set but no game has hit a capture point) doesn't crash —
+    that descendant just contributes 0 files."""
+    replays_root = tmp_path / "replays"
+    sp_dir = replays_root / "iter_011_self_play_v5"
+    sp_dir.mkdir(parents=True)
+    (sp_dir / "g.json.gz").write_bytes(b"")
+    # ev_dir intentionally NOT created — descendant exists in DB but
+    # no on-disk subdir yet.
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_011_cycle", kind="iterate", status="running",
+            started_at="2026-05-13T05:00:00+00:00",
+            config_json=json.dumps({
+                "kind": "cycle",
+                "replays_dir": str(replays_root),
+                "capture_every_self_play": 20,
+                "capture_every_eval": 50,
+            }),
+        )
+        _seed_run(
+            conn, "iter_011_self_play_v5", kind="self_play",
+            status="running",
+            started_at="2026-05-13T05:01:00+00:00",
+            parent_run_id="iter_011_cycle",
+        )
+        _seed_run(
+            conn, "iter_011_eval_v5_vs_v4", kind="eval", status="running",
+            started_at="2026-05-13T05:02:00+00:00",
+            parent_run_id="iter_011_cycle",
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/iter_011_cycle/replays").get_json()
+    assert body["count"] == 1
+    assert body["replays"][0]["subpath"] == (
+        "iter_011_self_play_v5/g.json.gz"
+    )
+
+
+def test_cycle_replays_falls_back_to_default_root(
+    client, progress_dir: Path, tmp_path: Path, monkeypatch,
+):
+    """Older cycle rows that predate the ``replays_dir`` fan-out have
+    no ``replays_dir`` in config_json. The endpoint falls back to
+    iterate's argparse default ``Path("replays")`` so those cycles
+    still surface their captures."""
+    workdir = tmp_path / "work"
+    sp_dir = workdir / "replays" / "iter_012_self_play_v5"
+    sp_dir.mkdir(parents=True)
+    (sp_dir / "g.json.gz").write_bytes(b"")
+    monkeypatch.chdir(workdir)
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_012_cycle", kind="iterate", status="running",
+            started_at="2026-05-13T05:00:00+00:00",
+            config_json=json.dumps({"kind": "cycle", "iter_idx": 12}),
+        )
+        _seed_run(
+            conn, "iter_012_self_play_v5", kind="self_play",
+            status="running",
+            started_at="2026-05-13T05:01:00+00:00",
+            parent_run_id="iter_012_cycle",
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/iter_012_cycle/replays").get_json()
+    assert body["count"] == 1
+    assert body["replays_dir"] == "replays"
+    assert body["replays"][0]["subpath"] == (
+        "iter_012_self_play_v5/g.json.gz"
+    )
+
+
+def test_stage_replays_unchanged_by_cycle_branch(
+    client, progress_dir: Path, tmp_path: Path,
+):
+    """The cycle branch is gated on ``_db_kind == 'iterate'``; a
+    stage row (kind=self_play) still uses the legacy single-subdir
+    glob without parent-tree aggregation."""
+    rep_dir = tmp_path / "replays" / "iter_013_self_play_v5"
+    rep_dir.mkdir(parents=True)
+    (rep_dir / "a.json.gz").write_bytes(b"")
+    (rep_dir / "b.json.gz").write_bytes(b"")
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_013_self_play_v5", kind="self_play",
+            status="running",
+            started_at="2026-05-13T05:01:00+00:00",
+        )
+        _seed_progress(
+            conn, "iter_013_self_play_v5",
+            extra={"replays_dir": str(rep_dir)},
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/iter_013_self_play_v5/replays").get_json()
+    assert body["count"] == 2
+    assert body["replays_dir"] == str(rep_dir)
+    # Stage subpath is just `<this_run_id>/<filename>` (replays_dir.name
+    # / filename); no parent-tree walk.
+    subpaths = sorted(r["subpath"] for r in body["replays"])
+    assert subpaths == [
+        "iter_013_self_play_v5/a.json.gz",
+        "iter_013_self_play_v5/b.json.gz",
+    ]

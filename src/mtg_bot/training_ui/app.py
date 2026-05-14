@@ -728,6 +728,72 @@ def _read_json_cycle_id(progress_dir: Path, run_id: str) -> Optional[str]:
     return cid if isinstance(cid, str) else None
 
 
+# ---- Cycle-replay aggregation --------------------------------------------
+
+
+def _cycle_replays_payload(
+    progress_dir: Path,
+    run: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    """Build the ``/replays`` payload for a cycle row by walking
+    ``parent_run_id`` descendants.
+
+    iterate's filesystem convention is
+    ``<cycle_replays_dir>/<descendant_run_id>/*.json.gz`` — every
+    stage + shard gets its own subdir named after its DB ``run_id``.
+    We pull the cycle's root from its ``config_json`` (fanned out
+    onto ``run["replays_dir"]`` by ``_row_to_ui_dict``; fall back to
+    iterate's argparse default ``Path("replays")`` so older cycle
+    rows that predate the fan-out still render).
+
+    Descendants come from a recursive CTE on ``runs.parent_run_id``;
+    shards under stages are reached transitively. Each descendant's
+    subdir is globbed non-recursively (captures are leaves), and
+    the union becomes the cycle's listing.
+
+    Returns the same envelope shape as the non-cycle branch so the
+    JS doesn't need a discriminator: ``replays_dir`` (root str),
+    ``replays`` (list of ``{filename, subpath}``), ``count``.
+    """
+    replays_root_str = run.get("replays_dir") or "replays"
+    replays_root = Path(replays_root_str)
+    descendants: list[str] = []
+    conn = _open_conn(progress_dir)
+    if conn is not None:
+        try:
+            cur = conn.execute(
+                """
+                WITH RECURSIVE descendants(run_id) AS (
+                    SELECT run_id FROM runs WHERE parent_run_id = ?
+                    UNION ALL
+                    SELECT runs.run_id FROM runs
+                    JOIN descendants ON runs.parent_run_id = descendants.run_id
+                )
+                SELECT run_id FROM descendants
+                """,
+                (run_id,),
+            )
+            descendants = [row[0] for row in cur.fetchall()]
+        finally:
+            conn.close()
+    replays: list[dict[str, str]] = []
+    for descendant_id in descendants:
+        subdir = replays_root / descendant_id
+        if not subdir.is_dir():
+            continue
+        for path in sorted(subdir.glob("*.json.gz")):
+            replays.append({
+                "filename": path.name,
+                "subpath": f"{descendant_id}/{path.name}",
+            })
+    return {
+        "replays_dir": str(replays_root),
+        "replays": replays,
+        "count": len(replays),
+    }
+
+
 # ---- Flask app factory ----------------------------------------------------
 
 
@@ -904,13 +970,27 @@ def create_app(
     def api_run_replays(run_id: str):
         """List captured replay files for a given run.
 
-        ``replays_dir`` lives in the producer's progress JSON (and
-        flows through ``run_progress.extra_json`` after the backfill).
-        We read it from whichever the run-detail dict surfaces.
+        Cycle rows (``kind = 'iterate'``) aggregate captures across
+        their descendants — the cycle's ``replays_dir`` is the bare
+        root (e.g. ``replays/``), and per-stage / per-shard captures
+        live in ``replays/<descendant_run_id>/`` subdirs (iterate's
+        filesystem convention; see ``cli.iterate`` lines 2104 / 2389
+        and ``training.distributed`` line 4886). Listing the bare root
+        non-recursively would surface only legacy flat files
+        unrelated to this iter. Instead we walk the ``parent_run_id``
+        graph from the DB and glob each descendant's subdir.
+
+        Non-cycle rows (``self_play`` / ``eval`` stages, shards)
+        keep the original behavior: ``replays_dir`` is already the
+        per-run subdir and we glob it directly.
         """
         run = _get_run_detail(app.config["PROGRESS_DIR"], run_id)
         if run is None:
             abort(404)
+        if run.get("_db_kind") == "iterate":
+            return jsonify(_cycle_replays_payload(
+                app.config["PROGRESS_DIR"], run, run_id,
+            ))
         replays_dir_str = run.get("replays_dir")
         if not replays_dir_str:
             return jsonify({
