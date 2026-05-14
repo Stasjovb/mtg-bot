@@ -4977,5 +4977,178 @@ def test_rust_parser_accepts_search_library_for_card_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_look_top_n_put_one_in_hand_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round-21 audit refresh) -- Codecracker
+    Hound family. Rust ``{"kind": "look_top_n_put_one_in_hand_rest_to_
+    graveyard", "n": 2}`` translates to Python
+    ``LookTopNPutOneInHandRestToGraveyard(n=2)``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3744-3761 (single
+    required `n` field, i32, non-negative). Field name `n` agrees on
+    both engines (no rename in the bridge). Pin verifies the n field
+    is correctly stored.
+    """
+    from mtg_bot.effects.generic.library_lookat import (
+        LookTopNPutOneInHandRestToGraveyard,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "look_top_n_put_one_in_hand_rest_to_graveyard", "n": 2}
+    )
+    assert isinstance(e, LookTopNPutOneInHandRestToGraveyard)
+    assert e.n == 2
+
+
+def test_bridge_look_top_n_put_one_in_hand_commune_with_evil_shape():
+    """Bridge arm pin: full Commune-with-Evil shape (n=4) round-trips.
+    Pulls in the Python class default-equivalent value (4) explicitly
+    via the dict path so a future change to the Python default never
+    masks a bridge bug -- the dict-shape contract is independent of
+    the class-level default.
+    """
+    from mtg_bot.effects.generic.library_lookat import (
+        LookTopNPutOneInHandRestToGraveyard,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "look_top_n_put_one_in_hand_rest_to_graveyard", "n": 4}
+    )
+    assert e == LookTopNPutOneInHandRestToGraveyard(n=4)
+
+
+def test_bridge_look_top_n_put_one_in_hand_extra_keys_ignored():
+    """Round-trip pin: extra keys on the dict are silently ignored
+    (the variant carries only one field, `n`). Mirrors the existing
+    bridge-arm extra-keys-ignored convention (set_base_pt_until_eot,
+    attach_to_target_creature_you_control). Forward-compatible with
+    future rider-widened Rust variants -- those would land as
+    separate ``kind`` arms on this translator.
+    """
+    from mtg_bot.effects.generic.library_lookat import (
+        LookTopNPutOneInHandRestToGraveyard,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "look_top_n_put_one_in_hand_rest_to_graveyard",
+            "n": 2,
+            "ignored_extra_field": "noise",
+        }
+    )
+    assert isinstance(e, LookTopNPutOneInHandRestToGraveyard)
+    assert e.n == 2
+
+
+def test_bridge_look_top_n_put_one_in_hand_missing_n_raises():
+    """Bridge arm pin: missing required `n` field raises ValueError to
+    mirror Rust's parse_effect contract at cards.rs:3744-3760 (which
+    raises PyValueError on missing `n`). Python's class has a default
+    of 4 (Commune-with-Evil shape), but the bridge enforces explicit
+    `n` to keep the dict-shape contract aligned with Rust's parse
+    path -- mirrors the round-20 LookAtTopNRevealOrCounter `n`-
+    required precedent.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="missing required field 'n'"):
+        _ta_dict_to_python_effect(
+            {"kind": "look_top_n_put_one_in_hand_rest_to_graveyard"}
+        )
+
+
+def test_bridge_look_top_n_put_one_in_hand_int_coercion():
+    """Bridge arm pin: `int(...)` coercion on `n` handles JSON-shape
+    int values cleanly (mirrors the LookAtTopNRevealOrCounter
+    int-coercion-robustness pin). Pins the explicit
+    ``int(eff_dict["n"])`` cast so a downstream consumer never gets
+    a stringy / floaty `n` slipping through.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "look_top_n_put_one_in_hand_rest_to_graveyard", "n": 5}
+    )
+    assert e.n == 5
+    assert isinstance(e.n, int)
+
+
+def test_bridge_look_top_n_put_one_in_hand_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([LookTopNPut..., DrawCards])`` translates correctly via
+    the recursive Sequence translator. Pins this arm against
+    accidental dispatch loss inside Sequence -- the recursive
+    translation walks each child via the same
+    ``_ta_dict_to_python_effect`` so this also exercises the
+    recursive path for the look-N arm.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.library_lookat import (
+        LookTopNPutOneInHandRestToGraveyard,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "look_top_n_put_one_in_hand_rest_to_graveyard",
+                    "n": 2,
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], LookTopNPutOneInHandRestToGraveyard)
+    assert e.effects[0].n == 2
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_look_top_n_put_one_in_hand_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "look_top_n_put_one_in_hand_rest_to_graveyard",
+    "n": 2}`` dict shape on a triggered_ability carrier. The bridge
+    dict shape must register cleanly on the Rust side too; this
+    lockstep gate keeps the bridge from drifting away from Rust's
+    parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms (set_base_pt_until_eot, may_do, attach_to_target_
+    creature_you_control). Rust's parse_effect arm at
+    ``rust/src/cards.rs:3744-3761`` accepts the bare dict shape with
+    a required `n: i32` field.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- LookTopNPutOneInHand",
+        "card_types": ["Creature"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "look_top_n_put_one_in_hand_rest_to_graveyard",
+                    "n": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
