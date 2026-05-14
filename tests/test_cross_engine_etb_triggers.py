@@ -5355,5 +5355,159 @@ def test_rust_parser_accepts_put_plus_one_counter_on_each_of_up_to_n_in_triggere
     assert pid == 0
 
 
+def test_bridge_put_plus_one_counter_on_self_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 22 fresh discovery walk) --
+    PutPlusOneCounterOnSelf family. Rust ``{"kind": "put_plus_one_
+    counter_on_self", "amount": 1}`` translates to Python
+    ``PutPlusOneCounterOnSelf(amount=1)``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3287-3306 (optional
+    `amount` field with default 1, i32, non-negative). Field name
+    `amount` agrees on both engines (no rename in the bridge). Pin
+    verifies the amount field is correctly stored.
+    """
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_plus_one_counter_on_self", "amount": 1}
+    )
+    assert isinstance(e, PutPlusOneCounterOnSelf)
+    assert e.amount == 1
+
+
+def test_bridge_put_plus_one_counter_on_self_amount_default_to_one():
+    """Bridge arm pin: missing `amount` defaults to 1 (mirrors Rust's
+    parse_effect default-handling at cards.rs:3293-3295 -- ``None ->
+    1``). This is the round-23 sister default-handling shape (vs the
+    required-field shape of round-21's up-to-N-counters slice). The
+    EoE consumer Sunstar Lightsmith carries amount=1 implicit; the
+    bridge must accept the bare ``{"kind": "..."}`` dict without an
+    explicit amount.
+    """
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "put_plus_one_counter_on_self"})
+    assert isinstance(e, PutPlusOneCounterOnSelf)
+    assert e.amount == 1
+
+
+def test_bridge_put_plus_one_counter_on_self_amount_two():
+    """Bridge arm pin: explicit amount=2 round-trips. Pulls in a
+    value distinct from the class-level default (1) so a future
+    change to the Python default never masks a bridge bug -- the
+    dict-shape contract is independent of the class-level default.
+    """
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_plus_one_counter_on_self", "amount": 2}
+    )
+    assert e == PutPlusOneCounterOnSelf(amount=2)
+
+
+def test_bridge_put_plus_one_counter_on_self_amount_zero_silent_noop():
+    """Bridge arm pin: amount=0 is a valid silent-no-op shape. Both
+    engines accept amount=0 (Rust at state_ops_resolve.rs:2607-2609
+    short-circuits; Python's class accepts 0 cleanly via
+    add_plus_one_counters). Bridge must NOT reject 0 -- only negative
+    amount raises.
+    """
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_plus_one_counter_on_self", "amount": 0}
+    )
+    assert isinstance(e, PutPlusOneCounterOnSelf)
+    assert e.amount == 0
+
+
+def test_bridge_put_plus_one_counter_on_self_negative_amount_raises():
+    """Bridge arm pin: negative amount raises ValueError to mirror
+    Rust's parse_effect contract at cards.rs:3296-3300 (which raises
+    PyValueError on negative amount). Bridge mirrors the contract so
+    a typo in a fixture surfaces immediately rather than silently
+    constructing a no-op effect.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="amount must be non-negative"):
+        _ta_dict_to_python_effect(
+            {"kind": "put_plus_one_counter_on_self", "amount": -1}
+        )
+
+
+def test_bridge_put_plus_one_counter_on_self_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([PutPlusOneCounterOnSelf(1), DrawCards(1)])`` translates
+    correctly via the recursive Sequence translator. Pins this arm
+    against accidental dispatch loss inside Sequence -- the recursive
+    translation walks each child via the same
+    ``_ta_dict_to_python_effect`` so this also exercises the recursive
+    path for the put-plus-one-counter-on-self arm.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "put_plus_one_counter_on_self", "amount": 1},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], PutPlusOneCounterOnSelf)
+    assert e.effects[0].amount == 1
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_put_plus_one_counter_on_self_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "put_plus_one_counter_on_self", "amount": 1}`` dict
+    shape on a triggered_ability carrier. The bridge dict shape must
+    register cleanly on the Rust side too; this lockstep gate keeps
+    the bridge from drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms (look_top_n_put_one_in_hand,
+    set_base_pt_until_eot, may_do, up_to_n_counters). Rust's
+    parse_effect arm at ``rust/src/cards.rs:3287-3306`` accepts the
+    dict shape with optional `amount: i32` field defaulting to 1.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- PutPlusOneCounterOnSelf",
+        "card_types": ["Creature"],
+        "mana_cost": {"W": 1, "generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counter_on_self",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
