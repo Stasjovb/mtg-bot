@@ -9687,6 +9687,145 @@ def test_resolve_return_creature_or_spacecraft_cross_controller_routing(engine):
     assert state.find_object_zone(p0_spacecraft_id) == ZONE_GRAVEYARD
 
 
+# ===== or_enchantment rider arm: 4 happy-path / edge-case pins =====
+#
+# Mirrors the or_artifact / or_spacecraft block above. Filter is
+# the disjunction `card_types.contains("Creature") ||
+# card_types.contains("Enchantment")` — both branches read off
+# `printing.card_types` (Enchantment is a CARD TYPE, not a subtype,
+# so this differs from the Spacecraft arm which reads
+# `printing.subtypes` for the second branch).
+#
+# Audit consumer in EoE is Rescue Skiff, which carries the rider
+# but on the to-BATTLEFIELD destination. The to-hand variant lands
+# here for substrate symmetry alongside the existing or_artifact /
+# or_spacecraft to-hand arms.
+
+
+def _return_enchantment_or_creature_dict():
+    """Synthetic 'Recur Enchantment Or Creature' sorcery — single-
+    effect 'return target creature or enchantment card from your
+    graveyard to your hand'. Used by the or_enchantment rider
+    regression pins."""
+    return {
+        "name": "Test Enchant Recur",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"B": 1},
+        "effects": [
+            {
+                "kind": "return_enchantment_or_creature_from_your_graveyard_to_hand"
+            }
+        ],
+    }
+
+
+def _vanilla_enchantment_dict(name="Test Enchantment"):
+    """A non-creature enchantment printing for graveyard injection.
+    Used to exercise the enchantment branch of the or_enchantment
+    disjunction. The bare unit-variant arm and the or_artifact /
+    or_spacecraft sibling arms would NOT pull this."""
+    return {
+        "name": name,
+        "card_types": ["Enchantment"],
+        "mana_cost": {"generic": 2},
+    }
+
+
+def test_resolve_return_enchantment_or_creature_pulls_creature(synthetic_state):
+    """Happy path 1: a creature card in p0's graveyard is pulled by
+    the or_enchantment-rider arm (creature branch of the disjunction).
+    Same observable as the bare unit variant when the graveyard
+    contains a creature."""
+    creature_id = synthetic_state.register_and_inject_object(
+        _vanilla_creature_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_enchantment_or_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.find_object_zone(creature_id) == ZONE_HAND
+
+
+def test_resolve_return_enchantment_or_creature_pulls_enchantment(
+    synthetic_state,
+):
+    """Happy path 2: a non-creature enchantment card in p0's graveyard
+    is pulled by the or_enchantment-rider arm (enchantment branch).
+    Key delta from the bare unit variant — that arm would silently
+    no-op on an enchantment-only graveyard. Also a discriminator vs
+    the or_artifact and or_spacecraft sibling arms — neither would
+    pull a plain Enchantment."""
+    enchantment_id = synthetic_state.register_and_inject_object(
+        _vanilla_enchantment_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_enchantment_or_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Post-fix: enchantment moved to hand on the enchantment branch
+    # of the disjunction.
+    assert synthetic_state.find_object_zone(enchantment_id) == ZONE_HAND
+
+
+def test_resolve_return_enchantment_or_creature_skips_artifact_no_enchantment(
+    synthetic_state,
+):
+    """Edge case / discriminator: a plain Artifact (no Creature, no
+    Enchantment) does NOT qualify. Distinct from the or_artifact arm
+    which WOULD pull this artifact — the disjunction here is
+    creature-or-enchantment, NOT creature-or-artifact.
+
+    This pins the rider's filter as creature-or-enchantment
+    specifically (vs the sibling arms' creature-or-artifact and
+    creature-or-Spacecraft predicates)."""
+    artifact_id = synthetic_state.register_and_inject_object(
+        _vanilla_artifact_dict(), 0, ZONE_GRAVEYARD
+    )
+    spell_id = synthetic_state.register_and_inject_object(
+        _return_enchantment_or_creature_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.push_to_stack(spell_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # Artifact stayed in graveyard — neither branch matched.
+    assert synthetic_state.find_object_zone(artifact_id) == ZONE_GRAVEYARD
+
+
+def test_resolve_return_enchantment_or_creature_cross_controller_routing(engine):
+    """**I82 controller-of-effect inheritance pin.** On p0's turn
+    (active_player=0), the or_enchantment-rider source cast by p1
+    must scan p1's graveyard and push to p1's hand — NOT
+    active_player's. Mirrors the unit-variant + sibling-arm I82
+    regression pins."""
+    state = engine.make_synthetic_state()
+    assert state.active_player == 0
+
+    # Inject enchantments into each player's graveyard. The scan
+    # must find p1's, not p0's.
+    p0_enchantment_id = state.register_and_inject_object(
+        _vanilla_enchantment_dict("P0 Enchantment"), 0, ZONE_GRAVEYARD
+    )
+    p1_enchantment_id = state.register_and_inject_object(
+        _vanilla_enchantment_dict("P1 Enchantment"), 1, ZONE_GRAVEYARD
+    )
+
+    src_id = state.register_and_inject_object(
+        _return_enchantment_or_creature_dict(), 1, ZONE_HAND
+    )
+
+    # Push with controller=1, active still 0.
+    state.push_to_stack(src_id, 1)
+    state.resolve_top_of_stack()
+
+    # P1's enchantment reanimated to p1's hand; p0's untouched.
+    assert state.find_object_zone(p1_enchantment_id) == ZONE_HAND
+    assert state.find_object_zone(p0_enchantment_id) == ZONE_GRAVEYARD
+
+
 # -------------------- Round-28 DealDamageEqualToSourcePowerAnyTarget (2 cards) --------------------
 
 
