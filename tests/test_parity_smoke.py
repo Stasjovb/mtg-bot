@@ -29466,6 +29466,549 @@ def test_cross_engine_synthetic_etb_exile_target_cross_controller_routes_to_sour
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_synthetic_etb_owner_puts_target_artifact_or_creature_on_top_or_bottom_cross_controller_routes_to_source_controller_opponent_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB
+    ``owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library``
+    (OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary) trigger
+    fired by a permanent CONTROLLED BY P1 while ACTIVE_PLAYER=P0 --
+    the I78 controller-of-effect fix's cross-engine flicker on the
+    new ``owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library``
+    bridge arm (commit b2b3a867). Both engines must put the bait
+    artifact on P0's bf onto the BOTTOM of P0's library (P0 is the
+    SOURCE's controller's OPPONENT, ``defender = 1 - controller``,
+    AND P0 is the OWNER of the bait so the bottom-vs-top choice
+    routes through P0's agent), NOT an artifact-or-creature on P1's
+    bf (which would happen if the resolve derived
+    ``defender = 1 - active_player`` on the pre-I78 substrate).
+
+    **The I78 substrate.** Per the bridge arm comment in
+    ``_ta_dict_to_python_effect`` (cross_engine.py): pre-I78 Rust's
+    ``Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
+    resolve arm at ``state_ops_resolve.rs:5173`` derived
+    ``defender = 1 - state.active_player`` directly. Wrong when
+    the resolving spell / triggered ability has a controller !=
+    active_player. The I78 fix routes that derivation through
+    ``current_resolve_source_controller`` (with active_player
+    fallback for direct ``apply_effect_pub`` callers), so cross-
+    controller OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary
+    correctly targets the SOURCE's controller's OPPONENT's first
+    artifact-or-creature. Sibling closure to I70 / I75 / I76 / I79 /
+    I80 -- identical defender-swap shape; differs in destination
+    zone (owner's library top-or-bottom for I78 vs exile / hand /
+    graveyard for the siblings) and adds an OWNER-side top-vs-
+    bottom choice via the agent's ``choose_mode`` hook.
+
+    **First-slice deterministic-bottom convention.** Per the Rust
+    Effect variant docstring (cards.rs:1151-1158), Rust has no
+    decision-callback substrate yet for the owner-side top-vs-
+    bottom choice and deterministically picks BOTTOM (a reasonable
+    first-slice mirror because decision-callback agents typically
+    default-pick the bottom option when offered top/bottom -- least
+    disruptive). Python's resolve calls
+    ``owner.agent.choose_mode(state, owner_id, ["top of library",
+    "bottom of library"])`` (effects/generic/zone_moves.py:87-93)
+    with the no-agent fallback at line 92-93 picking TOP. To
+    cross-engine match Rust's deterministic bottom pick, this probe
+    seats ``_PickBottomLibraryAgent`` on P0 (the OWNER of the
+    bait), which returns 1 from ``choose_mode``. The two engines
+    then agree on bottom-of-library destination.
+
+    Python's
+    ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary.resolve(
+    state, controller_id, targets)`` (effects/generic/zone_moves.py:68)
+    is target-required via the ``targets[0]`` ``("permanent",
+    target_id)`` pick. The agent on the source's controller (P1)
+    picks the artifact-or-creature target from ``legal_targets``
+    (which emits one ``("permanent", id)`` entry per artifact-or-
+    creature bf object across BOTH controllers -- the printed text
+    has no controller restriction, unlike I80's
+    "an opponent controls" rider). The
+    ``_PickFirstOpponentTargetCreaturePreferredAgent`` shim's
+    opponent-controlled filter walks legal_targets and picks the
+    first non-player entry whose controller != player_id; it works
+    for ``("permanent", id)`` shapes too (the shim's
+    "creature-preferred" name reflects its origin substrate but the
+    actual implementation is filter-shape-agnostic for any non-
+    player target kind). Combined with the bait-artifact-only
+    seating on P0 and the source-only seating on P1, the picker
+    deterministically lands on the bait artifact, mirroring Rust's
+    ``defender = 0`` first-bf-artifact-or-creature scan.
+
+    **Why synthetic, not a real EoE card.** The
+    ``owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library``
+    arm bridges Lost-in-Space-shape oracle text. EoE doesn't ship a
+    bare-rider-shape ETB owner-puts-on-library enchantment today
+    (the field's printings carry mode-choice or rider widenings),
+    so a synthetic 2/2 Spacecraft (artifact carrier mirroring the
+    cross-controller exile-creature-until-leaves probe shape) with
+    the bridged trigger keeps this probe self-contained and
+    exercises the bare-default Python shape (nonland_permanent=False)
+    the bridge constructs. Mirrors the I79 / I80 cross-controller
+    probes (commits 5aefc9df / 24816b31) shape exactly.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Pre-seat a vanilla bait artifact on P0's bf** (Cross-
+         Controller I78 Bait Artifact, an inert non-creature
+         artifact). P0 controls AND owns the bait; it's the only
+         eligible artifact-or-creature opponent-controlled
+         permanent from the source's perspective. Choosing an
+         artifact (not a creature) load-bears the I78 filter
+         widening: I79 narrows to creatures while I78 widens to
+         "Artifact OR Creature". The artifact would silent-fizzle
+         under the I79 picker but resolves cleanly under I78 --
+         pinning the I78 filter widening as well as the controller-
+         of-effect routing.
+
+      3. **Inject Cross-Controller LibraryBouncer Spacecraft (the
+         source) onto P1's bf** with controller=1 (Rust's
+         ``register_and_inject_object``; Python's ``new_object``
+         + bf append + manual ``_trigger_etb_abilities``). The
+         injection's ENTERS dispatch fires the SourceIsSelf
+         trigger; the trigger lands on the stack with
+         controller=1 (the SOURCE's controller).
+
+      4. **Seat
+         ``_PickFirstOpponentTargetCreaturePreferredAgent`` on
+         P1** (the source's controller, who picks the target
+         artifact-or-creature). The agent's opponent-controller
+         filter returns ``("permanent", bait_id)`` from the
+         legal_targets pool (which contains exactly one entry:
+         the P0-controlled bait artifact -- the source itself
+         is P1-controlled and the agent's opponent filter
+         excludes it), mirroring Rust's deterministic
+         ``defender = 1 - controller = 0`` first-artifact-or-
+         creature scan.
+
+      5. **Seat ``_PickBottomLibraryAgent`` on P0** (the OWNER of
+         the bait), so Python's ``choose_mode`` hook routes the
+         bait to the BOTTOM of P0's library, matching Rust's
+         deterministic bottom pick (cards.rs:1151-1158 +
+         state_ops_resolve.rs:5266 ``lib_mut.push(obj)``). The
+         no-agent default would pick TOP (zone_moves.py:92-93),
+         observably divergent from Rust.
+
+      6. **Drain both stacks.** The trigger resolves: Rust's
+         post-I78 arm reads
+         ``current_resolve_source_controller = Some(1)``,
+         computes ``defender = 0``, scans P0's bf top-to-bottom
+         for the first artifact-or-creature, finds the bait
+         artifact, removes it from P0's bf, and pushes it to the
+         END of P0's library (= bottom). Python's
+         ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary().resolve(
+         state, 1, (("permanent", bait_id),))`` does the same
+         on the equivalent state, calling P0's
+         ``choose_mode -> 1`` and appending to P0's library.
+
+      7. **Cross-engine assert (post-I78 contract):**
+         - Bait artifact no longer on P0's bf (left bf).
+         - Bait artifact on the BOTTOM of P0's library (last
+           element of the library list on Rust, last element /
+           library[-1] on Python).
+         - P0's library size grew by 1.
+         - Source spacecraft still on P1's bf (inject anchor).
+         - P1's bf size unchanged at 1 (just the source).
+         - P1's library size unchanged.
+         - Lives unchanged on both seats.
+         - No residual stack on either engine.
+
+    **Pre-I78 vs post-I78 observable.**
+    Pre-fix Rust would have:
+      - Derived ``defender = 1 - active_player = 1 - 0 = 1``,
+        scanned P1's bf for the first artifact-or-creature,
+        FOUND the source spacecraft itself (an Artifact on P1's
+        bf), and self-bounced it to P1's library bottom. Bait
+        artifact on P0 stays on P0's bf; P1 loses its source.
+        The pre-fix observable diverges from post-fix on TWO
+        seat slots simultaneously: P0's bf doesn't shrink (post-
+        fix it does) and P1's bf shrinks by 1 (post-fix it
+        doesn't); P0's library doesn't grow (post-fix it does)
+        and P1's library grows by 1 (post-fix it doesn't).
+    Post-fix Rust correctly derives defender = 1 - controller
+    = 1 - 1 = 0 (the SOURCE's controller's opponent). Scans
+    P0's bf, finds the bait artifact, bounces it to P0's
+    library bottom. Python's behavior is bit-equal because its
+    ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
+    takes the target via the targeting pipeline (which reads
+    the trigger's controller field when resolving the source-
+    controller's agent pick).
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-
+        ENTERS pattern bypasses the mana pipeline.
+      * Empty defender's bf with a fallback target -- the Rust
+        first-slice picker silent-fizzles if no artifact-or-
+        creature is on the defender's bf; this probe seats
+        exactly one bait so the picker resolves cleanly.
+      * Multiple eligible artifact-or-creature bait permanents
+        (target ordering on a 2-permanent defender bf) -- the
+        substrate's first-bf pick is implicit in
+        ``_PickFirstOpponentTargetCreaturePreferredAgent``'s
+        legal_targets[0] traversal.
+      * ``nonland_permanent`` rider widening -- the bare-shape
+        arm constructs the safe-default nonland_permanent=False
+        per the bridge arm comment; rider-widened variants will
+        land as separate Rust Effect variants + separate bridge
+        arms.
+      * Top-of-library destination -- this probe seats
+        ``_PickBottomLibraryAgent`` to match Rust's first-slice
+        deterministic bottom pick. A future slice with Rust-
+        side decision-callback substrate could promote the top-
+        vs-bottom choice to a real ``pending_decisions`` entry
+        and this probe could split into top-pick / bottom-pick
+        variants.
+      * Token bait -- the bait is a printed artifact (token
+        flag is False). The "tokens cease to exist" branch
+        (CR 704.5d) at zone_moves.py:113-117 isn't exercised.
+      * Owner != controller (stolen-creature scenario) -- the
+        bait owner_id == controller_id == 0 by construction;
+        owner is unconditionally derived from controller on
+        Rust per cards.rs:1160-1165 ("first-slice synthetic
+        states never split owner from controller, so owner_idx
+        == defender == 1 - controller"). Probes that exercise
+        the owner-vs-controller split would need a steal effect
+        to first transfer controller, which is outside the I78
+        substrate scope.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller LibraryBouncer Spacecraft on P1's
+        battlefield (controller=1; unchanged from inject).
+      * P0 battlefield: empty (bait artifact left).
+      * P0 library: 1 (bait artifact, at the bottom = last
+        element = library[-1] on Python).
+      * P1 battlefield: 1 (only the source spacecraft).
+      * P1 library: 0 (untouched; baseline empty).
+      * Lives unchanged on both seats.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import (
+        _PickBottomLibraryAgent,
+        _PickFirstOpponentTargetCreaturePreferredAgent,
+    )
+
+    # No card defs needed for the libraries -- the probe injects
+    # both the source AND the bait directly onto bfs. Empty
+    # libraries / hands keep the harness minimal.
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side: inject the bait artifact onto P0's bf first ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Cross-Controller I78 Bait Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "triggered_abilities": [],
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: vanilla bait Artifact inject must NOT push anything "
+        "onto the stack (no triggers). "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    # Pre-trigger snapshot (post-bait-inject, pre-source-inject).
+    rust_p0_bf_before = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    assert rust_p0_bf_before == 1, (
+        f"Rust: bait should be on P0's bf. "
+        f"got p0_bf={rust_p0_bf_before}"
+    )
+    rust_p0_lib_before = len(rust_state.library_snapshot(0))
+    rust_p1_lib_before = len(rust_state.library_snapshot(1))
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    assert rust_p0_lib_before == 0
+    assert rust_p1_lib_before == 0
+
+    # Inject the source onto P1's bf with controller=1. ENTERS fires
+    # via the deferred-dispatch queue; the SourceIsSelf trigger lands
+    # on the stack with controller=1 (the SOURCE's controller).
+    rust_source_dict = {
+        "name": "Cross-Controller LibraryBouncer Spacecraft",
+        "card_types": ["Artifact"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "effects": [],
+        "power": 0,
+        "toughness": 0,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library",
+                },
+            }
+        ],
+    }
+    rust_source_id = rust_state.register_and_inject_object(
+        rust_source_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller LibraryBouncer Spacecraft's arrival "
+        "on P1 should fire the SourceIsSelf ENTERS trigger and land "
+        "OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary on "
+        "the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: same setup ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.zone_moves import (
+        OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    # Vanilla bait Artifact on P0's bf.
+    bait_printing = CardPrinting(
+        name="Cross-Controller I78 Bait Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=()),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    py_p0_bf_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_p1_lib_before = len(py_state.players[1].library)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p0_bf_before == 1
+    assert py_p0_lib_before == 0
+    assert py_p1_lib_before == 0
+
+    # Source spacecraft on P1's bf (controller=1).
+    source_printing = CardPrinting(
+        name="Cross-Controller LibraryBouncer Spacecraft",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("W", 1),)),
+        type_line="Artifact -- Spacecraft",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=("Spacecraft",),
+        power=0,
+        toughness=0,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=(
+                    OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary()
+                ),
+            ),
+        ),
+    )
+
+    # Custom agents:
+    # - P1 (the source's controller) picks the target via the
+    #   opponent-controlled filter; mirrors Rust's deterministic
+    #   first-bf-artifact-or-creature pick.
+    # - P0 (the bait OWNER) picks bottom via choose_mode -> 1;
+    #   mirrors Rust's first-slice deterministic bottom pick
+    #   (cards.rs:1151-1158).
+    py_state.players[0].agent = _PickBottomLibraryAgent()
+    py_state.players[1].agent = (
+        _PickFirstOpponentTargetCreaturePreferredAgent()
+    )
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller LibraryBouncer Spacecraft's "
+        "arrival on P1 should fire the IsSelf ENTERS trigger and "
+        "land OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary "
+        "on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state on Rust: bait left P0's bf, landed on
+    # the BOTTOM of P0's library. Source still on P1's bf. P1
+    # library / lives untouched. The load-bearing cross-controller
+    # routing pin: pre-fix Rust would have computed defender = 1 -
+    # active_player = 1 (P1), scanned P1's bf, found the source
+    # artifact, self-bounced IT, leaving P0's bf and P1's source-
+    # slot wrong on both seats. Post-fix Rust bounces from P0's
+    # bf correctly.
+    rust_p0_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    assert rust_p0_bf_after == 0, (
+        f"Rust I78 cross-controller "
+        f"owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library "
+        f"contract: P0's bf should drop the bait artifact "
+        f"(defender = 1 - controller = 1 - 1 = 0; the source's "
+        f"controller's opponent is P0). Pre-fix would have computed "
+        f"defender = 1 - active_player = 1 - 0 = 1, scanned P1's "
+        f"bf, self-bounced the source, and left P0's bf at its "
+        f"pre-trigger size. "
+        f"after p0_bf={rust_p0_bf_after}"
+    )
+    assert rust_p1_bf_after == 1, (
+        f"Rust: P1's bf should still hold the source Spacecraft "
+        f"(post-fix: bait got bounced, not the source). "
+        f"after p1_bf={rust_p1_bf_after}"
+    )
+    rust_p0_lib_after = rust_state.library_snapshot(0)
+    assert len(rust_p0_lib_after) == rust_p0_lib_before + 1, (
+        f"Rust I78 cross-controller "
+        f"owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library "
+        f"contract: P0's library should grow by 1 (the bait "
+        f"artifact lands here at the bottom). "
+        f"before={rust_p0_lib_before} "
+        f"after={len(rust_p0_lib_after)}"
+    )
+    # Bottom of library = end of the snapshot list. Python's
+    # library[-1] = bottom matches the same convention (zone_moves.py:
+    # 119-122 -- ``owner.library.append(obj)`` for bottom).
+    assert (
+        rust_p0_lib_after[-1]["printing_name"]
+        == "Cross-Controller I78 Bait Artifact"
+    ), (
+        f"Rust: P0's library bottom should be the bait artifact. "
+        f"got name={rust_p0_lib_after[-1]['printing_name']!r}"
+    )
+    assert int(rust_p0_lib_after[-1]["id"]) == rust_bait_id, (
+        f"Rust: bounced object id should match the original bait "
+        f"id. expected={rust_bait_id} "
+        f"got={rust_p0_lib_after[-1]['id']}"
+    )
+    assert len(rust_state.library_snapshot(1)) == rust_p1_lib_before, (
+        f"Rust: P1's library should be unchanged at "
+        f"{rust_p1_lib_before}. "
+        f"after={len(rust_state.library_snapshot(1))}"
+    )
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+
+    # Per-engine post-state on Python: same shape.
+    py_p0_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert py_p0_bf_after == 0, (
+        f"Python: P0's bf should drop the bait artifact. "
+        f"after p0_bf={py_p0_bf_after}"
+    )
+    assert py_p1_bf_after == 1, (
+        f"Python: P1's bf should still hold the source Spacecraft. "
+        f"after p1_bf={py_p1_bf_after}"
+    )
+    assert len(py_state.players[0].library) == py_p0_lib_before + 1, (
+        f"Python: P0's library should grow by 1. "
+        f"before={py_p0_lib_before} "
+        f"after={len(py_state.players[0].library)}"
+    )
+    # Python's library[-1] = bottom (zone_moves.py:122-124
+    # ``owner.library.append(obj)`` for bottom).
+    assert (
+        py_state.players[0].library[-1].printing.name
+        == "Cross-Controller I78 Bait Artifact"
+    )
+    assert py_state.players[0].library[-1].id == py_bait.id, (
+        f"Python: bounced object id should match the original bait "
+        f"id. expected={py_bait.id} "
+        f"got={py_state.players[0].library[-1].id}"
+    )
+    assert len(py_state.players[1].library) == py_p1_lib_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # Cross-engine: per-zone parity on counts + lives.
+    assert len(rust_state.library_snapshot(0)) == len(
+        py_state.players[0].library
+    )
+    assert len(rust_state.library_snapshot(1)) == len(
+        py_state.players[1].library
+    )
+    assert rust_p0_bf_after == py_p0_bf_after
+    assert rust_p1_bf_after == py_p1_bf_after
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Source-id reference kept for future link-stamping pins (the
+    # I78 effect doesn't stamp an exiled_with_source link since the
+    # destination is the library, not exile -- this assert just
+    # silences the unused-variable warning while documenting that
+    # the source is identifiable for future LTB / source-leaves
+    # follow-up slices).
+    assert rust_source_id is not None
+    assert py_source.id is not None
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
