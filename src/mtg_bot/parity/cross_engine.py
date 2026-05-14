@@ -1867,6 +1867,119 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 f"can't move via owner-hand bounce per CR 401.1)"
             )
         return Bounce(targets=(TargetSpec(slot_filter),))
+    if kind == "owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library":
+        # "Target artifact or creature's owner puts it on the top or
+        # bottom of their library." Rust's
+        # ``Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
+        # (cards.rs:1170) is a UNIT VARIANT -- no fields. Its
+        # parse_effect arm at cards.rs:3306-3309 takes no fields. The
+        # resolve arm at state_ops_resolve.rs:5067 carries the I78
+        # controller-of-effect fix: defender = 1 - controller, where
+        # controller derives from
+        # ``current_resolve_source_controller`` (with active_player
+        # fallback). Sibling closure to I70 / I75 / I76 / I79 / I80 --
+        # identical defender-swap shape; differs in destination zone
+        # (owner's library top-or-bottom for I78 vs exile / hand /
+        # graveyard for the siblings) and adds an owner-side top-vs-
+        # bottom choice resolved via the OWNER's agent.choose_mode.
+        #
+        # **Rust target-pick semantics.** The Rust resolve arm scans
+        # the defender's bf top-to-bottom for the first object whose
+        # printing's card_types contains "Artifact" or "Creature"; no
+        # eligible permanent = silent fizzle. The owner-side top-vs-
+        # bottom choice is resolved at apply-effect time via the
+        # owner's pending decision queue (auto-resolves to top under
+        # the no-decision default strategy, mirroring Python's
+        # agent-is-None default).
+        #
+        # **Python target-pick semantics.** Python's
+        # ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary``
+        # class (effects/generic/zone_moves.py:30) is target-required
+        # (``requires_target() -> True``); its ``legal_targets``
+        # walks every artifact-or-creature on the battlefield via
+        # ``_matches`` (zone_moves.py:54-57 -- ``is_artifact or
+        # is_creature`` when ``nonland_permanent=False``). The
+        # targeting pipeline picks at PUSH time via
+        # ``push_triggered_ability`` ->
+        # ``controller.agent.choose_target`` over the legal_targets
+        # pool. Probes that exercise this bridge end-to-end seat a
+        # defender-bf-first picker on the source's controller (the
+        # existing ``_PickFirstOpponentTargetCreaturePreferredAgent``
+        # shim extends naturally to artifact-or-creature permanents
+        # since its filter walks ``state.battlefield`` for the
+        # controller-side check). The OWNER (not the spell's
+        # controller) picks top-vs-bottom via their agent's
+        # ``choose_mode`` hook (zone_moves.py:87-93); the no-agent
+        # default at line 92-93 picks top, matching Rust's no-
+        # decision default keep-on-top strategy.
+        #
+        # **Rider widening.** Rust's variant has no
+        # ``nonland_permanent`` mirror today -- the Python class
+        # carries an optional ``nonland_permanent: bool = False``
+        # flag (zone_moves.py:49) that widens the legal-target pool
+        # from "artifact or creature" to "any nonland permanent"
+        # (Vanish from Sight's printed scope). The bridge constructs
+        # the bare default shape (``nonland_permanent=False``),
+        # matching Rust's any-artifact-or-creature scan. A future
+        # nonland-permanent-widened Rust variant would land as a
+        # separate ``kind`` arm on this translator, mirroring the
+        # ``return_creature_from_your_graveyard_to_hand`` /
+        # ``return_artifact_or_creature_from_your_graveyard_to_hand``
+        # split-shape convention.
+        #
+        # **Filter differences from I79 / I80.** I79 filters target
+        # creatures via ``IsCreature`` (Python) /
+        # ``card_types.contains("Creature")`` (Rust). I80 filters
+        # target NON-LAND permanents via the ``is_land`` exclusion
+        # (Python) / ``card_types.iter().any(|t| t == "Land")``
+        # exclusion (Rust). I78 filters target ARTIFACT-OR-CREATURE
+        # permanents via the ``is_artifact or is_creature`` predicate
+        # (Python) / ``card_types.contains("Artifact") ||
+        # card_types.contains("Creature")`` predicate (Rust). On the
+        # Python side the legal_targets walk does NOT restrict to
+        # opponent-controlled permanents (the printed text "target
+        # artifact or creature" has no controller restriction);
+        # cross-controller probes seat the source on p1's bf during
+        # p0's turn so the I78 routing fix picks from p0's side
+        # (the source's controller's opponent's bf, per the I78
+        # docstring's ``defender = 1 - source_controller``
+        # derivation).
+        #
+        # **Owner-routes-to-OWNER's-library, not controller's.** Per
+        # CR 401.1, a card moves to its OWNER's library, not its
+        # controller's. Both engines route the bounced permanent to
+        # ``state.player_by_id(obj.owner_id).library`` -- the Python
+        # class fetches owner via ``state.player_by_id(obj.owner_id)``
+        # at zone_moves.py:84; the Rust resolve arm uses
+        # ``players[obj.owner].library``. On synthetic probes that
+        # seat ``owner_id == controller_id`` (the common case --
+        # objects are owned by their initial controller in non-
+        # gainsay scenarios), this collapses to the controller's
+        # library; in stolen-creature scenarios both engines still
+        # route to OWNER's library, agreeing on the destination.
+        #
+        # **Token cease-to-exist parity.** Both engines route tokens
+        # to the cease-to-exist path on bounce (CR 704.5d) -- Rust's
+        # bounce arm checks the token flag before pushing to library;
+        # Python's resolve at zone_moves.py:113-117 does the same
+        # (logs "ceases to exist" and returns without pushing to
+        # library). Probes that exercise token-only baits need to
+        # seed the token flag on both sides; the bare bridge arm
+        # doesn't carry rider behaviors beyond what
+        # ``OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary
+        # .resolve`` already does.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3306-3309);
+        # the unit variant takes no fields, so the bridge translator
+        # ignores every other key on the dict for round-trip dict-
+        # shape consistency. Forward-compatible with future rider-
+        # widened Rust variants -- those would land as separate
+        # ``kind`` arms on this translator (one per Rust Effect
+        # variant), mirroring the established split convention.
+        from mtg_bot.effects.generic.zone_moves import (
+            OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
+        )
+        return OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
