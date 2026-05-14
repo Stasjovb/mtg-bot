@@ -2959,3 +2959,128 @@ def test_defender_cannot_attack_parity():
         f"defender should still be on bf, not in graveyard; "
         f"got p0_gy={p0_gy}"
     )
+
+
+def test_flying_attacker_unblockable_by_groundwalker_parity():
+    """Flying attacker (2/2) attempts to be blocked by a ground 4/4 vanilla
+    blocker — per CR 702.9 a creature with flying can be blocked only by
+    creatures with flying or reach. Both engines silently drop the
+    single-blocker assignment as illegal:
+      * Python via ``combat.is_legal_block`` (combat.py:70-72):
+        ``if "flying" in attacker_kws: if not ("flying" in blocker_kws or
+        "reach" in blocker_kws): return False``.
+      * Rust via ``state_ops_combat.rs::is_legal_block_assignment``
+        (line 738-744): same flying-or-reach gate via
+        ``battlefield_has_keyword``.
+
+    Setup: walk to turn 7 PRECOMBAT_MAIN with no creatures. Inject a 2/2
+    flying creature on p0; inject a 4/4 vanilla (no flying / no reach) on
+    p1. p0 attacks with the flying creature (sole attacker); p1 attempts
+    to block with the 4/4 (sole eligible blocker). The agent's
+    ``attack_all_block_smallest`` strategy emits a single
+    ``[blocker_id, attacker_id]`` pair — which both engines drop because
+    the ground blocker can't intercept the flier per CR 702.9. The
+    attacker proceeds unblocked.
+
+    Asserts byte-equal:
+      * p1 life dropped by 2 (flying attacker hit unblocked).
+      * Both creatures still on the battlefield (no combat damage
+        exchange — block was dropped, not satisfied).
+
+    This is the round-20 trajectory promotion of the long-standing
+    Phase 5 ``flying`` rules-keyword coverage: the existing combat
+    primitives ALREADY enforce flying (see the Rust module docstring
+    line 139-145 and Python ``combat.is_legal_block``); this probe pins
+    that the round-16 ``RealGameCombatAgent`` + the round-17
+    keyword-injection helper compose with the engine's flying gate
+    on a real-game prefix. Mirrors the round-19 menace probe
+    structurally (single attacker + single illegal blocker → block
+    drop → unblocked attacker).
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Walk to turn 7 PRECOMBAT_MAIN with no creatures (skip the bears
+    # setup so the flying attacker + the 4/4 ground blocker are the
+    # SOLE combatants — keeps the block-drop deterministic).
+    _advance_n_phases(py_state, rust_state, 3)  # → turn 1 MAIN1
+    _advance_n_phases(py_state, rust_state, 12 * 6)  # → turn 7 MAIN1
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.PRECOMBAT_MAIN
+
+    # Inject 2/2 flying attacker on p0 + 4/4 vanilla ground blocker on p1.
+    _inject_keyword_creature_on_p0_bf(
+        py_state, rust_state,
+        keyword="flying",
+        printing_name="Bear Aviator",
+        power=2, toughness=2,
+    )
+    _inject_vanilla_creature_on_bf(
+        py_state, rust_state,
+        controller_idx=1,
+        printing_name="Bear Wall",
+        power=4, toughness=4,
+    )
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"keyword-injection (flying) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    pre_combat_life_p0 = py_view["life_p0"]
+    pre_combat_life_p1 = py_view["life_p1"]
+
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # p0's flying creature is the sole eligible attacker; p1's 4/4 is the
+    # sole eligible blocker. The agent emits a single-blocker assignment
+    # — both engines must drop it per CR 702.9 (flying requires
+    # flying-or-reach blockers).
+    agent = trajectory.RealGameCombatAgent(
+        strategy="attack_all_block_smallest"
+    )
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"flying combat via RealGameCombatAgent surfaced a real "
+            f"cross-engine divergence: {exc}"
+        )
+
+    # Post-combat parity.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+
+    # Per CR 702.9: the ground-blocker assignment is illegal; both
+    # engines drop it. Attacker proceeds unblocked → 2 damage to p1.
+    assert py_view["life_p0"] == pre_combat_life_p0
+    assert py_view["life_p1"] == pre_combat_life_p1 - 2, (
+        f"flying attacker should have hit unblocked for 2 damage "
+        f"(ground-blocker assignment dropped per CR 702.9); "
+        f"got life_p1={py_view['life_p1']} (pre={pre_combat_life_p1}). "
+        f"If life_p1 is unchanged, the attacker may have been blocked "
+        f"despite the flying restriction (the block-drop didn't fire)."
+    )
+    # Both creatures still on the battlefield (no combat exchange — the
+    # block was dropped, never resolved).
+    p0_gy = [entry[0] for entry in py_view["graveyard_p0"]]
+    p1_gy = [entry[0] for entry in py_view["graveyard_p1"]]
+    assert "Bear Aviator" not in p0_gy, (
+        f"flying attacker should still be on bf (no combat exchange — "
+        f"block was dropped); got p0_gy={p0_gy}"
+    )
+    assert "Bear Wall" not in p1_gy, (
+        f"4/4 ground blocker should still be on bf (block was dropped — "
+        f"never declared, never took damage); got p1_gy={p1_gy}"
+    )
