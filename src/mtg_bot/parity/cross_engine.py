@@ -4941,6 +4941,68 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DrawCardsEqualToResolvingCombatDamage,
         )
         return DrawCardsEqualToResolvingCombatDamage()
+    if kind == "deal_damage_equal_to_source_power_any_target":
+        # **Round-26 BLOCKED-BRIDGE-ARM slice -- "this creature deals
+        # damage equal to its power to any target"
+        # (DealDamageEqualToSourcePowerAnyTarget; Infernal-Phantom-
+        # shape source-power-driven damage family).** Rust substrate
+        # ``Effect::DealDamageEqualToSourcePowerAnyTarget`` (cards.rs:
+        # 1280; unit variant; parser at cards.rs:3690-3692, resolve at
+        # state_ops_resolve.rs reads source's effective power, to_dict
+        # at cards.rs:5594-5595) shipped via earlier round; this slice
+        # closes the cross-engine bridge gap. Discovered by the
+        # round-22 fresh discovery walk (Rust kind emitted by to_dict
+        # but no matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Unit variant on Rust; targets-defaulted dataclass on
+        # Python.** No fields beyond ``kind`` on the wire. Mirrors
+        # Rust's parse_effect arm at cards.rs:3690-3692 -- silent-drop
+        # convention for unrecognized keys (extra dict fields are
+        # ignored). Python's
+        # ``DealDamageEqualToSourcePowerAnyTarget``
+        # (``effects/generic/damage.py:204-260``) has a single
+        # ``targets: tuple = ()`` field which its ``__post_init__``
+        # populates with ``(TargetSpec(any_target_filter()),)`` when
+        # absent -- the bridge constructs it bare and lets the post-
+        # init populate the canonical any-target slot, matching the
+        # Rust unit-variant semantics where the any-target filter is
+        # intrinsic to the variant identity itself.
+        #
+        # **Resolve semantics (parity-relevant).** Both engines snap
+        # the source's effective power at resolve time and route that
+        # amount as direct damage to a single target (creature or
+        # player). Python's class at damage.py:234-260 reads
+        # ``effective_power(state, source)`` (CR 613 layer-7 effective
+        # P/T) and silent-no-ops if amount <= 0 (CR 119.5 zero-
+        # damage no-op). Rust's resolve mirrors the same snapshot +
+        # bounded-damage routing. For a dies-trigger source, both
+        # engines read the pre-death power off ``state.resolving_
+        # source`` (the carrier preserves the GameObject reference
+        # past the zone change for trigger-resolution lookup).
+        #
+        # **Distinct from sister arms.** Distinct from ``deal_damage``
+        # (which carries an explicit ``amount`` field; this arm reads
+        # the source's effective power at resolve time instead -- no
+        # field needed because the value is implicit in the
+        # resolution context). Distinct from ``deal_damage_any_target``
+        # (which has a fixed amount field; this arm has a power-driven
+        # amount).
+        #
+        # **Real EoE consumers** unblocked: 40 EoE oracle hits via
+        # scan -- Anticausal Vestige, Lumen-Class Frigate, Rescue
+        # Skiff, and 37 other cards using "deals damage equal to its
+        # power to any target" or "equal to" damage clauses on
+        # Spacecraft / creature carriers. Highest-EoE-leverage round-
+        # 26 unit-variant slice. Cross-engine end-to-end probe
+        # deferred per round-17/18/19 synthetic-only-when-riders-
+        # cascade precedent (the effective_power layer-7 lookup +
+        # any-target Decision pipeline + dies-trigger resolving_source
+        # carrier are their own surfaces beyond the bare bridge-arm
+        # slice).
+        from mtg_bot.effects.generic.damage import (
+            DealDamageEqualToSourcePowerAnyTarget,
+        )
+        return DealDamageEqualToSourcePowerAnyTarget()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

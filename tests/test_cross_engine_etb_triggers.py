@@ -8984,5 +8984,157 @@ def test_rust_parser_accepts_draw_cards_equal_to_resolving_combat_damage_in_trig
     assert pid == 0
 
 
+def test_bridge_deal_damage_equal_to_source_power_any_target_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 26 fresh discovery walk) --
+    DealDamageEqualToSourcePowerAnyTarget family. Rust ``{"kind":
+    "deal_damage_equal_to_source_power_any_target"}`` translates to
+    Python ``DealDamageEqualToSourcePowerAnyTarget()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3690-3692 (unit
+    variant; no fields). The bridge wires the same Python-side
+    primitive (``effects/generic/damage.py:204``) as the mirror of
+    the Rust resolver.
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageEqualToSourcePowerAnyTarget,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_equal_to_source_power_any_target"}
+    )
+    assert isinstance(e, DealDamageEqualToSourcePowerAnyTarget)
+
+
+def test_bridge_deal_damage_equal_to_source_power_any_target_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance. Extra dict fields
+    beyond ``kind`` are silently ignored (mirrors Rust's parse_effect
+    arm at cards.rs:3690-3692 which doesn't read additional keys).
+    Pins the silent-drop convention for unit variants used across
+    sister round-22/23/24/25/26 BLOCKED-BRIDGE-ARM unit-shape arms.
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageEqualToSourcePowerAnyTarget,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "deal_damage_equal_to_source_power_any_target",
+            "this_extra_key_should_be_silently_ignored": "ignored",
+        }
+    )
+    assert isinstance(e, DealDamageEqualToSourcePowerAnyTarget)
+
+
+def test_bridge_deal_damage_equal_to_source_power_any_target_default_targets_populated():
+    """Bridge arm pin: Python's __post_init__ populates the default
+    ``targets`` slot with ``(TargetSpec(any_target_filter()),)``
+    when the bridge constructs the effect bare. Mirrors Rust's
+    intrinsic any-target filter on the unit variant -- the bridge
+    produces the canonical default-targets shape that any consumer
+    (cast / dies-trigger) expects when collecting legal targets.
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageEqualToSourcePowerAnyTarget,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_equal_to_source_power_any_target"}
+    )
+    assert isinstance(e, DealDamageEqualToSourcePowerAnyTarget)
+    # __post_init__ filled the default any-target slot.
+    assert len(e.targets) == 1
+
+
+def test_bridge_deal_damage_equal_to_source_power_any_target_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed
+    ``DealDamageEqualToSourcePowerAnyTarget()``. Pins the dataclass
+    equality semantic for the post-init-defaulted-fields shape.
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageEqualToSourcePowerAnyTarget,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_equal_to_source_power_any_target"}
+    )
+    assert e == DealDamageEqualToSourcePowerAnyTarget()
+
+
+def test_bridge_deal_damage_equal_to_source_power_any_target_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DealDamageEqualToSourcePowerAnyTarget(),
+    DrawCards(1)])`` translates correctly via the recursive Sequence
+    translator. Pins this arm against accidental dispatch loss
+    inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.damage import (
+        DealDamageEqualToSourcePowerAnyTarget,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "deal_damage_equal_to_source_power_any_target",
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], DealDamageEqualToSourcePowerAnyTarget
+    )
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_deal_damage_equal_to_source_power_any_target_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "deal_damage_equal_to_source_power_any_target"}``
+    on a triggered_ability carrier (the Infernal-Phantom-shape "When
+    this dies, it deals damage equal to its power to any target").
+    The bridge dict shape must register cleanly on Rust too; this
+    lockstep gate keeps the bridge from drifting away from Rust's
+    parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3690-3692`` accepts
+    the bare ``kind``-only unit-variant dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "DealDamageEqualToSourcePowerAnyTarget"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "power": 3,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_equal_to_source_power_any_target",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
