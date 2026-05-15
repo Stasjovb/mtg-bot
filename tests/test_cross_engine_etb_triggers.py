@@ -9511,5 +9511,185 @@ def test_rust_parser_accepts_add_mana_to_pool_in_activated_ability():
     assert pid == 0
 
 
+def test_bridge_conditional_if_void_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 26 fresh discovery walk) --
+    ConditionalIfVoid family. Rust ``{"kind":
+    "conditional_if_void", "then_effect": {...}, "else_effect":
+    None}`` translates to Python ``ConditionalIfVoid(then_effect=...,
+    else_effect=None)``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:4220-4250. The
+    bridge wires the same Python-side primitive
+    (``effects/combinators.py:1409``) as the mirror of the Rust
+    resolver.
+    """
+    from mtg_bot.effects.combinators import ConditionalIfVoid
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "conditional_if_void",
+            "then_effect": {"kind": "draw_cards", "count": 1},
+            "else_effect": None,
+        }
+    )
+    assert isinstance(e, ConditionalIfVoid)
+    assert isinstance(e.then_effect, DrawCards)
+    assert e.then_effect.amount == 1
+    assert e.else_effect is None
+
+
+def test_bridge_conditional_if_void_missing_then_effect_raises():
+    """Bridge arm pin: missing ``then_effect`` field raises KeyError
+    (mirrors Rust's parse_effect arm at cards.rs:4222-4226 which
+    raises 'missing required then_effect field' with PyValueError).
+    The bridge enforces the required-fields contract on the Python
+    side so the dict shape is symmetric.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "conditional_if_void",
+                "else_effect": None,
+            }
+        )
+
+
+def test_bridge_conditional_if_void_else_effect_present():
+    """Bridge arm pin: nested ``else_effect`` dict round-trips via
+    recursive translator. Mirrors Rust's parse_effect arm at
+    cards.rs:4234-4245 which decodes ``else_effect`` as a nested
+    effect dict when present (vs key absent / explicit None).
+    """
+    from mtg_bot.effects.combinators import ConditionalIfVoid
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "conditional_if_void",
+            "then_effect": {"kind": "draw_cards", "count": 2},
+            "else_effect": {"kind": "draw_cards", "count": 1},
+        }
+    )
+    assert isinstance(e, ConditionalIfVoid)
+    assert isinstance(e.then_effect, DrawCards)
+    assert e.then_effect.amount == 2
+    assert isinstance(e.else_effect, DrawCards)
+    assert e.else_effect.amount == 1
+
+
+def test_bridge_conditional_if_void_else_effect_absent_key():
+    """Bridge arm pin: ``else_effect`` key absent decodes as None
+    (mirrors Rust's parse_effect arm at cards.rs:4234-4236 which
+    treats key-absent as None). Pins the three-form else_effect
+    contract: absent / explicit None / nested dict all valid.
+    """
+    from mtg_bot.effects.combinators import ConditionalIfVoid
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "conditional_if_void",
+            "then_effect": {"kind": "draw_cards", "count": 1},
+        }
+    )
+    assert isinstance(e, ConditionalIfVoid)
+    assert isinstance(e.then_effect, DrawCards)
+    assert e.else_effect is None
+
+
+def test_bridge_conditional_if_void_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed
+    ``ConditionalIfVoid(then_effect=DrawCards(1))``. Pins the
+    dataclass equality semantic for the optional-else default shape.
+    """
+    from mtg_bot.effects.combinators import ConditionalIfVoid
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "conditional_if_void",
+            "then_effect": {"kind": "draw_cards", "count": 1},
+        }
+    )
+    assert e == ConditionalIfVoid(then_effect=DrawCards(amount=1))
+
+
+def test_bridge_conditional_if_void_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([ConditionalIfVoid(DrawCards(1)), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    this arm against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import ConditionalIfVoid, Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "conditional_if_void",
+                    "then_effect": {"kind": "draw_cards", "count": 1},
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], ConditionalIfVoid)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_conditional_if_void_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape on a triggered_ability carrier (the canonical "Void --
+    Whenever this attacks, ..." rider). The bridge dict shape must
+    register cleanly on Rust too; this lockstep gate keeps the
+    bridge from drifting away from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:4220-4250`` accepts
+    the struct-variant dict with required ``then_effect`` and
+    optional ``else_effect``.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "ConditionalIfVoid"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"U": 1, "generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "attacks",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "conditional_if_void",
+                    "then_effect": {"kind": "draw_cards", "count": 1},
+                    "else_effect": None,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
