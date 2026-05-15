@@ -47853,6 +47853,248 @@ def test_rust_tap_enchanted_permanent_no_attached_to_silent_fizzle():
     )
 
 
+def _build_rust_put_card_from_graveyard_on_bottom_of_library_state(
+    source_owner: int = 0,
+    seed_p0_graveyard: bool = True,
+    seed_p1_graveyard: bool = False,
+):
+    """Helper: build a Rust state with a source carrier on
+    ``source_owner``'s bf carrying an ETB trigger that fires
+    ``put_card_from_graveyard_on_bottom_of_library``, optionally
+    seeded with bait cards in p0/p1 graveyards. Returns
+    ``(rust_state, source_id, p0_bait_id_or_None, p1_bait_id_or_None,
+    p0_lib_size_before, p1_lib_size_before)``.
+
+    Round-24 BLOCKED-BRIDGE-ARM helper. Mirrors the round-23
+    `_build_rust_untap_target_state` shape adapted to the
+    graveyard-rotation Effect family.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_GRAVEYARD = 3
+    ZONE_BATTLEFIELD = 2
+
+    p0_bait_id = None
+    p1_bait_id = None
+    if seed_p0_graveyard:
+        p0_bait_id = rust_state.register_and_inject_object(
+            {
+                "name": "PutCardFromGYOnBottom Bait Bear (p0 gy)",
+                "card_types": ["Creature"],
+                "mana_cost": {"generic": 1, "G": 1},
+                "effects": [],
+                "power": 2,
+                "toughness": 2,
+            },
+            0,
+            ZONE_GRAVEYARD,
+        )
+    if seed_p1_graveyard:
+        p1_bait_id = rust_state.register_and_inject_object(
+            {
+                "name": "PutCardFromGYOnBottom Bait Wurm (p1 gy)",
+                "card_types": ["Creature"],
+                "mana_cost": {"generic": 3, "B": 1},
+                "effects": [],
+                "power": 4,
+                "toughness": 4,
+            },
+            1,
+            ZONE_GRAVEYARD,
+        )
+    p0_lib_size_before = rust_state.library_sizes[0]
+    p1_lib_size_before = rust_state.library_sizes[1]
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "PutCardFromGYOnBottom ETB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"B": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "put_card_from_graveyard_on_bottom_of_library",
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return (
+        rust_state,
+        source_id,
+        p0_bait_id,
+        p1_bait_id,
+        p0_lib_size_before,
+        p1_lib_size_before,
+    )
+
+
+def test_rust_put_card_from_graveyard_on_bottom_of_library_basic_p0_pick():
+    """Rust regression pin: basic put-card-from-graveyard-on-bottom
+    with p0 source -- Rust's player-order scan finds p0's non-empty
+    graveyard first, takes graveyard[0] (the bait bear we seeded),
+    and pushes it to p0's library bottom (lib tail per CE3
+    convention). Pins state_ops_resolve.rs:5103-5133's player-order
+    scan + ``graveyard.remove(0)`` + ``library.push`` (tail-append =
+    bottom).
+    """
+    (
+        rust_state,
+        _source_id,
+        p0_bait_id,
+        _p1_bait_id,
+        p0_lib_size_before,
+        _p1_lib_size_before,
+    ) = _build_rust_put_card_from_graveyard_on_bottom_of_library_state(
+        source_owner=0, seed_p0_graveyard=True
+    )
+    assert rust_state.stack_size() == 1
+    # Pre-resolve: p0's graveyard has the bait card.
+    p0_gy_ids_before = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(0)
+    ]
+    assert p0_bait_id in p0_gy_ids_before
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Post-resolve: p0's graveyard no longer contains the bait card.
+    p0_gy_ids_after = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(0)
+    ]
+    assert p0_bait_id not in p0_gy_ids_after, (
+        f"p0 graveyard should no longer contain bait id {p0_bait_id}; "
+        f"got {p0_gy_ids_after}"
+    )
+    # Library size grew by one and the tail (bottom) is the bait.
+    assert rust_state.library_sizes[0] == p0_lib_size_before + 1
+    p0_lib_ids_after = [
+        int(e["id"]) for e in rust_state.library_snapshot(0)
+    ]
+    assert p0_lib_ids_after[-1] == p0_bait_id, (
+        f"p0 library tail (bottom) should be bait id {p0_bait_id}; "
+        f"got {p0_lib_ids_after}"
+    )
+
+
+def test_rust_put_card_from_graveyard_on_bottom_of_library_empty_graveyards_silent_fizzle():
+    """Rust regression pin: both players' graveyards empty -- the
+    resolve arm returns Ok(()) without modifying any zone (silent
+    fizzle). Pins the early-return at state_ops_resolve.rs:5117-5119
+    (``found = None`` => return without panic).
+    """
+    (
+        rust_state,
+        _source_id,
+        _p0_bait_id,
+        _p1_bait_id,
+        p0_lib_size_before,
+        p1_lib_size_before,
+    ) = _build_rust_put_card_from_graveyard_on_bottom_of_library_state(
+        source_owner=0,
+        seed_p0_graveyard=False,
+        seed_p1_graveyard=False,
+    )
+    assert rust_state.stack_size() == 1
+    # Both gys empty pre-resolve.
+    assert rust_state.graveyard_sizes[0] == 0
+    assert rust_state.graveyard_sizes[1] == 0
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Post-resolve: still empty, libraries unchanged (silent fizzle).
+    assert rust_state.graveyard_sizes[0] == 0
+    assert rust_state.graveyard_sizes[1] == 0
+    assert rust_state.library_sizes[0] == p0_lib_size_before
+    assert rust_state.library_sizes[1] == p1_lib_size_before
+
+
+def test_rust_put_card_from_graveyard_on_bottom_of_library_p0_first_player_order_scan():
+    """Rust regression pin: BOTH graveyards seeded -- the scan walks
+    in player-order (p0 first, then p1) and picks p0's bait, even
+    though p1's graveyard is also non-empty. Pins the
+    ``state.players.iter().enumerate()`` walk at
+    state_ops_resolve.rs:5111-5116 which breaks on the FIRST non-
+    empty graveyard.
+    """
+    (
+        rust_state,
+        _source_id,
+        p0_bait_id,
+        p1_bait_id,
+        p0_lib_size_before,
+        p1_lib_size_before,
+    ) = _build_rust_put_card_from_graveyard_on_bottom_of_library_state(
+        source_owner=0,
+        seed_p0_graveyard=True,
+        seed_p1_graveyard=True,
+    )
+    rust_state.resolve_top_of_stack()
+    # p0's graveyard lost its card; p1's graveyard untouched.
+    p0_gy_ids_after = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(0)
+    ]
+    p1_gy_ids_after = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert p0_bait_id not in p0_gy_ids_after
+    assert p1_bait_id in p1_gy_ids_after, (
+        f"p1 graveyard should still contain bait id {p1_bait_id} "
+        f"(player-order scan picks p0 first); got {p1_gy_ids_after}"
+    )
+    # p0's library grew by one; p1's library unchanged.
+    assert rust_state.library_sizes[0] == p0_lib_size_before + 1
+    assert rust_state.library_sizes[1] == p1_lib_size_before
+
+
+def test_rust_put_card_from_graveyard_on_bottom_of_library_p1_only_when_p0_empty():
+    """Rust regression pin: only p1's graveyard is seeded (p0 empty)
+    -- the scan walks past p0 (empty) and finds p1's bait, moving it
+    to p1's library bottom. Pins the multi-iteration loop at
+    state_ops_resolve.rs:5111-5116 (continues past empty graveyards
+    until it finds a non-empty one).
+
+    Also pins the source-owner-irrelevant routing: the source is on
+    p0's bf yet the move targets p1's zones because the scan is
+    player-indexed, not source-controller-indexed.
+    """
+    (
+        rust_state,
+        _source_id,
+        _p0_bait_id,
+        p1_bait_id,
+        p0_lib_size_before,
+        p1_lib_size_before,
+    ) = _build_rust_put_card_from_graveyard_on_bottom_of_library_state(
+        source_owner=0,
+        seed_p0_graveyard=False,
+        seed_p1_graveyard=True,
+    )
+    rust_state.resolve_top_of_stack()
+    # p1's graveyard lost its card.
+    p1_gy_ids_after = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert p1_bait_id not in p1_gy_ids_after, (
+        f"p1 graveyard should no longer contain bait id {p1_bait_id}; "
+        f"got {p1_gy_ids_after}"
+    )
+    # p1's library grew by one; p0's library unchanged.
+    assert rust_state.library_sizes[0] == p0_lib_size_before
+    assert rust_state.library_sizes[1] == p1_lib_size_before + 1
+    p1_lib_ids_after = [
+        int(e["id"]) for e in rust_state.library_snapshot(1)
+    ]
+    assert p1_lib_ids_after[-1] == p1_bait_id
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

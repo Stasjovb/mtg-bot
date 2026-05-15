@@ -7784,5 +7784,150 @@ def test_rust_parser_accepts_tap_enchanted_permanent_in_aura_effects():
     assert pid == 0
 
 
+def test_bridge_put_card_from_graveyard_on_bottom_of_library_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 24 fresh discovery walk) --
+    PutCardFromGraveyardOnBottomOfLibrary family. Rust
+    ``{"kind": "put_card_from_graveyard_on_bottom_of_library"}``
+    translates to Python's bare-constructor
+    ``PutCardFromGraveyardOnBottomOfLibrary()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3683-3686 (unit
+    variant; no fields). The bridge wires the same Python-side
+    primitive (``effects/generic/graveyard.py:419``) as the mirror of
+    the Rust resolver.
+    """
+    from mtg_bot.effects.generic.graveyard import (
+        PutCardFromGraveyardOnBottomOfLibrary,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_card_from_graveyard_on_bottom_of_library"}
+    )
+    assert isinstance(e, PutCardFromGraveyardOnBottomOfLibrary)
+
+
+def test_bridge_put_card_from_graveyard_on_bottom_of_library_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance. Extra dict fields
+    beyond ``kind`` are silently ignored (mirrors Rust's parse_effect
+    arm at cards.rs:3683-3686 which doesn't read additional keys).
+    Pins the silent-drop convention for unit variants used across
+    sister round-22/23 BLOCKED-BRIDGE-ARM unit-shape arms.
+    """
+    from mtg_bot.effects.generic.graveyard import (
+        PutCardFromGraveyardOnBottomOfLibrary,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_card_from_graveyard_on_bottom_of_library",
+            "this_extra_key_should_be_silently_ignored": 42,
+            "another": ["arbitrary", "junk"],
+        }
+    )
+    assert isinstance(e, PutCardFromGraveyardOnBottomOfLibrary)
+
+
+def test_bridge_put_card_from_graveyard_on_bottom_of_library_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed
+    ``PutCardFromGraveyardOnBottomOfLibrary()``. Pins the dataclass
+    equality semantic for the no-fields unit variant.
+    """
+    from mtg_bot.effects.generic.graveyard import (
+        PutCardFromGraveyardOnBottomOfLibrary,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_card_from_graveyard_on_bottom_of_library"}
+    )
+    assert e == PutCardFromGraveyardOnBottomOfLibrary()
+
+
+def test_bridge_put_card_from_graveyard_on_bottom_of_library_requires_target_property():
+    """Bridge arm pin: the bridged Python object reports
+    ``requires_target() is True``, mirroring the class definition at
+    ``effects/generic/graveyard.py:426-427``. Pins the targeting-
+    Decision-pipeline contract: the activated/triggered ability
+    using this effect MUST collect a target before resolve.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_card_from_graveyard_on_bottom_of_library"}
+    )
+    assert e.requires_target() is True
+
+
+def test_bridge_put_card_from_graveyard_on_bottom_of_library_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([PutCardFromGraveyardOnBottomOfLibrary(),
+    DrawCards(1)])`` translates correctly via the recursive Sequence
+    translator. Pins this arm against accidental dispatch loss inside
+    Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.graveyard import (
+        PutCardFromGraveyardOnBottomOfLibrary,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "put_card_from_graveyard_on_bottom_of_library"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], PutCardFromGraveyardOnBottomOfLibrary)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_put_card_from_graveyard_on_bottom_of_library_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "put_card_from_graveyard_on_bottom_of_library"}`` dict
+    shape on a triggered_ability carrier. The bridge dict shape must
+    register cleanly on the Rust side too; this lockstep gate keeps
+    the bridge from drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3683-3686`` accepts the bare ``kind``-only
+    dict (no ``target`` field — Rust resolves auto-pick
+    deterministically per state_ops_resolve.rs:5103-5133).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "PutCardFromGraveyardOnBottomOfLibrary"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "power": 1,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_card_from_graveyard_on_bottom_of_library",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
