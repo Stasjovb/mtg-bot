@@ -5813,6 +5813,103 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 f"parser at cards.rs:3925-3929)"
             )
         return ManifestDreadThenAttachSelf()
+    if kind == "manifest_dread_then_put_plus_one_counters_on_it":
+        # **Round-31 BLOCKED-BRIDGE-ARM slice -- "manifest dread,
+        # then put N +1/+1 counter(s) on that creature"
+        # (ManifestDreadThenPutPlusOneCountersOnIt composite, the
+        # Slimy-Aquarium / Weight-Room Duskmourn-Room door-trigger
+        # family).** Rust substrate
+        # ``Effect::ManifestDreadThenPutPlusOneCountersOnIt {
+        # count: i32, counter_amount: i32 }`` (cards.rs; parser at
+        # cards.rs:3932-3969, to_dict at cards.rs:5776-5780, resolve
+        # at state_ops_resolve.rs:6872-6920) was already on main
+        # from round 29; bridge arm was the staleness gap (round-28
+        # closeout discovery -- to_dict-emitted kind with no matching
+        # translator).
+        #
+        # **Field shape (two ints with defaults).** Rust's parse_effect
+        # arm at cards.rs:3939-3963 takes optional ``count`` AND
+        # optional ``counter_amount``, both defaulting to 1 and both
+        # required non-negative. Slimy Aquarium emits
+        # counter_amount=1 (default), Weight Room emits
+        # counter_amount=3 ("three +1/+1 counters"). Negative count
+        # OR negative counter_amount surfaces at parse time as
+        # PyValueError on Rust; the bridge mirrors via ValueError on
+        # either field. The ``count != 1`` lane is parse-tolerated
+        # (so dict round-trip works) but resolve-time-deferred on
+        # Rust per state_ops_resolve.rs:6873-6876 so a typo doesn't
+        # silently no-op.
+        #
+        # **Sister of manifest_dread / manifest_dread_then_attach_self.**
+        # Same count-defaulting-to-1 schema, same look-2-then-
+        # manifest-1-and-graveyard-1 mechanic from CR 701.55. The
+        # composite layer is the post-manifest +1/+1-counter add (no
+        # targeting Decision -- "that creature" is the just-
+        # manifested face-down 2/2, picked at resolve time via id-set
+        # difference on the battlefield snapshot before/after the
+        # manifest, same shape as ManifestDreadThenAttachSelf's
+        # attach pick).
+        #
+        # **Python-vs-Rust schema-narrowness divergence.** Python's
+        # ``ManifestDreadThenPutPlusOneCountersOnIt`` carries a
+        # single ``counter_amount: int = 1`` field (no count field
+        # -- the manifest count is hardcoded as
+        # ``ManifestDread(count=1).resolve(...)`` at
+        # library_lookat.py:479). The bridge constructs Python with
+        # the dict's counter_amount (passed through) but ignores the
+        # Rust ``count`` field at construction time since Python's
+        # class doesn't expose it; the count != 1 lane on Rust
+        # defers at resolve regardless, so observable parity is
+        # maintained on the count == 1 lane (the only lane the EoE
+        # / Duskmourn oracles actually emit).
+        #
+        # **EoE consumer note.** No EoE oracle hits today (the
+        # Slimy-Aquarium / Weight-Room Room family is a Duskmourn-
+        # block mechanic; EoE has no manifest-dread-then-put-
+        # counters cards). Slice ships per round-27 round-trip-
+        # surface-coverage rule. Cross-engine end-to-end probe
+        # deferred per round-17/18/19 synthetic-only-when-riders-
+        # cascade precedent (the choose_card_from_library agent hook
+        # + the put_into_battlefield face-down ETB-trigger fan-out
+        # + the +1/+1 counter pipeline + the count != 1 deferred-
+        # error gate are their own surfaces beyond the bare bridge-
+        # arm slice).
+        from mtg_bot.effects.generic.library_lookat import (
+            ManifestDreadThenPutPlusOneCountersOnIt,
+        )
+
+        count = eff_dict.get("count", 1)
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ValueError(
+                f"manifest_dread_then_put_plus_one_counters_on_it bridge "
+                f"arm: 'count' must be an integer, got {count!r} "
+                f"(type {type(count).__name__})"
+            )
+        if count < 0:
+            raise ValueError(
+                f"manifest_dread_then_put_plus_one_counters_on_it bridge "
+                f"arm: 'count' must be non-negative, got {count} "
+                f"(mirroring Rust parser at cards.rs:3947-3951)"
+            )
+        counter_amount = eff_dict.get("counter_amount", 1)
+        if isinstance(counter_amount, bool) or not isinstance(
+            counter_amount, int
+        ):
+            raise ValueError(
+                f"manifest_dread_then_put_plus_one_counters_on_it bridge "
+                f"arm: 'counter_amount' must be an integer, got "
+                f"{counter_amount!r} (type {type(counter_amount).__name__})"
+            )
+        if counter_amount < 0:
+            raise ValueError(
+                f"manifest_dread_then_put_plus_one_counters_on_it bridge "
+                f"arm: 'counter_amount' must be non-negative, got "
+                f"{counter_amount} (mirroring Rust parser at "
+                f"cards.rs:3960-3964)"
+            )
+        return ManifestDreadThenPutPlusOneCountersOnIt(
+            counter_amount=counter_amount
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

@@ -11347,5 +11347,236 @@ def test_rust_parser_accepts_manifest_dread_then_attach_self_with_explicit_count
     assert pid == 0
 
 
+def test_bridge_manifest_dread_then_put_plus_one_counters_basic_translation_default():
+    """BLOCKED-BRIDGE-ARM slice (round 28 closeout discovery) --
+    ManifestDreadThenPutPlusOneCountersOnIt composite (Slimy-Aquarium
+    / Weight-Room Duskmourn-Room door-trigger family). Rust ``{"kind":
+    "manifest_dread_then_put_plus_one_counters_on_it"}`` (no fields)
+    translates to Python ``ManifestDreadThenPutPlusOneCountersOnIt()``
+    with default ``counter_amount=1`` (Slimy Aquarium emits this).
+
+    Mirrors Rust's parse_effect arm at cards.rs:3932-3969 which
+    accepts optional ``count`` AND ``counter_amount`` both
+    defaulting to 1. The bridge wires the same Python-side primitive
+    (``effects/generic/library_lookat.py:ManifestDreadThenPutPlusOneCountersOnIt``).
+    """
+    from mtg_bot.effects.generic.library_lookat import (
+        ManifestDreadThenPutPlusOneCountersOnIt,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "manifest_dread_then_put_plus_one_counters_on_it"}
+    )
+    assert isinstance(e, ManifestDreadThenPutPlusOneCountersOnIt)
+    assert e.counter_amount == 1
+
+
+def test_bridge_manifest_dread_then_put_plus_one_counters_explicit_one():
+    """Bridge arm pin: explicit ``counter_amount=1`` translates
+    identically to the missing-field default-1 case (Slimy-Aquarium
+    bare oracle vs explicit emitters land on the same Python
+    instance). Pins the dict-shape round-trip equivalence.
+    """
+    from mtg_bot.effects.generic.library_lookat import (
+        ManifestDreadThenPutPlusOneCountersOnIt,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "manifest_dread_then_put_plus_one_counters_on_it",
+            "counter_amount": 1,
+        }
+    )
+    assert isinstance(e, ManifestDreadThenPutPlusOneCountersOnIt)
+    assert e == ManifestDreadThenPutPlusOneCountersOnIt(counter_amount=1)
+
+
+def test_bridge_manifest_dread_then_put_plus_one_counters_amount_three():
+    """Bridge arm pin: ``counter_amount=3`` translates to
+    ``ManifestDreadThenPutPlusOneCountersOnIt(counter_amount=3)`` --
+    the Weight-Room "three +1/+1 counters on that creature" oracle
+    shape. Pins the counter_amount pass-through against accidental
+    clamping.
+    """
+    from mtg_bot.effects.generic.library_lookat import (
+        ManifestDreadThenPutPlusOneCountersOnIt,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "manifest_dread_then_put_plus_one_counters_on_it",
+            "counter_amount": 3,
+        }
+    )
+    assert isinstance(e, ManifestDreadThenPutPlusOneCountersOnIt)
+    assert e.counter_amount == 3
+
+
+def test_bridge_manifest_dread_then_put_plus_one_counters_negative_count_raises():
+    """Bridge arm pin: negative ``count`` raises ValueError, mirroring
+    Rust's parse_effect at cards.rs:3947-3951. Pins the non-negative
+    ``count`` contract on both engines.
+    """
+    import pytest
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="non-negative"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "manifest_dread_then_put_plus_one_counters_on_it",
+                "count": -1,
+            }
+        )
+
+
+def test_bridge_manifest_dread_then_put_plus_one_counters_negative_amount_raises():
+    """Bridge arm pin: negative ``counter_amount`` raises ValueError,
+    mirroring Rust's parse_effect at cards.rs:3960-3964. Pins the
+    non-negative ``counter_amount`` contract on both engines.
+    """
+    import pytest
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="non-negative"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "manifest_dread_then_put_plus_one_counters_on_it",
+                "counter_amount": -2,
+            }
+        )
+
+
+def test_bridge_manifest_dread_then_put_plus_one_counters_non_integer_amount_raises():
+    """Bridge arm pin: non-integer ``counter_amount`` raises
+    ValueError. Rust extracts via ``c.extract::<i32>()`` which
+    rejects non-int; the bridge mirrors via explicit isinstance
+    check (and rejects bool explicitly since bool is an int subclass
+    in Python but not a legal counter_amount).
+    """
+    import pytest
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="must be an integer"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "manifest_dread_then_put_plus_one_counters_on_it",
+                "counter_amount": "three",
+            }
+        )
+
+
+def test_bridge_manifest_dread_then_put_plus_one_counters_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([ManifestDreadThenPutPlusOneCountersOnIt(counter_amount=3),
+    DrawCards(1)])`` translates correctly via the recursive Sequence
+    translator. Pins this arm against accidental dispatch loss
+    inside Sequence and pins counter_amount pass-through under a
+    composer.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.library_lookat import (
+        ManifestDreadThenPutPlusOneCountersOnIt,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": (
+                        "manifest_dread_then_put_plus_one_counters_on_it"
+                    ),
+                    "counter_amount": 3,
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], ManifestDreadThenPutPlusOneCountersOnIt
+    )
+    assert e.effects[0].counter_amount == 3
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_manifest_dread_then_put_plus_one_counters_default():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "manifest_dread_then_put_plus_one_counters_on_it"}``
+    (default count + default counter_amount) on a triggered_ability
+    carrier. The bridge dict shape must register cleanly on Rust
+    too; this lockstep gate keeps the bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3932-3969``
+    accepts the struct-variant dict with optional count: i32 +
+    optional counter_amount: i32 (both default to 1).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "ManifestDreadThenPutPlusOneCountersOnIt"
+        ),
+        "card_types": ["Enchantment"],
+        "mana_cost": {"G": 1, "generic": 2},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "manifest_dread_then_put_plus_one_counters_on_it"
+                    )
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_accepts_manifest_dread_then_put_plus_one_counters_three():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "manifest_dread_then_put_plus_one_counters_on_it",
+    "counter_amount": 3}`` on a triggered_ability carrier (the
+    Weight-Room oracle shape). Pins the counter_amount-3 register-
+    on-Rust path against accidental schema drift.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "ManifestDreadThenPutPlusOneCountersOnIt (counter_amount=3)"
+        ),
+        "card_types": ["Enchantment"],
+        "mana_cost": {"G": 2, "generic": 3},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "manifest_dread_then_put_plus_one_counters_on_it"
+                    ),
+                    "counter_amount": 3,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
