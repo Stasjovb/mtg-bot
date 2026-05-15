@@ -34,7 +34,7 @@ def _self_play_spec() -> SelfPlayJobSpec:
     return SelfPlayJobSpec(
         weights_path="trained_weights/v1/weights.pt",
         samples=4, inner_nodes=200, hidden_sizes=(64, 64),
-        base_seed=42, enable_mulligans=False,
+        base_seed=42,
         per_game_timeout_sec=300.0,
     )
 
@@ -44,7 +44,7 @@ def _eval_spec() -> EvalJobSpec:
         new_weights_path="trained_weights/v2/weights.pt",
         old_weights_path="trained_weights/v1/weights.pt",
         samples=4, inner_nodes=200, hidden_sizes=(64, 64),
-        base_seed=42, enable_mulligans=False,
+        base_seed=42,
         per_game_timeout_sec=300.0,
     )
 

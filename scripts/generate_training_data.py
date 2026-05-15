@@ -147,19 +147,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--enable-mulligans", action="store_true",
-        help=(
-            "Run the London-mulligan loop at game start. Each "
-            "player's seat-level agent (RandomAgent here) decides "
-            "keep / mulligan via the extreme-only heuristic in "
-            "``mtg_bot.mulligan`` (mulligan only on 0-land or all-"
-            "land hands). Reduces the worst MTG variance source "
-            "(mana screw / flood) at the cost of slightly longer "
-            "setup. Default off — preserves the Stage-1 "
-            "deal-7-and-go behavior for reproducibility."
-        ),
-    )
-    parser.add_argument(
         "--per-game-timeout-sec", type=float, default=300.0,
         help=(
             "Wall-clock cap per individual game (default 300s, ~50x "
@@ -295,7 +282,6 @@ def main() -> None:
                     deck_pool=deck_pool,
                     with_policy=True,
                     progress=progress,
-                    enable_mulligans=args.enable_mulligans,
                     per_game_timeout_sec=args.per_game_timeout_sec,
                     hang_dump_dir=hang_dump_dir,
                 )
@@ -311,7 +297,6 @@ def main() -> None:
                     deck_pool=deck_pool,
                     with_policy=True,
                     progress=progress,
-                    enable_mulligans=args.enable_mulligans,
                     per_game_timeout_sec=args.per_game_timeout_sec,
                     hang_dump_dir=hang_dump_dir,
                 )

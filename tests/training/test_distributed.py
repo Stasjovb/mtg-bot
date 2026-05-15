@@ -310,7 +310,6 @@ def test_run_shard_local_writes_npz_with_per_shard_filename(
         samples=1, inner_nodes=10,
         hidden_sizes=hidden_sizes,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
         with_policy=True,
     )
@@ -356,7 +355,6 @@ def test_run_shard_local_shm_off_skips_server_construction(
         samples=1, inner_nodes=10,
         hidden_sizes=hidden_sizes,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
         with_policy=True,
         use_shm_server=False,
@@ -435,7 +433,6 @@ def test_run_shard_local_shm_on_constructs_starts_stops_server(
         samples=1, inner_nodes=10,
         hidden_sizes=hidden_sizes,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
         with_policy=True,
         use_shm_server=True,
@@ -496,7 +493,6 @@ def test_run_shard_local_shm_not_implemented_falls_back(
         samples=1, inner_nodes=10,
         hidden_sizes=hidden_sizes,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
         with_policy=True,
         use_shm_server=True,
@@ -618,7 +614,6 @@ def test_run_distributed_two_local_shards_both_produce_npz(
         samples=1, inner_nodes=10,
         hidden_sizes=hidden_sizes,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
         with_policy=True,
     )
@@ -708,7 +703,6 @@ def test_run_distributed_eval_two_local_shards_aggregate_counts(
         samples=1, inner_nodes=10,
         hidden_sizes=hidden_sizes,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
         opponent_label="self",
     )
@@ -766,7 +760,6 @@ def test_run_distributed_self_play_with_slack_initializes_overqueue(
         samples=1, inner_nodes=10,
         hidden_sizes=hidden_sizes,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
         with_policy=True,
     )
@@ -814,7 +807,6 @@ def test_run_distributed_eval_with_slack_initializes_overqueue(
         samples=1, inner_nodes=10,
         hidden_sizes=hidden_sizes,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
         opponent_label="self",
     )
@@ -856,7 +848,7 @@ def test_spec_to_dict_normalizes_windows_paths_to_forward_slashes():
     spec = SelfPlayJobSpec(
         weights_path="tmp_iter\\registry\\v6\\weights.pt",
         samples=2, inner_nodes=50, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         deck_pool_path="data\\17lands\\eoe_decks.json.gz",
         replays_root="tmp_iter\\replays",
@@ -877,7 +869,7 @@ def test_spec_to_dict_handles_none_path_fields():
     spec = SelfPlayJobSpec(
         weights_path="weights.pt",
         samples=1, inner_nodes=1, hidden_sizes=None,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     d = spec.to_dict()
@@ -898,7 +890,6 @@ def test_spec_round_trips_through_to_dict_from_dict():
         samples=4, inner_nodes=200,
         hidden_sizes=(1024, 1024, 512),
         base_seed=2_000_000,
-        enable_mulligans=True,
         per_game_timeout_sec=450.0,
         deck_pool_path="data/17lands/eoe_decks.json.gz",
         with_policy=True,
@@ -930,7 +921,7 @@ def test_self_play_spec_default_heuristics_all_true():
 
     spec = SelfPlayJobSpec(
         weights_path="w.pt", samples=1, inner_nodes=1, hidden_sizes=None,
-        base_seed=0, enable_mulligans=False, per_game_timeout_sec=None,
+        base_seed=0, per_game_timeout_sec=None,
     )
     assert spec.heuristics == HeuristicsConfig()
 
@@ -947,7 +938,6 @@ def test_self_play_spec_from_dict_missing_heuristics_defaults_to_all_true():
         "inner_nodes": 1,
         "hidden_sizes": None,
         "base_seed": 0,
-        "enable_mulligans": False,
         "per_game_timeout_sec": None,
     })
     assert rebuilt.heuristics == HeuristicsConfig()
@@ -962,7 +952,7 @@ def test_eval_spec_default_heuristics_all_false():
     spec = EvalJobSpec(
         new_weights_path="new.pt", old_weights_path=None,
         samples=1, inner_nodes=1, hidden_sizes=None,
-        base_seed=0, enable_mulligans=False, per_game_timeout_sec=None,
+        base_seed=0, per_game_timeout_sec=None,
     )
     assert spec.heuristics == HeuristicsConfig.disabled()
 
@@ -974,7 +964,7 @@ def test_eval_spec_round_trips_heuristics():
     original = EvalJobSpec(
         new_weights_path="new.pt", old_weights_path="old.pt",
         samples=4, inner_nodes=200, hidden_sizes=(64, 64),
-        base_seed=42, enable_mulligans=False,
+        base_seed=42,
         per_game_timeout_sec=300.0,
         heuristics=HeuristicsConfig(
             phase_prune_enabled=True,
@@ -1001,7 +991,6 @@ def test_eval_spec_from_dict_missing_heuristics_defaults_to_all_false():
         "inner_nodes": 1,
         "hidden_sizes": None,
         "base_seed": 0,
-        "enable_mulligans": False,
         "per_game_timeout_sec": None,
     })
     assert rebuilt.heuristics == HeuristicsConfig.disabled()
@@ -1016,7 +1005,7 @@ def test_self_play_spec_architecture_round_trips():
     original = SelfPlayJobSpec(
         weights_path="w.pt", samples=4, inner_nodes=200,
         hidden_sizes=(128, 128, 64),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         architecture="separate",
         policy_hidden_sizes=(64, 32),
@@ -1036,7 +1025,6 @@ def test_self_play_spec_architecture_default_is_none():
         "samples": 1, "inner_nodes": 1,
         "hidden_sizes": None,
         "base_seed": 0,
-        "enable_mulligans": False,
         "per_game_timeout_sec": None,
     })
     assert rebuilt.architecture is None
@@ -1052,7 +1040,7 @@ def test_eval_spec_architecture_round_trips():
     original = EvalJobSpec(
         new_weights_path="new.pt", old_weights_path="old.pt",
         samples=4, inner_nodes=200, hidden_sizes=(64, 64),
-        base_seed=42, enable_mulligans=False,
+        base_seed=42,
         per_game_timeout_sec=300.0,
         new_architecture="separate",
         old_architecture="shared",
@@ -1075,7 +1063,7 @@ def test_self_play_spec_action_encoding_version_round_trips():
     original = SelfPlayJobSpec(
         weights_path="w.pt", samples=4, inner_nodes=200,
         hidden_sizes=(1024, 1024, 512),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         action_encoding_version="canonical_v2",
     )
@@ -1095,7 +1083,6 @@ def test_self_play_spec_action_encoding_version_default_is_none():
         "samples": 1, "inner_nodes": 1,
         "hidden_sizes": None,
         "base_seed": 0,
-        "enable_mulligans": False,
         "per_game_timeout_sec": None,
     })
     assert rebuilt.action_encoding_version is None
@@ -1111,7 +1098,7 @@ def test_eval_spec_action_encoding_version_round_trips_per_side():
     original = EvalJobSpec(
         new_weights_path="new.pt", old_weights_path="old.pt",
         samples=4, inner_nodes=200, hidden_sizes=(64, 64),
-        base_seed=42, enable_mulligans=False,
+        base_seed=42,
         per_game_timeout_sec=300.0,
         new_action_encoding_version="canonical_v2",
         old_action_encoding_version="positional_v1",
@@ -1132,7 +1119,6 @@ def test_eval_spec_action_encoding_version_default_is_none():
         "samples": 1, "inner_nodes": 1,
         "hidden_sizes": None,
         "base_seed": 0,
-        "enable_mulligans": False,
         "per_game_timeout_sec": None,
     })
     assert rebuilt.new_action_encoding_version is None
@@ -1167,7 +1153,7 @@ def test_remote_pull_command_posix_round_trips_b64_args():
     spec = SelfPlayJobSpec(
         weights_path="trained_weights/v6/weights.pt",
         samples=4, inner_nodes=200, hidden_sizes=(64, 64),
-        base_seed=42, enable_mulligans=False,
+        base_seed=42,
         per_game_timeout_sec=300.0,
     )
     shard = ShardConfig(
@@ -1220,7 +1206,6 @@ def test_eval_spec_round_trips_through_to_dict_from_dict():
         old_weights_path="trained_weights\\v6\\weights.pt",
         samples=4, inner_nodes=200, hidden_sizes=(1024, 1024, 512),
         base_seed=2_007_777,
-        enable_mulligans=True,
         per_game_timeout_sec=300.0,
         deck_pool_path="data\\17lands\\eoe_decks.json.gz",
         capture_every=10,
@@ -1253,7 +1238,7 @@ def test_eval_spec_old_weights_can_be_none():
     spec = EvalJobSpec(
         new_weights_path="weights.pt", old_weights_path=None,
         samples=2, inner_nodes=10, hidden_sizes=None,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     d = spec.to_dict()
@@ -1276,7 +1261,7 @@ def test_remote_eval_command_posix_round_trips():
         new_weights_path="trained_weights/v7/weights.pt",
         old_weights_path="trained_weights/v6/weights.pt",
         samples=4, inner_nodes=200, hidden_sizes=(64, 64),
-        base_seed=42, enable_mulligans=False,
+        base_seed=42,
         per_game_timeout_sec=300.0,
     )
     shard = ShardConfig(
@@ -1320,7 +1305,7 @@ def test_remote_eval_command_windows_uses_cmd_syntax():
         new_weights_path="trained_weights/v7/weights.pt",
         old_weights_path=None,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     shard = ShardConfig(
@@ -1454,7 +1439,7 @@ def test_remote_pull_command_windows_uses_cmd_syntax():
     spec = SelfPlayJobSpec(
         weights_path="trained_weights/v6/weights.pt",
         samples=4, inner_nodes=200, hidden_sizes=(64, 64),
-        base_seed=42, enable_mulligans=False,
+        base_seed=42,
         per_game_timeout_sec=300.0,
     )
     shard = ShardConfig(
@@ -1595,7 +1580,7 @@ def test_weight_push_posix_command_shape(monkeypatch, tmp_path):
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     shard = ShardConfig(
@@ -1638,7 +1623,7 @@ def test_weight_push_windows_command_shape(monkeypatch, tmp_path):
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     shard = ShardConfig(
@@ -1695,7 +1680,7 @@ def test_run_shard_remote_call_sequence(monkeypatch, tmp_path):
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     shard = ShardConfig(
@@ -1806,7 +1791,7 @@ def test_weight_push_failure_returns_failure_report(monkeypatch, tmp_path):
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     shard = ShardConfig(
@@ -3146,7 +3131,7 @@ def test_replay_collection_posix_command_shape(monkeypatch, tmp_path):
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         capture_every=10,
         replays_root="replays",
@@ -3218,7 +3203,7 @@ def test_replay_collection_windows_command_shape(monkeypatch, tmp_path):
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         capture_every=10,
         replays_root="replays",
@@ -3291,7 +3276,7 @@ def test_replay_collection_skipped_when_capture_off(
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         capture_every=0,
         replays_root="replays",
@@ -3329,7 +3314,7 @@ def test_replay_collection_skipped_when_replays_root_none(
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         capture_every=10,
         replays_root=None,
@@ -3364,7 +3349,7 @@ def test_replay_collection_eval_path(monkeypatch, tmp_path):
         new_weights_path=new_weights,
         old_weights_path=old_weights,
         samples=1, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         capture_every=5,
         replays_root="replays",
@@ -3428,7 +3413,7 @@ def test_replay_collection_eval_skipped_when_capture_off(
         new_weights_path=new_weights,
         old_weights_path=None,
         samples=1, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         capture_every=0,
         replays_root="replays",
@@ -3462,7 +3447,7 @@ def test_replay_collection_handles_empty_listing(monkeypatch, tmp_path):
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         capture_every=10,
         replays_root="replays",
@@ -3899,7 +3884,7 @@ def test_run_shard_remote_ssh_run_failure_returns_failure_report(
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     shard = ShardConfig(
@@ -4022,7 +4007,7 @@ def test_run_shard_remote_recovers_npzs_after_ssh_failure(
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     shard = ShardConfig(
@@ -4101,7 +4086,7 @@ def test_run_shard_eval_remote_ssh_failure_returns_failure_report(
         new_weights_path=new_weights,
         old_weights_path=old_weights,
         samples=1, inner_nodes=10, hidden_sizes=(16,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="v6",
     )
@@ -4150,7 +4135,6 @@ def test_run_distributed_self_play_one_local_shard_fails(
         samples=1, inner_nodes=10,
         hidden_sizes=hidden_sizes,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
         with_policy=True,
     )
@@ -4234,7 +4218,6 @@ def test_run_distributed_self_play_all_shards_fail_raises(
         samples=1, inner_nodes=10,
         hidden_sizes=hidden_sizes,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
         with_policy=True,
     )
@@ -4279,7 +4262,7 @@ def test_run_distributed_eval_one_shard_fails_aggregates_rest(
         new_weights_path=str(weights_path),
         old_weights_path=str(weights_path),
         samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="self",
     )
@@ -4423,7 +4406,7 @@ def test_run_shard_remote_bundle_sync_failure_returns_failure_report(
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=1, inner_nodes=10, hidden_sizes=(16,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     shard = ShardConfig(
@@ -4513,7 +4496,7 @@ def test_run_shard_remote_npz_pull_failure_records_partial(
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=1, inner_nodes=10, hidden_sizes=(16,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     shard = ShardConfig(
@@ -4585,7 +4568,7 @@ def test_run_shard_remote_npz_listing_failure_records(
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=1, inner_nodes=10, hidden_sizes=(16,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     shard = ShardConfig(
@@ -4664,7 +4647,7 @@ def test_run_shard_remote_replay_pull_failure_warned_not_fatal(
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=1, inner_nodes=10, hidden_sizes=(16,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         capture_every=1,
         replays_root="replays",
@@ -4735,7 +4718,7 @@ def test_run_shard_eval_remote_bundle_sync_failure(monkeypatch, tmp_path):
         new_weights_path=new_weights,
         old_weights_path=None,
         samples=1, inner_nodes=10, hidden_sizes=(16,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="rand",
     )
@@ -4804,7 +4787,7 @@ def test_run_shard_eval_remote_weight_push_failure(monkeypatch, tmp_path):
         new_weights_path=new_weights,
         old_weights_path=None,
         samples=1, inner_nodes=10, hidden_sizes=(16,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="rand",
     )
@@ -4862,7 +4845,7 @@ def test_run_shard_eval_remote_corrupt_result_file(monkeypatch, tmp_path):
         new_weights_path=new_weights,
         old_weights_path=None,
         samples=1, inner_nodes=10, hidden_sizes=(16,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="rand",
     )
@@ -4898,7 +4881,7 @@ def test_run_distributed_eval_all_shards_fail_raises(
         new_weights_path=str(weights_path),
         old_weights_path=str(weights_path),
         samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="self",
     )
@@ -5031,7 +5014,7 @@ def test_run_shard_remote_uses_supplied_ssh_timeout(monkeypatch, tmp_path):
     spec = SelfPlayJobSpec(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None, capture_every=10,
         replays_root="replays",
     )
@@ -5659,7 +5642,7 @@ def test_run_shard_remote_passes_local_progress_path_to_watchdog(
     spec = _SP(
         weights_path=weights_rel,
         samples=2, inner_nodes=10, hidden_sizes=(64,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     shard = _SC(
@@ -5744,7 +5727,7 @@ def test_run_shard_eval_remote_passes_local_progress_path_to_watchdog(
         new_weights_path=new_w,
         old_weights_path=None,
         samples=1, inner_nodes=10, hidden_sizes=(16,),
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="rand",
     )
@@ -5983,7 +5966,6 @@ def test_run_shard_pull_abandons_inflight_on_queue_close(
         samples=1, inner_nodes=10,
         hidden_sizes=None,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
     )
 
@@ -6098,7 +6080,6 @@ def test_run_shard_pull_natural_drain_abandons_inflight(
         samples=1, inner_nodes=10,
         hidden_sizes=None,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
     )
 
@@ -6199,7 +6180,6 @@ def test_run_shard_pull_preserves_data_already_completed_pre_close(
         samples=1, inner_nodes=10,
         hidden_sizes=None,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
     )
 
@@ -6275,7 +6255,6 @@ def test_run_shard_eval_pull_abandons_inflight_on_queue_close(
         samples=1, inner_nodes=10,
         hidden_sizes=None,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
     )
 
@@ -6374,7 +6353,6 @@ def test_run_shard_eval_pull_natural_drain_abandons_inflight(
         samples=1, inner_nodes=10,
         hidden_sizes=None,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
     )
 
@@ -6518,7 +6496,6 @@ def _basic_self_play_spec():
         samples=1, inner_nodes=10,
         hidden_sizes=None,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
     )
 
@@ -6531,7 +6508,6 @@ def _basic_eval_spec():
         samples=1, inner_nodes=10,
         hidden_sizes=None,
         base_seed=0,
-        enable_mulligans=False,
         per_game_timeout_sec=None,
     )
 
@@ -7721,7 +7697,7 @@ def test_run_distributed_eval_aggregates_after_remote_ssh_wedge(
         new_weights_path=str(weights_path),
         old_weights_path=str(weights_path),
         samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="self",
     )
@@ -7828,7 +7804,7 @@ def test_run_distributed_eval_uses_queue_completion_signal_not_ssh_futures(
         new_weights_path=str(weights_path),
         old_weights_path=str(weights_path),
         samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="self",
     )
@@ -7920,7 +7896,7 @@ def test_run_distributed_eval_all_shards_die_returns_partial_or_raises(
         new_weights_path=str(weights_path),
         old_weights_path=str(weights_path),
         samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="self",
     )
@@ -8086,7 +8062,7 @@ def test_run_distributed_eval_sentinel_stop_aggregates_partial_counts(
         new_weights_path=str(weights_path),
         old_weights_path=str(weights_path),
         samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="self",
     )
@@ -8146,7 +8122,7 @@ def test_run_distributed_eval_queue_max_wait_timeout_aggregates_anyway(
         new_weights_path=str(weights_path),
         old_weights_path=str(weights_path),
         samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="self",
     )
@@ -8249,7 +8225,7 @@ def test_run_distributed_eval_surfaces_queue_failed_as_crashed(
         new_weights_path=str(weights_path),
         old_weights_path=str(weights_path),
         samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="self",
     )
@@ -8343,7 +8319,7 @@ def test_run_distributed_eval_orchestrator_returns_before_ssh_unblocks(
         new_weights_path=str(weights_path),
         old_weights_path=str(weights_path),
         samples=1, inner_nodes=10, hidden_sizes=hidden_sizes,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         opponent_label="self",
     )

@@ -297,7 +297,7 @@ PYTHONPATH=src .venv-py313/Scripts/python.exe \
   --games-per-iteration 6 \
   --epochs 5 --batch-size 256 --learning-rate 1e-3 \
   --acceptance-threshold 0.55 --eval-games 4 \
-  --enable-mulligans --per-game-timeout-sec 450 \
+  --per-game-timeout-sec 450 \
   --workers 24 --seed 0 \
   --deck-pool data/17lands/eoe_decks.json.gz \
   --data-dir iterate_data \
@@ -323,7 +323,7 @@ PYTHONPATH=src .venv-py313/Scripts/python.exe \
   --games-per-iteration 500 \
   --epochs 100 --batch-size 256 --learning-rate 1e-3 \
   --acceptance-threshold 0.55 --eval-games 200 \
-  --enable-mulligans --per-game-timeout-sec 450 \
+  --per-game-timeout-sec 450 \
   --workers 24 --seed 0 \
   --deck-pool data/17lands/eoe_decks.json.gz \
   --data-dir iterate_data \

@@ -164,23 +164,25 @@ def test_build_command_overrides_emitted() -> None:
 
 
 def test_build_command_bool_storetrue() -> None:
-    """``--enable-mulligans`` is store_true; only emitted when True.
+    """``--use-ismcts`` is store_true; only emitted when True.
 
-    Likewise ``--use-ismcts`` and ``--reconcile-state``.
+    Likewise ``--reconcile-state`` and other store_true flags.
+    (``--enable-mulligans`` was removed by feature/always-on-mulligans
+    — mulligans are always on now.)
     """
     argv_off = build_iterate_command({
         "bootstrap-version": "v3",
         "deck-pool": "data/17lands/eoe_decks.json.gz",
-        "enable-mulligans": False,
+        "use-ismcts": False,
     })
-    assert "--enable-mulligans" not in argv_off
+    assert "--use-ismcts" not in argv_off
 
     argv_on = build_iterate_command({
         "bootstrap-version": "v3",
         "deck-pool": "data/17lands/eoe_decks.json.gz",
-        "enable-mulligans": True,
+        "use-ismcts": True,
     })
-    assert "--enable-mulligans" in argv_on
+    assert "--use-ismcts" in argv_on
 
 
 def test_build_command_bool_tristate_explicit_off() -> None:

@@ -58,7 +58,7 @@ def _make_pull_argv(*, run_id: str, label: str, progress_dir: Path,
     spec = SelfPlayJobSpec(
         weights_path="trained_weights/v1/weights.pt",
         samples=2, inner_nodes=10, hidden_sizes=(8,),
-        base_seed=42, enable_mulligans=False,
+        base_seed=42,
         per_game_timeout_sec=30.0,
     )
     shard = ShardConfig(host="local", label=label, n_workers=1)
@@ -81,7 +81,7 @@ def _make_eval_argv(*, run_id: str, label: str, progress_dir: Path,
         new_weights_path="trained_weights/v2/weights.pt",
         old_weights_path="trained_weights/v1/weights.pt",
         samples=2, inner_nodes=10, hidden_sizes=(8,),
-        base_seed=42, enable_mulligans=False,
+        base_seed=42,
         per_game_timeout_sec=30.0,
     )
     shard = ShardConfig(host="local", label=label, n_workers=1)

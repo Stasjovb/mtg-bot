@@ -40,7 +40,7 @@ def test_eval_job_spec_round_trips_hang_dump_root():
         new_weights_path="new.pt",
         old_weights_path="old.pt",
         samples=2, inner_nodes=10, hidden_sizes=None,
-        base_seed=1, enable_mulligans=False,
+        base_seed=1,
         per_game_timeout_sec=60.0, deck_pool_path=None,
         hang_dump_root="debug_hangs/eval_v16_v13",
     )
@@ -52,7 +52,7 @@ def test_eval_job_spec_round_trips_hang_dump_root():
     spec_unset = EvalJobSpec(
         new_weights_path="new.pt", old_weights_path=None,
         samples=1, inner_nodes=1, hidden_sizes=None,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=10.0, deck_pool_path=None,
     )
     assert spec_unset.hang_dump_root is None
@@ -183,7 +183,7 @@ def test_run_shard_eval_pull_threads_hang_dump_dir_into_worker_args(
         new_weights_path="new.pt",
         old_weights_path=None,  # heuristic opponent — no model load
         samples=1, inner_nodes=1, hidden_sizes=None,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=10.0, deck_pool_path=None,
         capture_every=0,
         opponent_label="heuristic",
@@ -278,11 +278,11 @@ def test_run_shard_eval_pull_threads_hang_dump_dir_into_worker_args(
     # One game submitted — args layout (see _build_args in
     # run_shard_eval_pull):
     #   (game_idx, p0_factory, p1_factory, base_seed, decision_cap,
-    #    enable_mulligans, per_game_timeout_sec, deck_pool,
-    #    replay_config, hang_dump_dir, heuristics)
+    #    per_game_timeout_sec, deck_pool,
+    #    replay_config, hang_dump_dir, heuristics, hb_path)
     assert len(submitted) == 1
     args = submitted[0]
-    hang_dump_dir = args[9]
+    hang_dump_dir = args[8]
     # Spec-level root + per-shard suffix.
     assert hang_dump_dir is not None
     assert Path(hang_dump_dir) == (
@@ -304,7 +304,7 @@ def test_run_shard_eval_pull_passes_none_when_root_unset(
         new_weights_path="new.pt",
         old_weights_path=None,
         samples=1, inner_nodes=1, hidden_sizes=None,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=10.0, deck_pool_path=None,
         capture_every=0,
         opponent_label="heuristic",
@@ -375,4 +375,8 @@ def test_run_shard_eval_pull_passes_none_when_root_unset(
     )
 
     assert len(submitted) == 1
-    assert submitted[0][9] is None
+    # hang_dump_dir is at index 8 in the args tuple (see _build_args in
+    # run_shard_eval_pull). The legacy ``enable_mulligans`` slot at
+    # index 5 was removed by feature/always-on-mulligans, shifting every
+    # later element down by one.
+    assert submitted[0][8] is None

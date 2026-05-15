@@ -128,7 +128,6 @@ def test_packed_worker_returns_sentinel_on_crash(capfd):
         random_choice_factory,      # p1_factory
         0,                          # base_seed
         100,                        # decision_cap
-        False,                      # enable_mulligans
         None,                       # per_game_timeout_sec
         simple_test_deck_pool(),    # deck_pool
     )
@@ -151,7 +150,6 @@ def test_indexed_worker_preserves_game_idx_on_crash(capfd):
         random_choice_factory,
         0,
         100,
-        False,                      # enable_mulligans
         None,                       # per_game_timeout_sec
         simple_test_deck_pool(),    # deck_pool
     )
@@ -198,7 +196,6 @@ def test_packed_worker_preserves_partial_decisions_on_timeout(
         random_choice_factory,
         0,                          # base_seed
         4000,                       # decision_cap
-        False,                      # enable_mulligans
         300.0,                      # per_game_timeout_sec (triggers wrap)
         simple_test_deck_pool(),    # deck_pool
     )
@@ -236,7 +233,7 @@ def test_packed_worker_partial_decisions_zero_when_attr_missing(
 
     args = (
         0, random_choice_factory, random_choice_factory,
-        0, 4000, False, 300.0, simple_test_deck_pool(),
+        0, 4000, 300.0, simple_test_deck_pool(),
     )
     result = _play_one_match_game_packed(args)
     assert result == (None, 0, "timed_out")
