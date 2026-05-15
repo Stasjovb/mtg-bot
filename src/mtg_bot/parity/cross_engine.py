@@ -4642,6 +4642,79 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # the bare bridge-arm slice).
         from mtg_bot.effects.generic.tap import UntapTargetOtherPermanent
         return UntapTargetOtherPermanent()
+    if kind == "create_token_copy_of_target_creature_you_control":
+        # **Round-23 BLOCKED-BRIDGE-ARM slice -- "create a token
+        # that's a copy of target creature you control"
+        # (CreateTokenCopyOfTargetCreatureYouControl family,
+        # Mirrorpool-shape clone-shape).** Rust substrate
+        # ``Effect::CreateTokenCopyOfTargetCreatureYouControl``
+        # (cards.rs:1366; unit variant; parser at
+        # cards.rs:3696-3698, resolve at
+        # state_ops_resolve.rs:5506-5594, to_dict at
+        # cards.rs:5614-5616) shipped via round 28; this slice closes
+        # the cross-engine bridge gap. Discovered by the round-22
+        # fresh discovery walk (Rust kind emitted by to_dict but no
+        # matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors Rust's
+        # parse_effect arm at cards.rs:3696-3698 -- silent-drop
+        # convention for unrecognized keys (extra dict fields are
+        # ignored).
+        #
+        # **Field shape.** Python's
+        # ``CreateTokenCopyOfTargetCreatureYouControl``
+        # (effects/generic/tokens.py:316-400) carries an optional
+        # ``additional_subtype: str | None = None`` field for the
+        # Mirror-Room-shape "except it's a Reflection in addition to
+        # its other creature types" rider, which Rust's substrate
+        # explicitly defers (``Python field drop. Python's
+        # additional_subtype field is deferred (Rust has no
+        # subtypes on registry yet)`` -- cards.rs:1364-1365). The
+        # bridge constructs the Python effect with no args
+        # (additional_subtype=None default), matching Rust's
+        # bare-clone semantics.
+        #
+        # **Resolve semantics (parity-relevant).** Rust's resolve at
+        # state_ops_resolve.rs:5506-5594 locates the source
+        # controller (5-zone walk + stack-fallback + active-player
+        # default), picks the FIRST creature on that controller's bf
+        # (deterministic first-slice target via filter on
+        # printing.card_types contains "Creature"), allocates a fresh
+        # obj_id (max+1 across both players' all-zones), and pushes a
+        # new GameObject with the SAME printing_id onto controller's
+        # bf with summoning_sick=true (token ETBs sick) and a fresh
+        # ETB timestamp; then queues an ENTERS dispatch (RS5 Slice 2
+        # ETB-trigger emission contract). No eligible target ->
+        # silent fizzle. Mirrors Python's ``CreateToken`` machinery
+        # via ``dataclasses.replace`` of the target's printing with
+        # the Token supertype injected. The two engines diverge on
+        # subtype-injection (Python carries it; Rust defers per the
+        # explicit Python-field-drop comment), but converge on the
+        # post-resolve observable bf-size+printing_id when
+        # additional_subtype=None (the bridge default).
+        #
+        # **Real EoE consumers** unblocked: 0 EoE cards via current
+        # oracle scan -- the Rust substrate comment cites
+        # "Mirrorpool-shape, 2 EoE cards" but the EoE oracle text
+        # corpus contains no direct "create a token that's a copy of
+        # target creature you control" hits today (the closest is
+        # Daring Salt-Lord's 12+ rider, which is the artifact-or-
+        # enchantment shape -- a different Effect variant). Bare
+        # bridge arm closes the to_dict round-trip surface and pre-
+        # positions the translator for any future EoE / sister-set
+        # consumer with this exact shape (Spark Double, Helm of the
+        # Host -- the "Mirrorpool-shape" precedent in older sets).
+        # Cross-engine end-to-end probe deferred per round-17/18/19
+        # synthetic-only-when-riders-cascade precedent (the clone
+        # substrate cascades token-printing-registry semantics +
+        # potential additional copy-substrate for the
+        # additional_subtype rider; Rust's deferred-subtype design
+        # makes a cross-engine token-snapshot probe shape-mismatched
+        # at the substrate level today).
+        from mtg_bot.effects.generic.tokens import (
+            CreateTokenCopyOfTargetCreatureYouControl,
+        )
+        return CreateTokenCopyOfTargetCreatureYouControl()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

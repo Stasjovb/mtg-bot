@@ -8192,5 +8192,156 @@ def test_rust_parser_accepts_untap_target_other_permanent_in_triggered_ability()
     assert pid == 0
 
 
+def test_bridge_create_token_copy_of_target_creature_you_control_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 23 fresh discovery walk) --
+    CreateTokenCopyOfTargetCreatureYouControl family. Rust
+    ``{"kind": "create_token_copy_of_target_creature_you_control"}``
+    translates to Python
+    ``CreateTokenCopyOfTargetCreatureYouControl()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3696-3698 (unit
+    variant; no fields). Pin verifies the bare-shape translation.
+    """
+    from mtg_bot.effects.generic.tokens import (
+        CreateTokenCopyOfTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "create_token_copy_of_target_creature_you_control"}
+    )
+    assert isinstance(e, CreateTokenCopyOfTargetCreatureYouControl)
+
+
+def test_bridge_create_token_copy_of_target_creature_you_control_default_subtype_none():
+    """Bridge arm pin: the constructed Python effect has
+    ``additional_subtype=None`` by default. Mirrors Rust's substrate
+    decision to defer the subtype-injection rider (per
+    cards.rs:1364-1365 ``Python field drop. Python's
+    additional_subtype field is deferred (Rust has no subtypes on
+    registry yet)``). This pin will fail loudly if a future Rust
+    schema bump adds an ``additional_subtype`` field to the bridge
+    dict shape and the Python side has to start threading it.
+    """
+    from mtg_bot.effects.generic.tokens import (
+        CreateTokenCopyOfTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "create_token_copy_of_target_creature_you_control"}
+    )
+    assert isinstance(e, CreateTokenCopyOfTargetCreatureYouControl)
+    assert e.additional_subtype is None
+
+
+def test_bridge_create_token_copy_of_target_creature_you_control_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    Rust's parse_effect silent-drop convention -- unrecognized fields
+    in the dict are ignored (not raised as errors). Pins the unit-
+    variant contract against future-evolution where a sibling Rust
+    variant might add fields. Notably, even an explicit
+    ``additional_subtype`` field in the dict is silently dropped at
+    bridge time today (Python defaults to None; Rust hasn't shipped
+    the pass-through yet).
+    """
+    from mtg_bot.effects.generic.tokens import (
+        CreateTokenCopyOfTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "create_token_copy_of_target_creature_you_control",
+            "additional_subtype": "Reflection",
+            "spurious_field": 42,
+        }
+    )
+    assert isinstance(e, CreateTokenCopyOfTargetCreatureYouControl)
+    # Even though dict carried "Reflection", bridge defaults to None
+    # because Rust's substrate doesn't pass it through yet.
+    assert e.additional_subtype is None
+
+
+def test_bridge_create_token_copy_of_target_creature_you_control_equality_default_constructor():
+    """Bridge arm pin: two
+    ``CreateTokenCopyOfTargetCreatureYouControl()`` instances are
+    equal under dataclass(frozen=True) default __eq__ semantics. Pins
+    the frozen-dataclass equality contract for the hash-based keying
+    used downstream (e.g. de-dup in Sequence composers).
+    """
+    from mtg_bot.effects.generic.tokens import (
+        CreateTokenCopyOfTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {"kind": "create_token_copy_of_target_creature_you_control"}
+    )
+    e2 = CreateTokenCopyOfTargetCreatureYouControl()
+    assert e1 == e2
+
+
+def test_bridge_create_token_copy_of_target_creature_you_control_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([CreateTokenCopyOfTargetCreatureYouControl(),
+    DrawCards(1)])`` translates correctly via the recursive Sequence
+    translator. Pins this arm against accidental dispatch loss
+    inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.tokens import (
+        CreateTokenCopyOfTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "create_token_copy_of_target_creature_you_control"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], CreateTokenCopyOfTargetCreatureYouControl
+    )
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_create_token_copy_of_target_creature_you_control_in_effects():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "create_token_copy_of_target_creature_you_
+    control"}`` on a Sorcery effects carrier (the canonical
+    Mirrorpool-shape). The bridge dict shape must register cleanly
+    on Rust too; this lockstep gate keeps the bridge from drifting
+    away from Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3696-3698`` accepts the unit-shape dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "CreateTokenCopyOfTargetCreatureYouControl"
+        ),
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 2, "generic": 1},
+        "effects": [
+            {"kind": "create_token_copy_of_target_creature_you_control"}
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
