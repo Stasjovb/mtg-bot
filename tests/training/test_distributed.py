@@ -1609,6 +1609,110 @@ def test_weight_push_posix_command_shape(monkeypatch, tmp_path):
     assert "g@macbook:/Users/g/repo/trained_weights/v7/weights.pt" in push
 
 
+def test_weight_push_includes_metadata_sidecar_when_present(
+    monkeypatch, tmp_path,
+):
+    """When a ``metadata.json`` lives next to ``weights.pt`` (every
+    registered version trained by ``mtg_bot train``), the push step
+    must scp it alongside the weights. Structured-architecture
+    loaders auto-discover trunk hparams (emb_dim, n_heads, n_layers,
+    hidden_dim) from that sidecar; without it the remote worker
+    falls back to ``StructuredModelConfig`` defaults and any
+    non-default-dim checkpoint crashes with a state_dict shape
+    mismatch on every game (the v10 regression that motivated this
+    fix)."""
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v10/weights.pt"
+    (tmp_path / "trained_weights" / "v10").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake-weights")
+    (tmp_path / "trained_weights" / "v10" / "metadata.json").write_text(
+        '{"version": "v10", "architecture": "structured"}',
+        encoding="utf-8",
+    )
+
+    calls: list[list[str]] = []
+
+    def _rec(cmd, *_a, **_kw):
+        calls.append(list(cmd))
+
+        class _R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return _R()
+
+    from mtg_bot.training import distributed as _dist
+    monkeypatch.setattr(_dist, "_run_subprocess", _rec)
+    shard = ShardConfig(
+        host="macbook", user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    _dist._push_weights_to_remote(shard, "/Users/g/repo", weights_rel)
+
+    scp_pushes = [c for c in calls if c[0] == "scp"]
+    assert len(scp_pushes) == 2, (
+        f"expected weights + metadata.json scp; got {scp_pushes!r}"
+    )
+    weights_pushes = [
+        c for c in scp_pushes if any("weights.pt" in p for p in c)
+    ]
+    meta_pushes = [
+        c for c in scp_pushes if any("metadata.json" in p for p in c)
+    ]
+    assert len(weights_pushes) == 1
+    assert len(meta_pushes) == 1
+    # Confirm the metadata scp's destination is the same parent dir
+    # the loader's discovery code looks in (``weights.parent / "metadata.json"``).
+    assert any(
+        "g@macbook:/Users/g/repo/trained_weights/v10/metadata.json" in p
+        for p in meta_pushes[0]
+    )
+
+
+def test_weight_push_skips_metadata_sidecar_when_absent(
+    monkeypatch, tmp_path,
+):
+    """Older / hand-crafted checkouts may not have a metadata.json
+    next to the weights. The push step is best-effort: missing
+    sidecar = single scp (weights only), no scp error. The loader's
+    own defensive missing-sidecar branch handles the remote-side
+    fallback for default-dim weights."""
+    monkeypatch.chdir(tmp_path)
+    weights_rel = "trained_weights/v_legacy/weights.pt"
+    (tmp_path / "trained_weights" / "v_legacy").mkdir(parents=True)
+    (tmp_path / weights_rel).write_bytes(b"fake-weights")
+    # Intentionally NO metadata.json next to weights.
+
+    calls: list[list[str]] = []
+
+    def _rec(cmd, *_a, **_kw):
+        calls.append(list(cmd))
+
+        class _R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return _R()
+
+    from mtg_bot.training import distributed as _dist
+    monkeypatch.setattr(_dist, "_run_subprocess", _rec)
+    shard = ShardConfig(
+        host="macbook", user="g",
+        repo_path="/Users/g/repo",
+        venv_python=".venv-py313/bin/python",
+    )
+    _dist._push_weights_to_remote(shard, "/Users/g/repo", weights_rel)
+
+    scp_pushes = [c for c in calls if c[0] == "scp"]
+    assert len(scp_pushes) == 1
+    assert any(
+        "metadata.json" not in p for p in scp_pushes[0]
+    ) and not any(
+        "metadata.json" in p for p in scp_pushes[0]
+    )
+
+
 def test_weight_push_windows_command_shape(monkeypatch, tmp_path):
     """Windows shard: mkdir routes through PowerShell New-Item; scp
     dst is forward-slashed (cmd.exe + scp both accept ``C:/...``,
