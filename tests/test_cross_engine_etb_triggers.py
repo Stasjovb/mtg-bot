@@ -8839,5 +8839,150 @@ def test_rust_parser_accepts_put_charge_counters_on_self_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_draw_cards_equal_to_resolving_combat_damage_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 26 fresh discovery walk) --
+    DrawCardsEqualToResolvingCombatDamage family. Rust ``{"kind":
+    "draw_cards_equal_to_resolving_combat_damage"}`` translates to
+    Python ``DrawCardsEqualToResolvingCombatDamage()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:4545-4551 (unit
+    variant; no fields). The bridge wires the same Python-side
+    primitive (``effects/generic/draw_mill.py:88``) as the mirror of
+    the Rust resolver.
+    """
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardsEqualToResolvingCombatDamage,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "draw_cards_equal_to_resolving_combat_damage"}
+    )
+    assert isinstance(e, DrawCardsEqualToResolvingCombatDamage)
+
+
+def test_bridge_draw_cards_equal_to_resolving_combat_damage_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance. Extra dict fields
+    beyond ``kind`` are silently ignored (mirrors Rust's parse_effect
+    arm at cards.rs:4545-4551 which doesn't read additional keys).
+    Pins the silent-drop convention for unit variants used across
+    sister round-22/23/24/25/26 BLOCKED-BRIDGE-ARM unit-shape arms.
+    """
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardsEqualToResolvingCombatDamage,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "draw_cards_equal_to_resolving_combat_damage",
+            "this_extra_key_should_be_silently_ignored": 99,
+        }
+    )
+    assert isinstance(e, DrawCardsEqualToResolvingCombatDamage)
+
+
+def test_bridge_draw_cards_equal_to_resolving_combat_damage_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed ``DrawCardsEqualToResolvingCombatDamage()``.
+    Pins the dataclass equality semantic for the no-fields unit
+    variant.
+    """
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardsEqualToResolvingCombatDamage,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "draw_cards_equal_to_resolving_combat_damage"}
+    )
+    assert e == DrawCardsEqualToResolvingCombatDamage()
+
+
+def test_bridge_draw_cards_equal_to_resolving_combat_damage_does_not_require_target():
+    """Bridge arm pin: the bridged Python object reports
+    ``requires_target() is False`` (the default Effect base
+    behavior). The "you may draw that many cards" rider on the
+    combat-damage trigger is untargeted -- the controller of the
+    triggered ability is the implicit recipient, and the carrier
+    pushes the count via state.resolving_combat_damage_amount.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "draw_cards_equal_to_resolving_combat_damage"}
+    )
+    assert e.requires_target() is False
+
+
+def test_bridge_draw_cards_equal_to_resolving_combat_damage_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DrawCardsEqualToResolvingCombatDamage(),
+    GainLife(1)])`` translates correctly via the recursive Sequence
+    translator. Pins this arm against accidental dispatch loss
+    inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import (
+        DrawCardsEqualToResolvingCombatDamage,
+    )
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "draw_cards_equal_to_resolving_combat_damage"},
+                {"kind": "gain_life", "amount": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], DrawCardsEqualToResolvingCombatDamage
+    )
+    assert isinstance(e.effects[1], GainLife)
+
+
+def test_rust_parser_accepts_draw_cards_equal_to_resolving_combat_damage_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "draw_cards_equal_to_resolving_combat_damage"}``
+    on a triggered_ability carrier (the Anticausal-Vestige-shape
+    "Whenever this creature deals combat damage to a player, you may
+    draw that many cards"). The bridge dict shape must register
+    cleanly on Rust too; this lockstep gate keeps the bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:4545-4551`` accepts
+    the bare ``kind``-only unit-variant dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "DrawCardsEqualToResolvingCombatDamage"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"U": 1, "generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "draw_cards_equal_to_resolving_combat_damage",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
