@@ -5770,121 +5770,153 @@ def test_rust_parser_accepts_target_opponent_loses_life_in_triggered_ability():
     assert pid == 0
 
 
-def test_bridge_pump_self_until_eot_basic_translation():
+def test_bridge_optional_mana_cost_then_effect_basic_translation():
     """BLOCKED-BRIDGE-ARM slice (round 22 fresh discovery walk) --
-    PumpSelfUntilEOT family. Rust ``{"kind": "pump_self_until_eot",
-    "power_bonus": 2, "toughness_bonus": 2}`` translates to Python
-    ``PumpSelfUntilEOT(power_bonus=2, toughness_bonus=2)``.
+    OptionalManaCostThenEffect family. Rust ``{"kind": "optional_
+    mana_cost_then_effect", "cost": {"generic": 1}, "inner_effect":
+    {"kind": "draw_cards", "count": 2}}`` translates to Python
+    ``OptionalManaCostThenEffect(cost_str="{1}", inner_effect=
+    DrawCards(amount=2))``.
 
-    Mirrors Rust's parse_effect arm at cards.rs:3562-3595 (both
-    fields optional with default 0, i32, negatives allowed). Field
-    names ``power_bonus`` and ``toughness_bonus`` agree on both
-    engines (no rename in the bridge).
+    Mirrors Rust's parse_effect arm at cards.rs:4514-4544. Pins both
+    the cost-dict-to-string translation (generic=1 -> "{1}") and the
+    recursive inner-effect translation.
     """
-    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
-    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
-
-    e = _ta_dict_to_python_effect(
-        {
-            "kind": "pump_self_until_eot",
-            "power_bonus": 2,
-            "toughness_bonus": 2,
-        }
-    )
-    assert isinstance(e, PumpSelfUntilEOT)
-    assert e.power_bonus == 2
-    assert e.toughness_bonus == 2
-
-
-def test_bridge_pump_self_until_eot_default_bonuses_zero():
-    """Bridge arm pin: missing ``power_bonus`` and ``toughness_bonus``
-    default to 0 (mirrors Rust's parse_effect default-handling at
-    cards.rs:3584+3592 -- ``None -> 0``). Default-handling shape
-    (round-23 sister DiscardSelf / EachOpponentDiscards /
-    PutPlusOneCounterOnSelf precedent). ``(0, 0)`` is a valid
-    silent no-op shape on both engines.
-    """
-    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
-    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
-
-    e = _ta_dict_to_python_effect({"kind": "pump_self_until_eot"})
-    assert isinstance(e, PumpSelfUntilEOT)
-    assert e.power_bonus == 0
-    assert e.toughness_bonus == 0
-
-
-def test_bridge_pump_self_until_eot_negative_bonuses_allowed():
-    """Bridge arm pin: negative bonuses are LEGAL (debuff-shaped
-    self-pumps). Rust intentionally allows them (cards.rs:3571-3577
-    docstring); Python's class is a bare dataclass with no non-
-    negative guard. Bridge does NOT raise on negatives -- mirrors
-    the contract. (Distinct from ``target_opponent_loses_life``
-    where Rust raises on negative amount.)
-    """
-    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
-    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
-
-    e = _ta_dict_to_python_effect(
-        {
-            "kind": "pump_self_until_eot",
-            "power_bonus": -3,
-            "toughness_bonus": 0,
-        }
-    )
-    assert isinstance(e, PumpSelfUntilEOT)
-    assert e.power_bonus == -3
-    assert e.toughness_bonus == 0
-
-
-def test_bridge_pump_self_until_eot_only_power_bonus_specified():
-    """Bridge arm pin: independent fields. Specify ``power_bonus``
-    only; ``toughness_bonus`` defaults to 0 (Giant-Growth-style
-    "+3/+0"). Pins that the get-with-default per-field is correctly
-    applied independently for each axis.
-    """
-    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
-    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
-
-    e = _ta_dict_to_python_effect(
-        {
-            "kind": "pump_self_until_eot",
-            "power_bonus": 3,
-        }
-    )
-    assert isinstance(e, PumpSelfUntilEOT)
-    assert e.power_bonus == 3
-    assert e.toughness_bonus == 0
-
-
-def test_bridge_pump_self_until_eot_equality_with_default_constructor():
-    """Bridge arm pin: round-trip equality. Translated effect equals
-    a directly-constructed ``PumpSelfUntilEOT(power_bonus=4,
-    toughness_bonus=2)``. Pins the dataclass equality semantic --
-    granted_keywords default (frozenset()) is equal across both
-    sides (no leakage from the bridge dict shape).
-    """
-    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
-    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
-
-    e = _ta_dict_to_python_effect(
-        {
-            "kind": "pump_self_until_eot",
-            "power_bonus": 4,
-            "toughness_bonus": 2,
-        }
-    )
-    assert e == PumpSelfUntilEOT(power_bonus=4, toughness_bonus=2)
-
-
-def test_bridge_pump_self_until_eot_composable_in_sequence():
-    """Round-trip in a Sequence composer to pin nesting end-to-end:
-    ``Sequence([PumpSelfUntilEOT(2, 2), DrawCards(1)])`` translates
-    correctly via the recursive Sequence translator. Pins this arm
-    against accidental dispatch loss inside Sequence.
-    """
-    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.combinators import OptionalManaCostThenEffect
     from mtg_bot.effects.generic.draw_mill import DrawCards
-    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_mana_cost_then_effect",
+            "cost": {"generic": 1},
+            "inner_effect": {"kind": "draw_cards", "count": 2},
+        }
+    )
+    assert isinstance(e, OptionalManaCostThenEffect)
+    assert e.cost_str == "{1}"
+    assert isinstance(e.inner_effect, DrawCards)
+    assert e.inner_effect.amount == 2
+
+
+def test_bridge_optional_mana_cost_then_effect_colored_cost():
+    """Bridge arm pin: colored mana cost dict ({"generic": 1, "R": 1})
+    translates to Python's "{1}{R}" string form. Pins the canonical-
+    color-order convention (W/U/B/R/G after generic) used by the
+    bridge's cost-dict-to-string builder.
+    """
+    from mtg_bot.effects.combinators import OptionalManaCostThenEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_mana_cost_then_effect",
+            "cost": {"generic": 1, "R": 1},
+            "inner_effect": {"kind": "draw_cards", "count": 1},
+        }
+    )
+    assert isinstance(e, OptionalManaCostThenEffect)
+    assert e.cost_str == "{1}{R}"
+
+
+def test_bridge_optional_mana_cost_then_effect_empty_cost():
+    """Bridge arm pin: empty cost dict ({}) translates to the empty
+    string "" (the "free" variant — not a real card shape but a
+    canonical edge case). Mirrors Python's parse_mana_cost('') ->
+    ManaCost() round-trip.
+    """
+    from mtg_bot.effects.combinators import OptionalManaCostThenEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_mana_cost_then_effect",
+            "cost": {},
+            "inner_effect": {"kind": "draw_cards", "count": 1},
+        }
+    )
+    assert isinstance(e, OptionalManaCostThenEffect)
+    assert e.cost_str == ""
+
+
+def test_bridge_optional_mana_cost_then_effect_missing_cost_raises():
+    """Bridge arm pin: missing `cost` field raises ValueError to
+    mirror Rust's parse_effect contract at cards.rs:4518-4527
+    (which raises PyValueError on missing 'cost'). Bridge mirrors the
+    contract so a typo in a fixture surfaces immediately.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="missing required 'cost'"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "optional_mana_cost_then_effect",
+                "inner_effect": {"kind": "draw_cards", "count": 1},
+            }
+        )
+
+
+def test_bridge_optional_mana_cost_then_effect_missing_inner_raises():
+    """Bridge arm pin: missing `inner_effect` field raises ValueError
+    to mirror Rust's parse_effect contract at cards.rs:4529-4538
+    (which raises PyValueError on missing 'inner_effect'). Symmetric
+    with the missing-cost arm.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="missing required 'inner_effect'"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "optional_mana_cost_then_effect",
+                "cost": {"generic": 1},
+            }
+        )
+
+
+def test_bridge_optional_mana_cost_then_effect_recursive_inner_translation():
+    """Bridge arm pin: inner_effect recursion fires through
+    ``_ta_dict_to_python_effect``. Pins the recursive-translation
+    contract (mirrors the MayDo/IfYouDo/Sequence composer pattern):
+    the nested ``put_plus_one_counter_on_self`` shape translates
+    cleanly to ``PutPlusOneCounterOnSelf(amount=1)`` -- the exact
+    Oreplate-Pangolin shape ("you may pay {1}; if you do, put a +1/+1
+    counter on this creature").
+    """
+    from mtg_bot.effects.combinators import OptionalManaCostThenEffect
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_mana_cost_then_effect",
+            "cost": {"generic": 1},
+            "inner_effect": {
+                "kind": "put_plus_one_counter_on_self",
+                "amount": 1,
+            },
+        }
+    )
+    assert isinstance(e, OptionalManaCostThenEffect)
+    assert e.cost_str == "{1}"
+    assert isinstance(e.inner_effect, PutPlusOneCounterOnSelf)
+    assert e.inner_effect.amount == 1
+
+
+def test_bridge_optional_mana_cost_then_effect_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([OptionalManaCostThenEffect("{1}", DrawCards(2)),
+    DiscardSelf()])`` translates correctly via the recursive Sequence
+    translator. Pins this arm against accidental dispatch loss inside
+    Sequence.
+    """
+    from mtg_bot.effects.combinators import (
+        OptionalManaCostThenEffect, Sequence,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
 
     e = _ta_dict_to_python_effect(
@@ -5892,9 +5924,9 @@ def test_bridge_pump_self_until_eot_composable_in_sequence():
             "kind": "sequence",
             "effects": [
                 {
-                    "kind": "pump_self_until_eot",
-                    "power_bonus": 2,
-                    "toughness_bonus": 2,
+                    "kind": "optional_mana_cost_then_effect",
+                    "cost": {"generic": 1},
+                    "inner_effect": {"kind": "draw_cards", "count": 2},
                 },
                 {"kind": "draw_cards", "count": 1},
             ],
@@ -5902,33 +5934,34 @@ def test_bridge_pump_self_until_eot_composable_in_sequence():
     )
     assert isinstance(e, Sequence)
     assert len(e.effects) == 2
-    assert isinstance(e.effects[0], PumpSelfUntilEOT)
-    assert e.effects[0].power_bonus == 2
-    assert e.effects[0].toughness_bonus == 2
+    assert isinstance(e.effects[0], OptionalManaCostThenEffect)
+    assert e.effects[0].cost_str == "{1}"
+    assert isinstance(e.effects[0].inner_effect, DrawCards)
+    assert e.effects[0].inner_effect.amount == 2
     assert isinstance(e.effects[1], DrawCards)
 
 
-def test_rust_parser_accepts_pump_self_until_eot_in_triggered_ability():
-    """Lockstep pin: Rust's parse_effect arm accepts the
-    ``{"kind": "pump_self_until_eot", "power_bonus": 2,
-    "toughness_bonus": 2}`` dict shape on a triggered_ability
-    carrier. The bridge dict shape must register cleanly on the
-    Rust side too; this lockstep gate keeps the bridge from drifting
-    away from Rust's parse_effect coverage.
+def test_rust_parser_accepts_optional_mana_cost_then_effect_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "optional_mana_cost_then_effect", "cost":
+    {"generic": 1}, "inner_effect": {...}}`` on a triggered_ability
+    carrier. The bridge dict shape must register cleanly on Rust too;
+    this lockstep gate keeps the bridge from drifting away from
+    Rust's parse_effect coverage.
 
     Mirrors the existing parser-surface pins for sister BLOCKED-
     BRIDGE-ARM arms. Rust's parse_effect arm at
-    ``rust/src/cards.rs:3562-3595`` accepts the dict shape with
-    optional ``power_bonus`` / ``toughness_bonus`` i32 fields
-    defaulting to 0.
+    ``rust/src/cards.rs:4514-4544`` accepts the dict shape with
+    REQUIRED `cost` (mana-cost dict) and `inner_effect` (nested
+    effect-shape dict).
     """
     import mtg_bot_engine
 
     reg = mtg_bot_engine.Registry()
     d = {
-        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- PumpSelfUntilEOT",
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- OptionalManaCostThenEffect",
         "card_types": ["Creature"],
-        "mana_cost": {"G": 1, "generic": 1},
+        "mana_cost": {"R": 1, "generic": 2},
         "power": 2,
         "toughness": 2,
         "triggered_abilities": [
@@ -5936,9 +5969,225 @@ def test_rust_parser_accepts_pump_self_until_eot_in_triggered_ability():
                 "event": "enters",
                 "predicate": {"kind": "source_is_self"},
                 "effect": {
-                    "kind": "pump_self_until_eot",
-                    "power_bonus": 2,
-                    "toughness_bonus": 2,
+                    "kind": "optional_mana_cost_then_effect",
+                    "cost": {"generic": 1},
+                    "inner_effect": {
+                        "kind": "put_plus_one_counter_on_self",
+                        "amount": 1,
+                    },
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_bridge_optional_mana_cost_then_effect_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 22 fresh discovery walk) --
+    OptionalManaCostThenEffect family. Rust ``{"kind": "optional_
+    mana_cost_then_effect", "cost": {"generic": 1}, "inner_effect":
+    {"kind": "draw_cards", "count": 2}}`` translates to Python
+    ``OptionalManaCostThenEffect(cost_str="{1}", inner_effect=
+    DrawCards(amount=2))``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:4514-4544. Pins both
+    the cost-dict-to-string translation (generic=1 -> "{1}") and the
+    recursive inner-effect translation.
+    """
+    from mtg_bot.effects.combinators import OptionalManaCostThenEffect
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_mana_cost_then_effect",
+            "cost": {"generic": 1},
+            "inner_effect": {"kind": "draw_cards", "count": 2},
+        }
+    )
+    assert isinstance(e, OptionalManaCostThenEffect)
+    assert e.cost_str == "{1}"
+    assert isinstance(e.inner_effect, DrawCards)
+    assert e.inner_effect.amount == 2
+
+
+def test_bridge_optional_mana_cost_then_effect_colored_cost():
+    """Bridge arm pin: colored mana cost dict ({"generic": 1, "R": 1})
+    translates to Python's "{1}{R}" string form. Pins the canonical-
+    color-order convention (W/U/B/R/G after generic) used by the
+    bridge's cost-dict-to-string builder.
+    """
+    from mtg_bot.effects.combinators import OptionalManaCostThenEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_mana_cost_then_effect",
+            "cost": {"generic": 1, "R": 1},
+            "inner_effect": {"kind": "draw_cards", "count": 1},
+        }
+    )
+    assert isinstance(e, OptionalManaCostThenEffect)
+    assert e.cost_str == "{1}{R}"
+
+
+def test_bridge_optional_mana_cost_then_effect_empty_cost():
+    """Bridge arm pin: empty cost dict ({}) translates to the empty
+    string "" (the "free" variant — not a real card shape but a
+    canonical edge case). Mirrors Python's parse_mana_cost('') ->
+    ManaCost() round-trip.
+    """
+    from mtg_bot.effects.combinators import OptionalManaCostThenEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_mana_cost_then_effect",
+            "cost": {},
+            "inner_effect": {"kind": "draw_cards", "count": 1},
+        }
+    )
+    assert isinstance(e, OptionalManaCostThenEffect)
+    assert e.cost_str == ""
+
+
+def test_bridge_optional_mana_cost_then_effect_missing_cost_raises():
+    """Bridge arm pin: missing `cost` field raises ValueError to
+    mirror Rust's parse_effect contract at cards.rs:4518-4527
+    (which raises PyValueError on missing 'cost'). Bridge mirrors the
+    contract so a typo in a fixture surfaces immediately.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="missing required 'cost'"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "optional_mana_cost_then_effect",
+                "inner_effect": {"kind": "draw_cards", "count": 1},
+            }
+        )
+
+
+def test_bridge_optional_mana_cost_then_effect_missing_inner_raises():
+    """Bridge arm pin: missing `inner_effect` field raises ValueError
+    to mirror Rust's parse_effect contract at cards.rs:4529-4538
+    (which raises PyValueError on missing 'inner_effect'). Symmetric
+    with the missing-cost arm.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="missing required 'inner_effect'"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "optional_mana_cost_then_effect",
+                "cost": {"generic": 1},
+            }
+        )
+
+
+def test_bridge_optional_mana_cost_then_effect_recursive_inner_translation():
+    """Bridge arm pin: inner_effect recursion fires through
+    ``_ta_dict_to_python_effect``. Pins the recursive-translation
+    contract (mirrors the MayDo/IfYouDo/Sequence composer pattern):
+    the nested ``put_plus_one_counter_on_self`` shape translates
+    cleanly to ``PutPlusOneCounterOnSelf(amount=1)`` -- the exact
+    Oreplate-Pangolin shape ("you may pay {1}; if you do, put a +1/+1
+    counter on this creature").
+    """
+    from mtg_bot.effects.combinators import OptionalManaCostThenEffect
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "optional_mana_cost_then_effect",
+            "cost": {"generic": 1},
+            "inner_effect": {
+                "kind": "put_plus_one_counter_on_self",
+                "amount": 1,
+            },
+        }
+    )
+    assert isinstance(e, OptionalManaCostThenEffect)
+    assert e.cost_str == "{1}"
+    assert isinstance(e.inner_effect, PutPlusOneCounterOnSelf)
+    assert e.inner_effect.amount == 1
+
+
+def test_bridge_optional_mana_cost_then_effect_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([OptionalManaCostThenEffect("{1}", DrawCards(2)),
+    DiscardSelf()])`` translates correctly via the recursive Sequence
+    translator. Pins this arm against accidental dispatch loss inside
+    Sequence.
+    """
+    from mtg_bot.effects.combinators import (
+        OptionalManaCostThenEffect, Sequence,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "optional_mana_cost_then_effect",
+                    "cost": {"generic": 1},
+                    "inner_effect": {"kind": "draw_cards", "count": 2},
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], OptionalManaCostThenEffect)
+    assert e.effects[0].cost_str == "{1}"
+    assert isinstance(e.effects[0].inner_effect, DrawCards)
+    assert e.effects[0].inner_effect.amount == 2
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_optional_mana_cost_then_effect_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "optional_mana_cost_then_effect", "cost":
+    {"generic": 1}, "inner_effect": {...}}`` on a triggered_ability
+    carrier. The bridge dict shape must register cleanly on Rust too;
+    this lockstep gate keeps the bridge from drifting away from
+    Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:4514-4544`` accepts the dict shape with
+    REQUIRED `cost` (mana-cost dict) and `inner_effect` (nested
+    effect-shape dict).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- OptionalManaCostThenEffect",
+        "card_types": ["Creature"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "optional_mana_cost_then_effect",
+                    "cost": {"generic": 1},
+                    "inner_effect": {
+                        "kind": "put_plus_one_counter_on_self",
+                        "amount": 1,
+                    },
                 },
             }
         ],

@@ -3647,6 +3647,104 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             power_bonus=eff_dict.get("power_bonus", 0),
             toughness_bonus=eff_dict.get("toughness_bonus", 0),
         )
+    if kind == "optional_mana_cost_then_effect":
+        # **Round-22 BLOCKED-BRIDGE-ARM slice -- "you may pay {cost}.
+        # If you do, [inner_effect]" (OptionalManaCostThenEffect
+        # family).** Rust substrate
+        # ``Effect::OptionalManaCostThenEffect { cost: ManaCost,
+        # inner_effect: Box<Effect> }`` (parser at cards.rs:4514-4544,
+        # resolve at state_ops_resolve.rs:7457-7470, to_dict at
+        # cards.rs:5775-5779) shipped with round 29; this slice
+        # closes the cross-engine bridge gap. Discovered by the
+        # round-22 fresh discovery walk (Rust kind emitted by to_dict
+        # but no matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape (composer with mana cost + nested effect).**
+        # Both ``cost`` and ``inner_effect`` are REQUIRED on the Rust
+        # side (parse raises on missing each); the bridge mirrors that
+        # contract -- missing either field raises ValueError here.
+        # Rust serializes ``cost`` via ``mana_cost_to_pydict`` (at
+        # cards.rs:5333-5357) which emits keys ``generic, W, U, B, R,
+        # G`` only for non-zero pip counts. Python's class field name
+        # is ``cost_str: str`` (at combinators.py:1482) -- a single
+        # mana-cost string like ``"{1}"`` or ``"{1}{R}"``. The bridge
+        # translates the Rust dict shape into the Python string shape
+        # via a deterministic builder: emit ``{N}`` (N = generic
+        # count) first if generic > 0, then ``{C}`` repeated for each
+        # color count (W/U/B/R/G in canonical order). Symmetric with
+        # round-29 ``parse_mana_cost`` (cards/base.py:349-388) which
+        # parses the same string format back into a ManaCost.
+        #
+        # **Recursive translation.** ``inner_effect`` is itself an
+        # effect-dict; we recurse into ``_ta_dict_to_python_effect``
+        # for it. Mirrors the MayDo / IfYouDo / Sequence composer
+        # pattern (rounds 1, 19) -- this unlocks
+        # ``OptionalManaCostThenEffect`` nesting end-to-end as long
+        # as each leaf inner-effect arm is on the bridge.
+        #
+        # **Resolve semantics (cross-engine).** Rust pushes a
+        # ``PendingDecision::OptionalManaCostChoice`` carrying the
+        # mana cost + inner Effect onto ``state.pending_decisions``
+        # and short-circuits (state_ops_resolve.rs:7457-7470). The
+        # controller drains via
+        # ``submit_optional_mana_cost_decision(pay)`` (manual) or
+        # ``auto_resolve_pending_decisions("default")`` (deterministic
+        # — picks "no" by default per the round-29 OptionalSac /
+        # MayDo precedent; "optional_pay_yes" / "optional_pay_no"
+        # available as targeted strategies). Python's class resolves
+        # synchronously inside ``OptionalManaCostThenEffect.resolve``
+        # (combinators.py:1485-1502): if the controller can afford
+        # ``cost_str``, auto-tap mana and fire ``inner_effect.resolve
+        # (...)``; otherwise log "P{x} can't pay {cost}; trigger does
+        # nothing" and return. The two engines diverge on the IDLE-
+        # on-stack wire-shape (Rust queues the decision, Python
+        # auto-pays-or-skips synchronously based on affordability)
+        # but converge on the post-resolve observable when the
+        # controller's mana situation is the same -- the inner
+        # effect either fires (cost paid, mana consumed) or doesn't.
+        #
+        # **Real EoE consumers** unblocked: 8 EoE cards via oracle
+        # scan (Oreplate Pangolin, Kavaron-Harrier-shape kicker /
+        # surge / Spree-shape variants). Cross-engine end-to-end
+        # probe deferred per round-17/18/19 synthetic-only-when-
+        # riders-cascade precedent (the OptionalManaCostChoice
+        # PendingDecision pipeline is its own surface beyond the
+        # bare bridge-arm slice).
+        from mtg_bot.effects.combinators import OptionalManaCostThenEffect
+        if "cost" not in eff_dict:
+            raise ValueError(
+                "optional_mana_cost_then_effect bridge arm: missing "
+                "required 'cost' field (mirrors Rust parse_effect "
+                "contract at cards.rs:4518-4527)"
+            )
+        if "inner_effect" not in eff_dict:
+            raise ValueError(
+                "optional_mana_cost_then_effect bridge arm: missing "
+                "required 'inner_effect' field (mirrors Rust "
+                "parse_effect contract at cards.rs:4529-4538)"
+            )
+        # Translate Rust's mana-cost dict (keys: generic, W, U, B, R,
+        # G; only present when > 0) into Python's mana-cost string
+        # ("{N}{C}{C}..." canonical form). Mirrors
+        # cards.rs:5333-5357's mana_cost_to_pydict in reverse.
+        cost_dict = eff_dict["cost"]
+        if not isinstance(cost_dict, dict):
+            raise ValueError(
+                "optional_mana_cost_then_effect bridge arm: cost must "
+                f"be a dict (got: {type(cost_dict).__name__})"
+            )
+        cost_parts: list[str] = []
+        generic = int(cost_dict.get("generic", 0))
+        if generic > 0:
+            cost_parts.append(f"{{{generic}}}")
+        for color in ("W", "U", "B", "R", "G"):
+            n = int(cost_dict.get(color, 0))
+            cost_parts.extend([f"{{{color}}}"] * n)
+        cost_str = "".join(cost_parts)
+        inner = _ta_dict_to_python_effect(eff_dict["inner_effect"])
+        return OptionalManaCostThenEffect(
+            cost_str=cost_str, inner_effect=inner,
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
