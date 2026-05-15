@@ -619,6 +619,60 @@ class Surveil(Effect):
         return f"surveil {self.amount}"
 
 
+@dataclass(frozen=True)
+class Scry(Effect):
+    """Scry N (CR 701.18): controller looks at the top ``count`` cards of
+    their library and may put any number of them on the bottom of their
+    library; the rest stay on top in any order.
+
+    **First-slice deterministic shortcut: keep all on top.** Mirrors the
+    Rust ``Effect::ScryN`` resolve arm in
+    ``rust/src/state_ops_resolve.rs:1777-1792`` which inlines the same
+    keep-all-on-top semantic without invoking the round-4 ``apply_scry``
+    primitive. This satisfies "scry happened" semantics without
+    requiring a decision callback to choose which cards go to the
+    bottom; a future slice that plumbs a real "which to bottom"
+    decision surface (sister to ``choose_surveil``, e.g.
+    ``choose_scry_to_bottom``) can grow the resolve body without
+    breaking the class shape.
+
+    Keep-on-top is mechanically a no-op on the library (no zone moves,
+    no order change), so resolution mutates only the log. This matches
+    Rust's behavior bit-for-bit on the cross-engine bridge.
+
+    Sister effect to :class:`Surveil` — same look-at-top-N pattern,
+    differs in destination zone for the chosen cards (library bottom
+    for scry vs graveyard for surveil).
+
+    **Negative ``amount`` raises** loudly (CR 701.18 doesn't define
+    Scry -1; surface it as a schema error). Matches Rust's
+    ``ScryN count must be non-negative`` raise.
+
+    **count > library size** clamps to library length per CR 701.18d
+    ("if there aren't enough cards in your library, look at all the
+    cards"). With keep-on-top, the clamp is also a no-op — we just
+    don't error.
+    """
+
+    amount: int = 1
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if self.amount < 0:
+            raise ValueError(
+                f"Scry amount must be non-negative, got {self.amount}"
+            )
+        p = state.player_by_id(controller_id)
+        # Clamp to library size (CR 701.18d). With keep-all-on-top,
+        # neither path mutates the library — only the log changes.
+        n = min(self.amount, len(p.library))
+        state.log.append(f"P{controller_id} scries {n} (kept all on top)")
+
+    def describe(self) -> str:
+        return f"scry {self.amount}"
+
 
 @dataclass(frozen=True)
 class SelfMill(Effect):

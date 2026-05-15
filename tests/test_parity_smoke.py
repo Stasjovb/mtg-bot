@@ -48676,6 +48676,185 @@ def test_rust_create_token_copy_cross_controller_token_lands_on_source_controlle
     )
 
 
+def _build_rust_scry_n_state(count: int = 1, source_owner: int = 0,
+                              p0_library: tuple = (),
+                              p1_library: tuple = ()):
+    """Helper: build a Rust state with a single carrier creature on
+    `source_owner`'s bf carrying an ETB triggered ability that fires
+    ScryN(count). Optionally seeds p0/p1 library with bait card names
+    (via DeckSpec.card_defs) so library-top semantics can be observed.
+
+    Returns (rust_state, source_id).
+
+    Mirrors the `_build_rust_lose_life_state` shape; the substrate
+    being pinned is state_ops_resolve.rs:1777-1792's keep-on-top
+    deterministic shortcut for ScryN.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    bait_defs = []
+    seen = set()
+    for name in tuple(p0_library) + tuple(p1_library):
+        if name in seen:
+            continue
+        seen.add(name)
+        bait_defs.append(
+            CardDef(
+                name=name,
+                card_type="Creature",
+                mana_cost_generic=1,
+                power=1,
+                toughness=1,
+            )
+        )
+    spec = DeckSpec(
+        card_defs=tuple(bait_defs),
+        p0_library=tuple(p0_library),
+        p1_library=tuple(p1_library),
+    )
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "ScryN-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "scry_n",
+                        "count": count,
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_scry_n_basic_count_two_keeps_library_top_unchanged():
+    """Rust regression pin: scry 2 with p0 as source owner. The
+    keep-on-top deterministic shortcut at state_ops_resolve.rs:1777-1792
+    leaves the library order unchanged (no zone moves, no graveyard
+    impact). Pins the bit-equal cross-engine default-strategy contract
+    that the new Python ``Scry`` class mirrors.
+    """
+    p0_lib = ("Scry Bait Alpha", "Scry Bait Beta", "Scry Bait Gamma")
+    rust_state, _src = _build_rust_scry_n_state(
+        count=2, source_owner=0, p0_library=p0_lib,
+    )
+    assert rust_state.stack_size() == 1
+    lib_before = [
+        int(d["printing_id"]) for d in rust_state.library_snapshot(0)
+    ]
+    gy_size_before = rust_state.graveyard_sizes[0]
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    lib_after = [
+        int(d["printing_id"]) for d in rust_state.library_snapshot(0)
+    ]
+    assert lib_after == lib_before, (
+        f"keep-on-top should leave library order unchanged; "
+        f"before={lib_before} after={lib_after}"
+    )
+    assert rust_state.graveyard_sizes[0] == gy_size_before, (
+        f"keep-on-top should NOT touch graveyard; "
+        f"before={gy_size_before} after={rust_state.graveyard_sizes[0]}"
+    )
+
+
+def test_rust_scry_n_count_zero_silent_noop():
+    """Rust regression pin: scry 0 silently no-ops (the count check at
+    state_ops_resolve.rs:1778-1782 only rejects negatives; zero is a
+    legal no-op). No library or graveyard movement on either player.
+    Mirrors the GainLife / DrawCards / Mill / Surveil zero-count
+    conventions.
+    """
+    p0_lib = ("Scry Bait Alpha",)
+    rust_state, _src = _build_rust_scry_n_state(
+        count=0, source_owner=0, p0_library=p0_lib,
+    )
+    lib_before = [
+        int(d["printing_id"]) for d in rust_state.library_snapshot(0)
+    ]
+    gy_before = rust_state.graveyard_sizes[0]
+    rust_state.resolve_top_of_stack()
+    lib_after = [
+        int(d["printing_id"]) for d in rust_state.library_snapshot(0)
+    ]
+    assert lib_after == lib_before
+    assert rust_state.graveyard_sizes[0] == gy_before
+
+
+def test_rust_scry_n_count_exceeds_library_silent_clamp():
+    """Rust regression pin: count > library size silently clamps to
+    library length per CR 701.18d ("if there aren't enough cards in
+    your library, look at all the cards"). With keep-on-top, the
+    clamp is a no-op — the library stays in its pre-resolve order
+    and no error is raised.
+    """
+    p0_lib = ("Scry Bait Alpha",)  # only 1 card; scry 5 overshoots
+    rust_state, _src = _build_rust_scry_n_state(
+        count=5, source_owner=0, p0_library=p0_lib,
+    )
+    lib_before = [
+        int(d["printing_id"]) for d in rust_state.library_snapshot(0)
+    ]
+    rust_state.resolve_top_of_stack()
+    lib_after = [
+        int(d["printing_id"]) for d in rust_state.library_snapshot(0)
+    ]
+    assert lib_after == lib_before, (
+        f"count > library size should silently clamp (no error, no "
+        f"reorder); before={lib_before} after={lib_after}"
+    )
+
+
+def test_rust_scry_n_cross_controller_routing_p1_source():
+    """Rust regression pin: source owned by p1 — keep-on-top still
+    no-ops on libraries, lives, and graveyards. Mirrors the
+    cross-controller routing pattern (state_ops_resolve.rs uses
+    ``current_resolve_source_controller`` with active_player fallback
+    per the I61 controller-of-effect substrate). With keep-on-top the
+    routing is unobservable on library state, but the resolve must
+    still complete cleanly without erroring on the cross-controller
+    case.
+    """
+    p1_lib = ("Cross-Bait A", "Cross-Bait B")
+    rust_state, _src = _build_rust_scry_n_state(
+        count=1, source_owner=1, p1_library=p1_lib,
+    )
+    p0_lib_before = [
+        int(d["printing_id"]) for d in rust_state.library_snapshot(0)
+    ]
+    p1_lib_before = [
+        int(d["printing_id"]) for d in rust_state.library_snapshot(1)
+    ]
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    p0_lib_after = [
+        int(d["printing_id"]) for d in rust_state.library_snapshot(0)
+    ]
+    p1_lib_after = [
+        int(d["printing_id"]) for d in rust_state.library_snapshot(1)
+    ]
+    # Both players' libraries unchanged (keep-on-top default; the
+    # cross-controller routing is internal to which player WOULD
+    # observe the cards in a non-shortcut implementation, but the
+    # observable post-resolve state agrees regardless of routing).
+    assert p0_lib_after == p0_lib_before
+    assert p1_lib_after == p1_lib_before
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
