@@ -8343,5 +8343,149 @@ def test_rust_parser_accepts_create_token_copy_of_target_creature_you_control_in
     assert pid == 0
 
 
+def test_bridge_move_self_counters_to_target_creature_you_control_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 25 fresh discovery walk) --
+    MoveSelfCountersToTargetCreatureYouControl family. Rust ``{"kind":
+    "move_self_counters_to_target_creature_you_control"}`` translates
+    to Python ``MoveSelfCountersToTargetCreatureYouControl()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3686-3688 (unit
+    variant; no fields). The bridge wires the same Python-side
+    primitive (``effects/generic/counters.py:263``) as the mirror of
+    the Rust resolver.
+    """
+    from mtg_bot.effects.generic.counters import (
+        MoveSelfCountersToTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "move_self_counters_to_target_creature_you_control"}
+    )
+    assert isinstance(e, MoveSelfCountersToTargetCreatureYouControl)
+
+
+def test_bridge_move_self_counters_to_target_creature_you_control_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance. Extra dict fields
+    beyond ``kind`` are silently ignored (mirrors Rust's parse_effect
+    arm at cards.rs:3686-3688 which doesn't read additional keys).
+    Pins the silent-drop convention for unit variants used across
+    sister round-22/23/24 BLOCKED-BRIDGE-ARM unit-shape arms.
+    """
+    from mtg_bot.effects.generic.counters import (
+        MoveSelfCountersToTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "move_self_counters_to_target_creature_you_control",
+            "this_extra_key_should_be_silently_ignored": 42,
+        }
+    )
+    assert isinstance(e, MoveSelfCountersToTargetCreatureYouControl)
+
+
+def test_bridge_move_self_counters_to_target_creature_you_control_equality_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed ``MoveSelfCountersToTargetCreatureYouControl()``.
+    Pins the dataclass equality semantic for the no-fields unit
+    variant.
+    """
+    from mtg_bot.effects.generic.counters import (
+        MoveSelfCountersToTargetCreatureYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "move_self_counters_to_target_creature_you_control"}
+    )
+    assert e == MoveSelfCountersToTargetCreatureYouControl()
+
+
+def test_bridge_move_self_counters_to_target_creature_you_control_requires_target_property():
+    """Bridge arm pin: the bridged Python object reports
+    ``requires_target() is True``, mirroring the class definition at
+    ``effects/generic/counters.py:272-273``. Pins the targeting-
+    Decision-pipeline contract: the dies-trigger ability using this
+    effect MUST collect a target before resolve.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "move_self_counters_to_target_creature_you_control"}
+    )
+    assert e.requires_target() is True
+
+
+def test_bridge_move_self_counters_to_target_creature_you_control_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([MoveSelfCountersToTargetCreatureYouControl(),
+    DrawCards(1)])`` translates correctly via the recursive Sequence
+    translator. Pins this arm against accidental dispatch loss inside
+    Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.counters import (
+        MoveSelfCountersToTargetCreatureYouControl,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "move_self_counters_to_target_creature_you_control"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], MoveSelfCountersToTargetCreatureYouControl
+    )
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_move_self_counters_to_target_creature_you_control_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "move_self_counters_to_target_creature_you_control"}``
+    dict shape on a triggered_ability carrier (Dockworker-Drone-shape
+    "When this dies, you may put its counters on target creature you
+    control"). The bridge dict shape must register cleanly on Rust
+    too; this lockstep gate keeps the bridge from drifting away from
+    Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3686-3688``
+    accepts the bare ``kind``-only unit-variant dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "MoveSelfCountersToTargetCreatureYouControl"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "dies",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "move_self_counters_to_target_creature_you_control",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

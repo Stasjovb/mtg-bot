@@ -4715,6 +4715,49 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             CreateTokenCopyOfTargetCreatureYouControl,
         )
         return CreateTokenCopyOfTargetCreatureYouControl()
+    if kind == "move_self_counters_to_target_creature_you_control":
+        # **Round-25 BLOCKED-BRIDGE-ARM slice -- "move all +1/+1
+        # counters from this permanent to target creature you control"
+        # (MoveSelfCountersToTargetCreatureYouControl family,
+        # Dockworker-Drone-shape dies-trigger counter relocation).**
+        # Rust substrate
+        # ``Effect::MoveSelfCountersToTargetCreatureYouControl``
+        # (cards.rs unit variant; parser at cards.rs:3686-3688,
+        # to_dict at cards.rs:5591-5592) shipped via earlier round;
+        # this slice closes the cross-engine bridge gap. Discovered by
+        # the round-22 fresh discovery walk (Rust kind emitted by
+        # to_dict but no matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors Rust's
+        # parse_effect arm at cards.rs:3686-3688 -- silent-drop
+        # convention for unrecognized keys (extra dict fields are
+        # ignored). Python's
+        # ``MoveSelfCountersToTargetCreatureYouControl``
+        # (``effects/generic/counters.py:263-311``) is a frozen
+        # dataclass with no fields; the bridge constructs it bare.
+        #
+        # **Resolve semantics (parity-relevant).** Python's class at
+        # ``effects/generic/counters.py:284-311`` reads
+        # ``state.resolving_source.plus_one_counters`` for the count,
+        # filters battlefield to controller-owned creatures for the
+        # target slot (``effects/generic/counters.py:275-282``), then
+        # adds N counters to the target via ``add_plus_one_counters``
+        # and zeroes the source's ``plus_one_counters``. No-op if the
+        # source has zero counters or wasn't set.
+        #
+        # **Real EoE consumers** unblocked: 2 EoE oracle hits via scan
+        # (Dockworker Drone, Broodguard Elite) -- "When this creature
+        # dies, you may put its counters on target creature you
+        # control" Dockworker-Drone-shape dies-trigger pattern. Cross-
+        # engine end-to-end probe deferred per round-17/18/19
+        # synthetic-only-when-riders-cascade precedent (the dies-
+        # trigger event-firing path + the targeting Decision pipeline
+        # + the resolving_source state are their own surfaces beyond
+        # the bare bridge-arm slice).
+        from mtg_bot.effects.generic.counters import (
+            MoveSelfCountersToTargetCreatureYouControl,
+        )
+        return MoveSelfCountersToTargetCreatureYouControl()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
