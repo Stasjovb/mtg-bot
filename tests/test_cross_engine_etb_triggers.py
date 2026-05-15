@@ -6960,5 +6960,135 @@ def test_rust_parser_accepts_destroy_target_nonland_permanent_in_triggered_abili
     assert pid == 0
 
 
+def test_bridge_destroy_all_creatures_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 23) -- DestroyAllCreatures
+    family (Wrath shape). Rust ``{"kind": "destroy_all_creatures"}``
+    translates to Python ``DestroyAllCreatures()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3504-3512 (unit
+    variant -- no fields). Python's class is a frozen dataclass
+    with three OPTIONAL narrowing fields (``tapped_only``,
+    ``untapped_only``, ``min_power``) all defaulting to the
+    unrestricted Wrath shape; Rust's variant carries no narrowing
+    fields so the bridge constructs the bare class.
+    """
+    from mtg_bot.effects.generic.destroy import DestroyAllCreatures
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "destroy_all_creatures"})
+    assert isinstance(e, DestroyAllCreatures)
+
+
+def test_bridge_destroy_all_creatures_narrowing_fields_default_to_unrestricted():
+    """Bridge arm pin: the three narrowing fields default to the
+    unrestricted Wrath shape (``tapped_only=False``,
+    ``untapped_only=False``, ``min_power=0``). Pins the contract
+    that the bare Rust unit variant maps to the unrestricted
+    Python form -- a bug that flipped a narrowing flag default
+    would silently shrink the wrath's victim set.
+    """
+    from mtg_bot.effects.generic.destroy import DestroyAllCreatures
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "destroy_all_creatures"})
+    assert isinstance(e, DestroyAllCreatures)
+    assert e.tapped_only is False
+    assert e.untapped_only is False
+    assert e.min_power == 0
+
+
+def test_bridge_destroy_all_creatures_extra_keys_silently_ignored():
+    """Bridge arm pin: extra keys on the dict are silently dropped
+    (mirrors Rust's parse_effect arm at cards.rs:3504-3512 which
+    takes no fields and simply returns the unit variant). Mirrors
+    the silent-drop convention on sister unit-variant arms. Pins
+    that Rust-side narrowing fields like ``tapped_only`` (NOT
+    represented on the Rust unit variant) are dropped here too --
+    the bridge cannot synthesize narrowing it doesn't see on the
+    Rust side.
+    """
+    from mtg_bot.effects.generic.destroy import DestroyAllCreatures
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_all_creatures", "tapped_only": True}
+    )
+    # Even with a stray narrowing key, bridge produces the
+    # unrestricted form (mirrors Rust's bare unit-variant shape).
+    assert isinstance(e, DestroyAllCreatures)
+    assert e.tapped_only is False
+
+
+def test_bridge_destroy_all_creatures_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed ``DestroyAllCreatures()``. Pins the
+    dataclass equality semantic -- the bare unit-shape carries no
+    parameters so equality is structural.
+    """
+    from mtg_bot.effects.generic.destroy import DestroyAllCreatures
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "destroy_all_creatures"})
+    assert e == DestroyAllCreatures()
+
+
+def test_bridge_destroy_all_creatures_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DestroyAllCreatures(), DrawCards(1)])`` translates
+    correctly via the recursive Sequence translator. Pins this
+    arm against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.destroy import DestroyAllCreatures
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "destroy_all_creatures"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DestroyAllCreatures)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_destroy_all_creatures_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the ``{"kind":
+    "destroy_all_creatures"}`` dict shape on a triggered_ability
+    carrier. The bridge dict shape must register cleanly on the
+    Rust side too; this lockstep gate keeps the bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3504-3512`` accepts the unit-shape dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- DestroyAllCreatures",
+        "card_types": ["Creature"],
+        "mana_cost": {"W": 1, "B": 1, "generic": 2},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "destroy_all_creatures"},
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

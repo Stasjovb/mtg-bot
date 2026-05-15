@@ -4057,6 +4057,63 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DestroyTargetNonlandPermanent,
         )
         return DestroyTargetNonlandPermanent()
+    if kind == "destroy_all_creatures":
+        # **Round-23 BLOCKED-BRIDGE-ARM slice -- "destroy all
+        # creatures" (DestroyAllCreatures family, Wrath shape).**
+        # Rust substrate ``Effect::DestroyAllCreatures`` (cards.rs:626
+        # unit variant; parser at cards.rs:3504-3512, resolve at
+        # state_ops_resolve.rs:3917-3985) shipped via round 24
+        # (mass-removal AOE iterating both bf sides). This slice
+        # closes the cross-engine bridge gap. Discovered by
+        # round-22 worker RR's diff walk (Rust kind emitted by
+        # to_dict but no matching ``_ta_dict_to_python_effect``
+        # arm).
+        #
+        # **Field shape (unit variant on Rust, narrow-able on
+        # Python).** Rust's parse_effect arm at cards.rs:3504-3512
+        # takes NO fields -- bare ``{"kind":
+        # "destroy_all_creatures"}``. Python's ``DestroyAllCreatures``
+        # carries OPTIONAL narrowing fields (``tapped_only``,
+        # ``untapped_only``, ``min_power``) that Rust's variant
+        # does NOT represent. The bare bridge-arm shape constructs
+        # the unrestricted Wrath (``DestroyAllCreatures()`` --
+        # all narrowing flags default-False / 0). The Split Up
+        # tapped/untapped narrowing and the Restricted Office
+        # min_power threshold do NOT round-trip through this arm
+        # in their narrowed form -- those will land as separate
+        # parameterized Rust Effect variants in follow-ups (matches
+        # the round-23 PumpCreaturesYouControlUntilEOT precedent
+        # of "bare-shape first slice; rider variants surface as
+        # separate Rust Effect variants in follow-ups").
+        #
+        # **Resolve semantics (parity-relevant).** Both engines
+        # iterate creatures across BOTH players' battlefield.
+        # Rust uses ``bf_iter::bf_iter_etb_sorted`` for ETB-monotone
+        # collection order (state_ops_resolve.rs:3923-3935); Python
+        # walks ``state.battlefield`` (centralized list, also
+        # ETB-monotone). Each creature destroys to its OWN
+        # controller's graveyard -- the outcome is order-invariant
+        # but visit order is load-bearing for future death-trigger
+        # emission (CE8 substrate; see I33 in
+        # ``docs/RUST_PARITY_GAPS.md``). Indestructible creatures
+        # survive on both engines (Rust filters via the
+        # ``indestructible`` keyword scan; Python routes each kill
+        # through ``turn.destroy()`` which checks indestructibility).
+        #
+        # **Real EoE consumers** unblocked: 1 EoE bare-shape card
+        # (Singularity Rupture -- "Destroy all creatures"). Zero
+        # Point Ballad uses the min_power-shape narrowing variant;
+        # Mutinous Massacre uses the each-creature-with-MV
+        # parameterized variant -- those are separate Rust Effect
+        # variants pending follow-up slices. Cross-engine end-to-end
+        # probe deferred per round-17/18/19 synthetic-only-when-
+        # riders-cascade precedent (the existing
+        # ``mass_removal_side_channel`` selector at line 6460+
+        # already exercises this Effect end-to-end via
+        # side-channel injection on the multi_blocker_deckspec walk;
+        # this bridge arm closes the to_dict round-trip surface).
+        from mtg_bot.effects.generic.destroy import DestroyAllCreatures
+        return DestroyAllCreatures()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
