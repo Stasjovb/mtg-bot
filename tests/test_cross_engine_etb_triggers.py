@@ -11777,5 +11777,220 @@ def test_rust_parser_accepts_double_target_creatures_power_ueot_in_cast_effects(
     assert pid == 0
 
 
+def test_bridge_deal_damage_to_opponent_creature_by_artifact_count_basic_translation():
+    """BLOCKED-RUST-EFFECT slice (round 32) -- deal damage to an
+    opponent's creature equal to the source-controller's artifact count.
+    Rust ``{"kind": "deal_damage_to_opponent_creature_by_artifact_count"}``
+    translates to Python ``DealDamageToOpponentCreatureByArtifactCount()``.
+
+    Mirrors Rust's parse_effect arm (added in this slice immediately
+    after the round-31 double_target_creatures_power_ueot arm; unit
+    variant; no fields). Pin verifies the bare-shape translation for
+    the round-32 dynamic-X-from-artifact-count Effect arm (Warmaker
+    Gunship's ETB).
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByArtifactCount,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature_by_artifact_count"}
+    )
+    assert isinstance(e, DealDamageToOpponentCreatureByArtifactCount)
+
+
+def test_bridge_deal_damage_to_opponent_creature_by_artifact_count_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    the unit-variant precedent (round-31 double_target_creatures_power_ueot
+    / round-30 put_stun_counter_on_tapped_creature) -- unrecognized
+    fields in the dict are ignored, not raised. Notably, an ``amount``
+    key (which the sister DealDamageToOpponentCreature arm DOES
+    consume) is silently dropped here -- the dynamic-X is the whole
+    point of this variant, not a static amount.
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByArtifactCount,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "deal_damage_to_opponent_creature_by_artifact_count",
+            "spurious_field": "ignored",
+            # ``amount`` would be consumed by sister
+            # ``deal_damage_to_opponent_creature`` arm; here it's
+            # silently dropped -- the count is dynamic.
+            "amount": 99,
+        }
+    )
+    assert isinstance(e, DealDamageToOpponentCreatureByArtifactCount)
+
+
+def test_bridge_deal_damage_to_opponent_creature_by_artifact_count_equality_default_constructor():
+    """Bridge arm pin: two ``DealDamageToOpponentCreatureByArtifactCount()``
+    instances are equal under dataclass(frozen=True) default __eq__
+    semantics (provided their auto-defaulted ``targets`` tuple
+    converges via __post_init__). Pins the frozen-dataclass equality
+    contract for downstream hash-based keying (e.g. de-dup in Sequence
+    composers).
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByArtifactCount,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature_by_artifact_count"}
+    )
+    e2 = DealDamageToOpponentCreatureByArtifactCount()
+    assert e1 == e2
+
+
+def test_bridge_deal_damage_to_opponent_creature_by_artifact_count_requires_target():
+    """Bridge arm pin: Python's
+    DealDamageToOpponentCreatureByArtifactCount carries
+    requires_target() == True (damage.py:421-430 -- the auto-defaulted
+    ``targets`` tuple holds a TargetSpec with count_min=1 by default;
+    "target creature an opponent controls" is a hard requires-target).
+    The bridge round-trip pin catches accidental drift to a no-target
+    unit-variant by asserting the requires_target flag survives
+    translation. (Distinct from the sister
+    DealDamageEqualToSourcePower does-NOT-require-target convention --
+    that arm reads its target from a defender-bf scan; this arm needs
+    an explicit opponent-creature target choice.)
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature_by_artifact_count"}
+    )
+    assert e.requires_target() is True
+
+
+def test_bridge_deal_damage_to_opponent_creature_by_artifact_count_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DealDamageToOpponentCreatureByArtifactCount(), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    the round-32 arm against accidental dispatch loss inside Sequence
+    (mirrors the round-30 stun-counter / round-31 double-power
+    Sequence-composability pins).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByArtifactCount,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "deal_damage_to_opponent_creature_by_artifact_count"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DealDamageToOpponentCreatureByArtifactCount)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_deal_damage_to_opponent_creature_by_artifact_count_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "deal_damage_to_opponent_creature_by_artifact_count"}``
+    on a triggered_ability carrier. Warmaker Gunship's actual real-card
+    consumer mounts this Effect on a Spacecraft ETB trigger; the
+    lockstep gate doesn't depend on the trigger event -- registering
+    through any abilities carrier exercises the parse_effect arm.
+    Pinning here keeps the Python bridge from drifting away from
+    Rust's parse_effect coverage.
+
+    Mirrors Rust's parse_effect arm added in this slice immediately
+    after the round-31 double_target_creatures_power_ueot arm.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- DealDamageToOpponentCreatureByArtifactCount",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"R": 1, "generic": 4},
+        "power": 5,
+        "toughness": 5,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_to_opponent_creature_by_artifact_count"
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_rejects_deal_damage_to_opponent_creature_by_artifact_count_with_typo():
+    """Negative lockstep pin: a misspelled kind (e.g.
+    ``deal_damage_to_opponent_creature_by_artifacts_count`` -- plural
+    "artifacts" vs singular "artifact") surfaces as ValueError on
+    Rust's parse_effect arm because the new variant isn't registered
+    for that spelling. Pin against accidental schema drift between
+    bridge dict shape and Rust parser's accepted-kinds set.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- typo lockstep",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"R": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    # Misspelled — plural "artifacts" instead of singular "artifact".
+                    "kind": "deal_damage_to_opponent_creature_by_artifacts_count"
+                },
+            }
+        ],
+    }
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown effect kind"):
+        reg.register_printing(d)
+
+
+def test_rust_parser_accepts_deal_damage_to_opponent_creature_by_artifact_count_in_cast_effects():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "deal_damage_to_opponent_creature_by_artifact_count"}``
+    on a cast-spell ``effects`` carrier. Sister of the
+    triggered_ability-carrier lockstep pin -- the same parse_effect
+    arm dispatches both carriers, so any drift surfaces on either
+    pin. Mirrors the round-25/26/27 cast-spell vs trigger lockstep
+    convention.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- DealDamageToOpponentCreatureByArtifactCount (Sorcery)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1},
+        "effects": [
+            {"kind": "deal_damage_to_opponent_creature_by_artifact_count"},
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

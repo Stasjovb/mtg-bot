@@ -5971,6 +5971,77 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DoubleTargetCreaturesPowerUEOT,
         )
         return DoubleTargetCreaturesPowerUEOT()
+    if kind == "deal_damage_to_opponent_creature_by_artifact_count":
+        # BLOCKED-RUST-EFFECT slice (round 32) -- deal damage to an
+        # opponent's creature equal to the source-controller's
+        # artifact count bridge arm. Rust's
+        # ``Effect::DealDamageToOpponentCreatureByArtifactCount``
+        # (cards.rs unit variant added in this slice; parse arm
+        # immediately after the round-31
+        # double_target_creatures_power_ueot arm, to_dict immediately
+        # after the round-31 DoubleTargetCreaturesPowerUEOT arm,
+        # resolve at state_ops_resolve.rs immediately after the
+        # round-31 DoubleTargetCreaturesPowerUEOT resolve arm
+        # following the DealDamageToOpponentCreature 5-zone scan +
+        # opponent-creature target shape) mirrors Python's
+        # ``DealDamageToOpponentCreatureByArtifactCount``
+        # (effects/generic/damage.py:406 -- Warmaker Gunship's ETB,
+        # 1 EoE consumer). Rust substrate landed end-to-end IN this
+        # slice; the bridge translator wires the cross-engine round
+        # trip.
+        #
+        # **Field-shape.** Unit variant on both sides; no fields beyond
+        # ``kind``. The Python class has no static ``amount`` field
+        # (damage.py:406-419 -- ``@dataclass(frozen=True)`` with only
+        # the inherited ``targets`` tuple, defaulted in __post_init__
+        # to a TargetSpec on IsCreature() & ControlledByOpponent()).
+        # The dynamic-X is the whole point of the class -- the count
+        # is computed at resolve time, not stored on the variant. The
+        # bridge translator ignores every other key on the dict for
+        # round-trip dict-shape consistency (mirrors the round-31
+        # double_target_creatures_power_ueot / round-30
+        # put_stun_counter_on_tapped_creature unit-variant precedents).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # walks the source-controller's bf, counts permanents whose
+        # printing's card_types contains "Artifact" (saturating to
+        # dodge i32 overflow), and applies that damage amount via
+        # saturating_add (i16 ceiling matches sibling damage arms) to
+        # the FIRST creature on the opponent's bf. Python's resolve at
+        # damage.py:432-453 reads the target from the targets tuple
+        # passed by the targeting pipeline (PUSH-time pick) and calls
+        # _apply_damage with the same artifact-count denominator. The
+        # chooser-driven pick converges with Rust's first-eligible-
+        # creature scan when the agent picks the first-eligible target
+        # on synthetic probes with one bait creature.
+        #
+        # **Source-controller resolution.** Rust uses the 5-zone walk
+        # + stack scan precedent set by DealDamageToOpponentCreature
+        # (cross-arm consistency on the `damage opponent` target
+        # shape). Python uses the resolving_controller_id transient
+        # slot via the standard effect-resolve harness. Both converge
+        # on the source's controller for the count denominator and
+        # the opponent's creature for the target.
+        #
+        # **Fizzle parity.** Both engines silently no-op when the
+        # source-controller has zero artifacts on bf (Python:
+        # damage.py:449-450 ``if artifact_count <= 0: return``; Rust:
+        # the amount <= 0 guard in the resolve arm). Both engines also
+        # silently no-op when no opponent creature is in play.
+        #
+        # **No real-EoE end-to-end probe in this slice.** Warmaker
+        # Gunship is a Spacecraft with conditional-ETB-trigger riders
+        # in the EoE pool; driving the ETB through both engines
+        # requires the create_token + Spacecraft predicate plumbing
+        # on review-gated branches. Synthetic regression pin (per the
+        # round-17 Fight + round-30 stun-counter + round-31
+        # double-power precedent) documents the bridge plumbing; a
+        # real-EoE Warmaker Gunship probe is a follow-up slice once
+        # the predicate substrate merges.
+        from mtg_bot.effects.generic.damage import (
+            DealDamageToOpponentCreatureByArtifactCount,
+        )
+        return DealDamageToOpponentCreatureByArtifactCount()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
