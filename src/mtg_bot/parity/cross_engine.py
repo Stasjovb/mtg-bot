@@ -4352,6 +4352,64 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 f"untap a player)"
             )
         return Untap(targets=(TargetSpec(slot_filter),))
+    if kind == "put_card_from_graveyard_on_bottom_of_library":
+        # **Round-24 BLOCKED-BRIDGE-ARM slice -- "put target card from
+        # a graveyard on the bottom of its owner's library"
+        # (PutCardFromGraveyardOnBottomOfLibrary family, Chrome-
+        # Companion-shape).** Rust substrate
+        # ``Effect::PutCardFromGraveyardOnBottomOfLibrary``
+        # (cards.rs:1240; unit variant; parser at cards.rs:3683-3686,
+        # resolve at state_ops_resolve.rs:5103-5133, to_dict at
+        # cards.rs:5588-5590) shipped via round 28 (graveyard-rotation
+        # / anti-reanimation pattern). This slice closes the cross-
+        # engine bridge gap. Discovered by the round-22 fresh
+        # discovery walk (Rust kind emitted by to_dict but no matching
+        # ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors Rust's
+        # parse_effect arm at cards.rs:3683-3686 -- silent-drop
+        # convention for unrecognized keys (extra dict fields are
+        # ignored). Python's ``PutCardFromGraveyardOnBottomOfLibrary``
+        # (``effects/generic/graveyard.py:419-469``) is a frozen
+        # dataclass with no fields; the bridge constructs it bare.
+        #
+        # **Resolve-asymmetry note.** Python's class is target-driven
+        # (``requires_target=True``; ``legal_targets`` walks both
+        # players' graveyards yielding ``("card_in_graveyard", id)``;
+        # the agent picks via the targeting Decision pipeline). Rust's
+        # resolve at state_ops_resolve.rs:5103-5133 is auto-pick
+        # deterministic: scans graveyards in player order (p0 first,
+        # then p1) and takes ``graveyard[0]`` from the first non-empty
+        # graveyard, moving it to that owner's library bottom (lib
+        # tail per CE3 convention). On synthetic probes that seat the
+        # bait card as ``graveyard[0]`` for the deterministic Rust
+        # pick AND the agent picks the same card on Python, the
+        # asymmetry collapses and both engines converge on the
+        # post-resolve observable. Empty-graveyards-on-both-sides =
+        # silent fizzle on both engines.
+        #
+        # **Zone-change reset (CR 400.7).** Rust resets ``tapped``,
+        # ``summoning_sick`` (true per r28 CE1 universal default in
+        # the LIBRARY zone), ``damage``, ``counters``,
+        # ``attached_to``, ``exiled_with_source`` on move. Python's
+        # ``card.zone = Zone.LIBRARY`` flip leaves accessory state
+        # untouched; library-zone gameplay-irrelevance makes the
+        # divergence non-observable in steady-state probes.
+        #
+        # **EoE consumer status.** 1 EoE bare-shape consumer -- Chrome
+        # Companion (``data/edge_of_eternities.json:30846``) carries
+        # the ``{2}, {T}: Put target card from a graveyard on the
+        # bottom of its owner's library`` activated ability. The
+        # bridge closes the to_dict round-trip surface for the
+        # activated-ability carrier. Cross-engine end-to-end probe
+        # deferred per round-17/18/19 synthetic-only-when-riders-
+        # cascade precedent (the targeting Decision pipeline +
+        # activated-ability cost payment pipeline are their own
+        # surfaces beyond the bare bridge-arm slice).
+        from mtg_bot.effects.generic.graveyard import (
+            PutCardFromGraveyardOnBottomOfLibrary,
+        )
+        return PutCardFromGraveyardOnBottomOfLibrary()
     if kind == "tap_another_target_creature":
         # **Round-23 BLOCKED-BRIDGE-ARM slice -- "tap another target
         # creature" (TapAnotherTargetCreature family,
