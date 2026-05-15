@@ -7090,5 +7090,157 @@ def test_rust_parser_accepts_destroy_all_creatures_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_damage_each_creature_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 23 fresh discovery walk) --
+    DealNDamageToEachCreature family. Rust ``{"kind":
+    "damage_each_creature", "amount": 2}`` translates to Python
+    ``DealNDamageToEachCreature(amount=2)``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3286-3289 (amount
+    required, i32, no default). Field name ``amount`` agrees on both
+    engines (no rename in the bridge).
+    """
+    from mtg_bot.effects.generic.damage import DealNDamageToEachCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "damage_each_creature", "amount": 2}
+    )
+    assert isinstance(e, DealNDamageToEachCreature)
+    assert e.amount == 2
+
+
+def test_bridge_damage_each_creature_amount_required_keyerror_when_missing():
+    """Bridge arm pin: missing ``amount`` raises KeyError (mirrors
+    Rust's ``require()`` contract at cards.rs:3286-3289). No default
+    on either side -- the variant has no zero-arg form.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect({"kind": "damage_each_creature"})
+
+
+def test_bridge_damage_each_creature_amount_zero_silent_noop():
+    """Bridge arm pin: amount=0 is legal (silent no-op) on both
+    engines. Rust's resolve at state_ops_resolve.rs:2035-2039 only
+    raises on negatives; amount=0 falls through to a no-op damage
+    mark on every creature. Python's class is a bare dataclass with
+    no zero-amount guard. Mirrors GainLife / DrawCards /
+    DamageEachOpponent zero-amount conventions.
+    """
+    from mtg_bot.effects.generic.damage import DealNDamageToEachCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "damage_each_creature", "amount": 0}
+    )
+    assert isinstance(e, DealNDamageToEachCreature)
+    assert e.amount == 0
+
+
+def test_bridge_damage_each_creature_negative_amount_raises():
+    """Bridge arm pin: amount<0 raises ValueError at translation time
+    (mirrors Rust's resolve raise at state_ops_resolve.rs:2035-2039).
+    The bridge front-loads the check rather than waiting for
+    Python's ``DealNDamageToEachCreature.resolve`` to handle it (the
+    Python class itself doesn't guard, but cross-engine probes that
+    feed a negative amount through the bridge would silently apply
+    the bogus value on the Python side and raise on the Rust side --
+    asymmetric. The bridge's pre-check keeps the contracts symmetric).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="non-negative"):
+        _ta_dict_to_python_effect(
+            {"kind": "damage_each_creature", "amount": -1}
+        )
+
+
+def test_bridge_damage_each_creature_amount_four_extinguisher_battleship_shape():
+    """Bridge arm pin: ``amount=4`` round-trips correctly --
+    Extinguisher Battleship's ETB sequence body shape. Pins that the
+    field translates as i32 (no clamp / overflow at the bridge).
+    """
+    from mtg_bot.effects.generic.damage import DealNDamageToEachCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "damage_each_creature", "amount": 4}
+    )
+    assert e == DealNDamageToEachCreature(amount=4)
+
+
+def test_bridge_damage_each_creature_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DealNDamageToEachCreature(2), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    this arm against accidental dispatch loss inside Sequence (the
+    real Lithobraking / Extinguisher Battleship cascades are Sequence-
+    wrapped on the printed surface).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.damage import DealNDamageToEachCreature
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "damage_each_creature", "amount": 2},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DealNDamageToEachCreature)
+    assert e.effects[0].amount == 2
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_damage_each_creature_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "damage_each_creature", "amount": 2}`` dict shape on a
+    triggered_ability carrier. The bridge dict shape must register
+    cleanly on the Rust side too; this lockstep gate keeps the bridge
+    from drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3286-3289`` accepts the dict shape with
+    required ``amount`` i32 field.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- DamageEachCreature"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "damage_each_creature",
+                    "amount": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

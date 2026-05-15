@@ -46880,6 +46880,271 @@ def test_rust_destroy_all_creatures_lands_untouched():
         assert lid not in p1_gy_ids
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- damage_each_creature (round 23).
+#
+# Rust's Effect::DamageEachCreature { amount: i32 } already shipped
+# end-to-end via round 18 (parse at cards.rs:3286-3289 + resolve at
+# state_ops_resolve.rs:2034-2069); this slice ships the cross-engine
+# bridge translator + Rust regression pins. The bridge arm closes a
+# gap discovered by the round-22 fresh discovery walk (Rust kind
+# emitted by to_dict but no matching `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumers (oracle scan): Lithobraking, Extinguisher
+# Battleship (2 EoE cards -- both cascade the kind inside a Sequence
+# / reflexive may-trigger, so the bare bridge arm doesn't on its own
+# claim a real card; the EoE consumers go through the surrounding
+# composer arms).
+#
+# Pin layout (in test_parity_smoke.py): 4 Rust regression pins
+# (basic amount=2 Pyroclasm-shape mass damage on both sides of the bf
+# + amount=0 silent no-op + creatures-only filter (lands/artifacts
+# untouched) + AOE crosses both controllers (asymmetric burn)). Cross-
+# engine end-to-end probe deferred per round-17/18/19 synthetic-only-
+# when-riders-cascade precedent (the bare bridge arm does NOT carry
+# the Sequence / reflexive composer scaffolding that real EoE
+# consumers cascade onto). The 6 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_damage_each_creature_state(
+    amount: int = 2,
+    source_owner: int = 0,
+    n_p0_bears: int = 2,
+    n_p1_bears: int = 1,
+):
+    """Helper: build a Rust state with a damage source on
+    `source_owner`'s bf carrying an ETB trigger that fires
+    DamageEachCreature(amount), PLUS `n_p0_bears` vanilla 3/3 bears
+    on p0 and `n_p1_bears` on p1 (3-toughness so they survive a 2
+    damage AOE; tests that drive lethal seed lower-toughness bears
+    inline).
+    Returns (rust_state, source_id, p0_bear_ids, p1_bear_ids).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    bear_dict = {
+        "name": "Pyroclasm Bait Bear (3/3)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "G": 1},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+    }
+    p0_bear_ids = [
+        rust_state.register_and_inject_object(
+            bear_dict, 0, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_p0_bears)
+    ]
+    p1_bear_ids = [
+        rust_state.register_and_inject_object(
+            bear_dict, 1, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_p1_bears)
+    ]
+    # Source is a creature carrier (so the AOE hits it too -- no
+    # exclude_source rider on the bare Rust variant).
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "DamageEachCreature ETB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"R": 1, "generic": 2},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "damage_each_creature",
+                        "amount": amount,
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id, p0_bear_ids, p1_bear_ids
+
+
+def _damage_for_id(rust_state, obj_id):
+    """Helper: read per-object damage from the bf snapshot. Walks
+    both players' bf entries and returns the damage int (or None if
+    the object isn't on the bf).
+    """
+    for entry in rust_state.battlefield_snapshot():
+        if int(entry["id"]) == obj_id:
+            return int(entry["damage"])
+    return None
+
+
+def test_rust_damage_each_creature_basic_amount_two_pyroclasm_shape():
+    """Rust regression pin: basic amount=2 AOE damage on both
+    battlefields -- 2 p0 bears (3/3) take 2 damage each (still alive
+    at 1-life-remaining), 1 p1 bear takes 2 damage (still alive),
+    and the source carrier itself takes 2 damage (still alive at
+    4-tough). Pins state_ops_resolve.rs:2034-2069's bf-ETB-timestamp
+    walk + per-creature saturating_add damage mark, observable via
+    the bf snapshot's per-object damage field.
+    """
+    rust_state, source_id, p0_bear_ids, p1_bear_ids = (
+        _build_rust_damage_each_creature_state(
+            amount=2, source_owner=0,
+            n_p0_bears=2, n_p1_bears=1,
+        )
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # All creatures on both bfs took 2 damage.
+    for bear_id in p0_bear_ids:
+        assert _damage_for_id(rust_state, bear_id) == 2, (
+            f"p0 bear {bear_id} should have 2 damage; got "
+            f"{_damage_for_id(rust_state, bear_id)}"
+        )
+    for bear_id in p1_bear_ids:
+        assert _damage_for_id(rust_state, bear_id) == 2, (
+            f"p1 bear {bear_id} should have 2 damage; got "
+            f"{_damage_for_id(rust_state, bear_id)}"
+        )
+    # Source itself also took 2 damage (no exclude_source on the
+    # Rust resolve arm).
+    assert _damage_for_id(rust_state, source_id) == 2
+
+
+def test_rust_damage_each_creature_amount_zero_silent_noop():
+    """Rust regression pin: amount=0 falls through to the per-creature
+    loop in state_ops_resolve.rs:2059-2068 but the saturating_add(0)
+    is a no-op -- no damage marked on any creature. Pins the
+    zero-amount no-op convention shared with GainLife / DrawCards /
+    DamageEachOpponent.
+    """
+    rust_state, source_id, p0_bear_ids, p1_bear_ids = (
+        _build_rust_damage_each_creature_state(
+            amount=0, source_owner=0,
+            n_p0_bears=2, n_p1_bears=1,
+        )
+    )
+    rust_state.resolve_top_of_stack()
+    # No damage marked on any creature.
+    for bear_id in p0_bear_ids:
+        assert _damage_for_id(rust_state, bear_id) == 0
+    for bear_id in p1_bear_ids:
+        assert _damage_for_id(rust_state, bear_id) == 0
+    assert _damage_for_id(rust_state, source_id) == 0
+
+
+def test_rust_damage_each_creature_creatures_only_filter():
+    """Rust regression pin: filter at state_ops_resolve.rs:2047-2053
+    selects only objects whose printing.card_types contains
+    "Creature". Lands / artifacts / enchantments on the bf are NOT
+    damaged. Pins the creature-only filter -- a bug that walked all
+    bf objects would (incorrectly) damage non-creatures.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Seat a non-creature artifact on p0's bf -- it should NOT be
+    # damaged by the AOE.
+    artifact_id = rust_state.register_and_inject_object(
+        {
+            "name": "Pyroclasm Bait Artifact (no card_types Creature)",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # And a single creature (with toughness 4 to survive 2 damage).
+    creature_id = rust_state.register_and_inject_object(
+        {
+            "name": "Pyroclasm Bait Creature (2/4)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # Source carrier on p1's bf.
+    _source_id = rust_state.register_and_inject_object(
+        {
+            "name": "DamageEachCreature ETB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"R": 1, "generic": 2},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "damage_each_creature",
+                        "amount": 2,
+                    },
+                }
+            ],
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    rust_state.resolve_top_of_stack()
+    # Artifact untouched by the creature-only AOE.
+    assert _damage_for_id(rust_state, artifact_id) == 0, (
+        f"Artifact should NOT be damaged (creature-only filter); "
+        f"got {_damage_for_id(rust_state, artifact_id)} damage"
+    )
+    # Creature took the 2 damage.
+    assert _damage_for_id(rust_state, creature_id) == 2
+
+
+def test_rust_damage_each_creature_aoe_crosses_both_controllers():
+    """Rust regression pin: DamageEachCreature is implicit-target and
+    hits creatures on BOTH battlefields (per state_ops_resolve.rs:1987-
+    1992 docstring "Symmetric AOE: applies to BOTH players'
+    battlefields"). Pins the symmetric-AOE shape -- distinct from
+    DamageEachOpponent (which only hits the opponent's life total) and
+    from DealDamage (which targets defender's bf). Source on p1 still
+    damages p0's creatures.
+    """
+    rust_state, source_id, p0_bear_ids, p1_bear_ids = (
+        _build_rust_damage_each_creature_state(
+            amount=2, source_owner=1,  # source on p1
+            n_p0_bears=3, n_p1_bears=1,
+        )
+    )
+    rust_state.resolve_top_of_stack()
+    # All p0 bears took damage (the AOE crosses controllers).
+    for bear_id in p0_bear_ids:
+        assert _damage_for_id(rust_state, bear_id) == 2, (
+            f"p0 bear {bear_id} should be damaged by p1's AOE "
+            f"(symmetric); got "
+            f"{_damage_for_id(rust_state, bear_id)}"
+        )
+    # p1 bear also damaged.
+    for bear_id in p1_bear_ids:
+        assert _damage_for_id(rust_state, bear_id) == 2
+    # Source itself also damaged.
+    assert _damage_for_id(rust_state, source_id) == 2
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

@@ -4114,6 +4114,73 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # this bridge arm closes the to_dict round-trip surface).
         from mtg_bot.effects.generic.destroy import DestroyAllCreatures
         return DestroyAllCreatures()
+    if kind == "damage_each_creature":
+        # **Round-23 BLOCKED-BRIDGE-ARM slice -- "[Source] deals N
+        # damage to each creature" (DealNDamageToEachCreature family,
+        # Pyroclasm-shape).** Rust substrate
+        # ``Effect::DamageEachCreature { amount: i32 }`` (cards.rs:145;
+        # parser at cards.rs:3286-3289, resolve at
+        # state_ops_resolve.rs:2034-2069, to_dict at cards.rs:5439-5442)
+        # shipped via round 18 and predates this bridge gap. Discovered
+        # by the round-22 fresh discovery walk (Rust kind emitted by
+        # to_dict but no matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape (required, no default).** Python's
+        # ``DealNDamageToEachCreature(amount: int)``
+        # (effects/generic/damage.py:117-140) and Rust's variant carry
+        # the SAME ``amount`` field as REQUIRED (no default on either
+        # side). Bridge mirrors Rust's parse_effect shape
+        # (cards.rs:3286-3289): ``amount`` is REQUIRED via direct
+        # ``int(eff_dict["amount"])`` lookup -- KeyError if missing,
+        # mirrors Rust's ``require()`` contract. Round-22 sister
+        # ``each_opponent_loses_life`` has the same
+        # required-field-no-default shape.
+        #
+        # **Negative amount.** Rust's resolve raises PyValueError on
+        # amount < 0 (state_ops_resolve.rs:2035-2039); the bridge
+        # mirrors that contract for symmetric translation-time errors.
+        # Note: Rust's parser does NOT pre-check at register time
+        # (cards.rs:3286-3289 has no negative guard, unlike sister
+        # ``each_opponent_loses_life`` which DOES guard at parse). The
+        # bridge raises early to match resolve-time behavior on the
+        # Python side; amount == 0 is a legal silent no-op on both
+        # engines (mirrors GainLife / DrawCards / DamageEachOpponent
+        # zero-amount conventions).
+        #
+        # **Resolve semantics (parity-relevant).** Both engines
+        # implicit-target every creature on EITHER bf and apply
+        # ``damage += amount`` (saturating on the Rust i16 storage).
+        # Rust's resolve at state_ops_resolve.rs:2045-2068 walks both
+        # players' battlefields in bf-ETB-timestamp order via
+        # ``crate::bf_iter::bf_iter_etb_sorted`` and filters by
+        # printing.card_types containing "Creature". Python's class
+        # at effects/generic/damage.py:129-137 walks the centralized
+        # ``state.battlefield`` filtering by ``printing.is_creature``
+        # and routes through ``_apply_damage`` which marks per-creature
+        # damage. Both engines defer death to the SBA loop (CR 704);
+        # indestructible suppression runs at SBA time on both engines,
+        # NOT at this resolve arm. Empty bf or no creatures = silent
+        # no-op on both.
+        #
+        # **Real EoE consumers** unblocked: 2 EoE cards via oracle
+        # scan -- Lithobraking (sequence body: "Lithobraking deals 2
+        # damage to each creature" inside the optional-sac reflexive
+        # trigger) and Extinguisher Battleship (ETB sequence body:
+        # "Then this Spacecraft deals 4 damage to each creature").
+        # Cross-engine end-to-end probe deferred per round-17/18/19
+        # synthetic-only-when-riders-cascade precedent (typical EoE
+        # consumers cascade the damage_each_creature inside a Sequence
+        # or reflexive may-trigger -- the bare bridge arm does NOT
+        # carry those rider composers).
+        from mtg_bot.effects.generic.damage import DealNDamageToEachCreature
+        amount = int(eff_dict["amount"])
+        if amount < 0:
+            raise ValueError(
+                "damage_each_creature bridge arm: amount must be "
+                f"non-negative, got {amount} (mirrors Rust resolve "
+                "contract at state_ops_resolve.rs:2035-2039)"
+            )
+        return DealNDamageToEachCreature(amount=amount)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
