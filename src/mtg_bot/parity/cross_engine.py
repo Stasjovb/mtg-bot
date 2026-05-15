@@ -4406,6 +4406,60 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # its own carrier beyond the bare bridge-arm slice).
         from mtg_bot.effects.generic.tap import TapAnotherTargetCreature
         return TapAnotherTargetCreature()
+    if kind == "tap_enchanted_permanent":
+        # **Round-23 BLOCKED-BRIDGE-ARM slice -- "tap enchanted
+        # permanent" (TapEnchantedPermanent family,
+        # Stay-Hidden-Stay-Silent-shape Aura ETB).** Rust substrate
+        # ``Effect::TapEnchantedPermanent`` (cards.rs:1487; unit
+        # variant; parser at cards.rs:3728-3730, resolve at
+        # state_ops_resolve.rs:6027-6056, to_dict at
+        # cards.rs:5633-5635) shipped via round 28; this slice closes
+        # the cross-engine bridge gap. Discovered by the round-22
+        # fresh discovery walk (Rust kind emitted by to_dict but no
+        # matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors Rust's
+        # parse_effect arm at cards.rs:3728-3730 -- silent-drop
+        # convention for unrecognized keys (extra dict fields are
+        # ignored).
+        #
+        # **Field shape.** Python's ``TapEnchantedPermanent``
+        # (effects/generic/tap.py:497-532) is a bare ``Effect``
+        # subclass with no constructor args. Targets the host
+        # permanent via ``state.resolving_source.attached_to`` (the
+        # source Aura's attachment slot). Mirrors Rust's unit
+        # variant; the bridge constructs ``TapEnchantedPermanent()``
+        # with no args.
+        #
+        # **Resolve semantics (parity-relevant).** Rust's resolve at
+        # state_ops_resolve.rs:6027-6056 reads the source's
+        # ``attached_to`` field (scanning both players' battlefields
+        # for the source obj), then locates the host on either
+        # player's bf and sets ``obj.tapped = true``. Idempotent on
+        # already-tapped target (unconditional write, mirroring the
+        # existing TapTarget contract). Source not on bf / no
+        # attached_to / target not found -> silent fizzle (the three
+        # early-return arms at state_ops_resolve.rs:6035-6047).
+        # Mirrors Python's ``aura.attached_to`` lookup +
+        # ``tap_permanent`` routing on the centralized
+        # ``state.battlefield``. Sibling to DestroyEnchantedPermanent
+        # (same attached_to lookup; differs only in the mutation --
+        # tap flag vs zone change). Carrier shape on both engines is
+        # an Aura with the trigger ``"When this Aura enters, tap
+        # enchanted permanent."``.
+        #
+        # **Real EoE consumers** unblocked: 1 EoE card via oracle
+        # scan -- Stay Hidden, Stay Silent ("Enchant creature or
+        # Spacecraft / When this Aura enters, tap enchanted
+        # permanent. / You control enchanted permanent. / Enchanted
+        # permanent doesn't untap during its controller's untap
+        # step."). Cross-engine end-to-end probe deferred per
+        # round-17/18/19 synthetic-only-when-riders-cascade
+        # precedent (the Aura attachment + control-stealing +
+        # untap-restriction rider stack is its own carrier surface
+        # beyond the bare bridge-arm slice).
+        from mtg_bot.effects.generic.tap import TapEnchantedPermanent
+        return TapEnchantedPermanent()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

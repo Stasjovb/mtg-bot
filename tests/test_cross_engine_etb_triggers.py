@@ -7667,5 +7667,122 @@ def test_rust_parser_accepts_tap_another_target_creature_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_tap_enchanted_permanent_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 23 fresh discovery walk) --
+    TapEnchantedPermanent family. Rust ``{"kind": "tap_enchanted_
+    permanent"}`` translates to Python ``TapEnchantedPermanent()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3728-3730 (unit
+    variant; no fields). Pin verifies the bare-shape translation.
+    """
+    from mtg_bot.effects.generic.tap import TapEnchantedPermanent
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "tap_enchanted_permanent"})
+    assert isinstance(e, TapEnchantedPermanent)
+
+
+def test_bridge_tap_enchanted_permanent_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    Rust's parse_effect silent-drop convention -- unrecognized fields
+    in the dict are ignored (not raised as errors). Pins the unit-
+    variant contract against future-evolution where a sibling Rust
+    variant might add fields.
+    """
+    from mtg_bot.effects.generic.tap import TapEnchantedPermanent
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "tap_enchanted_permanent",
+            "spurious_field": "ignored",
+        }
+    )
+    assert isinstance(e, TapEnchantedPermanent)
+
+
+def test_bridge_tap_enchanted_permanent_no_constructor_args():
+    """Bridge arm pin: the constructed Python effect has no
+    constructor args -- the host is resolved at resolve-time via
+    ``state.resolving_source.attached_to``. Pins the no-args
+    construction contract; the Aura attachment is a state-side
+    concern, not an effect-time field. This is the distinguishing
+    shape vs sister TapTarget(any_creature) and
+    TapAnotherTargetCreature -- those carry a TargetSpec for
+    Decision-pipeline targeting; this one resolves the host
+    implicitly via the source's attachment slot.
+    """
+    from mtg_bot.effects.generic.tap import TapEnchantedPermanent
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "tap_enchanted_permanent"})
+    assert isinstance(e, TapEnchantedPermanent)
+
+
+def test_bridge_tap_enchanted_permanent_equality_default_constructor():
+    """Bridge arm pin: two ``TapEnchantedPermanent()`` instances are
+    equal under dataclass(frozen=True) default __eq__ semantics. Pins
+    the frozen-dataclass equality contract for the hash-based keying
+    used downstream (e.g. de-dup in Sequence composers).
+    """
+    from mtg_bot.effects.generic.tap import TapEnchantedPermanent
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect({"kind": "tap_enchanted_permanent"})
+    e2 = TapEnchantedPermanent()
+    assert e1 == e2
+
+
+def test_bridge_tap_enchanted_permanent_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([TapEnchantedPermanent(), DrawCards(1)])`` translates
+    correctly via the recursive Sequence translator. Pins this arm
+    against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.tap import TapEnchantedPermanent
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "tap_enchanted_permanent"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], TapEnchantedPermanent)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_tap_enchanted_permanent_in_aura_effects():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "tap_enchanted_permanent"}`` on an Aura effects
+    carrier (the canonical Stay-Hidden-Stay-Silent shape). The
+    bridge dict shape must register cleanly on Rust too; this
+    lockstep gate keeps the bridge from drifting away from Rust's
+    parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3728-3730`` accepts the unit-shape dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- TapEnchantedPermanent",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "effects": [{"kind": "tap_enchanted_permanent"}],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
