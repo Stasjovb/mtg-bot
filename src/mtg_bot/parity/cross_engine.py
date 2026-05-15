@@ -5399,6 +5399,83 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DestroyEnchantedPermanent,
         )
         return DestroyEnchantedPermanent()
+    if kind == "grant_keyword_to_target_creature_until_eot":
+        # **Round-27 BLOCKED-BRIDGE-ARM slice -- "target creature
+        # gains <keyword> until end of turn" SINGULAR-keyword family.**
+        # Rust substrate ``Effect::GrantKeywordToTargetCreatureUntilEOT
+        # { keyword: String }`` (cards.rs; parser at cards.rs:4010-4028,
+        # to_dict at cards.rs:5683-5686) shipped on main; this slice
+        # closes the cross-engine bridge gap. Discovered by the round-22
+        # fresh discovery walk (Rust kind emitted by to_dict but no
+        # matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Sister of grant_keywords_to_target_creature_until_eot.**
+        # Same target shape (target creature you control), same lifetime
+        # semantic (UEOT), but the SINGULAR variant carries one keyword
+        # in a String rather than a list. Rust keeps the variants
+        # separate to optimize for the single-keyword case (no Vec
+        # allocation, no list-iteration); the bridge folds the singular
+        # variant into the same Python primitive used by the plural
+        # arm -- ``PumpTargetCreatureUntilEOT(power_bonus=0,
+        # toughness_bonus=0, granted_keywords=frozenset({keyword}),
+        # you_control_only=True, exclude_self=False)`` -- because
+        # Python's PumpTargetCreatureUntilEOT already accepts a
+        # frozenset of keywords (1-element when this arm fires; N-
+        # element when the plural arm fires). The Python class is the
+        # unified pump-with-keyword-grant primitive; both bridge arms
+        # construct it with different keyword cardinalities.
+        #
+        # **Required-fields contract.** Rust's parse_effect arm at
+        # cards.rs:4012-4026 requires ``keyword`` field present AND
+        # non-empty string; missing or empty raises PyValueError.
+        # The bridge mirrors via KeyError on missing ``keyword`` and
+        # ValueError on empty string (matches the round-25
+        # become_land_creature_ueot precedent for required-fields
+        # parity, plus the round-15 grant_keywords plural's empty-
+        # string-rejection rule).
+        #
+        # **No exclude_source rider on the singular variant.** Rust's
+        # singular arm has no ``exclude_source`` field (the plural arm
+        # adds it for the Blooming-Stinger-shape "another target
+        # creature" rider); the bridge constructs Python with
+        # ``exclude_self=False`` to mirror Rust's coverage. Singular-
+        # with-exclude-source would need a Rust schema bump first.
+        #
+        # **Real EoE consumers** unblocked: 2+ EoE oracle hits via
+        # scan -- Dual-Sun Technique ("target creature gains <keyword>
+        # until end of turn") and other single-keyword UEOT-grant
+        # cards. The plural arm's Blooming Stinger uses
+        # exclude_source=True so it stays on the plural arm; the
+        # singular variant is the bare-keyword-grant lane. Cross-
+        # engine end-to-end probe deferred per round-17/18/19
+        # synthetic-only-when-riders-cascade precedent (the
+        # PumpTargetCreatureUntilEOT layer-6 grant + the cleanup-step
+        # revert path are their own surfaces beyond the bare bridge-
+        # arm slice).
+        from mtg_bot.effects.generic.pump import (
+            PumpTargetCreatureUntilEOT,
+        )
+
+        if "keyword" not in eff_dict:
+            raise KeyError(
+                "grant_keyword_to_target_creature_until_eot bridge "
+                "arm: missing required 'keyword' field"
+            )
+        keyword = eff_dict["keyword"]
+        if not isinstance(keyword, str) or not keyword:
+            raise ValueError(
+                f"grant_keyword_to_target_creature_until_eot bridge "
+                f"arm: 'keyword' must be a non-empty string, got "
+                f"{keyword!r} (mirroring Rust parser at cards.rs:"
+                f"4022-4026)"
+            )
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=0,
+            toughness_bonus=0,
+            granted_keywords=frozenset({keyword}),
+            you_control_only=True,
+            exclude_self=False,
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
