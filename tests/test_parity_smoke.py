@@ -45487,6 +45487,143 @@ def test_rust_target_opponent_loses_life_saturating_at_low_life():
     )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- pump_self_until_eot (round 22).
+#
+# Rust's Effect::PumpSelfUntilEOT { power_bonus, toughness_bonus }
+# already shipped end-to-end via round 27 (parse at cards.rs:3562-
+# 3595 + resolve at state_ops_resolve.rs:4280-4305); this slice ships
+# the cross-engine bridge translator + Rust regression pins. The
+# bridge arm closes a gap discovered by the round-22 fresh discovery
+# walk (Rust kind emitted by to_dict but no matching
+# `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumers (oracle scan): 8 EoE cards with self-targeted
+# "+X/+Y until end of turn" ETB / activated abilities (Giant-Growth-
+# shape combat tricks).
+#
+# Pin layout (in test_parity_smoke.py): 3 Rust regression pins
+# (basic +2/+2 ETB self-pump observable via effective_power /
+# effective_toughness + (0,0) silent no-op short-circuit + cross-
+# controller routing -- p1 source on p0's turn). Cross-engine end-
+# to-end probe deferred per round-17/18/19 synthetic-only-when-
+# riders-cascade precedent (the bare bridge arm does NOT carry the
+# granted_keywords rider that typical EoE consumers cascade onto).
+# The 6 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_pump_self_until_eot_state(
+    power_bonus: int = 2,
+    toughness_bonus: int = 2,
+    source_owner: int = 0,
+):
+    """Helper: build a Rust state with a single carrier creature on
+    `source_owner`'s bf carrying an ETB triggered ability that fires
+    PumpSelfUntilEOT(power_bonus, toughness_bonus). Returns
+    (rust_state, source_id).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "PumpSelfUntilEOT-Trigger Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "pump_self_until_eot",
+                        "power_bonus": power_bonus,
+                        "toughness_bonus": toughness_bonus,
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_pump_self_until_eot_basic_plus_two_plus_two():
+    """Rust regression pin: basic +2/+2 self-pump on p0's bf -- the
+    Bear's ETB pumps itself from 2/2 to 4/4 UEOT. Pins
+    state_ops_resolve.rs:4280-4305's source-finder + UeotModifier::
+    PowerToughnessBonus push, observable through effective_power /
+    effective_toughness readers.
+    """
+    rust_state, source_id = _build_rust_pump_self_until_eot_state(
+        power_bonus=2, toughness_bonus=2, source_owner=0,
+    )
+    # Pre-resolve: trigger sits on the stack; printed P/T = 2/2.
+    assert rust_state.stack_size() == 1
+    assert rust_state.effective_power(source_id) == 2
+    assert rust_state.effective_toughness(source_id) == 2
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Post-resolve: UEOT modifier pushed; effective P/T = 4/4.
+    assert rust_state.effective_power(source_id) == 4, (
+        f"PumpSelfUntilEOT(+2/+2) should bump effective_power 2 -> 4; "
+        f"got {rust_state.effective_power(source_id)}"
+    )
+    assert rust_state.effective_toughness(source_id) == 4, (
+        f"PumpSelfUntilEOT(+2/+2) should bump effective_toughness 2 "
+        f"-> 4; got {rust_state.effective_toughness(source_id)}"
+    )
+
+
+def test_rust_pump_self_until_eot_zero_zero_silent_noop():
+    """Rust regression pin: (0, 0) short-circuits in
+    state_ops_resolve.rs:4281-4283 BEFORE the source-finder scan and
+    BEFORE the UeotModifier push. Effective P/T stays at the printed
+    base; no Vec mutation. Pins the warm-path allocation-free
+    optimization documented at cards.rs:4275-4279.
+    """
+    rust_state, source_id = _build_rust_pump_self_until_eot_state(
+        power_bonus=0, toughness_bonus=0, source_owner=0,
+    )
+    rust_state.resolve_top_of_stack()
+    # No bonus applied; effective P/T unchanged at printed 2/2.
+    assert rust_state.effective_power(source_id) == 2
+    assert rust_state.effective_toughness(source_id) == 2
+
+
+def test_rust_pump_self_until_eot_cross_controller_routing():
+    """Rust regression pin: source owned by p1 -- the source-finder
+    walks both players' battlefields per state_ops_resolve.rs:4285-
+    4304 and pumps the p1-side Bear (not a hypothetical p0-side
+    sibling). Pins cross-controller routing (the Rust resolve arm
+    pumps the SOURCE object regardless of active player).
+    """
+    rust_state, source_id = _build_rust_pump_self_until_eot_state(
+        power_bonus=3, toughness_bonus=1, source_owner=1,
+    )
+    rust_state.resolve_top_of_stack()
+    # The p1-side source is pumped: 2 + 3 = 5 power, 2 + 1 = 3
+    # toughness.
+    assert rust_state.effective_power(source_id) == 5, (
+        f"PumpSelfUntilEOT(+3/+1) on p1's source should yield "
+        f"effective_power=5; got {rust_state.effective_power(source_id)}"
+    )
+    assert rust_state.effective_toughness(source_id) == 3, (
+        f"PumpSelfUntilEOT(+3/+1) on p1's source should yield "
+        f"effective_toughness=3; got "
+        f"{rust_state.effective_toughness(source_id)}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
