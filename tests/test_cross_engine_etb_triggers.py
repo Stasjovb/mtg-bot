@@ -7242,5 +7242,157 @@ def test_rust_parser_accepts_damage_each_creature_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_each_opponent_loses_life_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 23 fresh discovery walk) --
+    EachOpponentLosesLife family. Rust ``{"kind":
+    "each_opponent_loses_life", "amount": 2}`` translates to Python
+    ``EachOpponentLosesLife(amount=2)``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3425-3437 (amount
+    required, i32, no default; negatives raise at parse time).
+    Field name ``amount`` agrees on both engines (no rename in the
+    bridge).
+    """
+    from mtg_bot.effects.generic.life import EachOpponentLosesLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_loses_life", "amount": 2}
+    )
+    assert isinstance(e, EachOpponentLosesLife)
+    assert e.amount == 2
+
+
+def test_bridge_each_opponent_loses_life_amount_required_keyerror_when_missing():
+    """Bridge arm pin: missing ``amount`` raises KeyError (mirrors
+    Rust's ``require()`` contract at cards.rs:3431). No default on
+    either side (distinct from sister
+    ``target_opponent_loses_life`` which defaults to 1).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect({"kind": "each_opponent_loses_life"})
+
+
+def test_bridge_each_opponent_loses_life_amount_zero_silent_noop():
+    """Bridge arm pin: amount=0 is legal (silent no-op) on both
+    engines. Rust's resolve at state_ops_resolve.rs:3592-3636's
+    saturating_sub(0) is a no-op; Python's class iterates opponents
+    and subtracts 0 from each life total. Mirrors GainLife /
+    DrawCards / DamageEachOpponent / DiscardSelf zero-amount
+    conventions per the resolve docstring at
+    state_ops_resolve.rs:3587-3589.
+    """
+    from mtg_bot.effects.generic.life import EachOpponentLosesLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_loses_life", "amount": 0}
+    )
+    assert isinstance(e, EachOpponentLosesLife)
+    assert e.amount == 0
+
+
+def test_bridge_each_opponent_loses_life_negative_amount_raises():
+    """Bridge arm pin: amount<0 raises ValueError at translation
+    time (mirrors Rust's parse_effect raise at cards.rs:3432-3436).
+    Rust raises at BOTH parse and resolve as defense-in-depth; the
+    bridge raises early to keep the translation-time contract
+    symmetric across engines.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="non-negative"):
+        _ta_dict_to_python_effect(
+            {"kind": "each_opponent_loses_life", "amount": -1}
+        )
+
+
+def test_bridge_each_opponent_loses_life_amount_two_void_consumer_shape():
+    """Bridge arm pin: ``amount=2`` round-trips correctly -- the EoE
+    Void-replacement consumer's shape ("you draw two cards and each
+    opponent loses 2 life"). Pins that the field translates as i32
+    (no clamp / overflow at the bridge).
+    """
+    from mtg_bot.effects.generic.life import EachOpponentLosesLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_loses_life", "amount": 2}
+    )
+    assert e == EachOpponentLosesLife(amount=2)
+
+
+def test_bridge_each_opponent_loses_life_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DrawCards(2), EachOpponentLosesLife(2)])`` translates
+    correctly via the recursive Sequence translator. Pins this arm
+    against accidental dispatch loss inside Sequence (the Void-
+    consumer body is Sequence-wrapped on the printed surface).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.life import EachOpponentLosesLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "draw_cards", "count": 2},
+                {"kind": "each_opponent_loses_life", "amount": 2},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DrawCards)
+    assert isinstance(e.effects[1], EachOpponentLosesLife)
+    assert e.effects[1].amount == 2
+
+
+def test_rust_parser_accepts_each_opponent_loses_life_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "each_opponent_loses_life", "amount": 2}`` dict shape
+    on a triggered_ability carrier. The bridge dict shape must
+    register cleanly on the Rust side too; this lockstep gate keeps
+    the bridge from drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3425-3437`` accepts the dict shape with
+    required ``amount`` i32 field (negatives raise).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- EachOpponentLosesLife"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"B": 1, "generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_loses_life",
+                    "amount": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

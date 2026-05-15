@@ -47145,6 +47145,144 @@ def test_rust_damage_each_creature_aoe_crosses_both_controllers():
     assert _damage_for_id(rust_state, source_id) == 2
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- each_opponent_loses_life (round 23).
+#
+# Rust's Effect::EachOpponentLosesLife { amount: i32 } already
+# shipped end-to-end via round 26 (parse at cards.rs:3425-3437 +
+# resolve at state_ops_resolve.rs:3592-3636); this slice ships the
+# cross-engine bridge translator + Rust regression pins. The bridge
+# arm closes a gap discovered by the round-22 fresh discovery walk
+# (Rust kind emitted by to_dict but no matching
+# `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumers (oracle scan): 1 EoE card via Void-replacement
+# clause body ("you draw two cards and each opponent loses 2 life").
+#
+# Pin layout (in test_parity_smoke.py): 3 Rust regression pins
+# (basic amount=2 Void-shape direct life loss + amount=0 silent
+# no-op + cross-controller routing -- p1 source on p0's turn).
+# Cross-engine end-to-end probe deferred per round-17/18/19
+# synthetic-only-when-riders-cascade precedent (the Void-replacement
+# composer is its own surface beyond the bare bridge-arm slice).
+# The 6 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_each_opponent_loses_life_state(
+    amount: int = 2, source_owner: int = 0,
+):
+    """Helper: build a Rust state with a single carrier creature on
+    `source_owner`'s bf carrying an ETB triggered ability that fires
+    EachOpponentLosesLife with the given amount. Returns
+    (rust_state, source_id).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "EachOpponentLosesLife-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"B": 1, "generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "each_opponent_loses_life",
+                        "amount": amount,
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_each_opponent_loses_life_basic_amount_two_void_shape():
+    """Rust regression pin: basic amount=2 with p0 as source owner --
+    p1 (the one opponent in 2-player land) loses 2 life via direct
+    saturating_sub. Pins state_ops_resolve.rs:3592-3636's source-
+    finder + `1 - controller` opponent pick + saturating_sub on the
+    opponent's life total. Mirrors the EoE Void-replacement consumer
+    body shape ("each opponent loses 2 life").
+    """
+    rust_state, _source_id = _build_rust_each_opponent_loses_life_state(
+        amount=2, source_owner=0,
+    )
+    assert rust_state.stack_size() == 1
+    life_before = list(rust_state.life_totals)
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    life_after = list(rust_state.life_totals)
+    # p0 (source controller) unchanged; p1 (the one opponent) loses 2.
+    assert life_after[0] == life_before[0], (
+        f"p0 life should be unchanged; before={life_before[0]}, "
+        f"after={life_after[0]}"
+    )
+    assert life_after[1] == life_before[1] - 2, (
+        f"p1 (opponent) should lose 2 life; "
+        f"before={life_before[1]}, after={life_after[1]}"
+    )
+
+
+def test_rust_each_opponent_loses_life_amount_zero_silent_noop():
+    """Rust regression pin: amount=0 silently no-ops (Rust's
+    saturating_sub(0) leaves life unchanged). No life changes on
+    either player. Mirrors GainLife / DrawCards / DamageEachOpponent
+    / DiscardSelf zero-amount conventions per the resolve docstring
+    at state_ops_resolve.rs:3587-3589.
+    """
+    rust_state, _source_id = _build_rust_each_opponent_loses_life_state(
+        amount=0, source_owner=0,
+    )
+    life_before = list(rust_state.life_totals)
+    rust_state.resolve_top_of_stack()
+    life_after = list(rust_state.life_totals)
+    assert life_after == life_before, (
+        f"amount=0 should silently no-op; before={life_before}, "
+        f"after={life_after}"
+    )
+
+
+def test_rust_each_opponent_loses_life_cross_controller_routing():
+    """Rust regression pin: source owned by p1 -- the source-finder
+    walks both players' five tracked zones + stack per
+    state_ops_resolve.rs:3600-3625, finds source.controller=1, picks
+    `1 - controller` = p0 as the one opponent, and p0 loses 2 life.
+    Pins cross-controller routing (p1's ETB targeting p0 even when
+    active_player=p0). Mirrors the round-22 sister
+    target_opponent_loses_life cross-controller pin.
+    """
+    rust_state, _source_id = _build_rust_each_opponent_loses_life_state(
+        amount=2, source_owner=1,
+    )
+    life_before = list(rust_state.life_totals)
+    rust_state.resolve_top_of_stack()
+    life_after = list(rust_state.life_totals)
+    # p1 (source controller) unchanged; p0 (the one opponent of p1)
+    # loses 2.
+    assert life_after[1] == life_before[1], (
+        f"p1 (source controller) life should be unchanged; "
+        f"before={life_before[1]}, after={life_after[1]}"
+    )
+    assert life_after[0] == life_before[0] - 2, (
+        f"p0 (opponent of p1) should lose 2 life; "
+        f"before={life_before[0]}, after={life_after[0]}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
