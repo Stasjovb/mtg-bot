@@ -12338,5 +12338,232 @@ def test_rust_parser_accepts_add_counters_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_put_plus_one_counters_on_self_per_other_creature_or_artifact_basic_translation():
+    """BLOCKED-RUST-EFFECT slice (round 33) -- put a +1/+1 counter on
+    this creature for each OTHER creature and/or artifact you control.
+    Rust ``{"kind": "put_plus_one_counters_on_self_per_other_creature_or_artifact"}``
+    translates to Python
+    ``PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact()``.
+
+    Mirrors Rust's parse_effect arm (added in this slice immediately
+    after the round-32 deal_damage_to_opponent_creature_by_artifact_count
+    arm; unit variant; no fields). Pin verifies the bare-shape
+    translation for the round-33 dynamic-X-from-other-permanent-count
+    Effect arm (Luxknight Breacher's ETB).
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_plus_one_counters_on_self_per_other_creature_or_artifact"}
+    )
+    assert isinstance(e, PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact)
+
+
+def test_bridge_put_plus_one_counters_on_self_per_other_creature_or_artifact_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    the unit-variant precedent (round-32 deal_damage_to_opponent_creature
+    _by_artifact_count / round-31 double_target_creatures_power_ueot /
+    round-30 put_stun_counter_on_tapped_creature) -- unrecognized
+    fields in the dict are ignored, not raised. Notably, an ``amount``
+    key (which the sister PutPlusOneCounterOnSelf arm DOES consume) is
+    silently dropped here -- the dynamic-X is the whole point of this
+    variant, not a static amount.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_plus_one_counters_on_self_per_other_creature_or_artifact",
+            "spurious_field": "ignored",
+            # ``amount`` would be consumed by sister
+            # ``put_plus_one_counter_on_self`` arm; here it's silently
+            # dropped -- the count is dynamic.
+            "amount": 99,
+        }
+    )
+    assert isinstance(e, PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact)
+
+
+def test_bridge_put_plus_one_counters_on_self_per_other_creature_or_artifact_equality_default_constructor():
+    """Bridge arm pin: two ``PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact()``
+    instances are equal under dataclass(frozen=True) default __eq__
+    semantics. Pins the frozen-dataclass equality contract for
+    downstream hash-based keying (e.g. de-dup in Sequence composers).
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {"kind": "put_plus_one_counters_on_self_per_other_creature_or_artifact"}
+    )
+    e2 = PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact()
+    assert e1 == e2
+
+
+def test_bridge_put_plus_one_counters_on_self_per_other_creature_or_artifact_no_target():
+    """Bridge arm pin: Python's
+    PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact carries
+    requires_target() == False (counters.py:393-431 -- @dataclass with
+    no override of requires_target, no targets tuple field; the base
+    Effect.requires_target() returns False when self.targets is empty).
+    "+1/+1 counter on this creature" is a self-counter effect; no
+    explicit target choice. The bridge round-trip pin catches accidental
+    drift to a requires-target shape by asserting requires_target ==
+    False survives translation.
+
+    Distinct from the sister round-32
+    DealDamageToOpponentCreatureByArtifactCount which DOES require a
+    target (opponent-creature pick); this arm targets self via the
+    resolving_source slot.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_plus_one_counters_on_self_per_other_creature_or_artifact"}
+    )
+    assert e.requires_target() is False
+
+
+def test_bridge_put_plus_one_counters_on_self_per_other_creature_or_artifact_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact(), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    the round-33 arm against accidental dispatch loss inside Sequence
+    (mirrors the round-32 by-artifact-count / round-31 double-power /
+    round-30 stun-counter Sequence-composability pins).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "put_plus_one_counters_on_self_per_other_creature_or_artifact"
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact
+    )
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_put_plus_one_counters_on_self_per_other_creature_or_artifact_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "put_plus_one_counters_on_self_per_other_creature_or_artifact"}``
+    on a triggered_ability carrier. Luxknight Breacher's actual
+    real-card consumer mounts this Effect on an ETB trigger (modeling
+    the "enters with N +1/+1 counters" clause as an ETB trigger since
+    the engine does not implement static replacement effects); the
+    lockstep gate doesn't depend on the trigger event -- registering
+    through any abilities carrier exercises the parse_effect arm.
+    Pinning here keeps the Python bridge from drifting away from
+    Rust's parse_effect coverage.
+
+    Mirrors Rust's parse_effect arm added in this slice immediately
+    after the round-32 deal_damage_to_opponent_creature_by_artifact_count
+    arm.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"W": 1, "generic": 2},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_plus_one_counters_on_self_per_other_creature_or_artifact"
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_rejects_put_plus_one_counters_on_self_per_other_creature_or_artifact_with_typo():
+    """Negative lockstep pin: a misspelled kind (e.g.
+    ``put_plus_one_counter_on_self_per_other_creature_or_artifact`` --
+    singular "counter" vs plural "counters") surfaces as ValueError on
+    Rust's parse_effect arm because the new variant isn't registered
+    for that spelling. Pin against accidental schema drift between
+    bridge dict shape and Rust parser's accepted-kinds set.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- typo lockstep",
+        "card_types": ["Creature"],
+        "mana_cost": {"W": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    # Misspelled — singular "counter" instead of plural "counters".
+                    "kind": "put_plus_one_counter_on_self_per_other_creature_or_artifact"
+                },
+            }
+        ],
+    }
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown effect kind"):
+        reg.register_printing(d)
+
+
+def test_rust_parser_accepts_put_plus_one_counters_on_self_per_other_creature_or_artifact_in_cast_effects():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "put_plus_one_counters_on_self_per_other_creature_or_artifact"}``
+    on a cast-spell ``effects`` carrier. Sister of the
+    triggered_ability-carrier lockstep pin -- the same parse_effect
+    arm dispatches both carriers, so any drift surfaces on either
+    pin. Mirrors the round-25/26/27/30/31/32 cast-spell vs trigger
+    lockstep convention.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact (Sorcery)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"W": 1},
+        "effects": [
+            {
+                "kind": "put_plus_one_counters_on_self_per_other_creature_or_artifact"
+            },
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

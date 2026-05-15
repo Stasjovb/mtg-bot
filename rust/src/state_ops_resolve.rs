@@ -4595,6 +4595,83 @@ fn apply_effect(
             }
             // else: no opponent creature → silent fizzle.
         }
+        // BLOCKED-RUST-EFFECT slice (round 33) — put a +1/+1 counter
+        // on the source for each OTHER creature and/or artifact the
+        // source's controller controls. Mirrors Python's
+        // `PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact`
+        // (`counters.py:394` — Luxknight Breacher's ETB).
+        //
+        // **Source-controller resolution.** Battlefield-only scan
+        // (mirrors round-23 `PutPlusOneCounterOnSelf` shape). A
+        // "+1/+1 counter on this creature" effect requires the source
+        // to be on a battlefield zone; if it's gone (counterspelled,
+        // bounced, etc.), silent fizzle.
+        //
+        // **Other-creature-or-artifact count.** Walk the source-
+        // controller's battlefield once; for each obj other than the
+        // source itself, count +1 if `printing.card_types` contains
+        // "Creature" OR "Artifact". Artifact-creatures count once
+        // (the disjunction short-circuits — same semantics as
+        // Python's `is_creature or is_artifact`).
+        //
+        // **Apply.** If count > 0, add `count` to the source's
+        // `counters` field via `saturating_add` on the
+        // `Arc::make_mut`-borrowed bf vec. Mirrors the round-23
+        // `PutPlusOneCounterOnSelf` mutation pattern bit-for-bit.
+        //
+        // **Fizzle paths.** Source not on bf → silent fizzle. Count
+        // ≤ 0 (only the source on the controller's bf) → silent
+        // fizzle (matches Python's `if count <= 0: return`).
+        Effect::PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact => {
+            // Locate the source on a battlefield zone (round-23
+            // PutPlusOneCounterOnSelf shape).
+            let mut found_player: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if player.battlefield.iter().any(|o| o.id == source_obj_id) {
+                    found_player = Some(pidx);
+                    break;
+                }
+            }
+            let pidx = match found_player {
+                Some(p) => p,
+                None => return Ok(()), // source not on bf → silent fizzle
+            };
+            // Count source-controller's other creatures+artifacts.
+            // Mirrors Python's `for o in state.battlefield: if
+            // o.id == source.id: continue; if o.controller_id !=
+            // controller_id: continue; if o.printing.is_creature or
+            // o.printing.is_artifact: count += 1` at counters.py:411-418.
+            let mut count: i32 = 0;
+            for obj in state.players[pidx].battlefield.iter() {
+                if obj.id == source_obj_id {
+                    continue;
+                }
+                let Some(printing) = state.registry.printings.get(obj.printing_id as usize)
+                else {
+                    continue;
+                };
+                let is_creature_or_artifact = printing
+                    .card_types
+                    .iter()
+                    .any(|t| t == "Creature" || t == "Artifact");
+                if is_creature_or_artifact {
+                    count = count.saturating_add(1);
+                }
+            }
+            if count <= 0 {
+                return Ok(()); // no other creatures/artifacts → silent fizzle
+            }
+            // Apply: add `count` +1/+1 counters to source. Mirrors
+            // round-23 PutPlusOneCounterOnSelf mutation pattern.
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == source_obj_id {
+                    obj.counters = obj.counters.saturating_add(count);
+                    break;
+                }
+            }
+        }
         // BLOCKED-RUST-EFFECT slice — Fight effect arm. "Target
         // creature you control fights target creature an opponent
         // controls" (CR 701.12). Both fighters deal damage equal to

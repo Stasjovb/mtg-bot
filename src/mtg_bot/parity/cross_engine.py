@@ -6236,6 +6236,90 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 f"its own bridge arm to a -1/-1 Python primitive."
             )
         return PutPlusOneCounterOnTargetCreature(amount=count)
+    if kind == "put_plus_one_counters_on_self_per_other_creature_or_artifact":
+        # BLOCKED-RUST-EFFECT slice (round 33) -- put a +1/+1 counter
+        # on this creature for each OTHER creature and/or artifact you
+        # control bridge arm. Rust's
+        # ``Effect::PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact``
+        # (cards.rs unit variant added in this slice; parse arm
+        # immediately after the round-32
+        # deal_damage_to_opponent_creature_by_artifact_count arm,
+        # to_dict immediately after the round-32
+        # DealDamageToOpponentCreatureByArtifactCount arm, resolve at
+        # state_ops_resolve.rs immediately after the round-32 resolve
+        # arm following the round-23 PutPlusOneCounterOnSelf bf-scan
+        # shape) mirrors Python's
+        # ``PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact``
+        # (effects/generic/counters.py:394 -- Luxknight Breacher's
+        # ETB, 1 EoE consumer). Rust substrate landed end-to-end IN
+        # this slice; the bridge translator wires the cross-engine
+        # round trip.
+        #
+        # **Field-shape.** Unit variant on both sides; no fields beyond
+        # ``kind``. The Python class has no constructor args
+        # (counters.py:393-394 -- ``@dataclass(frozen=True)`` with only
+        # the inherited ``targets`` tuple, defaulted to empty since
+        # this is a self-counter effect with no targeted permanent).
+        # The dynamic-X is the whole point of the class -- the count
+        # is computed at resolve time, not stored on the variant. The
+        # bridge translator ignores every other key on the dict for
+        # round-trip dict-shape consistency (mirrors the round-32
+        # deal_damage_to_opponent_creature_by_artifact_count /
+        # round-31 double_target_creatures_power_ueot / round-30
+        # put_stun_counter_on_tapped_creature unit-variant precedents).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # locates the source on a bf zone (mirrors round-23
+        # PutPlusOneCounterOnSelf shape -- battlefield-only scan;
+        # silent fizzle if source is gone), walks the source-
+        # controller's bf, counts permanents (other than the source
+        # itself) whose printing's card_types contains "Creature" OR
+        # "Artifact" (saturating to dodge i32 overflow), and adds
+        # that count to the source's `counters` field via
+        # saturating_add. Python's resolve at counters.py:404-425
+        # reads state.resolving_source, walks state.battlefield with
+        # the same self-exclusion + controller_id filter + is_creature
+        # or is_artifact disjunction, and calls add_plus_one_counters
+        # with the same denominator. Both engines converge on the
+        # same count for any synthetic harness with deterministic bf
+        # contents.
+        #
+        # **Source-controller resolution.** Rust uses the round-23
+        # PutPlusOneCounterOnSelf battlefield-only scan precedent
+        # (cross-arm consistency on the `+1/+1 counter on self`
+        # target shape -- the source MUST be on a bf zone for the
+        # apply to do anything). Python uses state.resolving_source,
+        # which is set by the standard effect-resolve harness; both
+        # converge on the source for the count denominator and the
+        # apply target.
+        #
+        # **Fizzle parity.** Both engines silently no-op when the
+        # source is not on a battlefield zone (Python: counters.py:408-410
+        # ``if source is None: return``; Rust: the found_player.is_none()
+        # guard in the resolve arm). Both also silently no-op when
+        # the count is <= 0 -- which happens iff the source is the
+        # only creature/artifact the controller controls (Python:
+        # counters.py:419-420 ``if count <= 0: return``; Rust: the
+        # ``if count <= 0: return Ok(())`` guard in the resolve arm).
+        # Self-exclusion means a controller with only the source on
+        # bf converges on 0.
+        #
+        # **No real-EoE end-to-end probe in this slice.** Luxknight
+        # Breacher's ETB carries a ``creature enters with N +1/+1
+        # counters`` clause that's modeled as an ETB trigger (since
+        # the engine does not implement static replacement effects
+        # for "enters with"); driving the ETB through both engines
+        # requires the ENTERS-trigger event-dispatcher harness which
+        # is review-gated on etb-subject-substrate / dies-event-harness.
+        # Synthetic regression pin (per the round-17 Fight + round-30
+        # stun-counter + round-31 double-power + round-32 by-artifact-
+        # count precedent) documents the bridge plumbing; a real-EoE
+        # Luxknight Breacher probe is a follow-up slice once the
+        # predicate substrate merges.
+        from mtg_bot.effects.generic.counters import (
+            PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
+        )
+        return PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
