@@ -5509,5 +5509,119 @@ def test_rust_parser_accepts_put_plus_one_counter_on_self_in_triggered_ability()
     assert pid == 0
 
 
+def test_bridge_counter_target_spell_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 22 fresh discovery walk) --
+    CounterTargetSpell family. Rust ``{"kind": "counter_target_spell"}``
+    translates to Python ``CounterTargetSpell()`` (default empty
+    filter_types).
+
+    Mirrors Rust's parse_effect arm at cards.rs:3361-3370 (unit
+    variant; no required fields). Pin verifies the bare dict shape
+    constructs the Python class with default filter_types.
+    """
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "counter_target_spell"})
+    assert isinstance(e, CounterTargetSpell)
+    # Default filter_types is empty frozenset (any spell).
+    assert e.filter_types == frozenset()
+
+
+def test_bridge_counter_target_spell_extra_keys_ignored():
+    """Round-trip pin: extra keys on the dict are silently ignored
+    (the Rust variant is a unit type with no fields). Mirrors the
+    Rust parse_effect arm's silent-drop convention for unrecognized
+    keys (cards.rs:3361-3370 docstring). Forward-compatible with
+    future rider-widened Rust variants -- those would land as
+    separate ``kind`` arms on this translator.
+    """
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "counter_target_spell",
+            "filter_types": ["Artifact"],  # ignored on Rust side
+            "ignored_extra_field": "noise",
+        }
+    )
+    assert isinstance(e, CounterTargetSpell)
+    # filter_types stays at default empty -- bridge does NOT pass
+    # the ignored key through, mirroring Rust's first-slice drop.
+    assert e.filter_types == frozenset()
+
+
+def test_bridge_counter_target_spell_equality_with_default_constructor():
+    """Pin: bare-dict translation produces an instance equal to the
+    direct ``CounterTargetSpell()`` constructor. This is the round-
+    trip-equality contract that enables fixture-side comparison via
+    ``assert e == CounterTargetSpell()``. Mirrors the up-to-N-counters
+    sister test pattern (assert e == PutPlusOne...) but for the unit
+    variant.
+    """
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "counter_target_spell"})
+    assert e == CounterTargetSpell()
+
+
+def test_bridge_counter_target_spell_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([CounterTargetSpell(), DrawCards(1)])`` translates
+    correctly via the recursive Sequence translator. Pins this arm
+    against accidental dispatch loss inside Sequence -- the recursive
+    translation walks each child via the same
+    ``_ta_dict_to_python_effect`` so this also exercises the
+    recursive path for the counter-target-spell arm.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "counter_target_spell"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], CounterTargetSpell)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_counter_target_spell_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "counter_target_spell"}`` dict shape on a
+    triggered_ability carrier. The bridge dict shape must register
+    cleanly on the Rust side too; this lockstep gate keeps the
+    bridge from drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms (look_top_n_put_one_in_hand,
+    set_base_pt_until_eot, may_do, up_to_n_counters,
+    put_plus_one_counter_on_self). Rust's parse_effect arm at
+    ``rust/src/cards.rs:3361-3370`` accepts the bare dict shape
+    with no companion fields.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- CounterTargetSpell",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 2},
+        "effects": [{"kind": "counter_target_spell"}],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

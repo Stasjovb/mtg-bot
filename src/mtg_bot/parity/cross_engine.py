@@ -3459,6 +3459,61 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 "parse_effect contract at cards.rs:3296-3300)"
             )
         return PutPlusOneCounterOnSelf(amount=amount)
+    if kind == "counter_target_spell":
+        # **Round-22 BLOCKED-BRIDGE-ARM slice -- "counter target spell"
+        # (CounterTargetSpell family).** Rust substrate
+        # ``Effect::CounterTargetSpell`` (cards.rs:625-style unit
+        # variant; parser at cards.rs:3361-3370, resolve at
+        # state_ops_resolve.rs counter-target-spell arm) has been on
+        # main since round 28 (the round-7 counterspell-primitive
+        # consolidation slice). This slice closes the cross-engine
+        # bridge gap. Discovered by the round-22 fresh discovery walk
+        # (Rust kind emitted by to_dict but no matching
+        # ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors Rust's
+        # parse_effect arm at cards.rs:3361-3370 -- silent-drop
+        # convention for unrecognized keys (extra dict fields are
+        # ignored). Python's ``CounterTargetSpell.filter_types``
+        # (frozenset[str], default frozenset() = "any spell") is
+        # intentionally dropped in the Rust first slice (per the
+        # variant's docstring). Bridge translates bare
+        # ``{"kind": "counter_target_spell"}`` to
+        # ``CounterTargetSpell()`` with default empty filter_types.
+        # Rider-widened variants ("counter target creature spell",
+        # "counter target noncreature spell") would surface as
+        # SEPARATE Rust Effect variants and re-enter the bridge as
+        # new arms -- out of scope for this bare-shape slice.
+        #
+        # **Resolve semantics (parity-relevant).** Both engines
+        # target a stack item. Rust picks the TOP stack item that
+        # isn't this Effect's own source via source_obj_id self-
+        # exclusion; Python's ``legal_targets`` walks state.stack and
+        # yields one ``("stack", i)`` per spell-kind item that isn't
+        # already countered or uncounterable. Empty stack / no legal
+        # target -> silent fizzle on both engines (Python's
+        # ``if not targets: return`` early-exit at stack_control.py:
+        # 198-199 mirrors Rust's empty-stack short-circuit).
+        #
+        # **Uncounterable enforcement (Python-only first slice).**
+        # Python re-checks ``_is_uncounterable`` at resolve time
+        # (stack_control.py:211-216) for spells that gained
+        # protection between targeting and resolution. The Rust
+        # variant intentionally does not enforce ``cant_be_countered``
+        # in the first slice (no Rust ``spell_is_uncounterable`` flag
+        # today). Cross-engine divergence: a probe asserting a
+        # counterspell fizzles against an uncounterable spell would
+        # pass on Python and fail on Rust until the substrate lands.
+        # Out of scope for this bridge-arm slice.
+        #
+        # **Real EoE consumers** unblocked: 2 EoE cards via oracle
+        # scan -- Divert Disaster, Unravel. Cross-engine end-to-end
+        # probe deferred per round-17/18/19 synthetic-only-when-
+        # riders-cascade precedent (the stack-target Decision
+        # pipeline is its own surface beyond the bare bridge-arm
+        # slice).
+        from mtg_bot.effects.generic.stack_control import CounterTargetSpell
+        return CounterTargetSpell()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
