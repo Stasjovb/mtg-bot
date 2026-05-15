@@ -4387,6 +4387,96 @@ fn apply_effect(
                 }
             }
         }
+        // BLOCKED-RUST-EFFECT slice (round 31). Double target
+        // creature's power UEOT — snapshot the chosen target's
+        // effective power AT RESOLVE TIME and push that as a
+        // PowerToughnessBonus { power: snapshot, toughness: 0 }
+        // UEOT modifier. Subsequent counter gains / pumps within the
+        // turn do NOT re-double (mirrors Python's snapshot semantic
+        // at pump.py:234-236).
+        //
+        // Source-controller resolution mirrors the
+        // PumpTargetCreatureUntilEOT shape: prefer the I79
+        // current_resolve_source_controller transient slot, fall
+        // back to scanning every zone for the source object, and
+        // ultimately default to active_player. The target picker
+        // walks the source-controller's bf and picks the FIRST
+        // creature (smallest Vec index — same shape as
+        // PumpTargetCreatureUntilEOT). Snapshot is read via the
+        // private `read_battlefield_creature_power` helper already in
+        // place from the round-17 Fight slice (per the per-slice
+        // file-isolation rule).
+        //
+        // Fizzle cases (silent — no modifier pushed):
+        // - source-controller untrackable → silent fizzle (defaults
+        //   to active_player after the I79 fallback chain so this is
+        //   rare in practice).
+        // - source-controller has no creatures on bf → silent fizzle.
+        // - chosen target's effective power ≤ 0 at resolve time →
+        //   silent fizzle (matches Python's `if snapshot <= 0:
+        //   return` guard at pump.py:235).
+        Effect::DoubleTargetCreaturesPowerUEOT => {
+            // Source-controller resolution (I79 substrate).
+            let src_controller: u8 = state
+                .current_resolve_source_controller
+                .or_else(|| {
+                    for player in &state.players {
+                        for zone in [
+                            &player.hand,
+                            &player.library,
+                            &player.battlefield,
+                            &player.graveyard,
+                            &player.exile,
+                        ] {
+                            if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                                return Some(obj.controller);
+                            }
+                        }
+                    }
+                    None
+                })
+                .unwrap_or(state.active_player);
+            let cidx = src_controller as usize;
+            // Pick the first creature on the source-controller's bf.
+            // Creature-ness gates on the printing's `card_types`
+            // (mirrors PumpTargetCreatureUntilEOT's filter).
+            let target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing = registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(target_id) = target_id else {
+                return Ok(()); // no eligible creature → silent fizzle
+            };
+            // Snapshot effective power at resolve time. Uses the
+            // private helper from the round-17 Fight slice (lives in
+            // this file; the public `state.effective_power` getter
+            // would need the &self/&mut state borrow split that the
+            // per-slice file-isolation rule blocks).
+            let snapshot = read_battlefield_creature_power(state, target_id) as i32;
+            if snapshot <= 0 {
+                return Ok(()); // ≤ 0 power → silent fizzle (no inversion)
+            }
+            // Push the snapshot as a UEOT power-only modifier.
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                        power: snapshot,
+                        toughness: 0,
+                    });
+                    break;
+                }
+            }
+        }
         // BLOCKED-RUST-EFFECT slice — Fight effect arm. "Target
         // creature you control fights target creature an opponent
         // controls" (CR 701.12). Both fighters deal damage equal to
