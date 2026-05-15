@@ -10597,5 +10597,170 @@ def test_rust_parser_accepts_destroy_target_land_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_return_all_creatures_from_gy_to_bf_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 27 fresh discovery walk) --
+    ReturnAllCreaturesFromYourGraveyardToBattlefield mass-reanimation
+    family. Rust ``{"kind":
+    "return_all_creatures_from_your_graveyard_to_battlefield"}``
+    translates to Python
+    ``ReturnAllCreaturesFromYourGraveyardToBattlefield()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3838-3840 (unit
+    variant; no fields). The bridge wires the same Python-side
+    primitive (``effects/generic/graveyard.py:ReturnAllCreaturesFromYourGraveyardToBattlefield``)
+    as the mirror of the Rust resolver.
+    """
+    from mtg_bot.effects.generic.graveyard import (
+        ReturnAllCreaturesFromYourGraveyardToBattlefield,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "return_all_creatures_from_your_graveyard_to_battlefield"}
+    )
+    assert isinstance(e, ReturnAllCreaturesFromYourGraveyardToBattlefield)
+
+
+def test_bridge_return_all_creatures_from_gy_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance. Extra dict fields
+    beyond ``kind`` are silently ignored (mirrors Rust's parse_effect
+    arm at cards.rs:3838-3840 which doesn't read additional keys).
+    Pins the silent-drop convention for unit variants used across
+    sister round-22/23/24/25/26/27 BLOCKED-BRIDGE-ARM unit-shape arms.
+    """
+    from mtg_bot.effects.generic.graveyard import (
+        ReturnAllCreaturesFromYourGraveyardToBattlefield,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "return_all_creatures_from_your_graveyard_to_battlefield",
+            "this_extra_key_should_be_silently_ignored": "ignored",
+        }
+    )
+    assert isinstance(e, ReturnAllCreaturesFromYourGraveyardToBattlefield)
+
+
+def test_bridge_return_all_creatures_from_gy_untargeted_all_pinned():
+    """Bridge arm pin: ``untargeted_all=True`` on the constructed
+    instance. Distinguishes this mass-reanimation arm from the sister
+    single-target ``ReturnCreatureFromYourGraveyardToBattlefield`` arm
+    (``untargeted_all=False`` default). Pins the
+    ``__post_init__``-set flag against accidental drift to the single-
+    target shape.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "return_all_creatures_from_your_graveyard_to_battlefield"}
+    )
+    assert e.untargeted_all is True
+    # Sister-arm divergence pin: also confirm creature/destination flags
+    # set by __post_init__ (the constructor sugar's contract).
+    assert e.creature is True
+    assert e.destination == "battlefield"
+
+
+def test_bridge_return_all_creatures_from_gy_does_not_require_target():
+    """Bridge arm pin: ``requires_target() -> False`` -- mass-
+    reanimation is intrinsically untargeted (the ``untargeted_all=True``
+    flag short-circuits the targeting pipeline; the controller's
+    graveyard is iterated at resolve time, not consulted via Decision
+    targets). Mirrors Rust's resolve which iterates the source-
+    controller's graveyard without consulting any explicit target.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "return_all_creatures_from_your_graveyard_to_battlefield"}
+    )
+    assert e.requires_target() is False
+
+
+def test_bridge_return_all_creatures_from_gy_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed
+    ``ReturnAllCreaturesFromYourGraveyardToBattlefield()``. Pins the
+    dataclass equality semantic for the sugar-class shape.
+    """
+    from mtg_bot.effects.generic.graveyard import (
+        ReturnAllCreaturesFromYourGraveyardToBattlefield,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "return_all_creatures_from_your_graveyard_to_battlefield"}
+    )
+    assert e == ReturnAllCreaturesFromYourGraveyardToBattlefield()
+
+
+def test_bridge_return_all_creatures_from_gy_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([ReturnAllCreaturesFromYourGraveyardToBattlefield(), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    this arm against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.graveyard import (
+        ReturnAllCreaturesFromYourGraveyardToBattlefield,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "return_all_creatures_from_your_graveyard_to_battlefield"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], ReturnAllCreaturesFromYourGraveyardToBattlefield
+    )
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_return_all_creatures_from_gy_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind":
+    "return_all_creatures_from_your_graveyard_to_battlefield"}`` on a
+    triggered_ability carrier. The bridge dict shape must register
+    cleanly on Rust too; this lockstep gate keeps the bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3838-3840`` accepts
+    the unit-variant dict (no fields).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "ReturnAllCreaturesFromYourGraveyardToBattlefield"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"W": 2, "generic": 4},
+        "power": 3,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "return_all_creatures_from_your_graveyard_to_battlefield",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
