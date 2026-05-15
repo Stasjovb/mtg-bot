@@ -1485,6 +1485,42 @@ pub enum Effect {
     /// Source not on bf / no host / target untracked → silent
     /// fizzle.
     TapEnchantedPermanent,
+    /// **Round-30 stun-counter substrate.** Put a stun counter on
+    /// up to one target tapped creature. Mirrors Python's
+    /// `PutStunCounterOnTappedCreature` (`counters.py:592` — Cryogen
+    /// Relic activated half, 1 EoE card).
+    ///
+    /// **First-slice deterministic target.** Walks both players'
+    /// battlefield in ETB-timestamp order and picks the FIRST
+    /// already-tapped creature it finds (regardless of controller —
+    /// the Python class places no controller restriction; "up to one
+    /// target tapped creature"). No eligible target (empty bf or no
+    /// tapped creatures) → silent fizzle. Real MTG lets the controller
+    /// pick any tapped creature; deferred until decision callbacks
+    /// extend to this Effect.
+    ///
+    /// **Mechanism.** On the matched object, increment
+    /// `stun_counters` by 1 via `Arc::make_mut` on the target's
+    /// battlefield Vec. The CR 701.20 untap-step gate is wired in
+    /// `state_ops_steps.rs:untap_all_for_player_inline` (decrement
+    /// instead of untap when `stun_counters > 0`).
+    PutStunCounterOnTappedCreature,
+    /// **Round-30 stun-counter substrate.** Tap target artifact or
+    /// creature an opponent controls and put a stun counter on it.
+    /// Both effects apply to the SAME chosen target. Mirrors Python's
+    /// `TapTargetOpponentPermanentAndStunIt` (`tap.py:217` —
+    /// Mechanozoa ETB, 1 EoE card).
+    ///
+    /// **First-slice deterministic target.** Walks both players'
+    /// battlefield in ETB-timestamp order and picks the FIRST
+    /// (Artifact OR Creature) permanent NOT controlled by the
+    /// source's controller. No eligible target → silent fizzle.
+    ///
+    /// **Mechanism.** Tap the target (idempotent on already-tapped)
+    /// and increment `stun_counters` by 1. Same target for both
+    /// mutations — the Python class's docstring is explicit that
+    /// "both effects apply to the same chosen target".
+    TapTargetOpponentPermanentAndStunIt,
     /// **Round 28 coverage extension.** Exile target creature until
     /// the source leaves the battlefield. Mirrors Python's
     /// `ExileTargetCreatureUntilSourceLeaves` (`effects/generic/exile.py:504`
@@ -3728,6 +3764,18 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
         "tap_enchanted_permanent" => {
             Ok(Effect::TapEnchantedPermanent)
         }
+        "put_stun_counter_on_tapped_creature" => {
+            // Unit variant; no fields. Mirrors Python's
+            // PutStunCounterOnTappedCreature with no constructor args.
+            Ok(Effect::PutStunCounterOnTappedCreature)
+        }
+        "tap_target_opponent_permanent_and_stun_it" => {
+            // Unit variant; no fields. Mirrors Python's
+            // TapTargetOpponentPermanentAndStunIt with no constructor
+            // args. Both the tap and the stun-counter increment apply
+            // to the same chosen target.
+            Ok(Effect::TapTargetOpponentPermanentAndStunIt)
+        }
         "exile_target_creature_until_source_leaves" => {
             Ok(Effect::ExileTargetCreatureUntilSourceLeaves)
         }
@@ -4580,7 +4628,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage"
         ))),
     }
 }
@@ -5632,6 +5680,18 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::TapEnchantedPermanent => {
             d.set_item("kind", "tap_enchanted_permanent")?;
+        }
+        Effect::PutStunCounterOnTappedCreature => {
+            // Round-30 stun-counter substrate. Unit variant; no
+            // payload fields beyond `kind`. Mirrors Python's
+            // PutStunCounterOnTappedCreature dict shape.
+            d.set_item("kind", "put_stun_counter_on_tapped_creature")?;
+        }
+        Effect::TapTargetOpponentPermanentAndStunIt => {
+            // Round-30 stun-counter substrate. Unit variant; no
+            // payload fields beyond `kind`. Mirrors Python's
+            // TapTargetOpponentPermanentAndStunIt dict shape.
+            d.set_item("kind", "tap_target_opponent_permanent_and_stun_it")?;
         }
         Effect::ExileTargetCreatureUntilSourceLeaves => {
             d.set_item("kind", "exile_target_creature_until_source_leaves")?;
