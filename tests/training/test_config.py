@@ -193,6 +193,94 @@ def test_nn_pimc_config_build_with_explicit_hidden_sizes(
     assert isinstance(strategy, PIMC)
 
 
+def test_nn_pimc_config_build_picks_up_structured_meta(
+    tmp_path: Path,
+) -> None:
+    """When ``architecture='structured'``, the build path must
+    discover the trunk hparams from the version's metadata.json
+    sidecar (``training.structured_*``). Without this discovery, a
+    checkpoint trained with non-default dims (emb!=128, layers!=2,
+    hidden!=256) would load against ``StructuredModelConfig``'s
+    defaults and crash with a state_dict shape mismatch on every
+    worker — the v10 regression that motivated this fix."""
+    import json as _json
+
+    from mtg_bot.training.structured_model import (
+        StructuredModel, StructuredModelConfig,
+    )
+
+    # Build a tiny non-default-dim structured model so the loader-
+    # vs-saved-shape distinction is exercised.
+    torch.manual_seed(0)
+    cfg = StructuredModelConfig(
+        emb_dim=64, n_heads=4, n_layers=1, hidden_dim=128,
+        action_history_n=8,
+    )
+    model = StructuredModel(cfg)
+    weights = tmp_path / "v_test" / "weights.pt"
+    weights.parent.mkdir(parents=True)
+    torch.save(model.state_dict(), weights)
+
+    # Write the metadata sidecar in the same shape the trainer would.
+    meta_path = weights.parent / "metadata.json"
+    with meta_path.open("w", encoding="utf-8") as f:
+        _json.dump({
+            "version": "v_test",
+            "architecture": "structured",
+            "action_encoding_version": "canonical_v2",
+            "training": {
+                "structured_emb_dim": 64,
+                "structured_n_heads": 4,
+                "structured_n_layers": 1,
+                "structured_hidden_dim": 128,
+                "structured_action_history_n": 8,
+            },
+        }, f)
+
+    # If the build path ignored the metadata sidecar, NNEvaluator
+    # would construct a default-config 10M-param trunk and torch
+    # would raise on the state_dict load.
+    pimc_cfg = NNPimcConfig(
+        weights_path=str(weights),
+        samples=1, inner_nodes=2, batch_size=1, with_policy=True,
+        architecture="structured",
+        action_encoding_version="canonical_v2",
+    )
+    strategy = pimc_cfg.build(seed=0)
+    assert isinstance(strategy, PIMC)
+
+
+def test_nn_pimc_config_build_picks_up_structured_meta_no_sidecar(
+    tmp_path: Path,
+) -> None:
+    """When ``architecture='structured'`` but no metadata.json sidecar
+    exists, build still goes through the default-config path. The
+    new discovery code must not raise on the missing-sidecar branch
+    — defensive against a fresh registry checkout / hand-crafted
+    weights / etc."""
+    from mtg_bot.training.structured_model import (
+        StructuredModel, StructuredModelConfig,
+    )
+
+    torch.manual_seed(0)
+    # Use the DEFAULT structured config so the load works without a
+    # sidecar telling NNEvaluator otherwise.
+    cfg = StructuredModelConfig()
+    model = StructuredModel(cfg)
+    weights = tmp_path / "v_test" / "weights.pt"
+    weights.parent.mkdir(parents=True)
+    torch.save(model.state_dict(), weights)
+    # Intentionally NO metadata.json next to weights.
+
+    pimc_cfg = NNPimcConfig(
+        weights_path=str(weights),
+        samples=1, inner_nodes=2, batch_size=1, with_policy=True,
+        architecture="structured",
+    )
+    strategy = pimc_cfg.build(seed=0)
+    assert isinstance(strategy, PIMC)
+
+
 def test_nn_pimc_config_to_dict_with_explicit_hidden_sizes(
     tmp_path: Path,
 ) -> None:
