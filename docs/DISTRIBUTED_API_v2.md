@@ -46,32 +46,37 @@ Base URL: `http://<coordinator-host>:5099`
 
 ### `POST /v2/claim`
 
-Worker asks "give me a game to play."
+Worker asks "give me a game to play from this stage."
 
 ```json
 // Request
 {
-  "worker_id": "macbook-pro",
-  "stage_id": "iter_008_self_play_v5"
+  "worker_id": "greggs-macbook-pro",       // matches shards_config worker_url's identity
+  "stage_id": "iter_009_self_play_v6"
 }
 
 // Response 200
 {
-  "claim_id": "iter_008_self_play_v5:game_0042",
+  "claim_id": "iter_009_self_play_v6:0042",
   "game_idx": 42,
   "deck_indices": [1247, 3891],
-  "seed": 8000042,
+  "seed": 9000042,
   "kind": "self_play",
-  "weights": { "p0": "v5", "p1": "v5" }
+  "weights": { "p0": "v6", "p1": "v6" },
+  "nodes": 200,
+  "samples": 4,
+  "per_game_timeout_sec": 600.0,
+  "capture_every": 20,
+  "expires_at": "2026-05-15T18:54:32Z"
 }
 
-// Response 204 (queue empty for that stage)
+// Response 204 (stage drained OR queue exhausted)
+// Response 404 (no such stage_id)
 ```
 
-`claim_id` is the idempotency key for `report_result`. Coordinator
-holds an in-flight set per worker; if a worker calls `/claim` a
-second time without reporting the prior `claim_id`, the prior
-in-flight claim is re-queued (worker crashed or restarted).
+`claim_id` is the idempotency key for `report_result`. `expires_at`
+is `now + claim_ttl_seconds` from the stage spec; after expiry the
+coordinator marks the claim re-claimable.
 
 ### `POST /v2/report_result`
 
@@ -100,6 +105,80 @@ Eval results have the same shape minus the npz field. Replays (when
 captured) are streamed under the same multipart payload, field
 `replay` (`.json.gz`).
 
+### `POST /v2/stage/create`
+
+Orchestrator opens a new stage of work on the coordinator. The
+coordinator allocates the per-stage queue, persists the spec, and
+returns 200 with the canonical `stage_id`. Workers pulling on
+`/v2/claim` for this `stage_id` get one game per call.
+
+```json
+// Request
+{
+  "stage_id": "iter_009_self_play_v6",   // proposed by orchestrator; idempotent
+  "kind": "self_play",                    // "self_play" | "eval"
+  "weights": { "p0": "v6", "p1": "v6" },  // eval uses {"new": "v6", "old": "v5"}
+  "nodes": 200,
+  "samples": 4,
+  "per_game_timeout_sec": 600.0,
+  "capture_every": 20,
+  "claim_ttl_seconds": 1200,
+  "games": [
+    { "game_idx": 0, "deck_indices": [1247, 3891], "seed": 9000000 },
+    { "game_idx": 1, "deck_indices": [42, 8123], "seed": 9000001 },
+    // ... 1000 entries for self-play, 500 for eval
+  ]
+}
+
+// Response 200
+{ "stage_id": "iter_009_self_play_v6", "n_games_queued": 1000 }
+
+// Response 409 if stage_id already exists with a different spec
+```
+
+### `GET /v2/stage/<stage_id>`
+
+Anyone reads aggregate progress for a stage. Used by the
+orchestrator to wait for completion, by the eval watcher to
+compute Wilson CIs for early-stop, by the training UI for the
+headline numbers.
+
+```json
+{
+  "stage_id": "iter_009_self_play_v6",
+  "kind": "self_play",
+  "status": "running",     // "queued" | "running" | "drained" | "complete"
+  "n_games_total": 1000,
+  "n_games_queued": 412,
+  "n_games_in_flight": 24,
+  "n_games_done": 564,
+  "wins_new": null,         // populated for eval stages only
+  "wins_old": null,
+  "draws": 0,
+  "crashed": 1,
+  "timed_out": 4,
+  "started_at": "2026-05-15T18:30:00Z",
+  "drained_at": null,
+  "complete_at": null
+}
+```
+
+### `POST /v2/stage/<stage_id>/close`
+
+Orchestrator (or the early-stop watcher) signals "no more work for
+this stage." Coordinator marks the stage as `drained`: subsequent
+`/v2/claim` calls for this stage return 204 and any pending entries
+in the queue are dropped. Already-in-flight claims still report
+back normally. When in-flight drops to 0, status becomes `complete`.
+
+```json
+// Request
+{ "reason": "early_stop_pass" }   // free-form; logged for forensics
+
+// Response 200
+{ "stage_id": "...", "drained_at": "2026-05-15T19:14:32Z" }
+```
+
 ### `GET /v2/weights/<version>`
 
 Worker fetches the canonical weights file. Coordinator caches the
@@ -121,21 +200,17 @@ Base URL: `http://<worker-host>:5198` (new port for the worker daemon)
 
 ### `POST /v2/start_self_play`
 
-Coordinator dispatches a stage. Worker fetches weights via
-`/v2/weights/<version>` (cache-aware), spins up its `NNEvaluator` +
-SHM server, and starts pulling from `/v2/claim` in the background.
+Orchestrator tells the worker "start pulling work for this stage."
+Worker pre-fetches weights via `/v2/weights/<version>` (cache-aware),
+spins up its `NNEvaluator` + SHM server, and starts a background
+loop that pulls from `coordinator_url`'s `/v2/claim`.
 
 ```json
 // Request
 {
-  "stage_id": "iter_008_self_play_v5",
-  "weights_version": "v5",
-  "nodes": 400,
-  "samples": 4,
-  "per_game_timeout_sec": 600.0,
-  "n_workers": 8,
-  "capture_every": 20,
-  "coordinator_url": "http://desktop-j05412i:5099"
+  "stage_id": "iter_009_self_play_v6",
+  "coordinator_url": "http://desktop-j05412i:5099",
+  "n_workers": 8
 }
 
 // Response 202 (accepted; running in background)
@@ -145,18 +220,20 @@ SHM server, and starts pulling from `/v2/claim` in the background.
 { "error": "worker_busy", "current_state": "SELF_PLAY_RUNNING" }
 ```
 
+The worker doesn't need per-game knobs (nodes / samples / timeouts /
+weights versions) in this request — each `/v2/claim` response carries
+them, since the coordinator's stage spec is the source of truth.
+
 ### `POST /v2/start_eval`
 
-Same shape as `/start_self_play` but with two weight versions:
+Identical shape; coordinator's stage spec just has `kind: "eval"`
+with `weights: {new, old}` instead of `{p0, p1}`.
 
 ```json
 {
-  "stage_id": "eval_v_N_vs_v_M_500g",
-  "new_version": "v10",
-  "old_version": "v5",
-  "nodes": 400,
-  "samples": 4,
-  ...
+  "stage_id": "eval_v6_vs_v5_500g",
+  "coordinator_url": "http://desktop-j05412i:5099",
+  "n_workers": 8
 }
 ```
 
