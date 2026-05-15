@@ -47486,6 +47486,217 @@ def test_rust_untap_target_cross_controller_routing():
     )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- tap_another_target_creature (round 23).
+#
+# Rust's Effect::TapAnotherTargetCreature (unit variant) already
+# shipped end-to-end via round 28 (parse at cards.rs:3835-3837 +
+# resolve at state_ops_resolve.rs:6994-7021 + to_dict at
+# cards.rs:5697-5699); this slice ships the cross-engine bridge
+# translator + Rust regression pins. The bridge arm closes a gap
+# discovered by the round-22 fresh discovery walk (Rust kind emitted
+# by to_dict but no matching `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumer (oracle scan): 1 EoE card -- Starport Security
+# (activated ability "{3}{W}, {T}: Tap another target creature.").
+#
+# Pin layout (in test_parity_smoke.py): 3 Rust regression pins
+# (basic ETB taps the only OTHER creature on bf via
+# bf_iter_etb_sorted skip-source filter + already-tapped target
+# idempotent + source-only fizzles silently because ~IsSource excludes
+# the source itself). Sibling to round-22's
+# tap_target_artifact_or_creature pins -- same find-first/silent-
+# fizzle shape, distinct in the ~IsSource exclusion. Cross-engine
+# end-to-end probe deferred per round-17/18/19 synthetic-only-when-
+# riders-cascade precedent (the targeting Decision pipeline +
+# activated-ability cost-pay surface is its own carrier).
+# The 6 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_tap_another_target_creature_state(source_owner: int = 0):
+    """Helper: build a Rust state with a single carrier creature on
+    `source_owner`'s bf carrying an ETB triggered ability that fires
+    TapAnotherTargetCreature. Returns (rust_state, source_id).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "TapAnotherTargetCreature-Trigger Wizard",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "tap_another_target_creature"},
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_tap_another_target_creature_basic_taps_other():
+    """Rust regression pin: ETB resolution picks the FIRST creature
+    on bf in ETB-timestamp order via bf_iter_etb_sorted, SKIPPING the
+    resolving source (id != source_obj_id), and taps it. Inject a
+    Bear FIRST (lower ETB timestamp), then the source carrier; the
+    Bear is the first non-source creature and gets tapped. Pins
+    state_ops_resolve.rs:6994-7021's filter dispatch +
+    bf_iter_etb_sorted walk + skip-source clause + obj.tapped
+    mutation.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Inject a Bear first (lower ETB timestamp).
+    bear_id = rust_state.register_and_inject_object(
+        {
+            "name": "Untapped Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.is_tapped(bear_id) is False
+    # Inject the source (later ETB timestamp).
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "TapAnotherTargetCreature-Trigger Wizard",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "tap_another_target_creature"},
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_state.resolve_top_of_stack()
+    # Post-resolve: Bear is tapped (it's the FIRST non-source creature
+    # by ETB timestamp), source is NOT tapped (excluded by skip-source).
+    assert rust_state.is_tapped(bear_id) is True, (
+        f"TapAnotherTargetCreature should tap the Bear (first non-"
+        f"source creature by ETB-timestamp); "
+        f"got is_tapped={rust_state.is_tapped(bear_id)}"
+    )
+    assert rust_state.is_tapped(source_id) is False, (
+        f"source should NOT be tapped (excluded by skip-source / "
+        f"~IsSource filter); got is_tapped={rust_state.is_tapped(source_id)}"
+    )
+
+
+def test_rust_tap_another_target_creature_already_tapped_idempotent():
+    """Rust regression pin: already-tapped target is idempotent --
+    the resolve arm sets ``obj.tapped = true`` unconditionally
+    (state_ops_resolve.rs:7013-7018) without checking pre-state, so
+    re-applying to a tapped permanent is a no-op. Pre-tap the Bear,
+    then ETB the source; Bear stays tapped (idempotent re-tap),
+    source untapped (skip-source filter still applies even when the
+    only other creature is already tapped).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    bear_id = rust_state.register_and_inject_object(
+        {
+            "name": "Pre-Tapped Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_state.tap_object(bear_id)
+    assert rust_state.is_tapped(bear_id) is True
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "TapAnotherTargetCreature-Trigger Wizard",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "tap_another_target_creature"},
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_state.resolve_top_of_stack()
+    # Both still: Bear tapped, source untapped.
+    assert rust_state.is_tapped(bear_id) is True
+    assert rust_state.is_tapped(source_id) is False, (
+        f"source should NOT be tapped (skip-source filter excludes "
+        f"the resolving source even when only other creature is "
+        f"already tapped); "
+        f"got is_tapped={rust_state.is_tapped(source_id)}"
+    )
+
+
+def test_rust_tap_another_target_creature_source_only_silent_fizzle():
+    """Rust regression pin: with ONLY the source on the battlefield
+    (no other creatures), the ~IsSource filter excludes the source
+    from its own target pool and the resolution silently fizzles.
+    Pins the silent-fizzle contract (no panic / no exception / no
+    state mutation) at state_ops_resolve.rs:7020 (`else: no eligible
+    creature -> silent fizzle`). This is the distinguishing pin vs
+    sister tap_target_artifact_or_creature, where the source itself
+    IS eligible (no ~IsSource exclusion) and gets self-tapped on the
+    same setup.
+    """
+    rust_state, source_id = (
+        _build_rust_tap_another_target_creature_state(source_owner=0)
+    )
+    assert rust_state.is_tapped(source_id) is False
+    rust_state.resolve_top_of_stack()
+    # Source still untapped -- the only creature on bf is the source
+    # itself, and it's excluded by the ~IsSource filter.
+    assert rust_state.is_tapped(source_id) is False, (
+        f"TapAnotherTargetCreature on a source-only bf should be a "
+        f"silent fizzle (no eligible target after ~IsSource exclusion); "
+        f"got is_tapped={rust_state.is_tapped(source_id)}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
