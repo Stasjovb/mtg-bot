@@ -81,6 +81,69 @@ class Tap(Effect):
 
 
 @dataclass(frozen=True)
+class Untap(Effect):
+    """Unified untap primitive driven by ``targets``.
+
+    Symmetric counterpart to :class:`Tap`: same target-driven shape,
+    inverse mutation (``obj.tapped = False``). Re-verifies each
+    slot's filter at resolution per CR 608.2b before flipping the
+    target's tap state. Idempotent on already-untapped targets
+    (silent no-op, no log entry).
+
+    Bridge-only consumer today: round-23 BLOCKED-BRIDGE-ARM closes
+    the cross-engine bridge for Rust's
+    ``Effect::UntapTarget { target: TargetFilter }``
+    (filter-narrow-by-design to ``any_creature`` per Rust's
+    AnyPlayer-raises contract at state_ops_resolve.rs:1429-1434).
+    Parser-side untap-target-creature shapes route through
+    bespoke / specialized recognizers today; this class exists as
+    the round-trippable target of the cross-engine translator.
+    """
+
+    targets: tuple = ()
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            for slot, chosen in zip(self.targets, targets):
+                if isinstance(slot, SlotRef):
+                    continue
+                if not isinstance(slot, TargetSpec):
+                    continue
+                if not _slot_target_still_legal(state, slot, chosen):
+                    state.log.append(
+                        _fizzle_message(state, chosen, action="untap")
+                    )
+                    continue
+                _, target_id = chosen
+                obj = next(
+                    (o for o in state.battlefield if o.id == target_id),
+                    None,
+                )
+                if obj is None:
+                    continue
+                if not obj.tapped:
+                    continue
+                obj.tapped = False
+                state.log.append(
+                    f"{obj.printing.name} is untapped"
+                )
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return f"untap {_describe_targets(self.targets)}"
+
+
+@dataclass(frozen=True)
 class IfGainedLifeThisTurnUntapSelf(Effect):
     """Ragost, Deft Gastronaut's beginning-of-each-end-step rider:
     "If you gained life this turn, untap Ragost."

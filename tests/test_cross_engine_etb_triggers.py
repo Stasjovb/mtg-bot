@@ -7394,5 +7394,148 @@ def test_rust_parser_accepts_each_opponent_loses_life_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_untap_target_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 23 fresh discovery walk) --
+    UntapTarget family. Rust ``{"kind": "untap_target", "target":
+    {"kind": "any_creature"}}`` translates to Python
+    ``Untap(targets=(TargetSpec(IsCreature()),))``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3237-3244 (target
+    dict required, parsed via parse_target_filter). The bridge wires
+    the same generic ``Untap`` primitive added in this slice as the
+    Python-side mirror of the Rust resolver.
+    """
+    from mtg_bot.effects.generic.tap import Untap
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "untap_target", "target": {"kind": "any_creature"}}
+    )
+    assert isinstance(e, Untap)
+    assert e.targets == (TargetSpec(IsCreature()),)
+
+
+def test_bridge_untap_target_default_target_filter_is_any_creature():
+    """Bridge arm pin: missing ``target`` defaults to
+    ``any_creature`` (mirrors the lenient-default convention used by
+    sister tap_target / destroy_target / exile_target /
+    return_to_hand arms). Bridge consumers SHOULD pass ``target``
+    explicitly for round-trip dict-shape consistency, but the
+    default keeps the arm tolerant of stripped dicts that lose
+    optional fields.
+    """
+    from mtg_bot.effects.generic.tap import Untap
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "untap_target"})
+    assert isinstance(e, Untap)
+    assert e.targets == (TargetSpec(IsCreature()),)
+
+
+def test_bridge_untap_target_any_player_filter_raises():
+    """Bridge arm pin: ``target.kind == "any_player"`` raises
+    ValueError (mirrors Rust's resolve raise at
+    state_ops_resolve.rs:1429-1434 -- "UntapTarget with AnyPlayer
+    target is semantically nonsense"). The bridge front-loads the
+    check rather than waiting for resolve so the contract is
+    symmetric across engines.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="any_player"):
+        _ta_dict_to_python_effect(
+            {"kind": "untap_target", "target": {"kind": "any_player"}}
+        )
+
+
+def test_bridge_untap_target_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed
+    ``Untap(targets=(TargetSpec(IsCreature()),))``. Pins the
+    dataclass equality semantic.
+    """
+    from mtg_bot.effects.generic.tap import Untap
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "untap_target", "target": {"kind": "any_creature"}}
+    )
+    assert e == Untap(targets=(TargetSpec(IsCreature()),))
+
+
+def test_bridge_untap_target_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([Untap(...), DrawCards(1)])`` translates correctly
+    via the recursive Sequence translator. Pins this arm against
+    accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.tap import Untap
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "untap_target",
+                    "target": {"kind": "any_creature"},
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], Untap)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_untap_target_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "untap_target", "target": {"kind": "any_creature"}}``
+    dict shape on a triggered_ability carrier. The bridge dict shape
+    must register cleanly on the Rust side too; this lockstep gate
+    keeps the bridge from drifting away from Rust's parse_effect
+    coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3237-3244`` requires ``target`` and
+    downcasts to a target-filter dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- UntapTarget",
+        "card_types": ["Creature"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "power": 1,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "untap_target",
+                    "target": {"kind": "any_creature"},
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
