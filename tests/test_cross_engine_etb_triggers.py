@@ -10244,5 +10244,206 @@ def test_rust_parser_accepts_destroy_enchanted_permanent_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_grant_keyword_to_target_creature_ueot_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 27 fresh discovery walk) --
+    GrantKeywordToTargetCreatureUntilEOT family (singular keyword
+    variant). Rust ``{"kind":
+    "grant_keyword_to_target_creature_until_eot", "keyword":
+    "deathtouch"}`` translates to Python
+    ``PumpTargetCreatureUntilEOT(power_bonus=0, toughness_bonus=0,
+    granted_keywords=frozenset({"deathtouch"}),
+    you_control_only=True, exclude_self=False)``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:4010-4028 (struct
+    variant; required keyword: String). The bridge folds the
+    singular variant into the same Python primitive used by the
+    plural arm (PumpTargetCreatureUntilEOT) with a 1-element
+    frozenset for keywords.
+    """
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "grant_keyword_to_target_creature_until_eot",
+            "keyword": "deathtouch",
+        }
+    )
+    assert isinstance(e, PumpTargetCreatureUntilEOT)
+    assert e.granted_keywords == frozenset({"deathtouch"})
+    assert e.power_bonus == 0
+    assert e.toughness_bonus == 0
+    assert e.you_control_only is True
+    assert e.exclude_self is False
+
+
+def test_bridge_grant_keyword_to_target_creature_ueot_each_canonical_keyword():
+    """Bridge arm pin: each common MTG evergreen keyword round-trips
+    cleanly through the singular variant. Pins the keyword string
+    pass-through (the bridge does not validate keyword vocab; that's
+    the parser's responsibility on Rust side via grammar; the bridge
+    surfaces the keyword as-is into Python's frozenset).
+    """
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    for kw in (
+        "deathtouch", "first strike", "flying", "haste", "hexproof",
+        "lifelink", "trample", "vigilance", "menace", "reach",
+    ):
+        e = _ta_dict_to_python_effect(
+            {
+                "kind": "grant_keyword_to_target_creature_until_eot",
+                "keyword": kw,
+            }
+        )
+        assert isinstance(e, PumpTargetCreatureUntilEOT)
+        assert e.granted_keywords == frozenset({kw})
+
+
+def test_bridge_grant_keyword_to_target_creature_ueot_exclude_self_defaults_false():
+    """Bridge arm pin: bridged
+    ``PumpTargetCreatureUntilEOT.exclude_self`` defaults to False on
+    the singular arm. The Blooming-Stinger-shape "another target
+    creature" rider rides on the PLURAL variant
+    (grant_keywords_to_target_creature_until_eot) -- the singular
+    arm has no exclude_source field on the Rust side, so the bridge
+    constructs Python with exclude_self=False to mirror the Rust
+    substrate's coverage today.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "grant_keyword_to_target_creature_until_eot",
+            "keyword": "haste",
+        }
+    )
+    assert e.exclude_self is False
+
+
+def test_bridge_grant_keyword_to_target_creature_ueot_you_control_only_true():
+    """Bridge arm pin: bridged
+    ``PumpTargetCreatureUntilEOT.you_control_only`` is True. Mirrors
+    the source-controller-bf scan on Rust's resolve arm (the grant
+    targets a creature you control; opponents' creatures are not
+    legal targets per the variant's name).
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "grant_keyword_to_target_creature_until_eot",
+            "keyword": "indestructible",
+        }
+    )
+    assert e.you_control_only is True
+
+
+def test_bridge_grant_keyword_to_target_creature_ueot_missing_keyword_raises():
+    """Bridge arm pin: missing required 'keyword' field raises
+    KeyError. Mirrors Rust's parse_effect arm at cards.rs:4012-4015
+    which raises PyValueError on missing keyword -- the bridge
+    surfaces the same contract via KeyError (matching the round-25
+    become_land_creature_ueot precedent for required-fields parity).
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    import pytest
+
+    with pytest.raises(KeyError, match="keyword"):
+        _ta_dict_to_python_effect(
+            {"kind": "grant_keyword_to_target_creature_until_eot"}
+        )
+
+
+def test_bridge_grant_keyword_to_target_creature_ueot_empty_keyword_raises():
+    """Bridge arm pin: empty 'keyword' string raises ValueError.
+    Mirrors Rust's parse_effect arm at cards.rs:4022-4026 which
+    raises PyValueError on empty keyword (the variant requires a
+    non-empty keyword name to bind a meaningful grant). The bridge
+    surfaces the same contract.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    import pytest
+
+    with pytest.raises(ValueError, match="non-empty"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "grant_keyword_to_target_creature_until_eot",
+                "keyword": "",
+            }
+        )
+
+
+def test_bridge_grant_keyword_to_target_creature_ueot_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([GrantKeywordToTargetCreatureUEOT, GainLife])``
+    translates correctly via the recursive Sequence translator. Pins
+    this arm against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "grant_keyword_to_target_creature_until_eot",
+                    "keyword": "lifelink",
+                },
+                {"kind": "gain_life", "amount": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], PumpTargetCreatureUntilEOT)
+    assert e.effects[0].granted_keywords == frozenset({"lifelink"})
+    assert isinstance(e.effects[1], GainLife)
+
+
+def test_rust_parser_accepts_grant_keyword_to_target_creature_ueot_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "grant_keyword_to_target_creature_until_eot",
+    "keyword": "deathtouch"}`` on a triggered_ability carrier. The
+    bridge dict shape must register cleanly on Rust too; this
+    lockstep gate keeps the bridge from drifting away from Rust's
+    parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:4010-4028`` accepts
+    the struct-variant dict with required keyword: String (non-empty).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "GrantKeywordToTargetCreatureUntilEOT"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "grant_keyword_to_target_creature_until_eot",
+                    "keyword": "trample",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
