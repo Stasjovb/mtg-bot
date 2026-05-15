@@ -6,17 +6,31 @@ between a **coordinator** (one) and **workers** (N).
 
 ## Roles
 
-- **Coordinator** — owns the work queue, the canonical weights/metadata
-  store, and the per-job lifecycle state. One per cluster. Today this
-  is the same process as `mtg_bot serve` (port 5099 on the master).
-- **Worker** — runs as a persistent daemon on each machine
+Three roles, each with a tightly-scoped responsibility:
+
+- **Coordinator** — passive work queue + result sink + weights store.
+  Stateless about workers (does NOT track which workers exist or whether
+  they're alive). One per cluster. Today this is the same process as
+  `mtg_bot serve` (port 5099 on the master). Coordinator endpoints serve
+  any caller — workers, orchestrators, monitoring tools, the UI.
+- **Worker** — persistent daemon on each machine
   (master + Mac + Win10 + future AWS instances). Single-job-at-a-time
   state machine. Pulls work from the coordinator's queue while a stage
-  is active.
+  is active. Owns its own liveness self-report.
+- **Orchestrator** — the entity that initiates stages (today, the
+  `mtg_bot iterate` CLI). Knows which workers exist (from
+  `shards_config.json`) and POSTs `start_self_play` / `start_eval` to
+  each. Submits the corresponding work batch to the coordinator's
+  queue. NOT a long-lived service — runs as a one-shot CLI per iter.
 
-Each node is "a Flask server with a documented API." Same tailnet
-trust model as today (any IP in the tailnet can hit any endpoint;
-no per-request auth tokens — defer until we add untrusted nodes).
+The coordinator is the only stateful piece; workers and orchestrators
+are pure clients of it. Coordinator-worker is decoupled: a worker can
+crash and restart without the coordinator caring, and the coordinator
+can restart without workers caring (other than retrying the next
+`/claim` after the brief blip).
+
+Each network listener uses the tailnet trust model — any IP in the
+tailnet can hit any endpoint, no per-request auth tokens.
 
 ## Coordinator endpoints
 
@@ -185,17 +199,35 @@ IDLE ─────────────────► STARTING ──► R
 
 Identical shape for the `EVAL_*` states.
 
-### Coordinator's view of a worker
+### Abandonment detection (claim expiration)
 
-Coordinator maintains per-worker state derived from heartbeats:
+The coordinator does NOT track workers and does NOT poll them. Instead,
+each `/claim` carries an **expiration deadline** — if the
+`/report_result` for that claim doesn't arrive within `claim_ttl_seconds`
+(default: 2× `per_game_timeout_sec`, so 1200s for the current
+600s/game cap), the coordinator considers the claim abandoned and
+makes it re-claimable.
 
-- `ALIVE` — heartbeat received in last 30s
-- `STALE` — no heartbeat in 30-90s; still trust in-flight claims
-- `DEAD` — no heartbeat in >90s; re-queue all in-flight claims for
-  this worker, mark stage as "minus one worker"
+This handles every worker-death scenario without a heartbeat poller:
 
-When DEAD transitions back to ALIVE (e.g., worker restart), worker
-re-registers and coordinator resumes assigning work.
+- Worker crashes mid-game → claim TTL expires → re-queued
+- Worker network drops → next `/claim` from a different worker grabs it
+- Worker restarts → its prior claims TTL-expire; it claims fresh
+  work as if new
+
+If a "zombie" worker's old in-flight game eventually completes after
+re-queue, its `/report_result` with the expired `claim_id` is rejected
+with `409 Conflict` — the result has already been redelivered to a
+different worker. Idempotency-on-success is keyed by `claim_id`: a
+second on-time `/report_result` for an already-reported claim is a
+silent 200 (network retry).
+
+### Worker self-reported heartbeat
+
+`GET /v2/heartbeat` on each worker is for **any caller** (training UI,
+monitoring tools, the orchestrator's pre-dispatch check). No node is
+required to poll it — it's just an observability endpoint. The
+coordinator never calls it.
 
 ## File-transfer model
 
@@ -215,37 +247,24 @@ traffic rides in the per-game `/report_result` POST. Avoids the
 
 | Today | v2 REST |
 |---|---|
-| Master SSH-launches `mtg_bot shard` on Mac/Win10 | Coord posts `/start_self_play` to worker daemon |
+| Master SSH-launches `mtg_bot shard` on Mac/Win10 | Orchestrator POSTs `/start_self_play` to worker daemon |
 | Master SCP's `weights.pt` to remote `trained_weights/<v>/` | Worker `GET /v2/weights/<v>` (cached) |
 | Master SCP's `metadata.json` alongside | Worker `GET /v2/weights/<v>/metadata` |
 | Master SCP's npz / replay back from remote | Worker streams in `/report_result` multipart |
-| Inline-Python orphan-sweep over SSH | Coord checks worker heartbeat + state; can issue `/stop` |
-| 90/360-min SSH wall-cap kills mid-stage | Heartbeats run forever; no wall-cap problem |
-| Per-iter SSH spawn / teardown | Worker daemon is persistent (systemd / launchd / Win Task Scheduler) |
+| Inline-Python orphan-sweep over SSH | Orchestrator POSTs `/stop` to the worker (or claim TTL expires) |
+| Coordinator polls remote shard heartbeats | Coordinator stateless re: workers; claim-TTL detects abandonment |
+| 90/360-min SSH wall-cap kills mid-stage | Long-lived daemon; no SSH session, no wall-cap |
+| Per-iter SSH spawn / teardown | Worker daemon is persistent (systemd / launchd / Task Scheduler) |
 
-## Open design points
+## Resolved design decisions
 
-1. **Worker daemon process supervision.** Need a `systemd` unit on
-   Linux, a `launchd` plist on Mac, and a Task Scheduler entry on
-   Windows. One-time per-machine bootstrap. Doc lives in
-   `docs/SETUP_DISTRIBUTED.md`.
-
-2. **TLS / auth.** Tailscale-allowlist on the listener (`--host
-   100.x.x.x` instead of `0.0.0.0`) is enough for our trust model.
-   Public AWS instances reach the coordinator via Tailscale too.
-
-3. **Worker discovery.** Static `shards_config.json` lists worker
-   URLs (same shape as today, just URL instead of SSH host). Future
-   work: dynamic registration via `POST /v2/workers/register`.
-
-4. **Idempotency.** `report_result` is keyed by `claim_id`. Duplicate
-   reports (worker retries on network blip) return 200 with the
-   prior result; coordinator does NOT double-count.
-
-5. **Backward compat.** The SSH path stays runnable until all three
-   on-prem shards have switched. Hard cut after that — the
-   `_push_weights_to_remote` + `_pull_remote_replays` + SSH-launch
-   functions get deleted, not deprecated.
+| Question | Resolution |
+|---|---|
+| Auth model | **Tailscale-allowlist only.** Bind listeners to the tailnet IP. No tokens, no app-layer TLS. Trust model matches today's SSH-over-Tailscale. |
+| Worker daemon supervision | **Native services from day one.** Phase 2 ships with `systemd` unit (Linux), `launchd` plist (Mac), Task Scheduler entry (Windows). Bootstrap doc lives in `docs/SETUP_DISTRIBUTED.md`. |
+| Worker discovery | **Coordinator does not track workers.** Workers know the coordinator URL (config); they POP work from `/claim`. Orchestrator separately knows worker URLs (`shards_config.json` field renamed to `worker_url`) so it can dispatch `start_*` / `stop`. No `/workers/register` endpoint. |
+| Idempotency | `/report_result` keyed by `claim_id`. On-time duplicate = silent 200. Late duplicate (after claim TTL expired) = `409 Conflict`. |
+| Backward compat | **Hard cut after migration.** SSH path stays runnable until local + Mac + Win10 are all on REST. Then `_push_weights_to_remote` / `_pull_remote_replays` / SSH-launch / orphan-sweep-via-SSH get deleted, not deprecated. |
 
 ## Phasing (from scoping discussion)
 
