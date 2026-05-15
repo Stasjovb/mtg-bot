@@ -8487,5 +8487,177 @@ def test_rust_parser_accepts_move_self_counters_to_target_creature_you_control_i
     assert pid == 0
 
 
+def test_bridge_pump_target_artifact_or_creature_until_eot_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 25 fresh discovery walk) --
+    PumpTargetArtifactOrCreatureUntilEOT family. Rust ``{"kind":
+    "pump_target_artifact_or_creature_until_eot", "power_bonus": 2,
+    "toughness_bonus": 2}`` translates to Python
+    ``PumpTargetArtifactOrCreatureUntilEOT(power_bonus=2,
+    toughness_bonus=2)``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3806-3826. The bridge
+    wires the same Python-side primitive
+    (``effects/generic/pump.py:977``) as the mirror of the Rust
+    resolver.
+    """
+    from mtg_bot.effects.generic.pump import (
+        PumpTargetArtifactOrCreatureUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_target_artifact_or_creature_until_eot",
+            "power_bonus": 2,
+            "toughness_bonus": 2,
+        }
+    )
+    assert isinstance(e, PumpTargetArtifactOrCreatureUntilEOT)
+    assert e.power_bonus == 2
+    assert e.toughness_bonus == 2
+
+
+def test_bridge_pump_target_artifact_or_creature_until_eot_missing_keys_default_zero():
+    """Bridge arm pin: missing ``power_bonus`` / ``toughness_bonus``
+    keys default to 0 (mirrors Rust's parse_effect arm at
+    cards.rs:3810-3825 which `match dict.get_item("power_bonus")?` and
+    falls back to 0 when None). Pure no-op on resolve when both are 0.
+    """
+    from mtg_bot.effects.generic.pump import (
+        PumpTargetArtifactOrCreatureUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "pump_target_artifact_or_creature_until_eot"}
+    )
+    assert isinstance(e, PumpTargetArtifactOrCreatureUntilEOT)
+    assert e.power_bonus == 0
+    assert e.toughness_bonus == 0
+
+
+def test_bridge_pump_target_artifact_or_creature_until_eot_negative_bonuses_allowed():
+    """Bridge arm pin: negative bonuses are accepted and round-trip
+    intact (debuff shapes like -3/-3 oracle text). Mirrors Rust's
+    parser which ALLOWS negative i32 values for power_bonus and
+    toughness_bonus -- there is no clamp at parse time, the bonus is
+    applied as-is at resolve.
+    """
+    from mtg_bot.effects.generic.pump import (
+        PumpTargetArtifactOrCreatureUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_target_artifact_or_creature_until_eot",
+            "power_bonus": -3,
+            "toughness_bonus": -3,
+        }
+    )
+    assert isinstance(e, PumpTargetArtifactOrCreatureUntilEOT)
+    assert e.power_bonus == -3
+    assert e.toughness_bonus == -3
+
+
+def test_bridge_pump_target_artifact_or_creature_until_eot_asymmetric_bonus():
+    """Bridge arm pin: power-only buff (+N/+0) and toughness-only buff
+    (+0/+M) shapes round-trip independently. Pins the two-field
+    independence -- the bridge does not couple the two values.
+    """
+    from mtg_bot.effects.generic.pump import (
+        PumpTargetArtifactOrCreatureUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    power_only = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_target_artifact_or_creature_until_eot",
+            "power_bonus": 3,
+        }
+    )
+    assert power_only.power_bonus == 3
+    assert power_only.toughness_bonus == 0
+
+    toughness_only = _ta_dict_to_python_effect(
+        {
+            "kind": "pump_target_artifact_or_creature_until_eot",
+            "toughness_bonus": 5,
+        }
+    )
+    assert toughness_only.power_bonus == 0
+    assert toughness_only.toughness_bonus == 5
+
+
+def test_bridge_pump_target_artifact_or_creature_until_eot_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([PumpTargetArtifactOrCreatureUntilEOT(power_bonus=1,
+    toughness_bonus=1), DrawCards(1)])`` translates correctly via the
+    recursive Sequence translator. Pins this arm against accidental
+    dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.pump import (
+        PumpTargetArtifactOrCreatureUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "pump_target_artifact_or_creature_until_eot",
+                    "power_bonus": 1,
+                    "toughness_bonus": 1,
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], PumpTargetArtifactOrCreatureUntilEOT
+    )
+    assert e.effects[0].power_bonus == 1
+    assert e.effects[0].toughness_bonus == 1
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_pump_target_artifact_or_creature_until_eot_in_effects():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "pump_target_artifact_or_creature_until_eot",
+    "power_bonus": N, "toughness_bonus": M}`` dict shape on an Instant
+    effects carrier. The bridge dict shape must register cleanly on
+    Rust too; this lockstep gate keeps the bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3806-3826`` accepts
+    the struct-variant dict with both fields tolerating defaults.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "PumpTargetArtifactOrCreatureUntilEOT"
+        ),
+        "card_types": ["Instant"],
+        "mana_cost": {"R": 1},
+        "effects": [
+            {
+                "kind": "pump_target_artifact_or_creature_until_eot",
+                "power_bonus": 2,
+                "toughness_bonus": 2,
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

@@ -4758,6 +4758,64 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             MoveSelfCountersToTargetCreatureYouControl,
         )
         return MoveSelfCountersToTargetCreatureYouControl()
+    if kind == "pump_target_artifact_or_creature_until_eot":
+        # **Round-25 BLOCKED-BRIDGE-ARM slice -- "target artifact or
+        # creature gets +N/+M UEOT" (PumpTargetArtifactOrCreature
+        # UntilEOT family, Reroute-Systems-shape broader-filter pump
+        # mode).** Rust substrate
+        # ``Effect::PumpTargetArtifactOrCreatureUntilEOT { power_bonus,
+        # toughness_bonus }`` (cards.rs; parser at cards.rs:3806-3826,
+        # to_dict at cards.rs:5675-5679) shipped via round 28 (broader-
+        # filter pump mode). This slice closes the cross-engine bridge
+        # gap. Discovered by the round-22 fresh discovery walk (Rust
+        # kind emitted by to_dict but no matching
+        # ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape.** Rust's struct-variant carries
+        # ``power_bonus: i32`` + ``toughness_bonus: i32``, both
+        # defaulting to 0 when the dict-key is missing (parser at
+        # cards.rs:3810-3825) and BOTH ALLOWING NEGATIVE values
+        # (debuff shapes). Mirrors sister
+        # ``pump_target_creature_until_eot`` (round 28's narrower-
+        # filter sibling) field-for-field. The bridge mirrors Rust's
+        # missing-key default of 0 via ``eff_dict.get(..., 0)``.
+        #
+        # **Distinct from sister ``pump_target_creature_until_eot``
+        # in target filter.** Sister arm filters to creatures only;
+        # this arm broadens to ``IsArtifact() | IsCreature()`` per
+        # Python's ``PumpTargetArtifactOrCreatureUntilEOT.
+        # __post_init__`` at ``effects/generic/pump.py:989-995``.
+        # Lands and enchantments are NOT eligible -- the OR-filter is
+        # artifact-or-creature specifically. The Pump base class re-
+        # verifies the slot's filter at resolution per CR 608.2b -- a
+        # target that lost both relevant card types between cast and
+        # resolve fails the recheck and the pump is skipped.
+        #
+        # **Resolve semantics (parity-relevant).** Python's class at
+        # ``effects/generic/pump.py:977-1012`` inherits from
+        # ``Pump`` and overrides ``__post_init__`` to inject the
+        # broader filter; resolve walks each TargetSpec slot and
+        # stamps the bonus onto the target's ``temp_*`` fields
+        # (cleared at cleanup) per the unified Pump.resolve at
+        # ``effects/generic/pump.py:55-100``. ``(0, 0)`` short-
+        # circuits before doing the lookup -- pure no-op without
+        # touching state.
+        #
+        # **Real EoE consumers** unblocked: 9+ EoE oracle hits via
+        # scan -- "target artifact or creature ..." pump shapes
+        # (Reroute Systems mode 1, Mental Modulation's pump arm,
+        # Tezzeret/Cruel Captain rider, etc.). Cross-engine end-to-
+        # end probe deferred per round-17/18/19 synthetic-only-when-
+        # riders-cascade precedent (the Pump.resolve filter-recheck
+        # path + the targeting Decision pipeline are their own
+        # surfaces beyond the bare bridge-arm slice).
+        from mtg_bot.effects.generic.pump import (
+            PumpTargetArtifactOrCreatureUntilEOT,
+        )
+        return PumpTargetArtifactOrCreatureUntilEOT(
+            power_bonus=eff_dict.get("power_bonus", 0),
+            toughness_bonus=eff_dict.get("toughness_bonus", 0),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
