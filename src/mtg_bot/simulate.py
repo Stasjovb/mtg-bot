@@ -78,7 +78,7 @@ def setup_game(
     agents: list[Agent],
     decks: list[list[str]],
     seed: Optional[int] = None,
-    enable_mulligans: bool = False,
+    enable_mulligans: bool = True,
     max_mulligans: int = 7,
 ) -> GameState:
     """Build a fresh game state.
@@ -91,13 +91,16 @@ def setup_game(
 
     Mulligan handling
     -----------------
-    Default ``enable_mulligans=False`` deals 7 cards to each player
-    and proceeds — the original Stage-1 simplification. Existing
-    callers (tests, training data-gen, eval) keep their previous
-    behavior unchanged.
+    Default ``enable_mulligans=True`` runs the London-mulligan loop at
+    game start. Production callers (data_gen, self_play, distributed,
+    iterate, eval, capture) all use the default — the legacy
+    ``--enable-mulligans`` CLI flag and its plumbing were removed in
+    feature/always-on-mulligans. The parameter survives as a leaf
+    knob for test fixtures that want to pin "deal 7 and go" semantics
+    (see ``tests/test_mulligan.py``).
 
-    With ``enable_mulligans=True`` each player runs the London-
-    mulligan loop:
+    With ``enable_mulligans=True`` (default) each player runs the
+    London-mulligan loop:
 
     1. Deal 7 cards.
     2. Ask ``agent.choose_mulligan(state, player_id, hand, mulls_taken)``.

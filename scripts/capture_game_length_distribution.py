@@ -115,7 +115,6 @@ def _play_one_game_instrumented(
     hidden_sizes: Optional[tuple[int, ...]],
     deck_pool: list,
     decision_cap: int,
-    enable_mulligans: bool,
     tail_keep_last: int,
 ) -> dict[str, Any]:
     """Play one self-play game and return a result dict with rich
@@ -168,7 +167,6 @@ def _play_one_game_instrumented(
         ],
         decks=[deck_p0.cards, deck_p1.cards],
         seed=engine_seed,
-        enable_mulligans=enable_mulligans,
     )
     if game_idx % 2 == 1:
         engine.active_player_idx = 1
@@ -265,7 +263,7 @@ def _worker(args: dict) -> dict[str, Any]:
     ``data_gen._play_one_parallel_game``.
 
     ``args`` carries everything needed per task: game_idx, base_seed,
-    decision_cap, enable_mulligans, tail_keep_last, deck_pool,
+    decision_cap, tail_keep_last, deck_pool,
     weights_path, hidden_sizes. The deck pool / weights path are
     re-shipped on every task pickle (3MB-ish per task) to mirror
     the production ``data_gen.generate_training_data_parallel``
@@ -335,7 +333,6 @@ def main() -> None:
                    help="Games >= this decision count get their last-K "
                         "decision reprs preserved in the JSON.")
     p.add_argument("--tail-keep-last", type=int, default=100)
-    p.add_argument("--enable-mulligans", action="store_true", default=True)
     p.add_argument("--bootstrap-version", default="v12")
     p.add_argument("--registry-root", type=Path,
                    default=Path("../../mtg-bot/trained_weights"))
@@ -386,7 +383,6 @@ def main() -> None:
             "game_idx": i,
             "base_seed": args.base_seed,
             "decision_cap": args.decision_cap,
-            "enable_mulligans": args.enable_mulligans,
             "tail_keep_last": args.tail_keep_last,
             "deck_pool": deck_pool,
             "weights_path": weights_path,

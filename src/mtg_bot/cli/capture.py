@@ -116,7 +116,6 @@ def main(argv=None) -> None:  # pragma: no cover
             base_seed=args.seed,
             n_workers=args.workers,
             with_policy=True,
-            enable_mulligans=False,
             per_game_timeout_sec=args.per_game_timeout_sec,
             deck_pool=deck_pool,
             replay_config=replay_cfg,

@@ -48,7 +48,6 @@ def main() -> int:
             sample_every=1,
             replay_config=cfg,
             deck_pool=None,
-            enable_mulligans=False,
         )
         files = sorted(Path(tmp).glob("*.json.gz"))
         if not files:

@@ -132,7 +132,6 @@ def main() -> None:
     p.add_argument("--timeout-sec", type=float, default=600.0)
     p.add_argument("--nn-version", default=None)
     p.add_argument("--registry-root", type=Path, default=Path("trained_weights"))
-    p.add_argument("--enable-mulligans", action="store_true")
     args = p.parse_args()
 
     meta = _resolve_meta(args)
@@ -162,10 +161,8 @@ def main() -> None:
     print(f"# base_seed={base_seed} game_idx={game_idx} "
           f"engine_seed={engine_seed} timeout={args.timeout_sec}s")
 
-    enable_mulligans = (
-        args.enable_mulligans
-        or bool(meta.get("enable_mulligans", False))
-    )
+    # Mulligans are always on post-feature/always-on-mulligans;
+    # setup_game's default fires.
     engine = setup_game(
         [
             RandomAgent(rng=random.Random(engine_seed + 1)),
@@ -173,7 +170,6 @@ def main() -> None:
         ],
         decks=[deck_p0.cards, deck_p1.cards],
         seed=engine_seed,
-        enable_mulligans=enable_mulligans,
     )
     if game_idx % 2 == 1:
         engine.active_player_idx = 1

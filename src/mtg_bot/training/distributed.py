@@ -881,7 +881,6 @@ class SelfPlayJobSpec:
     inner_nodes: int
     hidden_sizes: Optional[tuple[int, ...]]
     base_seed: int
-    enable_mulligans: bool
     per_game_timeout_sec: Optional[float]
     deck_pool_path: Optional[str] = None
     with_policy: bool = True
@@ -966,7 +965,6 @@ class SelfPlayJobSpec:
                 else None
             ),
             "base_seed": self.base_seed,
-            "enable_mulligans": self.enable_mulligans,
             "per_game_timeout_sec": self.per_game_timeout_sec,
             "deck_pool_path": _posix(self.deck_pool_path),
             "with_policy": self.with_policy,
@@ -1006,7 +1004,6 @@ class SelfPlayJobSpec:
             inner_nodes=int(d["inner_nodes"]),
             hidden_sizes=tuple(hs) if hs is not None else None,
             base_seed=int(d["base_seed"]),
-            enable_mulligans=bool(d["enable_mulligans"]),
             per_game_timeout_sec=d.get("per_game_timeout_sec"),
             deck_pool_path=d.get("deck_pool_path"),
             with_policy=bool(d.get("with_policy", True)),
@@ -1051,7 +1048,6 @@ class EvalJobSpec:
     inner_nodes: int
     hidden_sizes: Optional[tuple[int, ...]]
     base_seed: int
-    enable_mulligans: bool
     per_game_timeout_sec: Optional[float]
     deck_pool_path: Optional[str] = None
     capture_every: int = 0
@@ -1109,7 +1105,6 @@ class EvalJobSpec:
                 else None
             ),
             "base_seed": self.base_seed,
-            "enable_mulligans": self.enable_mulligans,
             "per_game_timeout_sec": self.per_game_timeout_sec,
             "deck_pool_path": _posix(self.deck_pool_path),
             "capture_every": self.capture_every,
@@ -1154,7 +1149,6 @@ class EvalJobSpec:
             inner_nodes=int(d["inner_nodes"]),
             hidden_sizes=tuple(hs) if hs is not None else None,
             base_seed=int(d["base_seed"]),
-            enable_mulligans=bool(d["enable_mulligans"]),
             per_game_timeout_sec=d.get("per_game_timeout_sec"),
             deck_pool_path=d.get("deck_pool_path"),
             capture_every=int(d.get("capture_every", 0)),
@@ -1380,7 +1374,6 @@ def run_shard_local(
                 with_policy=True,
                 decision_cap=spec.decision_cap,
                 sample_every=spec.sample_every,
-                enable_mulligans=spec.enable_mulligans,
                 per_game_timeout_sec=spec.per_game_timeout_sec,
                 progress=progress,
                 deck_pool=deck_pool,
@@ -3250,19 +3243,20 @@ def run_shard_pull(
         )
 
     def _build_args(game_idx: int) -> tuple:
-        # 14-element form so the worker's ``_play_one_parallel_game``
+        # 13-element form so the worker's ``_play_one_parallel_game``
         # picks up the spec's slot-mapping convention rather than
         # silently defaulting to v1, plus the structured-token writer
         # flag (Step 1 NN representation roadmap). ``None`` flows
         # through as v1 there too — keeps the existing v13/v15/v16
         # behavior intact; ``write_structured_tokens=False`` (the
         # default on every existing v* spec) preserves the legacy
-        # npz schema.
+        # npz schema. The legacy ``enable_mulligans`` slot was removed
+        # by feature/always-on-mulligans — mulligans are always on now.
         return (
             game_idx, factory, factory, spec.base_seed,
             spec.decision_cap, spec.sample_every,
             replay_config, deck_pool,
-            spec.enable_mulligans, spec.per_game_timeout_sec,
+            spec.per_game_timeout_sec,
             hang_dump_dir, spec.heuristics,
             spec.action_encoding_version or "positional_v1",
             spec.write_structured_tokens,
@@ -3912,7 +3906,7 @@ def run_shard_eval_pull(
         return (
             game_idx, p0_factory, p1_factory, spec.base_seed,
             4000,  # decision_cap, mirrors run_match's default
-            spec.enable_mulligans, spec.per_game_timeout_sec,
+            spec.per_game_timeout_sec,
             deck_pool, replay_config, hang_dump_dir,
             spec.heuristics, hb_path,
         )

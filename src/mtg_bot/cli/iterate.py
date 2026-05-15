@@ -200,7 +200,6 @@ def _self_play_config_dict(
         "samples": args.samples,
         "nodes": args.nodes,
         "seed": cycle_seed,
-        "enable_mulligans": args.enable_mulligans,
         "deck_pool": str(args.deck_pool),
         "distributed": distributed,
     }
@@ -497,7 +496,6 @@ def _self_play(  # pragma: no cover
     seed: int,
     n_workers: int | None,
     output: Path,
-    enable_mulligans: bool = False,
     per_game_timeout_sec: float | None = None,
     hidden_sizes: tuple[int, ...] | None = None,
     architecture: str | None = None,
@@ -579,7 +577,6 @@ def _self_play(  # pragma: no cover
             base_seed=seed,
             n_workers=n_workers,
             with_policy=True,
-            enable_mulligans=enable_mulligans,
             per_game_timeout_sec=per_game_timeout_sec,
             progress=progress,
             deck_pool=deck_pool,
@@ -635,7 +632,6 @@ def _self_play_distributed(  # pragma: no cover
     samples: int,
     nodes: int,
     seed: int,
-    enable_mulligans: bool,
     per_game_timeout_sec: float | None,
     hidden_sizes: tuple[int, ...] | None,
     architecture: str | None,
@@ -682,7 +678,6 @@ def _self_play_distributed(  # pragma: no cover
         inner_nodes=nodes,
         hidden_sizes=hidden_sizes,
         base_seed=seed,
-        enable_mulligans=enable_mulligans,
         per_game_timeout_sec=per_game_timeout_sec,
         deck_pool_path=str(deck_pool_path) if deck_pool_path else None,
         with_policy=True,
@@ -743,7 +738,6 @@ def _eval_match_distributed(  # pragma: no cover
     samples: int,
     nodes: int,
     seed: int,
-    enable_mulligans: bool,
     per_game_timeout_sec: float | None,
     hidden_sizes: tuple[int, ...] | None,
     new_architecture: str | None,
@@ -784,7 +778,6 @@ def _eval_match_distributed(  # pragma: no cover
         inner_nodes=nodes,
         hidden_sizes=hidden_sizes,
         base_seed=seed,
-        enable_mulligans=enable_mulligans,
         per_game_timeout_sec=per_game_timeout_sec,
         deck_pool_path=str(deck_pool_path) if deck_pool_path else None,
         capture_every=capture_every,
@@ -985,7 +978,6 @@ def _eval_match(  # pragma: no cover
     nodes: int,
     n_workers: int | None,
     seed: int,
-    enable_mulligans: bool = False,
     per_game_timeout_sec: float | None = None,
     hidden_sizes: tuple[int, ...] | None = None,
     new_architecture: str | None = None,
@@ -1081,7 +1073,6 @@ def _eval_match(  # pragma: no cover
         n_games=n_games,
         base_seed=seed,
         n_workers=n_workers,
-        enable_mulligans=enable_mulligans,
         per_game_timeout_sec=per_game_timeout_sec,
         progress=progress,
         deck_pool=deck_pool,
@@ -1325,21 +1316,6 @@ def main(argv=None) -> None:  # pragma: no cover
             "dir. Useful once iterate_data/ has accumulated hundreds "
             "of shards and per-iteration train wall-time is "
             "dominated by data load."
-        ),
-    )
-    parser.add_argument(
-        "--enable-mulligans", action="store_true",
-        help=(
-            "Run the London-mulligan loop at game start during "
-            "BOTH self-play data-gen and the acceptance-gate eval "
-            "match. Each player's seat-level fallback agent uses "
-            "the extreme-only heuristic from ``mtg_bot.mulligan`` "
-            "(mulligan only on 0-land or all-land hands). Reduces "
-            "the largest MTG variance source so self-play data is "
-            "less polluted by mana-screw / flood losses and the "
-            "eval-gate signal stabilizes faster. Default off — "
-            "matches the iteration-loop's prior deal-7-and-go "
-            "behavior so v6/v7-onwards comparisons stay clean."
         ),
     )
     parser.add_argument(
@@ -2148,7 +2124,6 @@ def main(argv=None) -> None:  # pragma: no cover
                     seed=cycle_seed,
                     n_workers=args.workers,
                     output=data_path,
-                    enable_mulligans=args.enable_mulligans,
                     per_game_timeout_sec=args.per_game_timeout_self_play_sec,
                     hidden_sizes=iter_hidden_sizes,
                     architecture=best_architecture,
@@ -2177,7 +2152,6 @@ def main(argv=None) -> None:  # pragma: no cover
                     samples=args.samples,
                     nodes=args.nodes,
                     seed=cycle_seed,
-                    enable_mulligans=args.enable_mulligans,
                     per_game_timeout_sec=args.per_game_timeout_self_play_sec,
                     hidden_sizes=iter_hidden_sizes,
                     architecture=best_architecture,
@@ -2428,7 +2402,6 @@ def main(argv=None) -> None:  # pragma: no cover
                         nodes=args.nodes,
                         n_workers=args.workers,
                         seed=cycle_seed + 7777,
-                        enable_mulligans=args.enable_mulligans,
                         per_game_timeout_sec=args.per_game_timeout_eval_sec,
                         hidden_sizes=iter_hidden_sizes,
                         new_architecture=iter_architecture,
@@ -2454,7 +2427,6 @@ def main(argv=None) -> None:  # pragma: no cover
                             samples=args.samples,
                             nodes=args.nodes,
                             seed=cycle_seed + 7777,
-                            enable_mulligans=args.enable_mulligans,
                             per_game_timeout_sec=args.per_game_timeout_eval_sec,
                             hidden_sizes=iter_hidden_sizes,
                             new_architecture=iter_architecture,

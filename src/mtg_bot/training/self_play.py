@@ -116,7 +116,6 @@ def run_match(
     n_games: int,
     base_seed: int = 0,
     decision_cap: int = _DEFAULT_DECISION_CAP,
-    enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
     deck_pool: Optional[list[Deck]] = None,
     replay_config: Optional[ReplayCaptureConfig] = None,
@@ -142,7 +141,7 @@ def run_match(
     results = [
         _play_one_match_game(
             game_idx, p0_factory, p1_factory, base_seed, decision_cap,
-            enable_mulligans, per_game_timeout_sec, deck_pool,
+            per_game_timeout_sec, deck_pool,
             replay_config, hang_dump_dir, heuristics,
         )
         for game_idx in range(n_games)
@@ -158,7 +157,6 @@ def run_match_parallel(
     decision_cap: int = _DEFAULT_DECISION_CAP,
     n_workers: Optional[int] = None,
     progress: Optional[EvalProgress] = None,
-    enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
     deck_pool: Optional[list[Deck]] = None,
     replay_config: Optional[ReplayCaptureConfig] = None,
@@ -210,7 +208,7 @@ def run_match_parallel(
 
     args_list = [
         (i, p0_factory, p1_factory, base_seed, decision_cap,
-         enable_mulligans, per_game_timeout_sec, deck_pool,
+         per_game_timeout_sec, deck_pool,
          replay_config, hang_dump_dir, heuristics)
         for i in range(n_games)
     ]
@@ -490,7 +488,6 @@ def _play_one_match_game(
     p1_factory: StrategyFactory,
     base_seed: int,
     decision_cap: int,
-    enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
     deck_pool: Optional[list[Deck]] = None,
     replay_config: Optional[ReplayCaptureConfig] = None,
@@ -533,7 +530,6 @@ def _play_one_match_game(
         seat_agents,
         decks=[deck_p0.cards, deck_p1.cards],
         seed=engine_seed,
-        enable_mulligans=enable_mulligans,
     )
     adapter = MtgGameStateAdapter(
         engine, expose_combat_decisions=True,
@@ -604,7 +600,6 @@ def _play_one_match_game(
                     extra={
                         "phase": "eval",
                         "decision_cap": decision_cap,
-                        "enable_mulligans": enable_mulligans,
                         "per_game_timeout_sec": per_game_timeout_sec,
                         "progress": progress.snapshot(),
                     },

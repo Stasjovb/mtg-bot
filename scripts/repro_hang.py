@@ -71,8 +71,6 @@ def main() -> None:
     p.add_argument("--nn-version", default=None,
                    help="Registered version (e.g. v6). Omit for heuristic-PIMC.")
     p.add_argument("--registry-root", type=Path, default=Path("trained_weights"))
-    p.add_argument("--enable-mulligans", action="store_true",
-                   help="Match iterate's enable_mulligans=True flag.")
     args = p.parse_args()
 
     meta = _resolve_meta(args)
@@ -102,10 +100,8 @@ def main() -> None:
     print(f"# base_seed={base_seed} game_idx={game_idx} "
           f"engine_seed={engine_seed} timeout={args.timeout_sec}s")
 
-    enable_mulligans = (
-        args.enable_mulligans
-        or bool(meta.get("enable_mulligans", False))
-    )
+    # Mulligans are always on post-feature/always-on-mulligans;
+    # setup_game's default fires.
     engine = setup_game(
         [
             RandomAgent(rng=random.Random(engine_seed + 1)),
@@ -113,7 +109,6 @@ def main() -> None:
         ],
         decks=[deck_p0.cards, deck_p1.cards],
         seed=engine_seed,
-        enable_mulligans=enable_mulligans,
     )
     adapter = MtgGameStateAdapter(engine, expose_combat_decisions=True)
     strategies = {

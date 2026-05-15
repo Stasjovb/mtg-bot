@@ -309,9 +309,10 @@ class Agent:
         """Pre-game London-mulligan decision: should ``player_id``
         send the current 7-card hand back and redraw?
 
-        Called by ``simulate.setup_game(enable_mulligans=True)``
-        immediately after the initial 7 are dealt and again after
-        each mulligan redraw. ``mulls_taken`` is the number of
+        Called by ``simulate.setup_game`` (mulligans are always on in
+        production callers; the parameter survives only as a leaf knob
+        for test fixtures) immediately after the initial 7 are dealt
+        and again after each mulligan redraw. ``mulls_taken`` is the number of
         previous mulligans on this hand (0 on first decision, 1 after
         one mull, etc.).
 
@@ -416,10 +417,11 @@ class RandomAgent(Agent):
         # Use the same extreme-only heuristic DefaultTacticalAgent uses
         # so the eval / data-gen pipelines (which pass RandomAgent
         # instances to setup_game as the seat-level fallback agent) get
-        # mulligan behavior when ``enable_mulligans=True``. Random
-        # mulligan choices would add noise without information; the
-        # heuristic is deterministic but cheap and hits the worst-case
-        # opening hands (0 or all lands).
+        # mulligan behavior. Mulligans are always on in production
+        # callers post-feature/always-on-mulligans. Random mulligan
+        # choices would add noise without information; the heuristic is
+        # deterministic but cheap and hits the worst-case opening hands
+        # (0 or all lands).
         from mtg_bot.mulligan import heuristic_mulligan_decision
         return heuristic_mulligan_decision(hand, mulls_taken)
 

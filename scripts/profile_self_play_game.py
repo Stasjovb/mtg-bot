@@ -181,7 +181,6 @@ def _run_one_game(
         decision_cap=decision_cap,
         sample_every=1,
         deck_pool=deck_pool,
-        enable_mulligans=True,
         per_game_timeout_sec=None,
     )
     wall = time.perf_counter() - start

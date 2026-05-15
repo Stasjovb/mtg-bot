@@ -117,10 +117,6 @@ def main(argv=None) -> None:
         ),
     )
     parser.add_argument(
-        "--enable-mulligans", action="store_true",
-        help="Allow opening-hand mulligans (default off — eval only).",
-    )
-    parser.add_argument(
         "--capture-every", type=int, default=0,
         help=(
             "Save annotated replay files every Nth game. Default 0 = "
@@ -228,7 +224,6 @@ def main(argv=None) -> None:
         inner_nodes=args.nodes,
         hidden_sizes=hidden_sizes,
         base_seed=args.seed,
-        enable_mulligans=args.enable_mulligans,
         per_game_timeout_sec=args.per_game_timeout_sec,
         deck_pool_path=str(args.deck_pool),
         capture_every=args.capture_every,
@@ -269,7 +264,6 @@ def main(argv=None) -> None:
         "deck_pool": args.deck_pool,
         "queue_url": args.queue_url,
         "per_game_timeout_sec": args.per_game_timeout_sec,
-        "enable_mulligans": args.enable_mulligans,
         "hang_dump_dir": str(args.hang_dump_dir) or None,
     }
     t0 = time.perf_counter()

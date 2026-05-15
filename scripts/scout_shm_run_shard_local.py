@@ -78,7 +78,6 @@ def _run_one(
             inner_nodes=nodes,
             hidden_sizes=hidden_sizes,
             base_seed=0,
-            enable_mulligans=False,
             per_game_timeout_sec=300,
             with_policy=True,
             use_shm_server=use_shm,

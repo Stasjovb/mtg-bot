@@ -358,7 +358,6 @@ def generate_training_data(
     deck_pool: Optional[list[Deck]] = None,
     with_policy: bool = False,
     progress: Optional[DataGenProgress] = None,
-    enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
     heuristics: Optional[HeuristicsConfig] = None,
@@ -414,7 +413,6 @@ def generate_training_data(
             decision_cap=decision_cap, sample_every=sample_every,
             replay_config=replay_config,
             deck_pool=deck_pool,
-            enable_mulligans=enable_mulligans,
             per_game_timeout_sec=per_game_timeout_sec,
             hang_dump_dir=hang_dump_dir,
             heuristics=heuristics,
@@ -457,7 +455,6 @@ def generate_training_data_parallel(
     deck_pool: Optional[list[Deck]] = None,
     with_policy: bool = False,
     progress: Optional[DataGenProgress] = None,
-    enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
     heuristics: Optional[HeuristicsConfig] = None,
@@ -539,7 +536,7 @@ def generate_training_data_parallel(
         (
             i, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
-            enable_mulligans, per_game_timeout_sec, hang_dump_dir,
+            per_game_timeout_sec, hang_dump_dir,
             heuristics, action_encoding_version, structured_tokens,
         )
         for i in range(n_games)
@@ -703,26 +700,23 @@ def _play_one_parallel_game(
     # ``action_encoding_version`` was appended to the args tuple in
     # ``generate_training_data_parallel`` (feature/iterate-v2-wiring) so
     # iterate's bootstrap-metadata read flows all the way through to the
-    # per-game policy-target encoder. Older callers that pre-date the
-    # field (none in tree, but for forward-compat with hand-built tuples
-    # in tests) fall through to the v1 default.
-    #
-    # ``structured_tokens`` was appended (this slice) to the same tuple
-    # so ``generate_training_data_parallel`` can opt-in to the Step 1
-    # structured-token writer path without breaking existing 12-/13-
-    # element callers.
-    if len(args) == 14:
+    # per-game policy-target encoder. ``structured_tokens`` was appended
+    # next (Step 1 NN-representation roadmap). The legacy
+    # ``enable_mulligans`` field was removed by
+    # feature/always-on-mulligans — mulligans are always on now and the
+    # tuple shape lost an element.
+    if len(args) == 13:
         (
             game_idx, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
-            enable_mulligans, per_game_timeout_sec, hang_dump_dir,
+            per_game_timeout_sec, hang_dump_dir,
             heuristics, action_encoding_version, structured_tokens,
         ) = args
-    elif len(args) == 13:
+    elif len(args) == 12:
         (
             game_idx, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
-            enable_mulligans, per_game_timeout_sec, hang_dump_dir,
+            per_game_timeout_sec, hang_dump_dir,
             heuristics, action_encoding_version,
         ) = args
         structured_tokens = False
@@ -730,7 +724,7 @@ def _play_one_parallel_game(
         (
             game_idx, p0_factory, p1_factory, base_seed,
             decision_cap, sample_every, replay_config, deck_pool,
-            enable_mulligans, per_game_timeout_sec, hang_dump_dir,
+            per_game_timeout_sec, hang_dump_dir,
             heuristics,
         ) = args
         action_encoding_version = "positional_v1"
@@ -740,7 +734,6 @@ def _play_one_parallel_game(
             game_idx=game_idx,
             p0_factory=p0_factory, p1_factory=p1_factory,
             base_seed=base_seed,
-            enable_mulligans=enable_mulligans,
             per_game_timeout_sec=per_game_timeout_sec,
             decision_cap=decision_cap, sample_every=sample_every,
             replay_config=replay_config,
@@ -794,7 +787,6 @@ def _generate_one_game_data(
     sample_every: int,
     replay_config: Optional[ReplayCaptureConfig] = None,
     deck_pool: Optional[list[Deck]] = None,
-    enable_mulligans: bool = False,
     per_game_timeout_sec: Optional[float] = None,
     hang_dump_dir: Optional[str] = None,
     heuristics: Optional[HeuristicsConfig] = None,
@@ -852,7 +844,6 @@ def _generate_one_game_data(
         ],
         decks=[deck_p0.cards, deck_p1.cards],
         seed=engine_seed,
-        enable_mulligans=enable_mulligans,
     )
     if game_idx % 2 == 1:
         engine.active_player_idx = 1
@@ -922,7 +913,6 @@ def _generate_one_game_data(
                         "phase": "data_gen",
                         "decision_cap": decision_cap,
                         "sample_every": sample_every,
-                        "enable_mulligans": enable_mulligans,
                         "per_game_timeout_sec": per_game_timeout_sec,
                         "progress": progress.snapshot(),
                     },

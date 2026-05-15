@@ -718,15 +718,6 @@ def build_iterate_schema(
                     ),
                 },
                 {
-                    "name": "enable-mulligans", "type": "bool",
-                    "default": False,
-                    "help": (
-                        "Run the London-mulligan loop at game start "
-                        "during self-play AND eval. Reduces mana-screw "
-                        "variance."
-                    ),
-                },
-                {
                     "name": "per-game-timeout-self-play-sec",
                     "type": "float",
                     "default": _default_per_game_self_play(),
