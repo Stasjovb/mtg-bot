@@ -5352,6 +5352,53 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             _ta_dict_to_python_effect(mode) for mode in modes_dicts
         )
         return ModalChooseOne(modes=modes)
+    if kind == "destroy_enchanted_permanent":
+        # **Round-26 BLOCKED-BRIDGE-ARM slice -- "destroy enchanted
+        # permanent" / Aura-host destruction primitive
+        # (DestroyEnchantedPermanent family).** Rust substrate
+        # ``Effect::DestroyEnchantedPermanent`` (unit variant; cards.rs;
+        # parser at cards.rs:3725-3727, to_dict at cards.rs:5630-5632)
+        # shipped via earlier round; bridge arm was the staleness gap
+        # (round-22 fresh discovery walk -- to_dict-emitted kind with
+        # no matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Unit variant on Rust; default-targets-empty on Python.**
+        # No fields beyond ``kind`` on the wire. Mirrors Rust's
+        # parse_effect arm at cards.rs:3725-3727 -- silent-drop
+        # convention for unrecognized keys (extra dict fields are
+        # ignored). Python's ``DestroyEnchantedPermanent``
+        # (effects/generic/destroy.py:213-249) is a unit-shaped
+        # dataclass with NO fields -- the bridge constructs it bare
+        # and Python's class declares ``requires_target() -> False``
+        # so the Aura-host lookup is intrinsic to the variant
+        # identity. The host is read from
+        # ``state.resolving_source.attached_to`` at resolve time.
+        #
+        # **Resolve semantics (parity-relevant).** Both engines snap
+        # the resolving source's ``attached_to`` host id at resolve
+        # time and route the destroy through the standard
+        # destroy-permanent pipeline (CR 701.7). Python's class at
+        # destroy.py:228-246 silent-no-ops if the aura is no longer
+        # on the battlefield or has no host (Aura unattached at
+        # resolution). Rust's resolve mirrors the same fizzle-on-
+        # unattached contract. Indestructible permanents survive
+        # via the destroy helper's indestructible check on both
+        # engines.
+        #
+        # **Real EoE consumers** unblocked: 1 EoE oracle hit via
+        # scan -- Cryoshatter ("when enchanted creature becomes
+        # tapped or is dealt damage, destroy it" -- the canonical
+        # Aura-trigger-shape host destruction pattern documented in
+        # Python's class docstring at destroy.py:215-220). Cross-
+        # engine end-to-end probe deferred per round-17/18/19
+        # synthetic-only-when-riders-cascade precedent (the
+        # attached_to lookup + the destroy pipeline + the Aura-
+        # trigger event firing are their own surfaces beyond the
+        # bare bridge-arm slice).
+        from mtg_bot.effects.generic.destroy import (
+            DestroyEnchantedPermanent,
+        )
+        return DestroyEnchantedPermanent()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
