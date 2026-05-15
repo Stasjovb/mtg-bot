@@ -2228,6 +2228,9 @@ fn apply_effect(
                     loyalty_counters: 0,
                     attached_to: None,
                     exiled_with_source: None,
+                    // Round-30 stun-counter substrate: tokens enter
+                    // with no stun counters per make_object precedent.
+                    stun_counters: 0,
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
                     ueot_modifiers: Vec::new(),
                 });
@@ -5583,6 +5586,10 @@ fn apply_effect(
                 loyalty_counters: 0,
                 attached_to: None,
                 exiled_with_source: None,
+                // Round-30 stun-counter substrate: cloned tokens
+                // enter with no stun counters (per the bare-token
+                // ETB precedent above).
+                stun_counters: 0,
                 etb_timestamp: etb_ts,
                 ueot_modifiers: Vec::new(),
             };
@@ -8013,6 +8020,9 @@ impl GameState {
             loyalty_counters: 0,
             attached_to: None,
             exiled_with_source: None,
+            // Round-30 stun-counter substrate: caller-injected
+            // objects start unstunned per make_object precedent.
+            stun_counters: 0,
             etb_timestamp: etb_ts,
             ueot_modifiers: Vec::new(),
         };

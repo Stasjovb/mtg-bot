@@ -210,6 +210,9 @@ fn push_object(
         loyalty_counters: 0,
         attached_to: None,
         exiled_with_source: None,
+        // Round-30 stun-counter substrate: freshly-allocated objects
+        // never carry stun counters; default 0 mirrors make_object.
+        stun_counters: 0,
         // CE4 closure: make_state never places objects directly on
         // battlefield (bf is built up by ETB primitives), so the
         // default 0 is fine for hand / library / starting zones.

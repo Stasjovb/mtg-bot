@@ -100,7 +100,17 @@ impl GameState {
     /// The untap-step primitive: untap every battlefield permanent
     /// controlled by `player_id`. Mirrors the per-controller sweep
     /// at `src/mtg_bot/turn.py:87-104` (without the stun-counter /
-    /// attached-prevents-untap gates — those land in later slices).
+    /// attached-prevents-untap gates).
+    ///
+    /// **Round-30 stun-counter substrate.** The production
+    /// `advance_phase` UNTAP-step driver delegates to
+    /// `state_ops_steps.rs:untap_all_for_player_inline`, which DOES
+    /// carry the CR 701.20 stun-counter gate (decrement instead of
+    /// untap when `stun_counters > 0`). This pymethod stays as the
+    /// pure-untap test primitive — fixtures call it to clear `tapped`
+    /// flags wholesale without triggering the stun-decrement leg.
+    /// Production callers should drive turn flow via `advance_phase`,
+    /// which routes through the gated inline helper.
     ///
     /// Goes through `Arc::make_mut` exactly once on the target
     /// player's battlefield Vec, regardless of how many objects
@@ -251,6 +261,41 @@ impl GameState {
             for obj in player.battlefield.iter() {
                 if obj.id == obj_id {
                     return Some(obj.loyalty_counters);
+                }
+            }
+        }
+        None
+    }
+
+    /// **Test-helper convention** (round-30 stun-counter substrate).
+    /// Set `stun_counters` on a battlefield permanent. Returns `true`
+    /// iff a value was changed. Real stun-counter changes flow
+    /// through `Effect::PutStunCounterOnTappedCreature` /
+    /// `Effect::TapTargetOpponentPermanentAndStunIt` resolve arms and
+    /// through the untap-step decrement at
+    /// `state_ops_steps.rs:untap_all_for_player_inline`; this helper
+    /// is for test fixtures that need to seed stun counters directly
+    /// without driving an Effect resolution.
+    fn set_stun_counters(&mut self, obj_id: u32, value: i32) -> bool {
+        mutate_battlefield_obj(self, obj_id, |obj| {
+            if obj.stun_counters == value {
+                false
+            } else {
+                obj.stun_counters = value;
+                true
+            }
+        })
+        .unwrap_or(false)
+    }
+
+    /// Read the `stun_counters` slot. Returns `None` if the object
+    /// isn't on any battlefield. Pairs with `set_stun_counters` for
+    /// test assertions on the stun-counter substrate.
+    fn get_stun_counters(&self, obj_id: u32) -> Option<i32> {
+        for player in &self.players {
+            for obj in player.battlefield.iter() {
+                if obj.id == obj_id {
+                    return Some(obj.stun_counters);
                 }
             }
         }
