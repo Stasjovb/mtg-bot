@@ -45329,6 +45329,164 @@ def test_rust_counter_target_spell_countered_spell_to_graveyard():
     )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- target_opponent_loses_life (round 22).
+#
+# Rust's Effect::TargetOpponentLosesLife { amount: i32 } already
+# shipped end-to-end via round 26 (parse at cards.rs:3413-3437 +
+# resolve at state_ops_resolve.rs:3741-3784); this slice ships the
+# cross-engine bridge translator + Rust regression pins. The bridge
+# arm closes a gap discovered by the round-22 fresh discovery walk
+# (Rust kind emitted by to_dict but no matching
+# `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumers (oracle scan): Dubious Delicacy, Susurian
+# Voidborn (2 EoE cards).
+#
+# Pin layout (in test_parity_smoke.py): 4 Rust regression pins
+# (basic ETB amount=3 Dubious-Delicacy shape + amount=0 silent
+# no-op + cross-controller routing -- p1 source on p0's turn +
+# saturating-sub-on-low-life). Cross-engine end-to-end probe
+# deferred per round-17/18/19 synthetic-only-when-riders-cascade
+# precedent (player-target Decision pipeline is its own surface).
+# The 6 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_target_opponent_loses_life_state(
+    amount: int = 3, source_owner: int = 0,
+):
+    """Helper: build a Rust state with a single carrier creature on
+    `source_owner`'s bf carrying an ETB triggered ability that fires
+    TargetOpponentLosesLife with the given amount. Returns
+    (rust_state, source_id).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "TargetOpponentLosesLife-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"B": 1, "generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "target_opponent_loses_life",
+                        "amount": amount,
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_target_opponent_loses_life_basic_amount_three():
+    """Rust regression pin: basic amount=3 with p0 as source owner --
+    the one opponent (p1) loses 3 life (Dubious Delicacy shape).
+    Pins state_ops_resolve.rs:3741-3784's source-finder +
+    `1 - controller` opponent pick + saturating_sub on the
+    opponent's life total.
+    """
+    rust_state, _source_id = _build_rust_target_opponent_loses_life_state(
+        amount=3, source_owner=0,
+    )
+    assert rust_state.stack_size() == 1
+    life_before = list(rust_state.life_totals)
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    life_after = list(rust_state.life_totals)
+    # p0 (source controller) unchanged; p1 (the one opponent) loses 3.
+    assert life_after[0] == life_before[0], (
+        f"p0 life should be unchanged; before={life_before[0]}, "
+        f"after={life_after[0]}"
+    )
+    assert life_after[1] == life_before[1] - 3, (
+        f"p1 (target opponent) should lose 3 life; "
+        f"before={life_before[1]}, after={life_after[1]}"
+    )
+
+
+def test_rust_target_opponent_loses_life_amount_zero_silent_noop():
+    """Rust regression pin: amount=0 silently no-ops (Rust's
+    saturating_sub(0) leaves life unchanged). No life changes on
+    either player.
+    """
+    rust_state, _source_id = _build_rust_target_opponent_loses_life_state(
+        amount=0, source_owner=0,
+    )
+    life_before = list(rust_state.life_totals)
+    rust_state.resolve_top_of_stack()
+    life_after = list(rust_state.life_totals)
+    assert life_after == life_before, (
+        f"amount=0 should silently no-op; before={life_before}, "
+        f"after={life_after}"
+    )
+
+
+def test_rust_target_opponent_loses_life_cross_controller_routing():
+    """Rust regression pin: source owned by p1 -- the source-finder
+    walks both players' zones per state_ops_resolve.rs:3749-3765,
+    finds source.controller=1, picks `1 - controller` = p0 as the
+    one opponent, and p0 loses 3 life. Pins cross-controller routing
+    (p1's ETB targeting p0 even when active_player=p0). Mirrors the
+    I82 / I83 controller-of-effect contract sister-tests.
+    """
+    rust_state, _source_id = _build_rust_target_opponent_loses_life_state(
+        amount=3, source_owner=1,
+    )
+    life_before = list(rust_state.life_totals)
+    rust_state.resolve_top_of_stack()
+    life_after = list(rust_state.life_totals)
+    # p1 (source controller) unchanged; p0 (the one opponent of p1)
+    # loses 3.
+    assert life_after[1] == life_before[1], (
+        f"p1 (source controller) life should be unchanged; "
+        f"before={life_before[1]}, after={life_after[1]}"
+    )
+    assert life_after[0] == life_before[0] - 3, (
+        f"p0 (target opponent of p1) should lose 3 life; "
+        f"before={life_before[0]}, after={life_after[0]}"
+    )
+
+
+def test_rust_target_opponent_loses_life_saturating_at_low_life():
+    """Rust regression pin: saturating_sub clamps at i32::MIN -- but
+    in practice this means a life-3 player hit for 25 ends at -22
+    (life is i32, no floor at 0; the SBA runs separately to register
+    the loss). Pins the saturating_sub semantic at state_ops_resolve.
+    rs:3783 -- the resolve arm does NOT clamp at 0, it uses
+    saturating_sub which only clamps at i32::MIN. Real life-loss
+    floor at 0 is the SBA's job, not this arm's.
+    """
+    rust_state, _source_id = _build_rust_target_opponent_loses_life_state(
+        amount=25, source_owner=0,
+    )
+    life_before = list(rust_state.life_totals)
+    rust_state.resolve_top_of_stack()
+    life_after = list(rust_state.life_totals)
+    # p1 starts at 20 (default), loses 25, ends at -5 (no SBA-style
+    # floor in this arm; the SBA dispatches lethal separately).
+    assert life_after[1] == life_before[1] - 25, (
+        f"p1 should lose 25 life via saturating_sub; "
+        f"before={life_before[1]}, after={life_after[1]} (expected "
+        f"{life_before[1] - 25})"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

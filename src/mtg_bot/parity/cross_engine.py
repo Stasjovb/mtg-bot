@@ -3524,6 +3524,65 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # slice).
         from mtg_bot.effects.generic.stack_control import CounterTargetSpell
         return CounterTargetSpell()
+    if kind == "target_opponent_loses_life":
+        # **Round-22 BLOCKED-BRIDGE-ARM slice -- "target opponent
+        # loses N life" (TargetOpponentLosesLife family).** Rust
+        # substrate ``Effect::TargetOpponentLosesLife { amount: i32 }``
+        # (parser at cards.rs:3413-3437, resolve at state_ops_resolve.
+        # rs:3741-3790) has been on main since round 26; this slice
+        # closes the cross-engine bridge gap. Discovered by the
+        # round-22 fresh discovery walk (Rust kind emitted by to_dict
+        # but no matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape (default-handling).** Python's
+        # ``TargetOpponentLosesLife(amount: int = 1)``
+        # (effects/generic/life.py:254-285) and Rust's variant carry
+        # the SAME ``amount`` field with the SAME default (1). Bridge
+        # mirrors Rust's parse_effect default-handling shape
+        # (cards.rs:3423-3429): ``amount`` is OPTIONAL on the bridge,
+        # defaulting to 1 when omitted. Mirrors round-23 sister
+        # ``DiscardSelf`` / ``EachOpponentDiscards`` /
+        # ``PutPlusOneCounterOnSelf`` default-handling precedent.
+        #
+        # **Negative amount.** Rust's parser raises PyValueError on
+        # amount < 0 (cards.rs:3431-3435); the bridge mirrors that
+        # contract for symmetric translation-time errors. amount == 0
+        # is valid on both engines and yields a silent no-op (Rust's
+        # resolve at state_ops_resolve.rs:3742-3746 short-circuits on
+        # negatives only; Python's class accepts 0 cleanly via
+        # opp.life -= 0 which is a no-op).
+        #
+        # **Resolve semantics (parity-relevant).** Both engines
+        # target the source-controller's one opponent. Rust's resolve
+        # walks both players' five tracked zones + stack to recover
+        # the source's controller (round-24 source-finder dispatch),
+        # then applies life loss to ``1 - controller`` (the one
+        # opponent in 2-player land). Python's class is target-driven
+        # (requires_target=True; legal_targets emits ("player", id)
+        # for each non-controller non-lost player), so the agent
+        # picks the target via the Decision pipeline. Both engines
+        # converge on the same observable in 2-player land: the one
+        # non-controller player loses ``amount`` life.
+        #
+        # **Real EoE consumers** unblocked: 2 EoE cards via oracle
+        # scan -- Dubious Delicacy ({2}, {T}, Sacrifice this artifact:
+        # Target opponent loses 3 life), Susurian Voidborn (similar
+        # shape). Cross-engine end-to-end probe deferred per round-
+        # 17/18/19 synthetic-only-when-riders-cascade precedent (the
+        # player-target Decision pipeline is its own surface beyond
+        # the bare bridge-arm slice).
+        from mtg_bot.effects.generic.life import TargetOpponentLosesLife
+        if "amount" in eff_dict:
+            amount = int(eff_dict["amount"])
+        else:
+            amount = 1
+        if amount < 0:
+            raise ValueError(
+                "target_opponent_loses_life bridge arm: amount must "
+                f"be non-negative, got {amount} (mirrors Rust "
+                "parse_effect contract at cards.rs:3431-3435)"
+            )
+        return TargetOpponentLosesLife(amount=amount)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
