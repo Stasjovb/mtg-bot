@@ -48237,6 +48237,166 @@ def test_rust_lose_life_saturating_at_low_life():
     )
 
 
+def _build_rust_untap_target_other_permanent_state(
+    source_owner: int = 0, target_owner: int = 0,
+):
+    """Helper: build a Rust state with a source carrier creature on
+    ``source_owner``'s bf carrying an ETB trigger that fires
+    UntapTargetOtherPermanent, PLUS a tapped non-source permanent
+    (Bear) on ``target_owner``'s bf so Rust's bf_iter_etb_sorted
+    picker has an eligible target. Returns
+    (rust_state, source_id, target_permanent_id).
+
+    Round-24 BLOCKED-BRIDGE-ARM helper. Mirrors the round-23
+    `_build_rust_untap_target_state` shape; key difference is the
+    target filter (any-permanent-not-source vs creature-only).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Seat the bait permanent FIRST so it has the lower ETB timestamp
+    # and Rust's bf_iter_etb_sorted picks it before scanning the
+    # source itself.
+    target_permanent_id = rust_state.register_and_inject_object(
+        {
+            "name": "UntapOther Bait Bear (3/3)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 1},
+            "effects": [],
+            "power": 3,
+            "toughness": 3,
+        },
+        target_owner,
+        ZONE_BATTLEFIELD,
+    )
+    # Tap it explicitly so it's eligible (filter: tapped != source).
+    assert rust_state.tap_object(target_permanent_id) is True
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "UntapTargetOtherPermanent ETB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "untap_target_other_permanent"},
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id, target_permanent_id
+
+
+def test_rust_untap_target_other_permanent_basic_untaps_other_creature():
+    """Rust regression pin: basic untap-target-other-permanent --
+    Rust's bf_iter_etb_sorted picker walks both bfs, skips the
+    source itself, and picks the FIRST tapped non-source permanent.
+    Pre-injected Bear (lower ETB stamp) gets untapped via
+    Arc::make_mut. Pins state_ops_resolve.rs:7022-7054's bf-walk +
+    skip-source clause + tapped filter + obj.tapped = false flip.
+    """
+    rust_state, source_id, target_permanent_id = (
+        _build_rust_untap_target_other_permanent_state(
+            source_owner=0, target_owner=0,
+        )
+    )
+    assert rust_state.stack_size() == 1
+    # Pre-resolve: target is tapped, source is untapped.
+    assert _is_tapped(rust_state, target_permanent_id) is True
+    assert _is_tapped(rust_state, source_id) is False
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Post-resolve: target is untapped, source unchanged.
+    assert _is_tapped(rust_state, target_permanent_id) is False, (
+        f"target permanent {target_permanent_id} should be untapped; "
+        f"tapped={_is_tapped(rust_state, target_permanent_id)}"
+    )
+    assert _is_tapped(rust_state, source_id) is False
+
+
+def test_rust_untap_target_other_permanent_no_eligible_silent_fizzle():
+    """Rust regression pin: source on bf, no other tapped permanents
+    anywhere -- the bf_iter_etb_sorted walk returns no match and the
+    resolver silently fizzles (early-return, no error). Pins
+    state_ops_resolve.rs:7036-7053's "found = None => skip mutation"
+    short-circuit. Distinguishing pin vs sister untap_target which
+    has its own variant of the silent-fizzle path.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Seat ONLY the source. No other tapped permanents on any bf.
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "UntapTargetOtherPermanent ETB Carrier (lonely)",
+            "card_types": ["Creature"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "untap_target_other_permanent"},
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    assert _is_tapped(rust_state, source_id) is False
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Source unchanged (skip-source filter precludes self-untap, and
+    # source is untapped anyway).
+    assert _is_tapped(rust_state, source_id) is False, (
+        f"source {source_id} should remain untapped (skip-source "
+        f"filter on bf_iter walk); "
+        f"tapped={_is_tapped(rust_state, source_id)}"
+    )
+
+
+def test_rust_untap_target_other_permanent_cross_controller_target():
+    """Rust regression pin: source on p0's bf, the only tapped
+    non-source permanent is on p1's bf -- the bf_iter_etb_sorted
+    walk crosses controllers and finds p1's bait, then untaps it via
+    Arc::make_mut on p1's battlefield. Pins state_ops_resolve.rs:
+    7036-7042's pidx-aware (controller) Arc::make_mut routing for
+    cross-bf targets. The Effect doesn't have controller-narrowing;
+    it picks ANY tapped non-source permanent regardless of owner.
+    """
+    rust_state, source_id, target_permanent_id = (
+        _build_rust_untap_target_other_permanent_state(
+            source_owner=0, target_owner=1,
+        )
+    )
+    # target is on p1's bf, source on p0's bf.
+    assert _is_tapped(rust_state, target_permanent_id) is True
+    rust_state.resolve_top_of_stack()
+    assert _is_tapped(rust_state, target_permanent_id) is False, (
+        f"p1 permanent {target_permanent_id} should be untapped by "
+        f"p0's UntapTargetOtherPermanent (cross-controller target "
+        f"selection); "
+        f"tapped={_is_tapped(rust_state, target_permanent_id)}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
