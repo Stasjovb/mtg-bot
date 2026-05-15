@@ -4595,6 +4595,108 @@ fn apply_effect(
             }
             // else: no opponent creature → silent fizzle.
         }
+        // BLOCKED-RUST-EFFECT slice (round 35) — deal damage to an
+        // opponent's creature equal to the source-controller's hand
+        // size. Sister of round-32's
+        // DealDamageToOpponentCreatureByArtifactCount: same target
+        // shape (first eligible Creature on an opponent's bf, scanned
+        // in ascending player order), same fizzle semantics
+        // (silent no-op when count <= 0 or no opponent creature),
+        // same source-controller resolution (5-zone scan + stack
+        // scan), NEW denominator (hand size in place of artifact
+        // count). Mirrors Python's
+        // `DealDamageToOpponentCreatureByCardsInHand`
+        // (`damage.py:464` — Roaring Furnace's door trigger,
+        // 1 EoE consumer).
+        //
+        // **Hand-size denominator.** `state.players[cidx].hand.len()`
+        // BIT-FOR-BIT mirrors Python's
+        // `len(state.player_by_id(controller_id).hand)` at
+        // damage.py:511. The source itself is already on the
+        // battlefield by the time the door / ETB trigger resolves
+        // (it left the controller's hand on cast resolution), so the
+        // hand-of-N + cast-source case produces N damage, not N+1 —
+        // identical to Python.
+        Effect::DealDamageToOpponentCreatureByCardsInHand => {
+            // Source-controller resolution (5-zone walk + stack scan;
+            // mirrors round-32 sister shape exactly).
+            let mut source_controller: Option<u8> = None;
+            'outer_sc_chnd: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_sc_chnd;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Read source-controller's hand size. Mirrors Python's
+            // `hand_size = len(state.player_by_id(controller_id).hand)`
+            // at damage.py:511. usize → i32 saturating cast (any
+            // realistic hand fits in i32; defensive cap follows the
+            // round-32 saturating-add denominator convention).
+            let cidx = controller as usize;
+            let hand_len = state.players[cidx].hand.len();
+            let amount: i32 = if hand_len > i32::MAX as usize {
+                i32::MAX
+            } else {
+                hand_len as i32
+            };
+            if amount <= 0 {
+                return Ok(()); // empty hand → silent fizzle (matches Python damage.py:512-513)
+            }
+            // Pick first eligible target: scan opponents in ascending
+            // order, pick the first Creature on each opponent's bf.
+            // BIT-FOR-BIT mirror of the round-32 sister target shape.
+            let mut found: Option<(usize, u32)> = None;
+            'outer_tg_chnd: for (pidx, player) in state.players.iter().enumerate() {
+                if pidx as u8 == controller {
+                    continue;
+                }
+                for obj in player.battlefield.iter() {
+                    let Some(printing) =
+                        state.registry.printings.get(obj.printing_id as usize)
+                    else {
+                        continue;
+                    };
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        found = Some((pidx, obj.id));
+                        break 'outer_tg_chnd;
+                    }
+                }
+            }
+            if let Some((pidx, target_id)) = found {
+                let amount_i16 = amount.min(i16::MAX as i32) as i16;
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.damage = obj.damage.saturating_add(amount_i16);
+                        break;
+                    }
+                }
+            }
+            // else: no opponent creature → silent fizzle.
+        }
         // BLOCKED-RUST-EFFECT slice (round 33) — put a +1/+1 counter
         // on the source for each OTHER creature and/or artifact the
         // source's controller controls. Mirrors Python's

@@ -6543,6 +6543,93 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # 33 precedent) documents the bridge plumbing.
         from mtg_bot.effects.generic.library_lookat import Surveil
         return Surveil(use_artifact_count=True)
+    if kind == "deal_damage_to_opponent_creature_by_cards_in_hand":
+        # BLOCKED-RUST-EFFECT slice (round 35) -- deal damage to an
+        # opponent's creature equal to the source-controller's hand
+        # size. Rust's
+        # ``Effect::DealDamageToOpponentCreatureByCardsInHand``
+        # (cards.rs unit variant added in this slice; parse arm
+        # immediately after the round-32
+        # deal_damage_to_opponent_creature_by_artifact_count arm,
+        # to_dict immediately after the round-32 arm, resolve at
+        # state_ops_resolve.rs immediately after the round-32 resolve
+        # arm with a renamed loop-label borrow split) mirrors Python's
+        # ``DealDamageToOpponentCreatureByCardsInHand``
+        # (effects/generic/damage.py:464 -- Roaring Furnace's door
+        # trigger, 1 EoE consumer). Rust substrate landed end-to-end
+        # IN this slice; the bridge translator wires the cross-engine
+        # round trip.
+        #
+        # **Sister-of-round-32 -- new denominator on same apply
+        # substrate.** Round-32's
+        # DealDamageToOpponentCreatureByArtifactCount uses the artifact
+        # count as the dynamic-X; this slice uses HAND SIZE as the
+        # dynamic-X. Both arms share the apply substrate (damage to
+        # first eligible opponent creature, fizzle on empty bf, 5-zone
+        # + stack source-controller scan); the denominator is the only
+        # axis that differs. This establishes a SECOND orthogonal
+        # X-from-count denominator on the same apply substrate, after
+        # rounds 32/33/34 walked the substrate axis (damage / counters
+        # / surveil) with the artifact-count denominator.
+        #
+        # **Field-shape.** Unit variant on both sides; no fields beyond
+        # ``kind``. The Python class has no static ``amount`` field
+        # (damage.py:464-516 -- ``@dataclass(frozen=True)`` with only
+        # the inherited ``targets`` tuple, defaulted in __post_init__
+        # to a TargetSpec on IsCreature() & ControlledByOpponent()).
+        # The dynamic-X is the whole point of the class -- the count
+        # is computed at resolve time from the source-controller's
+        # hand size, not stored on the variant. The bridge translator
+        # ignores every other key on the dict for round-trip
+        # dict-shape consistency (mirrors round-32 / round-33 /
+        # round-34 unit-variant precedent).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # walks the source-controller via the round-32 5-zone+stack
+        # scan, reads ``state.players[cidx].hand.len()`` (with usize
+        # -> i32 saturating cast as a defensive cap), and applies
+        # that damage amount via saturating_add (i16 ceiling matches
+        # sibling damage arms) to the FIRST creature on the
+        # opponent's bf. Python's resolve at damage.py:498-516 reads
+        # the target from the targets tuple passed by the targeting
+        # pipeline (PUSH-time pick) and calls _apply_damage with
+        # ``hand_size = len(state.player_by_id(controller_id).hand)``
+        # as the same denominator. The chooser-driven pick converges
+        # with Rust's first-eligible-creature scan when the agent
+        # picks the first-eligible target on synthetic probes with
+        # one bait creature.
+        #
+        # **Source-not-in-hand at resolve time.** Both engines agree
+        # the source is NO LONGER in the controller's hand by the
+        # time the door trigger / ETB resolves -- the Room (Roaring
+        # Furnace) is on the battlefield, the cast resolved earlier.
+        # So a hand-of-N produces N damage, not N+1. Rust's
+        # ``state.players[cidx].hand.len()`` and Python's
+        # ``len(state.player_by_id(controller_id).hand)`` both read
+        # the post-cast hand state -- BIT-FOR-BIT identical
+        # denominator semantics on synthetic harnesses with
+        # deterministic hand contents.
+        #
+        # **Fizzle parity.** Both engines silently no-op when the
+        # source-controller's hand is empty (Python: damage.py:512-513
+        # ``if hand_size <= 0: return``; Rust: the amount <= 0 guard
+        # in the resolve arm). Both engines also silently no-op when
+        # no opponent creature is in play (mirrors round-32 sister
+        # exactly).
+        #
+        # **No real-EoE end-to-end probe in this slice.** Roaring
+        # Furnace is a Room (split-card variant) whose door-trigger
+        # path drives this Effect; the door-trigger / Room subsystem
+        # is review-gated. Synthetic regression pin (per the round-17
+        # Fight + round-30 stun-counter + round-31 double-power +
+        # round-32 by-artifact-count + round-33 per-other-creature-
+        # or-artifact + round-34 surveil-X precedent) documents the
+        # bridge plumbing; a real-EoE Roaring Furnace probe is a
+        # follow-up slice once the Room substrate merges.
+        from mtg_bot.effects.generic.damage import (
+            DealDamageToOpponentCreatureByCardsInHand,
+        )
+        return DealDamageToOpponentCreatureByCardsInHand()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
