@@ -3583,6 +3583,70 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 "parse_effect contract at cards.rs:3431-3435)"
             )
         return TargetOpponentLosesLife(amount=amount)
+    if kind == "pump_self_until_eot":
+        # **Round-22 BLOCKED-BRIDGE-ARM slice -- "this creature gets
+        # +X/+Y until end of turn" (PumpSelfUntilEOT family).** Rust
+        # substrate ``Effect::PumpSelfUntilEOT { power_bonus: i32,
+        # toughness_bonus: i32 }`` (cards.rs:725; parser at
+        # cards.rs:3562-3595, resolve at state_ops_resolve.rs:
+        # 4280-4305) shipped via round 27 (UEOT-framework proof). This
+        # slice closes the cross-engine bridge gap. Discovered by the
+        # round-22 fresh discovery walk (Rust kind emitted by to_dict
+        # but no matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape (default-handling).** Rust's parse_effect arm
+        # at cards.rs:3578-3593 treats both ``power_bonus`` and
+        # ``toughness_bonus`` as OPTIONAL with default 0 (matching
+        # Python's ``PumpSelfUntilEOT(power_bonus: int = 0,
+        # toughness_bonus: int = 0)`` defaults). Bridge mirrors the
+        # default-handling shape (round-23 sister DiscardSelf /
+        # EachOpponentDiscards / PutPlusOneCounterOnSelf precedent).
+        # Both fields independent; ``(0, 0)`` is a pure no-op on both
+        # engines (Rust short-circuits before the source-finder scan;
+        # Python's ``grant_pt_pump_ueot`` is gated on a non-zero
+        # bonus).
+        #
+        # **Negatives are LEGAL.** Rust intentionally allows negative
+        # bonuses (cards.rs:3571-3577 docstring: "Python's
+        # PumpSelfUntilEOT accepts negative bonuses for debuff-shaped
+        # self-pumps"); Python's class is a bare dataclass with no
+        # non-negative guard. Bridge does NOT raise on negatives --
+        # mirrors the contract. (Distinct from the
+        # ``target_opponent_loses_life`` arm where Rust raises on
+        # negative amount.)
+        #
+        # **Rider drop (granted_keywords).** Python's class carries an
+        # additional ``granted_keywords: frozenset[str]`` rider field
+        # (effects/generic/pump.py:632) that Rust's variant does NOT
+        # represent. Bridge translates only the bare 2-field shape;
+        # cards whose oracle includes "and gains <kw> until end of
+        # turn" emit a separate ApplyEffect+GrantKeywords composer
+        # adjacent to the bare PumpSelfUntilEOT in Python -- those
+        # don't round-trip through this arm in their full form. Out
+        # of scope per the round-23 precedent of "bare-shape first
+        # slice; rider variants surface as separate Rust Effect
+        # variants in follow-ups."
+        #
+        # **Resolve semantics (parity-relevant).** Both engines find
+        # the source object across all zones, then push a
+        # power/toughness bonus onto the source's UEOT modifier list
+        # (Rust: ``UeotModifier::PowerToughnessBonus``; Python:
+        # ``grant_pt_pump_ueot`` registry entry, layer-7c with
+        # ``expires_at="cleanup"``). The combat readers compose the
+        # bonus on top of base P/T per CR 613.7c.
+        #
+        # **Real EoE consumers** unblocked: 8 EoE cards via oracle
+        # scan (cards with self-targeted "+X/+Y until end of turn"
+        # ETB / activated abilities). Cross-engine end-to-end probe
+        # deferred per round-17/18/19 synthetic-only-when-riders-
+        # cascade precedent (the typical EoE consumer cascades a
+        # keyword grant via the granted_keywords rider that the bare
+        # bridge arm does not carry).
+        from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
+        return PumpSelfUntilEOT(
+            power_bonus=eff_dict.get("power_bonus", 0),
+            toughness_bonus=eff_dict.get("toughness_bonus", 0),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
