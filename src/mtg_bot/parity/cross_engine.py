@@ -4518,6 +4518,78 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # beyond the bare bridge-arm slice).
         from mtg_bot.effects.generic.tap import TapEnchantedPermanent
         return TapEnchantedPermanent()
+    if kind == "lose_life":
+        # **Round-24 BLOCKED-BRIDGE-ARM slice -- "you lose N life"
+        # (LoseLife family).** Rust substrate
+        # ``Effect::LoseLife { amount: i32 }`` (cards.rs; parser at
+        # cards.rs:3439-3454, resolve at state_ops_resolve.rs:3666-,
+        # to_dict at cards.rs:5485-5486) was already on main; this
+        # slice closes the cross-engine bridge gap. Discovered by
+        # the round-22 fresh discovery walk (Rust kind emitted by
+        # to_dict but no matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape (required, no default).** Python's
+        # ``LoseLife(amount: int)`` (effects/generic/life.py:158-175)
+        # and Rust's variant carry the SAME ``amount`` field as
+        # REQUIRED (no default on either side). Bridge mirrors Rust's
+        # parse_effect shape (cards.rs:3439-3454): ``amount`` is
+        # REQUIRED via direct ``int(eff_dict["amount"])`` lookup --
+        # KeyError if missing, mirrors Rust's ``require()`` contract.
+        # Sister round-23 ``each_opponent_loses_life`` carries the
+        # same shape but the resolver applies to opponents instead of
+        # the source's controller; sister round-22
+        # ``target_opponent_loses_life`` defaults amount to 1 instead
+        # -- different shape, distinct here.
+        #
+        # **Negative amount.** Rust's parser raises PyValueError on
+        # amount < 0 at register time (cards.rs:3449-3452); resolve
+        # double-checks (state_ops_resolve.rs:3667-3671). The bridge
+        # mirrors that contract for symmetric translation-time errors.
+        # amount == 0 is a legal silent no-op on both engines (mirrors
+        # GainLife / DrawCards / Mill / EachOpponentLosesLife /
+        # DiscardSelf zero-amount conventions per the resolve
+        # docstring at state_ops_resolve.rs:3661-3665).
+        #
+        # **Resolve semantics (parity-relevant).** Both engines
+        # subtract ``amount`` life from the source's CONTROLLER (CR
+        # 118.4 direct life loss -- NOT damage; not reducible by
+        # damage-prevention / Worship-style replacement). Rust's
+        # resolve at state_ops_resolve.rs:3666- walks both players'
+        # five tracked zones + stack to recover the source's
+        # controller (round-24 source-finder dispatch), then applies
+        # life loss to ``source_controller`` via saturating_sub.
+        # Python's class at effects/generic/life.py:158-175 looks up
+        # the controller_id passed in by the resolve dispatcher and
+        # subtracts amount from that player's life. Both converge on
+        # the observable: the source's controller loses ``amount``
+        # life. Negative life is handled by the SBA loop on both
+        # engines, not clamped here.
+        #
+        # **Distinct from sister arms.** Distinct from
+        # ``each_opponent_loses_life`` (which subtracts from EACH
+        # opponent, not the controller), from
+        # ``target_opponent_loses_life`` (which targets a specific
+        # opponent via the Decision pipeline and defaults to 1), and
+        # from ``deal_damage`` family (which routes through damage-
+        # prevention -- vs this arm's direct life subtraction).
+        #
+        # **Real EoE consumers** unblocked: 2 EoE oracle hits via
+        # scan -- "you draw a card and lose 1 life" (Lifelink
+        # Spacecraft attacker rider, Void replacement clause body).
+        # Cross-engine end-to-end probe deferred per round-17/18/19
+        # synthetic-only-when-riders-cascade precedent (the carrier
+        # composers -- combat damage trigger, Void replacement,
+        # Spacecraft station ambit -- are their own surfaces beyond
+        # the bare bridge-arm slice).
+        from mtg_bot.effects.generic.life import LoseLife
+        amount = int(eff_dict["amount"])
+        if amount < 0:
+            raise ValueError(
+                "lose_life bridge arm: amount must be non-negative, "
+                f"got {amount} (mirrors Rust parse_effect contract "
+                "at cards.rs:3449-3452)"
+            )
+        return LoseLife(amount=amount)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
