@@ -5738,6 +5738,81 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 f"got {count} (mirroring Rust parser at cards.rs:3856-3860)"
             )
         return ManifestDread(count=count)
+    if kind == "manifest_dread_then_attach_self":
+        # **Round-31 BLOCKED-BRIDGE-ARM slice -- "manifest dread,
+        # then attach this Equipment to that creature"
+        # (ManifestDreadThenAttachSelf composite, the Conductive-
+        # Machete / Killer's-Mask / Cursed-Windbreaker / Dissection-
+        # Tools Duskmourn-Equipment-ETB family).** Rust substrate
+        # ``Effect::ManifestDreadThenAttachSelf { count: i32 }``
+        # (cards.rs; parser at cards.rs:3911-3930, to_dict at
+        # cards.rs:5772-5775, resolve at state_ops_resolve.rs:6802-
+        # 6842) was already on main from round 29; bridge arm was
+        # the staleness gap (round-28 closeout discovery -- to_dict-
+        # emitted kind with no matching translator).
+        #
+        # **Field shape (single int with default).** Rust's
+        # parse_effect arm at cards.rs:3917-3924 takes optional
+        # ``count`` field defaulting to 1 (mirrors Python's
+        # ``ManifestDreadThenAttachSelf`` which carries no fields
+        # today -- the Equipment-ETB oracle text always reads
+        # "manifest dread" without an explicit count rider, so
+        # Python's class hardcodes count=1 internally via
+        # ``ManifestDread(count=1).resolve(...)`` at
+        # library_lookat.py:543). Negative count surfaces at parse
+        # time as PyValueError on Rust; the bridge mirrors via
+        # ValueError on negative ``count``. Missing ``count`` is
+        # tolerated as default-1 on both engines (the Equipment-ETB
+        # bare oracle uses no count field). The ``count != 1`` lane
+        # is parse-tolerated (so dict round-trip works) but resolve-
+        # time-deferred on Rust with a clear error so a typo doesn't
+        # silently no-op (state_ops_resolve.rs:6803-6806).
+        #
+        # **Sister of manifest_dread / manifest_dread_then_put_plus_one_counters_on_it.**
+        # Same count-defaulting-to-1 schema, same look-2-then-
+        # manifest-1-and-graveyard-1 mechanic from CR 701.55. The
+        # composite layer is the post-manifest attach-source-
+        # Equipment step (no targeting Decision -- the back-reference
+        # to "that creature" is the just-manifested face-down 2/2,
+        # picked at resolve time via id-set difference on the
+        # battlefield snapshot before/after the manifest). The bridge
+        # constructs Python's bare ``ManifestDreadThenAttachSelf()``
+        # since the Python class has no count field today (the field
+        # gap is structural narrowness on the Python side -- the
+        # Equipment-ETB oracle always reads bare; the count != 1 lane
+        # would need a Python class generalization first).
+        #
+        # **EoE consumer note.** No EoE oracle hits today (the
+        # Equipment-ETB family is a Duskmourn-block mechanic; EoE
+        # has no manifest-dread-then-attach Equipment cards). Slice
+        # ships per round-27 round-trip-surface-coverage rule (each
+        # bridge arm is load-bearing for the to_dict round-trip even
+        # without EoE consumers; the bridge surface is the contract,
+        # not the EoE-oracle-only filter). Cross-engine end-to-end
+        # probe deferred per round-17/18/19 synthetic-only-when-
+        # riders-cascade precedent (the choose_card_from_library
+        # agent hook + the put_into_battlefield face-down ETB-
+        # trigger fan-out + the Equipment attach-source step + the
+        # count != 1 deferred-error gate are their own surfaces
+        # beyond the bare bridge-arm slice).
+        from mtg_bot.effects.generic.library_lookat import (
+            ManifestDreadThenAttachSelf,
+        )
+
+        count = eff_dict.get("count", 1)
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ValueError(
+                f"manifest_dread_then_attach_self bridge arm: 'count' "
+                f"must be an integer, got {count!r} "
+                f"(type {type(count).__name__})"
+            )
+        if count < 0:
+            raise ValueError(
+                f"manifest_dread_then_attach_self bridge arm: 'count' "
+                f"must be non-negative, got {count} (mirroring Rust "
+                f"parser at cards.rs:3925-3929)"
+            )
+        return ManifestDreadThenAttachSelf()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
