@@ -9325,5 +9325,191 @@ def test_rust_parser_accepts_become_land_creature_ueot_in_activated_ability():
     assert pid == 0
 
 
+def test_bridge_add_mana_to_pool_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 27 fresh discovery walk) --
+    AddManaToPool family. Rust ``{"kind": "add_mana_to_pool",
+    "color": "W", "amount": 1}`` translates to Python
+    ``AddManaToPool(produces=(("W", 1),))``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3295-3308 (struct
+    variant; required color: String + amount: i32). The bridge folds
+    Rust's scalar (color, amount) pair into Python's richer
+    ``produces: tuple[tuple[str, int], ...]`` shape via a one-tuple of
+    one pair (effects/generic/mana.py:30-80 -- the universal mana
+    primitive that every "{T}: Add {color}" mana ability emits).
+    """
+    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "add_mana_to_pool", "color": "W", "amount": 1}
+    )
+    assert isinstance(e, AddManaToPool)
+    assert e.produces == (("W", 1),)
+
+
+def test_bridge_add_mana_to_pool_each_color_round_trips():
+    """Bridge arm pin: each of the closed mana-color vocab
+    ``{W,U,B,R,G,C}`` round-trips as the produces[0][0] tag. Mirrors
+    Rust's ``validate_mana_symbol`` at cards.rs:4592-4599 closed set;
+    the bridge passes the color string through unchanged so the
+    canonical 6-color vocab is preserved end-to-end.
+    """
+    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    for color in ("W", "U", "B", "R", "G", "C"):
+        e = _ta_dict_to_python_effect(
+            {"kind": "add_mana_to_pool", "color": color, "amount": 1}
+        )
+        assert isinstance(e, AddManaToPool)
+        assert e.produces == ((color, 1),)
+
+
+def test_bridge_add_mana_to_pool_amount_two_round_trips():
+    """Bridge arm pin: amount > 1 (a single-color batched mint)
+    round-trips. The Rust substrate's ``amount: i32`` field and
+    Python's per-pair ``count`` field carry the same semantic --
+    "mint N coins of one color in one resolve" -- and the bridge
+    preserves the count without interpretation.
+    """
+    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "add_mana_to_pool", "color": "G", "amount": 2}
+    )
+    assert isinstance(e, AddManaToPool)
+    assert e.produces == (("G", 2),)
+
+
+def test_bridge_add_mana_to_pool_amount_zero_round_trips():
+    """Bridge arm pin: amount=0 is accepted (Rust's parser only
+    raises on negative amounts at cards.rs:3302-3306). The bridge
+    passes zero through unchanged -- the resolve no-ops naturally
+    (the for-loop in AddManaToPool.resolve runs zero times).
+    """
+    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "add_mana_to_pool", "color": "U", "amount": 0}
+    )
+    assert isinstance(e, AddManaToPool)
+    assert e.produces == (("U", 0),)
+
+
+def test_bridge_add_mana_to_pool_missing_color_raises():
+    """Bridge arm pin: missing required 'color' field raises
+    KeyError. Mirrors Rust's parse_effect arm at cards.rs:3296 which
+    calls ``require(dict, "color")`` -- a missing color is a hard
+    parse error on the Rust side, and the bridge surfaces the same
+    contract via KeyError (matching the round-25
+    become_land_creature_ueot precedent).
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    import pytest
+
+    with pytest.raises(KeyError, match="color"):
+        _ta_dict_to_python_effect(
+            {"kind": "add_mana_to_pool", "amount": 1}
+        )
+
+
+def test_bridge_add_mana_to_pool_missing_amount_raises():
+    """Bridge arm pin: missing required 'amount' field raises
+    KeyError. Mirrors Rust's parse_effect arm at cards.rs:3301 which
+    calls ``require(dict, "amount")`` -- a missing amount is a hard
+    parse error on the Rust side, and the bridge surfaces the same
+    contract via KeyError.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    import pytest
+
+    with pytest.raises(KeyError, match="amount"):
+        _ta_dict_to_python_effect(
+            {"kind": "add_mana_to_pool", "color": "B"}
+        )
+
+
+def test_bridge_add_mana_to_pool_equality_with_direct_construction():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed ``AddManaToPool(produces=(("R", 1),))``.
+    Pins the dataclass equality semantic for the produces-tuple
+    shape; spend_restriction defaults to None on both paths.
+    """
+    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "add_mana_to_pool", "color": "R", "amount": 1}
+    )
+    assert e == AddManaToPool(produces=(("R", 1),))
+
+
+def test_bridge_add_mana_to_pool_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([AddManaToPool({W,1}), GainLife(1)])`` translates
+    correctly via the recursive Sequence translator. Pins this arm
+    against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "add_mana_to_pool", "color": "W", "amount": 1},
+                {"kind": "gain_life", "amount": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], AddManaToPool)
+    assert e.effects[0].produces == (("W", 1),)
+    assert isinstance(e.effects[1], GainLife)
+
+
+def test_rust_parser_accepts_add_mana_to_pool_in_activated_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "add_mana_to_pool", "color": "G", "amount": 1}``
+    on an activated_ability carrier (the canonical "{T}: Add {G}"
+    mana-ability shape). The bridge dict shape must register cleanly
+    on Rust too; this lockstep gate keeps the bridge from drifting
+    away from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3295-3308`` accepts
+    the struct-variant dict with required color + amount fields and
+    closed-vocab color validation.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- AddManaToPool"
+        ),
+        "card_types": ["Land"],
+        "activated_abilities": [
+            {
+                "cost": {"tap_self": True},
+                "effect": {
+                    "kind": "add_mana_to_pool",
+                    "color": "G",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
