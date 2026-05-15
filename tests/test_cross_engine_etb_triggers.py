@@ -7929,5 +7929,140 @@ def test_rust_parser_accepts_put_card_from_graveyard_on_bottom_of_library_in_tri
     assert pid == 0
 
 
+def test_bridge_lose_life_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 24 fresh discovery walk) --
+    LoseLife family. Rust ``{"kind": "lose_life", "amount": 2}``
+    translates to Python ``LoseLife(amount=2)``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3439-3454 (required
+    ``amount`` field, non-negative). Sister of round-23
+    each_opponent_loses_life arm but applies to source-controller
+    instead of opponents.
+    """
+    from mtg_bot.effects.generic.life import LoseLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "lose_life", "amount": 2})
+    assert isinstance(e, LoseLife)
+    assert e.amount == 2
+
+
+def test_bridge_lose_life_amount_required_keyerror_when_missing():
+    """Bridge arm pin: ``amount`` is REQUIRED -- missing raises
+    KeyError (mirrors Rust's parse_effect ``require()`` contract at
+    cards.rs:3448). Distinct from sister target_opponent_loses_life
+    which defaults to 1.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect({"kind": "lose_life"})
+
+
+def test_bridge_lose_life_amount_zero_silent_noop():
+    """Bridge arm pin: amount=0 is a legal silent no-op (mirrors
+    Rust's resolve docstring at state_ops_resolve.rs:3661-3665 --
+    "amount=0 is a legal no-op"; sister to GainLife / DrawCards /
+    Mill / EachOpponentLosesLife / DiscardSelf zero-amount
+    conventions). The translation does NOT raise; the resolved
+    effect leaves life unchanged.
+    """
+    from mtg_bot.effects.generic.life import LoseLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "lose_life", "amount": 0})
+    assert isinstance(e, LoseLife)
+    assert e.amount == 0
+
+
+def test_bridge_lose_life_negative_amount_raises():
+    """Bridge arm pin: negative ``amount`` raises ValueError at
+    translation time (mirrors Rust's parse_effect contract at
+    cards.rs:3449-3452 -- "lose_life: amount must be non-negative").
+    Defense-in-depth: surfaces the contract at the bridge boundary
+    rather than waiting for resolve to fault.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="non-negative"):
+        _ta_dict_to_python_effect({"kind": "lose_life", "amount": -1})
+
+
+def test_bridge_lose_life_amount_one_lifelink_spacecraft_shape():
+    """Bridge arm pin: amount=1 round-trips correctly. Mirrors the
+    Lifelink Spacecraft attacker-rider shape "you draw a card and
+    lose 1 life" -- the LoseLife composes inside a Sequence with
+    DrawCards. This pin verifies the typical EoE consumer's amount
+    value translates exactly.
+    """
+    from mtg_bot.effects.generic.life import LoseLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "lose_life", "amount": 1})
+    assert e == LoseLife(amount=1)
+
+
+def test_bridge_lose_life_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DrawCards(1), LoseLife(1)])`` translates correctly
+    via the recursive Sequence translator. Mirrors the Lifelink
+    Spacecraft attacker-rider canonical shape.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.life import LoseLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "draw_cards", "count": 1},
+                {"kind": "lose_life", "amount": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DrawCards)
+    assert isinstance(e.effects[1], LoseLife)
+    assert e.effects[1].amount == 1
+
+
+def test_rust_parser_accepts_lose_life_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "lose_life", "amount": 1}`` dict shape on a
+    triggered_ability carrier. The bridge dict shape must register
+    cleanly on the Rust side too; this lockstep gate keeps the bridge
+    from drifting away from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3439-3454`` requires
+    the ``amount`` field and accepts non-negative ints.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- LoseLife",
+        "card_types": ["Creature"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "power": 1,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "lose_life", "amount": 2},
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

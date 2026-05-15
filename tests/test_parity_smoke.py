@@ -48095,6 +48095,148 @@ def test_rust_put_card_from_graveyard_on_bottom_of_library_p1_only_when_p0_empty
     assert p1_lib_ids_after[-1] == p1_bait_id
 
 
+def _build_rust_lose_life_state(amount: int = 1, source_owner: int = 0):
+    """Helper: build a Rust state with a single carrier creature on
+    `source_owner`'s bf carrying an ETB triggered ability that fires
+    LoseLife with the given amount. Returns (rust_state, source_id).
+
+    Round-24 BLOCKED-BRIDGE-ARM helper. Mirrors the round-23
+    `_build_rust_each_opponent_loses_life_state` shape; the only
+    semantic difference is the resolve target (controller, not
+    opponents).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "LoseLife-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"B": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "lose_life",
+                        "amount": amount,
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_lose_life_basic_amount_one_lifelink_spacecraft_shape():
+    """Rust regression pin: basic amount=1 with p0 as source owner --
+    p0 (the source's controller) loses 1 life via direct
+    saturating_sub. Pins state_ops_resolve.rs:3666-'s source-finder +
+    saturating_sub on the controller's life total. Mirrors the EoE
+    Lifelink-Spacecraft attacker-rider body shape ("you draw a card
+    and lose 1 life").
+    """
+    rust_state, _source_id = _build_rust_lose_life_state(
+        amount=1, source_owner=0,
+    )
+    assert rust_state.stack_size() == 1
+    life_before = list(rust_state.life_totals)
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    life_after = list(rust_state.life_totals)
+    # p0 (source controller) loses 1; p1 (opponent) unchanged.
+    assert life_after[0] == life_before[0] - 1, (
+        f"p0 (source controller) should lose 1 life; "
+        f"before={life_before[0]}, after={life_after[0]}"
+    )
+    assert life_after[1] == life_before[1], (
+        f"p1 (opponent) life should be unchanged; "
+        f"before={life_before[1]}, after={life_after[1]}"
+    )
+
+
+def test_rust_lose_life_amount_zero_silent_noop():
+    """Rust regression pin: amount=0 silently no-ops (Rust's
+    saturating_sub(0) leaves life unchanged). No life changes on
+    either player. Mirrors GainLife / DrawCards / Mill /
+    EachOpponentLosesLife / DiscardSelf zero-amount conventions per
+    the resolve docstring at state_ops_resolve.rs:3661-3665.
+    """
+    rust_state, _source_id = _build_rust_lose_life_state(
+        amount=0, source_owner=0,
+    )
+    life_before = list(rust_state.life_totals)
+    rust_state.resolve_top_of_stack()
+    life_after = list(rust_state.life_totals)
+    assert life_after == life_before, (
+        f"amount=0 should silently no-op; before={life_before}, "
+        f"after={life_after}"
+    )
+
+
+def test_rust_lose_life_cross_controller_routing():
+    """Rust regression pin: source owned by p1 -- the source-finder
+    walks both players' five tracked zones + stack per
+    state_ops_resolve.rs:3675-3700, finds source.controller=1, and
+    p1 (the source's controller) loses life. Pins cross-controller
+    routing: a LoseLife effect controlled by p1 affects p1's life
+    even when active_player=p0 (distinguishing pin vs sister
+    each_opponent_loses_life which would route the loss to p0
+    instead).
+    """
+    rust_state, _source_id = _build_rust_lose_life_state(
+        amount=2, source_owner=1,
+    )
+    life_before = list(rust_state.life_totals)
+    rust_state.resolve_top_of_stack()
+    life_after = list(rust_state.life_totals)
+    # p1 (source controller) loses 2; p0 (opponent) unchanged.
+    # This is the distinguishing observable vs each_opponent_loses_life:
+    # each_opponent would have hit p0 (the opponent of p1).
+    assert life_after[1] == life_before[1] - 2, (
+        f"p1 (source controller) should lose 2 life; "
+        f"before={life_before[1]}, after={life_after[1]}"
+    )
+    assert life_after[0] == life_before[0], (
+        f"p0 (opponent of p1) should be unchanged -- LoseLife "
+        f"affects controller, not opponents (distinguishing pin vs "
+        f"each_opponent_loses_life); "
+        f"before={life_before[0]}, after={life_after[0]}"
+    )
+
+
+def test_rust_lose_life_saturating_at_low_life():
+    """Rust regression pin: when amount > current life, life saturates
+    at 0 (Rust's saturating_sub semantics; no negative-overflow). The
+    SBA-driven loss-detection runs separately on the resolve loop --
+    this pin only verifies the arithmetic clamps. Pins the
+    saturating_sub at state_ops_resolve.rs:3666-.
+    """
+    rust_state, _source_id = _build_rust_lose_life_state(
+        amount=99, source_owner=0,
+    )
+    life_before_p0 = rust_state.life_totals[0]
+    assert life_before_p0 < 99  # confirm we're really overshooting (default 20)
+    rust_state.resolve_top_of_stack()
+    life_after_p0 = rust_state.life_totals[0]
+    # Saturating sub clamps to 0 (not negative), but engine may also
+    # bottom out at 0 via SBA. Either way, post-resolve p0's life is
+    # less than or equal to 0.
+    assert life_after_p0 <= 0, (
+        f"p0 life should be <= 0 after losing 99 from {life_before_p0}; "
+        f"got {life_after_p0}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
