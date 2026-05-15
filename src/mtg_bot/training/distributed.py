@@ -4832,7 +4832,16 @@ def _push_weights_to_remote(
     """scp ``<master_cwd>/<weights_path>`` to ``<repo_path>/<weights_path>``
     on the remote. Idempotent ``mkdir`` first so the parent dir exists.
     Failures propagate — a missing weights file on the remote silently
-    breaks the shard."""
+    breaks the shard.
+
+    Also pushes the sibling ``metadata.json`` when present. Structured-
+    architecture loaders auto-discover trunk hparams (emb_dim, n_heads,
+    n_layers, hidden_dim, action_history_n) from that sidecar at load
+    time; without it the worker constructs the default ``StructuredModelConfig``
+    and any non-default-dim checkpoint state_dict load crashes with a
+    shape mismatch on every game. Best-effort: a missing sidecar is OK
+    (the loader's defensive branch handles it for default-dim weights).
+    """
     print(
         f"[shard {shard.display_label}] pushing weights "
         f"{weights_path} to {shard.host}...",
@@ -4857,6 +4866,19 @@ def _push_weights_to_remote(
         ),
         timeout=300,
     )
+    local_metadata = local_weights.parent / "metadata.json"
+    if local_metadata.is_file():
+        remote_metadata = _remote_join(
+            shard, remote_repo,
+            str(PurePosixPath(weights_posix).parent / "metadata.json"),
+        )
+        _run_subprocess(
+            _scp_cmd(
+                shard, str(local_metadata), remote_metadata,
+                from_remote=False,
+            ),
+            timeout=60,
+        )
 
 
 def _pull_remote_replays(
