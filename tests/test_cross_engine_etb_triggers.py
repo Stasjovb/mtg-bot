@@ -11578,5 +11578,204 @@ def test_rust_parser_accepts_manifest_dread_then_put_plus_one_counters_three():
     assert pid == 0
 
 
+def test_bridge_double_target_creatures_power_ueot_basic_translation():
+    """BLOCKED-RUST-EFFECT slice (round 31) -- double target creature's
+    power UEOT substrate. Rust ``{"kind": "double_target_creatures_power_ueot"}``
+    translates to Python ``DoubleTargetCreaturesPowerUEOT()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3712-3721 (unit
+    variant; no fields). Pin verifies the bare-shape translation for
+    the round-31 double-power Effect arm (Mightform Harmonizer's
+    landfall trigger).
+    """
+    from mtg_bot.effects.generic.pump import (
+        DoubleTargetCreaturesPowerUEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "double_target_creatures_power_ueot"}
+    )
+    assert isinstance(e, DoubleTargetCreaturesPowerUEOT)
+
+
+def test_bridge_double_target_creatures_power_ueot_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    the unit-variant precedent (tap_enchanted_permanent /
+    destroy_enchanted_permanent / put_stun_counter_on_tapped_creature)
+    -- unrecognized fields in the dict are ignored, not raised.
+    """
+    from mtg_bot.effects.generic.pump import (
+        DoubleTargetCreaturesPowerUEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "double_target_creatures_power_ueot",
+            "spurious_field": "ignored",
+            "power_bonus": 99,  # ignored — not part of unit variant schema
+        }
+    )
+    assert isinstance(e, DoubleTargetCreaturesPowerUEOT)
+
+
+def test_bridge_double_target_creatures_power_ueot_equality_default_constructor():
+    """Bridge arm pin: two ``DoubleTargetCreaturesPowerUEOT()`` instances
+    are equal under dataclass(frozen=True) default __eq__ semantics.
+    Pins the frozen-dataclass equality contract for downstream hash-
+    based keying (e.g. de-dup in Sequence composers).
+    """
+    from mtg_bot.effects.generic.pump import (
+        DoubleTargetCreaturesPowerUEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {"kind": "double_target_creatures_power_ueot"}
+    )
+    e2 = DoubleTargetCreaturesPowerUEOT()
+    assert e1 == e2
+
+
+def test_bridge_double_target_creatures_power_ueot_requires_target():
+    """Bridge arm pin: Python's DoubleTargetCreaturesPowerUEOT carries
+    requires_target() == True (pump.py:205-206 -- "target creature you
+    control" is a hard requires-target). The bridge round-trip pin
+    catches accidental drift to a no-target unit-variant by asserting
+    the requires_target flag survives translation. (Distinct from the
+    DestroyEnchantedPermanent / DealDamageEqualToSourcePower
+    does-NOT-require-target convention -- those arms read their
+    target from resolving_source / source-bf scan, while this arm
+    needs an explicit target choice.)
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "double_target_creatures_power_ueot"}
+    )
+    assert e.requires_target() is True
+
+
+def test_bridge_double_target_creatures_power_ueot_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DoubleTargetCreaturesPowerUEOT(), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    the round-31 arm against accidental dispatch loss inside Sequence
+    (mirrors the round-30 stun-counter Sequence-composability pin).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.pump import (
+        DoubleTargetCreaturesPowerUEOT,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "double_target_creatures_power_ueot"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DoubleTargetCreaturesPowerUEOT)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_double_target_creatures_power_ueot_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "double_target_creatures_power_ueot"}`` on a
+    triggered_ability carrier. Mightform Harmonizer's actual real-
+    card consumer mounts this Effect on a LANDFALL trigger predicate
+    (Subject(IsLand) AND ControlledByYou); the lockstep gate doesn't
+    depend on the trigger event -- registering through any abilities
+    carrier exercises the parse_effect arm. Pinning here keeps the
+    Python bridge from drifting away from Rust's parse_effect coverage.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3712-3721.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- DoubleTargetCreaturesPowerUEOT",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 3},
+        "power": 4,
+        "toughness": 4,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "double_target_creatures_power_ueot"},
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_rejects_double_target_creatures_power_ueot_with_typo():
+    """Negative lockstep pin: a misspelled kind (e.g.
+    ``double_target_creature_power_ueot`` -- singular "creature" vs
+    plural "creatures") surfaces as ValueError on Rust's parse_effect
+    arm because the new variant isn't registered for that spelling.
+    Pin against accidental schema drift between bridge dict shape and
+    Rust parser's accepted-kinds set.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- typo lockstep",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    # Misspelled — singular "creature" instead of "creatures".
+                    "kind": "double_target_creature_power_ueot"
+                },
+            }
+        ],
+    }
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown effect kind"):
+        reg.register_printing(d)
+
+
+def test_rust_parser_accepts_double_target_creatures_power_ueot_in_cast_effects():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "double_target_creatures_power_ueot"}`` on a
+    cast-spell ``effects`` carrier. Sister of the
+    triggered_ability-carrier lockstep pin -- the same parse_effect
+    arm dispatches both carriers, so any drift surfaces on either
+    pin. Mirrors the round-25/26/27 cast-spell vs trigger lockstep
+    convention.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- DoubleTargetCreaturesPowerUEOT (Sorcery)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"G": 1},
+        "effects": [
+            {"kind": "double_target_creatures_power_ueot"},
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
