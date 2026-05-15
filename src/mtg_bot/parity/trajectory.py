@@ -69,6 +69,7 @@ __all__ = [
     "setup_matched_game_from_real_decks",
     "MulliganDeterministicAgent",
     "RealGameCombatAgent",
+    "BilateralCombatAgent",
     "CombatStrategy",
     "drive_combat_phase",
     "load_production_deck",
@@ -437,6 +438,190 @@ class RealGameCombatAgent:
                 break  # one blocker per attacker for this strategy
             # If no blocker available, attacker goes through unblocked.
         return assignments
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 round-19 enhancement (bilateral / asymmetric combat strategies):
+#
+# RealGameCombatAgent's strategy is mirror-symmetric -- the same strategy
+# decides attackers when p0 is active AND when p1 is active, and the same
+# strategy decides blockers regardless of which side is defending. The
+# round-17 enhancement-follow-on list flagged this as the next gap:
+# "Bilateral / asymmetric combat strategies -- current strategies are
+# symmetric across both players. Asymmetric strategies (`p0 attacks, p1
+# never attacks back`) would let trajectory tests pin specific defensive
+# patterns without needing a second RealGameCombatAgent per player.
+# Round-17 ships the agent shape that could carry per-side config, but
+# the strategy enum stays mirror-symmetric for now."
+#
+# BilateralCombatAgent is the per-side wrapper: a frozen-dataclass that
+# holds two RealGameCombatAgent instances (one per player) and dispatches
+# pick_attackers / pick_blocks to the active-player-side / defender-side
+# delegate respectively. Same duck-typed interface as RealGameCombatAgent
+# (just .pick_attackers + .pick_blocks), so drive_combat_phase accepts it
+# unchanged.
+#
+# Construction is by (p0_strategy, p1_strategy) string pair (the cleanest
+# call shape; the wrapper builds the two RealGameCombatAgent instances
+# internally) OR by (p0_agent, p1_agent) for callers that want to share /
+# pre-build per-side agents (e.g. a future state-conditional agent that
+# isn't a bare RealGameCombatAgent). Both shapes route through the same
+# dispatch logic.
+#
+# The wrapper is stateless (frozen-dataclass holding frozen-dataclass
+# RealGameCombatAgent instances). Two calls with the same agent + same
+# observable state produce identical output, mirroring the round-16/17
+# RealGameCombatAgent invariant.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BilateralCombatAgent:
+    """Per-side combat policy wrapper around two ``RealGameCombatAgent``s.
+
+    Closes the round-17 enhancement-follow-on item "Bilateral /
+    asymmetric combat strategies": the symmetric strategy enum becomes
+    a per-side pair via this wrapper, without changing the underlying
+    ``RealGameCombatAgent`` contract.
+
+    The wrapper exposes the same duck-typed interface as
+    ``RealGameCombatAgent`` (``pick_attackers`` + ``pick_blocks``) so
+    it drops into ``drive_combat_phase`` unchanged. Each call dispatches
+    to the appropriate per-side delegate based on which player is the
+    active player at decision time:
+
+      * ``pick_attackers(py_state)`` -> delegate for
+        ``py_state.active_player_idx``'s strategy. The active player is
+        the one declaring attackers per CR 508.1.
+      * ``pick_blocks(py_state)`` -> delegate for the DEFENDER (=
+        ``1 - py_state.active_player_idx``)'s strategy. The defender is
+        the one declaring blockers per CR 509.1.
+
+    Construct from per-side strategy strings (the common case):
+
+        BilateralCombatAgent(p0_strategy="attack_all", p1_strategy="no_attack")
+
+    Or from pre-built per-side agents (for callers sharing agents or
+    using a future agent type that isn't a bare RealGameCombatAgent):
+
+        BilateralCombatAgent(
+            p0_agent=RealGameCombatAgent(strategy="attack_all"),
+            p1_agent=RealGameCombatAgent(strategy="no_attack"),
+        )
+
+    Exactly one of the two construction shapes per side must be
+    provided; mixing (p0_strategy + p0_agent both set) or omitting
+    (neither set) raises ValueError.
+
+    Use cases:
+
+    * **Asymmetric attack/defense** -- p0 plays aggro
+      (``"attack_all"``), p1 plays control (``"no_attack"``). Pins the
+      aggressor / control trajectory shape in one config.
+    * **Per-side block selectors** -- p0 uses
+      ``"attack_all_block_smallest"`` to chump-block, p1 uses
+      ``"block_with_largest_able"`` to trade up. Surfaces the
+      asymmetric block selector divergence directly.
+    * **Single-side smoke** -- one side runs an interesting policy
+      (``"optimal_no_loss_attack"``), the other side runs a trivial
+      baseline (``"no_attack"``) so the trajectory probe isolates one
+      side's decision logic cleanly.
+
+    Mirroring RealGameCombatAgent's invariants:
+
+    * **Stateless.** Frozen-dataclass; per-side delegates are
+      themselves frozen-dataclasses. No mutation, no RNG.
+    * **Same emission on both engines.** Reads PYTHON state and emits
+      action-dicts; the harness applies on both sides via
+      ``step_both``.
+    * **Does NOT advance phases.** The caller composes phase advances
+      around the agent (or uses ``drive_combat_phase``).
+    """
+
+    p0_strategy: CombatStrategy | None = None
+    p1_strategy: CombatStrategy | None = None
+    p0_agent: RealGameCombatAgent | None = None
+    p1_agent: RealGameCombatAgent | None = None
+
+    def __post_init__(self) -> None:
+        # Each side must have exactly one source of truth (strategy OR
+        # agent, not both, not neither). Build the per-side agent from
+        # the strategy if it was passed; this normalizes the two
+        # construction shapes into a single internal representation.
+        if self.p0_strategy is not None and self.p0_agent is not None:
+            raise ValueError(
+                "BilateralCombatAgent: pass either p0_strategy or "
+                "p0_agent, not both"
+            )
+        if self.p0_strategy is None and self.p0_agent is None:
+            raise ValueError(
+                "BilateralCombatAgent: must pass one of p0_strategy or "
+                "p0_agent"
+            )
+        if self.p1_strategy is not None and self.p1_agent is not None:
+            raise ValueError(
+                "BilateralCombatAgent: pass either p1_strategy or "
+                "p1_agent, not both"
+            )
+        if self.p1_strategy is None and self.p1_agent is None:
+            raise ValueError(
+                "BilateralCombatAgent: must pass one of p1_strategy or "
+                "p1_agent"
+            )
+        # Normalize: stamp the constructed delegates onto p0_agent /
+        # p1_agent regardless of which constructor shape was used. The
+        # validation in RealGameCombatAgent.__post_init__ catches an
+        # invalid strategy at construct time (NOT at call time).
+        if self.p0_agent is None:
+            object.__setattr__(
+                self, "p0_agent", RealGameCombatAgent(strategy=self.p0_strategy),
+            )
+        if self.p1_agent is None:
+            object.__setattr__(
+                self, "p1_agent", RealGameCombatAgent(strategy=self.p1_strategy),
+            )
+
+    def _agent_for(self, player_idx: int) -> RealGameCombatAgent:
+        """Return the delegate agent for ``player_idx`` (0 or 1)."""
+        if player_idx == 0:
+            return self.p0_agent  # type: ignore[return-value]
+        if player_idx == 1:
+            return self.p1_agent  # type: ignore[return-value]
+        raise ValueError(
+            f"BilateralCombatAgent only supports two-player engines "
+            f"(player_idx in {{0, 1}}); got {player_idx}"
+        )
+
+    # -- Decision functions (delegate to the right per-side agent) ----------
+
+    def pick_attackers(self, py_state) -> list[int]:
+        """Pick the active player's attackers via that player's delegate.
+
+        The active player is the one declaring attackers per CR 508.1,
+        so attacker selection routes to the active-side strategy --
+        e.g. ``BilateralCombatAgent(p0_strategy="attack_all",
+        p1_strategy="no_attack")`` will declare every eligible p0
+        attacker on p0's turn and an empty attacker set on p1's turn.
+        """
+        return self._agent_for(py_state.active_player_idx).pick_attackers(
+            py_state
+        )
+
+    def pick_blocks(self, py_state) -> list[list[int]]:
+        """Pick the defender's block assignments via that player's delegate.
+
+        The defender (= 1 - active_player_idx) is the one declaring
+        blockers per CR 509.1, so block assignment routes to the
+        defender-side strategy -- e.g. ``BilateralCombatAgent(
+        p0_strategy="attack_all_block_smallest",
+        p1_strategy="block_with_largest_able")`` will block with the
+        SMALLEST defender on p1's attacks (because p0 is defending and
+        their delegate runs ``attack_all_block_smallest``) and with
+        the LARGEST defender on p0's attacks (because p1 is defending
+        and their delegate runs ``block_with_largest_able``).
+        """
+        defender_idx = 1 - py_state.active_player_idx
+        return self._agent_for(defender_idx).pick_blocks(py_state)
 
 
 def drive_combat_phase(
