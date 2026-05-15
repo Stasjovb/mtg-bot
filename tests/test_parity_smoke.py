@@ -44552,6 +44552,174 @@ def test_rust_put_plus_one_counter_on_self_cross_controller_routing():
     )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- counter_target_spell (round 22).
+#
+# Rust's Effect::CounterTargetSpell (unit variant) already shipped
+# end-to-end via round 28's round-7 counterspell-primitive
+# consolidation; this slice ships the cross-engine bridge translator
+# + a couple of fresh Rust regression pins that exercise the bare
+# unit-variant resolve. The bridge arm closes a gap discovered by
+# the round-22 fresh discovery walk (Rust kind emitted by to_dict
+# but no matching `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumers (oracle scan): Divert Disaster, Unravel.
+#
+# Pin layout: 3 fresh Rust regression pins (basic counter of a
+# bait spell on stack + counter-with-empty-stack silent fizzle +
+# countered spell moves to graveyard). Cross-engine end-to-end
+# probe deferred per round-17/18/19 synthetic-only-when-riders-
+# cascade precedent (the stack-target Decision pipeline + spell-
+# casting agent shim is its own surface beyond the bare bridge-
+# arm slice). The 5 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+#
+# Pre-existing test ``test_cross_engine_counterspell_empty_stack_
+# fizzle`` already exercises the Rust resolve arm via direct
+# register_and_inject_object + push_to_stack. The new pins below
+# cover ANGLES that pre-existing test does not (basic non-empty-
+# stack counter + countered-spell-routes-to-graveyard).
+# =====================================================================
+
+
+def test_rust_counter_target_spell_basic_counters_stack_top():
+    """Rust regression pin: basic counter of a bait spell on the
+    stack. Push a Bait Spell (Sorcery) onto p0's stack first, then
+    push a Counterspell (Instant with counter_target_spell effect)
+    onto p1's stack. Resolve top -> Counterspell resolves, finds
+    the bait spell as the picked target via source_obj_id self-
+    exclusion (the counter doesn't counter itself), and the bait
+    spell is countered + moves to graveyard.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_HAND = 0
+    bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Spell",
+            "card_types": ["Sorcery"],
+            "effects": [],
+        },
+        0,
+        ZONE_HAND,
+    )
+    counter_id = rust_state.register_and_inject_object(
+        {
+            "name": "Counterspell",
+            "card_types": ["Instant"],
+            "effects": [{"kind": "counter_target_spell"}],
+        },
+        1,
+        ZONE_HAND,
+    )
+    rust_state.push_to_stack(bait_id, 0)
+    rust_state.push_to_stack(counter_id, 1)
+    assert rust_state.stack_size() == 2
+    rust_state.resolve_top_of_stack()
+    rust_state.apply_sbas()
+    # After Counterspell resolves, the bait spell is countered and
+    # both spells end up in their owners' graveyards.
+    assert rust_state.stack_size() == 0, (
+        f"Stack should be empty after counter resolves and bait "
+        f"is countered; got {rust_state.stack_size()}"
+    )
+
+
+def test_rust_counter_target_spell_empty_stack_silent_fizzle():
+    """Rust regression pin: counter on an empty stack (no other
+    stack item to target) silently fizzles -- Rust's resolve arm
+    short-circuits on empty stack just like Python's ``if not
+    targets: return`` early-exit. Pins the no-target fizzle path
+    on the bare unit-variant resolve.
+
+    This is a fresh angle vs the pre-existing
+    `test_cross_engine_counterspell_empty_stack_fizzle` which
+    cross-checks Python+Rust together; this pin is Rust-only and
+    asserts the unit-variant resolve at the dict-shape level.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_HAND = 0
+    counter_id = rust_state.register_and_inject_object(
+        {
+            "name": "Counterspell",
+            "card_types": ["Instant"],
+            "effects": [{"kind": "counter_target_spell"}],
+        },
+        1,
+        ZONE_HAND,
+    )
+    rust_state.push_to_stack(counter_id, 1)
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    rust_state.apply_sbas()
+    # Stack empties (Counterspell self-resolves and moves to gy);
+    # no crash on empty-target resolve.
+    assert rust_state.stack_size() == 0
+
+
+def test_rust_counter_target_spell_countered_spell_to_graveyard():
+    """Rust regression pin: the countered spell's source moves to
+    its owner's graveyard (CR 701.6). After Counterspell resolves
+    and counters the bait, BOTH the bait spell's source AND the
+    counter's source end up in their owners' graveyards. Pins the
+    post-counter zone routing.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_HAND = 0
+    bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Sorcery",
+            "card_types": ["Sorcery"],
+            "effects": [],
+        },
+        0,
+        ZONE_HAND,
+    )
+    counter_id = rust_state.register_and_inject_object(
+        {
+            "name": "Counterspell-To-GY-Pin",
+            "card_types": ["Instant"],
+            "effects": [{"kind": "counter_target_spell"}],
+        },
+        1,
+        ZONE_HAND,
+    )
+    rust_state.push_to_stack(bait_id, 0)
+    rust_state.push_to_stack(counter_id, 1)
+    rust_state.resolve_top_of_stack()
+    rust_state.apply_sbas()
+    p0_gy_names = tuple(
+        e["printing_name"] for e in rust_state.graveyard_snapshot(0)
+    )
+    p1_gy_names = tuple(
+        e["printing_name"] for e in rust_state.graveyard_snapshot(1)
+    )
+    # Bait Sorcery was countered; its source moves to p0's graveyard.
+    assert "Bait Sorcery" in p0_gy_names, (
+        f"countered bait spell should be in p0 graveyard; got "
+        f"p0_gy={p0_gy_names}"
+    )
+    # Counterspell itself resolves and goes to p1's graveyard.
+    assert "Counterspell-To-GY-Pin" in p1_gy_names, (
+        f"resolved Counterspell should be in p1 graveyard; got "
+        f"p1_gy={p1_gy_names}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
