@@ -48397,6 +48397,285 @@ def test_rust_untap_target_other_permanent_cross_controller_target():
     )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- create_token_copy_of_target_creature_you_control
+# (round 23).
+#
+# Rust's Effect::CreateTokenCopyOfTargetCreatureYouControl (unit
+# variant) already shipped end-to-end via round 28 (parse at
+# cards.rs:3696-3698 + resolve at state_ops_resolve.rs:5506-5594 +
+# to_dict at cards.rs:5614-5616); this slice ships the cross-engine
+# bridge translator + Rust regression pins. The bridge arm closes a
+# gap discovered by the round-22 fresh discovery walk (Rust kind
+# emitted by to_dict but no matching `_ta_dict_to_python_effect`
+# arm).
+#
+# Real-EoE consumer status (oracle scan): 0 EoE cards today -- the
+# Rust substrate comment cites "Mirrorpool-shape, 2 EoE cards" but
+# the EoE oracle text corpus contains no direct "create a token
+# that's a copy of target creature you control" hits (Daring
+# Salt-Lord's 12+ rider is the artifact-or-enchantment shape, a
+# different Effect variant). Bridge arm closes the to_dict round-
+# trip surface and pre-positions the translator for any future EoE
+# / sister-set consumer with this exact shape (Spark Double, Helm of
+# the Host -- the Mirrorpool-shape precedent in older sets).
+#
+# Pin layout (in test_parity_smoke.py): 3 Rust regression pins
+# (basic resolve picks first bf-creature on source-controller's bf
+# and spawns a token with same printing_id + bf grew by 1; no-
+# eligible-target silent fizzle when source-controller's bf has no
+# Creature-typed permanent; cross-controller substrate routing pins
+# that the new token lands on the SOURCE'S controller's bf, not the
+# active-player default fallback). Cross-engine end-to-end probe
+# deferred per round-17/18/19 synthetic-only-when-riders-cascade
+# precedent (the clone substrate cascades token-printing-registry
+# semantics + potential additional copy-substrate for the
+# additional_subtype rider; Rust's deferred-subtype design makes a
+# cross-engine token-snapshot probe shape-mismatched at the
+# substrate level today). The 6 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_create_token_copy_state(source_owner: int = 0):
+    """Helper: build a Rust state with a Bear on `source_owner`'s bf
+    (the deterministic first-slice clone target) and a Sorcery
+    carrier with the CreateTokenCopyOfTargetCreatureYouControl
+    effect; returns (rust_state, spell_id, bear_id, bears_printing_id).
+    Caller invokes ``push_to_stack(spell_id, source_owner)`` +
+    ``resolve_top_of_stack()`` to fire.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    ZONE_HAND = 0
+    bear_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Clone Target Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    spell_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Clone Sorcery",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"U": 2, "generic": 1},
+            "effects": [
+                {"kind": "create_token_copy_of_target_creature_you_control"}
+            ],
+        },
+        source_owner,
+        ZONE_HAND,
+    )
+    # Look up the Bear's printing_id via battlefield_snapshot.
+    bears_printing_id = next(
+        d["printing_id"]
+        for d in rust_state.battlefield_snapshot()
+        if d["id"] == bear_id
+    )
+    return rust_state, spell_id, bear_id, bears_printing_id
+
+
+def test_rust_create_token_copy_basic_spawns_token_same_printing():
+    """Rust regression pin: resolving the spell picks the FIRST
+    Creature on source-controller's bf (the pre-injected Bear),
+    allocates a fresh obj_id, and pushes a new GameObject with the
+    SAME printing_id onto controller's bf. Pins
+    state_ops_resolve.rs:5506-5594's controller-locate +
+    first-creature filter + max+1 obj_id allocation + bf push.
+    """
+    rust_state, spell_id, bear_id, bears_printing_id = (
+        _build_rust_create_token_copy_state(source_owner=0)
+    )
+    snap_before = rust_state.battlefield_snapshot()
+    p0_bears_before = [
+        d for d in snap_before
+        if d["controller_id"] == 0
+        and d["printing_id"] == bears_printing_id
+    ]
+    assert len(p0_bears_before) == 1
+    rust_state.push_to_stack(spell_id, 0)
+    rust_state.resolve_top_of_stack()
+    snap_after = rust_state.battlefield_snapshot()
+    p0_bears_after = [
+        d for d in snap_after
+        if d["controller_id"] == 0
+        and d["printing_id"] == bears_printing_id
+    ]
+    # Bf grew by exactly 1; new token shares the Bear's printing_id.
+    assert len(p0_bears_after) == 2, (
+        f"Expected p0 bf to grow by 1 (token clone of Bear); "
+        f"got before={len(p0_bears_before)}, after={len(p0_bears_after)}"
+    )
+    new_token = next(d for d in p0_bears_after if d["id"] != bear_id)
+    assert new_token["printing_id"] == bears_printing_id, (
+        f"Cloned token should carry the same printing_id as the "
+        f"target Bear; got token.printing_id={new_token['printing_id']}, "
+        f"bear.printing_id={bears_printing_id}"
+    )
+
+
+def test_rust_create_token_copy_no_eligible_target_silent_fizzle():
+    """Rust regression pin: source-controller's bf has NO Creature-
+    typed permanent -> silent fizzle (the resolve arm's
+    ``Some(printing_id) = target_printing_id else { return Ok(()); }``
+    early-return at state_ops_resolve.rs:5549-5551 short-circuits).
+    Pins the no-eligible-target fizzle path. Inject only an
+    Enchantment (not a Creature) on source's bf; spell resolves
+    without panic and bf size stays unchanged.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    ZONE_HAND = 0
+    # Inject ONLY a non-Creature Enchantment on p0's bf.
+    enchantment_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Non-Creature Enchantment",
+            "card_types": ["Enchantment"],
+            "mana_cost": {"W": 1, "generic": 1},
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    spell_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Clone Sorcery (no target)",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"U": 2, "generic": 1},
+            "effects": [
+                {"kind": "create_token_copy_of_target_creature_you_control"}
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+    p0_bf_size_before = sum(
+        1
+        for d in rust_state.battlefield_snapshot()
+        if d["controller_id"] == 0
+    )
+    rust_state.push_to_stack(spell_id, 0)
+    # Resolve must NOT panic; bf must stay the same size (no token spawned).
+    rust_state.resolve_top_of_stack()
+    p0_bf_size_after = sum(
+        1
+        for d in rust_state.battlefield_snapshot()
+        if d["controller_id"] == 0
+    )
+    assert p0_bf_size_after == p0_bf_size_before, (
+        f"No-eligible-target should be a silent fizzle (no token "
+        f"spawned); got before={p0_bf_size_before}, "
+        f"after={p0_bf_size_after}"
+    )
+    # Sanity: the Enchantment is still there and no spurious extra obj.
+    assert any(
+        d["id"] == enchantment_id
+        for d in rust_state.battlefield_snapshot()
+    )
+
+
+def test_rust_create_token_copy_cross_controller_token_lands_on_source_controller_bf():
+    """Rust regression pin: source-controller routing -- when p1
+    casts the clone spell with a Bear on p1's bf (and p0 ALSO has
+    a creature on bf), the cloned token lands on p1's bf (the
+    SOURCE'S controller), not on p0's bf or the active-player
+    default. Pins the controller-locate substrate at
+    state_ops_resolve.rs:5507-5535 (the 5-zone walk + stack-fallback
+    + active-player default chain) on a non-active-player source.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    ZONE_HAND = 0
+    # p0 has a decoy creature.
+    p0_bear_id = rust_state.register_and_inject_object(
+        {
+            "name": "p0 Decoy Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # p1 (the spell's source controller) has the actual target.
+    p1_bear_id = rust_state.register_and_inject_object(
+        {
+            "name": "p1 Target Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    spell_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Clone Sorcery (p1)",
+            "card_types": ["Sorcery"],
+            "mana_cost": {"U": 2, "generic": 1},
+            "effects": [
+                {"kind": "create_token_copy_of_target_creature_you_control"}
+            ],
+        },
+        1,
+        ZONE_HAND,
+    )
+    p0_bf_before = sum(
+        1
+        for d in rust_state.battlefield_snapshot()
+        if d["controller_id"] == 0
+    )
+    p1_bf_before = sum(
+        1
+        for d in rust_state.battlefield_snapshot()
+        if d["controller_id"] == 1
+    )
+    rust_state.push_to_stack(spell_id, 1)
+    rust_state.resolve_top_of_stack()
+    p0_bf_after = sum(
+        1
+        for d in rust_state.battlefield_snapshot()
+        if d["controller_id"] == 0
+    )
+    p1_bf_after = sum(
+        1
+        for d in rust_state.battlefield_snapshot()
+        if d["controller_id"] == 1
+    )
+    # p1's bf grew by 1 (token landed on source controller's bf);
+    # p0's bf unchanged (controller routing didn't leak to p0).
+    assert p1_bf_after == p1_bf_before + 1, (
+        f"p1's bf should grow by 1 (token landed on source-controller's "
+        f"bf); got before={p1_bf_before}, after={p1_bf_after}"
+    )
+    assert p0_bf_after == p0_bf_before, (
+        f"p0's bf should be unchanged (token does NOT land on the "
+        f"non-source-controller's bf); got before={p0_bf_before}, "
+        f"after={p0_bf_after}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
