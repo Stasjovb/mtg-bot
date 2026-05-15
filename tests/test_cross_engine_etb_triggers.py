@@ -9136,5 +9136,194 @@ def test_rust_parser_accepts_deal_damage_equal_to_source_power_any_target_in_tri
     assert pid == 0
 
 
+def test_bridge_become_land_creature_ueot_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 25 fresh discovery walk) --
+    BecomeLandCreatureUEOT family. Rust ``{"kind":
+    "become_land_creature_ueot", "power": 2, "toughness": 2}``
+    translates to Python ``BecomeLandCreatureUEOT(power=2,
+    toughness=2)`` with default ``granted_subtype=None`` and default
+    empty ``granted_keywords``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3953-4008. The bridge
+    wires the same Python-side primitive
+    (``effects/generic/become_type.py:126``) as the mirror of the
+    Rust resolver.
+    """
+    from mtg_bot.effects.generic.become_type import (
+        BecomeLandCreatureUEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "become_land_creature_ueot",
+            "power": 2,
+            "toughness": 2,
+        }
+    )
+    assert isinstance(e, BecomeLandCreatureUEOT)
+    assert e.power == 2
+    assert e.toughness == 2
+    assert e.granted_subtype is None
+    assert e.granted_keywords == frozenset()
+    assert e.unblockable is False
+
+
+def test_bridge_become_land_creature_ueot_missing_power_raises():
+    """Bridge arm pin: missing ``power`` field raises KeyError
+    (mirrors Rust's parse_effect arm at cards.rs:3962-3974 which
+    raises 'missing required power field' with PyValueError). The
+    bridge enforces the required-fields contract on the Python side
+    so the dict shape is symmetric.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "become_land_creature_ueot",
+                "toughness": 2,
+            }
+        )
+
+
+def test_bridge_become_land_creature_ueot_missing_toughness_raises():
+    """Bridge arm pin: missing ``toughness`` field raises KeyError
+    (mirrors Rust's parse_effect arm at cards.rs:3975-3987 which
+    raises 'missing required toughness field' with PyValueError).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "become_land_creature_ueot",
+                "power": 2,
+            }
+        )
+
+
+def test_bridge_become_land_creature_ueot_granted_subtype_present():
+    """Bridge arm pin: ``granted_subtype`` field round-trips when set
+    (e.g. ``"Elemental"`` for Lavaclaw-shape, ``"Blinkmoth"`` for
+    Blinkmoth Nexus-shape). Pins the optional-string field handling.
+    """
+    from mtg_bot.effects.generic.become_type import (
+        BecomeLandCreatureUEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "become_land_creature_ueot",
+            "power": 1,
+            "toughness": 1,
+            "granted_subtype": "Elemental",
+        }
+    )
+    assert isinstance(e, BecomeLandCreatureUEOT)
+    assert e.granted_subtype == "Elemental"
+
+
+def test_bridge_become_land_creature_ueot_empty_subtype_normalizes_to_none():
+    """Bridge arm pin: empty-string ``granted_subtype`` normalizes to
+    None (mirrors Rust's parse_effect arm at cards.rs:3996-4000
+    `if s.is_empty() { None } else { Some(s) }`). Pins the empty-
+    string-as-None convention for round-trip parity.
+    """
+    from mtg_bot.effects.generic.become_type import (
+        BecomeLandCreatureUEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "become_land_creature_ueot",
+            "power": 2,
+            "toughness": 2,
+            "granted_subtype": "",
+        }
+    )
+    assert isinstance(e, BecomeLandCreatureUEOT)
+    assert e.granted_subtype is None
+
+
+def test_bridge_become_land_creature_ueot_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([BecomeLandCreatureUEOT(power=2, toughness=2),
+    DrawCards(1)])`` translates correctly via the recursive Sequence
+    translator. Pins this arm against accidental dispatch loss inside
+    Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.become_type import (
+        BecomeLandCreatureUEOT,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "become_land_creature_ueot",
+                    "power": 2,
+                    "toughness": 2,
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], BecomeLandCreatureUEOT)
+    assert e.effects[0].power == 2
+    assert e.effects[0].toughness == 2
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_become_land_creature_ueot_in_activated_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "become_land_creature_ueot", "power": N, "toughness":
+    M, "granted_subtype": "..."}`` dict shape on a Land's activated-
+    ability effects carrier (the canonical manland animation shape).
+    The bridge dict shape must register cleanly on Rust too; this
+    lockstep gate keeps the bridge from drifting away from Rust's
+    parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3953-4008`` accepts
+    the struct-variant dict with required power/toughness and optional
+    granted_subtype.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "BecomeLandCreatureUEOT"
+        ),
+        "card_types": ["Land"],
+        "activated_abilities": [
+            {
+                "cost": {"mana": {"generic": 1}, "tap_self": True},
+                "effect": {
+                    "kind": "become_land_creature_ueot",
+                    "power": 2,
+                    "toughness": 2,
+                    "granted_subtype": "Elemental",
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
