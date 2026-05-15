@@ -45936,6 +45936,147 @@ def test_rust_add_n_mana_of_chosen_color_amount_zero_silent_noop():
     )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- tap_target_artifact_or_creature (round 22).
+#
+# Rust's Effect::TapTargetArtifactOrCreature (unit variant) already
+# shipped end-to-end via round 28 (parse at cards.rs:3693-3694 +
+# resolve at state_ops_resolve.rs:5301-5327 + to_dict at
+# cards.rs:5597-5599); this slice ships the cross-engine bridge
+# translator + Rust regression pins. The bridge arm closes a gap
+# discovered by the round-22 fresh discovery walk (Rust kind emitted
+# by to_dict but no matching `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumers (oracle scan): 4 EoE cards (Mental Modulation
+# middle clause and sister cards with the bare "tap target artifact
+# or creature" shape).
+#
+# Pin layout (in test_parity_smoke.py): 2 Rust regression pins
+# (basic ETB taps the only artifact-or-creature target on bf +
+# already-tapped target idempotent). Cross-engine end-to-end probe
+# deferred per round-17/18/19 synthetic-only-when-riders-cascade
+# precedent (the targeting Decision pipeline is its own surface).
+# The 5 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_tap_target_artifact_or_creature_state(source_owner: int = 0):
+    """Helper: build a Rust state with a single carrier creature on
+    `source_owner`'s bf carrying an ETB triggered ability that fires
+    TapTargetArtifactOrCreature. Returns (rust_state, source_id).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "TapTargetArtifactOrCreature-Trigger Wizard",
+            "card_types": ["Creature"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "tap_target_artifact_or_creature"},
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_tap_target_artifact_or_creature_basic_taps_target():
+    """Rust regression pin: ETB resolution picks the FIRST artifact-
+    or-creature on bf in ETB-timestamp order via bf_iter_etb_sorted
+    and taps it. With only the source on the battlefield, the source
+    itself is the first eligible target (it's a creature) and gets
+    tapped. Pins state_ops_resolve.rs:5301-5327's filter dispatch +
+    bf_iter_etb_sorted walk + obj.tapped mutation.
+    """
+    rust_state, source_id = (
+        _build_rust_tap_target_artifact_or_creature_state(source_owner=0)
+    )
+    # Pre-resolve: source is untapped (just entered).
+    assert rust_state.is_tapped(source_id) is False
+    rust_state.resolve_top_of_stack()
+    # Post-resolve: source is now tapped (it's the only artifact-or-
+    # creature on bf, so it's the ETB-first target).
+    assert rust_state.is_tapped(source_id) is True, (
+        f"TapTargetArtifactOrCreature should tap the only eligible "
+        f"target (source itself); got is_tapped={rust_state.is_tapped(source_id)}"
+    )
+
+
+def test_rust_tap_target_artifact_or_creature_already_tapped_idempotent():
+    """Rust regression pin: already-tapped target is idempotent --
+    the resolve arm sets ``obj.tapped = true`` unconditionally
+    (state_ops_resolve.rs:5322-5325) without checking pre-state, so
+    re-applying to a tapped permanent is a no-op. Pins the
+    idempotent-tap contract documented at state_ops_resolve.rs:
+    5296-5297.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Inject a creature first (it'll be the ETB-first target),
+    # already tapped.
+    target_id = rust_state.register_and_inject_object(
+        {
+            "name": "Pre-Tapped Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_state.tap_object(target_id)
+    assert rust_state.is_tapped(target_id) is True
+    # Now inject the source (later ETB timestamp).
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "TapTargetArtifactOrCreature-Trigger Wizard",
+            "card_types": ["Creature"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "tap_target_artifact_or_creature"},
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # Resolve: ETB-first picks the pre-tapped Bear; idempotent re-tap.
+    rust_state.resolve_top_of_stack()
+    # Both still tapped (Bear was, source wasn't picked).
+    assert rust_state.is_tapped(target_id) is True
+    assert rust_state.is_tapped(source_id) is False, (
+        f"source should NOT be tapped (pre-tapped Bear was picked "
+        f"first by ETB-timestamp); got is_tapped={rust_state.is_tapped(source_id)}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
