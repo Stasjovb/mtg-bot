@@ -47283,6 +47283,209 @@ def test_rust_each_opponent_loses_life_cross_controller_routing():
     )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- untap_target (round 23).
+#
+# Rust's Effect::UntapTarget { target: TargetFilter } already
+# shipped end-to-end via round 13 (parse at cards.rs:3237-3244 +
+# resolve at state_ops_resolve.rs:1429-1476, with the I72
+# controller-of-effect fix); this slice ships the cross-engine
+# bridge translator + Rust regression pins. The bridge arm closes
+# a gap discovered by the round-22 fresh discovery walk (Rust kind
+# emitted by to_dict but no matching `_ta_dict_to_python_effect`
+# arm).
+#
+# Real-EoE consumers (oracle scan): No bare-shape consumer today --
+# the only EoE untap-target oracle hit (Tezzeret's "Untap target
+# artifact or creature") is a rider-narrowed shape that needs its
+# own Rust Effect variant (sister to tap_target_artifact_or_creature
+# from round 22). The bare bridge arm closes the to_dict round-trip
+# surface and pre-positions the Untap primitive for the rider-
+# variant follow-up.
+#
+# Pin layout (in test_parity_smoke.py): 3 Rust regression pins
+# (basic untap of a tapped creature on defender's bf + idempotent
+# on already-untapped target + cross-controller routing pinning
+# the I72 controller-of-effect fix). Cross-engine end-to-end probe
+# deferred per round-17/18/19 synthetic-only-when-riders-cascade
+# precedent (the targeting Decision pipeline is its own surface).
+# The 6 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_untap_target_state(source_owner: int = 0):
+    """Helper: build a Rust state with a source carrier creature on
+    `source_owner`'s bf carrying an ETB trigger that fires
+    UntapTarget(any_creature), PLUS one tapped creature on the
+    defender's bf so Rust's first-slice picker has a target.
+    Returns (rust_state, source_id, defender_creature_id).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    defender_owner = 1 - source_owner
+    # Seat a creature on the defender's bf so the AnyCreature first-
+    # slice picker has bf[0] to flip; objects are injected untapped
+    # by default, so we tap_object after injection for the
+    # "needs untapping" baseline.
+    defender_creature_id = rust_state.register_and_inject_object(
+        {
+            "name": "Untap-Target Bait Bear (3/3)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 1},
+            "effects": [],
+            "power": 3,
+            "toughness": 3,
+        },
+        defender_owner,
+        ZONE_BATTLEFIELD,
+    )
+    # Tap it explicitly (register_and_inject_object always seeds
+    # tapped=false; tap_object flips to true and returns True on
+    # state change).
+    assert rust_state.tap_object(defender_creature_id) is True
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "UntapTarget ETB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "untap_target",
+                        "target": {"kind": "any_creature"},
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id, defender_creature_id
+
+
+def _is_tapped(rust_state, obj_id):
+    """Helper: read tapped state from the bf snapshot. Returns
+    bool, or None if the object isn't on the bf.
+    """
+    for entry in rust_state.battlefield_snapshot():
+        if int(entry["id"]) == obj_id:
+            return bool(entry["tapped"])
+    return None
+
+
+def test_rust_untap_target_basic_untaps_defender_creature():
+    """Rust regression pin: basic untap-target with p0 source --
+    Rust's AnyCreature first-slice picker on the I72-resolved
+    defender (1 - controller = p1) finds the tapped creature and
+    flips ``obj.tapped = false``. Pins state_ops_resolve.rs:
+    1429-1476's defender-side pick + tapped flip via Arc::make_mut.
+    """
+    rust_state, _source_id, defender_creature_id = (
+        _build_rust_untap_target_state(source_owner=0)
+    )
+    assert rust_state.stack_size() == 1
+    # Pre-resolve: defender creature is tapped.
+    assert _is_tapped(rust_state, defender_creature_id) is True
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # Post-resolve: defender creature is untapped.
+    assert _is_tapped(rust_state, defender_creature_id) is False, (
+        f"defender creature {defender_creature_id} should be untapped; "
+        f"tapped={_is_tapped(rust_state, defender_creature_id)}"
+    )
+
+
+def test_rust_untap_target_idempotent_on_already_untapped():
+    """Rust regression pin: target is already untapped pre-resolve
+    -- the resolve arm's tapped-flip is unconditional (sets
+    ``tapped = false`` regardless of prior state) so observable
+    is unchanged. Pins the round-13 docstring promise of
+    "idempotent on already-untapped target".
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Seat an UNTAPPED creature on p1's bf.
+    defender_creature_id = rust_state.register_and_inject_object(
+        {
+            "name": "Untap-Target Bait Bear (3/3, untapped)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 1},
+            "effects": [],
+            "power": 3,
+            "toughness": 3,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    _source_id = rust_state.register_and_inject_object(
+        {
+            "name": "UntapTarget ETB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "untap_target",
+                        "target": {"kind": "any_creature"},
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert _is_tapped(rust_state, defender_creature_id) is False
+    rust_state.resolve_top_of_stack()
+    # Still untapped (no error, no other state change).
+    assert _is_tapped(rust_state, defender_creature_id) is False
+
+
+def test_rust_untap_target_cross_controller_routing():
+    """Rust regression pin: source owned by p1 -- the I72 fix at
+    state_ops_resolve.rs:1454-1458 derives controller from
+    ``current_resolve_source_controller``, picks defender =
+    1 - controller = p0, and untaps p0's creature (NOT p1's). Pins
+    cross-controller routing: a Twiddle-shape effect controlled by
+    p1 untaps an opponent's creature even when active_player=p0.
+    Mirrors the round-12 sister TapTarget cross-controller pin
+    shape.
+    """
+    rust_state, _source_id, defender_creature_id = (
+        _build_rust_untap_target_state(source_owner=1)
+    )
+    # defender_creature_id sits on p0's bf (the helper computes
+    # defender_owner = 1 - source_owner = 0).
+    assert _is_tapped(rust_state, defender_creature_id) is True
+    rust_state.resolve_top_of_stack()
+    # p0's creature is untapped via I72 source-controller resolution.
+    assert _is_tapped(rust_state, defender_creature_id) is False, (
+        f"p0 creature {defender_creature_id} should be untapped by "
+        f"p1's UntapTarget (I72 controller-of-effect routing); "
+        f"tapped={_is_tapped(rust_state, defender_creature_id)}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

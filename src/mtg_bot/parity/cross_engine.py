@@ -4251,6 +4251,107 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 "parse_effect contract at cards.rs:3432-3436)"
             )
         return EachOpponentLosesLife(amount=amount)
+    if kind == "untap_target":
+        # **Round-23 BLOCKED-BRIDGE-ARM slice -- "untap target
+        # creature" (UntapTarget family).** Rust substrate
+        # ``Effect::UntapTarget { target: TargetFilter }``
+        # (cards.rs:95; parser at cards.rs:3237-3244, resolve at
+        # state_ops_resolve.rs:1429-1476, to_dict at
+        # cards.rs:5410-5413) shipped via round 13 (Twiddle-shape
+        # symmetric counterpart to TapTarget). This slice closes
+        # the cross-engine bridge gap. Discovered by the round-22
+        # fresh discovery walk (Rust kind emitted by to_dict but no
+        # matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Filter-narrow-by-design.** Rust's resolve arm
+        # (state_ops_resolve.rs:1429-1434) explicitly raises a
+        # PyValueError on ``TargetFilter::AnyPlayer`` -- "UntapTarget
+        # with AnyPlayer target is semantically nonsense (cannot
+        # untap a player)". The bridge mirrors this narrowness: only
+        # ``any_creature`` is honored. Sibling to round-18's
+        # tap_target arm which is also filter-narrow-by-design.
+        #
+        # **Symmetric to TapTarget.** Same target-driven shape with
+        # inverse mutation (``obj.tapped = False``). Rust's resolve
+        # arm carries the I72 controller-of-effect fix
+        # (state_ops_resolve.rs:1454-1458): defender = 1 - controller
+        # where controller derives from
+        # ``current_resolve_source_controller`` with active_player
+        # fallback -- mirrors the I71 TapTarget fix exactly. The
+        # AnyCreature first-slice picker scans the resolved
+        # defender's bf for ``bf[0]`` regardless of card-type filter
+        # at this layer. Idempotent on already-untapped targets
+        # (silent no-op). Empty defender's bf = silent fizzle.
+        #
+        # **Python target-pick semantics.** The bridge constructs
+        # ``Untap(targets=(TargetSpec(IsCreature()),))`` -- the
+        # generic ``Untap`` primitive added to
+        # ``effects/generic/tap.py`` mirrors ``Tap``'s shape (same
+        # SlotRef / TargetSpec walk + slot filter recheck at resolve
+        # time per CR 608.2b). The targeting Decision pipeline picks
+        # at PUSH time via the source-controller's
+        # ``agent.choose_target`` over the legal_targets pool, and
+        # ``Untap.resolve`` re-verifies the slot's filter at fire
+        # time before flipping ``obj.tapped = False``. Already-
+        # untapped targets early-out silently (no log entry; mirrors
+        # Rust's no-op semantics).
+        #
+        # **Filter narrowness asymmetry note.** Mirrors the
+        # tap_target / destroy_target / exile_target / return_to_hand
+        # arm notes: Rust's first-slice ``AnyCreature`` picker
+        # doesn't actually filter to creatures (picks ``bf[0]``
+        # blindly); Python's ``IsCreature()`` slot filter does. On
+        # synthetic probes that seat only creatures on the
+        # defender's bf, this asymmetry collapses and both engines
+        # pick the same target.
+        #
+        # **Distinct from ``UntapTargetOtherPermanent``** (round-28
+        # Nanoform-Sentinel trigger) and ``UntapTargetLand``
+        # (Deserted Temple). Those carry their own Effect variants
+        # on both engines; the bare ``untap_target`` arm here only
+        # honors AnyCreature (matches the parser-side filter
+        # allowlist).
+        #
+        # **EoE consumer status.** No bare-shape EoE consumer today
+        # -- the only EoE untap-target oracle hit (Tezzeret's "Untap
+        # target artifact or creature") is a rider-narrowed shape
+        # that needs its own Rust Effect variant (sister to
+        # ``tap_target_artifact_or_creature`` from round 22). The
+        # bare bridge arm closes the to_dict round-trip surface and
+        # pre-positions the Untap primitive for the rider-variant
+        # follow-up. Cross-engine end-to-end probe deferred per
+        # round-17/18/19 synthetic-only-when-riders-cascade
+        # precedent.
+        from mtg_bot.effects.generic.tap import Untap
+        from mtg_bot.effects.object_predicates import IsCreature
+        from mtg_bot.effects.targets import TargetSpec
+        target_dict = eff_dict.get("target")
+        # Lenient-default: missing ``target`` defaults to
+        # ``any_creature`` (mirrors the tap_target / destroy_target
+        # / exile_target / return_to_hand convention). Bridge
+        # consumers SHOULD pass ``target`` explicitly to keep
+        # round-trip dict-shape consistency with what Rust's parser
+        # accepts.
+        target_kind = (
+            target_dict.get("kind", "any_creature")
+            if isinstance(target_dict, dict)
+            else "any_creature"
+        )
+        if target_kind == "any_creature":
+            slot_filter = IsCreature()
+        else:
+            raise ValueError(
+                f"cross_engine untap_target bridge: unsupported "
+                f"target filter kind {target_kind!r} (Rust's "
+                f"parse_target_filter at cards.rs:2790-2799 accepts "
+                f"only 'any_player' and 'any_creature'; "
+                f"untap_target is filter-narrow-by-design and only "
+                f"honors creature-shaped filters -- Rust raises a "
+                f"runtime PyValueError on AnyPlayer at "
+                f"state_ops_resolve.rs:1429-1434 since you can't "
+                f"untap a player)"
+            )
+        return Untap(targets=(TargetSpec(slot_filter),))
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
