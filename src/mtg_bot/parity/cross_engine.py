@@ -5079,6 +5079,79 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             toughness=eff_dict["toughness"],
             granted_subtype=granted_subtype,
         )
+    if kind == "add_mana_to_pool":
+        # **Round-27 BLOCKED-BRIDGE-ARM slice -- "add {color} mana"
+        # mana-ability resolve family (AddManaToPool; the universal
+        # mana-producing primitive that every mana ability emits).**
+        # Rust substrate ``Effect::AddManaToPool { color: String,
+        # amount: i32 }`` (cards.rs; parser at cards.rs:3295-3308,
+        # to_dict at cards.rs:5448-5452) shipped on main; this slice
+        # closes the cross-engine bridge gap. Discovered by the
+        # round-22 fresh discovery walk (Rust kind emitted by to_dict
+        # but no matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape divergence (translated at the bridge).** Rust's
+        # struct-variant uses scalar ``color: String`` + ``amount: i32``
+        # (single color/amount pair per Effect instance). Python's
+        # ``AddManaToPool`` (effects/generic/mana.py:30-80) uses the
+        # richer ``produces: tuple[tuple[str, int], ...]`` shape so a
+        # single Effect can mint multi-color batches in one resolve
+        # (the All-Fates-Scroll-shape "Add WUBRG" emits a single
+        # AddManaToPool with five (color, 1) pairs). The bridge folds
+        # Rust's scalar pair into a one-tuple of one (color, amount)
+        # pair: ``produces=((color, amount),)``. This is structurally
+        # narrower than Python's max-coverage shape but matches what
+        # the Rust substrate emits today; multi-color batched-mint
+        # would need a Rust schema bump first.
+        #
+        # **Required-fields contract.** Rust's parser raises
+        # PyValueError on missing ``color`` or ``amount`` (cards.rs:
+        # 3296-3306 calls ``require()`` for both); the bridge mirrors
+        # via KeyError on missing field (matches the round-25
+        # become_land_creature_ueot precedent for required-fields
+        # parity).
+        #
+        # **Color validation lockstep.** Rust's parser calls
+        # ``validate_mana_symbol(&color)`` (cards.rs:3300, valid set
+        # ``{"W","U","B","R","G","C"}``). Python's ``AddManaToPool``
+        # has no equivalent runtime validation -- the produces tuple
+        # accepts any string -- so the bridge does NOT re-validate
+        # here. The Rust parser surface lockstep test at the end of
+        # this slice ensures any invalid color string fails on the
+        # Rust side first (which is the round-trip contract: Rust
+        # parse -> bridge translate -> Python construct), so an
+        # invalid color never reaches the bridge in normal flow.
+        #
+        # **Amount non-negative contract.** Rust's parser raises on
+        # ``amount < 0`` (cards.rs:3302-3306). Python's class accepts
+        # any int; same lockstep contract -- Rust parser validates
+        # first, bridge passes through, never sees negative.
+        #
+        # **Real EoE consumers** unblocked: 23 EoE oracle hits via
+        # scan -- Adagia Windswept Bastion, All-Fates Scroll, Breeding
+        # Pool, Command Bridge, Evendo Waking Haven, and 18 other
+        # cards using "{T}: Add {color}" mana-ability primitives
+        # across dual lands and mana-rock activated abilities. High-
+        # leverage round-27 slice. Cross-engine end-to-end probe
+        # deferred per round-17/18/19 synthetic-only-when-riders-
+        # cascade precedent (the mana-ability bypass-stack flag +
+        # spend_restriction tagging path are their own surfaces
+        # beyond the bare bridge-arm slice).
+        from mtg_bot.effects.generic.mana import AddManaToPool
+
+        if "color" not in eff_dict:
+            raise KeyError(
+                "add_mana_to_pool bridge arm: missing required "
+                "'color' field"
+            )
+        if "amount" not in eff_dict:
+            raise KeyError(
+                "add_mana_to_pool bridge arm: missing required "
+                "'amount' field"
+            )
+        return AddManaToPool(
+            produces=((eff_dict["color"], eff_dict["amount"]),),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
