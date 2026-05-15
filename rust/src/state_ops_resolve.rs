@@ -4477,6 +4477,124 @@ fn apply_effect(
                 }
             }
         }
+        // BLOCKED-RUST-EFFECT slice (round 32). Deal damage to
+        // target creature an opponent controls equal to the number
+        // of artifacts the source's controller controls (Warmaker
+        // Gunship's ETB; 1 EoE consumer). First dynamic-X-from-
+        // permanent-count primitive in Rust.
+        //
+        // **Mechanism — count + apply.** Compute `amount` as the
+        // number of permanents on the source-controller's bf whose
+        // printing's `card_types` contains "Artifact" (matches
+        // Python: lands that are also artifacts count, tokens like
+        // Lander count). If amount ≤ 0 → silent fizzle (no targets
+        // chosen, no damage). Otherwise route through the same
+        // opponent-creature target shape as
+        // `Effect::DealDamageToOpponentCreature`: scan opponents in
+        // ascending player order, pick the first creature on each
+        // opponent's bf, apply `amount` damage to it. No opponent
+        // creature → silent fizzle.
+        //
+        // **Source-controller resolution.** Mirrors
+        // `Effect::DealDamageToOpponentCreature` shape — 5-zone scan
+        // + stack scan, falling through to silent fizzle if the
+        // source isn't trackable (e.g. counterspelled). Distinct
+        // from the I79 transient-slot lookup
+        // (current_resolve_source_controller) used by
+        // PumpTargetCreatureUntilEOT / DoubleTargetCreaturesPowerUEOT
+        // because those arms target the source's OWN side and the
+        // I79 slot is the canonical source-controller cache there.
+        // For the `damage opponent` shape we already commit to the
+        // 5-zone scan precedent set by DealDamageToOpponentCreature
+        // for cross-arm consistency on this target shape.
+        Effect::DealDamageToOpponentCreatureByArtifactCount => {
+            // Source-controller resolution (5-zone walk + stack scan;
+            // mirrors DealDamageToOpponentCreature shape).
+            let mut source_controller: Option<u8> = None;
+            'outer_sc: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_sc;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Count source-controller's artifacts on bf. Mirrors
+            // Python's `sum(1 for o in state.battlefield if
+            // o.controller_id == controller_id and
+            // o.printing.is_artifact)` at damage.py:445-448.
+            // Scryfall's card_types convention has "Artifact" in
+            // the card_types list for any artifact (including
+            // artifact-creatures, artifact-lands, tokens with
+            // Artifact type).
+            let cidx = controller as usize;
+            let mut amount: i32 = 0;
+            for obj in state.players[cidx].battlefield.iter() {
+                let Some(printing) = state.registry.printings.get(obj.printing_id as usize)
+                else {
+                    continue;
+                };
+                if printing.card_types.iter().any(|t| t == "Artifact") {
+                    amount = amount.saturating_add(1);
+                }
+            }
+            if amount <= 0 {
+                return Ok(()); // no artifacts → silent fizzle (matches Python damage.py:449-450)
+            }
+            // Pick first eligible target: scan opponents in
+            // ascending order, pick the first Creature on each
+            // opponent's bf. Mirrors DealDamageToOpponentCreature
+            // target shape.
+            let mut found: Option<(usize, u32)> = None;
+            'outer_tg: for (pidx, player) in state.players.iter().enumerate() {
+                if pidx as u8 == controller {
+                    continue;
+                }
+                for obj in player.battlefield.iter() {
+                    let Some(printing) =
+                        state.registry.printings.get(obj.printing_id as usize)
+                    else {
+                        continue;
+                    };
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        found = Some((pidx, obj.id));
+                        break 'outer_tg;
+                    }
+                }
+            }
+            if let Some((pidx, target_id)) = found {
+                let amount_i16 = amount.min(i16::MAX as i32) as i16;
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.damage = obj.damage.saturating_add(amount_i16);
+                        break;
+                    }
+                }
+            }
+            // else: no opponent creature → silent fizzle.
+        }
         // BLOCKED-RUST-EFFECT slice — Fight effect arm. "Target
         // creature you control fights target creature an opponent
         // controls" (CR 701.12). Both fighters deal damage equal to
