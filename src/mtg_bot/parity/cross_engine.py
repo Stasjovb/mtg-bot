@@ -5476,6 +5476,52 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             you_control_only=True,
             exclude_self=False,
         )
+    if kind == "destroy_target_land":
+        # **Round-27 BLOCKED-BRIDGE-ARM slice -- "destroy target land"
+        # (DestroyTargetLand family, sister of round-23 destroy_target_artifact).**
+        # Rust substrate ``Effect::DestroyTargetLand`` (cards.rs:673 unit
+        # variant; parser at cards.rs:3526-3533, to_dict at cards.rs:5506-
+        # 5508, resolve at state_ops_resolve.rs:4112) was already on main;
+        # bridge arm was the staleness gap (round-22 fresh discovery walk
+        # -- to_dict-emitted kind with no matching translator).
+        #
+        # **Field shape (unit variant).** Rust's parse_effect arm at
+        # cards.rs:3526-3533 takes NO fields -- bare ``{"kind":
+        # "destroy_target_land"}`` (silent-drop convention for extra
+        # keys mirroring the sister destroy_target_artifact arm at
+        # cards.rs:3519-3525). Python's ``DestroyTargetLand`` carries
+        # one optional bool field ``nonbasic_only: bool = False`` (sugar
+        # for Strip Mine's bare form vs Dust Bowl's nonbasic-restricted
+        # form -- the unified ``Destroy.resolve`` re-verifies the slot's
+        # filter at resolution). Rust's substrate covers ONLY the bare
+        # form (``nonbasic_only=False`` lane); the bridge constructs
+        # Python with the default to mirror Rust's coverage. Nonbasic-
+        # only-with-Rust-substrate would need a Rust schema bump first
+        # (sister-arm schema-narrowness convention -- see round-27
+        # grant_keyword_to_target_creature_until_eot's exclude_self=False
+        # default).
+        #
+        # **Resolve semantics (parity-relevant).** Rust scans BOTH
+        # players' battlefield in ETB-timestamp order via
+        # ``bf_iter::bf_iter_etb_sorted`` and picks the first
+        # non-indestructible Land (state_ops_resolve.rs:4112). Python's
+        # ``Destroy.resolve`` re-verifies the ``IsLand()`` filter at
+        # resolution time per CR 608.2b. Indestructible permanents
+        # survive on both engines.
+        #
+        # **EoE consumer note.** No EoE oracle hits today (EoE has no
+        # bare "destroy target land" cards -- Strip Mine / Wasteland /
+        # Dust Bowl are reprints from earlier sets). Slice ships per
+        # round-27 round-trip-surface-coverage rule (each bridge arm is
+        # load-bearing for the to_dict round-trip even without EoE
+        # consumers; the bridge surface is the contract, not the EoE-
+        # oracle-only filter). Cross-engine end-to-end probe deferred
+        # per round-17/18/19 synthetic-only-when-riders-cascade
+        # precedent (the targeting Decision pipeline + CR 608.2b
+        # filter re-verification are their own surfaces beyond the
+        # bare bridge-arm slice).
+        from mtg_bot.effects.generic.destroy import DestroyTargetLand
+        return DestroyTargetLand()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
