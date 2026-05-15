@@ -45624,6 +45624,204 @@ def test_rust_pump_self_until_eot_cross_controller_routing():
     )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- optional_mana_cost_then_effect (round 22).
+#
+# Rust's Effect::OptionalManaCostThenEffect { cost, inner_effect }
+# already shipped end-to-end via round 29 (parse at cards.rs:4514-4544
+# + resolve at state_ops_resolve.rs:7457-7470 + to_dict at
+# cards.rs:5775-5779); this slice ships the cross-engine bridge
+# translator + Rust regression pins. The bridge arm closes a gap
+# discovered by the round-22 fresh discovery walk (Rust kind emitted
+# by to_dict but no matching `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumers (oracle scan): 8 EoE cards (Oreplate Pangolin and
+# the kicker / surge / Spree-shape variant family).
+#
+# Pin layout (in test_parity_smoke.py): 3 Rust regression pins
+# (resolve-pushes-pending-decision shape + pay-yes-applies-inner +
+# pay-no-drops-inner). Tight drain-shape pins are intentionally
+# minimal here -- the OptionalManaCostChoice PendingDecision contract
+# already has extensive coverage in tests_rust/test_pending_decisions.py
+# (>10 pins covering empty-pool transactional rollback, cross-variant
+# mismatches, fingerprint stability, deep-clone). These regression
+# pins lock the bridge dict shape against Rust's parser+resolve
+# end-to-end via the triggered_ability carrier path. Cross-engine
+# end-to-end probe deferred per round-17/18/19 synthetic-only-when-
+# riders-cascade precedent (the OptionalManaCostChoice PendingDecision
+# pipeline is its own surface). The 7 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_optional_mana_cost_then_effect_state(
+    generic_cost: int = 1, draw_count: int = 2, source_owner: int = 0,
+):
+    """Helper: build a Rust state with a single carrier creature on
+    `source_owner`'s bf carrying an ETB triggered ability that fires
+    OptionalManaCostThenEffect with cost={generic: generic_cost} and
+    inner_effect=draw_cards{count: draw_count}. Returns
+    (rust_state, source_id).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "OptionalManaCostThenEffect-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"R": 1, "generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "optional_mana_cost_then_effect",
+                        "cost": {"generic": generic_cost},
+                        "inner_effect": {
+                            "kind": "draw_cards",
+                            "count": draw_count,
+                        },
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_optional_mana_cost_then_effect_resolve_pushes_pending():
+    """Rust regression pin: resolving the trigger pushes exactly one
+    OptionalManaCostChoice PendingDecision onto the queue carrying
+    the cost dict and the inner_effect dict, mirroring the parser-
+    surface contract. Pins state_ops_resolve.rs:7457-7470 -- the
+    resolve arm short-circuits and packages the decision rather than
+    consuming the cost / firing the inner effect synchronously.
+    """
+    rust_state, source_id = (
+        _build_rust_optional_mana_cost_then_effect_state(
+            generic_cost=1, draw_count=2, source_owner=0,
+        )
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack_pause()
+    # Stack drained, one PendingDecision queued.
+    assert rust_state.stack_size() == 0
+    assert rust_state.has_pending_decision() is True
+    pds = rust_state.pending_decisions()
+    assert len(pds) == 1
+    pd = pds[0]
+    assert pd["kind"] == "OptionalManaCostChoice"
+    assert pd["controller"] == 0
+    assert pd["source_obj_id"] == source_id
+    assert pd["cost"] == {"generic": 1}
+    assert pd["inner_effect"]["kind"] == "draw_cards"
+    assert pd["inner_effect"]["count"] == 2
+
+
+def test_rust_optional_mana_cost_then_effect_pay_yes_applies_inner():
+    """Rust regression pin: ``submit_optional_mana_cost_decision(True)``
+    with the cost payable from the pool deducts the cost atomically
+    and applies the inner draw. Mirrors round-29 OptionalManaCost
+    PendingDecision contract: pool drained from 1 to 0, hand grew by
+    inner_effect.count (2). End-to-end pin from triggered-ability
+    register through resolve through pending-decision drain.
+    """
+    rust_state, _source_id = (
+        _build_rust_optional_mana_cost_then_effect_state(
+            generic_cost=1, draw_count=2, source_owner=0,
+        )
+    )
+    # Seed p0 with a library so the inner draw has cards to pull.
+    # Add 5 colorless lands to p0's library.
+    ZONE_LIBRARY = 1
+    for _ in range(5):
+        rust_state.register_and_inject_object(
+            {
+                "name": "Library Filler",
+                "card_types": ["Land"],
+                "mana_cost": {},
+            },
+            0,
+            ZONE_LIBRARY,
+        )
+    # Seed p0 mana pool to cover {1}.
+    rust_state.add_mana(0, "C", 1)
+    pool_before = rust_state.get_mana_pool(0)
+    assert pool_before["C"] == 1
+
+    hand_before = rust_state.hand_sizes[0]
+    rust_state.resolve_top_of_stack_pause()
+    rust_state.submit_optional_mana_cost_decision(True)
+
+    # Pool drained, inner draw fired (+2 to hand).
+    assert rust_state.has_pending_decision() is False
+    pool_after = rust_state.get_mana_pool(0)
+    assert pool_after["C"] == 0, (
+        f"pool C should drain from 1 to 0 after pay-yes; "
+        f"got {pool_after['C']}"
+    )
+    assert rust_state.hand_sizes[0] == hand_before + 2, (
+        f"hand should grow by 2 after inner draw fires; "
+        f"before={hand_before}, after={rust_state.hand_sizes[0]}"
+    )
+
+
+def test_rust_optional_mana_cost_then_effect_pay_no_drops_inner():
+    """Rust regression pin: ``submit_optional_mana_cost_decision(False)``
+    drops the decision without touching the pool or applying the
+    inner draw. Pins the controller's "decline" path -- even when
+    the pool can cover the cost, the controller may refuse and the
+    inner effect does NOT fire. Mirrors round-29 OptionalSac /
+    MayDo precedent for the auto-default-to-no convention.
+    """
+    rust_state, _source_id = (
+        _build_rust_optional_mana_cost_then_effect_state(
+            generic_cost=1, draw_count=2, source_owner=0,
+        )
+    )
+    # Library + payable pool: even though we COULD pay, "no" must
+    # still skip the inner draw.
+    ZONE_LIBRARY = 1
+    for _ in range(5):
+        rust_state.register_and_inject_object(
+            {
+                "name": "Library Filler",
+                "card_types": ["Land"],
+                "mana_cost": {},
+            },
+            0,
+            ZONE_LIBRARY,
+        )
+    rust_state.add_mana(0, "C", 1)
+    pool_before = rust_state.get_mana_pool(0)
+    hand_before = rust_state.hand_sizes[0]
+
+    rust_state.resolve_top_of_stack_pause()
+    rust_state.submit_optional_mana_cost_decision(False)
+
+    assert rust_state.has_pending_decision() is False
+    # No inner draw, no mana drain.
+    assert rust_state.hand_sizes[0] == hand_before, (
+        f"hand should be unchanged after pay-no; "
+        f"before={hand_before}, after={rust_state.hand_sizes[0]}"
+    )
+    pool_after = rust_state.get_mana_pool(0)
+    assert pool_after == pool_before, (
+        f"pool should be unchanged after pay-no; "
+        f"before={pool_before}, after={pool_after}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
