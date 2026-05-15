@@ -818,3 +818,373 @@ def test_setup_matched_game_from_real_decks_parity_clean():
     # 53-card libraries (60 - 7 dealt).
     assert len(py_view["library_p0"]) == 53
     assert len(py_view["library_p1"]) == 53
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 round-19 enhancement: BilateralCombatAgent unit tests.
+#
+# Closes the round-17 enhancement-follow-on item "Bilateral / asymmetric
+# combat strategies": the per-side wrapper holds two RealGameCombatAgent
+# delegates and dispatches pick_attackers / pick_blocks based on which
+# side is active / defending at decision time.
+# ---------------------------------------------------------------------------
+
+
+def _bilateral_test_creatures():
+    """Helper: return (bears, big_bear) printings for the per-side
+    bf-construction tests below. Mirrors the
+    test_combat_agent_attack_all_block_smallest_assignment_pairing
+    helper-style above, but extracted so the bilateral tests can
+    share it without inflating each test body."""
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    bears = CardPrinting(
+        name="Grizzly Bears",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature — Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset(),
+    )
+    big_bear = CardPrinting(
+        name="Big Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature — Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=3,
+        toughness=3,
+        produces=frozenset(),
+        keywords=frozenset(),
+    )
+    return bears, big_bear
+
+
+def _bilateral_add_creature(state, printing, controller):
+    """Helper: append a battlefield creature controlled by ``controller``.
+    Mirrors the inline ``_add_creature`` in the round-16/17 tests."""
+    from mtg_bot.game import Zone
+
+    obj = state.new_object(printing, owner_id=controller, zone=Zone.BATTLEFIELD)
+    obj.summoning_sick = False
+    obj.tapped = False
+    obj.attacking = False
+    obj.blocking = False
+    obj.etb_timestamp = state.next_timestamp
+    state.next_timestamp += 1
+    state.battlefield.append(obj)
+    return obj
+
+
+def test_bilateral_agent_constructs_from_strategy_pair():
+    """BilateralCombatAgent constructs from per-side strategy strings
+    and stamps two RealGameCombatAgent delegates internally."""
+    from mtg_bot.parity.trajectory import (
+        BilateralCombatAgent,
+        RealGameCombatAgent,
+    )
+
+    agent = BilateralCombatAgent(
+        p0_strategy="attack_all", p1_strategy="no_attack",
+    )
+    assert isinstance(agent.p0_agent, RealGameCombatAgent)
+    assert isinstance(agent.p1_agent, RealGameCombatAgent)
+    assert agent.p0_agent.strategy == "attack_all"
+    assert agent.p1_agent.strategy == "no_attack"
+
+
+def test_bilateral_agent_constructs_from_agent_pair():
+    """BilateralCombatAgent constructs from pre-built per-side
+    RealGameCombatAgent instances. Useful for callers that share /
+    pre-build agents."""
+    from mtg_bot.parity.trajectory import (
+        BilateralCombatAgent,
+        RealGameCombatAgent,
+    )
+
+    p0 = RealGameCombatAgent(strategy="attack_all_block_smallest")
+    p1 = RealGameCombatAgent(strategy="block_with_largest_able")
+    agent = BilateralCombatAgent(p0_agent=p0, p1_agent=p1)
+    assert agent.p0_agent is p0
+    assert agent.p1_agent is p1
+
+
+def test_bilateral_agent_mixed_construction_per_side_works():
+    """Per-side construction shapes are independent: p0 from strategy,
+    p1 from agent (or vice versa) is legal."""
+    from mtg_bot.parity.trajectory import (
+        BilateralCombatAgent,
+        RealGameCombatAgent,
+    )
+
+    p1 = RealGameCombatAgent(strategy="optimal_no_loss_attack")
+    agent = BilateralCombatAgent(p0_strategy="attack_all", p1_agent=p1)
+    assert agent.p0_agent.strategy == "attack_all"
+    assert agent.p1_agent is p1
+
+
+def test_bilateral_agent_both_strategy_and_agent_per_side_raises():
+    """Each side must have exactly one source of truth."""
+    from mtg_bot.parity.trajectory import (
+        BilateralCombatAgent,
+        RealGameCombatAgent,
+    )
+
+    p0 = RealGameCombatAgent(strategy="attack_all")
+    with pytest.raises(ValueError, match="either p0_strategy or p0_agent"):
+        BilateralCombatAgent(
+            p0_strategy="attack_all",
+            p0_agent=p0,
+            p1_strategy="no_attack",
+        )
+    with pytest.raises(ValueError, match="either p1_strategy or p1_agent"):
+        BilateralCombatAgent(
+            p0_strategy="attack_all",
+            p1_strategy="no_attack",
+            p1_agent=p0,
+        )
+
+
+def test_bilateral_agent_neither_per_side_raises():
+    """Each side must have at least one source of truth."""
+    from mtg_bot.parity.trajectory import BilateralCombatAgent
+
+    with pytest.raises(ValueError, match="must pass one of p0_strategy"):
+        BilateralCombatAgent(p1_strategy="no_attack")
+    with pytest.raises(ValueError, match="must pass one of p1_strategy"):
+        BilateralCombatAgent(p0_strategy="attack_all")
+
+
+def test_bilateral_agent_invalid_strategy_string_rejected():
+    """Per-side strategy strings flow through RealGameCombatAgent's
+    strategy validation; an invalid string raises at construct time."""
+    from mtg_bot.parity.trajectory import BilateralCombatAgent
+
+    with pytest.raises(ValueError, match="strategy="):
+        BilateralCombatAgent(
+            p0_strategy="charge_blindly", p1_strategy="no_attack",
+        )
+
+
+def test_bilateral_agent_pick_attackers_routes_to_active_side():
+    """``pick_attackers`` dispatches to the active player's delegate.
+
+    Constructs a synthetic bf with one creature per side. With
+    p0_strategy=attack_all + p1_strategy=no_attack: when p0 is active,
+    p0's creature attacks (returns [id]); when p1 is active, no
+    attacker (returns [])."""
+    from mtg_bot.parity.trajectory import (
+        BilateralCombatAgent,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+
+    bears, _ = _bilateral_test_creatures()
+    p0_creature = _bilateral_add_creature(py_state, bears, controller=0)
+    p1_creature = _bilateral_add_creature(py_state, bears, controller=1)
+
+    agent = BilateralCombatAgent(
+        p0_strategy="attack_all", p1_strategy="no_attack",
+    )
+
+    # p0 active -> attack_all fires for p0; only p0's creature is eligible.
+    py_state.active_player_idx = 0
+    assert agent.pick_attackers(py_state) == [int(p0_creature.id)]
+
+    # p1 active -> no_attack fires for p1; no attackers regardless of bf.
+    py_state.active_player_idx = 1
+    assert agent.pick_attackers(py_state) == []
+
+
+def test_bilateral_agent_pick_blocks_routes_to_defender_side():
+    """``pick_blocks`` dispatches to the DEFENDER's delegate.
+
+    Constructs a synthetic bf with two p0 creatures (one attacking)
+    and two p1 creatures (one attacking, one blocking-eligible).
+    With p0_strategy=attack_all_block_smallest +
+    p1_strategy=no_attack: when p0 is active (so p1 defends), p1's
+    no_attack-strategy delegate picks no blocks; when p1 is active
+    (so p0 defends), p0's attack_all_block_smallest-strategy delegate
+    picks a block.
+    """
+    from mtg_bot.parity.trajectory import (
+        BilateralCombatAgent,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+
+    bears, _ = _bilateral_test_creatures()
+
+    # p0 has one creature, p1 has one creature. We'll mark them
+    # attacking depending on which test branch is active.
+    p0_creature = _bilateral_add_creature(py_state, bears, controller=0)
+    p1_creature = _bilateral_add_creature(py_state, bears, controller=1)
+
+    agent = BilateralCombatAgent(
+        p0_strategy="attack_all_block_smallest",
+        p1_strategy="no_attack",
+    )
+
+    # Branch 1: p0 active (defender = p1, runs no_attack -> empty
+    # blocks). p0's creature is the attacker; p1's creature is
+    # block-eligible but no_attack-strategy returns [] (the no_attack
+    # strategy applies on both sides of the table for that delegate).
+    py_state.active_player_idx = 0
+    p0_creature.attacking = True
+    p1_creature.attacking = False
+    p1_creature.blocking = False
+    assert agent.pick_blocks(py_state) == []
+
+    # Reset attacking flags before branch 2 (avoid stale state).
+    p0_creature.attacking = False
+    p1_creature.attacking = False
+
+    # Branch 2: p1 active (defender = p0, runs
+    # attack_all_block_smallest -> blocks each attacker). p1's
+    # creature is the attacker; p0's creature is block-eligible and
+    # the smallest-strategy delegate picks it.
+    py_state.active_player_idx = 1
+    p1_creature.attacking = True
+    assignments = agent.pick_blocks(py_state)
+    assert len(assignments) == 1
+    blocker_id, attacker_id = assignments[0]
+    assert blocker_id == int(p0_creature.id)
+    assert attacker_id == int(p1_creature.id)
+
+
+def test_bilateral_agent_inverted_block_selectors_per_side():
+    """Two different block selectors: p0 picks SMALLEST, p1 picks
+    LARGEST. With one attacker on each side and a small + a big
+    blocker on each side, the assignment selector differs per
+    defender — pinning the asymmetric block selector contract that
+    the round-17 enhancement-follow-on flagged."""
+    from mtg_bot.parity.trajectory import (
+        BilateralCombatAgent,
+        setup_matched_game,
+    )
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, _ = setup_matched_game(spec)
+
+    bears, big_bear = _bilateral_test_creatures()
+
+    # p0: 1 attacker (bears) + 2 blockers (one bears, one big_bear).
+    p0_atk = _bilateral_add_creature(py_state, bears, controller=0)
+    p0_blk_small = _bilateral_add_creature(py_state, bears, controller=0)
+    p0_blk_big = _bilateral_add_creature(py_state, big_bear, controller=0)
+    # p1: 1 attacker + 2 blockers (same shape).
+    p1_atk = _bilateral_add_creature(py_state, bears, controller=1)
+    p1_blk_small = _bilateral_add_creature(py_state, bears, controller=1)
+    p1_blk_big = _bilateral_add_creature(py_state, big_bear, controller=1)
+
+    agent = BilateralCombatAgent(
+        p0_strategy="attack_all_block_smallest",
+        p1_strategy="block_with_largest_able",
+    )
+
+    # Branch 1: p1 attacks, p0 defends with smallest. p0's bears
+    # (smaller than big_bear) blocks p1's attacker. Tap p0_atk so
+    # only p0_blk_small / p0_blk_big are block-eligible (the smallest
+    # selector would otherwise pick p0_atk -- another bears at the
+    # lowest id -- since tied 2/2 creatures break by id ascending).
+    py_state.active_player_idx = 1
+    p1_atk.attacking = True
+    p0_atk.attacking = False
+    p0_atk.tapped = True
+    assignments = agent.pick_blocks(py_state)
+    assert len(assignments) == 1
+    blocker_id, attacker_id = assignments[0]
+    assert blocker_id == int(p0_blk_small.id), (
+        f"p0 with attack_all_block_smallest should pick the SMALLER "
+        f"of the two block-eligible defenders (bears p0_blk_small, "
+        f"id={p0_blk_small.id}), not big_bear (id={p0_blk_big.id})"
+    )
+    assert attacker_id == int(p1_atk.id)
+
+    # Reset attacking + blocking + tapped flags before branch 2.
+    p1_atk.attacking = False
+    p0_atk.tapped = False
+    p0_blk_small.blocking = False
+    p0_blk_big.blocking = False
+
+    # Branch 2: p0 attacks, p1 defends with LARGEST. p1's big_bear
+    # (larger than bears) blocks p0's attacker. Symmetric to branch 1
+    # -- tap p1_atk so only p1_blk_small / p1_blk_big are block-
+    # eligible (the largest selector would also rank p1_atk at a tie
+    # with p1_blk_small; tapping makes the test isolation cleaner).
+    py_state.active_player_idx = 0
+    p0_atk.attacking = True
+    p1_atk.tapped = True
+    assignments = agent.pick_blocks(py_state)
+    assert len(assignments) == 1
+    blocker_id, attacker_id = assignments[0]
+    assert blocker_id == int(p1_blk_big.id), (
+        f"p1 with block_with_largest_able should pick the LARGER "
+        f"of the two block-eligible defenders (big_bear "
+        f"p1_blk_big, id={p1_blk_big.id}), not bears "
+        f"(id={p1_blk_small.id})"
+    )
+    assert attacker_id == int(p0_atk.id)
+
+
+def test_bilateral_agent_drives_drive_combat_phase_unchanged():
+    """BilateralCombatAgent is duck-typed-compatible with
+    drive_combat_phase: the helper accepts the wrapper unchanged.
+    Smoke test: walk a no-op combat phase (both sides no_attack) on
+    an empty bf; pre + post-state equal modulo step advance."""
+    from mtg_bot.parity.trajectory import (
+        BilateralCombatAgent,
+        drive_combat_phase,
+        setup_matched_game,
+    )
+    from mtg_bot.parity.cross_engine import advance_phase_python
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(shared_rng_seed=42)
+    py_state, rust_state = setup_matched_game(spec)
+    # Advance to DECLARE_ATTACKERS (UNTAP -> UPKEEP -> DRAW ->
+    # PRECOMBAT_MAIN -> BEGINNING_OF_COMBAT -> DECLARE_ATTACKERS
+    # = 5 advances). Mirror on rust.
+    for _ in range(5):
+        advance_phase_python(py_state)
+        rust_state.advance_phase()
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    agent = BilateralCombatAgent(
+        p0_strategy="no_attack", p1_strategy="no_attack",
+    )
+    # Should not raise; should advance the step to END_OF_COMBAT.
+    drive_combat_phase(py_state, rust_state, agent)
+    assert py_state.step == Step.END_OF_COMBAT
+
+
+def test_bilateral_agent_player_idx_validation():
+    """The internal _agent_for helper rejects unsupported player
+    indexes (defensive against a future N>2 player engine that calls
+    pick_attackers with active_player_idx > 1)."""
+    from mtg_bot.parity.trajectory import BilateralCombatAgent
+
+    agent = BilateralCombatAgent(
+        p0_strategy="attack_all", p1_strategy="no_attack",
+    )
+    with pytest.raises(ValueError, match="two-player engines"):
+        agent._agent_for(2)
+
+
+def test_bilateral_agent_in_module_dunder_all():
+    """BilateralCombatAgent is exported from the trajectory module
+    public API."""
+    from mtg_bot.parity import trajectory
+
+    assert "BilateralCombatAgent" in trajectory.__all__
