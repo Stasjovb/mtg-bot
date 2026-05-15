@@ -5522,6 +5522,56 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # bare bridge-arm slice).
         from mtg_bot.effects.generic.destroy import DestroyTargetLand
         return DestroyTargetLand()
+    if kind == "return_all_creatures_from_your_graveyard_to_battlefield":
+        # **Round-27 BLOCKED-BRIDGE-ARM slice -- "return all creature
+        # cards from your graveyard to the battlefield" mass-reanimation
+        # untargeted family.** Rust substrate
+        # ``Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield``
+        # (cards.rs unit variant; parser at cards.rs:3838-3840, to_dict
+        # at cards.rs:5700-5702) was already on main; bridge arm was
+        # the staleness gap (round-22 fresh discovery walk -- to_dict-
+        # emitted kind with no matching translator).
+        #
+        # **Field shape (unit variant).** Rust's parse_effect arm at
+        # cards.rs:3838-3840 takes NO fields -- bare ``{"kind":
+        # "return_all_creatures_from_your_graveyard_to_battlefield"}``
+        # (silent-drop convention for extra keys mirroring the sister
+        # ``return_creature_from_your_graveyard_to_battlefield`` arm at
+        # cards.rs:3006-3014). Python's
+        # ``ReturnAllCreaturesFromYourGraveyardToBattlefield`` is a
+        # frozen dataclass with no constructor parameters (``__post_init__``
+        # pins ``creature=True``, ``destination="battlefield"``,
+        # ``untargeted_all=True`` on the inherited
+        # ``ReturnFromGraveyard`` base). Bridge constructs the bare
+        # class.
+        #
+        # **Sister of single-target return_creature_from_your_graveyard_to_battlefield.**
+        # Same source-controller-of-effect derivation, same destination
+        # zone (battlefield), same ETB-trigger fan-out semantics. The
+        # only structural difference: this arm reanimates ALL creature
+        # cards from the controller's graveyard in iteration order
+        # (untargeted mass-reanimation -- the ``untargeted_all=True``
+        # flag on Python's class), versus the single-target sister
+        # arm's first-creature pick. Each creature is moved out of the
+        # graveyard and routed through ``put_into_battlefield`` so its
+        # ETB triggers fire normally (mirrors Rust's deferred-dispatch
+        # ENTERS-fan-out shape).
+        #
+        # **EoE consumer note.** No EoE oracle hits today (Awakening
+        # Hall, the canonical consumer, is not in EoE). Slice ships
+        # per round-27 round-trip-surface-coverage rule (each bridge
+        # arm is load-bearing for the to_dict round-trip even without
+        # EoE consumers; the bridge surface is the contract, not the
+        # EoE-oracle-only filter). Cross-engine end-to-end probe
+        # deferred per round-17/18/19 synthetic-only-when-riders-
+        # cascade precedent (the multi-creature graveyard scan + per-
+        # creature ETB-trigger fan-out + the controller-of-effect
+        # derivation are their own surfaces beyond the bare bridge-
+        # arm slice).
+        from mtg_bot.effects.generic.graveyard import (
+            ReturnAllCreaturesFromYourGraveyardToBattlefield,
+        )
+        return ReturnAllCreaturesFromYourGraveyardToBattlefield()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
