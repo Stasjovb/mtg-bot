@@ -9875,5 +9875,244 @@ def test_rust_parser_accepts_conditional_on_tapped_creatures_in_triggered_abilit
     assert pid == 0
 
 
+def test_bridge_choose_one_mode_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 27 fresh discovery walk) --
+    ChooseOneMode family. Rust ``{"kind": "choose_one_mode", "modes":
+    [<effect_dict>, <effect_dict>]}`` translates to Python
+    ``ModalChooseOne(modes=(...,))``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:4119-4153 (struct
+    variant; required modes: Vec<Effect>). The bridge recursively
+    translates each mode-dict via ``_ta_dict_to_python_effect`` and
+    constructs Python ``ModalChooseOne`` (effects/combinators.py:
+    1112-1208) with the resulting tuple.
+    """
+    from mtg_bot.effects.combinators import ModalChooseOne
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "choose_one_mode",
+            "modes": [
+                {"kind": "draw_cards", "count": 1},
+                {"kind": "gain_life", "amount": 2},
+            ],
+        }
+    )
+    assert isinstance(e, ModalChooseOne)
+    assert len(e.modes) == 2
+    assert isinstance(e.modes[0], DrawCards)
+    assert isinstance(e.modes[1], GainLife)
+
+
+def test_bridge_choose_one_mode_or_both_defaults_to_false():
+    """Bridge arm pin: bridged ``ModalChooseOne.or_both`` defaults to
+    False, mirroring the Rust substrate's choose-one-only coverage
+    (Rust's ``ChooseOneMode`` variant has no or_both discriminator;
+    a "Choose one or both --" mode would need a Rust schema bump
+    first). Pins the structural narrowing convention.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "choose_one_mode",
+            "modes": [
+                {"kind": "gain_life", "amount": 1},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert e.or_both is False
+
+
+def test_bridge_choose_one_mode_single_mode_round_trips():
+    """Bridge arm pin: a single-mode ``ChooseOneMode`` (degenerate
+    "Choose one --" with one option) round-trips. Rust's parser
+    requires non-empty modes (cards.rs:4138-4142) but accepts a
+    one-element list; the bridge passes it through.
+    """
+    from mtg_bot.effects.combinators import ModalChooseOne
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "choose_one_mode",
+            "modes": [{"kind": "draw_cards", "count": 1}],
+        }
+    )
+    assert isinstance(e, ModalChooseOne)
+    assert len(e.modes) == 1
+    assert isinstance(e.modes[0], DrawCards)
+
+
+def test_bridge_choose_one_mode_three_modes_round_trips():
+    """Bridge arm pin: a three-mode ``ChooseOneMode`` (the
+    Cryptic-Command-shape "Choose one of three options") round-trips
+    each mode independently. Pins the recursive translator's
+    iteration over the modes Vec without dropping any.
+    """
+    from mtg_bot.effects.combinators import ModalChooseOne
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "choose_one_mode",
+            "modes": [
+                {"kind": "draw_cards", "count": 1},
+                {"kind": "gain_life", "amount": 2},
+                {"kind": "draw_cards", "count": 2},
+            ],
+        }
+    )
+    assert isinstance(e, ModalChooseOne)
+    assert len(e.modes) == 3
+    assert isinstance(e.modes[0], DrawCards)
+    assert e.modes[0].amount == 1
+    assert isinstance(e.modes[1], GainLife)
+    assert e.modes[1].amount == 2
+    assert isinstance(e.modes[2], DrawCards)
+    assert e.modes[2].amount == 2
+
+
+def test_bridge_choose_one_mode_missing_modes_raises():
+    """Bridge arm pin: missing required 'modes' field raises
+    KeyError. Mirrors Rust's parse_effect arm at cards.rs:4123-4129
+    which raises PyValueError on missing modes -- the bridge
+    surfaces the same contract via KeyError (matching the round-25
+    become_land_creature_ueot precedent for required-fields parity).
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    import pytest
+
+    with pytest.raises(KeyError, match="modes"):
+        _ta_dict_to_python_effect({"kind": "choose_one_mode"})
+
+
+def test_bridge_choose_one_mode_empty_modes_raises():
+    """Bridge arm pin: empty 'modes' list raises ValueError. Mirrors
+    Rust's parse_effect arm at cards.rs:4138-4142 which raises
+    PyValueError on empty modes ('at least one mode required'). The
+    bridge surfaces the same contract.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    import pytest
+
+    with pytest.raises(ValueError, match="non-empty"):
+        _ta_dict_to_python_effect(
+            {"kind": "choose_one_mode", "modes": []}
+        )
+
+
+def test_bridge_choose_one_mode_nested_in_sequence():
+    """Round-trip a ``ChooseOneMode`` nested INSIDE a Sequence
+    composer: ``Sequence([ChooseOneMode([DrawCards, GainLife]),
+    GainLife])`` translates correctly via the recursive Sequence
+    translator. Pins the modal arm against accidental dispatch loss
+    inside Sequence.
+    """
+    from mtg_bot.effects.combinators import ModalChooseOne, Sequence
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "choose_one_mode",
+                    "modes": [
+                        {"kind": "draw_cards", "count": 1},
+                        {"kind": "gain_life", "amount": 1},
+                    ],
+                },
+                {"kind": "gain_life", "amount": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], ModalChooseOne)
+    assert len(e.effects[0].modes) == 2
+    assert isinstance(e.effects[1], GainLife)
+
+
+def test_bridge_choose_one_mode_sequence_inside_mode():
+    """Reverse-nesting pin: a ``Sequence`` inside one of the modes
+    of a ``ChooseOneMode`` round-trips correctly. Pins the
+    recursive-into-mode translator path against accidental dispatch
+    loss when the mode itself is a composer.
+    """
+    from mtg_bot.effects.combinators import ModalChooseOne, Sequence
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "choose_one_mode",
+            "modes": [
+                {
+                    "kind": "sequence",
+                    "effects": [
+                        {"kind": "draw_cards", "count": 1},
+                        {"kind": "gain_life", "amount": 1},
+                    ],
+                },
+                {"kind": "gain_life", "amount": 3},
+            ],
+        }
+    )
+    assert isinstance(e, ModalChooseOne)
+    assert len(e.modes) == 2
+    assert isinstance(e.modes[0], Sequence)
+    assert len(e.modes[0].effects) == 2
+
+
+def test_rust_parser_accepts_choose_one_mode_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "choose_one_mode", "modes": [...]}`` on a
+    triggered_ability carrier. The bridge dict shape must register
+    cleanly on Rust too; this lockstep gate keeps the bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:4119-4153`` accepts
+    the struct-variant dict with required modes list (recursively
+    parsed via parse_effect for each entry).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- ChooseOneMode"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"U": 1, "generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "choose_one_mode",
+                    "modes": [
+                        {"kind": "draw_cards", "count": 1},
+                        {"kind": "gain_life", "amount": 2},
+                    ],
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

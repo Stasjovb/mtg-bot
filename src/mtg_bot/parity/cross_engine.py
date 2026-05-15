@@ -5287,6 +5287,71 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             effect=inner,
             min_count=min_count,
         )
+    if kind == "choose_one_mode":
+        # **Round-27 BLOCKED-BRIDGE-ARM slice -- "Choose one --"
+        # modal-spell family (ChooseOneMode; the universal modal-effect
+        # composer for "choose one of N modes" spells like
+        # Archenemy's Charm, Blade of the Swarm, Drill Too Deep).**
+        # Rust substrate ``Effect::ChooseOneMode { modes: Vec<Effect> }``
+        # (cards.rs:1635; parser at cards.rs:4119-4153, to_dict at
+        # cards.rs:5658-5665) shipped on main; this slice closes the
+        # cross-engine bridge gap. Discovered by the round-22 fresh
+        # discovery walk (Rust kind emitted by to_dict but no matching
+        # ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Recursive translation (composer arm).** Each entry in
+        # ``modes`` is itself an effect-dict; we recurse into
+        # ``_ta_dict_to_python_effect`` to translate each one. Mirrors
+        # the round-23 ``sequence`` / ``if_you_do`` composer-arm
+        # precedent for nested-effect translation. This unlocks any
+        # nested leaf arm already on the bridge for free under a
+        # modal carrier (Sequence-in-Mode, IfYouDo-in-Mode, ...).
+        #
+        # **Required-fields contract.** Rust's parse_effect arm at
+        # cards.rs:4123-4142 requires the ``modes`` field present
+        # AND non-empty; missing or empty-list raises PyValueError.
+        # The bridge mirrors via KeyError on missing ``modes`` and
+        # ValueError on empty list (matches the round-23 if_you_do +
+        # round-25 become_land_creature_ueot precedents for surfacing
+        # Rust parser contracts at the bridge boundary).
+        #
+        # **Python-vs-Rust schema-narrowness divergence.** Python's
+        # ``ModalChooseOne`` (effects/combinators.py:1112-1208)
+        # carries an additional ``or_both: bool`` field (defaults to
+        # False) for the "Choose one or both --" rider seen on some
+        # MTG spells (Charms, Cryptic Command). Rust's substrate is
+        # currently choose-one-only -- the variant has no or_both
+        # discriminator -- so the bridge constructs Python with
+        # ``or_both=False`` to mirror the Rust substrate's coverage
+        # today. A "choose-one-or-both" mode would need a Rust schema
+        # bump first.
+        #
+        # **Real EoE consumers** unblocked: 7 EoE oracle hits via scan
+        # -- Cosmogrand Zenith, Reroute Systems, Scour for Scrap,
+        # Archenemy's Charm, Blade of the Swarm, Drill Too Deep, and
+        # 1 other modal carrier in the EoE pool. Cross-engine end-to-
+        # end probe deferred per round-17/18/19 synthetic-only-when-
+        # riders-cascade precedent (the choose_mode agent pick + the
+        # state.resolving_modes carrier path are their own surfaces
+        # beyond the bare bridge-arm slice).
+        from mtg_bot.effects.combinators import ModalChooseOne
+
+        if "modes" not in eff_dict:
+            raise KeyError(
+                "choose_one_mode bridge arm: missing required "
+                "'modes' field"
+            )
+        modes_dicts = eff_dict["modes"]
+        if len(modes_dicts) == 0:
+            raise ValueError(
+                "choose_one_mode bridge arm: 'modes' must be non-empty "
+                "(at least one mode required, mirroring Rust parser "
+                "at cards.rs:4138-4142)"
+            )
+        modes = tuple(
+            _ta_dict_to_python_effect(mode) for mode in modes_dicts
+        )
+        return ModalChooseOne(modes=modes)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
