@@ -1,30 +1,35 @@
 """Regression tests for the local-shard run-DB lifecycle wrap.
 
-Per the structural fix tracked in ``feature/local-shard-run-row``:
-the master's in-process local shard (``_local_runner`` in
-``mtg_bot.training.distributed``) historically called
-``run_shard_pull`` / ``run_shard_eval_pull`` directly, bypassing
-the ``run_lifecycle`` wrap that ``mtg_bot.cli.shard`` uses for
-SSH-launched remote shards. The result was a per-shard ``runs``
-row asymmetry: remotes had ``iter_NNN_..._shard_<host>`` rows
-(parent = the master run); local had none. ``run_progress`` rows
-landed in both cases (the FK target there is the master row), but
-downstream tooling that enumerates shards via
-``runs.parent_run_id`` skipped local.
+Layered tests covering two contracts:
 
-These tests pin the post-fix contract:
+**Layer 1 — direct helper tests.** ``dist._local_shard_run_lifecycle``
+still exists as a context manager that opens / closes a per-shard
+``runs`` row. These tests exercise the helper in isolation and
+remain green; the helper itself is a reusable primitive that the
+SSH-launched ``cli/shard.py`` analog uses on the remote side.
 
-1. After a local self-play shard runs, the per-shard ``runs`` row
-   exists with the expected ``run_id`` / ``parent_run_id`` /
-   ``label`` / ``kind`` (mirrors the cli/shard.py contract on the
-   remote side).
-2. After a local eval shard runs, same shape with ``kind='eval'``.
-3. The ``run_progress`` row for ``shard_label='local'`` lands
-   under the master ``run_id`` and updates correctly across
-   multiple ``push_progress`` calls (no silent FK failure).
-4. The SSH-launched remote runner does NOT double-register the
-   per-shard row — that wrap is owned by ``cli/shard.py`` and is
-   the only thing that touches the remote's lifecycle.
+**Layer 2 — end-to-end contract via the orchestrator.** Phase 2
+removed the call site of ``_local_shard_run_lifecycle`` inside
+``run_distributed_self_play`` / ``run_distributed_eval``. The
+local shard no longer gets a per-shard ``runs`` row from the
+master process — it lands a ``run_progress`` row keyed by
+``shard_label='local'`` (under the master ``run_id``) instead.
+This matches the remote contract: the orchestrator never writes
+per-shard ``runs`` rows; for remotes, ``cli/shard.py`` does that
+write SSH-side. Downstream tooling (UI shard rollups, cycle-replay
+aggregator) enumerates shards via ``run_progress.shard_label``
+rather than ``runs.parent_run_id`` — see
+``training_ui/app._cycle_replays_payload`` and
+``_per_shard_to_machines``.
+
+The Layer 2 tests below assert the Phase 2 contract:
+
+1. Self-play: a ``run_progress`` row for the local shard lands
+   under the master ``run_id``; no per-shard ``runs`` row is
+   written.
+2. Eval: same shape, eval counters.
+3. Self-play with a remote shard alongside local: NEITHER per-
+   shard ``runs`` row is created by the master process.
 """
 
 from __future__ import annotations
@@ -287,17 +292,21 @@ def _no_op_queue_init(*args, **kwargs):
     return dist._QueueHTTPResponse(status=200, body=b"{}")
 
 
-def test_run_distributed_self_play_local_shard_registers_run_row(
+def test_run_distributed_self_play_local_shard_progress_only(
     tmp_path: Path, monkeypatch,
 ):
     """End-to-end: a local self-play shard launched through
-    :func:`run_distributed_self_play` must land BOTH the
-    per-shard ``runs`` row AND the ``run_progress`` row keyed off
-    the master ``run_id`` + ``shard_label='local'``.
+    :func:`run_distributed_self_play` lands a ``run_progress`` row
+    keyed off the master ``run_id`` + ``shard_label='local'`` but
+    does NOT register its own per-shard ``runs`` row.
 
-    Pre-fix this test would fail at the first assertion (no
-    per-shard ``runs`` row for local).
-    """
+    Phase 2 reverses the earlier per-shard-row contract: the local-
+    shard lifecycle wrap was removed from ``run_distributed_self_play``
+    to match the SSH-launched remote contract (which also writes only
+    a ``run_progress`` row from the master side; the canonical
+    ``runs`` row for remotes is written by ``cli/shard.py`` running
+    SSH-side). Downstream tooling enumerates shards via
+    ``run_progress.shard_label``, not ``runs.parent_run_id``."""
     db_path = tmp_path / "runs.db"
     monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
     monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
@@ -347,18 +356,18 @@ def test_run_distributed_self_play_local_shard_registers_run_row(
     finally:
         conn.close()
 
-    # The headline assertion: the per-shard runs row exists.
-    assert len(shard_runs) == 1, (
-        "local shard must register a per-shard runs row "
-        "(parent = master) so downstream tooling can enumerate "
-        "shards via parent_run_id"
+    # The headline assertion: NO per-shard runs row for local. Phase 2
+    # removed the local-shard lifecycle wrap so the master process no
+    # longer pre-registers it (matches the remote contract — cli/shard.py
+    # is the canonical per-shard runs-row creator, and for local there
+    # is no cli/shard.py invocation).
+    assert len(shard_runs) == 0, (
+        "Phase 2 contract: the orchestrator must not register a "
+        "per-shard runs row for the local shard; shard enumeration "
+        "uses run_progress.shard_label instead"
     )
-    assert shard_runs[0]["parent_run_id"] == "iter_010_self_play_v4"
-    assert shard_runs[0]["kind"] == "self_play"
-    assert shard_runs[0]["label"] == "local"
-    assert shard_runs[0]["status"] == "completed"
 
-    # And the run_progress row landed (was the user's main symptom).
+    # The run_progress row DOES land (canonical path post-Phase 2).
     assert len(progress) == 1
     assert progress[0]["shard_label"] == "local"
     # Two push_progress calls -> the second overwrites; final state
@@ -372,12 +381,12 @@ def test_run_distributed_self_play_local_shard_registers_run_row(
     assert len(master_runs) == 1
 
 
-def test_run_distributed_eval_local_shard_registers_run_row(
+def test_run_distributed_eval_local_shard_progress_only(
     tmp_path: Path, monkeypatch,
 ):
-    """Eval counterpart: per-shard ``runs`` row + ``run_progress``
-    row both land under the master ``run_id``, with
-    ``kind='eval'`` on the shard row."""
+    """Eval counterpart of the Phase 2 contract: only a
+    ``run_progress`` row lands for the local shard; no per-shard
+    ``runs`` row is registered by the orchestrator."""
     db_path = tmp_path / "runs.db"
     monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
     monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
@@ -428,11 +437,8 @@ def test_run_distributed_eval_local_shard_registers_run_row(
     finally:
         conn.close()
 
-    assert len(shard_runs) == 1
-    assert shard_runs[0]["kind"] == "eval"
-    assert shard_runs[0]["parent_run_id"] == "iter_010_eval_v4_vs_v3"
-    assert shard_runs[0]["label"] == "local"
-    assert shard_runs[0]["status"] == "completed"
+    # Phase 2: no per-shard runs row for the local shard.
+    assert len(shard_runs) == 0
 
     # The run_progress row carries the latest eval counters and
     # didn't silently drop them on the FK constraint.
@@ -442,15 +448,17 @@ def test_run_distributed_eval_local_shard_registers_run_row(
     assert progress[0]["n_games_done"] == 3
 
 
-def test_run_distributed_self_play_does_not_register_remote_shard_runs_row(
+def test_run_distributed_self_play_does_not_register_per_shard_rows(
     tmp_path: Path, monkeypatch,
 ):
-    """The remote (SSH-launched) shard registers its own per-shard
-    ``runs`` row inside :mod:`mtg_bot.cli.shard` — the orchestrator
-    must NOT pre-register it from the master process (that would
-    racet with the SSH-launched canonical creator). Verify the
-    orchestrator only touches the local shard's row, not the
-    remote's.
+    """Post-Phase 2 the orchestrator does NOT pre-register the
+    per-shard ``runs`` row for EITHER local or remote shards. The
+    remote's row is written by the SSH-launched ``cli/shard.py``;
+    the local shard skips per-shard registration entirely (its
+    progress is keyed by ``shard_label='local'`` on the master
+    ``run_progress`` row instead). This test guards that symmetry —
+    the master process should never write per-shard ``runs`` rows
+    from inside ``run_distributed_self_play``.
     """
     db_path = tmp_path / "runs.db"
     monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
@@ -502,14 +510,11 @@ def test_run_distributed_self_play_does_not_register_remote_shard_runs_row(
 
     conn = runs_db.connect(db_path)
     try:
-        # Local shard row was created by the orchestrator.
+        # Neither per-shard row should exist post-Phase 2.
         local_rows = list(conn.execute(
             "SELECT * FROM runs WHERE run_id = ?",
             ("iter_011_self_play_v5_shard_local",),
         ))
-        # Remote shard row was NOT created (the SSH-launched
-        # cli/shard.py is the canonical creator — out of process
-        # for this test).
         remote_rows = list(conn.execute(
             "SELECT * FROM runs WHERE run_id = ?",
             ("iter_011_self_play_v5_shard_remote-box",),
@@ -517,7 +522,10 @@ def test_run_distributed_self_play_does_not_register_remote_shard_runs_row(
     finally:
         conn.close()
 
-    assert len(local_rows) == 1
+    assert len(local_rows) == 0, (
+        "Phase 2: orchestrator no longer pre-registers the local "
+        "shard's runs row"
+    )
     assert len(remote_rows) == 0, (
         "the orchestrator must not pre-register the remote shard's "
         "runs row from the master process; cli/shard.py owns that "

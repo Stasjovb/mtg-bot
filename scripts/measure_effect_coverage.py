@@ -143,6 +143,45 @@ RUST_AHEAD_OF_POOL: set[str] = {
     # parity tests against a future card; add the matching Python class
     # when an EoE card surfaces a consumer.
     "SetBasePTUntilEOT",
+    # Rust ``FightTargetCreatureWithTargetCreature`` — bare bilateral
+    # fight primitive (Rust feature/rust-fight-effect, commit ab1bd52d).
+    # Python class exists at ``effects/generic/damage.py:631`` but no
+    # EoE card consumes the bare shape yet; Diplomatic Relations
+    # consumes the two-target bespoke variant. Add an override or
+    # remove this entry when the bare-shape consumer lands.
+    "FightTargetCreatureWithTargetCreature",
+    # Rust ``ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield``
+    # — additive enchantment-or-creature widening of the bare
+    # ``ReturnCreatureFromYourGraveyardToBattlefield`` family (parallels
+    # the existing OrArtifact / OrSpacecraft overrides for the ToHand
+    # sibling). No in-pool EoE consumer for the widened-to-enchantment
+    # variant yet; promote to an override mapping to
+    # ``ReturnCreatureFromYourGraveyardToBattlefield`` when one lands.
+    "ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield",
+    # Rust ``ReturnEnchantmentOrCreatureFromYourGraveyardToHand`` — the
+    # ToHand sibling of the variant above; same OrEnchantment widening
+    # pattern. Promote to an override mapping to
+    # ``ReturnCreatureFromYourGraveyardToHand`` when an EoE card
+    # surfaces the widened-to-enchantment shape.
+    "ReturnEnchantmentOrCreatureFromYourGraveyardToHand",
+    # Rust ``PumpCreaturesOpponentsControlUntilCasterNextTurn`` —
+    # extended-duration sibling of ``PumpCreaturesOpponentsControlUntilEOT``
+    # (Rust commit 8e5d7852). Python has the UntilEOT variant but no
+    # UntilCasterNextTurn-duration analog; allowlist until a card pool
+    # surfaces an extended-duration consumer.
+    "PumpCreaturesOpponentsControlUntilCasterNextTurn",
+    # Rust ``ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves`` —
+    # parametric MaxMv-filter rider on the bare
+    # ``ExileOpponentsNonlandPermanentUntilLeaves`` family. Python has
+    # the bare class at ``effects/generic/exile.py:588`` but no card
+    # consumes the MaxMv-filtered variant in the current pool.
+    "ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves",
+    # Rust ``GrantKeywordsToTargetCreatureUntilEOT`` — plural-keywords
+    # sibling of the existing singular ``GrantKeywordToTargetCreatureUntilEOT``
+    # override (which maps to ``GrantUnblockableUEOT``). The plural
+    # form takes a list of keywords and has no 1:N mapping that's
+    # obviously correct; allowlist until a clean Python target emerges.
+    "GrantKeywordsToTargetCreatureUntilEOT",
 }
 
 

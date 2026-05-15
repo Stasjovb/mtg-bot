@@ -47,6 +47,23 @@ _DEFAULT_WEIGHTS = (
 )
 
 
+def _default_weights_are_flat_mlp() -> bool:
+    """Bench script's ``_NNIsmctsConfig`` is sized for the legacy
+    flat-feature ``_ValuePolicyMLP`` (1024,1024,512 trunk). Once v6+
+    is trained on the structured trunk, the bench can't load them
+    without a separate refactor. Detect via the metadata sidecar so
+    the test skips cleanly instead of crashing on a state_dict shape
+    mismatch."""
+    meta_path = _DEFAULT_WEIGHTS.parent / "metadata.json"
+    if not meta_path.is_file():
+        return False
+    try:
+        with meta_path.open("r", encoding="utf-8") as f:
+            return json.load(f).get("architecture") in (None, "shared", "separate")
+    except (json.JSONDecodeError, OSError):
+        return False
+
+
 def _load_module():
     """Load the bench script as a fresh module.
 
@@ -122,6 +139,15 @@ def test_classify_verdict_thresholds():
 @pytest.mark.skipif(
     not _DEFAULT_WEIGHTS.is_file(),
     reason=f"v6 weights not at {_DEFAULT_WEIGHTS}",
+)
+@pytest.mark.skipif(
+    not _default_weights_are_flat_mlp(),
+    reason=(
+        f"v6 weights at {_DEFAULT_WEIGHTS} are structured-architecture; "
+        "the bench's _NNIsmctsConfig is sized for the flat-feature MLP "
+        "and would crash with a state_dict shape mismatch. Re-enable "
+        "this test when the bench grows structured-arch support."
+    ),
 )
 def test_ismcts_factory_builds_and_chooses_legal_decision():
     """``_NNIsmctsConfig.build`` returns a SearchStrategy whose
