@@ -342,7 +342,7 @@ def test_self_play_job_spec_carries_structured_tokens_flag():
     spec = SelfPlayJobSpec(
         weights_path="w.pt",
         samples=1, inner_nodes=1, hidden_sizes=None,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
         write_structured_tokens=True,
     )
@@ -358,7 +358,7 @@ def test_self_play_job_spec_default_is_false():
     spec = SelfPlayJobSpec(
         weights_path="w.pt",
         samples=1, inner_nodes=1, hidden_sizes=None,
-        base_seed=0, enable_mulligans=False,
+        base_seed=0,
         per_game_timeout_sec=None,
     )
     assert spec.write_structured_tokens is False

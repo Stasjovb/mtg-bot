@@ -672,7 +672,6 @@ def test_self_play_config_dict_shape():
         games_per_iteration=500,
         samples=4,
         nodes=200,
-        enable_mulligans=False,
         deck_pool=Path("d.json.gz"),
     )
     out = cli_iterate._self_play_config_dict(
