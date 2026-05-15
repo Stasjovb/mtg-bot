@@ -8659,5 +8659,185 @@ def test_rust_parser_accepts_pump_target_artifact_or_creature_until_eot_in_effec
     assert pid == 0
 
 
+def test_bridge_put_charge_counters_on_self_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 26 fresh discovery walk) --
+    PutChargeCountersOnSelf family. Rust ``{"kind":
+    "put_charge_counters_on_self", "amount": 2,
+    "amount_from_x": False}`` translates to Python
+    ``PutChargeCountersOnSelf(amount=2, amount_from_x=False)``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:4154-4177 (optional
+    ``amount`` defaulting to 1, optional ``amount_from_x`` defaulting
+    to False, both round-trip explicitly via to_dict at
+    cards.rs:5609-5613).
+    """
+    from mtg_bot.effects.generic.counters import PutChargeCountersOnSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_charge_counters_on_self",
+            "amount": 2,
+            "amount_from_x": False,
+        }
+    )
+    assert isinstance(e, PutChargeCountersOnSelf)
+    assert e.amount == 2
+    assert e.amount_from_x is False
+
+
+def test_bridge_put_charge_counters_on_self_amount_defaults_to_one():
+    """Bridge arm pin: missing ``amount`` defaults to 1 (mirrors Rust's
+    parse_effect arm at cards.rs:4155-4163 ``None => 1`` and Python's
+    class default at counters.py:562).
+    """
+    from mtg_bot.effects.generic.counters import PutChargeCountersOnSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_charge_counters_on_self"}
+    )
+    assert isinstance(e, PutChargeCountersOnSelf)
+    assert e.amount == 1
+    assert e.amount_from_x is False
+
+
+def test_bridge_put_charge_counters_on_self_amount_zero_silent_noop():
+    """Bridge arm pin: amount=0 is a legal silent no-op (mirrors
+    Python's resolve early-return at counters.py:573-574 on n <= 0).
+    The translation does NOT raise; the resolved effect leaves the
+    source's charge counters unchanged.
+    """
+    from mtg_bot.effects.generic.counters import PutChargeCountersOnSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_charge_counters_on_self", "amount": 0}
+    )
+    assert isinstance(e, PutChargeCountersOnSelf)
+    assert e.amount == 0
+
+
+def test_bridge_put_charge_counters_on_self_negative_amount_raises():
+    """Bridge arm pin: negative ``amount`` raises ValueError at
+    translation time (mirrors Rust's parse_effect contract at
+    cards.rs:4163-4167 -- "put_charge_counters_on_self: amount must
+    be non-negative"). Defense-in-depth: surfaces the contract at the
+    bridge boundary rather than waiting for resolve to fault.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="non-negative"):
+        _ta_dict_to_python_effect(
+            {"kind": "put_charge_counters_on_self", "amount": -1}
+        )
+
+
+def test_bridge_put_charge_counters_on_self_amount_from_x_flag_passes_through():
+    """Bridge arm pin: amount_from_x=True round-trips correctly.
+    Mirrors Blast-Zone-shape "{X}{X}, {T}: Put X charge counters on
+    this land" pattern. Rust treats amount_from_x=True as a deferred
+    no-op today (cards.rs:1339-1343); Python's resolve reads
+    ``state.resolving_x_value`` (counters.py:572). The bridge passes
+    the flag through faithfully so the Python side can apply X-cost
+    semantics where Rust defers.
+    """
+    from mtg_bot.effects.generic.counters import PutChargeCountersOnSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_charge_counters_on_self",
+            "amount": 1,
+            "amount_from_x": True,
+        }
+    )
+    assert isinstance(e, PutChargeCountersOnSelf)
+    assert e.amount_from_x is True
+
+
+def test_bridge_put_charge_counters_on_self_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals a
+    directly-constructed ``PutChargeCountersOnSelf(amount=1,
+    amount_from_x=False)``. Pins the dataclass equality semantic for
+    the default-field shape used by the typical Spacecraft / Planet
+    "enters with a charge counter" carrier.
+    """
+    from mtg_bot.effects.generic.counters import PutChargeCountersOnSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_charge_counters_on_self",
+            "amount": 1,
+            "amount_from_x": False,
+        }
+    )
+    assert e == PutChargeCountersOnSelf(amount=1, amount_from_x=False)
+
+
+def test_bridge_put_charge_counters_on_self_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([PutChargeCountersOnSelf(amount=1), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator.
+    Pins this arm against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.counters import PutChargeCountersOnSelf
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "put_charge_counters_on_self", "amount": 1},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], PutChargeCountersOnSelf)
+    assert e.effects[0].amount == 1
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_put_charge_counters_on_self_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "put_charge_counters_on_self", "amount": 1}`` on
+    a triggered_ability carrier. The bridge dict shape must register
+    cleanly on the Rust side too; this lockstep gate keeps the bridge
+    from drifting away from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:4154-4177`` accepts
+    optional ``amount`` (default 1) and optional ``amount_from_x``
+    (default false). Mirrors the Spacecraft "enters with a charge
+    counter" carrier shape.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- PutChargeCountersOnSelf",
+        "card_types": ["Artifact", "Spacecraft"],
+        "mana_cost": {"generic": 3},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "put_charge_counters_on_self",
+                    "amount": 1,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

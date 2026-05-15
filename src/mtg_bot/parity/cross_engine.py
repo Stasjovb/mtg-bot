@@ -4816,6 +4816,77 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             power_bonus=eff_dict.get("power_bonus", 0),
             toughness_bonus=eff_dict.get("toughness_bonus", 0),
         )
+    if kind == "put_charge_counters_on_self":
+        # **Round-26 BLOCKED-BRIDGE-ARM slice -- "put N charge counters
+        # on this permanent" (PutChargeCountersOnSelf family, Blast-
+        # Zone-shape).** Rust substrate
+        # ``Effect::PutChargeCountersOnSelf { amount: i32,
+        # amount_from_x: bool }`` (cards.rs:1347; parser at
+        # cards.rs:4154-4177, resolve at state_ops_resolve.rs, to_dict
+        # at cards.rs:5609-5613) shipped via round 28 coverage
+        # extension. This slice closes the cross-engine bridge gap.
+        # Discovered by the round-22 fresh discovery walk (Rust kind
+        # emitted by to_dict but no matching ``_ta_dict_to_python_effect``
+        # arm).
+        #
+        # **Field shape.** Python's ``PutChargeCountersOnSelf(amount:
+        # int = 1, amount_from_x: bool = False)``
+        # (effects/generic/counters.py:548-588) and Rust's variant
+        # carry the SAME two fields with the SAME defaults. Bridge
+        # mirrors Rust's parse_effect arm at cards.rs:4154-4177:
+        # ``amount`` defaults to 1 when missing (matches Python's
+        # default), ``amount_from_x`` defaults to False. Negative
+        # ``amount`` raises ValueError (mirrors Rust's parse contract
+        # at cards.rs:4163-4167).
+        #
+        # **Single-counter-slot simplification.** Rust's per-object
+        # ``counters`` scalar doesn't distinguish +1/+1 vs charge vs
+        # loyalty (cards.rs:1333-1337); for gameplay purposes today
+        # charge counters route to the same counter slot as +1/+1.
+        # Python's class at counters.py:565-580 routes through
+        # ``add_charge_counters`` which writes the dedicated
+        # ``charge_counters`` slot on the GameObject. Both engines
+        # converge on the observable: the source gains N charge
+        # counters of the appropriate kind for downstream queries.
+        #
+        # **``amount_from_x`` deferred on Rust.** Rust doesn't track
+        # X-cost values today; the flag is preserved on the variant
+        # for round-trip but Rust's resolve treats ``amount_from_x=
+        # true`` as 0 (silent no-op per cards.rs:1339-1343 docstring).
+        # Python's resolve at counters.py:572 reads
+        # ``state.resolving_x_value`` for the count when the flag is
+        # set. Bridge passes both fields through faithfully so the
+        # Python side can apply X-cost semantics where Rust defers;
+        # round-trip dict shape is preserved either way.
+        #
+        # **Resolve semantics (parity-relevant).** Both engines
+        # operate on the source object (no targeting). amount=0 is a
+        # legal silent no-op (Python's resolve at counters.py:573-574
+        # early-returns on n <= 0). Mirrors PutPlusOneCounterOnSelf
+        # zero-amount conventions.
+        #
+        # **Real EoE consumers** unblocked: 29 EoE oracle hits via
+        # scan -- Lumen-Class Frigate, Rescue Skiff, The Seriema, and
+        # 26 other Spacecraft / Planet cards that use "enters with N
+        # charge counters" or "put a charge counter on this
+        # permanent". Cross-engine end-to-end probe deferred per
+        # round-17/18/19 synthetic-only-when-riders-cascade precedent
+        # (the Spacecraft-station / charge-counter-trigger carrier
+        # surfaces are their own substrate beyond the bare bridge-arm
+        # slice; the single-counter-slot simplification on Rust would
+        # make a counter-snapshot probe shape-mismatched today).
+        from mtg_bot.effects.generic.counters import PutChargeCountersOnSelf
+        amount = int(eff_dict.get("amount", 1))
+        if amount < 0:
+            raise ValueError(
+                "put_charge_counters_on_self bridge arm: amount must be "
+                f"non-negative, got {amount} (mirrors Rust parse_effect "
+                "contract at cards.rs:4163-4167)"
+            )
+        amount_from_x = bool(eff_dict.get("amount_from_x", False))
+        return PutChargeCountersOnSelf(
+            amount=amount, amount_from_x=amount_from_x
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
