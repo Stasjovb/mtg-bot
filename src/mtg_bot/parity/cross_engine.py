@@ -5152,6 +5152,79 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return AddManaToPool(
             produces=((eff_dict["color"], eff_dict["amount"]),),
         )
+    if kind == "conditional_if_void":
+        # **Round-26 BLOCKED-BRIDGE-ARM slice -- "Void -- [effect]" /
+        # "if Void is active, [then]; otherwise, [else]"
+        # (ConditionalIfVoid family, intervening-if conditional on the
+        # EoE-set Void state).** Rust substrate
+        # ``Effect::ConditionalIfVoid { then_effect:
+        # Box<Effect>, else_effect: Option<Box<Effect>> }`` (cards.rs;
+        # parser at cards.rs:4220-4250, to_dict at cards.rs:5721-5732)
+        # shipped via earlier round (Void-tracking-LTB wiring
+        # closure -- see commits 89818f72 + 710d2043). This slice
+        # closes the cross-engine bridge gap. Discovered by the round-
+        # 22 fresh discovery walk (Rust kind emitted by to_dict but
+        # no matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape.** Rust's struct-variant carries REQUIRED
+        # ``then_effect`` (Box<Effect>) + OPTIONAL ``else_effect``
+        # (Option<Box<Effect>>). Per Rust's parser contract at
+        # cards.rs:4222-4232, missing ``then_effect`` raises
+        # PyValueError "missing required 'then_effect' field". The
+        # bridge enforces the same required-field contract on the
+        # Python side via KeyError so the dict shape is symmetric.
+        # Per cards.rs:4234-4245, ``else_effect`` accepts three
+        # forms: key absent, key present with explicit None, or key
+        # present with a nested effect dict. The bridge mirrors all
+        # three forms (None default + dict-nested decode).
+        #
+        # **Resolve semantics (parity-relevant).** Python's class at
+        # ``effects/combinators.py:1409-1465`` reads
+        # ``is_void_active(state)`` at resolve time (CR 603-style
+        # intervening-if checked at resolution, not on cast) and
+        # routes to ``then_effect`` if active, else_effect if
+        # inactive (or silent no-op when else_effect is None). Rust's
+        # resolve mirrors the same Void-flag check + branch-routing
+        # contract. Both engines treat the absent-else as a clean no-
+        # op rather than a failure -- matches the printed "Void --"
+        # rider style used on Decode Transmissions ("Void -- ...
+        # instead") and Hymn of the Faller ("Void -- ... draw another
+        # card").
+        #
+        # **Recursive composer.** Bridge recursively translates
+        # ``then_effect`` and (when present) ``else_effect`` via the
+        # same ``_ta_dict_to_python_effect`` dispatcher -- nested
+        # arms compose naturally. Mirrors Rust's parse_effect's
+        # recursion at cards.rs:4232 + 4243.
+        #
+        # **Real EoE consumers** unblocked: 14 EoE oracle hits via
+        # scan -- Alpharael Stonechosen ("Void -- Whenever Alpharael
+        # attacks, ..."), Decode Transmissions ("Void -- If a nonland
+        # permanent left the battlefield this turn ..."), Hylderblade
+        # ("Void -- At the beginning of your end step, if a nonland
+        # permanent left ..."), Chorale of the Void, Elegy Acolyte,
+        # and 9 other cards using the EoE Void mechanic. High-EoE
+        # leverage round-26 conditional slice. Cross-engine end-to-
+        # end probe deferred per round-17/18/19 synthetic-only-when-
+        # riders-cascade precedent (the Void-flag tracking call sites
+        # + the LTB event firing path are their own surfaces beyond
+        # the bare bridge-arm slice).
+        from mtg_bot.effects.combinators import ConditionalIfVoid
+
+        if "then_effect" not in eff_dict:
+            raise KeyError(
+                "conditional_if_void bridge arm: missing required "
+                "'then_effect' field"
+            )
+        then_inner = _ta_dict_to_python_effect(eff_dict["then_effect"])
+        else_raw = eff_dict.get("else_effect", None)
+        else_inner = (
+            _ta_dict_to_python_effect(else_raw) if else_raw is not None else None
+        )
+        return ConditionalIfVoid(
+            then_effect=then_inner,
+            else_effect=else_inner,
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
