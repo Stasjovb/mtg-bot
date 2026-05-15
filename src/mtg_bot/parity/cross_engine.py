@@ -3972,6 +3972,44 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             power_bonus=eff_dict.get("power_bonus", 0),
             toughness_bonus=eff_dict.get("toughness_bonus", 0),
         )
+    if kind == "destroy_target_artifact":
+        # **Round-23 BLOCKED-BRIDGE-ARM slice -- "destroy target
+        # artifact" (DestroyTargetArtifact family).** Rust substrate
+        # ``Effect::DestroyTargetArtifact`` (cards.rs:655 unit
+        # variant; parser at cards.rs:3519-3525, resolve at
+        # state_ops_resolve.rs:4053-4109) shipped via round 25
+        # (single-target Artifact-filter destroy). This slice closes
+        # the cross-engine bridge gap. Discovered by round-22 worker
+        # RR's diff walk (Rust kind emitted by to_dict but no
+        # matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape (unit variant).** Rust's parse_effect arm at
+        # cards.rs:3519-3525 takes NO fields — bare ``{"kind":
+        # "destroy_target_artifact"}``. Python's
+        # ``DestroyTargetArtifact`` is a frozen dataclass with no
+        # constructor parameters (the ``targets`` tuple is set in
+        # ``__post_init__`` to a ``TargetSpec(IsArtifact())``).
+        # Bridge constructs the bare class.
+        #
+        # **Resolve semantics (parity-relevant).** Rust scans BOTH
+        # players' battlefield in ETB-timestamp order via
+        # ``bf_iter::bf_iter_etb_sorted`` and picks the first
+        # non-indestructible Artifact (state_ops_resolve.rs:
+        # 4053-4109). Python's ``Destroy.resolve`` re-verifies the
+        # ``IsArtifact()`` filter at resolution time per CR 608.2b.
+        # Indestructible permanents survive on both engines.
+        #
+        # **Real EoE consumers** unblocked: 1 EoE bare-shape card
+        # (Drill Too Deep modal arm 2). The OR-shape variant
+        # (Shattered Wings — "destroy target artifact, enchantment,
+        # or creature with flying") is a separate
+        # ``DestroyTargetArtifactEnchantmentOrFlyingCreature`` Effect
+        # variant on both engines. Cross-engine end-to-end probe
+        # deferred per round-17/18/19 synthetic-only-when-riders-
+        # cascade precedent (the targeting Decision pipeline is its
+        # own surface beyond the bare bridge-arm slice).
+        from mtg_bot.effects.generic.destroy import DestroyTargetArtifact
+        return DestroyTargetArtifact()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

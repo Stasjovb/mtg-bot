@@ -6695,5 +6695,125 @@ def test_rust_parser_accepts_pump_creatures_you_control_until_eot_in_triggered_a
     assert pid == 0
 
 
+def test_bridge_destroy_target_artifact_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 23) -- DestroyTargetArtifact
+    family. Rust ``{"kind": "destroy_target_artifact"}`` translates
+    to Python ``DestroyTargetArtifact()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3519-3525 (unit
+    variant -- no fields). Python's class is a ``Destroy`` subclass
+    that sets ``targets = (TargetSpec(IsArtifact()),)`` in
+    ``__post_init__``.
+    """
+    from mtg_bot.effects.generic.destroy import DestroyTargetArtifact
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "destroy_target_artifact"})
+    assert isinstance(e, DestroyTargetArtifact)
+
+
+def test_bridge_destroy_target_artifact_targets_set_to_is_artifact():
+    """Bridge arm pin: post-init wires ``targets`` tuple to a single
+    ``TargetSpec(IsArtifact())``. Pins the filter shape -- a bug
+    that dropped the ``__post_init__`` would leave ``targets`` empty
+    and make the resolver pick anything.
+    """
+    from mtg_bot.effects.generic.destroy import DestroyTargetArtifact
+    from mtg_bot.effects.object_predicates import IsArtifact
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "destroy_target_artifact"})
+    assert isinstance(e, DestroyTargetArtifact)
+    assert e.targets == (TargetSpec(IsArtifact()),)
+
+
+def test_bridge_destroy_target_artifact_extra_keys_silently_ignored():
+    """Bridge arm pin: extra keys on the dict are silently dropped
+    (mirrors Rust's parse_effect arm at cards.rs:3519-3525 which
+    takes no fields and simply returns the unit variant -- there
+    is no extra-key validation). Mirrors the silent-drop convention
+    on sister unit-variant arms (counter_target_spell, etc.).
+    """
+    from mtg_bot.effects.generic.destroy import DestroyTargetArtifact
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_artifact", "spurious": 42}
+    )
+    assert isinstance(e, DestroyTargetArtifact)
+
+
+def test_bridge_destroy_target_artifact_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed ``DestroyTargetArtifact()``. Pins the
+    dataclass equality semantic -- the bare unit-shape carries no
+    parameters so equality is structural.
+    """
+    from mtg_bot.effects.generic.destroy import DestroyTargetArtifact
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "destroy_target_artifact"})
+    assert e == DestroyTargetArtifact()
+
+
+def test_bridge_destroy_target_artifact_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DestroyTargetArtifact(), DrawCards(1)])`` translates
+    correctly via the recursive Sequence translator. Pins this arm
+    against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.destroy import DestroyTargetArtifact
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "destroy_target_artifact"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DestroyTargetArtifact)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_destroy_target_artifact_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the ``{"kind":
+    "destroy_target_artifact"}`` dict shape on a triggered_ability
+    carrier. The bridge dict shape must register cleanly on the
+    Rust side too; this lockstep gate keeps the bridge from drifting
+    away from Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3519-3525`` accepts the unit-shape dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- DestroyTargetArtifact",
+        "card_types": ["Creature"],
+        "mana_cost": {"R": 1, "generic": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "destroy_target_artifact"},
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
