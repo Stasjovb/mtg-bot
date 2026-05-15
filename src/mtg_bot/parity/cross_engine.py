@@ -5003,6 +5003,82 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DealDamageEqualToSourcePowerAnyTarget,
         )
         return DealDamageEqualToSourcePowerAnyTarget()
+    if kind == "become_land_creature_ueot":
+        # **Round-25 BLOCKED-BRIDGE-ARM slice -- "this land becomes a
+        # P/T creature until end of turn" (BecomeLandCreatureUEOT
+        # family, manland-shape land animation).** Rust substrate
+        # ``Effect::BecomeLandCreatureUEOT { power, toughness,
+        # granted_subtype }`` (cards.rs; parser at cards.rs:3953-4008,
+        # to_dict at cards.rs:5749-5763) shipped via round 28 (manland
+        # animation). This slice closes the cross-engine bridge gap.
+        # Discovered by the round-22 fresh discovery walk (Rust kind
+        # emitted by to_dict but no matching
+        # ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape.** Rust's struct-variant carries REQUIRED
+        # ``power: i32`` + ``toughness: i32`` (parser raises on
+        # missing fields per cards.rs:3964-3982) and OPTIONAL
+        # ``granted_subtype: Option<String>`` defaulting to None
+        # (cards.rs:3988-4003). Empty-string subtype normalizes to
+        # None at parse time. Negative power/toughness are accepted
+        # (no clamp) -- per Rust's parser comment at
+        # cards.rs:3958-3961, "the Python dataclass has no raise-on-
+        # negative either, and a debuff-shaped manland would still
+        # register cleanly". Bridge mirrors Rust's required-fields
+        # contract (KeyError on missing) and the optional-subtype
+        # default.
+        #
+        # **Python-vs-Rust schema-narrowness divergence.** Python's
+        # ``BecomeLandCreatureUEOT`` (effects/generic/become_type.py
+        # :126-180) carries additional fields beyond Rust's substrate:
+        # ``granted_keywords: frozenset[str]``, ``unblockable: bool``,
+        # plus granted activated/triggered ability fields. Rust's
+        # to_dict only emits power/toughness/granted_subtype, so the
+        # bridge constructs Python with default empty-frozenset
+        # keywords + unblockable=False -- a structural narrowing that
+        # mirrors the Rust substrate's coverage. Manlands with KW
+        # riders (Lavaclaw Reaches reach, Wandering Fumarole hexproof)
+        # are not yet round-trippable through this dict shape and
+        # would need a Rust schema bump first.
+        #
+        # **Resolve semantics (parity-relevant).** Python's class at
+        # ``effects/generic/become_type.py:126-180`` composes layer-4
+        # ``add_type "creature"`` (+ optional ``add_subtype``) and
+        # layer-7 ``set_base_pt`` registry entries with
+        # ``expires_at="cleanup"``, flipping the source's
+        # ``permanent_is_creature`` for the duration. Cleanup-step
+        # rebuild reverts at end of turn.
+        #
+        # **Real EoE consumers** unblocked: 1+ EoE oracle hit via scan
+        # (Tezzeret, Cruel Captain's "becomes a 5/5 ..." rider on a
+        # land animation pattern). Cross-engine end-to-end probe
+        # deferred per round-17/18/19 synthetic-only-when-riders-
+        # cascade precedent (the layer-4/7 registry composition + the
+        # cleanup-step revert path are their own surfaces beyond the
+        # bare bridge-arm slice).
+        from mtg_bot.effects.generic.become_type import (
+            BecomeLandCreatureUEOT,
+        )
+        if "power" not in eff_dict:
+            raise KeyError(
+                "become_land_creature_ueot bridge arm: missing "
+                "required 'power' field"
+            )
+        if "toughness" not in eff_dict:
+            raise KeyError(
+                "become_land_creature_ueot bridge arm: missing "
+                "required 'toughness' field"
+            )
+        granted_subtype = eff_dict.get("granted_subtype", None)
+        # Mirror Rust's empty-string-normalizes-to-None at parse time
+        # (cards.rs:3996-4000) for round-trip parity.
+        if granted_subtype == "":
+            granted_subtype = None
+        return BecomeLandCreatureUEOT(
+            power=eff_dict["power"],
+            toughness=eff_dict["toughness"],
+            granted_subtype=granted_subtype,
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
