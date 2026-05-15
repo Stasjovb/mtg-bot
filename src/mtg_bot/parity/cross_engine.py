@@ -489,6 +489,44 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # ``draw_cards`` arm's count default of 1).
         from mtg_bot.effects.generic.library_lookat import Surveil
         return Surveil(amount=eff_dict.get("count", 1))
+    if kind == "scry_n":
+        # Scry N (CR 701.18) — controller looks at the top ``count`` cards
+        # of their library, may put any number on the bottom, the rest
+        # stay on top in any order. Rust's ``Effect::ScryN { count: i32 }``
+        # variant (cards.rs:123) has existed since round 16; its resolve
+        # arm at ``state_ops_resolve.rs:1777-1792`` implements the
+        # first-slice deterministic shortcut "keep all on top" — no
+        # library mutation needed, satisfying "scry happened" semantics
+        # without a decision callback. Python's ``Scry`` class
+        # (effects/generic/library_lookat.py, sister to Surveil) mirrors
+        # the same keep-on-top semantic exactly: validate non-negative
+        # count, append a log line, no library mutation.
+        #
+        # **Cross-engine default-strategy contract.** Both engines'
+        # post-resolve state agrees bit-for-bit: library top unchanged,
+        # library order unchanged, no zone moves, no graveyard impact.
+        # This is the cleanest possible cross-engine arm — no agent
+        # seating required to mirror, no PendingDecision pipeline to
+        # drain. A future slice that plumbs a real "which to bottom"
+        # decision surface (sister to ``choose_surveil``) can grow both
+        # resolve bodies in lockstep without breaking the bridge.
+        #
+        # **Negative ``count`` raises** on both engines (CR 701.18 doesn't
+        # define Scry -1; surface it as a schema error). Rust's
+        # parse_effect arm at cards.rs:3350-3352 also requires a
+        # non-negative count.
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3350-3352) which
+        # requires an explicit ``count`` field. The dict-shape key here
+        # is ``count`` (Rust's terminology); Python's ``Scry`` constructor
+        # spells the same value ``amount`` — same count -> amount rename
+        # convention as the surveil / mill / draw_cards arms. Missing
+        # ``count`` defaults to 1 (mirrors Python's Scry default of 1
+        # and the surveil arm's lenient-default convention); bridge
+        # consumers SHOULD pass ``count`` explicitly to keep round-trip
+        # dict-shape consistency with what Rust's parser accepts.
+        from mtg_bot.effects.generic.library_lookat import Scry
+        return Scry(amount=eff_dict.get("count", 1))
     if kind == "discard_self":
         # ``DiscardSelf N`` — the SOURCE's controller discards
         # ``amount`` cards from their hand; each discard is the

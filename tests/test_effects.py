@@ -1019,3 +1019,167 @@ def test_deal_damage_opponent_creature_describe():
         DealDamageToOpponentCreature(amount=1).describe()
         == "deals 1 damage to target creature an opponent controls"
     )
+
+
+# === Scry primitive (CR 701.18) ===
+#
+# Sister effect to Surveil — same look-at-top-N pattern, differs in
+# destination zone (library bottom for scry vs graveyard for surveil).
+# First-slice keep-on-top deterministic shortcut: no library mutation,
+# no agent callback. Mirrors Rust's ``Effect::ScryN`` resolve arm at
+# state_ops_resolve.rs:1777-1792 bit-for-bit.
+
+
+def test_scry_default_amount_is_one():
+    """Class default mirrors Rust's surveil/mill/draw_cards count-shape
+    convention — bare ``Scry()`` is scry 1.
+    """
+    from mtg_bot.effects.generic.library_lookat import Scry
+
+    assert Scry().amount == 1
+
+
+def test_scry_keeps_library_unchanged_when_count_one():
+    """Keep-on-top shortcut: scry 1 leaves library order unchanged."""
+    from mtg_bot.effects.generic.library_lookat import Scry
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    for _ in range(3):
+        obj = state.new_object(
+            BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+        )
+        state.players[0].library.append(obj)
+    lib_ids_before = [c.id for c in state.players[0].library]
+    gy_size_before = len(state.players[0].graveyard)
+
+    Scry(amount=1).resolve(state, controller_id=0)
+
+    lib_ids_after = [c.id for c in state.players[0].library]
+    assert lib_ids_after == lib_ids_before
+    assert len(state.players[0].graveyard) == gy_size_before
+
+
+def test_scry_keeps_library_unchanged_when_count_n():
+    """Keep-on-top scales — scry 5 across a library of 5 still no-ops."""
+    from mtg_bot.effects.generic.library_lookat import Scry
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    for _ in range(5):
+        obj = state.new_object(
+            BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+        )
+        state.players[0].library.append(obj)
+    lib_ids_before = [c.id for c in state.players[0].library]
+
+    Scry(amount=5).resolve(state, controller_id=0)
+
+    assert [c.id for c in state.players[0].library] == lib_ids_before
+
+
+def test_scry_zero_is_legal_noop():
+    """count=0 is legal (mirrors Rust's count==0 silent no-op). The
+    log line still records "scries 0" — distinguishes the resolve from
+    a not-fired branch."""
+    from mtg_bot.effects.generic.library_lookat import Scry
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    for _ in range(2):
+        obj = state.new_object(
+            BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+        )
+        state.players[0].library.append(obj)
+    log_len_before = len(state.log)
+
+    Scry(amount=0).resolve(state, controller_id=0)
+
+    assert len(state.players[0].library) == 2
+    assert len(state.log) == log_len_before + 1
+    assert "scries 0" in state.log[-1]
+
+
+def test_scry_negative_amount_raises():
+    """Negative count raises (CR 701.18 doesn't define Scry -1; surface
+    as a schema error). Mirrors Rust's
+    ``ScryN count must be non-negative`` raise.
+    """
+    from mtg_bot.effects.generic.library_lookat import Scry
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    with pytest.raises(ValueError, match="non-negative"):
+        Scry(amount=-1).resolve(state, controller_id=0)
+
+
+def test_scry_clamps_to_library_size():
+    """Per CR 701.18d, count > library size silently clamps. With
+    keep-on-top this is observable only in the log line: it records
+    the clamped count, not the requested count."""
+    from mtg_bot.effects.generic.library_lookat import Scry
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    obj = state.new_object(
+        BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+    )
+    state.players[0].library.append(obj)
+
+    Scry(amount=5).resolve(state, controller_id=0)
+
+    # Library still has its 1 card, no error raised.
+    assert len(state.players[0].library) == 1
+    # Log records the CLAMPED count, not the requested 5.
+    assert "scries 1" in state.log[-1]
+
+
+def test_scry_empty_library_is_legal_noop():
+    """Empty library + scry N is a silent no-op (clamp to 0)."""
+    from mtg_bot.effects.generic.library_lookat import Scry
+
+    state = GameState()
+    state.players.append(Player(id=0))
+    state.players.append(Player(id=1))
+    Scry(amount=3).resolve(state, controller_id=0)
+    assert len(state.players[0].library) == 0
+    assert "scries 0" in state.log[-1]
+
+
+def test_scry_describe_singular_and_plural_shape():
+    """describe() format: "scry N" — matches Rust's debug output and
+    the standard MTG oracle text shape."""
+    from mtg_bot.effects.generic.library_lookat import Scry
+
+    assert Scry(amount=1).describe() == "scry 1"
+    assert Scry(amount=3).describe() == "scry 3"
+    assert Scry(amount=0).describe() == "scry 0"
+
+
+def test_scry_equality_and_hashing():
+    """Frozen dataclass equality + hash by amount. Mirrors Surveil's
+    @dataclass(frozen=True) shape — two Scry instances with the same
+    amount compare equal and hash equal."""
+    from mtg_bot.effects.generic.library_lookat import Scry
+
+    assert Scry(amount=2) == Scry(amount=2)
+    assert Scry(amount=2) != Scry(amount=3)
+    assert hash(Scry(amount=2)) == hash(Scry(amount=2))
+
+
+def test_scry_exported_from_generic_namespace():
+    """Scry is exported through the effects.generic namespace
+    alongside Surveil so card-parser arms and bridge code can import
+    it from the canonical location.
+    """
+    from mtg_bot.effects.generic import Scry as ScryFromGeneric
+    from mtg_bot.effects.generic.library_lookat import Scry as ScryFromModule
+    from mtg_bot.effects import Scry as ScryFromTop
+
+    assert ScryFromGeneric is ScryFromModule
+    assert ScryFromTop is ScryFromModule

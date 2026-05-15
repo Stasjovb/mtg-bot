@@ -2006,6 +2006,58 @@ attacker as unblocked" branch goes away.
 
 ---
 
+## Python `Effect.Scry` first-slice keep-on-top deterministic shortcut
+
+**Location**: `src/mtg_bot/effects/generic/library_lookat.py` (the new
+`Scry` dataclass, sister to `Surveil`). Bridge arm at
+`src/mtg_bot/parity/cross_engine.py` `_ta_dict_to_python_effect` under
+`kind == "scry_n"`.
+
+**What the shortcut is**: Python's new `Scry` primitive (and the Rust
+`Effect::ScryN` resolve arm at `state_ops_resolve.rs:1777-1792` it
+mirrors) implements the CR 701.18 scry as the deterministic
+"keep all observed cards on top of the library in their original
+order" branch — no decision callback for "which cards go to the
+bottom". The library is not mutated; only the log is updated. CR
+701.18d's "if there aren't enough cards in your library, look at
+all the cards" clamp is honored silently (count clamps to library
+size). Negative count raises loudly.
+
+**Why it's OK today**: matches Rust's already-shipped first-slice
+shortcut byte-for-byte, so the cross-engine bridge stays bit-equal
+on observable state. The Rust side intentionally deferred the "which
+to bottom" decision substrate to a future slice (analogous to how
+Surveil queues a `PendingDecision::SurveilChoice` and calls
+`auto_resolve_pending_decisions("keep_all_on_top")` at the trigger
+terminal); Python's Scry mirrors the same default. No EoE card today
+exercises the choose-a-card-to-bottom path — the only consumers are
+ETB triggers that benefit from the CR 122.6 "scry happened"
+information delta, not the bottoming decision itself.
+
+**Failure mode**: a future EoE printing whose oracle text rewards
+bottoming a specific card (e.g. "scry 2; if you scried a creature
+card, draw a card") would observe the shortcut as a strength
+regression — the bot would never bottom the wrong-shape card and
+would lose the conditional rider. None today.
+
+**Fix scope estimate**: medium-small. Add a `choose_scry_to_bottom`
+agent callback (sister to `choose_surveil`) on the `Agent` base +
+`DefaultTacticalAgent` + `InteractiveAgent`. Update `Scry.resolve`
+to walk the top-N cards through the callback and partition into
+keep-on-top / put-on-bottom lists; mirror the same on the Rust side
+by replacing the inlined keep-on-top branch with a
+`PendingDecision::ScryChoice` queue + `submit_scry_decision` /
+`auto_resolve_pending_decisions("keep_all_on_top")` symmetric to
+Surveil. Roughly mirrors the work already done for Surveil.
+
+**Impact estimate**: zero strength cost today (no consumer exercises
+the bottoming choice). Once the first scry-rewards-bottoming card
+lands, strength cost grows from "shortcut equals Surveil's default"
+levels — i.e. small, but a real signal-loss in self-play data on the
+affected printings.
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,

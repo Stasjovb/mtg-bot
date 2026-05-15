@@ -200,6 +200,7 @@ from mtg_bot.effects.generic import (
     SearchLibraryForCard,
     SearchLibraryForEquipmentToBattlefield,
     SearchLibraryForGreenCreatureWithMVAtMostX,
+    Scry,
     ScuttlemuttColorChangeUEOT,
     SelfMill,
     SetLifeToHalfStartingRoundedUp,

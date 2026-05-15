@@ -703,6 +703,119 @@ def test_rust_parser_accepts_surveil_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_scry_n_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "scry_n", "count": N}`` translates to Python
+    ``Scry(amount=N)``.
+
+    Sister effect to surveil — same look-at-top-N pattern, differs in
+    destination zone (library bottom for scry vs graveyard for surveil).
+    The Rust effect variant already exists at ``rust/src/cards.rs:123``
+    (``Effect::ScryN { count: i32 }``) and its parse_effect arm at
+    ``cards.rs:3350-3352``; the Rust resolve arm at
+    ``state_ops_resolve.rs:1777-1792`` implements the first-slice
+    deterministic shortcut "keep all on top" — no library mutation
+    needed. The Python ``Scry`` class
+    (effects/generic/library_lookat.py, sister to Surveil) mirrors the
+    same keep-on-top semantic so post-resolve state agrees bit-for-bit
+    across engines without any agent seating.
+
+    Note the dict-key rename: Rust's parser uses ``count`` (consistent
+    with the Mill / Surveil / DrawCards / DamageEachOpponent count-shape
+    family); Python's constructor spells the same value ``amount``. The
+    bridge translates count -> amount.
+    """
+    from mtg_bot.effects.generic.library_lookat import Scry
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "scry_n", "count": 3})
+    assert isinstance(e, Scry)
+    assert e.amount == 3
+
+
+def test_bridge_scry_n_count_default_one():
+    """Missing ``count`` defaults to 1 (mirrors Python's Scry default of
+    1; same lenient-default convention as the surveil / mill / draw_cards
+    arms).
+
+    Rust's parse_effect is STRICTER (cards.rs:3350-3352 requires an
+    explicit ``count`` field); the Python bridge's lenient default
+    exists for partial test fixtures only and is out-of-band relative
+    to the production parser path.
+    """
+    from mtg_bot.effects.generic.library_lookat import Scry
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "scry_n"})
+    assert isinstance(e, Scry)
+    assert e.amount == 1
+
+
+def test_bridge_scry_n_translates_count_zero():
+    """Scry 0 is a legal no-op (mirrors Rust's keep-on-top when
+    count=0: no cards examined, library and graveyard untouched). The
+    bridge passes the explicit zero through verbatim — Python's Scry
+    resolve also no-ops cleanly on count=0 (the min-clamp against
+    library size yields 0; the log line records 0 and returns).
+    """
+    from mtg_bot.effects.generic.library_lookat import Scry
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "scry_n", "count": 0})
+    assert isinstance(e, Scry)
+    assert e.amount == 0
+
+
+def test_bridge_scry_n_translates_large_count():
+    """Large ``count`` values pass through verbatim (no upper-bound
+    clamp at the bridge layer). The Python ``Scry.resolve`` clamps to
+    library length per CR 701.18d at resolve time, mirroring Rust's
+    silent clamp at state_ops_resolve.rs:1777-1792 — the bridge stays
+    a pure translator.
+    """
+    from mtg_bot.effects.generic.library_lookat import Scry
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "scry_n", "count": 100})
+    assert isinstance(e, Scry)
+    assert e.amount == 100
+
+
+def test_rust_parser_accepts_scry_n_in_triggered_ability():
+    """Pin the Rust parser surface for the matched effect kind. The
+    bridge's dict shape must register cleanly on the Rust side too;
+    this lockstep gate keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Mirrors the existing ``surveil`` parser-surface pin. Required field
+    is ``count`` (non-negative i32); the predicate-path triggered-
+    ability wrapper is just a carrier — the substrate being pinned is
+    parse_effect's ``scry_n`` arm (cards.rs:3350-3352).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Phase 5 Bridge Pin -- Scry N",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 4, "U": 1},
+        "power": 4,
+        "toughness": 4,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "scry_n",
+                    "count": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 def test_bridge_mill_translates_to_python():
     """Phase 5 bridge extension: Rust
     ``{"kind": "mill", "count": N}`` translates to Python

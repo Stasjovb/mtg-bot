@@ -200,6 +200,7 @@ from mtg_bot.effects.generic.library_lookat import (
     ManifestDreadThenAttachSelf,
     ManifestDreadThenPutPlusOneCountersOnIt,
     PeekTopMayBattlefieldIfLandElseHand,
+    Scry,
     SelfMill,
     Surveil,
 )
@@ -456,6 +457,7 @@ __all__ = [
     "ManifestDreadThenAttachSelf",
     "ManifestDreadThenPutPlusOneCountersOnIt",
     "PeekTopMayBattlefieldIfLandElseHand",
+    "Scry",
     "SelfMill",
     "Surveil",
     # life
