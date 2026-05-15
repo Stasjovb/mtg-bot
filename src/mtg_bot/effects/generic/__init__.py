@@ -263,6 +263,7 @@ from mtg_bot.effects.generic.zone_moves import (
     OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary,
     OwnerPutsTargetWarpedExileCardOnBottomOfLibrary,
     PutBasicLandFromHandOntoBattlefieldTapped,
+    SacrificeFirstPermanentYouControl,
     SacrificeNLandsYouControl,
     ShuffleZonesIntoLibrary,
 )
@@ -506,6 +507,7 @@ __all__ = [
     "OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary",
     "OwnerPutsTargetWarpedExileCardOnBottomOfLibrary",
     "PutBasicLandFromHandOntoBattlefieldTapped",
+    "SacrificeFirstPermanentYouControl",
     "SacrificeNLandsYouControl",
     "ShuffleZonesIntoLibrary",
     # control

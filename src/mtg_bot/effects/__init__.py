@@ -192,6 +192,7 @@ from mtg_bot.effects.generic import (
     ReturnUpToNNonlandPermanentCardsFromGraveyardToHand,
     ReturnUpToNSmallCreaturesFromGraveyardWithCounters,
     ReturnUpToNTargetCreaturesToOwnersHands,
+    SacrificeFirstPermanentYouControl,
     SacrificeNLandsYouControl,
     SacrificeSourceDelayed,
     ScheduleSelfSacAtNextEndStep,

@@ -275,6 +275,88 @@ class SacrificeNLandsYouControl(Effect):
 
 
 @dataclass(frozen=True)
+class SacrificeFirstPermanentYouControl(Effect):
+    """Generic "sacrifice a permanent" first-slice deterministic primitive.
+
+    The bridge-shape Python mirror of Rust's
+    ``Effect::Sacrifice { target: TargetFilter::AnyCreature }`` (cards.rs:100;
+    parse arm at cards.rs:3405-3412, resolve arm at
+    state_ops_resolve.rs:1504-1583, to_dict at cards.rs:5620-5623). Rust's
+    first-slice resolve is a deterministic shortcut: it picks
+    ``state.players[controller].battlefield[0]`` regardless of card-type
+    filter (the AnyCreature filter is a label-only narrowness convention
+    shared with the round-15 AddCounters / round-18 TapTarget / round-23
+    UntapTarget arms; the actual creature filter is not enforced at
+    resolve time -- ``bf[0]`` of any permanent type is sacrificed).
+    Empty controller bf == silent fizzle; mirrors the bounce / tap /
+    untap / destroy fizzle convention.
+
+    This Python primitive mirrors the Rust deterministic-shortcut shape
+    EXACTLY -- no agent.choose_target plumbing, no PendingDecision pipe,
+    no creature-only filter at resolve time. The bridge constructor
+    enforces the AnyCreature filter narrowness at bridge-time (mirrors
+    Rust's parse_target_filter coverage of any_player vs any_creature),
+    but the resolve body picks ``state.battlefield[0]`` filtered by
+    controller_id without any card-type constraint -- bit-identical to
+    Rust's first-slice resolve.
+
+    **Distinct from the rich Python sacrifice family.** Python has
+    ``SacrificeSelf`` (source-targeting, used by Pinnacle Starcage),
+    ``SacrificeNLandsYouControl`` (Lotus Field's land-only shape with
+    agent.choose_sacrifice plumbing), ``EachOpponentSacrificesCreature``
+    (multi-player iteration), ``TargetOpponentSacrificesCreatureOther
+    ThanEnchanted`` (target opponent picks via their agent), and
+    ``SacrificeSourceDelayed`` (delayed-trigger schedule). All five
+    carry richer semantics than Rust's bare AddCounters-shape
+    Sacrifice arm. This primitive is the bridge-only translator
+    target -- direct Python card defs that want richer behavior should
+    use the existing classes; this class exists to give the cross-
+    engine bridge a deterministic Rust-shape Python target that
+    doesn't drag PendingDecision / agent.choose_sacrifice / multi-
+    target slot machinery into the bridge surface.
+
+    **Controller resolution.** Reads ``controller_id`` (the source-
+    controller per CR 119.5 / 608.2 -- effects resolve under the
+    SOURCE's controller, not the active player). Mirrors Rust's I66
+    follow-up that swapped the hardcoded ``state.active_player`` for
+    ``state.current_resolve_source_controller``. The Python resolve
+    pipeline already passes the source-controller as ``controller_id``,
+    so this primitive uses it directly.
+
+    **No source-exclusion convention.** Rust's resolve picks
+    ``bf[0]`` of the controller's battlefield with no source filter.
+    Sister to Rust's destroy_target / tap_target / untap_target
+    conventions. The source IS allowed to be the picked permanent
+    when it sits at index 0 (e.g. an ETB-triggered self-sacrifice).
+    Distinct from ``SacrificeNLandsYouControl`` which excludes the
+    source via ``source_id != obj.id``.
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.turn import sacrifice as _sacrifice
+
+        # Mirror Rust state_ops_resolve.rs:1539-1543 exactly: scan the
+        # controller's battlefield, fizzle silently on empty bf, pick
+        # bf[0] regardless of card-type filter (the AnyCreature label is
+        # bridge-time narrowness, not resolve-time filter).
+        bf = [o for o in state.battlefield if o.controller_id == controller_id]
+        if not bf:
+            return  # silent fizzle (matches Rust state_ops_resolve.rs:1541)
+        chosen = bf[0]
+        state.log.append(
+            f"P{controller_id} sacrifices {chosen.printing.name}"
+        )
+        _sacrifice(state, chosen)
+
+    def describe(self) -> str:
+        return "sacrifice a permanent you control"
+
+
+
+@dataclass(frozen=True)
 class PutBasicLandFromHandOntoBattlefieldTapped(Effect):
     """Terrain Generator's {2}, {T} activated: "You may put a basic
     land card from your hand onto the battlefield tapped."

@@ -6236,6 +6236,150 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 f"its own bridge arm to a -1/-1 Python primitive."
             )
         return PutPlusOneCounterOnTargetCreature(amount=count)
+    if kind == "sacrifice":
+        # **Round-34 BLOCKED-BRIDGE-ARM tail slice -- "sacrifice a
+        # permanent" (Sacrifice family).** CLOSES THE BLOCKED-BRIDGE-
+        # ARM TAIL: this is the last of the round-28 closeout's three
+        # substrate-asymmetric residue items (round-30 scry_n,
+        # round-32/33 add_counters, round-34 sacrifice). With this
+        # arm landed, every Rust ``Effect::*`` parse-arm shape has a
+        # cross-engine Python translator; no orphaned BLOCKED-BRIDGE-
+        # ARM Rust shapes remain.
+        #
+        # Rust substrate ``Effect::Sacrifice { target: TargetFilter }``
+        # (cards.rs:96-100; parse arm at cards.rs:3405-3412, resolve
+        # arm at state_ops_resolve.rs:1504-1583, to_dict at
+        # cards.rs:5620-5623) shipped via round 12-ish with the I66
+        # controller-of-effect fix (state.current_resolve_source_
+        # controller fallback to state.active_player). This slice
+        # closes the cross-engine bridge gap.
+        #
+        # **Filter-narrow-by-design.** Rust's resolve arm
+        # (state_ops_resolve.rs:1505-1509) explicitly raises a
+        # PyValueError on ``TargetFilter::AnyPlayer`` -- "Sacrifice
+        # with AnyPlayer target is semantically nonsense (cannot
+        # sacrifice a player)". The bridge mirrors this narrowness:
+        # only ``any_creature`` is honored. Sibling to the round-32/33
+        # add_counters / round-23 untap_target / round-18 tap_target /
+        # round-25 destroy_target arms which are also filter-narrow-
+        # by-design for permanent-shaped recipients.
+        #
+        # **Rust target-pick semantics (deterministic shortcut).**
+        # The Rust resolve arm is the AnyCreature first-slice
+        # shortcut: scans the SOURCE-CONTROLLER's bf for ``bf[0]``
+        # regardless of card-type filter at this layer (per the I66 /
+        # I70 / I73 docstring convention). The "any creature" filter
+        # is a label, not a runtime constraint. Empty source-
+        # controller's bf = silent fizzle. Distinct from
+        # destroy_target / tap_target / add_counters which scan the
+        # DEFENDER's bf -- this arm scans the source-controller's
+        # OWN bf because the printed text is "you sacrifice".
+        #
+        # **Python target-pick semantics (matched deterministic
+        # shortcut).** The bridge constructs
+        # ``SacrificeFirstPermanentYouControl()`` (zero-arg) -- the
+        # primitive's resolve mirrors Rust's deterministic shortcut
+        # bit-identically: scan ``state.battlefield`` filtered by
+        # ``controller_id``, fizzle silently on empty, pick ``bf[0]``
+        # regardless of card-type filter, route through
+        # ``mtg_bot.turn.sacrifice``. No agent.choose_target plumbing,
+        # no PendingDecision pipeline -- the same kind of clean
+        # cross-engine arm the round-30 ScryN bridge shipped (Rust's
+        # first-slice "keep all on top" deterministic shortcut had a
+        # matching Python ``Scry`` no-op-shaped resolve).
+        #
+        # **Why this isn't a cascade.** The round-31 worker JJJ
+        # analysis flagged sacrifice as cascading because it assumed
+        # we needed a generic "Sacrifice with target" primitive that
+        # plumbed agent.choose_target + PendingDecision + multi-target
+        # slot machinery. That assumption was correct for a FULL
+        # MTG-rules sacrifice ("sacrifice a creature" with player
+        # choice CR 701.16) but UNNECESSARY for mirroring Rust's
+        # current first-slice shortcut. Rust itself doesn't plumb
+        # choose_sacrifice -- it picks bf[0] deterministically. The
+        # bridge target needs only to mirror what Rust actually
+        # does, not what a fully-rules-compliant Sacrifice would
+        # require. The richer choose_sacrifice plumbing already
+        # exists on Python (SacrificeNLandsYouControl,
+        # EachOpponentSacrificesCreature) -- when Rust grows real
+        # agent.choose_sacrifice plumbing those primitives can be
+        # bridged in a future slice.
+        #
+        # **Filter narrowness asymmetry note.** Mirrors the
+        # add_counters / untap_target / destroy_target / tap_target
+        # arm notes: Rust's first-slice ``AnyCreature`` picker
+        # doesn't actually filter to creatures (picks ``bf[0]``
+        # blindly); the bridge target ALSO picks ``bf[0]`` blindly
+        # so cross-engine bf-state agrees bit-for-bit on synthetic
+        # probes. Real-card probes that mix card types on the
+        # controller's bf will pick the same index on both engines
+        # (no creature-filter divergence because neither engine
+        # filters).
+        #
+        # **Distinct from the rich Python sacrifice family.** Python
+        # has SacrificeSelf (source-targeting, used by Pinnacle
+        # Starcage), SacrificeNLandsYouControl (Lotus Field's land-
+        # only shape with agent.choose_sacrifice plumbing),
+        # EachOpponentSacrificesCreature (multi-player iteration),
+        # TargetOpponentSacrificesCreatureOtherThanEnchanted (target
+        # opponent picks via their agent), SacrificeSourceDelayed
+        # (delayed-trigger schedule). All five carry richer semantics
+        # than Rust's bare bf[0]-shape Sacrifice arm. The bridge
+        # target is the new SacrificeFirstPermanentYouControl
+        # primitive -- bridge-only translator target that doesn't
+        # drag PendingDecision / agent.choose_sacrifice / multi-
+        # target slot machinery into the bridge surface. Direct
+        # Python card defs that want richer behavior should use the
+        # existing classes; this primitive exists specifically as
+        # the cross-engine translator target.
+        #
+        # **EoE consumer status.** No bare-shape EoE consumer today
+        # for the bridge target -- EoE sacrifice oracle hits all use
+        # the richer SacrificeSelf / SacrificeNLandsYouControl /
+        # EachOpponentSacrificesCreature / activation-cost shapes.
+        # The bare bridge arm closes the to_dict round-trip surface
+        # and pre-positions the Sacrifice -> SacrificeFirstPermanent
+        # YouControl translator for any future card-text-narrowed
+        # variant that rides on the same Rust dispatch. Cross-engine
+        # end-to-end probe deferred per round-17/18/19/23/30/31/32/33
+        # synthetic-only-when-riders-cascade precedent (the bare
+        # bridge arm pin tests cover the dict-translator surface
+        # alone).
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3405-3412)
+        # which requires a ``target`` dict (downcast + parsed via
+        # parse_target_filter).
+        from mtg_bot.effects.generic.zone_moves import (
+            SacrificeFirstPermanentYouControl,
+        )
+        target_dict = eff_dict.get("target")
+        # Lenient-default mirrors the destroy_target / untap_target /
+        # tap_target / exile_target / add_counters arms: missing
+        # ``target`` defaults to ``any_creature``. Bridge consumers
+        # SHOULD pass ``target`` explicitly to keep round-trip
+        # dict-shape consistency with what Rust's parser accepts.
+        target_kind = (
+            target_dict.get("kind", "any_creature")
+            if isinstance(target_dict, dict)
+            else "any_creature"
+        )
+        if target_kind == "any_player":
+            raise ValueError(
+                f"cross_engine sacrifice bridge: AnyPlayer target "
+                f"is semantically nonsense (you can't sacrifice a "
+                f"player). Mirrors Rust's runtime PyValueError at "
+                f"state_ops_resolve.rs:1505-1509."
+            )
+        if target_kind != "any_creature":
+            raise ValueError(
+                f"cross_engine sacrifice bridge: unsupported target "
+                f"filter kind {target_kind!r} (Rust's "
+                f"parse_target_filter at cards.rs:2790-2799 accepts "
+                f"only 'any_player' and 'any_creature'; sacrifice is "
+                f"filter-narrow-by-design and only honors creature-"
+                f"shaped filters)."
+            )
+        return SacrificeFirstPermanentYouControl()
     if kind == "put_plus_one_counters_on_self_per_other_creature_or_artifact":
         # BLOCKED-RUST-EFFECT slice (round 33) -- put a +1/+1 counter
         # on this creature for each OTHER creature and/or artifact you

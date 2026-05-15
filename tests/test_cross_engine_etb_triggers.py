@@ -12338,6 +12338,269 @@ def test_rust_parser_accepts_add_counters_in_triggered_ability():
     assert pid == 0
 
 
+# ----------------------------------------------------------------------
+# Round-34 BLOCKED-BRIDGE-ARM tail closeout: ``sacrifice`` translator.
+# Closes the round-28 closeout's three substrate-asymmetric residue
+# items (round-30 scry_n + round-32/33 add_counters + round-34
+# sacrifice). With this arm landed, every Rust ``Effect::*`` parse-arm
+# shape has a cross-engine Python translator.
+# ----------------------------------------------------------------------
+
+
+def test_bridge_sacrifice_basic_translation():
+    """BLOCKED-BRIDGE-ARM tail closeout (round 34) -- Sacrifice family.
+    Rust ``{"kind": "sacrifice", "target": {"kind": "any_creature"}}``
+    translates to Python ``SacrificeFirstPermanentYouControl()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3405-3412 (target
+    dict required, parsed via parse_target_filter). Rust's resolve at
+    state_ops_resolve.rs:1504-1583 is the deterministic-shortcut
+    "pick bf[0] of source-controller's bf" shape; the Python
+    primitive mirrors that bit-identically (no agent.choose_target
+    plumbing, no PendingDecision, no creature-only filter at resolve
+    time -- the AnyCreature label is bridge-time narrowness only).
+    Closes the BLOCKED-BRIDGE-ARM tail.
+    """
+    from mtg_bot.effects.generic.zone_moves import (
+        SacrificeFirstPermanentYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "sacrifice", "target": {"kind": "any_creature"}}
+    )
+    assert isinstance(e, SacrificeFirstPermanentYouControl)
+
+
+def test_bridge_sacrifice_default_target_filter_is_any_creature():
+    """Bridge arm pin: missing ``target`` defaults to ``any_creature``
+    (mirrors the lenient-default convention used by sister tap_target
+    / untap_target / destroy_target / exile_target / add_counters arms).
+    Bridge consumers SHOULD pass ``target`` explicitly for round-trip
+    dict-shape consistency.
+    """
+    from mtg_bot.effects.generic.zone_moves import (
+        SacrificeFirstPermanentYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "sacrifice"})
+    assert isinstance(e, SacrificeFirstPermanentYouControl)
+
+
+def test_bridge_sacrifice_any_player_filter_raises():
+    """Bridge arm pin: ``target.kind == "any_player"`` raises
+    ValueError (mirrors Rust's resolve raise at
+    state_ops_resolve.rs:1505-1509 -- "Sacrifice with AnyPlayer
+    target is semantically nonsense"). The bridge front-loads the
+    check rather than waiting for resolve so the contract is
+    symmetric across engines.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="AnyPlayer"):
+        _ta_dict_to_python_effect(
+            {"kind": "sacrifice", "target": {"kind": "any_player"}}
+        )
+
+
+def test_bridge_sacrifice_unknown_target_filter_raises():
+    """Bridge arm pin: target kind that's neither ``any_creature`` nor
+    ``any_player`` raises ValueError. Pins the bridge against
+    accidental future filter expansion that drifts away from Rust's
+    parse_target_filter coverage at cards.rs:2790-2799.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="unsupported target filter"):
+        _ta_dict_to_python_effect(
+            {"kind": "sacrifice", "target": {"kind": "any_artifact"}}
+        )
+
+
+def test_bridge_sacrifice_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([Sacrifice(any_creature), DrawCards(1)])`` translates
+    correctly via the recursive Sequence translator. Pins this arm
+    against accidental dispatch loss inside Sequence (the classic
+    "sacrifice a creature, draw a card" Altar's-Reap composition).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.zone_moves import (
+        SacrificeFirstPermanentYouControl,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "sacrifice", "target": {"kind": "any_creature"}},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], SacrificeFirstPermanentYouControl)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def _sacrifice_pin_state():
+    """Test fixture mirroring tests/test_stellar_sights_batch7.py
+    helpers: new GameState with two players (PickFirstAgent), p0
+    active, precombat-main step. Returns (state, _put_helper).
+    """
+    from mtg_bot.agents import Agent
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.turn import Step
+
+    class _PickFirstAgent(Agent):
+        def choose_target(self, state, player_id, legal_targets):
+            return legal_targets[0] if legal_targets else None
+
+        def choose_sacrifice(self, state, player_id, legal_ids):
+            return legal_ids[0] if legal_ids else None
+
+    state = GameState()
+    state.players.append(Player(id=0, agent=_PickFirstAgent()))
+    state.players.append(Player(id=1, agent=_PickFirstAgent()))
+    state.active_player_idx = 0
+    state.priority_player_idx = 0
+    state.step = Step.PRECOMBAT_MAIN
+
+    def _put(printing, owner_id=0):
+        obj = state.new_object(printing, owner_id, Zone.BATTLEFIELD)
+        state.battlefield.append(obj)
+        return obj
+
+    return state, _put
+
+
+def test_sacrifice_first_permanent_you_control_resolve_picks_bf_zero():
+    """Resolve-side pin for the new SacrificeFirstPermanentYouControl
+    primitive -- mirrors Rust's first-slice deterministic shortcut
+    at state_ops_resolve.rs:1539-1543: pick state.battlefield[0]
+    filtered by controller_id (no card-type filter at resolve time),
+    route through ``mtg_bot.turn.sacrifice``, leave the picked
+    object in the controller's graveyard.
+    """
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.effects.generic.zone_moves import (
+        SacrificeFirstPermanentYouControl,
+    )
+
+    state, _put = _sacrifice_pin_state()
+    # Seed two basic lands onto p0's bf (deterministic, simplest).
+    mountain_a = _put(BASIC_LANDS["Mountain"], owner_id=0)
+    mountain_b = _put(BASIC_LANDS["Mountain"], owner_id=0)
+    p0_bf = [o for o in state.battlefield if o.controller_id == 0]
+    assert p0_bf == [mountain_a, mountain_b]
+
+    SacrificeFirstPermanentYouControl().resolve(state, controller_id=0)
+
+    # bf[0] (mountain_a) sacrificed -> moved to p0's graveyard;
+    # mountain_b remains on bf.
+    p0_bf_after = [o for o in state.battlefield if o.controller_id == 0]
+    assert p0_bf_after == [mountain_b]
+    assert mountain_a in state.players[0].graveyard
+
+
+def test_sacrifice_first_permanent_you_control_resolve_silent_fizzle_on_empty_bf():
+    """Resolve-side pin: when the controller's battlefield is empty,
+    the resolve fizzles silently (mirrors Rust state_ops_resolve.rs:
+    1540-1542 -- ``if bf.is_empty() { return Ok(()); }``). No raise,
+    no graveyard mutation.
+    """
+    from mtg_bot.effects.generic.zone_moves import (
+        SacrificeFirstPermanentYouControl,
+    )
+
+    state, _ = _sacrifice_pin_state()
+    # Empty bf on both sides.
+    assert state.battlefield == []
+
+    # Should not raise.
+    SacrificeFirstPermanentYouControl().resolve(state, controller_id=0)
+
+    # No state mutation.
+    assert state.battlefield == []
+    assert state.players[0].graveyard == []
+    assert state.players[1].graveyard == []
+
+
+def test_sacrifice_first_permanent_you_control_resolve_uses_controller_id_not_active_player():
+    """Resolve-side pin: the primitive scans the controller's bf, not
+    the active player's. Mirrors Rust's I66 controller-of-effect fix
+    at state_ops_resolve.rs:1535-1538 (resolve picks
+    state.current_resolve_source_controller, falling back to
+    state.active_player). The Python primitive consumes the
+    ``controller_id`` parameter directly (the upstream resolve
+    pipeline is responsible for passing the source-controller).
+
+    Pin scenario: p0 is active, p1's creature is the source. The
+    primitive sacrifices from P1's bf, not p0's.
+    """
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.effects.generic.zone_moves import (
+        SacrificeFirstPermanentYouControl,
+    )
+
+    state, _put = _sacrifice_pin_state()
+    p0_mountain = _put(BASIC_LANDS["Mountain"], owner_id=0)
+    p1_mountain = _put(BASIC_LANDS["Mountain"], owner_id=1)
+
+    # Resolve as p1's effect even though p0 is active.
+    SacrificeFirstPermanentYouControl().resolve(state, controller_id=1)
+
+    # p1's mountain sacrificed (controller-id-driven), p0's mountain
+    # untouched.
+    assert p0_mountain in state.battlefield
+    assert p1_mountain not in state.battlefield
+    assert p1_mountain in state.players[1].graveyard
+    assert state.players[0].graveyard == []
+
+
+def test_rust_parser_accepts_sacrifice_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "sacrifice", "target": {"kind": "any_creature"}}`` dict
+    shape on a triggered_ability carrier. The bridge dict shape must
+    register cleanly on the Rust side too; this lockstep gate keeps
+    the bridge from drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3405-3412`` requires ``target``.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- Sacrifice",
+        "card_types": ["Creature"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "sacrifice",
+                    "target": {"kind": "any_creature"},
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 def test_bridge_put_plus_one_counters_on_self_per_other_creature_or_artifact_basic_translation():
     """BLOCKED-RUST-EFFECT slice (round 33) -- put a +1/+1 counter on
     this creature for each OTHER creature and/or artifact you control.
