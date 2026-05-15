@@ -4672,6 +4672,95 @@ fn apply_effect(
                 }
             }
         }
+        // BLOCKED-RUST-EFFECT slice (round 34) — surveil X, where X is
+        // the source-controller's artifact count. Sister of round-32
+        // DealDamageToOpponentCreatureByArtifactCount (same X-from-
+        // artifact-count denominator) and round-15 Effect::Surveil
+        // (same SurveilChoice PendingDecision shape). Resolves to a
+        // SurveilChoice carrying min(artifact_count, library_len)
+        // cards off the controller's library top, with the controller
+        // resolved via I61 transient slot first then 5-zone+stack
+        // scan fallback.
+        Effect::SurveilXEqualToArtifactCount => {
+            // Source-controller resolution — try I61 transient slot
+            // first (mirrors round-15 Effect::Surveil), then fall back
+            // to 5-zone scan + stack scan (mirrors round-32
+            // DealDamageToOpponentCreatureByArtifactCount robustness).
+            let mut source_controller: Option<u8> =
+                state.current_resolve_source_controller;
+            if source_controller.is_none() {
+                'outer_sc: for player in state.players.iter() {
+                    for zone in [
+                        &player.hand,
+                        &player.library,
+                        &player.battlefield,
+                        &player.graveyard,
+                        &player.exile,
+                    ] {
+                        for obj in zone.iter() {
+                            if obj.id == source_obj_id {
+                                source_controller = Some(obj.controller);
+                                break 'outer_sc;
+                            }
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            // Final fallback: active_player. Preserves the "always
+            // emit exactly one PendingDecision" contract that auto-
+            // resolve depends on (mirrors round-15 Effect::Surveil's
+            // unconditional push at state_ops_resolve.rs:2726-2730).
+            let controller = source_controller.unwrap_or(state.active_player);
+            let cidx = controller as usize;
+            // Count source-controller's artifacts on bf. BIT-FOR-BIT
+            // mirror of round-32's DealDamageToOpponentCreatureByArtifactCount
+            // counting denominator at state_ops_resolve.rs:4550-4560.
+            let mut count: i32 = 0;
+            for obj in state.players[cidx].battlefield.iter() {
+                let Some(printing) = state.registry.printings.get(obj.printing_id as usize)
+                else {
+                    continue;
+                };
+                if printing.card_types.iter().any(|t| t == "Artifact") {
+                    count = count.saturating_add(1);
+                }
+            }
+            // Pop min(count, library_len) cards off library TOP into
+            // a SurveilChoice PendingDecision. IDENTICAL post-pop
+            // state shape to round-15 Effect::Surveil resolve arm at
+            // state_ops_resolve.rs:2705-2730. count == 0 (controller
+            // has zero artifacts) is a legitimate no-op surveil — we
+            // still push an empty SurveilChoice so the auto-resolve
+            // invariant (every Surveil emits exactly one
+            // PendingDecision) holds; auto-resolve discards it in
+            // O(1) (matches round-15 count = 0 comment).
+            let lib_len = state.players[cidx].library.len();
+            let n = (count.max(0) as usize).min(lib_len);
+            let lib_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].library);
+            let mut cards: Vec<GameObject> = Vec::with_capacity(n);
+            for _ in 0..n {
+                // Always remove index 0 — the new top after each prior
+                // remove shifts down. Mirrors round-15 Surveil's
+                // identical pop loop.
+                let removed = lib_mut.remove(0);
+                cards.push(removed);
+            }
+            state.pending_decisions.push(PendingDecision::SurveilChoice {
+                source_obj_id,
+                controller,
+                cards,
+            });
+        }
         // BLOCKED-RUST-EFFECT slice — Fight effect arm. "Target
         // creature you control fights target creature an opponent
         // controls" (CR 701.12). Both fighters deal damage equal to
