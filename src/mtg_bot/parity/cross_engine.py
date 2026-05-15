@@ -5910,6 +5910,67 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return ManifestDreadThenPutPlusOneCountersOnIt(
             counter_amount=counter_amount
         )
+    if kind == "double_target_creatures_power_ueot":
+        # BLOCKED-RUST-EFFECT slice (round 31) -- double target
+        # creature's power UEOT bridge arm. Rust's
+        # ``Effect::DoubleTargetCreaturesPowerUEOT`` (cards.rs unit
+        # variant added in this slice; parse arm at cards.rs:3712-3721,
+        # to_dict at cards.rs:5628-5634, resolve at
+        # state_ops_resolve.rs DoubleTargetCreaturesPowerUEOT arm
+        # following the round-17 PumpTargetCreatureUntilEOT shape)
+        # mirrors Python's ``DoubleTargetCreaturesPowerUEOT``
+        # (effects/generic/pump.py:194 -- Mightform Harmonizer's
+        # landfall trigger, 1 EoE consumer). Rust substrate landed
+        # end-to-end IN this slice; the bridge translator wires the
+        # cross-engine round trip.
+        #
+        # **Field-shape.** Unit variant on both sides; no fields beyond
+        # ``kind``. The Python class has no constructor args
+        # (pump.py:194 -- ``@dataclass(frozen=True) class
+        # DoubleTargetCreaturesPowerUEOT(Effect): ...``). The bridge
+        # translator ignores every other key on the dict for round-trip
+        # dict-shape consistency (mirrors the destroy_enchanted_permanent
+        # / tap_enchanted_permanent / put_stun_counter_on_tapped_creature
+        # unit-variant precedents).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # snapshots the chosen target's effective power at resolve time
+        # (via the round-17 read_battlefield_creature_power helper) and
+        # pushes a UeotModifier::PowerToughnessBonus { power: snapshot,
+        # toughness: 0 }. Source-controller resolution routes through
+        # the I79 substrate (current_resolve_source_controller with
+        # active_player fallback). Target picker walks the source-
+        # controller's bf and picks the FIRST creature (smallest Vec
+        # index) -- mirrors PumpTargetCreatureUntilEOT's first-eligible
+        # scan. Python's resolve at pump.py:218-250 reads the target
+        # from the targets tuple passed by the targeting pipeline (PUSH-
+        # time pick) and calls grant_pt_pump_ueot with the same snapshot
+        # shape; the chooser-driven pick converges with Rust's first-
+        # eligible-creature scan when the agent picks the first-
+        # eligible target on synthetic probes with one bait creature.
+        #
+        # **Snapshot fizzle parity.** Both engines silently no-op when
+        # the chosen target's effective power is <= 0 at resolve time
+        # (Python: pump.py:235 ``if snapshot <= 0: return``; Rust: the
+        # snapshot <= 0 guard in the resolve arm). Doubling 0/X is no-
+        # op, doubling -N would invert via addition (which both engines
+        # explicitly avoid).
+        #
+        # **No real-EoE end-to-end probe in this slice.** Mightform
+        # Harmonizer's double-power clause is a LANDFALL TRIGGER
+        # (Subject(IsLand) AND ControlledByYou predicate). Driving the
+        # landfall path through both engines requires the etb-subject-
+        # substrate predicate plumbing for the landfall multi-subject
+        # event (review-gated branch -- audit Section 4.1). Synthetic
+        # regression pin (per the round-17 Fight precedent + round-30
+        # stun-counter precedent) documents the bridge plumbing; a
+        # real-EoE landfall probe is a follow-up slice once etb-
+        # subject-substrate merges or the bridge gains per-card
+        # synthetic landfall harness coverage.
+        from mtg_bot.effects.generic.pump import (
+            DoubleTargetCreaturesPowerUEOT,
+        )
+        return DoubleTargetCreaturesPowerUEOT()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
