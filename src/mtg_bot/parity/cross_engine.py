@@ -6080,6 +6080,162 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DealDamageToOpponentCreatureByArtifactCount,
         )
         return DealDamageToOpponentCreatureByArtifactCount()
+    if kind == "add_counters":
+        # **Round-32/33 BLOCKED-BRIDGE-ARM tail slice -- "put +1/+1
+        # counters on target creature" (AddCounters family).** Rust
+        # substrate ``Effect::AddCounters { target: TargetFilter,
+        # count: i32 }`` (cards.rs:109; parser at cards.rs:3370-3378,
+        # resolve at state_ops_resolve.rs:1608-1655, to_dict at
+        # cards.rs:5569-5573) shipped via round 15 with the I73
+        # controller-of-effect fix. This slice closes the cross-engine
+        # bridge gap. Sister tail entry to round-32 ``scry_n`` (the
+        # round-28 closeout flagged ``add_counters``, ``sacrifice``,
+        # ``scry_n`` as the three substrate-asymmetric residue items;
+        # round-32 picked scry_n as the simplest, this slice picks
+        # add_counters as the next-cleanest -- sacrifice still defers
+        # for the no-Python-generic-Sacrifice-with-target cascade).
+        #
+        # **Filter-narrow-by-design.** Rust's resolve arm
+        # (state_ops_resolve.rs:1608-1613) explicitly raises a
+        # PyValueError on ``TargetFilter::AnyPlayer`` -- "AddCounters
+        # with AnyPlayer target is semantically nonsense (cannot put
+        # counters on a player)". The bridge mirrors this narrowness:
+        # only ``any_creature`` is honored. Sibling to round-23's
+        # untap_target / round-18's tap_target / round-25's
+        # destroy_target arms which are also filter-narrow-by-design
+        # for creature-shaped recipients.
+        #
+        # **Counter-kind narrowness: +1/+1 only.** Rust's resolve arm
+        # routes through round-2's signed net-counter i32 model
+        # (``obj.counters.saturating_add(delta)``) -- a single net
+        # counter field, where positive deltas read as +1/+1 counters
+        # and negative deltas as -1/-1 counters per the round-2
+        # model. The bridge translates ONLY the positive-count lane
+        # to Python's ``PutPlusOneCounterOnTargetCreature``
+        # (constructor sugar over ``PutPlusOneCounters`` with
+        # ``targets=(TargetSpec(IsCreature()),)``); Python's
+        # ``add_plus_one_counters`` helper does not natively model
+        # negative-counter semantics on the same primitive (Python's
+        # -1/-1 counters live on a distinct ``minus_one_counters``
+        # GameObject slot via separate effect classes -- see
+        # ``effects/generic/counters.py`` family). **Negative count
+        # raises ValueError** at bridge time (front-loaded schema
+        # error); the round-31 ManifestDread defer-error precedent.
+        # The negative-count lane is parse-tolerated on Rust (so
+        # round-trip works) but bridge-time-deferred so a typo doesn't
+        # silently no-op into a Python primitive that misinterprets
+        # the sign.
+        #
+        # **Rust target-pick semantics.** The Rust resolve arm is the
+        # AnyCreature first-slice shortcut: scans the resolved
+        # defender's bf for ``bf[0]`` regardless of card-type filter
+        # at this layer (per the I70/I73 docstring convention). Empty
+        # defender's bf = silent fizzle.
+        #
+        # **Python target-pick semantics.** The bridge constructs
+        # ``PutPlusOneCounterOnTargetCreature(amount=count)`` -- the
+        # ``__post_init__`` hook stamps ``targets=(TargetSpec(
+        # IsCreature()),)`` automatically. The targeting Decision
+        # pipeline picks at PUSH time via ``push_triggered_ability``
+        # -> the source-controller's ``agent.choose_target`` over the
+        # legal_targets pool, and the inherited ``PutPlusOneCounters
+        # .resolve`` re-verifies the slot's filter at fire time per
+        # CR 608.2b before invoking ``add_plus_one_counters(state,
+        # obj, amount)``.
+        #
+        # **Filter narrowness asymmetry note.** Mirrors the
+        # untap_target / destroy_target / tap_target / exile_target
+        # arm notes: Rust's first-slice ``AnyCreature`` picker doesn't
+        # actually filter to creatures (picks ``bf[0]`` blindly);
+        # Python's ``IsCreature()`` slot filter does. On synthetic
+        # probes that seat only creatures on the defender's bf, this
+        # asymmetry collapses and both engines pick the same target.
+        # Real-card probes that mix lands / artifacts on the
+        # defender's bf may diverge; the bridge surface mirrors Rust's
+        # filter symbol verbatim and lets the Python side's narrower
+        # filter shape land additional safety.
+        #
+        # **Distinct from the rich Python +1/+1 family.** Python has
+        # many counter-related primitives (``PutPlusOneCounterOnSelf``,
+        # ``PutChargeCountersOnSelf``, ``PutPlusOneCounterOnEachCreature
+        # YouControl``, ``PutLoyaltyCounterOnSelf``, etc.) but those
+        # carry source-side / each-creature-side / charge-counter-side
+        # / loyalty-counter-side semantics that Rust's bare
+        # ``add_counters`` arm does NOT model. The bare bridge arm
+        # here only translates the simplest target-creature shape;
+        # the rider-bearing variants live on their own bridge arms
+        # when their Rust counterparts ship.
+        #
+        # **EoE consumer status.** No bare-shape EoE consumer today --
+        # EoE +1/+1 oracle hits are all rider-narrowed shapes (self /
+        # each-creature / equal-to-X / Spacecraft). The bare bridge
+        # arm closes the to_dict round-trip surface and pre-positions
+        # the AddCounters -> PutPlusOneCounterOnTargetCreature
+        # translator for any future card-text-narrowed variant that
+        # rides on the same Rust dispatch. Cross-engine end-to-end
+        # probe deferred per round-17/18/19/23/31 synthetic-only-when-
+        # riders-cascade precedent (the agent.choose_target pipeline
+        # would need to be seated on both sides to mirror Rust's
+        # bf[0] pick semantically; the bare bridge arm pin tests
+        # cover the dict-translator surface alone).
+        #
+        # Mirrors Rust's ``parse_effect`` arm (cards.rs:3370-3378)
+        # which requires both ``count`` (extracted as i32) and a
+        # ``target`` dict (downcast + parsed via parse_target_filter).
+        from mtg_bot.effects.generic.counters import (
+            PutPlusOneCounterOnTargetCreature,
+        )
+        target_dict = eff_dict.get("target")
+        # Lenient-default mirrors the destroy_target / untap_target /
+        # tap_target / exile_target arms: missing ``target`` defaults
+        # to ``any_creature``. Bridge consumers SHOULD pass ``target``
+        # explicitly to keep round-trip dict-shape consistency with
+        # what Rust's parser accepts.
+        target_kind = (
+            target_dict.get("kind", "any_creature")
+            if isinstance(target_dict, dict)
+            else "any_creature"
+        )
+        if target_kind == "any_player":
+            raise ValueError(
+                f"cross_engine add_counters bridge: AnyPlayer target "
+                f"is semantically nonsense (you can't put counters on "
+                f"a player). Mirrors Rust's runtime PyValueError at "
+                f"state_ops_resolve.rs:1608-1613."
+            )
+        if target_kind != "any_creature":
+            raise ValueError(
+                f"cross_engine add_counters bridge: unsupported target "
+                f"filter kind {target_kind!r} (Rust's "
+                f"parse_target_filter at cards.rs:2790-2799 accepts "
+                f"only 'any_player' and 'any_creature'; add_counters "
+                f"is filter-narrow-by-design and only honors "
+                f"creature-shaped filters)."
+            )
+        count = eff_dict.get("count", 1)
+        if not isinstance(count, int) or isinstance(count, bool):
+            raise ValueError(
+                f"cross_engine add_counters bridge: count must be an "
+                f"int, got {type(count).__name__} {count!r}. Mirrors "
+                f"Rust's parse_effect i32 extract at cards.rs:3371."
+            )
+        if count < 0:
+            # Negative counts (Rust's -1/-1 lane via the signed
+            # net-counter model) defer at bridge time -- Python's
+            # PutPlusOneCounterOnTargetCreature primitive is
+            # +1/+1-counter-only; -1/-1 counters live on a distinct
+            # Python primitive family (effects/generic/counters.py
+            # MinusOne... shape) and would need its own bridge arm.
+            # Round-31 ManifestDread defer-error precedent.
+            raise ValueError(
+                f"cross_engine add_counters bridge: negative count "
+                f"{count} (Rust's -1/-1 lane via the signed "
+                f"net-counter model) is bridge-time-deferred -- "
+                f"Python's PutPlusOneCounterOnTargetCreature is "
+                f"+1/+1-counter-only. The negative-count lane needs "
+                f"its own bridge arm to a -1/-1 Python primitive."
+            )
+        return PutPlusOneCounterOnTargetCreature(amount=count)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

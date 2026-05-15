@@ -12105,5 +12105,238 @@ def test_rust_parser_accepts_deal_damage_to_opponent_creature_by_artifact_count_
     assert pid == 0
 
 
+def test_bridge_add_counters_basic_translation():
+    """BLOCKED-BRIDGE-ARM tail slice (round 28 closeout residue) --
+    AddCounters family. Rust ``{"kind": "add_counters", "count": 2,
+    "target": {"kind": "any_creature"}}`` translates to Python
+    ``PutPlusOneCounterOnTargetCreature(amount=2)`` (which auto-stamps
+    ``targets=(TargetSpec(IsCreature()),)`` via __post_init__).
+
+    Mirrors Rust's parse_effect arm at cards.rs:3370-3378 (count
+    extracted as i32 + target dict required, parsed via
+    parse_target_filter). Sister tail entry to round-32 scry_n.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnTargetCreature,
+    )
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "add_counters",
+            "count": 2,
+            "target": {"kind": "any_creature"},
+        }
+    )
+    assert isinstance(e, PutPlusOneCounterOnTargetCreature)
+    assert e.amount == 2
+    # __post_init__ auto-stamps the IsCreature() filter.
+    assert e.targets == (TargetSpec(IsCreature()),)
+
+
+def test_bridge_add_counters_default_count_is_one():
+    """Bridge arm pin: missing ``count`` defaults to 1 (mirrors the
+    Python ``PutPlusOneCounterOnTargetCreature`` dataclass default
+    inherited from PutPlusOneCounters.amount=1). Bridge consumers
+    SHOULD pass ``count`` explicitly for round-trip dict-shape
+    consistency, but the default keeps the arm tolerant of stripped
+    fixtures.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnTargetCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "add_counters", "target": {"kind": "any_creature"}}
+    )
+    assert isinstance(e, PutPlusOneCounterOnTargetCreature)
+    assert e.amount == 1
+
+
+def test_bridge_add_counters_default_target_filter_is_any_creature():
+    """Bridge arm pin: missing ``target`` defaults to ``any_creature``
+    (mirrors the lenient-default convention used by sister tap_target
+    / untap_target / destroy_target / exile_target arms). Bridge
+    consumers SHOULD pass ``target`` explicitly for round-trip
+    dict-shape consistency.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnTargetCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "add_counters", "count": 3})
+    assert isinstance(e, PutPlusOneCounterOnTargetCreature)
+    assert e.amount == 3
+
+
+def test_bridge_add_counters_any_player_filter_raises():
+    """Bridge arm pin: ``target.kind == "any_player"`` raises
+    ValueError (mirrors Rust's resolve raise at
+    state_ops_resolve.rs:1608-1613 -- "AddCounters with AnyPlayer
+    target is semantically nonsense"). The bridge front-loads the
+    check rather than waiting for resolve so the contract is
+    symmetric across engines.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="AnyPlayer"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "add_counters",
+                "count": 1,
+                "target": {"kind": "any_player"},
+            }
+        )
+
+
+def test_bridge_add_counters_negative_count_raises():
+    """Bridge arm pin: negative ``count`` (Rust's -1/-1 lane via the
+    signed net-counter model) raises ValueError at bridge time --
+    Python's PutPlusOneCounterOnTargetCreature primitive is
+    +1/+1-counter-only; -1/-1 counters live on a distinct Python
+    primitive family. Round-31 ManifestDread defer-error precedent:
+    parse-tolerated on Rust (so dict round-trip works), bridge-time-
+    deferred so a typo doesn't silently no-op.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="negative count"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "add_counters",
+                "count": -1,
+                "target": {"kind": "any_creature"},
+            }
+        )
+
+
+def test_bridge_add_counters_non_int_count_raises():
+    """Bridge arm pin: non-int ``count`` raises ValueError. Rust's
+    parser at cards.rs:3371 extracts as i32 strictly; the bridge
+    mirrors the type narrowness so cross-engine dict shapes don't
+    silently coerce. Excludes bool subtype of int (a common
+    accidental shape -- True/False as count is nonsensical).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="must be an int"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "add_counters",
+                "count": 1.5,
+                "target": {"kind": "any_creature"},
+            }
+        )
+    with pytest.raises(ValueError, match="must be an int"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "add_counters",
+                "count": True,
+                "target": {"kind": "any_creature"},
+            }
+        )
+
+
+def test_bridge_add_counters_unknown_target_filter_raises():
+    """Bridge arm pin: target kind that's neither ``any_creature`` nor
+    ``any_player`` raises ValueError. Pins the bridge against
+    accidental future filter expansion that drifts away from Rust's
+    parse_target_filter coverage at cards.rs:2790-2799.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="unsupported target filter"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "add_counters",
+                "count": 1,
+                "target": {"kind": "any_artifact"},
+            }
+        )
+
+
+def test_bridge_add_counters_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([AddCounters(...), DrawCards(1)])`` translates correctly
+    via the recursive Sequence translator. Pins this arm against
+    accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnTargetCreature,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "add_counters",
+                    "count": 1,
+                    "target": {"kind": "any_creature"},
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], PutPlusOneCounterOnTargetCreature)
+    assert e.effects[0].amount == 1
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_add_counters_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the
+    ``{"kind": "add_counters", "count": N, "target": {"kind":
+    "any_creature"}}`` dict shape on a triggered_ability carrier.
+    The bridge dict shape must register cleanly on the Rust side
+    too; this lockstep gate keeps the bridge from drifting away from
+    Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3370-3378`` requires both ``count`` and
+    ``target``.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- AddCounters",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "power": 1,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "add_counters",
+                    "count": 2,
+                    "target": {"kind": "any_creature"},
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
