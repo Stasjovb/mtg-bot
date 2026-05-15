@@ -4352,6 +4352,60 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 f"untap a player)"
             )
         return Untap(targets=(TargetSpec(slot_filter),))
+    if kind == "tap_another_target_creature":
+        # **Round-23 BLOCKED-BRIDGE-ARM slice -- "tap another target
+        # creature" (TapAnotherTargetCreature family,
+        # Starport-Security-shape).** Rust substrate
+        # ``Effect::TapAnotherTargetCreature`` (cards.rs:1822; unit
+        # variant; parser at cards.rs:3835-3837, resolve at
+        # state_ops_resolve.rs:6994-7021, to_dict at
+        # cards.rs:5697-5699) shipped via round 28; this slice closes
+        # the cross-engine bridge gap. Discovered by the round-22
+        # fresh discovery walk (Rust kind emitted by to_dict but no
+        # matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors Rust's
+        # parse_effect arm at cards.rs:3835-3837 -- silent-drop
+        # convention for unrecognized keys (extra dict fields are
+        # ignored).
+        #
+        # **Field shape.** Python's ``TapAnotherTargetCreature``
+        # (effects/generic/tap.py:340-358) is a ``Tap`` subclass with
+        # a fixed ``targets`` tuple set in ``__post_init__`` to
+        # ``(TargetSpec(IsCreature() & ~IsSource()),)``. No
+        # constructor args. Mirrors Rust's unit variant; the bridge
+        # constructs ``TapAnotherTargetCreature()`` with no args.
+        #
+        # **Resolve semantics (parity-relevant).** Rust's resolve at
+        # state_ops_resolve.rs:6994-7021 walks BOTH players'
+        # battlefield in ETB-timestamp order via
+        # ``crate::bf_iter::bf_iter_etb_sorted`` and picks the FIRST
+        # creature whose id != source_obj_id (the ``~IsSource()``
+        # filter on Python). Already-tapped target is idempotent
+        # (no-op). No eligible target -> silent fizzle. Mirrors
+        # Python's filter-based ``Tap.legal_targets`` walk on the
+        # centralized ``state.battlefield`` filtered by
+        # ``IsCreature() & ~IsSource()``. The two engines diverge on
+        # the agent surface (Rust deterministically picks first by
+        # ETB-timestamp; Python's targeting Decision pipeline lets
+        # the agent pick any legal target), but converge on the
+        # post-resolve observable when the agent's choice matches
+        # the ETB-first default. Sibling to round-22's
+        # tap_target_artifact_or_creature -- same find-first/silent-
+        # fizzle shape, different filter (Creature-only with
+        # ~IsSource exclusion vs Artifact|Creature without source
+        # exclusion).
+        #
+        # **Real EoE consumers** unblocked: 1 EoE card via oracle
+        # scan -- Starport Security's activated ability "{3}{W}, {T}:
+        # Tap another target creature." (and any future sister cards
+        # with the bare "tap another target creature" shape).
+        # Cross-engine end-to-end probe deferred per round-17/18/19
+        # synthetic-only-when-riders-cascade precedent (the targeting
+        # Decision pipeline + activated-ability cost-pay surface is
+        # its own carrier beyond the bare bridge-arm slice).
+        from mtg_bot.effects.generic.tap import TapAnotherTargetCreature
+        return TapAnotherTargetCreature()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

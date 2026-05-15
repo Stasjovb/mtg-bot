@@ -7537,5 +7537,135 @@ def test_rust_parser_accepts_untap_target_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_tap_another_target_creature_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 23 fresh discovery walk) --
+    TapAnotherTargetCreature family. Rust ``{"kind": "tap_another_
+    target_creature"}`` translates to Python
+    ``TapAnotherTargetCreature()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3835-3837 (unit
+    variant; no fields). Pin verifies the bare-shape translation.
+    """
+    from mtg_bot.effects.generic.tap import TapAnotherTargetCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "tap_another_target_creature"})
+    assert isinstance(e, TapAnotherTargetCreature)
+
+
+def test_bridge_tap_another_target_creature_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    Rust's parse_effect silent-drop convention -- unrecognized fields
+    in the dict are ignored (not raised as errors). Pins the unit-
+    variant contract against future-evolution where a sibling Rust
+    variant might add fields.
+    """
+    from mtg_bot.effects.generic.tap import TapAnotherTargetCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "tap_another_target_creature",
+            "spurious_field": 42,
+        }
+    )
+    assert isinstance(e, TapAnotherTargetCreature)
+
+
+def test_bridge_tap_another_target_creature_targets_filter_set():
+    """Bridge arm pin: the constructed Python effect carries the
+    ``targets`` tuple set by ``__post_init__`` to a single TargetSpec
+    with the ``IsCreature() & ~IsSource()`` filter. Pins the
+    implicit construction-time wiring -- the bridge does NOT need to
+    thread the filter explicitly because Python's class sets it
+    internally. The ``~IsSource()`` arm is what makes this distinct
+    from the bare TapTarget(any_creature) shape -- the resolving
+    source is excluded from its own target pool so "another" reads
+    CR-correct.
+    """
+    from mtg_bot.effects.generic.tap import TapAnotherTargetCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "tap_another_target_creature"})
+    assert isinstance(e, TapAnotherTargetCreature)
+    # __post_init__ sets `targets` to a 1-tuple of TargetSpec.
+    assert hasattr(e, "targets")
+    assert len(e.targets) == 1
+
+
+def test_bridge_tap_another_target_creature_equality_default_constructor():
+    """Bridge arm pin: two ``TapAnotherTargetCreature()`` instances
+    are equal under dataclass(frozen=True) default __eq__ semantics.
+    The ``targets`` field is set in ``__post_init__`` to the same
+    tuple shape on both, so structural equality holds. Pins the
+    frozen-dataclass equality contract for the hash-based keying
+    used downstream (e.g. de-dup in Sequence composers).
+    """
+    from mtg_bot.effects.generic.tap import TapAnotherTargetCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect({"kind": "tap_another_target_creature"})
+    e2 = TapAnotherTargetCreature()
+    assert e1 == e2
+
+
+def test_bridge_tap_another_target_creature_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([TapAnotherTargetCreature(), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    this arm against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.tap import TapAnotherTargetCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "tap_another_target_creature"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], TapAnotherTargetCreature)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_tap_another_target_creature_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "tap_another_target_creature"}`` on a
+    triggered_ability carrier. The bridge dict shape must register
+    cleanly on Rust too; this lockstep gate keeps the bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Mirrors the existing parser-surface pins for sister BLOCKED-
+    BRIDGE-ARM arms. Rust's parse_effect arm at
+    ``rust/src/cards.rs:3835-3837`` accepts the unit-shape dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- TapAnotherTargetCreature",
+        "card_types": ["Creature"],
+        "mana_cost": {"W": 1, "generic": 1},
+        "power": 1,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "tap_another_target_creature"},
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
