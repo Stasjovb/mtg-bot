@@ -5225,6 +5225,68 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             then_effect=then_inner,
             else_effect=else_inner,
         )
+    if kind == "conditional_on_tapped_creatures":
+        # **Round-26 BLOCKED-BRIDGE-ARM slice -- "if you control N or
+        # more tapped creatures, [effect]" (ConditionalOnTappedCreatures
+        # family, intervening-if conditional on tapped-creature count).**
+        # Rust substrate ``Effect::ConditionalOnTappedCreatures {
+        # effect: Box<Effect>, min_count: i32 }`` (cards.rs; parser at
+        # cards.rs:4194-4219, to_dict at cards.rs:5600-5604) shipped via
+        # an earlier round; bridge arm was the staleness gap (round-22
+        # fresh discovery walk -- to_dict-emitted kind with no matching
+        # ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape.** Rust's struct-variant carries REQUIRED
+        # ``effect`` (Box<Effect>) + OPTIONAL ``min_count`` (i32,
+        # defaulting to 2 per Rust's parser at cards.rs:4207-4214 --
+        # ``min_count: i32 = 2`` matches Python's
+        # ``ConditionalOnTappedCreatures.min_count: int = 2``
+        # default at effects/combinators.py:1016). Per Rust's
+        # parser contract at cards.rs:4196-4205, missing
+        # ``effect`` raises PyValueError "missing required 'effect'
+        # field". The bridge enforces the same required-field
+        # contract on the Python side via KeyError so the dict
+        # shape is symmetric.
+        #
+        # **Resolve semantics (parity-relevant).** Python's class at
+        # ``effects/combinators.py:1007-1050`` counts tapped
+        # creatures the controller controls at resolve time (CR 603-
+        # style intervening-if checked at resolution, not on cast)
+        # and routes to ``effect`` if count >= ``min_count``, silent
+        # no-op otherwise (logged via state.log). Rust's resolve
+        # mirrors the same controller-tapped-count check. Matches
+        # printed wording on EoE cards like Flight-Deck Coordinator
+        # ("if you control two or more tapped creatures, ...") and
+        # Sunstar Chaplain.
+        #
+        # **Recursive composer.** Bridge recursively translates
+        # ``effect`` via the same ``_ta_dict_to_python_effect``
+        # dispatcher -- nested arms compose naturally. Mirrors
+        # Rust's parse_effect's recursion at cards.rs:4206.
+        #
+        # **Real EoE consumers** unblocked: 9 EoE oracle hits via
+        # scan -- Dawnstrike Vanguard, Flight-Deck Coordinator,
+        # Radiant Strike, and 6 other cards using "tapped creatures"
+        # intervening-if rider patterns. Cross-engine end-to-end
+        # probe deferred per round-17/18/19 synthetic-only-when-
+        # riders-cascade precedent (the controller-tapped-creature
+        # count enumeration + the is_creature_now layer-7 check
+        # are their own surfaces beyond the bare bridge-arm slice).
+        from mtg_bot.effects.combinators import ConditionalOnTappedCreatures
+
+        if "effect" not in eff_dict:
+            raise KeyError(
+                "conditional_on_tapped_creatures bridge arm: missing "
+                "required 'effect' field"
+            )
+        inner = _ta_dict_to_python_effect(eff_dict["effect"])
+        # Rust default for min_count is 2 (cards.rs:4207-4214).
+        # Python class default is also 2 (combinators.py:1016).
+        min_count = eff_dict.get("min_count", 2)
+        return ConditionalOnTappedCreatures(
+            effect=inner,
+            min_count=min_count,
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

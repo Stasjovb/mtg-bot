@@ -9691,5 +9691,189 @@ def test_rust_parser_accepts_conditional_if_void_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_conditional_on_tapped_creatures_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 26 fresh discovery walk) --
+    ConditionalOnTappedCreatures family. Rust ``{"kind":
+    "conditional_on_tapped_creatures", "effect": {...},
+    "min_count": 2}`` translates to Python
+    ``ConditionalOnTappedCreatures(effect=..., min_count=2)``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:4194-4219. The
+    bridge wires the same Python-side primitive
+    (``effects/combinators.py:1007``) as the mirror of the Rust
+    resolver.
+    """
+    from mtg_bot.effects.combinators import ConditionalOnTappedCreatures
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "conditional_on_tapped_creatures",
+            "effect": {"kind": "draw_cards", "count": 1},
+            "min_count": 2,
+        }
+    )
+    assert isinstance(e, ConditionalOnTappedCreatures)
+    assert isinstance(e.effect, DrawCards)
+    assert e.effect.amount == 1
+    assert e.min_count == 2
+
+
+def test_bridge_conditional_on_tapped_creatures_missing_effect_raises():
+    """Bridge arm pin: missing ``effect`` field raises KeyError
+    (mirrors Rust's parse_effect arm at cards.rs:4196-4200 which
+    raises 'missing required effect field' with PyValueError).
+    The bridge enforces the required-fields contract on the
+    Python side so the dict shape is symmetric.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(KeyError):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "conditional_on_tapped_creatures",
+                "min_count": 2,
+            }
+        )
+
+
+def test_bridge_conditional_on_tapped_creatures_min_count_default():
+    """Bridge arm pin: ``min_count`` key absent defaults to 2
+    (mirrors Rust's parse_effect arm at cards.rs:4207-4214 which
+    defaults to 2 when key absent). Pins the documented default
+    that matches Python's class field default at
+    combinators.py:1016 (``min_count: int = 2``).
+    """
+    from mtg_bot.effects.combinators import ConditionalOnTappedCreatures
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "conditional_on_tapped_creatures",
+            "effect": {"kind": "draw_cards", "count": 1},
+        }
+    )
+    assert isinstance(e, ConditionalOnTappedCreatures)
+    assert isinstance(e.effect, DrawCards)
+    assert e.min_count == 2
+
+
+def test_bridge_conditional_on_tapped_creatures_custom_min_count():
+    """Bridge arm pin: explicit ``min_count`` value (e.g. 3)
+    round-trips correctly. Pins the explicit-override path
+    against silent default-clobbering bugs.
+    """
+    from mtg_bot.effects.combinators import ConditionalOnTappedCreatures
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "conditional_on_tapped_creatures",
+            "effect": {"kind": "draw_cards", "count": 1},
+            "min_count": 3,
+        }
+    )
+    assert isinstance(e, ConditionalOnTappedCreatures)
+    assert e.min_count == 3
+
+
+def test_bridge_conditional_on_tapped_creatures_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed ``ConditionalOnTappedCreatures(...)``.
+    Pins the dataclass equality semantic for the default-min_count
+    shape.
+    """
+    from mtg_bot.effects.combinators import ConditionalOnTappedCreatures
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "conditional_on_tapped_creatures",
+            "effect": {"kind": "draw_cards", "count": 1},
+        }
+    )
+    assert e == ConditionalOnTappedCreatures(
+        effect=DrawCards(amount=1), min_count=2
+    )
+
+
+def test_bridge_conditional_on_tapped_creatures_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([ConditionalOnTappedCreatures(DrawCards(1)),
+    DrawCards(1)])`` translates correctly via the recursive Sequence
+    translator. Pins this arm against accidental dispatch loss
+    inside Sequence.
+    """
+    from mtg_bot.effects.combinators import (
+        ConditionalOnTappedCreatures,
+        Sequence,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": "conditional_on_tapped_creatures",
+                    "effect": {"kind": "draw_cards", "count": 1},
+                    "min_count": 2,
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], ConditionalOnTappedCreatures)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_conditional_on_tapped_creatures_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape on a triggered_ability carrier (the canonical "if you
+    control two or more tapped creatures, ..." rider). The bridge
+    dict shape must register cleanly on Rust too; this lockstep
+    gate keeps the bridge from drifting away from Rust's
+    parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:4194-4219`` accepts
+    the struct-variant dict with required ``effect`` and optional
+    ``min_count`` (default 2).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "ConditionalOnTappedCreatures"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"W": 1, "generic": 2},
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "attacks",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "conditional_on_tapped_creatures",
+                    "effect": {"kind": "draw_cards", "count": 1},
+                    "min_count": 2,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
