@@ -45822,6 +45822,120 @@ def test_rust_optional_mana_cost_then_effect_pay_no_drops_inner():
     )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- add_n_mana_of_chosen_color (round 22).
+#
+# Rust's Effect::AddNManaOfChosenColor { amount, options } already
+# shipped end-to-end (parse at cards.rs:4407-4456 + resolve at
+# state_ops_resolve.rs:4738-4797 + to_dict at cards.rs:5560-5564);
+# this slice ships the cross-engine bridge translator + Rust
+# regression pins. The bridge arm closes a gap discovered by the
+# round-22 fresh discovery walk (Rust kind emitted by to_dict but
+# no matching `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumers (oracle scan): 4 EoE cards (Spacecraft /
+# artifact / creature mana sources with the "{T}: Add N mana of any
+# one color" shape, e.g. Lotus-Field-shape mana sources; The
+# Eternity Elevator's tier-gated AddChargeCounterMana variant
+# delegates to AddNManaOfChosenColor at resolve time).
+#
+# Pin layout (in test_parity_smoke.py): 2 Rust regression pins
+# (basic amount=3 default-options first-color minted + amount=0
+# silent no-op short-circuit). Cross-engine end-to-end probe
+# deferred per round-17/18/19 synthetic-only-when-riders-cascade
+# precedent: the color-choice mechanism (Agent.choose_mana_color
+# on Python; deterministic options[0] on Rust) is its own Decision-
+# pipeline surface beyond the bare bridge-arm slice, AND the
+# canonical real-card use is an ACTIVATED mana ability path that
+# bypasses the stack per CR 605 (a different carrier than triggered_
+# abilities). The 8 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_add_n_mana_of_chosen_color_state(
+    amount: int = 3, source_owner: int = 0,
+):
+    """Helper: build a Rust state with a single carrier creature on
+    `source_owner`'s bf carrying an ETB triggered ability that fires
+    AddNManaOfChosenColor with the given amount and the default
+    5-color options. Returns (rust_state, source_id).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "AddNManaOfChosenColor-Trigger Creature",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "add_n_mana_of_chosen_color",
+                        "amount": amount,
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id
+
+
+def test_rust_add_n_mana_of_chosen_color_basic_amount_three_default_color():
+    """Rust regression pin: basic amount=3 with default 5-color
+    options on p0's bf -- Rust deterministically picks options[0]
+    ("W") and mints 3 white coins into p0's pool. Pins
+    state_ops_resolve.rs:4738-4797's source-finder + first-color
+    mint behavior.
+    """
+    rust_state, _source_id = _build_rust_add_n_mana_of_chosen_color_state(
+        amount=3, source_owner=0,
+    )
+    pool_before = rust_state.get_mana_pool(0)
+    assert pool_before["W"] == 0
+    rust_state.resolve_top_of_stack()
+    pool_after = rust_state.get_mana_pool(0)
+    assert pool_after["W"] == 3, (
+        f"AddNManaOfChosenColor(amount=3, default opts) should mint "
+        f"3 white coins (deterministic options[0]); got {pool_after['W']}"
+    )
+    # No other colors touched.
+    for c in ("U", "B", "R", "G", "C"):
+        assert pool_after[c] == 0, (
+            f"only W should be minted; got {c}={pool_after[c]}"
+        )
+
+
+def test_rust_add_n_mana_of_chosen_color_amount_zero_silent_noop():
+    """Rust regression pin: amount=0 short-circuits in
+    state_ops_resolve.rs:4744-4746 BEFORE the source-finder scan and
+    BEFORE any mana minting. Pool stays empty. Pins the warm-path
+    allocation-free no-op semantic.
+    """
+    rust_state, _source_id = _build_rust_add_n_mana_of_chosen_color_state(
+        amount=0, source_owner=0,
+    )
+    pool_before = rust_state.get_mana_pool(0)
+    rust_state.resolve_top_of_stack()
+    pool_after = rust_state.get_mana_pool(0)
+    assert pool_after == pool_before, (
+        f"amount=0 should silently no-op; before={pool_before}, "
+        f"after={pool_after}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

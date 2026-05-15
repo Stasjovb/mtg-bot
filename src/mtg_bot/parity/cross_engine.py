@@ -3745,6 +3745,112 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return OptionalManaCostThenEffect(
             cost_str=cost_str, inner_effect=inner,
         )
+    if kind == "add_n_mana_of_chosen_color":
+        # **Round-22 BLOCKED-BRIDGE-ARM slice -- "add N mana of any
+        # one color" (AddNManaOfChosenColor family, Lotus-Field
+        # shape).** Rust substrate
+        # ``Effect::AddNManaOfChosenColor { amount: i32, options:
+        # Vec<String> }`` (cards.rs:1094; parser at cards.rs:4407-
+        # 4456, resolve at state_ops_resolve.rs:4738-4797, to_dict at
+        # cards.rs:5560-5564) shipped earlier; this slice closes the
+        # cross-engine bridge gap. Discovered by the round-22 fresh
+        # discovery walk (Rust kind emitted by to_dict but no
+        # matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape (default-handling).** Rust's parse_effect arm
+        # at cards.rs:4407-4456 treats ``amount`` as REQUIRED (parse
+        # raises on missing) -- non-negative i32, validated. The
+        # ``options`` field is OPTIONAL with default
+        # ``["W","U","B","R","G"]`` (Lotus-Field default; no C in the
+        # default per the printed "any one color" wording, which
+        # excludes colorless). Bridge mirrors both contracts: amount
+        # required + non-negative; options optional with the same
+        # 5-color default. Empty options list is rejected by Rust
+        # (cards.rs:4434-4438) -- bridge mirrors. Unknown color
+        # strings are rejected by Rust (cards.rs:4439-4445) -- bridge
+        # mirrors.
+        #
+        # **Field-name agreement (no rename).** Python's
+        # ``AddNManaOfChosenColor(amount: int, options: tuple[str,
+        # ...] = ("W","U","B","R","G"))`` (effects/generic/mana.py:
+        # 85-128) uses the SAME field names ``amount`` and
+        # ``options`` as the Rust variant -- no bridge-side rename.
+        # Python stores options as ``tuple[str, ...]`` (immutable);
+        # Rust emits a list via to_dict (cards.rs:5563); the bridge
+        # converts list -> tuple during translation.
+        #
+        # **Resolve semantics (cross-engine).** Both engines mint
+        # ``amount`` mana coins of a SINGLE color picked at resolve
+        # time. Rust's resolve at state_ops_resolve.rs:4738-4797
+        # picks ``options[0]`` deterministically (first-slice
+        # convention; "no agent seated" fallback equivalent to
+        # Python's ``opts[0]`` default at mana.py:115). Python's
+        # resolve at mana.py:107-125 asks
+        # ``Agent.choose_mana_color(state, controller_id, opts)``
+        # (synchronous, no PendingDecision -- the choice is made
+        # inline by the agent). The two engines diverge on the agent
+        # surface (Rust deferred / no agent integration in this
+        # arm; Python uses choose_mana_color which is its own
+        # surface), but converge on the post-resolve observable when
+        # the agent's choice matches options[0]: ``amount`` coins of
+        # that one color land in the source-controller's mana pool.
+        # amount=0 is a silent no-op on both engines.
+        #
+        # **Real EoE consumers** unblocked: 4 EoE cards via oracle
+        # scan (Spacecraft / artifact / creature mana sources with
+        # the "{T}: Add N mana of any one color" shape -- e.g. The
+        # Eternity Elevator's tier-gated AddChargeCounterMana variant
+        # delegates here at resolve time). Cross-engine end-to-end
+        # probe deferred per round-17/18/19 synthetic-only-when-
+        # riders-cascade precedent: the color-choice mechanism
+        # (Agent.choose_mana_color on Python; deterministic
+        # options[0] on Rust) is its own Decision-pipeline surface
+        # beyond the bare bridge-arm slice, AND the activated mana-
+        # ability path is a different carrier than triggered_
+        # abilities (mana abilities bypass the stack per CR 605).
+        from mtg_bot.effects.generic.mana import AddNManaOfChosenColor
+        if "amount" not in eff_dict:
+            raise ValueError(
+                "add_n_mana_of_chosen_color bridge arm: missing "
+                "required 'amount' field (mirrors Rust parse_effect "
+                "contract at cards.rs:4416-4420)"
+            )
+        amount = int(eff_dict["amount"])
+        if amount < 0:
+            raise ValueError(
+                "add_n_mana_of_chosen_color bridge arm: amount must "
+                f"be non-negative, got {amount} (mirrors Rust "
+                "parse_effect contract at cards.rs:4422-4426)"
+            )
+        # Rust's default options when missing: ["W","U","B","R","G"]
+        # (cards.rs:4448-4454). Bridge mirrors; Python's class default
+        # at mana.py:105 is the same tuple.
+        if "options" in eff_dict:
+            raw_options = eff_dict["options"]
+            if not isinstance(raw_options, (list, tuple)):
+                raise ValueError(
+                    "add_n_mana_of_chosen_color bridge arm: options "
+                    "must be a list/tuple of color strings (got: "
+                    f"{type(raw_options).__name__})"
+                )
+            if len(raw_options) == 0:
+                raise ValueError(
+                    "add_n_mana_of_chosen_color bridge arm: options "
+                    "must be non-empty (mirrors Rust parse_effect "
+                    "contract at cards.rs:4434-4438)"
+                )
+            for c in raw_options:
+                if c not in ("W", "U", "B", "R", "G", "C"):
+                    raise ValueError(
+                        "add_n_mana_of_chosen_color bridge arm: "
+                        f"unknown color {c!r}; valid: W, U, B, R, G, "
+                        "C (mirrors Rust parse_effect contract at "
+                        "cards.rs:4439-4445)"
+                    )
+            options = tuple(raw_options)
+        else:
+            options = ("W", "U", "B", "R", "G")
+        return AddNManaOfChosenColor(amount=amount, options=options)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

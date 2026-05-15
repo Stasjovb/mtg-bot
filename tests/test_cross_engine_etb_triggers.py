@@ -6196,5 +6196,194 @@ def test_rust_parser_accepts_optional_mana_cost_then_effect_in_triggered_ability
     assert pid == 0
 
 
+def test_bridge_add_n_mana_of_chosen_color_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 22 fresh discovery walk) --
+    AddNManaOfChosenColor family. Rust ``{"kind": "add_n_mana_of_
+    chosen_color", "amount": 3, "options": ["W","U","B","R","G"]}``
+    translates to Python ``AddNManaOfChosenColor(amount=3,
+    options=("W","U","B","R","G"))``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:4407-4456. Pins both
+    the amount field translation and the list -> tuple conversion
+    for options.
+    """
+    from mtg_bot.effects.generic.mana import AddNManaOfChosenColor
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "add_n_mana_of_chosen_color",
+            "amount": 3,
+            "options": ["W", "U", "B", "R", "G"],
+        }
+    )
+    assert isinstance(e, AddNManaOfChosenColor)
+    assert e.amount == 3
+    assert e.options == ("W", "U", "B", "R", "G")
+
+
+def test_bridge_add_n_mana_of_chosen_color_default_options():
+    """Bridge arm pin: missing `options` defaults to the 5-color
+    ("W","U","B","R","G") tuple (Lotus-Field default; mirrors Rust's
+    parse_effect default at cards.rs:4448-4454 and Python's class
+    default at mana.py:105). C is intentionally NOT in the default
+    per the printed "any one color" wording (which excludes
+    colorless).
+    """
+    from mtg_bot.effects.generic.mana import AddNManaOfChosenColor
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "add_n_mana_of_chosen_color", "amount": 3}
+    )
+    assert isinstance(e, AddNManaOfChosenColor)
+    assert e.amount == 3
+    assert e.options == ("W", "U", "B", "R", "G")
+
+
+def test_bridge_add_n_mana_of_chosen_color_amount_zero_silent_noop():
+    """Bridge arm pin: amount=0 is a valid silent-no-op shape. Rust's
+    resolve at state_ops_resolve.rs:4744-4746 short-circuits on
+    amount=0; Python's class loops range(0) which is a no-op.
+    Bridge must NOT reject 0.
+    """
+    from mtg_bot.effects.generic.mana import AddNManaOfChosenColor
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "add_n_mana_of_chosen_color", "amount": 0}
+    )
+    assert isinstance(e, AddNManaOfChosenColor)
+    assert e.amount == 0
+
+
+def test_bridge_add_n_mana_of_chosen_color_missing_amount_raises():
+    """Bridge arm pin: missing `amount` raises ValueError to mirror
+    Rust's parse_effect contract at cards.rs:4416-4420 (which raises
+    PyValueError on missing amount). Bridge mirrors so a typo in a
+    fixture surfaces immediately.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="missing required 'amount'"):
+        _ta_dict_to_python_effect({"kind": "add_n_mana_of_chosen_color"})
+
+
+def test_bridge_add_n_mana_of_chosen_color_negative_amount_raises():
+    """Bridge arm pin: negative amount raises ValueError to mirror
+    Rust's parse_effect contract at cards.rs:4422-4426 (which raises
+    PyValueError on negative amount).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="amount must be non-negative"):
+        _ta_dict_to_python_effect(
+            {"kind": "add_n_mana_of_chosen_color", "amount": -1}
+        )
+
+
+def test_bridge_add_n_mana_of_chosen_color_empty_options_raises():
+    """Bridge arm pin: empty options list raises ValueError to mirror
+    Rust's parse_effect contract at cards.rs:4434-4438 (which raises
+    PyValueError on empty options). A degenerate "no colors to choose
+    from" shape can't produce mana.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="options must be non-empty"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "add_n_mana_of_chosen_color",
+                "amount": 1,
+                "options": [],
+            }
+        )
+
+
+def test_bridge_add_n_mana_of_chosen_color_unknown_color_raises():
+    """Bridge arm pin: unknown color string in options raises
+    ValueError to mirror Rust's parse_effect contract at
+    cards.rs:4439-4445. Closed mana-color vocab: W/U/B/R/G/C only.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="unknown color"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "add_n_mana_of_chosen_color",
+                "amount": 1,
+                "options": ["W", "Q"],
+            }
+        )
+
+
+def test_bridge_add_n_mana_of_chosen_color_subset_options():
+    """Bridge arm pin: options subset (e.g. ("W","U")) translates
+    cleanly to a 2-color tuple. Pins that the bridge does NOT silently
+    expand subsets back to the 5-color default. Real-card example:
+    the gold-2-pip filter "{T}: Add {W} or {U}" shape is a different
+    Effect variant, but a hypothetical "{T}: Add 2 mana of any one of
+    {W} or {U}" would route through this arm with options=("W","U").
+    """
+    from mtg_bot.effects.generic.mana import AddNManaOfChosenColor
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "add_n_mana_of_chosen_color",
+            "amount": 2,
+            "options": ["W", "U"],
+        }
+    )
+    assert isinstance(e, AddNManaOfChosenColor)
+    assert e.amount == 2
+    assert e.options == ("W", "U")
+
+
+def test_rust_parser_accepts_add_n_mana_of_chosen_color_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "add_n_mana_of_chosen_color", "amount": 3}`` on
+    a triggered_ability carrier. The bridge dict shape must register
+    cleanly on Rust too; this lockstep gate keeps the bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Note: the canonical real-card use is an ACTIVATED mana ability
+    (e.g. Lotus Field's "{T}: Add three mana of any one color"), but
+    a triggered_abilities carrier registers cleanly too -- it
+    exercises the same parse_effect path. Mirrors the existing
+    parser-surface pins for sister BLOCKED-BRIDGE-ARM arms.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- AddNManaOfChosenColor",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "add_n_mana_of_chosen_color",
+                    "amount": 3,
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
