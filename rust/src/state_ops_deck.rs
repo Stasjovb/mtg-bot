@@ -121,6 +121,10 @@ impl GameState {
                 loyalty_counters: 0,
                 attached_to: None,
                 exiled_with_source: None,
+                // Round-30 stun-counter substrate: freshly-dealt
+                // library cards never carry stun counters; default
+                // 0 mirrors the make_object precedent.
+                stun_counters: 0,
                 // CE4 closure: deck-loaded library cards never start
                 // on battlefield; default 0 is correct.
                 etb_timestamp: 0,

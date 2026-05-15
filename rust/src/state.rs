@@ -119,6 +119,30 @@ pub struct GameObject {
     /// when `None`, so default-state pinned baselines stay
     /// byte-identical.
     pub exiled_with_source: Option<u32>,
+    /// **Stun-counter substrate (round-30 BLOCKED-RUST-EFFECT slice).**
+    /// CR 701.20 — "If a permanent with a stun counter would become
+    /// untapped, instead remove a stun counter from it." Tracked
+    /// per-object as a non-negative count; the untap-step sweep at
+    /// `state_ops_steps.rs:untap_all_for_player_inline` decrements
+    /// `stun_counters` by 1 instead of clearing `tapped` whenever
+    /// `stun_counters > 0`, mirroring Python's
+    /// `src/mtg_bot/turn.py:88-96`.
+    ///
+    /// **Why a distinct field** (vs overloading `counters`): G8
+    /// (multi-kind counter open gap) — stun counters are functionally
+    /// orthogonal to +1/+1 / charge / loyalty. New field keeps the
+    /// slice disjoint and matches the Python-side per-counter-type
+    /// slot precedent at `src/mtg_bot/game.py:537`.
+    ///
+    /// Defaults to `0` for every freshly-allocated object. Per-counter-
+    /// kind reset on zone change is NOT wired in this slice — Python's
+    /// model treats stun-counter clearing as a per-effect concern
+    /// (graveyard transit drops the field naturally because the bf
+    /// object is discarded). Mirrors the charge_counters / loyalty_
+    /// counters precedent. The fingerprint serializer does NOT include
+    /// this field today (matching the snapshot's existing per-counter-
+    /// kind elision); pre-r30 baselines stay bit-equal.
+    pub stun_counters: i32,
     /// **CE4 closure — ETB-timestamp ordering.** Monotonic counter
     /// stamped at every battlefield-entry call site (cast →
     /// move_from_hand_to_battlefield, play_land, every ETB pathway in
@@ -1664,6 +1688,7 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         loyalty_counters: 0,
         attached_to: None,
         exiled_with_source: None,
+        stun_counters: 0,
         // CE4 closure: synthetic-state fixtures pre-populate the
         // battlefield without going through stamp_etb_timestamp, so
         // every object defaults to 0. The stable-sort in the snapshot

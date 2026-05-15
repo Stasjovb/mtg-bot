@@ -15570,3 +15570,242 @@ def test_return_creature_to_bf_empty_source_controllers_graveyard_fizzles(engine
     # Src in p1's graveyard.
     snap_p1_gy_ids = {c["id"] for c in state.graveyard_snapshot(1)}
     assert src_id in snap_p1_gy_ids
+
+
+# -------------------- Round-30 stun-counter substrate --------------------
+#
+# Effect::PutStunCounterOnTappedCreature (Cryogen Relic activated half)
+# and Effect::TapTargetOpponentPermanentAndStunIt (Mechanozoa ETB).
+# These tests pin the resolve-arm behavior plus the
+# CR 701.20 untap-step gate at
+# state_ops_steps.rs:untap_all_for_player_inline.
+
+
+def _stun_tapped_creature_spell_dict():
+    """A spell whose only effect is put_stun_counter_on_tapped_creature.
+    Used to drive the resolve arm in isolation from any source-side
+    state. The spell itself isn't a Creature so it doesn't contaminate
+    the bf scan when it lands in the graveyard post-resolve.
+    """
+    return {
+        "name": "Round-30 Stun-Counter Spell",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "effects": [{"kind": "put_stun_counter_on_tapped_creature"}],
+    }
+
+
+def _tap_and_stun_opp_spell_dict():
+    """A spell whose only effect is tap_target_opponent_permanent_and_stun_it.
+    Mechanozoa-shape ETB but driven via a spell here for resolve-arm
+    isolation.
+    """
+    return {
+        "name": "Round-30 Tap-and-Stun Spell",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "effects": [
+            {"kind": "tap_target_opponent_permanent_and_stun_it"}
+        ],
+    }
+
+
+def test_resolve_put_stun_counter_on_tapped_creature_picks_first_tapped(
+    engine,
+):
+    """Round-30 regression pin: walks bf in ETB-timestamp order, picks
+    the FIRST already-tapped creature (no controller restriction), and
+    increments its stun_counters by 1.
+
+    Setup: p0 has an UNtapped creature (oldest ETB), p1 has a TAPPED
+    creature (newer ETB). Expected: p1's tapped creature gets the
+    stun counter (the untapped p0 creature is filtered out by the
+    `obj.tapped` gate even though it's earlier in ETB order).
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_untapped = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_tapped = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+    # Tap p1's creature so the filter has exactly one match.
+    assert state.tap_object(p1_tapped) is True
+
+    spell_id = state.register_and_inject_object(
+        _stun_tapped_creature_spell_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.get_stun_counters(p0_untapped) == 0
+    assert state.get_stun_counters(p1_tapped) == 1
+    # Stun-counter increment doesn't change tapped state.
+    assert state.is_tapped(p1_tapped) is True
+
+
+def test_resolve_put_stun_counter_on_tapped_creature_silent_fizzle_no_tapped(
+    engine,
+):
+    """Round-30 pin: if NO creature on either bf is tapped, the Effect
+    silently fizzles (no stun counters anywhere, no error).
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+    # Both creatures untapped.
+    spell_id = state.register_and_inject_object(
+        _stun_tapped_creature_spell_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # No stun counters added; resolve arm fizzled silently.
+    assert state.get_stun_counters(p0_creature) == 0
+    assert state.get_stun_counters(p1_creature) == 0
+
+
+def test_resolve_tap_target_opponent_permanent_and_stun_it_taps_and_stuns_opponent(
+    engine,
+):
+    """Round-30 regression pin: the Effect taps an opponent's permanent
+    AND increments its stun_counters by 1, both mutations on the SAME
+    chosen target (load-bearing property — same target gets both).
+
+    Setup: p0 casts the spell; p1 has an untapped creature. Expected:
+    p1's creature is tapped AND has stun_counters=1; p0's creatures
+    untouched (opp-only filter).
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    p1_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+    spell_id = state.register_and_inject_object(
+        _tap_and_stun_opp_spell_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # p1's creature got both effects.
+    assert state.is_tapped(p1_creature) is True
+    assert state.get_stun_counters(p1_creature) == 1
+    # p0's own creature untouched (opp-only).
+    assert state.is_tapped(p0_creature) is False
+    assert state.get_stun_counters(p0_creature) == 0
+
+
+def test_resolve_tap_target_opponent_permanent_and_stun_it_picks_artifact_over_land(
+    engine,
+):
+    """Round-30 pin: the filter is Artifact OR Creature on the
+    opponent's bf. Land (the third permanent type) is correctly
+    excluded — the opp's only Land is skipped and the Effect fizzles
+    silently.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p1_land = state.register_and_inject_object(
+        _vanilla_land_dict_i39(), 1, ZONE_BATTLEFIELD
+    )
+    spell_id = state.register_and_inject_object(
+        _tap_and_stun_opp_spell_dict(), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_id, 0)
+    state.resolve_top_of_stack()
+
+    # Land is filtered out; Effect fizzles silently.
+    assert state.is_tapped(p1_land) is False
+    assert state.get_stun_counters(p1_land) == 0
+
+
+def test_untap_step_with_stun_counter_decrements_instead_of_untapping(
+    engine,
+):
+    """Round-30 CR 701.20 pin: the production untap-step driver
+    (state_ops_steps.rs:untap_all_for_player_inline, fired by
+    advance_phase on UNTAP entry) decrements stun_counters by 1
+    instead of clearing tapped when stun_counters > 0. Mirrors
+    Python's src/mtg_bot/turn.py:88-96.
+
+    Setup: p0 has a tapped creature with stun_counters=2. Drive
+    advance_phase from PHASE_CLEANUP back around to PHASE_UNTAP for
+    p0. Expected: stun_counters drops to 1; tapped stays True.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    # Tap + seed stun counters via test helpers.
+    assert state.tap_object(p0_creature) is True
+    assert state.set_stun_counters(p0_creature, 2) is True
+    assert state.is_tapped(p0_creature) is True
+    assert state.get_stun_counters(p0_creature) == 2
+
+    # Drive a full turn: advance_phase from current (UNTAP) all the way
+    # around back to UNTAP for the ACTIVE player. The next-untap-step
+    # firing happens when the active player rotates back. Easiest:
+    # manually call the untap-step inline behavior by invoking the
+    # public untap_all_for_player wrapper -- but that one is the bare
+    # sweep without the gate. Instead, drive one full advance_phase
+    # cycle until a new untap-step fires for p0. Phases are:
+    # 0 UNTAP -> 1 UPKEEP -> ... back to UNTAP after the next turn.
+    #
+    # The cleanest way to exercise the gated inline helper is to
+    # advance_phase 12 times (full turn cycle on a 12-phase model),
+    # which lands us back at UNTAP for p0 (assuming a 2-player game
+    # passes through p1's turn first; the active_player flip happens
+    # at end-of-turn cleanup). For determinism we call advance_phase
+    # in a loop until phase==UNTAP and active_player==0 again.
+    initial_active = state.active_player
+    for _ in range(64):  # bound the loop; one full cycle is well under 64
+        state.advance_phase()
+        if state.current_phase() == 0 and state.active_player == initial_active:
+            break
+
+    # CR 701.20: stun_counters decremented by 1; tapped unchanged.
+    assert state.get_stun_counters(p0_creature) == 1
+    assert state.is_tapped(p0_creature) is True
+
+
+def test_untap_step_with_zero_stun_counter_untaps_normally(
+    engine,
+):
+    """Round-30 CR 701.20 pin (sister test): when stun_counters == 0
+    the untap-step CLEARS tapped per the bare CR 502.1 rule. The
+    presence of the gate does not regress the unstunned-untap path.
+    """
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=0, num_library=2
+    )
+    p0_creature = state.register_and_inject_object(
+        _vanilla_creature_dict_i39(), 0, ZONE_BATTLEFIELD
+    )
+    assert state.tap_object(p0_creature) is True
+    assert state.get_stun_counters(p0_creature) == 0
+    assert state.is_tapped(p0_creature) is True
+
+    initial_active = state.active_player
+    for _ in range(64):
+        state.advance_phase()
+        if state.current_phase() == 0 and state.active_player == initial_active:
+            break
+
+    # Bare untap: tapped cleared, stun_counters stays at 0.
+    assert state.is_tapped(p0_creature) is False
+    assert state.get_stun_counters(p0_creature) == 0

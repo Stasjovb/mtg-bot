@@ -2228,6 +2228,9 @@ fn apply_effect(
                     loyalty_counters: 0,
                     attached_to: None,
                     exiled_with_source: None,
+                    // Round-30 stun-counter substrate: tokens enter
+                    // with no stun counters per make_object precedent.
+                    stun_counters: 0,
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
                     ueot_modifiers: Vec::new(),
                 });
@@ -5583,6 +5586,10 @@ fn apply_effect(
                 loyalty_counters: 0,
                 attached_to: None,
                 exiled_with_source: None,
+                // Round-30 stun-counter substrate: cloned tokens
+                // enter with no stun counters (per the bare-token
+                // ETB precedent above).
+                stun_counters: 0,
                 etb_timestamp: etb_ts,
                 ueot_modifiers: Vec::new(),
             };
@@ -6050,6 +6057,95 @@ fn apply_effect(
             for obj in bf_mut.iter_mut() {
                 if obj.id == target_id {
                     obj.tapped = true;
+                    break;
+                }
+            }
+        }
+        // Round-30 stun-counter substrate. Walks both players'
+        // battlefield in ETB-timestamp order via the shared
+        // `bf_iter_etb_sorted` helper, picking the FIRST already-
+        // tapped creature it finds (no controller restriction; the
+        // Python class places none either — "up to one target tapped
+        // creature"). No eligible target → silent fizzle. Increments
+        // `stun_counters` on the matched object via Arc::make_mut.
+        // Sister of TapTargetArtifactOrCreature (no-controller
+        // filter); differs in (1) Creature-only filter, (2) tapped-
+        // only gate, (3) stun_counters increment instead of tap-flip.
+        Effect::PutStunCounterOnTappedCreature => {
+            let target: Option<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    if !obj.tapped {
+                        return None;
+                    }
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some((obj.controller as usize, obj.id))
+                    } else {
+                        None
+                    }
+                });
+            let Some((pidx, target_id)) = target else {
+                return Ok(()); // fizzle
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == target_id {
+                    obj.stun_counters = obj.stun_counters.saturating_add(1);
+                    break;
+                }
+            }
+        }
+        // Round-30 stun-counter substrate. Both effects (tap + stun
+        // counter) apply to the SAME chosen target. Walks both
+        // players' battlefield in ETB-timestamp order, picking the
+        // FIRST (Artifact OR Creature) permanent NOT controlled by
+        // the source's controller. No eligible target → silent fizzle.
+        // Tap is idempotent on already-tapped target (CR 701.20a).
+        Effect::TapTargetOpponentPermanentAndStunIt => {
+            // Locate source controller — the "an opponent controls"
+            // filter needs the source's controller to compare against.
+            // Mirrors the controller-resolution shape of the Round-28
+            // I79 follow-up: prefer current_resolve_source_controller,
+            // fall back to source-on-bf scan, fall back to active_player.
+            let src_controller: u8 = state
+                .current_resolve_source_controller
+                .or_else(|| {
+                    state
+                        .players
+                        .iter()
+                        .flat_map(|p| p.battlefield.iter())
+                        .find(|o| o.id == source_obj_id)
+                        .map(|o| o.controller)
+                })
+                .unwrap_or(state.active_player);
+            let target: Option<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    if obj.controller == src_controller {
+                        return None; // opponent-only filter
+                    }
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    if printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Artifact" || t == "Creature")
+                    {
+                        Some((obj.controller as usize, obj.id))
+                    } else {
+                        None
+                    }
+                });
+            let Some((pidx, target_id)) = target else {
+                return Ok(()); // fizzle
+            };
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[pidx].battlefield);
+            for obj in bf_mut.iter_mut() {
+                if obj.id == target_id {
+                    obj.tapped = true;
+                    obj.stun_counters = obj.stun_counters.saturating_add(1);
                     break;
                 }
             }
@@ -8013,6 +8109,9 @@ impl GameState {
             loyalty_counters: 0,
             attached_to: None,
             exiled_with_source: None,
+            // Round-30 stun-counter substrate: caller-injected
+            // objects start unstunned per make_object precedent.
+            stun_counters: 0,
             etb_timestamp: etb_ts,
             ueot_modifiers: Vec::new(),
         };

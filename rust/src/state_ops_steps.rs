@@ -115,18 +115,40 @@ const PHASE_MAX: u8 = PHASE_CLEANUP;
 /// Free-function mirror of `state_ops_tap.rs:untap_all_for_player`.
 /// See the module docstring for why this duplication exists. Same
 /// CoW shape — short-circuits if every permanent on the target
-/// battlefield is already untapped, otherwise one `Arc::make_mut`
-/// covers the in-place sweep.
+/// battlefield is already untapped AND no permanent carries a stun
+/// counter, otherwise one `Arc::make_mut` covers the in-place sweep.
+///
+/// **Round-30 stun-counter substrate (CR 701.20).** "If a permanent
+/// with a stun counter would become untapped, instead remove a stun
+/// counter from it." For each permanent the active player controls:
+///   - If `stun_counters > 0`, decrement by 1 and leave `tapped`
+///     unchanged (stays tapped this turn).
+///   - Otherwise clear `tapped = false` per the bare untap-step
+///     rule (CR 502.1).
+/// Mirrors Python's `src/mtg_bot/turn.py:88-96`.
+///
+/// **CoW short-circuit.** The make_mut now fires when ANY object
+/// either is tapped or carries a stun counter — pre-r30 baselines
+/// (no stun counters anywhere on the bf) keep the same warm path.
 fn untap_all_for_player_inline(state: &mut GameState, player_id: u8) {
     let player = match state.players.iter_mut().find(|p| p.id == player_id) {
         Some(p) => p,
         None => return,
     };
-    if player.battlefield.iter().all(|o| !o.tapped) {
+    if player
+        .battlefield
+        .iter()
+        .all(|o| !o.tapped && o.stun_counters == 0)
+    {
         return;
     }
     let zone: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
     for obj in zone.iter_mut() {
+        if obj.stun_counters > 0 {
+            // CR 701.20: doesn't untap; instead remove a stun counter.
+            obj.stun_counters -= 1;
+            continue;
+        }
         obj.tapped = false;
     }
 }
