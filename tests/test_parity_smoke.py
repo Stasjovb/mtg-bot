@@ -46455,6 +46455,186 @@ def test_rust_destroy_target_artifact_creatures_untouched():
         assert bear_id not in p1_gy_ids
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- destroy_target_nonland_permanent
+# (round 23).
+#
+# Rust's Effect::DestroyTargetNonlandPermanent (unit variant,
+# cards.rs:635) already shipped end-to-end via round 24 (parse at
+# cards.rs:3514-3517 + resolve at state_ops_resolve.rs:3995-4043);
+# this slice ships the cross-engine bridge translator + Rust
+# regression pins. The bridge arm closes a gap discovered by
+# round-22 worker RR's diff walk.
+#
+# Real-EoE consumers (oracle scan): 1 EoE bare-shape card --
+# Thaumaton Torpedo (activated ability "Sacrifice this artifact:
+# Destroy target nonland permanent"). Emergency Eject is the
+# lander-rider variant routed through
+# `DestroyTargetNonlandPermanentWithLanderForController` -- not a
+# consumer of this arm.
+#
+# Pin layout (in test_parity_smoke.py): 3 Rust regression pins
+# (basic destroy on a single-creature bf + land target skipped +
+# indestructible permanent survives). Cross-engine end-to-end probe
+# deferred per round-17/18/19 synthetic-only-when-riders-cascade
+# precedent. The 6 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_destroy_target_nonland_permanent_state(
+    n_creatures: int = 1,
+    n_lands: int = 0,
+    creature_indestructible: bool = False,
+    target_owner: int = 1,
+):
+    """Helper: build a Rust state with an ETB-triggered
+    DestroyTargetNonlandPermanent source on p0's bf, plus
+    `n_creatures` vanilla 2/2 bears on `target_owner`'s bf and
+    `n_lands` vanilla lands on the same player's bf.
+    Returns (rust_state, source_id, creature_ids, land_ids).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    bear_dict = {
+        "name": "Bait Bear (2/2)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    if creature_indestructible:
+        bear_dict = dict(bear_dict)
+        bear_dict["name"] = "Indestructible Bait Bear (2/2)"
+        bear_dict["keywords"] = ["indestructible"]
+    creature_ids = [
+        rust_state.register_and_inject_object(
+            bear_dict, target_owner, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_creatures)
+    ]
+    land_dict = {
+        "name": "Bait Land",
+        "card_types": ["Land"],
+        "effects": [],
+    }
+    land_ids = [
+        rust_state.register_and_inject_object(
+            land_dict, target_owner, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_lands)
+    ]
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "DestroyNonland ETB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"B": 1, "generic": 2},
+            "power": 1,
+            "toughness": 1,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "destroy_target_nonland_permanent",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id, creature_ids, land_ids
+
+
+def test_rust_destroy_target_nonland_permanent_basic_destroys_creature():
+    """Rust regression pin: ETB-triggered
+    DestroyTargetNonlandPermanent with one creature on the bf --
+    the creature is destroyed and ends up in its controller's
+    graveyard. Pins state_ops_resolve.rs:3995-4043's bf-ETB-sorted
+    scan + per-controller graveyard insertion path on the
+    non-Land, non-indestructible permanent.
+    """
+    rust_state, source_id, creature_ids, _ = (
+        _build_rust_destroy_target_nonland_permanent_state(
+            n_creatures=1, n_lands=0,
+        )
+    )
+    bear_id = creature_ids[0]
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert bear_id not in bf_ids, (
+        f"creature {bear_id} should be off bf after destroy; "
+        f"got bf_ids={bf_ids}"
+    )
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert bear_id in p1_gy_ids
+
+
+def test_rust_destroy_target_nonland_permanent_land_target_skipped():
+    """Rust regression pin: per state_ops_resolve.rs:4000-4002, the
+    scan skips permanents whose printing.card_types contains
+    'Land'. Setup: 1 land + 0 non-land permanents on p1's bf -- the
+    destroy is a silent no-op (no valid target found). Pins the
+    Land filter -- a bug that dropped the filter would destroy the
+    land.
+    """
+    rust_state, source_id, _, land_ids = (
+        _build_rust_destroy_target_nonland_permanent_state(
+            n_creatures=0, n_lands=1,
+        )
+    )
+    land_id = land_ids[0]
+    rust_state.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert land_id in bf_ids, (
+        f"land {land_id} should NOT be destroyed by "
+        f"destroy_target_nonland_permanent (land filter); got "
+        f"bf_ids={bf_ids}"
+    )
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert land_id not in p1_gy_ids
+
+
+def test_rust_destroy_target_nonland_permanent_indestructible_survives():
+    """Rust regression pin: per state_ops_resolve.rs:4003-4005, the
+    scan filters out permanents with the `indestructible` keyword.
+    With only an indestructible creature on the bf, the destroy is
+    a silent no-op (no target found). Pins CR 702.12
+    indestructibility handling at the scan filter.
+    """
+    rust_state, source_id, creature_ids, _ = (
+        _build_rust_destroy_target_nonland_permanent_state(
+            n_creatures=1, n_lands=0,
+            creature_indestructible=True,
+        )
+    )
+    bear_id = creature_ids[0]
+    rust_state.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert bear_id in bf_ids, (
+        f"indestructible creature {bear_id} should remain on bf; "
+        f"got bf_ids={bf_ids}"
+    )
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert bear_id not in p1_gy_ids
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

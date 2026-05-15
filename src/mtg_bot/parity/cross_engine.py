@@ -4010,6 +4010,53 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # own surface beyond the bare bridge-arm slice).
         from mtg_bot.effects.generic.destroy import DestroyTargetArtifact
         return DestroyTargetArtifact()
+    if kind == "destroy_target_nonland_permanent":
+        # **Round-23 BLOCKED-BRIDGE-ARM slice -- "destroy target
+        # nonland permanent" (DestroyTargetNonlandPermanent family).**
+        # Rust substrate ``Effect::DestroyTargetNonlandPermanent``
+        # (cards.rs:635 unit variant; parser at cards.rs:3514-3517,
+        # resolve at state_ops_resolve.rs:3995-4043) shipped via
+        # round 24 (single-target nonland-filter destroy). This
+        # slice closes the cross-engine bridge gap. Discovered by
+        # round-22 worker RR's diff walk (Rust kind emitted by
+        # to_dict but no matching ``_ta_dict_to_python_effect``
+        # arm).
+        #
+        # **Field shape (unit variant).** Rust's parse_effect arm
+        # at cards.rs:3514-3517 takes NO fields -- bare ``{"kind":
+        # "destroy_target_nonland_permanent"}``. Python's
+        # ``DestroyTargetNonlandPermanent`` is a frozen dataclass
+        # with no constructor parameters (the ``targets`` tuple is
+        # set in ``__post_init__`` to a
+        # ``TargetSpec(~IsLand() & ~IsPlayer())``). Bridge
+        # constructs the bare class.
+        #
+        # **Resolve semantics (parity-relevant).** Rust scans BOTH
+        # players' battlefield in ETB-timestamp order via
+        # ``bf_iter::bf_iter_etb_sorted`` and picks the first
+        # non-Land, non-indestructible permanent
+        # (state_ops_resolve.rs:3995-4043). Python's
+        # ``Destroy.resolve`` re-verifies the
+        # ``~IsLand() & ~IsPlayer()`` filter at resolution time per
+        # CR 608.2b. Indestructible permanents survive on both
+        # engines. Players are excluded by the ``~IsPlayer()`` arm
+        # (Rust's bf walk only iterates GameObjects on bf so
+        # players are structurally not in the candidate set).
+        #
+        # **Real EoE consumers** unblocked: 1 EoE bare-shape card
+        # (Thaumaton Torpedo via activated ability "Sacrifice this
+        # artifact: Destroy target nonland permanent"). Emergency
+        # Eject is the lander-rider variant routed through the
+        # separate ``DestroyTargetNonlandPermanentWithLanderForController``
+        # Effect on both engines -- not a consumer of this arm.
+        # Cross-engine end-to-end probe deferred per round-17/18/19
+        # synthetic-only-when-riders-cascade precedent (the
+        # targeting Decision pipeline is its own surface beyond
+        # the bare bridge-arm slice).
+        from mtg_bot.effects.generic.destroy import (
+            DestroyTargetNonlandPermanent,
+        )
+        return DestroyTargetNonlandPermanent()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
