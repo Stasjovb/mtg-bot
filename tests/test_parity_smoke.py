@@ -46077,6 +46077,195 @@ def test_rust_tap_target_artifact_or_creature_already_tapped_idempotent():
     )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- pump_creatures_you_control_until_eot
+# (round 22).
+#
+# Rust's Effect::PumpCreaturesYouControlUntilEOT { power_bonus,
+# toughness_bonus } already shipped end-to-end via round 28 (parse
+# at cards.rs:4476-4498 + resolve at state_ops_resolve.rs:4530-4593);
+# this slice ships the cross-engine bridge translator + Rust
+# regression pins. The bridge arm closes a gap discovered by the
+# round-22 fresh discovery walk (Rust kind emitted by to_dict but no
+# matching `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumers (oracle scan): 7 EoE cards with mass-pump
+# anthem-shape ETB on a Spacecraft / Sorcery / Enchantment.
+#
+# Pin layout (in test_parity_smoke.py): 3 Rust regression pins
+# (basic +1/+1 ETB anthem pumping all source-controller creatures
+# observable via effective_power / effective_toughness + (0,0)
+# silent no-op short-circuit + opponent-side creatures NOT pumped
+# (controller-scoped per state_ops_resolve.rs:4567-4577 filter)).
+# Cross-engine end-to-end probe deferred per round-17/18/19
+# synthetic-only-when-riders-cascade precedent (typical EoE
+# consumers cascade rider-narrowed scopes that the bare bridge arm
+# does not carry). The 6 bridge-translator pins live in
+# test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_pump_creatures_you_control_until_eot_state(
+    power_bonus: int = 1,
+    toughness_bonus: int = 1,
+    source_owner: int = 0,
+    n_p0_bears: int = 2,
+    n_p1_bears: int = 1,
+):
+    """Helper: build a Rust state with an anthem source on
+    `source_owner`'s bf carrying an ETB trigger that fires
+    PumpCreaturesYouControlUntilEOT(power_bonus, toughness_bonus),
+    PLUS `n_p0_bears` vanilla 2/2 bears on p0 and `n_p1_bears` on p1.
+    Returns (rust_state, source_id, p0_bear_ids, p1_bear_ids).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    bear_dict = {
+        "name": "Anthem Bait Bear (2/2)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    p0_bear_ids = [
+        rust_state.register_and_inject_object(
+            bear_dict, 0, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_p0_bears)
+    ]
+    p1_bear_ids = [
+        rust_state.register_and_inject_object(
+            bear_dict, 1, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_p1_bears)
+    ]
+    # The anthem source is itself a creature carrier (so the resolve
+    # arm pumps it too -- no exclude_source rider on the bare Rust
+    # variant).
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "Anthem ETB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "generic": 2},
+            "power": 1,
+            "toughness": 1,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "pump_creatures_you_control_until_eot",
+                        "power_bonus": power_bonus,
+                        "toughness_bonus": toughness_bonus,
+                    },
+                }
+            ],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id, p0_bear_ids, p1_bear_ids
+
+
+def test_rust_pump_creatures_you_control_until_eot_basic_anthem():
+    """Rust regression pin: basic +1/+1 anthem on p0's bf -- the
+    Anthem Carrier's ETB pumps every creature on p0's bf (including
+    itself, since the resolve arm has no `exclude_source` filter on
+    Rust). p0 has 2 bears (2/2 -> 3/3); p1's bear stays at 2/2.
+    Pins state_ops_resolve.rs:4530-4593's source-finder + per-creature
+    UeotModifier::PowerToughnessBonus push, observable through
+    effective_power / effective_toughness readers.
+    """
+    rust_state, source_id, p0_bear_ids, p1_bear_ids = (
+        _build_rust_pump_creatures_you_control_until_eot_state(
+            power_bonus=1, toughness_bonus=1, source_owner=0,
+            n_p0_bears=2, n_p1_bears=1,
+        )
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # All p0 creatures pumped: 2 bears at 3/3, source itself at 2/2.
+    for bear_id in p0_bear_ids:
+        assert rust_state.effective_power(bear_id) == 3, (
+            f"p0 bear {bear_id} should be pumped to 3 power; got "
+            f"{rust_state.effective_power(bear_id)}"
+        )
+        assert rust_state.effective_toughness(bear_id) == 3, (
+            f"p0 bear {bear_id} should be pumped to 3 toughness; got "
+            f"{rust_state.effective_toughness(bear_id)}"
+        )
+    # Anthem source itself is also pumped (no exclude_source on the
+    # Rust resolve arm; printed 1/1 + 1/1 = 2/2).
+    assert rust_state.effective_power(source_id) == 2
+    assert rust_state.effective_toughness(source_id) == 2
+
+
+def test_rust_pump_creatures_you_control_until_eot_zero_zero_silent_noop():
+    """Rust regression pin: (0, 0) short-circuits in
+    state_ops_resolve.rs:4531-4533 BEFORE the source-finder scan
+    and BEFORE the per-creature UeotModifier push. Effective P/T
+    stays at the printed base for every creature; no Vec mutation.
+    Pins the warm-path allocation-free optimization.
+    """
+    rust_state, source_id, p0_bear_ids, p1_bear_ids = (
+        _build_rust_pump_creatures_you_control_until_eot_state(
+            power_bonus=0, toughness_bonus=0, source_owner=0,
+            n_p0_bears=2, n_p1_bears=1,
+        )
+    )
+    rust_state.resolve_top_of_stack()
+    # No bonus applied; every creature unchanged from printed base.
+    for bear_id in p0_bear_ids:
+        assert rust_state.effective_power(bear_id) == 2
+        assert rust_state.effective_toughness(bear_id) == 2
+    for bear_id in p1_bear_ids:
+        assert rust_state.effective_power(bear_id) == 2
+        assert rust_state.effective_toughness(bear_id) == 2
+    assert rust_state.effective_power(source_id) == 1
+    assert rust_state.effective_toughness(source_id) == 1
+
+
+def test_rust_pump_creatures_you_control_until_eot_opponent_creatures_not_pumped():
+    """Rust regression pin: anthem is controller-scoped per
+    state_ops_resolve.rs:4567-4577 (zone walk on
+    state.players[cidx].battlefield only). p0's anthem on a bf with
+    1 p0 bear + 2 p1 bears pumps ONLY the p0 bear; p1's bears stay
+    at printed 2/2. Pins the controller filter -- a bug that walked
+    both battlefields would pump everyone.
+    """
+    rust_state, source_id, p0_bear_ids, p1_bear_ids = (
+        _build_rust_pump_creatures_you_control_until_eot_state(
+            power_bonus=2, toughness_bonus=2, source_owner=0,
+            n_p0_bears=1, n_p1_bears=2,
+        )
+    )
+    rust_state.resolve_top_of_stack()
+    # p0 bear pumped 2 + 2 = 4 / 4.
+    for bear_id in p0_bear_ids:
+        assert rust_state.effective_power(bear_id) == 4
+        assert rust_state.effective_toughness(bear_id) == 4
+    # p1 bears UNCHANGED at printed 2 / 2.
+    for bear_id in p1_bear_ids:
+        assert rust_state.effective_power(bear_id) == 2, (
+            f"p1 bear {bear_id} should NOT be pumped (anthem is "
+            f"controller-scoped); got "
+            f"{rust_state.effective_power(bear_id)}"
+        )
+        assert rust_state.effective_toughness(bear_id) == 2, (
+            f"p1 bear {bear_id} should NOT be pumped (anthem is "
+            f"controller-scoped); got "
+            f"{rust_state.effective_toughness(bear_id)}"
+        )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

@@ -3901,6 +3901,77 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # slice).
         from mtg_bot.effects.generic.tap import TapTargetArtifactOrCreature
         return TapTargetArtifactOrCreature()
+    if kind == "pump_creatures_you_control_until_eot":
+        # **Round-22 BLOCKED-BRIDGE-ARM slice -- "creatures you control
+        # get +X/+Y until end of turn" (PumpCreaturesYouControlUntilEOT
+        # family).** Rust substrate
+        # ``Effect::PumpCreaturesYouControlUntilEOT { power_bonus: i32,
+        # toughness_bonus: i32 }`` (cards.rs:892; parser at
+        # cards.rs:4476-4498, resolve at state_ops_resolve.rs:
+        # 4530-4593) shipped via round 28 (anthem-shape UEOT
+        # extension). This slice closes the cross-engine bridge gap.
+        # Discovered by the round-22 fresh discovery walk (Rust kind
+        # emitted by to_dict but no matching
+        # ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Field shape (default-handling).** Rust's parse_effect arm
+        # at cards.rs:4481-4496 treats both ``power_bonus`` and
+        # ``toughness_bonus`` as OPTIONAL with default 0 (matching
+        # Python's ``PumpCreaturesYouControlUntilEOT(power_bonus: int
+        # = 0, toughness_bonus: int = 0, ...)`` defaults). Bridge
+        # mirrors the default-handling shape (round-23 sister
+        # DiscardSelf / EachOpponentDiscards / PutPlusOneCounterOnSelf
+        # precedent). Both fields independent; ``(0, 0)`` is a pure
+        # no-op on both engines (Rust short-circuits before the
+        # source-finder scan; Python's class accepts cleanly).
+        #
+        # **Negatives are LEGAL.** Rust intentionally allows negative
+        # bonuses (cards.rs:4477-4480 docstring: "negatives allowed",
+        # mirroring the PumpSelfUntilEOT precedent); Python's class
+        # is a bare dataclass with no non-negative guard. Bridge does
+        # NOT raise on negatives -- mirrors the contract.
+        #
+        # **Rider drops (granted_keywords / exclude_source /
+        # attacking_only / also_untap_if_not_your_turn).** Python's
+        # class carries four additional rider fields
+        # (effects/generic/pump.py:695-698) that Rust's variant does
+        # NOT represent. Bridge translates only the bare 2-field
+        # shape; cards whose oracle includes "and gain <kw>"
+        # (granted_keywords) or "other creatures you control"
+        # (exclude_source) or "attacking creatures get..."
+        # (attacking_only) or "if it's not your turn, untap them"
+        # (also_untap_if_not_your_turn -- Zealous Display rider) emit
+        # separate composers in Python -- those don't round-trip
+        # through this arm in their full form. Out of scope per the
+        # round-23 precedent of "bare-shape first slice; rider
+        # variants surface as separate Rust Effect variants in
+        # follow-ups" (matches the sibling
+        # ``pump_creatures_opponents_control_until_eot`` arm's
+        # rider-handling shape).
+        #
+        # **Resolve semantics (parity-relevant).** Both engines find
+        # the source object across all zones, locate the source
+        # controller, then push a power/toughness bonus onto each
+        # creature on that controller's battlefield (Rust:
+        # ``UeotModifier::PowerToughnessBonus`` per object; Python:
+        # ``grant_pt_pump_ueot`` registry entry per object, layer-7c
+        # with ``expires_at="cleanup"``). Empty bf or no creatures on
+        # it is a silent no-op on both engines.
+        #
+        # **Real EoE consumers** unblocked: 7 EoE cards via oracle
+        # scan (mass-pump anthem-shape ETB on a Spacecraft / Sorcery
+        # / Enchantment). Cross-engine end-to-end probe deferred per
+        # round-17/18/19 synthetic-only-when-riders-cascade
+        # precedent (typical EoE consumers cascade keyword grants or
+        # rider-narrowed scopes that the bare bridge arm does not
+        # carry).
+        from mtg_bot.effects.generic.pump import (
+            PumpCreaturesYouControlUntilEOT,
+        )
+        return PumpCreaturesYouControlUntilEOT(
+            power_bonus=eff_dict.get("power_bonus", 0),
+            toughness_bonus=eff_dict.get("toughness_bonus", 0),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
