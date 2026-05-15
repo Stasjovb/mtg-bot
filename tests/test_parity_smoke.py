@@ -47697,6 +47697,162 @@ def test_rust_tap_another_target_creature_source_only_silent_fizzle():
     )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- tap_enchanted_permanent (round 23).
+#
+# Rust's Effect::TapEnchantedPermanent (unit variant) already shipped
+# end-to-end via round 28 (parse at cards.rs:3728-3730 + resolve at
+# state_ops_resolve.rs:6027-6056 + to_dict at cards.rs:5633-5635);
+# this slice ships the cross-engine bridge translator + Rust
+# regression pins. The bridge arm closes a gap discovered by the
+# round-22 fresh discovery walk (Rust kind emitted by to_dict but no
+# matching `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumer (oracle scan): 1 EoE card -- Stay Hidden, Stay
+# Silent ("Enchant creature or Spacecraft / When this Aura enters,
+# tap enchanted permanent. / You control enchanted permanent. /
+# Enchanted permanent doesn't untap during its controller's untap
+# step.").
+#
+# Pin layout (in test_parity_smoke.py): 3 Rust regression pins
+# (basic Aura ETB taps the attached host via attached_to lookup +
+# already-tapped host idempotent re-tap + no-attached-to silent
+# fizzle). Sibling to round-28 DestroyEnchantedPermanent (same
+# attached_to lookup; differs only in mutation -- tap vs zone
+# change). Cross-engine end-to-end probe deferred per round-17/18/19
+# synthetic-only-when-riders-cascade precedent (the Aura attachment
+# + control-stealing + untap-restriction rider stack on Stay Hidden,
+# Stay Silent is its own carrier). The 6 bridge-translator pins live
+# in test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_aura_state_with_target(source_owner: int = 0):
+    """Helper: build a Rust state with a Bear on `source_owner`'s bf
+    (the attachment target) and an Aura carrier with the
+    TapEnchantedPermanent effect; returns (rust_state, aura_id,
+    bear_id). Caller must `rust_state.attach(aura_id, bear_id)` and
+    then `push_to_stack(aura_id, source_owner)` +
+    `resolve_top_of_stack()` to fire the effect.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    bear_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Aura Host Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    aura_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Aura of Taps",
+            "card_types": ["Enchantment"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "effects": [{"kind": "tap_enchanted_permanent"}],
+        },
+        source_owner,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, aura_id, bear_id
+
+
+def test_rust_tap_enchanted_permanent_basic_taps_host():
+    """Rust regression pin: Aura on bf attached to a Bear; resolving
+    the Aura's effect taps the Bear via the attached_to lookup.
+    Pins state_ops_resolve.rs:6027-6056's source-bf scan +
+    attached_to read + target-bf locate + obj.tapped mutation.
+    """
+    rust_state, aura_id, bear_id = (
+        _build_rust_aura_state_with_target(source_owner=0)
+    )
+    rust_state.attach(aura_id, bear_id)
+    assert rust_state.is_tapped(bear_id) is False
+    rust_state.push_to_stack(aura_id, 0)
+    rust_state.resolve_top_of_stack()
+    assert rust_state.is_tapped(bear_id) is True, (
+        f"TapEnchantedPermanent should tap the attached host Bear; "
+        f"got is_tapped={rust_state.is_tapped(bear_id)}"
+    )
+
+
+def test_rust_tap_enchanted_permanent_already_tapped_idempotent():
+    """Rust regression pin: already-tapped host is idempotent -- the
+    resolve arm sets ``obj.tapped = true`` unconditionally
+    (state_ops_resolve.rs:6050-6054) without checking pre-state, so
+    re-applying to a tapped host is a no-op. Pre-tap the Bear, then
+    fire the Aura's effect; Bear stays tapped (idempotent re-tap).
+    """
+    rust_state, aura_id, bear_id = (
+        _build_rust_aura_state_with_target(source_owner=0)
+    )
+    rust_state.tap_object(bear_id)
+    assert rust_state.is_tapped(bear_id) is True
+    rust_state.attach(aura_id, bear_id)
+    rust_state.push_to_stack(aura_id, 0)
+    rust_state.resolve_top_of_stack()
+    # Idempotent: still tapped, no panic / no exception.
+    assert rust_state.is_tapped(bear_id) is True
+
+
+def test_rust_tap_enchanted_permanent_no_attached_to_silent_fizzle():
+    """Rust regression pin: Aura with NO attached_to on the source
+    silently fizzles -- the resolve arm's ``Some(target_id) =
+    target_id_opt else { return Ok(()); }`` early-return at
+    state_ops_resolve.rs:6035-6037 skips the mutation. Pins the
+    no-attached-to fizzle path (defensive against malformed Aura
+    state where attach() was never called).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # Target Bear (NOT attached to anything).
+    bear_id = rust_state.register_and_inject_object(
+        {
+            "name": "Untargeted Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 2,
+            "toughness": 2,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # Aura WITHOUT attach() call.
+    aura_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Aura of Taps (Unattached)",
+            "card_types": ["Enchantment"],
+            "mana_cost": {"U": 1, "generic": 1},
+            "effects": [{"kind": "tap_enchanted_permanent"}],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.is_tapped(bear_id) is False
+    rust_state.push_to_stack(aura_id, 0)
+    # Resolve must NOT panic and Bear must NOT get tapped.
+    rust_state.resolve_top_of_stack()
+    assert rust_state.is_tapped(bear_id) is False, (
+        f"Unattached Aura's TapEnchantedPermanent should be a silent "
+        f"fizzle (no attached_to => no host => no tap); "
+        f"got is_tapped={rust_state.is_tapped(bear_id)}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
