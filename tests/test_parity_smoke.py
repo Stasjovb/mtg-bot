@@ -46266,6 +46266,195 @@ def test_rust_pump_creatures_you_control_until_eot_opponent_creatures_not_pumped
         )
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- destroy_target_artifact (round 23).
+#
+# Rust's Effect::DestroyTargetArtifact (unit variant, cards.rs:655)
+# already shipped end-to-end via round 25 (parse at cards.rs:3519-3525
+# + resolve at state_ops_resolve.rs:4053-4109); this slice ships the
+# cross-engine bridge translator + Rust regression pins. The bridge
+# arm closes a gap discovered by round-22 worker RR's diff walk
+# (Rust kind emitted by to_dict but no matching
+# `_ta_dict_to_python_effect` arm).
+#
+# Real-EoE consumers (oracle scan): 1 EoE bare-shape card -- Drill
+# Too Deep modal arm 2 ("Destroy target artifact"). Shattered Wings
+# is the OR-shape variant routed through a separate
+# `DestroyTargetArtifactEnchantmentOrFlyingCreature` Effect on both
+# engines -- not a consumer of this arm.
+#
+# Pin layout (in test_parity_smoke.py): 3 Rust regression pins
+# (basic destroy on a single-artifact bf + indestructible artifact
+# survives + non-artifact creatures untouched). Cross-engine
+# end-to-end probe deferred per round-17/18/19 synthetic-only-when-
+# riders-cascade precedent (the targeting Decision pipeline is its
+# own surface beyond the bare bridge-arm slice). The 6 bridge-
+# translator pins live in test_cross_engine_etb_triggers.py per
+# the established split.
+# =====================================================================
+
+
+def _build_rust_destroy_target_artifact_state(
+    n_artifacts: int = 1,
+    n_creatures: int = 0,
+    artifact_indestructible: bool = False,
+    artifact_owner: int = 1,
+):
+    """Helper: build a Rust state with an ETB-triggered
+    DestroyTargetArtifact source on p0's bf, plus `n_artifacts`
+    vanilla artifacts on `artifact_owner`'s bf and `n_creatures`
+    vanilla 2/2 bears on the same player's bf.
+    Returns (rust_state, source_id, artifact_ids, creature_ids).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    artifact_dict = {
+        "name": "Bait Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+    }
+    if artifact_indestructible:
+        artifact_dict = dict(artifact_dict)
+        artifact_dict["name"] = "Indestructible Bait Artifact"
+        artifact_dict["keywords"] = ["indestructible"]
+    artifact_ids = [
+        rust_state.register_and_inject_object(
+            artifact_dict, artifact_owner, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_artifacts)
+    ]
+    bear_dict = {
+        "name": "Bait Bear (2/2)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    creature_ids = [
+        rust_state.register_and_inject_object(
+            bear_dict, artifact_owner, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_creatures)
+    ]
+    # The destroy source itself is a non-artifact creature carrier.
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "Destroy ETB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"R": 1, "generic": 1},
+            "power": 1,
+            "toughness": 1,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "destroy_target_artifact"},
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id, artifact_ids, creature_ids
+
+
+def test_rust_destroy_target_artifact_basic_destroys_single_artifact():
+    """Rust regression pin: ETB-triggered DestroyTargetArtifact with
+    exactly one artifact on the bf -- the artifact is moved off
+    p1's battlefield into p1's graveyard. Pins
+    state_ops_resolve.rs:4053-4109's bf-ETB-sorted scan + per-
+    controller graveyard insertion path.
+    """
+    rust_state, source_id, artifact_ids, _ = (
+        _build_rust_destroy_target_artifact_state(
+            n_artifacts=1, n_creatures=0,
+        )
+    )
+    artifact_id = artifact_ids[0]
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    # The artifact is gone from bf and now in p1's graveyard.
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert artifact_id not in bf_ids, (
+        f"artifact {artifact_id} should be off bf after destroy; "
+        f"got bf_ids={bf_ids}"
+    )
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert artifact_id in p1_gy_ids, (
+        f"artifact {artifact_id} should be in p1's graveyard after "
+        f"destroy; got gy_ids={p1_gy_ids}"
+    )
+
+
+def test_rust_destroy_target_artifact_indestructible_survives():
+    """Rust regression pin: per state_ops_resolve.rs:4061-4063, the
+    scan filters out artifacts with the `indestructible` keyword.
+    With ONLY an indestructible artifact on the bf, the destroy is
+    a silent no-op (no target found) -- the artifact stays on bf
+    and out of any graveyard. Pins CR 702.12 indestructibility
+    handling at the scan filter.
+    """
+    rust_state, source_id, artifact_ids, _ = (
+        _build_rust_destroy_target_artifact_state(
+            n_artifacts=1, n_creatures=0,
+            artifact_indestructible=True,
+        )
+    )
+    artifact_id = artifact_ids[0]
+    rust_state.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert artifact_id in bf_ids, (
+        f"indestructible artifact {artifact_id} should remain on "
+        f"bf; got bf_ids={bf_ids}"
+    )
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert artifact_id not in p1_gy_ids
+
+
+def test_rust_destroy_target_artifact_creatures_untouched():
+    """Rust regression pin: the scan filters on
+    `card_types.contains("Artifact")` -- non-artifact creatures
+    are skipped. Setup: 1 artifact + 2 bears on p1's bf; resolve
+    destroys ONLY the artifact. Pins the type-filter at
+    state_ops_resolve.rs:4057-4060 -- a bug that dropped the
+    Artifact filter would destroy a creature instead.
+    """
+    rust_state, source_id, artifact_ids, creature_ids = (
+        _build_rust_destroy_target_artifact_state(
+            n_artifacts=1, n_creatures=2,
+        )
+    )
+    artifact_id = artifact_ids[0]
+    rust_state.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    # Artifact gone; both bears still present.
+    assert artifact_id not in bf_ids
+    for bear_id in creature_ids:
+        assert bear_id in bf_ids, (
+            f"bear {bear_id} should NOT be destroyed by "
+            f"destroy_target_artifact; got bf_ids={bf_ids}"
+        )
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert artifact_id in p1_gy_ids
+    for bear_id in creature_ids:
+        assert bear_id not in p1_gy_ids
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
