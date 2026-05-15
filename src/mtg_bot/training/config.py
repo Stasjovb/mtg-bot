@@ -294,6 +294,41 @@ class NNPimcConfig:
                 eval_kwargs["action_encoding_version"] = (
                     self.action_encoding_version
                 )
+            # Structured-architecture trunk hparams live in the
+            # version's metadata.json under ``training.structured_*``.
+            # NNPimcConfig itself doesn't carry these (the spec
+            # predates the structured trunk) so we discover them
+            # from the weights-path sibling. Without this discovery,
+            # NNEvaluator falls back to ``StructuredModelConfig``'s
+            # defaults (emb=128, layers=2, hidden=256) and any
+            # checkpoint trained with non-default dims fails with a
+            # state_dict shape mismatch on every worker.
+            if self.architecture == "structured":
+                meta_path = Path(self.weights_path).parent / "metadata.json"
+                if meta_path.is_file():
+                    try:
+                        import json as _json
+                        with meta_path.open("r", encoding="utf-8") as _f:
+                            _meta = _json.load(_f)
+                        _training = _meta.get("training") or {}
+                        for _src, _dst in (
+                            ("structured_emb_dim", "structured_emb_dim"),
+                            ("structured_n_heads", "structured_n_heads"),
+                            ("structured_n_layers", "structured_n_layers"),
+                            ("structured_hidden_dim", "structured_hidden_dim"),
+                            ("structured_action_history_n",
+                             "structured_action_history_n"),
+                            ("structured_n_printings", "structured_n_printings"),
+                        ):
+                            if _training.get(_src) is not None:
+                                eval_kwargs[_dst] = _training[_src]
+                    except (OSError, ValueError):
+                        # Defensive: a malformed metadata.json should not
+                        # crash the worker. Fall through to the default
+                        # config; the resulting state_dict-shape error
+                        # is still a much better failure surface than
+                        # a silent wrong-config load.
+                        pass
             evaluator = NNEvaluator(**eval_kwargs)
         if self.use_ismcts:
             total_iters = max(1, self.samples * self.inner_nodes)
