@@ -1098,12 +1098,17 @@ pub enum Effect {
     /// `SearchLibraryForCard(filter_name, max_mv=0, may_fail=True)`
     /// (`search.py:30` — 9 EoE cards).
     ///
-    /// **First-slice filter vocabulary.** Rust supports a subset of
-    /// Python's filters constrained by available registry fields
-    /// (Rust has no `supertypes` / `subtypes` registry today):
+    /// **Filter vocabulary** (post Round-30 supertypes/subtypes
+    /// substrate). Rust dispatches on the same string set Python does
+    /// at `search.py:_matches` — arm-for-arm parity:
     ///   - `"basic_land"` → `card_types` contains `"Land"`
-    ///     (approximation; Rust can't distinguish basic vs non-basic
-    ///     without supertypes).
+    ///     (legacy proxy; the historical reason was the missing
+    ///     supertypes field, which the Round-30 substrate now carries.
+    ///     Kept on the legacy proxy because every EoE basic land has
+    ///     `card_types=["Land"]` with no compound non-basic land
+    ///     routing this dispatch path, and changing the proxy now
+    ///     would break in-flight fixtures whose CardDef omits the
+    ///     supertypes hint).
     ///   - `"basic_plains"` / `"basic_island"` / `"basic_swamp"` /
     ///     `"basic_mountain"` / `"basic_forest"` → `printing.name`
     ///     equals the canonical basic name.
@@ -1112,12 +1117,18 @@ pub enum Effect {
     ///     means "creatures with cost <= 0" (rarely matches; specify
     ///     a real `max_mv` value).
     ///   - `"artifact"` → `card_types` contains `"Artifact"`.
+    ///   - `"legendary_creature"` → `card_types` contains `"Creature"`
+    ///     AND `supertypes` contains `"Legendary"` (Round-30
+    ///     substrate; powers The Seriema's tutor + Starfield Shepherd's
+    ///     dual-clause inner half).
+    ///   - `"spacecraft"` → `subtypes` contains `"Spacecraft"`
+    ///     (Round-30 substrate).
+    ///   - `"sliver"` → `subtypes` contains `"Sliver"` (Round-30
+    ///     substrate).
+    ///   - `"demon"` → `subtypes` contains `"Demon"` (Round-30
+    ///     substrate; powers Demonic Counsel from Duskmourn).
     ///   - unknown filter → silent fizzle (matches Python's
     ///     `_matches` returning False for unknown).
-    ///
-    /// **Deferred filters**: `legendary_creature`, `sliver`, `demon`,
-    /// `spacecraft` — these require supertypes / subtypes which
-    /// aren't on the Rust registry yet. Silent fizzle for now.
     ///
     /// **Deterministic first-match pick (top-to-bottom).** Library
     /// Vec is bottom-first (lib[len-1] = top); scan via `iter().rev()`.
@@ -2973,6 +2984,38 @@ pub struct CardPrinting {
     /// `#[serde(default)]`-equivalent shape — keeps every pre-substrate
     /// registry-dict caller working without modification).
     pub subtypes: Vec<String>,
+    /// MTG card supertypes: "Basic", "Legendary", "Snow", "World",
+    /// "Token". Empty Vec when the type line has no supertype prefix
+    /// (most cards). Stored as Title Case strings exactly as printed
+    /// — case-sensitive comparison via
+    /// `supertypes.iter().any(|s| s == "Legendary")` is the canonical
+    /// consumer pattern.
+    ///
+    /// **Use cases.** Distinguishes basic vs non-basic lands
+    /// (`is_basic_land` = `card_types contains "Land"` AND
+    /// `supertypes contains "Basic"`); legendary-rule processing
+    /// (`is_legendary` = `supertypes contains "Legendary"`); tutor
+    /// filters that scope by supertype (`legendary_creature` filter
+    /// in `Effect::SearchLibraryForCard`).
+    ///
+    /// Mirrors Python's `CardPrinting.supertypes: tuple[str, ...]`
+    /// at `src/mtg_bot/cards/base.py:499`. Registry-dict input under
+    /// the `supertypes` key; missing key parses to empty Vec
+    /// (back-compat — every pre-supertypes registry dict implicitly
+    /// omits the key, matches the `subtypes` substrate's parse shape).
+    ///
+    /// **Round 30 substrate.** Added to unblock the
+    /// `legendary_creature` filter on `Effect::SearchLibraryForCard`
+    /// (round-21 bridge slice's deferred filter list — see
+    /// state_ops_resolve.rs `SearchLibraryForCard` arm). Pre-Round-30
+    /// the field didn't exist; the legacy `is_basic_land` proxy in
+    /// `SearchLibraryForBasicLandTapped`'s arm comment is now
+    /// historical (it still uses `card_types contains "Land"` because
+    /// every EoE basic land has card_types=["Land"] and no compound
+    /// non-basic land routes through that arm — keeping the proxy
+    /// avoids a behavior change for any in-flight fixture without
+    /// `supertypes` set).
+    pub supertypes: Vec<String>,
     /// Static keyword abilities printed on the card. Stored as
     /// lowercase strings ("flying", "vigilance", "trample",
     /// "first strike", "double strike", "deathtouch", "lifelink",
@@ -4752,6 +4795,30 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => Vec::new(),
     };
+    // Supertypes substrate (Round 30): `supertypes` defaults to empty
+    // Vec when absent (back-compat — every pre-Round-30 registry dict
+    // implicitly omits the key). Same parse shape as `subtypes`.
+    // Stored as Title Case strings exactly as printed ("Basic",
+    // "Legendary", "Snow", "World", "Token"); consumers do
+    // case-sensitive `contains`.
+    let supertypes = match dict.get_item("supertypes")? {
+        Some(st_any) => {
+            let iter = st_any.try_iter().map_err(|_| {
+                PyValueError::new_err(
+                    "supertypes must be an iterable of supertype strings",
+                )
+            })?;
+            let mut out = Vec::new();
+            for item in iter {
+                let s: String = item?.extract().map_err(|_| {
+                    PyValueError::new_err("supertypes entries must be strings")
+                })?;
+                out.push(s);
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     let keywords = match dict.get_item("keywords")? {
         Some(kw_any) => {
             let iter = kw_any.try_iter().map_err(|_| {
@@ -4878,6 +4945,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         mana_produced,
         card_types,
         subtypes,
+        supertypes,
         keywords,
         etb_effects,
         triggered_abilities,
@@ -5806,6 +5874,14 @@ impl Registry {
     /// `CardPrinting.subtypes: tuple[str, ...]`.
     fn get_printing_subtypes(&self, id: u32) -> PyResult<Vec<String>> {
         Ok(self.lookup(id)?.subtypes.clone())
+    }
+
+    /// MTG card supertypes: "Basic", "Legendary", "Snow", "World",
+    /// "Token". Empty when the type line has no supertype prefix.
+    /// Mirrors Python's `CardPrinting.supertypes: tuple[str, ...]`.
+    /// Round-30 substrate addition.
+    fn get_printing_supertypes(&self, id: u32) -> PyResult<Vec<String>> {
+        Ok(self.lookup(id)?.supertypes.clone())
     }
 
     /// Static printed keywords (lowercase): "flying", "vigilance",
