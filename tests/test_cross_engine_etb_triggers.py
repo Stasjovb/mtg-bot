@@ -10948,5 +10948,233 @@ def test_rust_parser_accepts_manifest_dread_with_explicit_count():
     assert pid == 0
 
 
+def test_bridge_put_stun_counter_on_tapped_creature_basic_translation():
+    """BLOCKED-RUST-EFFECT slice (round 30) -- stun-counter substrate.
+    Rust ``{"kind": "put_stun_counter_on_tapped_creature"}`` translates
+    to Python ``PutStunCounterOnTappedCreature()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3766-3771 (unit
+    variant; no fields). Pin verifies the bare-shape translation for
+    the round-30 stun-counter substrate's first Effect arm (Cryogen
+    Relic activated half).
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutStunCounterOnTappedCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "put_stun_counter_on_tapped_creature"}
+    )
+    assert isinstance(e, PutStunCounterOnTappedCreature)
+
+
+def test_bridge_put_stun_counter_on_tapped_creature_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    the unit-variant precedent (tap_enchanted_permanent /
+    destroy_enchanted_permanent / attach_to_target_creature_you_control)
+    -- unrecognized fields in the dict are ignored, not raised.
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutStunCounterOnTappedCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "put_stun_counter_on_tapped_creature",
+            "spurious_field": "ignored",
+        }
+    )
+    assert isinstance(e, PutStunCounterOnTappedCreature)
+
+
+def test_bridge_put_stun_counter_on_tapped_creature_equality_default_constructor():
+    """Bridge arm pin: two ``PutStunCounterOnTappedCreature()`` instances
+    are equal under dataclass(frozen=True) default __eq__ semantics.
+    Pins the frozen-dataclass equality contract for downstream hash-
+    based keying (e.g. de-dup in Sequence composers).
+    """
+    from mtg_bot.effects.generic.counters import (
+        PutStunCounterOnTappedCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {"kind": "put_stun_counter_on_tapped_creature"}
+    )
+    e2 = PutStunCounterOnTappedCreature()
+    assert e1 == e2
+
+
+def test_bridge_put_stun_counter_on_tapped_creature_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([PutStunCounterOnTappedCreature(), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    the round-30 arm against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.counters import (
+        PutStunCounterOnTappedCreature,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "put_stun_counter_on_tapped_creature"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], PutStunCounterOnTappedCreature)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_put_stun_counter_on_tapped_creature_in_activated_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "put_stun_counter_on_tapped_creature"}`` on a
+    triggered_ability carrier. The Cryogen Relic real-card consumer
+    actually mounts this Effect on an ACTIVATED ability (sacrifice
+    cost), but the lockstep gate doesn't depend on the trigger event
+    -- registering through any abilities carrier exercises the
+    parse_effect arm. Pinning here keeps the Python bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3766-3771.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- PutStunCounterOnTappedCreature",
+        "card_types": ["Artifact"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "put_stun_counter_on_tapped_creature"},
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_bridge_tap_target_opponent_permanent_and_stun_it_basic_translation():
+    """BLOCKED-RUST-EFFECT slice (round 30) -- stun-counter substrate.
+    Rust ``{"kind": "tap_target_opponent_permanent_and_stun_it"}``
+    translates to Python ``TapTargetOpponentPermanentAndStunIt()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3772-3779 (unit
+    variant; no fields). Pin verifies the bare-shape translation for
+    the round-30 stun-counter substrate's second Effect arm
+    (Mechanozoa ETB).
+    """
+    from mtg_bot.effects.generic.tap import (
+        TapTargetOpponentPermanentAndStunIt,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "tap_target_opponent_permanent_and_stun_it"}
+    )
+    assert isinstance(e, TapTargetOpponentPermanentAndStunIt)
+
+
+def test_bridge_tap_target_opponent_permanent_and_stun_it_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys, same
+    convention as the sister put_stun_counter_on_tapped_creature arm
+    above.
+    """
+    from mtg_bot.effects.generic.tap import (
+        TapTargetOpponentPermanentAndStunIt,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "tap_target_opponent_permanent_and_stun_it",
+            "spurious_field": "ignored",
+        }
+    )
+    assert isinstance(e, TapTargetOpponentPermanentAndStunIt)
+
+
+def test_bridge_tap_target_opponent_permanent_and_stun_it_equality_default_constructor():
+    """Bridge arm pin: two ``TapTargetOpponentPermanentAndStunIt()``
+    instances are equal under dataclass(frozen=True) default __eq__
+    semantics. Pins the frozen-dataclass equality contract.
+    """
+    from mtg_bot.effects.generic.tap import (
+        TapTargetOpponentPermanentAndStunIt,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {"kind": "tap_target_opponent_permanent_and_stun_it"}
+    )
+    e2 = TapTargetOpponentPermanentAndStunIt()
+    assert e1 == e2
+
+
+def test_bridge_tap_target_opponent_permanent_and_stun_it_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.tap import (
+        TapTargetOpponentPermanentAndStunIt,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "tap_target_opponent_permanent_and_stun_it"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], TapTargetOpponentPermanentAndStunIt)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_tap_target_opponent_permanent_and_stun_it_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape on a triggered_ability carrier. Mechanozoa's actual ETB is
+    the canonical real-card consumer of this shape.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- TapTargetOpponentPermanentAndStunIt",
+        "card_types": ["Creature"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "tap_target_opponent_permanent_and_stun_it"
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

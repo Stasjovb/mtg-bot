@@ -2930,6 +2930,113 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             EquipToTargetCreatureYouControl,
         )
         return EquipToTargetCreatureYouControl()
+    if kind == "put_stun_counter_on_tapped_creature":
+        # BLOCKED-RUST-EFFECT slice (round-30) -- stun-counter substrate
+        # bridge. Rust's ``Effect::PutStunCounterOnTappedCreature`` (a
+        # unit variant added in cards.rs:1488-1507 alongside the
+        # round-30 ``GameObject.stun_counters: i32`` slot at
+        # state.rs:121-148 and the CR 701.20 untap-step gate at
+        # state_ops_steps.rs:untap_all_for_player_inline) mirrors
+        # Python's ``PutStunCounterOnTappedCreature``
+        # (effects/generic/counters.py:592 -- Cryogen Relic activated
+        # half, 1 EoE card). Rust substrate landed end-to-end IN this
+        # slice (the substrate field + Effect arms + bridge arm all
+        # ship together because the field had no prior consumers); the
+        # bridge translator wires the cross-engine round trip.
+        #
+        # **Field-shape.** Unit variant on both sides; no fields beyond
+        # ``kind``. The Python class has no constructor args
+        # (counters.py:592 -- ``@dataclass(frozen=True) class
+        # PutStunCounterOnTappedCreature(Effect): ...``). The bridge
+        # translator ignores every other key on the dict for round-trip
+        # dict-shape consistency (mirrors the destroy_enchanted_permanent
+        # / tap_enchanted_permanent unit-variant precedent).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm at
+        # state_ops_resolve.rs:6064-6100 walks both players' bf in
+        # ETB-timestamp order via bf_iter_etb_sorted (round-28 shared
+        # walk), picks the FIRST already-tapped Creature it finds (no
+        # controller restriction -- the Python class places none either,
+        # ``legal_targets`` walks ``state.battlefield`` filtered only on
+        # ``is_creature and tapped``). Increments stun_counters on the
+        # matched object via Arc::make_mut. Silent fizzle on no eligible
+        # target. Python's ``resolve`` reads the target from the
+        # ``targets`` tuple passed in by the targeting pipeline (PUSH-
+        # time pick) and increments via ``add_stun_counters`` in
+        # game.py:2084-2095; the chooser-driven pick converges with
+        # Rust's first-eligible-tapped-creature scan when the agent
+        # picks the first-eligible target on synthetic probes with one
+        # bait creature.
+        #
+        # **No real-EoE end-to-end probe in this slice.** Cryogen
+        # Relic's stun-counter clause lives on an ACTIVATED ability
+        # (``{1}{U}, Sacrifice this artifact: Put a stun counter on up
+        # to one target tapped creature.``), not an ETB trigger; the
+        # round-19/20/21 probe template is ETB-only. Driving the
+        # activated path through both engines requires the activated-
+        # ability cross-engine harness (separate substrate from
+        # ETB-trigger probes) that isn't yet wired for the new effect.
+        # Synthetic regression pin (per the round-17 Fight precedent)
+        # documents the bridge plumbing; a real-EoE activated probe is
+        # a follow-up slice once the activated-ability cross-engine
+        # harness extends to this Effect.
+        from mtg_bot.effects.generic.counters import (
+            PutStunCounterOnTappedCreature,
+        )
+        return PutStunCounterOnTappedCreature()
+    if kind == "tap_target_opponent_permanent_and_stun_it":
+        # BLOCKED-RUST-EFFECT slice (round-30) -- stun-counter substrate
+        # bridge. Sister bridge arm to put_stun_counter_on_tapped_creature
+        # but with the Mechanozoa ETB shape: tap target artifact-or-
+        # creature an opponent controls AND put a stun counter on it,
+        # both effects landing on the SAME chosen target. Rust's
+        # ``Effect::TapTargetOpponentPermanentAndStunIt`` (cards.rs:1508-
+        # 1521; resolve arm at state_ops_resolve.rs:6101-6168) mirrors
+        # Python's ``TapTargetOpponentPermanentAndStunIt``
+        # (effects/generic/tap.py:217 -- Mechanozoa ETB, 1 EoE card).
+        #
+        # **Field-shape.** Unit variant on both sides; no fields beyond
+        # ``kind``. The Python class has no constructor args
+        # (tap.py:217 -- ``@dataclass(frozen=True) class
+        # TapTargetOpponentPermanentAndStunIt(Effect): ...``). The
+        # bridge translator ignores every other key on the dict.
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # walks both players' bf in ETB-timestamp order via
+        # bf_iter_etb_sorted, applies the opp-only filter
+        # (``obj.controller != src_controller``) and the Artifact-OR-
+        # Creature card-types filter, picks the FIRST match, taps it
+        # (idempotent on already-tapped) AND increments stun_counters
+        # by 1 -- both mutations on the same Arc::make_mut pass.
+        # Silent fizzle on no eligible target. Python's ``resolve``
+        # reads the target from the ``targets`` tuple passed in by the
+        # targeting pipeline (PUSH-time pick); ``legal_targets`` walks
+        # the centralized ``state.battlefield`` filtered on
+        # ``(is_artifact or is_creature) and controller_id !=
+        # controller_id``. On synthetic probes with one bait permanent
+        # on the opponent's bf, the chooser-driven pick converges with
+        # Rust's first-eligible scan bit-for-bit.
+        #
+        # **Both effects on the same target.** This is the load-bearing
+        # property -- Mechanozoa's ETB doesn't tap one creature and
+        # stun a different one. Both engines stamp tap=true and
+        # stun_counters+=1 on the SAME chosen object. Pinned by the
+        # synthetic regression pin in the round-30 test slice.
+        #
+        # **No real-EoE end-to-end probe in this slice.** Mechanozoa's
+        # ETB is wired through the cross-engine ETB-trigger probe
+        # template, but its parsed Effect today routes through the
+        # generic clause-builder which constructs the Python class
+        # directly without going through the cross-engine bridge dict
+        # round-trip. The bridge plumbing itself is pinned via
+        # synthetic regression; a real-EoE Mechanozoa ETB cross-engine
+        # probe driven through the bridge dict (rather than the direct
+        # Python class instantiation) is a follow-up slice once the
+        # ETB cross-engine harness threads bridge dicts on both sides.
+        from mtg_bot.effects.generic.tap import (
+            TapTargetOpponentPermanentAndStunIt,
+        )
+        return TapTargetOpponentPermanentAndStunIt()
     if kind == "optional_sac_artifact_for_effect":
         # BLOCKED-BRIDGE-ARM slice (round-19 audit refresh) -- "you may
         # sacrifice an artifact. If you do, [inner_effect]." composer.
