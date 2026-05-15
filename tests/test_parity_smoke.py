@@ -46635,6 +46635,251 @@ def test_rust_destroy_target_nonland_permanent_indestructible_survives():
     assert bear_id not in p1_gy_ids
 
 
+# =====================================================================
+# BLOCKED-BRIDGE-ARM slice -- destroy_all_creatures (round 23).
+#
+# Rust's Effect::DestroyAllCreatures (unit variant, cards.rs:626)
+# already shipped end-to-end via round 24 (parse at cards.rs:3504-3512
+# + resolve at state_ops_resolve.rs:3917-3985, with the Slice 11 LTB
+# fan-out wired in via mark_left_battlefield_if_nonland +
+# pending_leaves_dispatches); this slice ships the cross-engine bridge
+# translator + Rust regression pins. The bridge arm closes a gap
+# discovered by round-22 worker RR's diff walk.
+#
+# Real-EoE consumers (oracle scan): 1 EoE bare-shape card --
+# Singularity Rupture ("Destroy all creatures, then ..."). Zero Point
+# Ballad uses min_power-shape narrowing; Mutinous Massacre uses an
+# each-creature-with-MV parameterized variant -- both pending separate
+# Rust Effect variants in follow-up slices.
+#
+# Pin layout (in test_parity_smoke.py): 3 Rust regression pins
+# (basic mass destroy iterating BOTH players' bf + indestructible
+# survives + lands untouched). The cross-engine end-to-end path is
+# already exercised by `mass_removal_side_channel` /
+# `mass_removal_selector` (cross_engine.py:6460+) on the
+# multi_blocker_deckspec walk; this slice's Rust-side pins target the
+# isolated unit-variant resolve to surface regressions early without
+# needing the full multi-turn walk. The 6 bridge-translator pins live
+# in test_cross_engine_etb_triggers.py per the established split.
+# =====================================================================
+
+
+def _build_rust_destroy_all_creatures_state(
+    n_p0_creatures: int = 1,
+    n_p1_creatures: int = 1,
+    n_lands_per_side: int = 0,
+    p0_creature_indestructible: bool = False,
+):
+    """Helper: build a Rust state with an ETB-triggered
+    DestroyAllCreatures source on p0's bf, plus `n_p0_creatures`
+    bears on p0 and `n_p1_creatures` bears on p1, plus
+    `n_lands_per_side` lands on each side.
+    Returns (rust_state, source_id, p0_creature_ids,
+    p1_creature_ids, p0_land_ids, p1_land_ids).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    bear_dict = {
+        "name": "Wrath Bait Bear (2/2)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    indestructible_bear_dict = dict(bear_dict)
+    indestructible_bear_dict["name"] = "Indestructible Bear (2/2)"
+    indestructible_bear_dict["keywords"] = ["indestructible"]
+    p0_creature_ids = []
+    for i in range(n_p0_creatures):
+        d = (
+            indestructible_bear_dict
+            if p0_creature_indestructible and i == 0
+            else bear_dict
+        )
+        p0_creature_ids.append(
+            rust_state.register_and_inject_object(
+                d, 0, ZONE_BATTLEFIELD,
+            )
+        )
+    p1_creature_ids = [
+        rust_state.register_and_inject_object(
+            bear_dict, 1, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_p1_creatures)
+    ]
+    land_dict = {
+        "name": "Wrath Bait Land",
+        "card_types": ["Land"],
+        "effects": [],
+    }
+    p0_land_ids = [
+        rust_state.register_and_inject_object(
+            land_dict, 0, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_lands_per_side)
+    ]
+    p1_land_ids = [
+        rust_state.register_and_inject_object(
+            land_dict, 1, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_lands_per_side)
+    ]
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "Wrath ETB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "B": 1, "generic": 2},
+            "power": 1,
+            "toughness": 1,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "destroy_all_creatures"},
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return (
+        rust_state, source_id,
+        p0_creature_ids, p1_creature_ids,
+        p0_land_ids, p1_land_ids,
+    )
+
+
+def test_rust_destroy_all_creatures_iterates_both_battlefield_sides():
+    """Rust regression pin: ETB-triggered DestroyAllCreatures with
+    creatures on BOTH p0 and p1 bf -- every non-indestructible
+    creature is destroyed regardless of controller. Each victim
+    ends up in its OWN controller's graveyard. Pins
+    state_ops_resolve.rs:3917-3985's bf-ETB-sorted cross-controller
+    iteration via `bf_iter::bf_iter_etb_sorted` and the per-victim
+    `pidx`-keyed graveyard insertion.
+    """
+    rust_state, source_id, p0_creatures, p1_creatures, _, _ = (
+        _build_rust_destroy_all_creatures_state(
+            n_p0_creatures=2, n_p1_creatures=2,
+        )
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    # Every bear on either side is gone; the Wrath source itself
+    # is also a creature so it dies too (no exclude_source rider).
+    for cid in p0_creatures + p1_creatures + [source_id]:
+        assert cid not in bf_ids, (
+            f"creature {cid} should be off bf after wrath; "
+            f"got bf_ids={bf_ids}"
+        )
+    p0_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(0)
+    ]
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    # p0's creatures (incl. source) end up in p0's graveyard.
+    for cid in p0_creatures + [source_id]:
+        assert cid in p0_gy_ids, (
+            f"p0 creature {cid} should be in p0 graveyard; "
+            f"got p0_gy={p0_gy_ids}"
+        )
+    # p1's creatures end up in p1's graveyard (NOT p0's).
+    for cid in p1_creatures:
+        assert cid in p1_gy_ids, (
+            f"p1 creature {cid} should be in p1 graveyard; "
+            f"got p1_gy={p1_gy_ids}"
+        )
+        assert cid not in p0_gy_ids, (
+            f"p1 creature {cid} should NOT be in p0 graveyard; "
+            f"got p0_gy={p0_gy_ids}"
+        )
+
+
+def test_rust_destroy_all_creatures_indestructible_survives():
+    """Rust regression pin: per state_ops_resolve.rs:3930-3932, the
+    scan filters out creatures with the `indestructible` keyword.
+    Setup: p0 has 1 indestructible bear + 1 normal bear; p1 has
+    1 normal bear. After wrath, the indestructible bear stays on
+    bf; the two normal bears + Wrath source die. Pins CR 702.12
+    indestructibility handling on the AOE path.
+    """
+    rust_state, source_id, p0_creatures, p1_creatures, _, _ = (
+        _build_rust_destroy_all_creatures_state(
+            n_p0_creatures=2, n_p1_creatures=1,
+            p0_creature_indestructible=True,
+        )
+    )
+    indestructible_bear = p0_creatures[0]
+    mortal_p0_bear = p0_creatures[1]
+    mortal_p1_bear = p1_creatures[0]
+    rust_state.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert indestructible_bear in bf_ids, (
+        f"indestructible bear {indestructible_bear} should remain "
+        f"on bf after wrath; got bf_ids={bf_ids}"
+    )
+    assert mortal_p0_bear not in bf_ids
+    assert mortal_p1_bear not in bf_ids
+    assert source_id not in bf_ids
+    # Mortal victims are in their own controllers' graveyards.
+    p0_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(0)
+    ]
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert indestructible_bear not in p0_gy_ids
+    assert mortal_p0_bear in p0_gy_ids
+    assert mortal_p1_bear in p1_gy_ids
+
+
+def test_rust_destroy_all_creatures_lands_untouched():
+    """Rust regression pin: per state_ops_resolve.rs:3927-3929, the
+    scan filters on `card_types.contains("Creature")` -- lands are
+    skipped. Setup: 1 bear + 2 lands per side. After wrath, the
+    bears die but every land stays on bf. Pins the Creature filter
+    -- a bug that dropped the filter would also destroy lands.
+    """
+    rust_state, source_id, p0_creatures, p1_creatures, p0_lands, p1_lands = (
+        _build_rust_destroy_all_creatures_state(
+            n_p0_creatures=1, n_p1_creatures=1,
+            n_lands_per_side=2,
+        )
+    )
+    rust_state.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    # Bears + Wrath source gone.
+    for cid in p0_creatures + p1_creatures + [source_id]:
+        assert cid not in bf_ids
+    # Every land still present.
+    for lid in p0_lands + p1_lands:
+        assert lid in bf_ids, (
+            f"land {lid} should NOT be destroyed by wrath; "
+            f"got bf_ids={bf_ids}"
+        )
+    # Lands are NOT in any graveyard.
+    p0_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(0)
+    ]
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    for lid in p0_lands:
+        assert lid not in p0_gy_ids
+    for lid in p1_lands:
+        assert lid not in p1_gy_ids
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
