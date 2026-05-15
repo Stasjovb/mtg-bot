@@ -44010,6 +44010,208 @@ def test_cross_engine_search_library_for_card_synthetic_etb_creature_small_parit
     assert py_state.players[1].life == 20
 
 
+def test_cross_engine_search_library_for_card_synthetic_etb_legendary_creature_parity(
+    parity_smoke,
+):
+    """Round-30 supertypes substrate slice -- cross-engine end-to-end
+    synthetic ETB probe for the ``legendary_creature`` filter. This
+    is the unblock probe that round-21's slice deferred (the bridge
+    arm landed then; the Rust dispatch was silent-fizzling pending
+    this slice's supertypes substrate).
+
+    Probe shape:
+      1. Spec a 3-card library on p0: (vanilla Bears, Legendary Bear,
+         vanilla Bears). The middle card explicitly carries
+         supertypes=("Legendary",) so both engines see the supertype
+         tag on materialization (Rust via the new
+         ``CardPrinting.supertypes`` field, Python via
+         ``CardPrinting.supertypes`` which it already had).
+      2. Inject a tutor-shape source with a SearchLibraryForCard(
+         filter_name=legendary_creature) ETB onto p0's bf.
+      3. Drain both stacks. Each engine moves the Legendary Bear from
+         p0's library to p0's hand.
+      4. Cross-engine: same library size delta (-1), same hand
+         size delta (+1).
+
+    Real-EoE consumer of this filter shape: The Seriema (the EoE
+    Spacecraft tutor — "When The Seriema enters, search your library
+    for a legendary creature card, reveal it, put it into your hand,
+    then shuffle"). The synthetic probe pins the cross-engine contract
+    on the bare filter dispatch; the real-EoE Seriema probe layers in
+    the parser-built printing + station mechanic + tier-gated
+    sub-abilities, which are out of this slice's scope (each is its
+    own substrate).
+
+    Out of scope (documented):
+      * Real-EoE Seriema printing wired through the parser pipeline
+        (parser-built bespoke spec + station + tier-gated indestructible
+        rider). The tutor *trigger* is what this probe pins; the
+        rest of Seriema's printing is orthogonal substrate.
+      * Post-search shuffle parity (G19 — Rust skips shuffle on this
+        arm; Python calls shuffle_library). Pin compares deltas, not
+        full library order, side-stepping the gap.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    bears = CardDef(
+        name="Library Filler Bears (2/2)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+    )
+    legendary_bear = CardDef(
+        name="Legendary Bear (cross-engine fixture)",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("G", 1),),
+        power=3,
+        toughness=3,
+        # Round-30 substrate — propagates to Rust's
+        # CardPrinting.supertypes via the registry-dict builder, and
+        # to Python's CardPrinting.supertypes via build_python_state's
+        # explicit-override branch.
+        supertypes=("Legendary",),
+        subtypes=("Bear",),
+    )
+    spec = DeckSpec(
+        card_defs=(bears, legendary_bear),
+        p0_library=(
+            "Library Filler Bears (2/2)",
+            "Legendary Bear (cross-engine fixture)",
+            "Library Filler Bears (2/2)",
+        ),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_state.register_and_inject_object(
+        {
+            "name": "Legendary-Creature Tutor ETB Trigger Bear",
+            "card_types": ["Creature"],
+            "subtypes": ["Bear", "Druid"],
+            "mana_cost": {"generic": 4},
+            "power": 2,
+            "toughness": 4,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "search_library_for_card",
+                        "filter_name": "legendary_creature",
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.search import SearchLibraryForCard
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.game import Zone
+    from mtg_bot.agents import Agent
+
+    # Seat a deterministic agent on p0 that picks the FIRST legal
+    # option so the picker behavior matches Rust's top-to-bottom scan.
+    class _PickFirstFromLibraryAgent(Agent):
+        def choose_card_from_library(self, state, player_id, option_ids):
+            return option_ids[0] if option_ids else None
+
+    py_state.players[0].agent = _PickFirstFromLibraryAgent()
+
+    bear_printing = CardPrinting(
+        name="Legendary-Creature Tutor ETB Trigger Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=4),
+        type_line="Creature -- Bear Druid",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear", "Druid"),
+        power=2,
+        toughness=4,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=SearchLibraryForCard(
+                    filter_name="legendary_creature",
+                ),
+            ),
+        ),
+    )
+    py_bear = py_state.new_object(
+        bear_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bear.summoning_sick = False
+    py_bear.tapped = False
+    py_bear.damage = 0
+    py_bear.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bear)
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_p0_hand_before = len(py_state.players[0].hand)
+    _trigger_etb_abilities(py_state, py_bear)
+    assert len(py_state.stack) == 1, (
+        "Python: tutor ETB should fire IsSelf ENTERS and land "
+        "SearchLibraryForCard(legendary_creature) on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Cross-engine post-state ----
+    rust_p0_lib_after = rust_state.library_sizes[0]
+    rust_p0_hand_after = rust_state.hand_sizes[0]
+    py_p0_lib_after = len(py_state.players[0].library)
+    py_p0_hand_after = len(py_state.players[0].hand)
+
+    # Library shrank by 1 on both sides (the Legendary Bear).
+    assert rust_p0_lib_after == rust_p0_lib_before - 1, (
+        f"Rust p0 lib delta should be -1; before={rust_p0_lib_before} "
+        f"after={rust_p0_lib_after}"
+    )
+    assert py_p0_lib_after == py_p0_lib_before - 1, (
+        f"Python p0 lib delta should be -1; before={py_p0_lib_before} "
+        f"after={py_p0_lib_after}"
+    )
+    # Hand grew by 1 on both sides.
+    assert rust_p0_hand_after == rust_p0_hand_before + 1
+    assert py_p0_hand_after == py_p0_hand_before + 1
+    # Cross-engine deltas agree.
+    assert (
+        rust_p0_lib_after - rust_p0_lib_before
+        == py_p0_lib_after - py_p0_lib_before
+    )
+    assert (
+        rust_p0_hand_after - rust_p0_hand_before
+        == py_p0_hand_after - py_p0_hand_before
+    )
+    # Lives unchanged on both sides.
+    assert list(rust_state.life_totals) == [20, 20]
+    assert py_state.players[0].life == 20
+    assert py_state.players[1].life == 20
+
+
 # =====================================================================
 # BLOCKED-BRIDGE-ARM slice -- look_top_n_put_one_in_hand_rest_to_
 # graveyard (round 21).
