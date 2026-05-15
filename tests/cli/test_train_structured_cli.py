@@ -331,8 +331,14 @@ def test_train_structured_cli_default_progress_path(
     tmp_path: Path, monkeypatch,
 ) -> None:
     """When no --progress-path is given, the default lands under
-    training_progress/<version>.json (under the cwd we ``chdir`` into).
+    training_progress/train_<version>_<stamp>.json (under the cwd we
+    ``chdir`` into). The timestamp salt keeps consecutive standalone
+    trains of the same version label from sharing a filename — see
+    the sibling ``test_train_main_default_progress_path_branch``
+    docstring for context.
     """
+    import re as _re
+
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     _write_structured_npz(data_dir / "a.npz", n_rows=8, seed=0)
@@ -349,9 +355,16 @@ def test_train_structured_cli_default_progress_path(
         "--device", "cpu",
         "--architecture", "structured",
     ])
-    default_progress = tmp_path / "training_progress" / "v1.json"
-    assert default_progress.is_file()
-    blob = json.loads(default_progress.read_text())
+    # No bare ``v1.json`` — the default is salt-stamped.
+    assert not (tmp_path / "training_progress" / "v1.json").exists()
+    matches = [
+        p for p in (tmp_path / "training_progress").iterdir()
+        if _re.match(r"train_v1_\d{8}T\d{6}Z\.json", p.name)
+    ]
+    assert len(matches) == 1, list(
+        (tmp_path / "training_progress").iterdir()
+    )
+    blob = json.loads(matches[0].read_text())
     assert blob["architecture"] == "structured"
 
 

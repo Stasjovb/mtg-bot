@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -58,6 +59,27 @@ from mtg_bot.training.registry import ModelMetadata, Registry
 # into ``--notes`` so the resulting training run can be linked back
 # to its parent iterate cycle row.
 _ITER_CYCLE_RE = re.compile(r"\b(iter_\d+_cycle)\b")
+
+
+def _now_stamp() -> str:
+    """Compact UTC ISO-8601 timestamp suitable for embedding in
+    run_ids / filenames (no colons, no fractional seconds, trailing
+    ``Z``). Matches the format ``mtg_bot iterate`` uses for its own
+    launch IDs (:func:`mtg_bot.cli.iterate._now_stamp`)."""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _build_train_run_id(version_label: str, stamp: str) -> str:
+    """Compose the standalone-train run_id from a registry version
+    label + a UTC stamp.
+
+    The leading ``train_`` namespace plus the trailing timestamp keeps
+    each ``mtg_bot train`` invocation unique even when the same
+    registry version label is recycled (fresh checkout reusing
+    ``vN``, manual recovery train after a failed attempt, ...). See
+    ``feature/unique-train-run-id`` for the bug this resolves.
+    """
+    return f"train_{version_label}_{stamp}"
 
 
 def _parent_run_id_from_notes(notes: str) -> Optional[str]:
@@ -206,10 +228,15 @@ def main(argv=None) -> None:
         help=(
             "Where to write live per-epoch progress JSON for the "
             "training UI. Defaults to "
-            "<cwd>/training_progress/<version>.json where <version> "
-            "is the next registry version (peeked, not reserved). "
-            "Pass an explicit path to override; pass an empty string "
-            "to disable progress emission entirely."
+            "<cwd>/training_progress/train_<version>_<stamp>.json — "
+            "<version> is the next registry version (peeked, not "
+            "reserved) and <stamp> is a UTC compact-ISO start "
+            "timestamp (YYYYMMDDThhmmssZ) so two standalone trains "
+            "of the same version land in separate files. Pass an "
+            "explicit path to override; pass an empty string to "
+            "disable progress emission entirely. (Iterate threads its "
+            "own iter-namespaced --progress-path through, so this "
+            "default only governs standalone callers.)"
         ),
     )
     parser.add_argument(
@@ -520,10 +547,23 @@ def main(argv=None) -> None:
     # file no longer lands on disk for new runs.
     registry = Registry(args.registry_root)
     peeked_version = registry.next_version_id()
+    # The run_id salts the registry version label with the start
+    # timestamp so re-running ``mtg_bot train`` against the same
+    # version label (fresh checkout, manual recovery train, ...) lands
+    # a NEW ``runs.run_id`` row rather than colliding with the prior
+    # row's UNIQUE constraint. Iterate's subprocess-invoked train
+    # supplies its own iter-namespaced run_id via the parent lifecycle
+    # CM; this build only governs the standalone-train row.
+    train_run_id = _build_train_run_id(peeked_version, _now_stamp())
     if args.progress_path is None:
         progress_dir = Path("training_progress")
         progress_dir.mkdir(parents=True, exist_ok=True)
-        progress_path: Path | None = progress_dir / f"{peeked_version}.json"
+        # Default progress JSON tracks the run_id (not just the
+        # version label) so two concurrent / consecutive standalone
+        # trains of the same version land in separate files. Iterate's
+        # explicit ``--progress-path`` still wins via the elif/else
+        # branches below.
+        progress_path: Path | None = progress_dir / f"{train_run_id}.json"
     elif str(args.progress_path) == "":
         progress_path = None
     else:
@@ -575,7 +615,7 @@ def main(argv=None) -> None:
         ``current_epoch`` (mirrors how the JSON producer overloads
         the same column for training kind)."""
         _runs_client.push_progress(
-            peeked_version,
+            train_run_id,
             n_games_done=int(payload["epoch"]),
             n_games_total=int(payload["total_epochs"]),
             elapsed_seconds=float(payload["elapsed_seconds"]),
@@ -592,7 +632,7 @@ def main(argv=None) -> None:
             },
         )
         _runs_client.push_event(
-            peeked_version,
+            train_run_id,
             event_type="epoch_completed",
             payload={
                 "epoch": int(payload["epoch"]),
@@ -606,14 +646,18 @@ def main(argv=None) -> None:
         )
 
     # Train into a temp file, then hand off to the registry which
-    # copies the bytes into the versioned directory.
+    # copies the bytes into the versioned directory. The DB
+    # ``runs.label`` column carries the registry version label
+    # (e.g. ``v10``) so the UI can still group successive train
+    # attempts of the same version together; ``run_id`` is the unique
+    # timestamped form so the UNIQUE constraint never collides.
     with tempfile.TemporaryDirectory() as tmp, _lifecycle.run_lifecycle(
-        run_id=peeked_version,
+        run_id=train_run_id,
         kind="training",
         config=train_config,
         progress_json_path=progress_path,
         parent_run_id=parent_run_id,
-        label=args.notes or None,
+        label=peeked_version,
     ):
         tmp_weights = Path(tmp) / "weights.pt"
         started = time.perf_counter()
@@ -641,7 +685,7 @@ def main(argv=None) -> None:
             # a ``progress_json`` artifact via run_lifecycle for
             # historical compatibility.
             "progress_path": None,
-            "run_id": peeked_version,
+            "run_id": train_run_id,
             "notes": args.notes,
             "compile_model": args.compile_model,
             "hidden_sizes": hidden_sizes,
@@ -746,7 +790,7 @@ def main(argv=None) -> None:
         if history.val_losses:
             final_history["final_val_loss"] = history.val_losses[-1]
         _runs_client.push_progress(
-            peeked_version,
+            train_run_id,
             n_games_done=len(history.train_losses),
             n_games_total=args.epochs,
             elapsed_seconds=elapsed,
@@ -761,7 +805,7 @@ def main(argv=None) -> None:
         except OSError:
             weights_bytes = None
         _runs_client.push_artifact(
-            peeked_version,
+            train_run_id,
             artifact_type="weights",
             path=str(weights_path),
             bytes_=weights_bytes,
@@ -866,10 +910,15 @@ def _main_structured(args, parser) -> None:
 
     registry = Registry(args.registry_root)
     peeked_version = registry.next_version_id()
+    # Salt the run_id with the start timestamp so the standalone-train
+    # row is unique per invocation — see :func:`_build_train_run_id`'s
+    # docstring + the flat-feature ``main()`` block above for the
+    # ``run_id == label`` UNIQUE-collision bug this resolves.
+    train_run_id = _build_train_run_id(peeked_version, _now_stamp())
     if args.progress_path is None:
         progress_dir = Path("training_progress")
         progress_dir.mkdir(parents=True, exist_ok=True)
-        progress_path: Path | None = progress_dir / f"{peeked_version}.json"
+        progress_path: Path | None = progress_dir / f"{train_run_id}.json"
     elif str(args.progress_path) == "":
         progress_path = None
     else:
@@ -927,7 +976,7 @@ def _main_structured(args, parser) -> None:
 
     def _on_epoch(payload: dict) -> None:
         _runs_client.push_progress(
-            peeked_version,
+            train_run_id,
             n_games_done=int(payload["epoch"]),
             n_games_total=int(payload["total_epochs"]),
             elapsed_seconds=float(payload["elapsed_seconds"]),
@@ -945,7 +994,7 @@ def _main_structured(args, parser) -> None:
             },
         )
         _runs_client.push_event(
-            peeked_version,
+            train_run_id,
             event_type="epoch_completed",
             payload={
                 "epoch": int(payload["epoch"]),
@@ -959,12 +1008,12 @@ def _main_structured(args, parser) -> None:
         )
 
     with tempfile.TemporaryDirectory() as tmp, _lifecycle.run_lifecycle(
-        run_id=peeked_version,
+        run_id=train_run_id,
         kind="training",
         config=train_config,
         progress_json_path=progress_path,
         parent_run_id=parent_run_id,
-        label=args.notes or None,
+        label=peeked_version,
     ):
         tmp_weights = Path(tmp) / "weights.pt"
         started = time.perf_counter()
@@ -979,7 +1028,7 @@ def _main_structured(args, parser) -> None:
             device=device,
             rng_seed=args.seed,
             progress_path=progress_path,
-            run_id=peeked_version,
+            run_id=train_run_id,
             notes=args.notes,
             policy_loss_weight=args.policy_loss_weight,
             epoch_callback=_on_epoch,
@@ -1058,7 +1107,7 @@ def _main_structured(args, parser) -> None:
         if history.val_losses:
             final_history["final_val_loss"] = history.val_losses[-1]
         _runs_client.push_progress(
-            peeked_version,
+            train_run_id,
             n_games_done=len(history.train_losses),
             n_games_total=args.epochs,
             elapsed_seconds=elapsed,
@@ -1074,7 +1123,7 @@ def _main_structured(args, parser) -> None:
         except OSError:
             weights_bytes = None
         _runs_client.push_artifact(
-            peeked_version,
+            train_run_id,
             artifact_type="weights",
             path=str(weights_path),
             bytes_=weights_bytes,

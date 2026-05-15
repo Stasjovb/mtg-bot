@@ -117,8 +117,14 @@ def test_train_main_round_trips_start_progress_finish(
     assert row["kind"] == "training"
     assert row["status"] == "completed"
     assert row["git_commit"] == "abc1234"
-    # run_id should be the peeked version (v1 — empty registry).
-    assert row["run_id"] == "v1"
+    # run_id namespaces the registry version (``v1`` here — empty
+    # registry) with a UTC start-timestamp so re-running ``mtg_bot
+    # train`` against the same version label doesn't collide on the
+    # ``runs.run_id`` UNIQUE constraint. The DB's ``label`` column
+    # carries the bare version label for UI grouping.
+    assert row["run_id"].startswith("train_v1_")
+    assert row["run_id"].endswith("Z")
+    assert row["label"] == "v1"
     cfg = json.loads(row["config_json"])
     assert cfg["kind"] == "training"
     assert cfg["epochs"] == 3
@@ -773,11 +779,19 @@ def test_train_main_progress_path_disabled_branch(monkeypatch, tmp_path):
 
 def test_train_main_default_progress_path_branch(monkeypatch, tmp_path):
     """Without ``--progress-path``, the default ``training_progress/
-    <peeked>.json`` path is computed under cwd. Phase 3 cutover: the
-    JSON file is no longer written, but the parent directory
-    ``training_progress/`` is still created (idempotent mkdir) so the
-    artifact path-string registration sees a well-formed path.
+    train_<version>_<stamp>.json`` path is computed under cwd. Phase 3
+    cutover: the JSON file is no longer written, but the parent
+    directory ``training_progress/`` is still created (idempotent
+    mkdir) so the artifact path-string registration sees a
+    well-formed path.
+
+    Salting the default with the start timestamp lands each
+    standalone invocation in its own filename so consecutive trains
+    of the same version label don't clobber each other's per-epoch
+    JSON — the run_id-collision sibling fix.
     """
+    import re as _re
+
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     _write_synthetic_npz(data_dir, n=64, seed=27)
@@ -793,10 +807,17 @@ def test_train_main_default_progress_path_branch(monkeypatch, tmp_path):
         "--batch-size", "16",
         "--device", "cpu",
     ])
-    progress_file = cwd / "training_progress" / "v1.json"
-    # Parent dir created; file itself not written.
-    assert progress_file.parent.is_dir()
-    assert not progress_file.exists()
+    progress_dir = cwd / "training_progress"
+    # Parent dir created; file itself not written (Phase 3).
+    assert progress_dir.is_dir()
+    # No bare ``v1.json`` should appear — the default is now
+    # ``train_v1_<stamp>.json``. (And no actual JSON file lands.)
+    assert not (progress_dir / "v1.json").exists()
+    # The matching artifact row in runs.db (no DB configured here, so
+    # we just sanity-check the run_id format via the directory listing
+    # if anything ever lands).
+    for entry in progress_dir.iterdir():
+        assert _re.match(r"train_v1_\d{8}T\d{6}Z\.json", entry.name)
 
 
 def test_train_main_weights_stat_oserror_swallowed(
