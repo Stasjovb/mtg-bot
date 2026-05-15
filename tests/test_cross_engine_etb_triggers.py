@@ -10114,5 +10114,135 @@ def test_rust_parser_accepts_choose_one_mode_in_triggered_ability():
     assert pid == 0
 
 
+def test_bridge_destroy_enchanted_permanent_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 26 fresh discovery walk) --
+    DestroyEnchantedPermanent family. Rust ``{"kind":
+    "destroy_enchanted_permanent"}`` translates to Python
+    ``DestroyEnchantedPermanent()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3725-3727 (unit
+    variant; no fields). The bridge wires the same Python-side
+    primitive (``effects/generic/destroy.py:213``) as the mirror of
+    the Rust resolver.
+    """
+    from mtg_bot.effects.generic.destroy import DestroyEnchantedPermanent
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_enchanted_permanent"}
+    )
+    assert isinstance(e, DestroyEnchantedPermanent)
+
+
+def test_bridge_destroy_enchanted_permanent_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance. Extra dict fields
+    beyond ``kind`` are silently ignored (mirrors Rust's parse_effect
+    arm at cards.rs:3725-3727 which doesn't read additional keys).
+    Pins the silent-drop convention for unit variants used across
+    sister round-22/23/24/25/26 BLOCKED-BRIDGE-ARM unit-shape arms.
+    """
+    from mtg_bot.effects.generic.destroy import DestroyEnchantedPermanent
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "destroy_enchanted_permanent",
+            "this_extra_key_should_be_silently_ignored": "ignored",
+        }
+    )
+    assert isinstance(e, DestroyEnchantedPermanent)
+
+
+def test_bridge_destroy_enchanted_permanent_does_not_require_target():
+    """Bridge arm pin: ``requires_target() -> False`` -- the Aura-
+    host destruction is intrinsic to the variant (the host is read
+    from ``state.resolving_source.attached_to`` at resolve time, not
+    from the Decision targets tuple). Mirrors Python's class
+    contract at destroy.py:225-226 and Rust's resolve which also
+    reads the attached host without consulting any explicit target.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_enchanted_permanent"}
+    )
+    assert e.requires_target() is False
+
+
+def test_bridge_destroy_enchanted_permanent_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed ``DestroyEnchantedPermanent()``. Pins the
+    dataclass equality semantic for the unit-shape (no fields to
+    compare; identity reduces to the type).
+    """
+    from mtg_bot.effects.generic.destroy import DestroyEnchantedPermanent
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_enchanted_permanent"}
+    )
+    assert e == DestroyEnchantedPermanent()
+
+
+def test_bridge_destroy_enchanted_permanent_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DestroyEnchantedPermanent(), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    this arm against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.destroy import DestroyEnchantedPermanent
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "destroy_enchanted_permanent"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DestroyEnchantedPermanent)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_destroy_enchanted_permanent_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "destroy_enchanted_permanent"}`` on a
+    triggered_ability carrier (the canonical Cryoshatter-shape
+    Aura-trigger pattern). The bridge dict shape must register
+    cleanly on Rust too; this lockstep gate keeps the bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3725-3727`` accepts
+    the bare ``kind``-only unit-variant dict.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- "
+            "DestroyEnchantedPermanent"
+        ),
+        "card_types": ["Enchantment"],
+        "subtypes": ["Aura"],
+        "mana_cost": {"U": 1, "generic": 1},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "destroy_enchanted_permanent"},
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
