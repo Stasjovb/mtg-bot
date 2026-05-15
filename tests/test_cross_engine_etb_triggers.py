@@ -10445,5 +10445,157 @@ def test_rust_parser_accepts_grant_keyword_to_target_creature_ueot_in_triggered_
     assert pid == 0
 
 
+def test_bridge_destroy_target_land_basic_translation():
+    """BLOCKED-BRIDGE-ARM slice (round 27 fresh discovery walk) --
+    DestroyTargetLand family. Rust ``{"kind":
+    "destroy_target_land"}`` translates to Python
+    ``DestroyTargetLand()``.
+
+    Mirrors Rust's parse_effect arm at cards.rs:3526-3533 (unit
+    variant; no fields). The bridge wires the same Python-side
+    primitive (``effects/generic/destroy.py:DestroyTargetLand``) as
+    the mirror of the Rust resolver at state_ops_resolve.rs:4112.
+    """
+    from mtg_bot.effects.generic.destroy import DestroyTargetLand
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_land"}
+    )
+    assert isinstance(e, DestroyTargetLand)
+
+
+def test_bridge_destroy_target_land_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance. Extra dict fields
+    beyond ``kind`` are silently ignored (mirrors Rust's parse_effect
+    arm at cards.rs:3526-3533 which doesn't read additional keys).
+    Pins the silent-drop convention for unit variants used across
+    sister round-22/23/24/25/26/27 BLOCKED-BRIDGE-ARM unit-shape arms.
+    """
+    from mtg_bot.effects.generic.destroy import DestroyTargetLand
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "destroy_target_land",
+            "this_extra_key_should_be_silently_ignored": "ignored",
+        }
+    )
+    assert isinstance(e, DestroyTargetLand)
+
+
+def test_bridge_destroy_target_land_nonbasic_only_defaults_false():
+    """Bridge arm pin: ``nonbasic_only=False`` schema-narrowness
+    default. Rust's substrate covers ONLY the bare "destroy target
+    land" variant (no nonbasic-only field on the Rust side); the
+    bridge constructs Python with ``nonbasic_only=False`` (the
+    default) to mirror Rust's coverage. Pins the schema-narrowness
+    convention -- nonbasic-only-with-Rust-substrate would need a
+    Rust schema bump first (sister-arm convention -- see round-27
+    grant_keyword_to_target_creature_until_eot's exclude_self=False
+    default and round-26 destroy_enchanted_permanent's no-extras
+    default).
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_land"}
+    )
+    assert e.nonbasic_only is False
+
+
+def test_bridge_destroy_target_land_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed ``DestroyTargetLand()``. Pins the
+    dataclass equality semantic for the bare-shape (only the
+    ``nonbasic_only`` field present, defaulted to False).
+    """
+    from mtg_bot.effects.generic.destroy import DestroyTargetLand
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_land"}
+    )
+    assert e == DestroyTargetLand()
+
+
+def test_bridge_destroy_target_land_target_filter_is_land():
+    """Bridge arm pin: the ``targets`` tuple constructed by
+    ``DestroyTargetLand.__post_init__`` carries an ``IsLand()``
+    predicate (the bare lane -- no ``& ~IsBasic()`` rider). Pins
+    the predicate-construction shape against accidental drift to
+    the nonbasic-only filter; the unified ``Destroy.resolve``
+    re-verifies this filter at resolution per CR 608.2b.
+    """
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_land"}
+    )
+    assert len(e.targets) == 1
+    # The bare form's filter is exactly ``IsLand()`` (no compound).
+    assert e.targets[0].filter == IsLand()
+
+
+def test_bridge_destroy_target_land_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DestroyTargetLand(), DrawCards(1)])`` translates
+    correctly via the recursive Sequence translator. Pins this arm
+    against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.destroy import DestroyTargetLand
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "destroy_target_land"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DestroyTargetLand)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_destroy_target_land_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "destroy_target_land"}`` on a triggered_ability
+    carrier. The bridge dict shape must register cleanly on Rust too;
+    this lockstep gate keeps the bridge from drifting away from
+    Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3526-3533`` accepts
+    the unit-variant dict (no fields).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- DestroyTargetLand"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"R": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "destroy_target_land"},
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
