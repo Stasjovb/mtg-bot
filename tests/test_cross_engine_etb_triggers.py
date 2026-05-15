@@ -12828,5 +12828,235 @@ def test_rust_parser_accepts_put_plus_one_counters_on_self_per_other_creature_or
     assert pid == 0
 
 
+def test_bridge_surveil_x_equal_to_artifact_count_basic_translation():
+    """BLOCKED-RUST-EFFECT slice (round 34) -- surveil X, where X is
+    the source-controller's artifact count. Rust
+    ``{"kind": "surveil_x_equal_to_artifact_count"}`` translates to
+    Python ``Surveil(use_artifact_count=True)`` (NOT bare
+    ``Surveil(amount=N)`` -- the whole point of the variant is the
+    dynamic-X lane).
+
+    Mirrors Rust's parse_effect arm (added in this slice immediately
+    after the round-33
+    put_plus_one_counters_on_self_per_other_creature_or_artifact
+    arm; unit variant; no fields). Pin verifies the bare-shape
+    translation for the round-34 dynamic-X-from-artifact-count
+    Effect arm (Cerebral Download's cast-spell carrier).
+    """
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "surveil_x_equal_to_artifact_count"}
+    )
+    assert isinstance(e, Surveil)
+    assert e.use_artifact_count is True
+
+
+def test_bridge_surveil_x_equal_to_artifact_count_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    the unit-variant precedent (round-32 / round-33 dynamic-X
+    primitives) -- unrecognized fields in the dict are ignored, not
+    raised. Notably, a ``count`` or ``amount`` key (which the sister
+    bare ``surveil`` arm DOES consume into Surveil.amount) is silently
+    dropped here -- the dynamic-X is the whole point of this variant,
+    not a static amount, and Python's class ignores ``amount`` when
+    use_artifact_count is True.
+    """
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "surveil_x_equal_to_artifact_count",
+            "spurious_field": "ignored",
+            # ``count`` would be consumed by the sister bare
+            # ``surveil`` arm into Surveil.amount; here it's silently
+            # dropped -- the count is dynamic from artifact count.
+            "count": 99,
+            "amount": 99,
+        }
+    )
+    assert isinstance(e, Surveil)
+    assert e.use_artifact_count is True
+
+
+def test_bridge_surveil_x_equal_to_artifact_count_equality_default_constructor():
+    """Bridge arm pin: bridge-translated and direct-constructed
+    ``Surveil(use_artifact_count=True)`` instances are equal under
+    dataclass(frozen=True) default __eq__ semantics. Pins the
+    frozen-dataclass equality contract for downstream hash-based
+    keying (e.g. de-dup in Sequence composers, where the same
+    SurveilXEqualToArtifactCount may appear twice).
+    """
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {"kind": "surveil_x_equal_to_artifact_count"}
+    )
+    e2 = Surveil(use_artifact_count=True)
+    assert e1 == e2
+
+
+def test_bridge_surveil_x_equal_to_artifact_count_distinct_from_bare_surveil():
+    """Bridge arm pin: the dynamic-X variant is NOT equal to bare
+    Surveil(amount=N). Catches accidental bridge-arm collapse
+    (e.g. someone "simplifying" the arm to return Surveil(amount=1)
+    would silently drop the dynamic-X dispatch). Both shapes share
+    the same dataclass; equality must distinguish on the
+    use_artifact_count flag.
+    """
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    dynamic = _ta_dict_to_python_effect(
+        {"kind": "surveil_x_equal_to_artifact_count"}
+    )
+    bare_one = Surveil(amount=1)
+    bare_three = Surveil(amount=3)
+    assert dynamic != bare_one
+    assert dynamic != bare_three
+    # And equal to itself:
+    assert dynamic == Surveil(use_artifact_count=True)
+
+
+def test_bridge_surveil_x_equal_to_artifact_count_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([SurveilXEqualToArtifactCount(), DrawCards(3)])`` --
+    the actual Cerebral Download oracle shape -- translates correctly
+    via the recursive Sequence translator. Pins the round-34 arm
+    against accidental dispatch loss inside Sequence (mirrors the
+    round-32 by-artifact-count / round-33 counters-per-other Sequence-
+    composability pins) AND models Cerebral Download's printed
+    cast-spell effect bit-for-bit (surveil-X then draw-3).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "surveil_x_equal_to_artifact_count"},
+                {"kind": "draw_cards", "count": 3},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], Surveil)
+    assert e.effects[0].use_artifact_count is True
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_surveil_x_equal_to_artifact_count_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "surveil_x_equal_to_artifact_count"}`` on a
+    triggered_ability carrier. Cerebral Download's actual real-card
+    consumer is a cast-spell carrier (Instant), but the parse_effect
+    arm dispatches both carriers identically -- registering through
+    a triggered_abilities carrier exercises the parse_effect arm
+    without needing a cast-effects carrier here. Pinning against
+    the trigger carrier keeps the Python bridge from drifting away
+    from Rust's parse_effect coverage.
+
+    Mirrors Rust's parse_effect arm added in this slice immediately
+    after the round-33
+    put_plus_one_counters_on_self_per_other_creature_or_artifact
+    arm.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- SurveilXEqualToArtifactCount",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"U": 1, "generic": 2},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "surveil_x_equal_to_artifact_count"
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_rejects_surveil_x_equal_to_artifact_count_with_typo():
+    """Negative lockstep pin: a misspelled kind (e.g.
+    ``surveil_x_equal_to_artifacts_count`` -- plural "artifacts" vs
+    singular "artifact") surfaces as ValueError on Rust's parse_effect
+    arm because the new variant isn't registered for that spelling.
+    Pin against accidental schema drift between bridge dict shape
+    and Rust parser's accepted-kinds set.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- typo lockstep",
+        "card_types": ["Creature"],
+        "mana_cost": {"U": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    # Misspelled -- plural "artifacts" instead of singular.
+                    "kind": "surveil_x_equal_to_artifacts_count"
+                },
+            }
+        ],
+    }
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown effect kind"):
+        reg.register_printing(d)
+
+
+def test_rust_parser_accepts_surveil_x_equal_to_artifact_count_in_cast_effects():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "surveil_x_equal_to_artifact_count"}`` on a
+    cast-spell ``effects`` carrier. Cerebral Download's REAL real-EoE
+    consumer is a cast-spell shape (Instant whose cast effect is a
+    Sequence: surveil-X then draw 3) -- this carrier is the actual
+    deployment shape, NOT the synthetic triggered_ability sister pin.
+    Sister of the triggered_ability-carrier lockstep pin -- the same
+    parse_effect arm dispatches both carriers, so any drift surfaces
+    on either pin. Mirrors the round-25/26/27/30/31/32/33 cast-spell
+    vs trigger lockstep convention.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- SurveilXEqualToArtifactCount (Instant)",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1, "generic": 2},
+        "effects": [
+            {
+                "kind": "sequence",
+                "effects": [
+                    {"kind": "surveil_x_equal_to_artifact_count"},
+                    {"kind": "draw_cards", "count": 3},
+                ],
+            },
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

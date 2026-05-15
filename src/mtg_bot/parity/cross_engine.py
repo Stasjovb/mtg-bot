@@ -6464,6 +6464,85 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact,
         )
         return PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact()
+    if kind == "surveil_x_equal_to_artifact_count":
+        # BLOCKED-RUST-EFFECT slice (round 34) -- surveil X, where X
+        # is the number of artifacts the source's controller controls.
+        # Rust's ``Effect::SurveilXEqualToArtifactCount`` (cards.rs
+        # unit variant added in this slice; parse arm immediately
+        # after the round-33
+        # put_plus_one_counters_on_self_per_other_creature_or_artifact
+        # arm, to_dict immediately after the round-33
+        # PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact arm,
+        # resolve at state_ops_resolve.rs immediately after the
+        # round-33 resolve arm) mirrors Python's
+        # ``Surveil(use_artifact_count=True)``
+        # (effects/generic/library_lookat.py:569 -- Cerebral
+        # Download's 'Surveil X, where X is the number of artifacts
+        # you control' clause, 1 EoE consumer). Rust substrate landed
+        # end-to-end IN this slice; the bridge translator wires the
+        # cross-engine round trip.
+        #
+        # **Field-shape divergence (Rust unit variant -> Python
+        # class with use_artifact_count=True flag).** Rust's variant
+        # is a unit variant on the dispatch tag (the dynamic-X is
+        # the whole point -- the count is computed at resolve time,
+        # not stored on the variant). Python's class HAS fields
+        # (``amount: int = 1`` and ``use_artifact_count: bool =
+        # False``) but the dynamic-X variant is selected at
+        # construct time by ``use_artifact_count=True``; the
+        # ``amount`` field is ignored on the dynamic lane. The
+        # bridge constructs ``Surveil(use_artifact_count=True)``
+        # with the default ``amount=1`` (which the resolve path
+        # ignores when use_artifact_count is True); any ``count`` /
+        # ``amount`` field on the dict is silently dropped (mirrors
+        # round-32 / round-33 extra-key tolerance).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # tries the I61 transient slot
+        # (current_resolve_source_controller) first then 5-zone +
+        # stack scan fallback for the source-controller; counts that
+        # controller's bf permanents whose printing's card_types
+        # contains 'Artifact' via the round-32 counting denominator
+        # BIT-FOR-BIT (saturating_add overflow guard); pops
+        # min(artifact_count, library_len) cards off the controller's
+        # library top into a SurveilChoice PendingDecision --
+        # IDENTICAL post-pop state shape to round-15 Effect::Surveil
+        # at state_ops_resolve.rs:2692. Python's Surveil resolve at
+        # library_lookat.py:591 reads use_artifact_count, recomputes
+        # amount from the controller's bf artifact count via the same
+        # ``sum(1 for o in state.battlefield if o.controller_id ==
+        # controller_id and o.printing.is_artifact)`` shape (same
+        # denominator), then walks the top N cards in order calling
+        # ``agent.choose_surveil`` for each. Both engines converge on
+        # the same N for any synthetic harness with deterministic bf
+        # contents.
+        #
+        # **Cross-engine default-strategy contract.** Mirrors round-15
+        # Effect::Surveil exactly: Both engines' no-decision defaults
+        # agree -- every observed card stays on the library in its
+        # original order, NO cards mill. On the Rust side this is the
+        # auto-resolve "keep_all_on_top" strategy; on the Python side
+        # this is the ``p.agent is None`` short-circuit at
+        # library_lookat.py:605. Probes that don't seat a custom agent
+        # observe the SAME post-resolve library top + graveyard
+        # contents on both engines.
+        #
+        # **Fizzle parity.** Both engines silently produce a 0-card
+        # surveil when the source-controller has zero artifacts on
+        # bf -- Python's _amount returns 0 and the resolve loop is a
+        # no-op; Rust pushes an empty SurveilChoice so auto-resolve
+        # discards it in O(1).
+        #
+        # **No real-EoE end-to-end probe in this slice.** Cerebral
+        # Download is an INSTANT whose effect is a Sequence:
+        # Surveil(use_artifact_count=True) then DrawCards(3). Driving
+        # a real-EoE end-to-end Cerebral Download cast through both
+        # engines requires the cast-spell driver harness to seat both
+        # effect resolutions in the same parity probe -- follow-up
+        # slice. Synthetic regression pin (per the round-17/30/31/32/
+        # 33 precedent) documents the bridge plumbing.
+        from mtg_bot.effects.generic.library_lookat import Surveil
+        return Surveil(use_artifact_count=True)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
