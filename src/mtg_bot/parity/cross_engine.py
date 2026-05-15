@@ -4590,6 +4590,58 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 "at cards.rs:3449-3452)"
             )
         return LoseLife(amount=amount)
+    if kind == "untap_target_other_permanent":
+        # **Round-24 BLOCKED-BRIDGE-ARM slice -- "untap another target
+        # permanent" (UntapTargetOtherPermanent family, Nanoform-
+        # Sentinel-shape).** Rust substrate
+        # ``Effect::UntapTargetOtherPermanent`` (cards.rs:1808; unit
+        # variant; parser at cards.rs:3832-3833, resolve at
+        # state_ops_resolve.rs:7022-7054, to_dict at cards.rs:5694-
+        # 5695) shipped via round 28 (Nanoform-Sentinel "untap another
+        # target permanent" trigger pattern). This slice closes the
+        # cross-engine bridge gap. Discovered by the round-22 fresh
+        # discovery walk (Rust kind emitted by to_dict but no matching
+        # ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors Rust's
+        # parse_effect arm at cards.rs:3832-3833 -- silent-drop
+        # convention for unrecognized keys (extra dict fields are
+        # ignored). Python's ``UntapTargetOtherPermanent``
+        # (``effects/generic/tap.py:408-449``) is a frozen dataclass
+        # with no fields; the bridge constructs it bare.
+        #
+        # **Resolve semantics (parity-relevant).** Rust's resolve at
+        # state_ops_resolve.rs:7022-7054 walks BOTH players'
+        # battlefields in ETB-timestamp order via
+        # ``crate::bf_iter::bf_iter_etb_sorted`` (CE7 closure) and
+        # picks the FIRST permanent whose ``id != source_obj_id`` AND
+        # ``tapped == true``. Python's class at
+        # ``effects/generic/tap.py:418-427`` filters
+        # ``state.battlefield`` to objects where
+        # ``o.id != source_id and o.tapped`` (the ``state.battlefield``
+        # walk is the same centralized ETB-ordered view). Already-
+        # untapped targets are not eligible (filtered at legal-targets
+        # time on Python; not reached on Rust because the picker only
+        # selects ``tapped`` ones). No eligible target = silent fizzle
+        # on both engines.
+        #
+        # **Distinct from sister arms.** Distinct from sister
+        # ``untap_target`` (round 23, filter-narrow ``any_creature``;
+        # this arm is ``any_permanent_other_than_source`` -- artifacts
+        # / lands / enchantments are eligible too). Both are unit-
+        # filter-by-design: ``untap_target`` raises on ``any_player``
+        # at parse time, this arm has no filter parameter at all.
+        #
+        # **Real EoE consumers** unblocked: 1+ EoE oracle hit via
+        # scan -- "Whenever this creature becomes tapped, untap
+        # another target permanent..." (Nanoform-Sentinel-shape
+        # tapped-trigger). Cross-engine end-to-end probe deferred per
+        # round-17/18/19 synthetic-only-when-riders-cascade precedent
+        # (the becomes-tapped trigger event-firing path + the
+        # targeting Decision pipeline are their own surfaces beyond
+        # the bare bridge-arm slice).
+        from mtg_bot.effects.generic.tap import UntapTargetOtherPermanent
+        return UntapTargetOtherPermanent()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
