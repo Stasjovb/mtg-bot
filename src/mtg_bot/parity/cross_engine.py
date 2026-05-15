@@ -5572,6 +5572,65 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ReturnAllCreaturesFromYourGraveyardToBattlefield,
         )
         return ReturnAllCreaturesFromYourGraveyardToBattlefield()
+    if kind == "manifest_dread":
+        # **Round-27 BLOCKED-BRIDGE-ARM slice -- "manifest dread"
+        # (ManifestDread family, the bare untargeted look-2-pick-1-
+        # face-down-1-graveyard primitive from CR 701.55).** Rust
+        # substrate ``Effect::ManifestDread { count: i32 }`` (cards.rs;
+        # parser at cards.rs:3841-3862, to_dict at cards.rs:5708-5711)
+        # was already on main; bridge arm was the staleness gap
+        # (round-22 fresh discovery walk -- to_dict-emitted kind with
+        # no matching translator).
+        #
+        # **Field shape (single int with default).** Rust's parse_effect
+        # arm at cards.rs:3841-3862 takes optional ``count`` field
+        # defaulting to 1 (mirrors Python's ``ManifestDread(count: int
+        # = 1)`` default-arg shape). Negative count surfaces at parse
+        # time as PyValueError on Rust; the bridge mirrors via
+        # ValueError on negative ``count``. Missing ``count`` is
+        # tolerated as default-1 on both engines (Awakening Hall's bare
+        # "Manifest dread" oracle uses no count field; Valgavoth's
+        # Onslaught-shape "Manifest dread X times" passes the X-value
+        # through state.resolving_x_value at resolve time, again via
+        # the default-1 dict shape with the X-value handled at the
+        # GameState layer rather than the Effect dict). The
+        # ``count != 1`` lane is parse-tolerated (so dict round-trip
+        # works) but resolve-time-deferred on Rust with a clear error
+        # so a typo doesn't silently no-op (cards.rs:3845-3847 comment).
+        #
+        # **Sister of manifest_dread_then_attach_self / manifest_dread_then_put_plus_one_counters_on_it.**
+        # Same count-defaulting-to-1 schema, same look-2-then-manifest-
+        # 1-and-graveyard-1 mechanic from CR 701.55 + CR 701.34. The
+        # sister arms layer additional post-manifest steps (attach-
+        # source-Equipment, +1/+1-counter add) that this bare arm
+        # lacks. The bridge folds the bare variant into Python's
+        # ``ManifestDread(count=count)`` directly.
+        #
+        # **EoE consumer note.** No EoE oracle hits today (manifest
+        # dread is a Duskmourn-block mechanic; EoE has no manifest-
+        # dread cards). Slice ships per round-27 round-trip-surface-
+        # coverage rule (each bridge arm is load-bearing for the
+        # to_dict round-trip even without EoE consumers; the bridge
+        # surface is the contract, not the EoE-oracle-only filter).
+        # Cross-engine end-to-end probe deferred per round-17/18/19
+        # synthetic-only-when-riders-cascade precedent (the
+        # choose_card_from_library agent hook + the put_into_battlefield
+        # face-down ETB-trigger fan-out + the count != 1 deferred-error
+        # gate are their own surfaces beyond the bare bridge-arm slice).
+        from mtg_bot.effects.generic.library_lookat import ManifestDread
+
+        count = eff_dict.get("count", 1)
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ValueError(
+                f"manifest_dread bridge arm: 'count' must be an integer, "
+                f"got {count!r} (type {type(count).__name__})"
+            )
+        if count < 0:
+            raise ValueError(
+                f"manifest_dread bridge arm: 'count' must be non-negative, "
+                f"got {count} (mirroring Rust parser at cards.rs:3856-3860)"
+            )
+        return ManifestDread(count=count)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

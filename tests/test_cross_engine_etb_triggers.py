@@ -10762,5 +10762,191 @@ def test_rust_parser_accepts_return_all_creatures_from_gy_in_triggered_ability()
     assert pid == 0
 
 
+def test_bridge_manifest_dread_basic_translation_default_count():
+    """BLOCKED-BRIDGE-ARM slice (round 27 fresh discovery walk) --
+    ManifestDread family. Rust ``{"kind": "manifest_dread"}`` (no
+    ``count`` field) translates to Python ``ManifestDread(count=1)``
+    (the default-count case for bare "Manifest dread" oracle text).
+
+    Mirrors Rust's parse_effect arm at cards.rs:3841-3862 which
+    accepts the optional ``count`` defaulting to 1. The bridge wires
+    the same Python-side primitive
+    (``effects/generic/library_lookat.py:ManifestDread``).
+    """
+    from mtg_bot.effects.generic.library_lookat import ManifestDread
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "manifest_dread"})
+    assert isinstance(e, ManifestDread)
+    assert e.count == 1
+
+
+def test_bridge_manifest_dread_explicit_count_one():
+    """Bridge arm pin: explicit ``count=1`` translates identically
+    to the missing-count default-1 case. Pins the dict-shape round-
+    trip equivalence (bare oracle vs explicit-count emitters both
+    land on the same Python instance).
+    """
+    from mtg_bot.effects.generic.library_lookat import ManifestDread
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "manifest_dread", "count": 1}
+    )
+    assert isinstance(e, ManifestDread)
+    assert e.count == 1
+    assert e == ManifestDread(count=1)
+
+
+def test_bridge_manifest_dread_count_two():
+    """Bridge arm pin: ``count=2`` translates to ``ManifestDread(count=2)``
+    -- the "Manifest dread twice" oracle shape. Pins the count-pass-
+    through against accidental clamping. Note: the count != 1 lane
+    is parse-tolerated (so dict round-trip works) but resolve-time-
+    deferred on Rust per cards.rs:3845-3847; this test exercises only
+    the parse/dict-translation surface.
+    """
+    from mtg_bot.effects.generic.library_lookat import ManifestDread
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "manifest_dread", "count": 2}
+    )
+    assert isinstance(e, ManifestDread)
+    assert e.count == 2
+
+
+def test_bridge_manifest_dread_negative_count_raises():
+    """Bridge arm pin: negative ``count`` raises ValueError, mirroring
+    Rust's parse_effect at cards.rs:3856-3860. Pins the non-negative
+    contract on both engines.
+    """
+    import pytest
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="non-negative"):
+        _ta_dict_to_python_effect(
+            {"kind": "manifest_dread", "count": -1}
+        )
+
+
+def test_bridge_manifest_dread_non_integer_count_raises():
+    """Bridge arm pin: non-integer ``count`` raises ValueError. Rust
+    extracts via ``c.extract::<i32>()`` which rejects non-int; the
+    bridge mirrors via explicit isinstance check (and rejects bool
+    explicitly since bool is an int subclass in Python but not a
+    legal count).
+    """
+    import pytest
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    with pytest.raises(ValueError, match="must be an integer"):
+        _ta_dict_to_python_effect(
+            {"kind": "manifest_dread", "count": "two"}
+        )
+
+
+def test_bridge_manifest_dread_does_not_require_target():
+    """Bridge arm pin: ``requires_target() -> False`` -- manifest
+    dread is intrinsically untargeted (the controller's library top-
+    two cards are examined at resolve time via
+    ``choose_card_from_library``, not consulted via Decision targets).
+    Mirrors Rust's resolve which reads the controller's library
+    without consulting any explicit target.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "manifest_dread"})
+    assert e.requires_target() is False
+
+
+def test_bridge_manifest_dread_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([ManifestDread(), DrawCards(1)])`` translates
+    correctly via the recursive Sequence translator. Pins this arm
+    against accidental dispatch loss inside Sequence.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.library_lookat import ManifestDread
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "manifest_dread"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], ManifestDread)
+    assert e.effects[0].count == 1
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_manifest_dread_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "manifest_dread"}`` (default count) on a
+    triggered_ability carrier. The bridge dict shape must register
+    cleanly on Rust too; this lockstep gate keeps the bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Rust's parse_effect arm at ``rust/src/cards.rs:3841-3862`` accepts
+    the struct-variant dict with optional count: i32 (defaults to 1).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-BRIDGE-ARM Bridge Pin -- ManifestDread",
+        "card_types": ["Creature"],
+        "mana_cost": {"B": 1, "generic": 2},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "manifest_dread"},
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_accepts_manifest_dread_with_explicit_count():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "manifest_dread", "count": 2}`` on a
+    triggered_ability carrier. Pins the explicit-count register-on-
+    Rust path against accidental schema drift (the count != 1 lane
+    is parse-tolerated even though resolve defers).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": (
+            "BLOCKED-BRIDGE-ARM Bridge Pin -- ManifestDread (count=2)"
+        ),
+        "card_types": ["Creature"],
+        "mana_cost": {"B": 1, "generic": 3},
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "manifest_dread", "count": 2},
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
