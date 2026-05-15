@@ -4887,6 +4887,60 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return PutChargeCountersOnSelf(
             amount=amount, amount_from_x=amount_from_x
         )
+    if kind == "draw_cards_equal_to_resolving_combat_damage":
+        # **Round-26 BLOCKED-BRIDGE-ARM slice -- "you may draw that many
+        # cards" combat-damage trigger family
+        # (DrawCardsEqualToResolvingCombatDamage; Starwinder /
+        # Anticausal-Vestige / Fear-of-Failed-Tests shape).** Rust
+        # substrate ``Effect::DrawCardsEqualToResolvingCombatDamage``
+        # (cards.rs unit variant; parser at cards.rs:4545-4551, resolve
+        # reads ``state.resolving_combat_damage_amount``, to_dict at
+        # cards.rs) shipped via round 28 freq-2 closure. This slice
+        # closes the cross-engine bridge gap. Discovered by the round-22
+        # fresh discovery walk (Rust kind emitted by to_dict but no
+        # matching ``_ta_dict_to_python_effect`` arm).
+        #
+        # **Unit variant.** No fields beyond ``kind``. Mirrors Rust's
+        # parse_effect arm at cards.rs:4545-4551 -- silent-drop
+        # convention for unrecognized keys (extra dict fields are
+        # ignored). Python's
+        # ``DrawCardsEqualToResolvingCombatDamage``
+        # (``effects/generic/draw_mill.py:88-115``) is a frozen
+        # dataclass with no fields; the bridge constructs it bare.
+        #
+        # **Resolve semantics (parity-relevant).** Both engines read
+        # ``state.resolving_combat_damage_amount`` at resolve time --
+        # the implicit "that many" carrier value pushed by the combat
+        # damage event handler before firing the trigger. Python's
+        # class at draw_mill.py:100-112 calls ``draw_n_cards(state,
+        # controller_id, amount)`` and no-ops when amount <= 0
+        # (defensive against accidental invocation outside a combat
+        # damage trigger). Rust's resolve mirrors the same read +
+        # bounded draw semantics. The "may" in oracle text is
+        # simplified to always-yes per the OptionalXyz precedent
+        # documented on the Python class docstring.
+        #
+        # **Distinct from sister arms.** Distinct from ``draw_cards``
+        # (which carries an explicit ``count`` field; this arm reads
+        # the carrier-pushed combat damage scalar at resolve time
+        # instead -- no field needed because the value is implicit in
+        # the resolution context).
+        #
+        # **Real EoE consumers** unblocked: 25 EoE oracle hits via
+        # scan -- Anticausal Vestige ("Whenever this creature deals
+        # combat damage to a player, you may draw that many cards"),
+        # Dual-Sun Technique, Haliya Guided by Light, and 22 other
+        # cards using the "deals combat damage to a player" combat-
+        # damage-trigger pattern with a "may draw that many cards"
+        # rider. Cross-engine end-to-end probe deferred per round-
+        # 17/18/19 synthetic-only-when-riders-cascade precedent (the
+        # combat-damage event firing path + the
+        # resolving_combat_damage_amount carrier scalar are their own
+        # surfaces beyond the bare bridge-arm slice).
+        from mtg_bot.effects.generic.draw_mill import (
+            DrawCardsEqualToResolvingCombatDamage,
+        )
+        return DrawCardsEqualToResolvingCombatDamage()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
