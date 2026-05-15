@@ -6,6 +6,13 @@ requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0",
     "numpy>=1.26",
+    # ``mtg_bot.worker_daemon`` reads system-wide CPU / memory / load
+    # for its /v2/heartbeat payload. ``pynvml`` (for the optional
+    # GPU metrics) is NOT declared here — it's try-imported at
+    # runtime so the daemon stays installable on CPU-only hosts
+    # (Mac, headless CI). On NVIDIA hosts, install it manually:
+    #   pip install nvidia-ml-py
+    "psutil>=5.9",
     # CPU-only torch is enough for Phase C scaffolding (network
     # architecture + load/save + single-state inference). For
     # training on a Blackwell GPU (RTX 50-series, sm_120), install
