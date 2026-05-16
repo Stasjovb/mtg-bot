@@ -743,6 +743,14 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - argparse
                 weights_cache_root=cfg.weights_root,
                 worker_id=cfg.worker_id,
                 deck_pool_path=cfg.deck_pool_path,
+                # Phase 2: real multi-core concurrency via N subprocesses.
+                # Without this every claim-loop thread serializes on the
+                # Python GIL during MCTS / game-state work and the
+                # daemon plays effectively one game at a time regardless
+                # of ``--n-workers`` (measured on iter_007 smoke
+                # 2026-05-15: 35 games / 28 slots / 10 min, ~3 games/min
+                # cluster-wide).
+                use_subprocess_pool=True,
             )
         if kind == "eval":
             return _prod.build_eval_runner(
@@ -752,6 +760,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - argparse
                 weights_cache_root=cfg.weights_root,
                 worker_id=cfg.worker_id,
                 deck_pool_path=cfg.deck_pool_path,
+                use_subprocess_pool=True,
             )
         raise ValueError(f"unknown runner kind: {kind!r}")
 
