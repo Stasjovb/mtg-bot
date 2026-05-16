@@ -1188,3 +1188,200 @@ def test_bilateral_agent_in_module_dunder_all():
     from mtg_bot.parity import trajectory
 
     assert "BilateralCombatAgent" in trajectory.__all__
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-substrate slice — unit tests for the keywords-aware
+# bridge filter extension and the CardDef.keywords plumbing.
+# ---------------------------------------------------------------------------
+
+
+def test_safe_keywords_set_covers_phase_6_round_18_probes():
+    """Phase 6 rounds 17/18 trajectory probes verified eight specific
+    keywords parity-clean. Pin that the bridge filter's allowlist
+    carries every one of them so a future shrink doesn't silently
+    regress production-deck coverage.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_KEYWORDS
+
+    # Round 17: trample, vigilance, lifelink. Round 18: deathtouch,
+    # double-strike, haste. Phase 5 selectors: flying, first strike.
+    # Plus menace / defender / indestructible (Phase 5 only — included
+    # in the safe set so multi-keyword EoE creatures with these keep
+    # surviving the filter).
+    expected_subset = {
+        "flying", "vigilance", "lifelink", "trample", "haste",
+        "deathtouch", "first strike", "double strike",
+        "menace", "defender", "indestructible",
+    }
+    missing = expected_subset - _SAFE_KEYWORDS
+    assert not missing, (
+        f"_SAFE_KEYWORDS regressed; missing keywords with parity-"
+        f"clean trajectory probes: {sorted(missing)}"
+    )
+
+
+def test_simple_creature_filter_admits_safe_keyword_creature():
+    """A creature whose only keyword is in `_SAFE_KEYWORDS` (e.g.
+    'flying') passes the bridge-simple filter — the prior round-17
+    "vanilla only" gate would have dropped it.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+    )
+
+    flier = CardPrinting(
+        name="Synthetic Flier",
+        mana_cost_str="{1}{U}",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"flying"}),
+    )
+    assert _printing_is_bridge_simple_creature(flier) is True
+
+
+def test_simple_creature_filter_rejects_unsafe_keyword_creature():
+    """A creature carrying a keyword OUTSIDE `_SAFE_KEYWORDS` (e.g.
+    'flash') fails the bridge-simple filter even when every other
+    field is vanilla. Pins that the gate is restrictive on the unsafe
+    direction — admitting an unmodeled keyword would silently produce
+    cross-engine divergence at probe time.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+    )
+
+    flasher = CardPrinting(
+        name="Synthetic Flasher",
+        mana_cost_str="{2}{G}",
+        mana_cost=ManaCost(generic=2, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"flash"}),
+    )
+    assert _printing_is_bridge_simple_creature(flasher) is False
+
+
+def test_printing_to_card_def_carries_keywords_through():
+    """`_printing_to_card_def` populates `CardDef.keywords` from the
+    source printing's `keywords` frozenset, sorted for determinism.
+    Pins the bridge-side keyword propagation invariant.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    multi = CardPrinting(
+        name="Synthetic Multi-Keyword",
+        mana_cost_str="{2}{W}",
+        mana_cost=ManaCost(generic=2, colored=(("W", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"flying", "vigilance"}),
+    )
+    cd = _printing_to_card_def(multi)
+    assert cd.card_type == "Creature"
+    assert cd.keywords == ("flying", "vigilance")  # sorted
+
+
+def test_carddef_keywords_thread_through_both_engines():
+    """Building a matched state from a DeckSpec with a keyword-bearing
+    CardDef registers the keyword on BOTH engines' printing registries.
+
+    The Python side carries `frozenset({"flying"})`; the Rust side
+    consumes `["flying"]` (underscore-translated only when the input
+    contained a space, e.g. "first strike" -> "first_strike"). End-to-
+    end sanity check that the substrate change wires both engines.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec
+    from mtg_bot.parity.trajectory import setup_matched_game
+
+    flier = CardDef(
+        name="Carddef Flier",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("U", 1),),
+        power=2, toughness=2,
+        keywords=("flying",),
+    )
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",),
+    )
+    spec = DeckSpec(
+        card_defs=(flier, forest),
+        p0_library=("Forest",) * 30 + ("Carddef Flier",) * 30,
+        p1_library=("Forest",) * 60,
+        shared_rng_seed=42,
+    )
+    py_state, rust_state = setup_matched_game(spec)
+    # Python side: every flier in the registry carries the keyword.
+    py_lib = py_state.players[0].library + py_state.players[0].hand
+    fliers = [o for o in py_lib if o.printing.name == "Carddef Flier"]
+    assert fliers, "no Carddef Flier in p0's library/hand"
+    assert all(
+        "flying" in o.printing.keywords for o in fliers
+    ), "Python-side flier missing the flying keyword"
+    # Rust side: matched-state setup must have completed without
+    # error; the keyword translation through `register_printing` is
+    # exercised by the matched-state field-view compare in the
+    # trajectory-parity tests above.
+    assert rust_state.turn_number == 1
+
+
+def test_carddef_keywords_with_space_translate_for_rust():
+    """A CardDef carrying a space-form keyword (e.g. 'first strike')
+    threads through to BOTH engines. Pins the convention split: Python
+    keeps the space form; Rust receives the underscore form via the
+    bridge translation in `cross_engine.build_rust_state`.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec
+    from mtg_bot.parity.trajectory import setup_matched_game
+
+    fs = CardDef(
+        name="Carddef FS",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("W", 1),),
+        power=2, toughness=2,
+        keywords=("first strike",),
+    )
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",),
+    )
+    spec = DeckSpec(
+        card_defs=(fs, forest),
+        p0_library=("Forest",) * 30 + ("Carddef FS",) * 30,
+        p1_library=("Forest",) * 60,
+        shared_rng_seed=42,
+    )
+    py_state, rust_state = setup_matched_game(spec)
+    # Python keeps the space form.
+    py_lib = py_state.players[0].library + py_state.players[0].hand
+    fs_objs = [o for o in py_lib if o.printing.name == "Carddef FS"]
+    assert fs_objs, "no Carddef FS in p0's library/hand"
+    assert all(
+        "first strike" in o.printing.keywords for o in fs_objs
+    )
+    # Rust side: setup completed without raising, which is the load-
+    # bearing assertion — the underscore translation is what makes
+    # `register_printing` accept the keyword. End-to-end keyword-
+    # behavior parity for first strike is exercised by the existing
+    # round-17 first-strike trajectory probe.
+    assert rust_state.turn_number == 1

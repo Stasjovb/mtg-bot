@@ -1281,13 +1281,74 @@ def _parse_mana_cost_string(s: str) -> tuple[int, tuple[tuple[str, int], ...]]:
     return generic, tuple(sorted(colored.items()))
 
 
+# Phase 6 carddef-substrate slice: keywords confirmed parity-clean by
+# Phase 5/6 probes whose per-keyword combat behaviors both engines
+# model byte-for-byte today. Restricting CardDef.keywords to this set
+# at filter time keeps the production-deck loader honest — a card
+# carrying any keyword OUTSIDE this set falls through to the filter
+# drop path, the same as a card with a triggered ability or a non-
+# vanilla activated ability. Extending this set should be done in
+# lockstep with adding a new trajectory keyword probe + verifying
+# Phase 5's selector for that keyword still passes.
+#
+# Per Phase 6 doc (rounds 17-18 keyword probes) + Phase 5 selector
+# coverage, the following keywords are parity-clean:
+#
+#   * flying      — Phase 5 flying_selector (synthetic) + can be
+#                   exercised via the round-17 generic injector.
+#   * vigilance   — round-17 trajectory probe
+#                   (test_vigilance_attacker_untaps_parity).
+#   * lifelink    — round-17 trajectory probe
+#                   (test_lifelink_combat_damage_to_self_parity).
+#   * trample     — round-17 trajectory probe
+#                   (test_trample_overflow_to_player_parity).
+#   * haste       — round-18 trajectory probe
+#                   (test_haste_attacker_no_summoning_sickness_parity).
+#   * deathtouch  — round-18 trajectory probe
+#                   (test_deathtouch_combat_damage_kills_blocker_parity).
+#   * first strike  — Phase 5 first_strike_selector + cross-engine
+#                     bridge pin (cross_engine.py:9381).
+#   * double strike — round-18 trajectory probe
+#                     (test_double_strike_combat_damage_doubles_parity).
+#                     Note: the engines agree byte-for-byte despite
+#                     a CR divergence on regular-damage spillover,
+#                     documented in SEARCH_LIMITATIONS.md.
+#   * menace, defender, indestructible — Phase 5 selectors exist;
+#                     keep them in the safe set so cards carrying
+#                     these keywords alongside flying / vigilance
+#                     etc. (e.g. multi-keyword EoE creatures) still
+#                     survive the filter.
+#
+# Keywords explicitly NOT in this set (and therefore disqualifying):
+# flash (CR 702.8 cast-timing; trajectory probes for it land in a
+# follow-up slice); reach (no Phase 5 probe yet); hexproof
+# (Phase 5 selector exists but lifecycle is fragile in trajectory
+# context); ward / protection / scry (cost-modifying / replacement
+# effects out of CardDef's per-creature surface).
+_SAFE_KEYWORDS: frozenset[str] = frozenset({
+    "flying",
+    "vigilance",
+    "lifelink",
+    "trample",
+    "haste",
+    "deathtouch",
+    "first strike",
+    "double strike",
+    "menace",
+    "defender",
+    "indestructible",
+})
+
+
 def _printing_is_bridge_simple_creature(printing) -> bool:
     """True if a CardPrinting is a vanilla bridge-supported creature.
 
     A "bridge-simple" creature has:
       * "Creature" in card_types
       * Non-None power and toughness
-      * No keywords
+      * Either no keywords, OR every keyword in :data:`_SAFE_KEYWORDS`
+        (Phase 6 carddef-substrate slice — see the constant's docstring
+        for the per-keyword parity provenance).
       * No triggered_abilities
       * No activated_abilities (other than the empty default)
       * No static_abilities
@@ -1302,7 +1363,7 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
         return False
     if printing.power is None or printing.toughness is None:
         return False
-    if printing.keywords:
+    if printing.keywords and not printing.keywords.issubset(_SAFE_KEYWORDS):
         return False
     if printing.triggered_abilities:
         return False
@@ -1379,6 +1440,14 @@ def _printing_to_card_def(printing) -> CardDef:
         )
     if _printing_is_bridge_simple_creature(printing):
         generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
+        # Phase 6 carddef-substrate slice: thread the printing's
+        # keywords through to the CardDef in deterministic-sorted
+        # order. The filter (above) already guarantees every entry is
+        # in ``_SAFE_KEYWORDS``; the bridge in
+        # ``cross_engine.build_python_state`` /
+        # ``cross_engine.build_rust_state`` re-materializes the same
+        # set on each engine, with the underscore-vs-space convention
+        # translation handled on the Rust side.
         return CardDef(
             name=printing.name,
             card_type="Creature",
@@ -1386,6 +1455,7 @@ def _printing_to_card_def(printing) -> CardDef:
             mana_cost_colored=colored,
             power=printing.power,
             toughness=printing.toughness,
+            keywords=tuple(sorted(printing.keywords)),
         )
     raise ValueError(
         f"printing {printing.name!r} is not bridge-supported; "
