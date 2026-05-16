@@ -402,6 +402,19 @@ def _resolve_damage_step(
                     )
             continue
 
+        # CR 510.1c: "an attacking creature with no creatures blocking
+        # it" is the unblocked path — the gate is on whether the
+        # attacker WAS blocked (at declare-blockers time), not on
+        # whether any blockers are still alive RIGHT NOW. A blocker
+        # that died in the first-strike substep leaves the attacker
+        # still BLOCKED for the regular-damage substep; the assignment
+        # walks the live subset of `attacker.blocked_by` (which is
+        # NOT cleared when individual blockers die — only when the
+        # attacker itself leaves combat). Trample (CR 702.19b) is the
+        # exception: an attacker with trample whose blockers all died
+        # still spills the unabsorbed remainder to the defending
+        # player.
+        was_blocked = len(attacker.blocked_by) > 0
         blockers = [o for o in state.battlefield if o.id in attacker.blocked_by]
         attacker_base_power = effective_power(state, attacker)
         attacker_power = _effective_combat_damage_amount(
@@ -410,12 +423,17 @@ def _resolve_damage_step(
         attacker_controller = attacker.controller_id
         has_trample = "trample" in attacker_kws
         has_deathtouch = "deathtouch" in attacker_kws
-        if not blockers:
+        if not was_blocked:
             damage_events_typed.append(
                 ("player", defending_player_id, attacker_power,
                  attacker.id, attacker_kws, attacker_controller)
             )
         else:
+            # Attacker was blocked. Walk LIVE blockers assigning
+            # damage; if all blockers died (live `blockers` is empty)
+            # the damage is wasted under no-trample (assignment lands
+            # on the dead blocker, which is a no-op for player life)
+            # and spills the full power under trample (CR 702.19b).
             remaining = attacker_power
             for i, blocker in enumerate(blockers):
                 if remaining <= 0:
