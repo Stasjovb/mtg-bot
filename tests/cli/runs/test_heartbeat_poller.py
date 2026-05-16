@@ -2,8 +2,8 @@
 
 We exercise:
 
-- Config loading (new ``workers`` shape + legacy ``shards`` shape +
-  the silent-skip path for SSH-only entries that lack ``worker_url``).
+- Config loading (post-cutover ``worker_urls`` shape only; legacy
+  ``shards`` / ``workers`` shapes raise ``LegacyShardsConfigError``).
 - One full poll cycle against a fake worker that returns a heartbeat
   payload; ``last_heartbeat_at`` + ``last_heartbeat_payload`` update.
 - Liveness transitions ALIVE → STALE → DEAD as the clock advances
@@ -37,6 +37,7 @@ from mtg_bot.cli import serve as serve_mod
 from mtg_bot.cli.runs import queue_db
 from mtg_bot.cli.runs.heartbeat_poller import (
     HeartbeatPoller,
+    LegacyShardsConfigError,
     load_shards_config,
 )
 
@@ -44,42 +45,53 @@ from mtg_bot.cli.runs.heartbeat_poller import (
 # ---- config loader --------------------------------------------------------
 
 
-def test_load_shards_config_new_shape(tmp_path):
+def test_load_shards_config_worker_urls_shape(tmp_path):
+    """Post-cutover shape: ``{"worker_urls": [<str>, ...]}``."""
     cfg = tmp_path / "shards.json"
     cfg.write_text(json.dumps({
-        "workers": [
-            {
-                "worker_id": "local",
-                "worker_url": "http://desktop:5198",
-                "n_workers": 8,
-            },
-            {
-                "worker_id": "mac",
-                "worker_url": "http://mac:5198",
-                "n_workers": 6,
-            },
+        "worker_urls": [
+            "http://desktop:5198",
+            "http://mac:5198",
         ],
     }))
     entries = load_shards_config(cfg)
     assert len(entries) == 2
-    assert entries[0]["worker_url"] == "http://desktop:5198"
-    assert entries[1]["worker_id"] == "mac"
+    assert entries[0] == {"worker_url": "http://desktop:5198"}
+    assert entries[1] == {"worker_url": "http://mac:5198"}
 
 
-def test_load_shards_config_legacy_shape(tmp_path):
+def test_load_shards_config_legacy_shards_raises(tmp_path):
+    """Legacy ``{shards: [...]}`` (SSH era) is rejected with a clear
+    migration message."""
     cfg = tmp_path / "shards.json"
     cfg.write_text(json.dumps({
         "shards": [
             {"host": "h1", "user": "u1", "repo_path": "/x"},
-            {"host": "h2", "user": "u2", "repo_path": "/y"},
         ],
     }))
-    entries = load_shards_config(cfg)
-    # Both entries are returned, but neither has worker_url → the
-    # poller will silently skip them (no network call). The loader
-    # itself doesn't filter.
-    assert len(entries) == 2
-    assert all(e["worker_url"] is None for e in entries)
+    with pytest.raises(LegacyShardsConfigError, match="legacy shards_config"):
+        load_shards_config(cfg)
+
+
+def test_load_shards_config_legacy_workers_raises(tmp_path):
+    """The transitional ``{workers: [{worker_id, worker_url,
+    n_workers}]}`` shape is also rejected — operators must migrate to
+    the URL-only ``worker_urls`` shape."""
+    cfg = tmp_path / "shards.json"
+    cfg.write_text(json.dumps({
+        "workers": [
+            {"worker_id": "x", "worker_url": "http://x:5198", "n_workers": 1},
+        ],
+    }))
+    with pytest.raises(LegacyShardsConfigError, match="legacy shards_config"):
+        load_shards_config(cfg)
+
+
+def test_load_shards_config_worker_urls_must_be_list(tmp_path):
+    cfg = tmp_path / "shards.json"
+    cfg.write_text(json.dumps({"worker_urls": "not-a-list"}))
+    with pytest.raises(ValueError, match="must be a list"):
+        load_shards_config(cfg)
 
 
 def test_load_shards_config_missing_file(tmp_path):
@@ -152,9 +164,7 @@ def _bootstrap_queue_db(tmp_path: Path) -> Path:
 def _shards_config_with(tmp_path: Path, worker_url: str) -> Path:
     cfg = tmp_path / "shards.json"
     cfg.write_text(json.dumps({
-        "workers": [
-            {"worker_id": "wA", "worker_url": worker_url, "n_workers": 1},
-        ],
+        "worker_urls": [worker_url],
     }))
     return cfg
 
@@ -163,7 +173,9 @@ def test_poller_alive_on_heartbeat(tmp_path):
     db = _bootstrap_queue_db(tmp_path)
     cfg = _shards_config_with(tmp_path, "http://wA:5198")
     clock = _FakeClock(t=100.0)
-    responses = {"http://wA:5198": {"state": "SELF_PLAY_RUNNING"}}
+    responses = {
+        "http://wA:5198": {"worker_id": "wA", "state": "SELF_PLAY_RUNNING"},
+    }
     poller = HeartbeatPoller(
         queue_db_path=db,
         shards_config_path=cfg,
@@ -176,7 +188,7 @@ def test_poller_alive_on_heartbeat(tmp_path):
     assert states["http://wA:5198"]["liveness"] == "ALIVE"
     assert (
         states["http://wA:5198"]["last_heartbeat_payload"]
-        == {"state": "SELF_PLAY_RUNNING"}
+        == {"worker_id": "wA", "state": "SELF_PLAY_RUNNING"}
     )
 
 
@@ -184,7 +196,9 @@ def test_poller_stale_then_dead_re_queues_inflight_claims(tmp_path):
     db = _bootstrap_queue_db(tmp_path)
     cfg = _shards_config_with(tmp_path, "http://wA:5198")
     clock = _FakeClock(t=100.0)
-    responses = {"http://wA:5198": {"state": "SELF_PLAY_RUNNING"}}
+    responses = {
+        "http://wA:5198": {"worker_id": "wA", "state": "SELF_PLAY_RUNNING"},
+    }
     poller = HeartbeatPoller(
         queue_db_path=db,
         shards_config_path=cfg,
@@ -251,7 +265,7 @@ def test_poller_dead_to_alive_clears_inflight(tmp_path):
         http_get=lambda url, _t: responses.get(url),
     )
     # First mark ALIVE so we can transit through DEAD.
-    responses["http://wA:5198"] = {"state": "RUNNING"}
+    responses["http://wA:5198"] = {"worker_id": "wA", "state": "RUNNING"}
     poller.tick()
     poller.track_claim("wA", "stage_x:000000")
     # DEAD.
@@ -260,7 +274,7 @@ def test_poller_dead_to_alive_clears_inflight(tmp_path):
     poller.tick()
     assert poller.worker_states()["http://wA:5198"]["liveness"] == "DEAD"
     # Worker comes back.
-    responses["http://wA:5198"] = {"state": "IDLE"}
+    responses["http://wA:5198"] = {"worker_id": "wA", "state": "IDLE"}
     clock.t = 305.0
     poller.tick()
     state = poller.worker_states()["http://wA:5198"]
@@ -287,14 +301,20 @@ def test_poller_track_claim_unknown_worker_is_noop(tmp_path):
 
 
 def test_untrack_claim_removes_from_all_workers(tmp_path):
+    """Post-cutover, worker_id → url mapping is learned from heartbeat
+    payloads. A poll cycle has to fire first so the poller knows
+    wA lives at http://wA:5198."""
     db = _bootstrap_queue_db(tmp_path)
     cfg = _shards_config_with(tmp_path, "http://wA:5198")
     poller = HeartbeatPoller(
         queue_db_path=db,
         shards_config_path=cfg,
         poll_interval_s=0.05,
-        http_get=lambda url, _t: None,
+        http_get=lambda url, _t: {"worker_id": "wA", "state": "RUNNING"},
     )
+    # Tick first so the poller learns wA → http://wA:5198 from the
+    # heartbeat payload.
+    poller.tick()
     poller.track_claim("wA", "stage_x:000000")
     assert (
         poller.worker_states()["http://wA:5198"]["in_flight_claim_ids"]
@@ -307,17 +327,15 @@ def test_untrack_claim_removes_from_all_workers(tmp_path):
     )
 
 
-def test_poller_skips_workers_without_worker_url(tmp_path):
+def test_poller_skips_non_string_worker_urls(tmp_path):
+    """Non-string entries in worker_urls are silently skipped."""
     db = _bootstrap_queue_db(tmp_path)
     cfg = tmp_path / "shards.json"
     cfg.write_text(json.dumps({
-        "workers": [
-            {"worker_id": "wA"},  # no worker_url — must skip
-            {
-                "worker_id": "wB",
-                "worker_url": "http://wB:5198",
-                "n_workers": 1,
-            },
+        "worker_urls": [
+            None,  # skipped
+            "http://wB:5198",
+            42,  # skipped
         ],
     }))
     poller = HeartbeatPoller(
@@ -456,7 +474,7 @@ def test_no_heartbeat_poller_flag_skips_thread(tmp_path):
 
 def test_default_create_app_starts_heartbeat_poller(tmp_path):
     cfg = tmp_path / "shards.json"
-    cfg.write_text(json.dumps({"workers": []}))
+    cfg.write_text(json.dumps({"worker_urls": []}))
     app = serve_mod.create_app(
         repo_url="https://example.test/mtg-bot.git",
         master_pubkey="ssh-ed25519 KEY",
