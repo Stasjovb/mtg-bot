@@ -571,8 +571,20 @@ class ClaimLoopRunner:
         return "continue"
 
     def run(self) -> None:
-        """Main loop body. Returns when the stage drains, /v2/stop
-        fires, or a fatal error pushes the daemon into ERROR."""
+        """Main loop body. Spawns ``cfg.n_workers`` parallel
+        claim/play/report threads so the daemon plays up to N games
+        concurrently. Returns when the stage drains, ``/v2/stop``
+        fires, or a fatal error pushes the daemon into ERROR.
+
+        Each thread independently calls :meth:`run_once` in its own
+        ``while`` loop — ``WorkerState``'s counters are already lock-
+        protected and the production runner's per-version weight
+        cache is guarded by the runner itself, so the threads share
+        no mutable state that needs additional synchronization here.
+
+        ``n_workers`` is clamped to ``>=1`` — a single-threaded daemon
+        is still a valid configuration (and is what tests exercise).
+        """
         try:
             self.runner.setup(
                 self.cfg.coordinator_url,
@@ -587,27 +599,54 @@ class ClaimLoopRunner:
             return
         # Setup done — pool/NN are ready to play games.
         self.state.mark_running()
-        try:
-            while True:
-                if self.state.is_stop_requested():
-                    break
-                status = self.run_once()
-                if status == "drained":
-                    break
-        except Exception:
-            self.state.mark_error(
-                f"claim loop crashed: {traceback.format_exc()}"
-            )
-            return
-        finally:
+
+        n_threads = max(1, int(self.cfg.n_workers))
+        # Set by any thread that crashes — guards the post-join
+        # mark_stopping/mark_idle so we don't clobber ERROR state.
+        crashed_flag = threading.Event()
+
+        def _thread_body(tid: int) -> None:
             try:
-                self.runner.teardown()
+                while True:
+                    if self.state.is_stop_requested():
+                        break
+                    status = self.run_once()
+                    if status == "drained":
+                        break
             except Exception:
-                log.exception("[claim_loop] runner.teardown failed")
-        # Normal completion path — push to STOPPING (if not already)
+                # One thread crashing puts the whole daemon into
+                # ERROR; ``mark_error`` flips ``stop_requested`` so
+                # peer threads exit on their next loop iteration.
+                crashed_flag.set()
+                self.state.mark_error(
+                    f"claim loop thread {tid} crashed: "
+                    f"{traceback.format_exc()}"
+                )
+
+        threads = [
+            threading.Thread(
+                target=_thread_body, args=(tid,),
+                daemon=True, name=f"claim-loop-{tid}",
+            )
+            for tid in range(n_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        try:
+            self.runner.teardown()
+        except Exception:
+            log.exception("[claim_loop] runner.teardown failed")
+
+        # If any thread pushed the daemon into ERROR the state already
+        # reflects that — stay there. Otherwise normal completion:
+        # mark STOPPING (in case it was already, this is idempotent)
         # then IDLE.
-        self.state.mark_stopping()
-        self.state.mark_idle()
+        if not crashed_flag.is_set():
+            self.state.mark_stopping()
+            self.state.mark_idle()
 
 
 # ---------------------------------------------------------------------------

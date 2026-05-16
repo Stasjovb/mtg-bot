@@ -18,12 +18,14 @@ Key shape differences from the SSH-era shards:
   cached in memory by version. A version change between claims (rare
   in self-play, normal in eval where p0=new and p1=old) re-runs
   ``fetch_weights_if_missing`` and rebuilds the NN evaluator.
-- The runner is synchronous: one game at a time per
-  :class:`mtg_bot.worker_daemon_claim_loop.ClaimLoopRunner`. The
-  ``n_workers`` field on the start request is currently stored but not
-  used to fan games out — Phase 2c picks the simplest correct shape;
-  parallelism returns when the daemon spawns multiple claim-loop
-  threads (see the "Open questions" in the PR-2c report).
+- The runner's per-call body (``_play_one``) is synchronous in the
+  calling thread. The :class:`ClaimLoopRunner` spawns ``n_workers``
+  parallel claim-loop threads, all of which dispatch through this same
+  runner instance — so the deck-pool load and the per-version weights
+  cache are guarded by a single ``threading.Lock`` here. The actual
+  game-execution body (``_generate_one_game_data`` / NN-PIMC) holds no
+  shared mutable state across threads beyond the cached config dict,
+  which is read-only after first build.
 - No SHM NN eval server. At the small per-game volume this runner sees
   (1 in flight), a per-call ``NNEvaluator.forward`` is fine; the SHM
   fan-out was a benefit of the pool-with-workers shape that we now
@@ -42,6 +44,7 @@ from __future__ import annotations
 
 import io
 import logging
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -373,12 +376,16 @@ def build_self_play_runner(
     6. Encode the per-game chunk to npz bytes; return :class:`GameResult`.
     """
 
-    # In-memory caches. The runner is single-threaded inside one
-    # ClaimLoopRunner, so plain dicts are race-free.
+    # In-memory caches. Multiple claim-loop threads dispatch through
+    # this runner concurrently; ``state_lock`` guards the write paths
+    # (deck-pool load + per-version config build). Reads after the
+    # initial write are race-free because both values are effectively
+    # immutable once built.
     state: dict[str, Any] = {
         "deck_pool": None,
         "configs_by_version": {},  # version -> NNPimcConfig
     }
+    state_lock = threading.Lock()
 
     def _emit(name: str, payload: dict) -> None:
         if log_event is not None:
@@ -390,44 +397,51 @@ def build_self_play_runner(
     def _ensure_deck_pool() -> None:
         if state["deck_pool"] is not None:
             return
-        path = _resolve_deck_pool_path(deck_pool_path)
-        if not path.is_file():
-            raise RuntimeError(
-                f"deck pool not found at {path}; pass deck_pool_path "
-                f"explicitly via /v2/start_self_play body, or place "
-                f"the canonical pool at {DEFAULT_DECK_POOL_PATH}."
+        with state_lock:
+            if state["deck_pool"] is not None:  # double-checked
+                return
+            path = _resolve_deck_pool_path(deck_pool_path)
+            if not path.is_file():
+                raise RuntimeError(
+                    f"deck pool not found at {path}; pass deck_pool_path "
+                    f"explicitly via /v2/start_self_play body, or place "
+                    f"the canonical pool at {DEFAULT_DECK_POOL_PATH}."
+                )
+            from mtg_bot.decks import decks_from_json
+            state["deck_pool"] = decks_from_json(path)
+            _emit(
+                "deck_pool_loaded",
+                {"path": str(path), "n_decks": len(state["deck_pool"])},
             )
-        from mtg_bot.decks import decks_from_json
-        state["deck_pool"] = decks_from_json(path)
-        _emit(
-            "deck_pool_loaded",
-            {"path": str(path), "n_decks": len(state["deck_pool"])},
-        )
 
     def _ensure_config(version: str):
         cfg = state["configs_by_version"].get(version)
         if cfg is not None:
             return cfg
-        weights_dir = fetch_weights_if_missing(
-            coordinator_url=coordinator_url,
-            version=version,
-            weights_root=Path(weights_cache_root),
-            http_get=http_get,
-        )
-        metadata = _read_metadata_json(weights_dir)
-        cfg = _build_nn_pimc_config(
-            weights_dir / "weights.pt", metadata,
-        )
-        state["configs_by_version"][version] = cfg
-        _emit(
-            "weights_loaded",
-            {
-                "version": version,
-                "architecture": cfg.architecture,
-                "action_encoding_version": cfg.action_encoding_version,
-            },
-        )
-        return cfg
+        with state_lock:
+            cfg = state["configs_by_version"].get(version)  # double-checked
+            if cfg is not None:
+                return cfg
+            weights_dir = fetch_weights_if_missing(
+                coordinator_url=coordinator_url,
+                version=version,
+                weights_root=Path(weights_cache_root),
+                http_get=http_get,
+            )
+            metadata = _read_metadata_json(weights_dir)
+            cfg = _build_nn_pimc_config(
+                weights_dir / "weights.pt", metadata,
+            )
+            state["configs_by_version"][version] = cfg
+            _emit(
+                "weights_loaded",
+                {
+                    "version": version,
+                    "architecture": cfg.architecture,
+                    "action_encoding_version": cfg.action_encoding_version,
+                },
+            )
+            return cfg
 
     def _setup(coord_url_unused, weights_root_unused, kind, n_workers_unused):
         # All lazy — weight load happens on first claim, deck pool is
@@ -573,6 +587,7 @@ def build_eval_runner(
         "deck_pool": None,
         "configs_by_version": {},
     }
+    state_lock = threading.Lock()
 
     def _emit(name: str, payload: dict) -> None:
         if log_event is not None:
@@ -584,44 +599,51 @@ def build_eval_runner(
     def _ensure_deck_pool() -> None:
         if state["deck_pool"] is not None:
             return
-        path = _resolve_deck_pool_path(deck_pool_path)
-        if not path.is_file():
-            raise RuntimeError(
-                f"deck pool not found at {path}; pass deck_pool_path "
-                f"explicitly via /v2/start_eval body, or place the "
-                f"canonical pool at {DEFAULT_DECK_POOL_PATH}."
+        with state_lock:
+            if state["deck_pool"] is not None:  # double-checked
+                return
+            path = _resolve_deck_pool_path(deck_pool_path)
+            if not path.is_file():
+                raise RuntimeError(
+                    f"deck pool not found at {path}; pass deck_pool_path "
+                    f"explicitly via /v2/start_eval body, or place the "
+                    f"canonical pool at {DEFAULT_DECK_POOL_PATH}."
+                )
+            from mtg_bot.decks import decks_from_json
+            state["deck_pool"] = decks_from_json(path)
+            _emit(
+                "deck_pool_loaded",
+                {"path": str(path), "n_decks": len(state["deck_pool"])},
             )
-        from mtg_bot.decks import decks_from_json
-        state["deck_pool"] = decks_from_json(path)
-        _emit(
-            "deck_pool_loaded",
-            {"path": str(path), "n_decks": len(state["deck_pool"])},
-        )
 
     def _ensure_config(version: str):
         cfg = state["configs_by_version"].get(version)
         if cfg is not None:
             return cfg
-        weights_dir = fetch_weights_if_missing(
-            coordinator_url=coordinator_url,
-            version=version,
-            weights_root=Path(weights_cache_root),
-            http_get=http_get,
-        )
-        metadata = _read_metadata_json(weights_dir)
-        cfg = _build_nn_pimc_config(
-            weights_dir / "weights.pt", metadata,
-        )
-        state["configs_by_version"][version] = cfg
-        _emit(
-            "weights_loaded",
-            {
-                "version": version,
-                "architecture": cfg.architecture,
-                "action_encoding_version": cfg.action_encoding_version,
-            },
-        )
-        return cfg
+        with state_lock:
+            cfg = state["configs_by_version"].get(version)  # double-checked
+            if cfg is not None:
+                return cfg
+            weights_dir = fetch_weights_if_missing(
+                coordinator_url=coordinator_url,
+                version=version,
+                weights_root=Path(weights_cache_root),
+                http_get=http_get,
+            )
+            metadata = _read_metadata_json(weights_dir)
+            cfg = _build_nn_pimc_config(
+                weights_dir / "weights.pt", metadata,
+            )
+            state["configs_by_version"][version] = cfg
+            _emit(
+                "weights_loaded",
+                {
+                    "version": version,
+                    "architecture": cfg.architecture,
+                    "action_encoding_version": cfg.action_encoding_version,
+                },
+            )
+            return cfg
 
     def _setup(coord_url_unused, weights_root_unused, kind, n_workers_unused):
         state["kind"] = kind

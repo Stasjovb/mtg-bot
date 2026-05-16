@@ -599,7 +599,10 @@ def test_claim_loop_runner_crash_reports_crashed_then_errors():
     loop.run()
     snap = state.snapshot()
     assert snap["state"] == worker_daemon.State.ERROR
-    assert state.error and "claim loop crashed" in state.error
+    # Threaded claim loop wraps the underlying RuntimeError in a
+    # "claim loop thread <tid> crashed" envelope.
+    assert state.error and "claim loop thread" in state.error
+    assert "simulated runner crash" in state.error
     # The crash was reported to the coordinator before re-raise so
     # the queue accounting stays sane.
     assert len(fake.reports_received) == 1
@@ -673,6 +676,186 @@ def test_clear_error_noop_when_not_in_error():
     state = worker_daemon.WorkerState(start_delay_s=0.01)
     state.clear_error()
     assert state.snapshot()["state"] == worker_daemon.State.IDLE
+
+
+# ---------------------------------------------------------------------------
+# Concurrent claim loop (multi-thread fan-out).
+# ---------------------------------------------------------------------------
+
+
+def test_claim_loop_runs_n_workers_threads_concurrently():
+    """With ``n_workers=4``, four games must be in flight at the same
+    instant. We block each ``play_one`` invocation on a 4-party
+    barrier; if the loop is single-threaded the barrier never reaches
+    parties=4 and we trip a wait timeout instead of completing
+    cleanly. The barrier flip + 4 successful reports is the
+    concurrency proof.
+    """
+    import threading as _threading
+
+    n_workers = 4
+    fake = FakeCoordinator(
+        claims_queue=[_make_claim(i) for i in range(n_workers)]
+    )
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+
+    barrier = _threading.Barrier(n_workers, timeout=10.0)
+    seen_threads: set[int] = set()
+    seen_threads_lock = _threading.Lock()
+
+    def play_one_blocks_until_all_claimed(claim, shard_label):
+        with seen_threads_lock:
+            seen_threads.add(_threading.get_ident())
+        # Will raise ``BrokenBarrierError`` if fewer than n_workers
+        # threads reach this point within the timeout. That surfaces
+        # as a runner crash -> daemon ERROR, which the test then
+        # detects via the state assertion below.
+        barrier.wait()
+        return cl.GameResult(
+            outcome="completed", winner=0, n_samples=1,
+            duration_s=0.001, npz_bytes=b"X",
+        )
+
+    runner = cl.CallableGameRunner(play_one_blocks_until_all_claimed)
+    cfg = cl.ClaimLoopConfig(
+        coordinator_url="http://fake:5099",
+        stage_id="stage_X", kind="self_play",
+        n_workers=n_workers,
+        worker_id="test", weights_root=Path("trained_weights_test"),
+        shard_label="test",
+        retry_backoff_s=(0.0, 0.0, 0.0),
+        http_get=fake.http_get,
+        http_post_json=fake.http_post_json,
+        http_post_multipart=fake.http_post_multipart,
+    )
+    cbs = _state_callbacks_for(state)
+    state.try_start("self_play", "stage_X", n_workers=n_workers)
+    loop = cl.ClaimLoopRunner(cfg, cbs, runner)
+    loop.run()
+
+    # All four games drained, none crashed, daemon back to IDLE.
+    snap = state.snapshot()
+    assert snap["state"] == worker_daemon.State.IDLE
+    assert snap["games_done"] == n_workers
+    # Distinct thread ids prove the loop actually fanned out.
+    assert len(seen_threads) == n_workers, (
+        f"expected {n_workers} distinct worker threads, got {len(seen_threads)}"
+    )
+    # All four reports landed on the coordinator.
+    assert len(fake.reports_received) == n_workers
+
+
+def test_claim_loop_threads_share_runner_setup():
+    """``runner.setup`` runs exactly once before the threads spawn, and
+    ``runner.teardown`` runs exactly once after all threads join — so
+    the production runner's per-version weights cache is shared
+    across the threads instead of being rebuilt per-thread."""
+    import threading as _threading
+
+    fake = FakeCoordinator(
+        claims_queue=[_make_claim(i) for i in range(3)]
+    )
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+
+    setup_calls: list[int] = []
+    teardown_calls: list[int] = []
+    setup_lock = _threading.Lock()
+
+    def play_one(claim, shard_label):
+        return cl.GameResult(
+            outcome="completed", winner=0, n_samples=1,
+            duration_s=0.001, npz_bytes=b"X",
+        )
+
+    def setup_fn(*args, **kwargs):
+        with setup_lock:
+            setup_calls.append(1)
+
+    def teardown_fn():
+        with setup_lock:
+            teardown_calls.append(1)
+
+    runner = cl.CallableGameRunner(
+        play_one, setup_fn=setup_fn, teardown_fn=teardown_fn,
+    )
+    cfg = cl.ClaimLoopConfig(
+        coordinator_url="http://fake:5099",
+        stage_id="stage_X", kind="self_play",
+        n_workers=3,
+        worker_id="test", weights_root=Path("trained_weights_test"),
+        shard_label="test",
+        retry_backoff_s=(0.0, 0.0, 0.0),
+        http_get=fake.http_get,
+        http_post_json=fake.http_post_json,
+        http_post_multipart=fake.http_post_multipart,
+    )
+    cbs = _state_callbacks_for(state)
+    state.try_start("self_play", "stage_X", n_workers=3)
+    loop = cl.ClaimLoopRunner(cfg, cbs, runner)
+    loop.run()
+
+    assert len(setup_calls) == 1, (
+        f"setup must run exactly once; got {len(setup_calls)}"
+    )
+    assert len(teardown_calls) == 1, (
+        f"teardown must run exactly once; got {len(teardown_calls)}"
+    )
+
+
+def test_claim_loop_one_thread_crash_pulls_all_threads_to_error():
+    """One thread crashing must mark the daemon ERROR and the peer
+    threads must exit on their next ``is_stop_requested()`` check
+    instead of plowing on against a dead daemon."""
+    import threading as _threading
+
+    n_workers = 4
+    # Far more claims than will be served — we want peer threads to
+    # be mid-loop when one crashes, then verify they bail.
+    fake = FakeCoordinator(
+        claims_queue=[_make_claim(i) for i in range(100)]
+    )
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+
+    crash_armed = _threading.Event()
+    barrier = _threading.Barrier(n_workers, timeout=10.0)
+
+    def play_one(claim, shard_label):
+        # First N-1 threads block at the barrier; the Nth thread to
+        # arrive trips the barrier and raises.
+        try:
+            barrier.wait()
+        except _threading.BrokenBarrierError:
+            pass
+        if not crash_armed.is_set():
+            crash_armed.set()
+            raise RuntimeError("simulated thread crash")
+        # Peer threads return cleanly here on this one claim, then
+        # their next loop iteration sees stop_requested and exits.
+        return cl.GameResult(
+            outcome="completed", winner=0, n_samples=1,
+            duration_s=0.001, npz_bytes=b"X",
+        )
+
+    runner = cl.CallableGameRunner(play_one)
+    cfg = cl.ClaimLoopConfig(
+        coordinator_url="http://fake:5099",
+        stage_id="stage_X", kind="self_play",
+        n_workers=n_workers,
+        worker_id="test", weights_root=Path("trained_weights_test"),
+        shard_label="test",
+        retry_backoff_s=(0.0, 0.0, 0.0),
+        http_get=fake.http_get,
+        http_post_json=fake.http_post_json,
+        http_post_multipart=fake.http_post_multipart,
+    )
+    cbs = _state_callbacks_for(state)
+    state.try_start("self_play", "stage_X", n_workers=n_workers)
+    loop = cl.ClaimLoopRunner(cfg, cbs, runner)
+    loop.run()
+
+    snap = state.snapshot()
+    assert snap["state"] == worker_daemon.State.ERROR
+    assert state.error and "claim loop thread" in state.error
 
 
 # ---------------------------------------------------------------------------
