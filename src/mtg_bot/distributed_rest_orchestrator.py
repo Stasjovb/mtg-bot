@@ -584,10 +584,10 @@ def make_runs_db_progress_writer(
                 int(status.get("wins_old") or 0) if is_eval else None
             ),
             draws=int(status.get("draws", 0) or 0),
-            extra_json=json.dumps({
+            extra={
                 "n_samples": n_samples,
                 "n_workers": n_workers,
-            }),
+            },
         )
 
         # Per-shard rows — one per machine. ``n_games_total`` on each
@@ -624,13 +624,13 @@ def make_runs_db_progress_writer(
                     else None
                 ),
                 draws=int(m.get("draws", 0) or 0),
-                extra_json=json.dumps({
+                extra={
                     "n_samples": int(m.get("n_samples", 0) or 0),
                     "n_in_flight": m_inflight,
                     # n_workers on a per-shard row = "this machine is
                     # one worker"; sum across shards = total machines.
                     "n_workers": 1,
-                }),
+                },
             )
 
     return _push
