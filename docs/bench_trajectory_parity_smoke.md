@@ -163,3 +163,185 @@ PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
     --archetypes 4 --seeds 0 --max-turns 15 \
     --json-out /tmp/single.json --verbose
 ```
+
+## Round 41 wider-sweep results
+
+Round 41 ran **two complementary sweeps** to surface the next batch of
+divergence shapes. The first (this slice's small sweep) re-verified
+arch 0-30 at seeds 0-2; the second salvaged round-40 worker G2's
+abandoned-but-actually-complete wider sweep (arch 0-50 × seeds 0-5 ×
+max-turns 20 — the brief reported it blocked at 113/306 but the
+on-disk JSON shows all 306 games landed cleanly). Both runs are
+included here because the G2 set is the higher-signal one (the
+divergences in the production-deck loader admit set fire predominantly
+at **seed=4**, which the small 0-2 sweep doesn't reach).
+
+### Sweep A — small verification (this slice)
+
+Invocation:
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 0-15 --seeds 0-2 --max-turns 18 \
+    --json-out tmp/bench_r41.json --verbose
+# and
+    --archetypes 16-30 --seeds 0-2 --max-turns 20 \
+    --json-out tmp/bench_r41_b.json --verbose
+```
+
+| Sweep | Games | PASS | FAIL_DIVERGENCE | FAIL_TIMEOUT | Wall |
+|-------|-------|------|-----------------|--------------|------|
+| A1 (0-15, s0-2, t18) | 48 | 1 | 0 | 47 | 62s |
+| A2 (16-30, s0-2, t20) | 45 | 3 | 0 | 42 | 58s |
+
+Sweep A surfaced **zero divergences** at seeds 0-2 — the known
+landfall-triggered shapes from the round-37/38 smoke (`play_land::stack`,
+`cast_spell::graveyard_p0,battlefield`) did not reproduce in this run.
+Pure FAIL_TIMEOUT dominance at seeds 0-2 confirms the
+"divergence-bearing trajectories live at higher seeds" observation
+from round 39. Sweep A's value is negative-signal: confirms
+seeds 0-2 are largely silent until max-turns crosses ~15 AND the
+seed admits a divergence-bearing draw.
+
+### Sweep B — salvaged G2 wider-sweep run
+
+Invocation (per G2's recorded config):
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 0-50 --seeds 0-5 --max-turns 20 \
+    --json-out /tmp/bench_wide.json --verbose
+```
+
+| Status            | Count |
+|-------------------|-------|
+| Total games       | 306   |
+| PASS              | 10    |
+| FAIL_DIVERGENCE   | 17    |
+| FAIL_TIMEOUT      | 279   |
+| Wall time         | 406s  |
+
+### Top divergence shapes (Sweep B)
+
+| Rank | Shape                                    | Count | NEW since round-38? |
+|------|------------------------------------------|-------|---------------------|
+| 1    | `cast_spell::life_p0,stack`              |   8   | **NEW**             |
+| 2    | `cast_spell::stack`                      |   6   | **NEW**             |
+| 3    | `cast_spell::life_p1,stack`              |   3   | **NEW**             |
+| 4    | `play_land::stack`                       |   0   | (round-37 shape)    |
+| 5    | `cast_spell::graveyard_p0,battlefield`   |   0   | (round-37 shape)    |
+
+**All three shapes that fired are NEW** since the round-37/38 baseline.
+The two old shapes did NOT reproduce at all in 306 games — likely
+indicating those were fixed (or filtered) between round 38 and main
+HEAD `53604a7c`, or they only fire at the earlier max-turns=15 the
+round-37 smoke used.
+
+### Divergence shape detail
+
+**`cast_spell::stack` (6 games — archetypes 4, 5, 43, 49)**
+
+```
+py:   stack=()
+rust: stack=((None, 0, 0, 0, 0, None, 0, 9),
+             (None, 0, 0, 0, 0, None, 1, 70),
+             (None, 0, 0, 0, 0, None, 0, 9),
+             (None, 0, 0, 0, 0, None, 1, 70),
+             (None, 0, 0, 0, 0, None, 0, 9))
+```
+
+Rust accumulates multiple triggered-ability stack entries that Python's
+stack does not carry. The repeated `(0, 9)` / `(1, 70)` pairs look
+like the same source-pair (likely Icecave Crasher + Harmonious
+Grovestrider's landfall triggers from the round-37 admit set)
+re-firing — Python may be auto-resolving and clearing the stack
+between casts where Rust queues them.
+
+**`cast_spell::life_p0,stack` (8 games — archetypes 13, 14, 15, 16, 17, 30, 35, 44)**
+
+```
+py:   life_p0=23, stack=()
+rust: life_p0=20, stack=((None,0,0,0,0,None,0,0)x3)
+```
+
+Compound divergence: 3-point life delta on the active player AND
+3 stack entries that didn't fire on Python. The 3-point life loss
+correlates with the 3 missing stack entries — likely a life-loss
+trigger (e.g. a "lose 1 life" upkeep / cast effect) that resolves
+immediately + accumulates on Rust but no-ops on Python.
+
+**`cast_spell::life_p1,stack` (3 games — archetypes 30, 35)**
+
+```
+py:   life_p1=21, stack=()
+rust: life_p1=20, stack=((None,0,0,0,0,None,1,60),)
+```
+
+Same shape but on the non-active player — 1-point life delta + 1
+stack entry. Almost certainly the same underlying bridge gap as
+`life_p0,stack` but in the opponent-targeted variant.
+
+### Per-archetype breakdown (Sweep B, archetypes that produced divergences)
+
+| Arch | PASS | FAIL_DIV | FAIL_TIMEOUT |
+|------|------|----------|--------------|
+| 4    | 4    | 1        | 1            |
+| 5    | 1    | 1        | 4            |
+| 13   | 0    | 1        | 5            |
+| 14   | 0    | 1        | 5            |
+| 15   | 0    | 1        | 5            |
+| 16   | 0    | 1        | 5            |
+| 17   | 0    | 1        | 5            |
+| 21   | 3    | 0        | 3            |
+| 30   | 0    | 2        | 4            |
+| 35   | 0    | 3        | 3            |
+| 43   | 2    | 1        | 3            |
+| 44   | 0    | 1        | 5            |
+| 49   | 0    | 3        | 3            |
+
+Archetypes 13-17 all produce the SAME divergence (`cast_spell::life_p0,stack`
+at turn=16 action_index=32), which strongly suggests they share a
+divergence-bearing card and the shape is deterministic given the
+deck list. Round 42+ slice work should reproduce one of these
+(e.g. arch=13 seed=4 max-turns=18) and trace the cast that produces
+the 3-life / 3-stack-entry divergence.
+
+### FAIL_TIMEOUT pattern
+
+279 of 306 games (91%) are FAIL_TIMEOUT. Archetypes 0-3, 6-12, 18-20,
+22-29, 31-34, 36-42, 45-48, 50 are uniformly 6/6 FAIL_TIMEOUT — every
+seed runs to max-turns with neither engine winning. Per the round-37
+smoke analysis, this is the CardDef bridge filter dropping all
+creatures from these archetypes, leaving "basic lands + Forest
+padding" — `attack_all` has nothing to attack with.
+
+**Conversion opportunity:** extending the bridge filter to admit one
+creature per timeout-dominant archetype would convert ~6 games each
+into real trajectory probes — potentially 30-50 archetypes worth of
+new divergence signal. Candidate next-slice work: enumerate the
+creatures the filter rejects across archetypes 0-3, 6-12 and pick
+the highest-value vocabulary additions (single-shape triggers like
+plain ETB / vanilla creatures should be cheap to admit).
+
+### New divergence-shape candidates for round 42+
+
+1. **`cast_spell::stack` (rust-extra entries)** — six games, arch 4/5/43/49.
+   The repeated `(0, 9)` / `(1, 70)` source pairs in Rust's stack
+   suggest a multi-trigger-per-cast accumulation that Python is
+   silently flushing. Diagnose whether Python's bridge is missing a
+   trigger-enqueue path OR Rust is failing to resolve between casts.
+2. **`cast_spell::life_p0,stack` (life delta + 3 stack entries)** —
+   8 games concentrated on a 5-archetype cluster (13-17). Single
+   bridge gap likely explains all 8 — reproduce arch=13 seed=4 and
+   trace.
+3. **`cast_spell::life_p1,stack` (opponent variant)** — should fix
+   once the active-player variant is patched (same underlying
+   mechanism, opposite controller).
+
+The two **round-37 shapes did not reproduce** in 306 fresh games — a
+re-run of the original failing seeds (arch=4 seed=0 max-turns=15) is
+worth doing in round 42 to confirm whether `play_land::stack` and
+`cast_spell::graveyard_p0,battlefield` are actually fixed on main
+HEAD or just no longer firing at max-turns=20.
