@@ -50218,6 +50218,323 @@ def test_cross_engine_synthetic_etb_each_opponent_loses_life_cross_controller_ro
     assert rust_p1_bf_after == py_p1_bf_after
 
 
+def test_cross_engine_synthetic_etb_tap_target_opponent_permanent_and_stun_it_bridge_dict_round_trip_parity(
+    parity_smoke,
+):
+    """Round-28 BLOCKED-RUST-EFFECT deferred-EoE-probe close — drive
+    Mechanozoa's ETB shape end-to-end on both engines via the
+    cross-engine bridge-dict round trip (NOT direct Python class
+    instantiation). Closes the round-30 stun-counter substrate's
+    deferred Mechanozoa half (commit 2f2f79d0 -- the bridge arm
+    landed pinned by 16 cross-engine bridge tests but no real-EoE
+    end-to-end probe on the ``tap_target_opponent_permanent_and_stun_it``
+    arm; the deferral note at parity/cross_engine.py:3081-3090 calls
+    out the ETB cross-engine harness needed to thread bridge dicts on
+    both sides for the Mechanozoa shape).
+
+    **Why the bridge-dict round trip matters.** Mechanozoa's actual
+    parsed Effect today routes through the generic clause-builder
+    which constructs the Python class ``TapTargetOpponentPermanentAndStunIt``
+    directly, sidestepping the cross-engine bridge dict. The round-30
+    bridge arm pinned the dict-shape translation surface
+    (``test_bridge_tap_target_opponent_permanent_and_stun_it_basic_translation``
+    et al. at tests/test_cross_engine_etb_triggers.py:11182-11290 + the
+    Rust parser pin at line 11264) but no probe drove a CardDef whose
+    ``triggered_abilities`` carry the bridge-dict shape end-to-end on
+    BOTH engines through inject + ENTERS-dispatch + drain. This probe
+    closes that gap on the synthetic-Bear template (per the round-30
+    "synthetic regression pin documents the bridge plumbing; a real-
+    EoE Mechanozoa ETB cross-engine probe driven through the bridge
+    dict is a follow-up slice once the ETB cross-engine harness
+    threads bridge dicts on both sides" deferral).
+
+    The harness threads bridge dicts on both sides today (round-8
+    tap_target cross-controller probe at line 33502 established the
+    template; the Phase 6 carddef-triggers slice at commit a4b5386f
+    landed _safe_triggers + _is_safe_trigger_dict +
+    _python_ta_to_safe_dict for production-deck round trips). This
+    probe consumes that infrastructure for the stun-counter substrate.
+
+    **Probe shape (synthetic same-controller inject-and-fire-ENTERS).**
+
+      1. **active_player=P0** (default). The source's controller is P0.
+
+      2. **Inject Bait Bear (vanilla 2/2, untapped) onto P1's bf** --
+         the SOURCE-controller's opponent. The opp-only filter on both
+         engines admits this Bear (an artifact-or-creature an opponent
+         controls).
+
+      3. **Inject Mechanozoa Stun Bear (synthetic; carries the bridge-
+         dict ETB ``tap_target_opponent_permanent_and_stun_it``) onto
+         P0's bf** with controller=0 via Rust's
+         ``register_and_inject_object`` and Python's ``new_object`` +
+         bf append + manual ``_trigger_etb_abilities`` (mirrors the
+         round-7/round-8 cross-controller probe pattern). The
+         injection's ENTERS dispatch fires the SourceIsSelf trigger on
+         both engines; the trigger lands on the stack.
+
+      4. **Seat ``_PickFirstOpponentTargetAgent`` on P0** (the
+         SOURCE's controller, whose agent gets called for choose_target
+         on the trigger). The shim's controller-filter walks
+         legal_targets (returned by Python's
+         ``TapTargetOpponentPermanentAndStunIt.legal_targets`` --
+         ``("permanent", obj.id)`` for each artifact-or-creature an
+         opponent controls), picks the first opponent-controlled
+         target. With one Bait Bear on P1's bf, both engines pick
+         that bear.
+
+      5. **Drain both stacks.** The trigger resolves: Rust's resolve
+         arm (state_ops_resolve.rs:6101-6168) walks both players' bf
+         in ETB-timestamp order, applies the opp-only filter via
+         ``obj.controller != src_controller``, picks the FIRST match
+         (Bait Bear), taps it AND increments stun_counters by 1.
+         Python's ``resolve`` fires off the chosen target tuple,
+         calls ``tap_permanent`` then ``add_stun_counters``.
+
+      6. **Cross-engine assert (post-fix contract):**
+         - Bait Bear on P1's bf is TAPPED on both engines.
+         - Bait Bear on P1's bf has stun_counters=1 on both engines
+           (the load-bearing stun-substrate observable -- the round-30
+           substrate landed end-to-end with this slot at
+           state.rs:121-148 / game.py:2084-2095, but no real probe
+           had exercised the increment yet through the bridge).
+         - The Mechanozoa Stun Bear itself on P0's bf is UNTAPPED with
+           stun_counters=0 on both engines (load-bearing: the source
+           is never a candidate for its own opp-only filter).
+         - Lives unchanged on both seats.
+         - No residual stack on either engine.
+
+    **Substrate confirmed.** Per the round-30 commit 2f2f79d0
+    (``Merge feature/rust-stun-counter``): Rust's
+    ``Effect::TapTargetOpponentPermanentAndStunIt`` (cards.rs:1508-1521;
+    resolve at state_ops_resolve.rs:6101-6168) mirrors Python's
+    ``TapTargetOpponentPermanentAndStunIt`` (effects/generic/tap.py:217).
+    The unit-variant bridge dict (``{"kind":
+    "tap_target_opponent_permanent_and_stun_it"}``) round-trips through
+    cross_engine.py:3042-3094. ``GameObject.stun_counters: i32``
+    field on Rust (state.rs:145) + Python's
+    ``GameObject.stun_counters: int`` field + the CR 701.20 untap-step
+    gate (state_ops_steps.rs:124-149 on Rust, turn.py untap step on
+    Python) form the substrate; this probe exercises the increment
+    without needing the gate (no untap step occurs during a single
+    ETB drain).
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline (mirrors the entire
+        cross_engine ETB-trigger family).
+      * The Cryogen Relic ACTIVATED-ability path
+        (``put_stun_counter_on_tapped_creature``) -- separate
+        substrate (activated-ability cross-engine harness),
+        explicitly deferred at parity/cross_engine.py:3026-3037.
+      * Untap-step gate (CR 701.20: stun counters are removed instead
+        of untapping) -- pinned by Rust's state_ops_steps.rs +
+        Python's turn.py separately; this ETB probe doesn't drive
+        a turn boundary.
+      * The Meat Locker Room-door ``TapAndStunUpToOneTargetCreature``
+        variant -- separate Effect (different filter + counter
+        amount), separate Rust substrate gate (Room/door subsystem
+        is review-gated per round-33).
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Mechanozoa Stun Bear on P0's bf (controller=0; tapped=False;
+        stun_counters=0).
+      * Bait Bear on P1's bf (controller=1; tapped=True;
+        stun_counters=1).
+      * P0 / P1 lives: unchanged at 20.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    # Confirm pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bear (Mechanozoa stun probe)",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    rust_zoa_dict = {
+        "name": "Mechanozoa Stun Bear (synthetic bridge-dict)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "tap_target_opponent_permanent_and_stun_it"
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_zoa_id = rust_state.register_and_inject_object(
+        rust_zoa_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Mechanozoa Stun Bear's arrival on P0 should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "TapTargetOpponentPermanentAndStunIt on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.tap import (
+        TapTargetOpponentPermanentAndStunIt,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+    bait_printing = CardPrinting(
+        name="Bait Bear (Mechanozoa stun probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    zoa_printing = CardPrinting(
+        name="Mechanozoa Stun Bear (synthetic bridge-dict)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=TapTargetOpponentPermanentAndStunIt(),
+            ),
+        ),
+    )
+    # The trigger's controller is P0 (the SOURCE's controller); seat
+    # the picker on P0. The shim filters legal_targets by
+    # controller_id != player_id, which mirrors Rust's opp-only scan
+    # exactly on the 2-player harness with one bait creature on P1's
+    # bf.
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+    py_zoa = py_state.new_object(
+        zoa_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_zoa.summoning_sick = False
+    py_zoa.tapped = False
+    py_zoa.damage = 0
+    py_zoa.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_zoa)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_zoa)
+    assert len(py_state.stack) == 1, (
+        "Python: Mechanozoa Stun Bear's arrival on P0 should fire the "
+        "IsSelf ENTERS trigger and land "
+        "TapTargetOpponentPermanentAndStunIt on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    # Lives unchanged on both seats.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    # Bait Bear on P1's bf is TAPPED + has stun_counters=1 on both
+    # engines (the load-bearing stun-substrate observable through the
+    # bridge-dict round trip).
+    rust_bf = rust_state.battlefield_snapshot()
+    rust_bait_entry = next(
+        (e for e in rust_bf if int(e["id"]) == rust_bait_id), None,
+    )
+    rust_zoa_entry = next(
+        (e for e in rust_bf if int(e["id"]) == rust_zoa_id), None,
+    )
+    assert rust_bait_entry is not None
+    assert rust_zoa_entry is not None
+    assert rust_bait_entry["tapped"] is True, (
+        "Rust: Bait Bear on P1's bf should be tapped post-resolve "
+        "(Mechanozoa's ETB tap clause). "
+        f"Got tapped={rust_bait_entry['tapped']}"
+    )
+    rust_bait_stun = rust_state.get_stun_counters(rust_bait_id)
+    assert rust_bait_stun == 1, (
+        "Rust: Bait Bear should carry exactly 1 stun counter post-"
+        "resolve (the bridge-dict round trip wiring of "
+        "TapTargetOpponentPermanentAndStunIt). "
+        f"Got stun_counters={rust_bait_stun}"
+    )
+    assert rust_zoa_entry["tapped"] is False, (
+        "Rust: Mechanozoa Stun Bear itself should remain UNTAPPED "
+        "(opp-only filter excludes the source). "
+        f"Got tapped={rust_zoa_entry['tapped']}"
+    )
+    rust_zoa_stun = rust_state.get_stun_counters(rust_zoa_id)
+    assert rust_zoa_stun == 0, (
+        "Rust: Mechanozoa Stun Bear itself should carry 0 stun counters. "
+        f"Got stun_counters={rust_zoa_stun}"
+    )
+    # Python observable: same shape.
+    assert py_bait.tapped is True, (
+        f"Python: Bait Bear should be tapped. Got tapped={py_bait.tapped}"
+    )
+    assert py_bait.stun_counters == 1, (
+        "Python: Bait Bear should carry exactly 1 stun counter. "
+        f"Got stun_counters={py_bait.stun_counters}"
+    )
+    assert py_zoa.tapped is False
+    assert py_zoa.stun_counters == 0
+    # Cross-engine: same lives, same tapped flags, same stun counts.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    assert rust_bait_entry["tapped"] == py_bait.tapped
+    assert rust_zoa_entry["tapped"] == py_zoa.tapped
+    assert rust_bait_stun == py_bait.stun_counters
+    assert rust_zoa_stun == py_zoa.stun_counters
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
