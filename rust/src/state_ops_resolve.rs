@@ -4193,6 +4193,96 @@ fn apply_effect(
             // saturating_add).
             state.players[cidx].life += amount;
         }
+        // BLOCKED-RUST-EFFECT slice (round 49) -- the source's
+        // controller GAINS life equal to the source-controller's
+        // CURRENT LIFE TOTAL. Sister of round-45's
+        // `Effect::GainLifeEqualToArtifactCount` (SAME recipient =
+        // controller-self + SAME apply step: direct life addition via
+        // `+=`, mirrors round-26 GainLife bit-for-bit, AND the SAME
+        // apply substrate: gain-life-controller-self), only the
+        // DENOMINATOR read differs (source-controller's current life
+        // total instead of their artifact-count walk). SECOND
+        // denominator on the gain-life-controller-self apply substrate
+        // (artifact-count round-45 -> life-total round-49). Life-total
+        // denominator established by round-42's
+        // `MillTargetPlayerEqualToYourLifeTotal` (mill), round-47's
+        // `DealDamageToOpponentCreatureByLifeTotal` (damage), round-48's
+        // `EachOpponentLosesLifeEqualToYourLifeTotal` (life-loss-each-
+        // opponent) on OTHER substrates -- this walks the X-from-count
+        // matrix to a FOURTH (substrate, life-total) cell.
+        //
+        // **Life-total clamp.** Clamp negative life to 0 (`life.max(0)`)
+        // before use as the denominator -- matches Python's
+        // `max(0, life)` and the round-42 / round-47 / round-48
+        // life-total clamping precedent (a negative life total can
+        // transiently arise from a prior loss/damage in the same
+        // resolution window before the SBA loop runs; a negative
+        // denominator would be nonsensical). Zero clamped life ->
+        // silent no-op (matches Python's `if amount <= 0: return`
+        // short-circuit before the life-add; also mirrors GainLife /
+        // DrawCards / Mill / EachOpponentLosesLife /
+        // GainLifeEqualToArtifactCount / DiscardSelf zero-amount
+        // conventions).
+        //
+        // **Source-finder dispatch (round-45 sister pattern).** 5-zone
+        // walk + stack scan. Source not found anywhere = silent fizzle
+        // (lost-track-of-source tolerance, mirrors
+        // GainLifeEqualToArtifactCount / EachOpponentLosesLife /
+        // DiscardSelf shape). The dynamic-X arm needs the 5-zone walk
+        // (not the `current_resolve_source_controller` shortcut bare
+        // GainLife uses) because the life-total denominator must read
+        // from the source's ACTUAL controller even when the resolve
+        // harness's shortcut isn't set (e.g. inject-and-fire-ENTERS
+        // synthetic harnesses, plus consistency with the round-45/48
+        // sister source-finders).
+        Effect::GainLifeEqualToYourLifeTotal => {
+            // Source-controller resolution (5-zone walk + stack scan;
+            // mirrors round-45 GainLifeEqualToArtifactCount sister and
+            // round-48 EachOpponentLosesLifeEqualToYourLifeTotal sister
+            // shape exactly).
+            let mut source_controller: Option<u8> = None;
+            'outer_sc_glyl: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_sc_glyl;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Life-total denominator: clamp negative life to 0
+            // (matches Python's `max(0, life)` clamp and the round-42
+            // mill / round-47 damage / round-48 each-opponent-loses
+            // life-total clamping precedent).
+            let cidx = controller as usize;
+            let amount: i32 = state.players[cidx].life.max(0);
+            if amount <= 0 {
+                return Ok(()); // life <= 0 -> silent no-op
+            }
+            // Direct life addition -- not damage. Mirrors round-45
+            // GainLifeEqualToArtifactCount sister BIT-FOR-BIT (simple
+            // `+=`, not saturating_add), only the amount source differs.
+            state.players[cidx].life += amount;
+        }
         // LoseLife: CR 118.4 — "life loss" (not damage). The SOURCE's
         // controller loses `amount` life. Punisher / drawback pattern
         // (Decode Transmissions shape) — 7 cards in the EoE pool per
