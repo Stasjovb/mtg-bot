@@ -950,6 +950,117 @@ fn apply_damage_marker(state: &mut GameState, obj_id: u32, amount: i16) {
     }
 }
 
+/// **BLOCKED-RUST-EFFECT slice — Faller's Faithful ETB.**
+/// Destroy the source-controller's opponent's first battlefield
+/// creature (the `defender = 1 - controller` bf[0] first-slice
+/// deterministic pick, identical to the `DestroyTarget { AnyCreature }`
+/// arm), then — iff that creature carried NO marked damage at the
+/// moment of resolution (`obj.damage == 0`, the byte-equal Rust read
+/// of Python's `not obj.damaged_this_turn` for the realistic
+/// no-prior-damage ETB) — the victim's controller draws `draw_amount`
+/// cards (CR 121.1 — the printed text gives the draw to the destroyed
+/// creature's controller).
+///
+/// Mirrors the `DestroyTarget { AnyCreature }` resolve body verbatim
+/// (controller resolution, indestructible-suppress CR 702.12, zone-
+/// change reset CR 400.7, Void LTB nonland flag, LTB fan-out via
+/// `pending_leaves_dispatches` + `queue_token_cease`) so the destroy
+/// half stays byte-equal with the existing destroy substrate; the
+/// only additions are the pre-destroy `was_undamaged` snapshot, the
+/// victim-controller capture, and the post-destroy conditional draw
+/// (inlined draw loop — same shape as `Effect::DrawCards`,
+/// re-derived here per the per-slice file-isolation rule rather than
+/// cross-calling the DrawCards arm). Empty defender bf / indestructible
+/// target = silent fizzle, and the draw rider does NOT run in either
+/// fizzle case (CR 608.2c — the "up to one" optional shape resolves
+/// as a no-op).
+fn destroy_first_defender_creature_then_draw_if_undamaged(
+    state: &mut GameState,
+    draw_amount: i32,
+) {
+    let controller = state
+        .current_resolve_source_controller
+        .map(|c| c as usize)
+        .unwrap_or(state.active_player as usize);
+    let defender = 1 - controller;
+    let bf = &state.players[defender].battlefield;
+    if bf.is_empty() {
+        return; // fizzle silently — "up to one" no-op, no draw
+    }
+    let target_id = bf[0].id;
+    // Snapshot the undamaged condition BEFORE any mutation: leaving
+    // the battlefield resets `obj.damage`, so the read must happen
+    // now (mirrors Python's `was_undamaged = not obj.damaged_this_turn`
+    // captured before `destroy()` in DestroyTargetCreature.resolve).
+    let was_undamaged = bf[0].damage == 0;
+    // The victim's controller (defender in the 2-player first slice;
+    // == owner). The draw goes here per the printed text, not to the
+    // spell's controller. Mirrors Python's
+    // `victim_controller_id = obj.controller_id`.
+    let victim_controller = defender;
+    // Indestructible check (CR 702.12): peek the target's printing
+    // keywords before mutating. Suppress destroy AND draw silently if
+    // present (Python's turn.destroy carries the same gate; the rider
+    // only runs alongside an actual destruction).
+    let target_printing_id = bf[0].printing_id;
+    let is_indestructible = match state.registry.lookup(target_printing_id) {
+        Some(printing) => printing
+            .keywords
+            .iter()
+            .any(|k| k == "indestructible"),
+        None => false,
+    };
+    if is_indestructible {
+        return; // CR 702.12 — suppress silently, no draw
+    }
+    // Pop from defender's battlefield (CoW-safe).
+    let bf_mut: &mut Vec<GameObject> =
+        Arc::make_mut(&mut state.players[defender].battlefield);
+    let pos = bf_mut
+        .iter()
+        .position(|o| o.id == target_id)
+        .expect("target_id was bf[0] but not found on re-scan");
+    let mut obj = bf_mut.remove(pos);
+    // Zone-change reset (CR 400.7) — identical to the DestroyTarget
+    // arm. summoning_sick deliberately NOT reset (Python's
+    // turn.move_off_battlefield omits the clear — CR 302.1, see I35).
+    obj.zone = ZONE_GRAVEYARD;
+    obj.tapped = false;
+    obj.damage = 0;
+    obj.counters = 0;
+    obj.attached_to = None;
+    obj.exiled_with_source = None;
+    let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+    Arc::make_mut(&mut state.players[defender].graveyard).push(obj);
+    // Round-29 Void LTB tracking: destroy is a battlefield exit.
+    mark_left_battlefield_if_nonland(state, printing_id);
+    // LTB fan-out — queue the leaving id; the drain runs in
+    // `resolve_top_of_stack` AFTER the resolving slot pops (same
+    // deferral shape as the DestroyTarget arm).
+    state.pending_leaves_dispatches.push(leaving_obj_id);
+    crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+    // Faller's Faithful draw rider: iff the target carried no marked
+    // damage at resolve time, the victim's controller draws
+    // `draw_amount` cards. Negative clamps to 0 (X-from-count zero
+    // short-circuit convention). Inlined draw loop — same pattern as
+    // `Effect::DrawCards`.
+    let n = draw_amount.max(0) as usize;
+    if was_undamaged && n > 0 {
+        for _ in 0..n {
+            let player = &mut state.players[victim_controller];
+            let lib = Arc::make_mut(&mut player.library);
+            if lib.is_empty() {
+                // CR 704.5b — empty-library draw flags the player.
+                player.attempted_draw_on_empty = true;
+                break;
+            }
+            let mut drawn = lib.remove(0);
+            drawn.zone = ZONE_HAND;
+            Arc::make_mut(&mut player.hand).push(drawn);
+        }
+    }
+}
+
 fn apply_effect(
     state: &mut GameState,
     effect: &Effect,
@@ -2173,6 +2284,25 @@ fn apply_effect(
             crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         },
+        // BLOCKED-RUST-EFFECT slice — Faller's Faithful ETB
+        // (~14,108 17lands decks). "Destroy up to one OTHER target
+        // creature. If that creature wasn't dealt damage this turn,
+        // its controller draws `draw_amount` cards." Structural
+        // sibling of `DestroyTarget { AnyCreature }` — same defender
+        // bf[0] first-slice pick + indestructible gate + LTB fan-out
+        // — plus the pre-destroy undamaged snapshot + post-destroy
+        // conditional victim-controller draw. Logic lives in the
+        // module-private `destroy_first_defender_creature_then_draw_
+        // if_undamaged` helper (per the per-slice file-isolation
+        // rule). Mirrors Python's
+        // `DestroyTargetCreature(draw_if_undamaged_amount=draw_amount,
+        // optional=True, exclude_self=True)`
+        // (`effects/generic/destroy.py:94`).
+        Effect::DestroyTargetCreatureThenDrawIfUndamaged { draw_amount } => {
+            destroy_first_defender_creature_then_draw_if_undamaged(
+                state, *draw_amount,
+            );
+        }
         // Round-17: DamageEachOpponent. CR 701.4 + AOE pattern — the
         // controller deals ``amount`` damage to each of their
         // opponents.

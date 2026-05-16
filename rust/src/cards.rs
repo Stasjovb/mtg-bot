@@ -196,6 +196,48 @@ pub enum Effect {
     /// fizzle silently. Indestructible (round-13) is honored — the
     /// destroy is suppressed exactly like in the SBA path.
     DestroyTarget { target: TargetFilter },
+    /// **BLOCKED-RUST-EFFECT slice — Faller's Faithful ETB
+    /// (~14,108 17lands decks).** "When this creature enters, destroy
+    /// up to one OTHER target creature. If that creature wasn't dealt
+    /// damage this turn, its controller draws `draw_amount` cards."
+    ///
+    /// Structural sibling of `DestroyTarget { AnyCreature }`: same
+    /// source-controller resolution (`current_resolve_source_controller`
+    /// with active-player fallback), same `defender = 1 - controller`
+    /// bf[0] first-slice deterministic target pick, same
+    /// indestructible-suppress gate (CR 702.12), same LTB fan-out
+    /// (`pending_leaves_dispatches.push` + `queue_token_cease`). Adds
+    /// the Faller's-Faithful draw rider: BEFORE the destroy mutates
+    /// anything, snapshot whether the chosen creature carries marked
+    /// damage (`obj.damage == 0` → "wasn't dealt damage"); record the
+    /// victim's controller; AFTER the destroy, if the snapshot said
+    /// undamaged, the victim's controller draws `draw_amount` cards
+    /// (CR 121.1 — the destroyed creature's controller, per the
+    /// printed text). The "other target" / `exclude_self` shape is
+    /// already enforced by the defender-bf scan (the source ETBs on
+    /// the controller's bf; the defender scan never sees it).
+    ///
+    /// **Effect-half / damage-ledger split (see SEARCH_LIMITATIONS.md).**
+    /// Python maintains a per-object `damaged_this_turn` boolean
+    /// (`effects/base.py:300`, cleared on zone moves) that survives a
+    /// heal-to-0; Rust carries only `obj.damage` (marked damage,
+    /// cleared at cleanup). For the realistic Faller's Faithful ETB
+    /// (instant-speed destroy with no prior damage marked on the
+    /// target this turn) the two reads are byte-equal: a creature with
+    /// no marked damage `obj.damage == 0` ⇔ Python's
+    /// `not obj.damaged_this_turn`. The asymmetric corner —
+    /// damaged-then-healed-to-0 within the same turn — is NOT modeled
+    /// on the Rust side; the full general damaged-this-turn ledger is
+    /// the loader-gated subsystem half (the card is NOT admitted to
+    /// the production-deck loader allowlist). Mirrors Python's
+    /// `DestroyTargetCreature(draw_if_undamaged_amount=draw_amount,
+    /// optional=True, exclude_self=True)`
+    /// (`effects/generic/destroy.py:94`).
+    ///
+    /// **Empty defender bf = silent fizzle** (the "up to one"
+    /// optional shape collapses to a no-op when no legal target — CR
+    /// 608.2c — and the draw rider does not run).
+    DestroyTargetCreatureThenDrawIfUndamaged { draw_amount: i32 },
     /// Deal `amount` damage to each opponent of the controller
     /// (CR 701.4 + AOE pattern). Two-player engine first slice:
     /// damages defender (= the one opponent). No target — implicit.
@@ -4482,6 +4524,21 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let target = parse_target_filter(target_dict)?;
             Ok(Effect::DestroyTarget { target })
         }
+        "destroy_target_creature_then_draw_if_undamaged" => {
+            // BLOCKED-RUST-EFFECT slice — Faller's Faithful ETB.
+            // Payload variant: `draw_amount` (cards the destroyed
+            // creature's controller draws iff it carried no marked
+            // damage). Missing `draw_amount` defaults to 0 (Python
+            // parity: `draw_if_undamaged_amount: int = 0` — a 0 rider
+            // is a legal "destroy with no draw" shape). Negative
+            // `draw_amount` clamps to 0 at resolve (matching the
+            // X-from-count zero short-circuit convention).
+            let draw_amount: i32 = match dict.get_item("draw_amount")? {
+                Some(v) => v.extract()?,
+                None => 0,
+            };
+            Ok(Effect::DestroyTargetCreatureThenDrawIfUndamaged { draw_amount })
+        }
         "damage_each_opponent" => {
             let amount: i32 = require(dict, "amount")?.extract()?;
             Ok(Effect::DamageEachOpponent { amount })
@@ -7019,6 +7076,16 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::DestroyTarget { target } => {
             d.set_item("kind", "destroy_target")?;
             d.set_item("target", target_filter_to_pydict(py, target)?)?;
+        }
+        Effect::DestroyTargetCreatureThenDrawIfUndamaged { draw_amount } => {
+            // BLOCKED-RUST-EFFECT slice — Faller's Faithful ETB.
+            // Round-trip dict-shape: kind + draw_amount only (no
+            // target key — the defender-bf first-slice picker derives
+            // its target deterministically, mirroring the
+            // ExileEachOpponentsGraveyard / EachOpponentMillsCards
+            // unit-shape convention).
+            d.set_item("kind", "destroy_target_creature_then_draw_if_undamaged")?;
+            d.set_item("draw_amount", *draw_amount)?;
         }
         Effect::DamageEachOpponent { amount } => {
             d.set_item("kind", "damage_each_opponent")?;
