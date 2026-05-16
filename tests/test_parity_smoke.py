@@ -60874,6 +60874,567 @@ def test_cross_engine_real_eoe_pulsar_squadron_ace_etb_reveal_real_spacecraft_ca
     # safe to assert.
     assert rust_state.get_life(0) == py_state.players[0].life == 20
     assert rust_state.get_life(1) == py_state.players[1].life == 20
+# ---------------------------------------------------------------------------
+# ROUND-55 N2 — Rust token-cease-to-exist SBA (CR 111.7 / 704.5d) pins.
+#
+# Rust now derives is_token from the supertypes Vec (bridge round-trips
+# ("Token",)) and removes a token from any non-battlefield zone it
+# lands in after a bf-exit (drain_pending_token_cease, run at the tail
+# of the universal LEAVES drain + apply_sbas). The 4 Rust regression
+# pins below drive a token off the battlefield via the generic
+# move_object primitive into each destination zone and assert the
+# token ceased to exist (gone from EVERY zone), plus the negative
+# control (a NONTOKEN goes to graveyard and STAYS). The 3 bridge pins
+# drive the same through the cross-engine builders so the supertypes
+# round-trip is exercised. The genuine real-EoE probe at the end
+# re-derives the Lander sac path on a real carrier and asserts FULL
+# cross-engine byte-equality.
+# ---------------------------------------------------------------------------
+
+# Zone constants exposed by the Rust move_object pymethod.
+_R55_ZONE_HAND = 0
+_R55_ZONE_BATTLEFIELD = 2
+_R55_ZONE_GRAVEYARD = 3
+_R55_ZONE_EXILE = 5
+
+
+def _r55_make_rust_state():
+    """Empty 2-player Rust GameState via the cross-engine builder."""
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    return build_rust_state(DeckSpec(card_defs=(), p0_library=(), p1_library=()))
+
+
+def _r55_all_zone_ids(rust_state):
+    """Every object id across every tracked zone on both seats."""
+    ids = set()
+    for e in rust_state.battlefield_snapshot():
+        ids.add(int(e["id"]))
+    for pid in (0, 1):
+        for e in rust_state.graveyard_snapshot(pid):
+            ids.add(int(e["id"]))
+        for e in rust_state.exile_snapshot(pid):
+            ids.add(int(e["id"]))
+        for e in rust_state.hand_snapshot(pid):
+            ids.add(int(e["id"]))
+        for e in rust_state.library_snapshot(pid):
+            ids.add(int(e["id"]))
+    return ids
+
+
+_R55_TOKEN_DICT = {
+    "name": "R55 Test Token",
+    "card_types": ["Creature"],
+    "power": 1,
+    "toughness": 1,
+    # The one load-bearing bit: the bridge / registry conveys
+    # token-ness via the supertypes Vec ("Token"). Rust's
+    # RegistryData::is_token reads this — mirrors Python's
+    # CardPrinting.is_token = "Token" in supertypes.
+    "supertypes": ["Token"],
+}
+_R55_NONTOKEN_DICT = {
+    "name": "R55 Test Nontoken",
+    "card_types": ["Creature"],
+    "mana_cost": {"generic": 1},
+    "effects": [],
+    "power": 2,
+    "toughness": 2,
+}
+
+
+def test_r55_rust_token_sacrificed_to_graveyard_ceases_to_exist():
+    """Rust regression pin: a token moved off bf to the graveyard
+    (the sacrifice destination) ceases to exist (CR 111.7) — it is
+    gone from EVERY zone, not sitting in the graveyard.
+    """
+    rust_state = _r55_make_rust_state()
+    tok_id = rust_state.register_and_inject_object(
+        _R55_TOKEN_DICT, 0, _R55_ZONE_BATTLEFIELD
+    )
+    assert tok_id in _r55_all_zone_ids(rust_state)
+    moved = rust_state.move_object(tok_id, _R55_ZONE_GRAVEYARD, 0)
+    assert moved is True
+    # Token ceased to exist: absent from graveyard AND every zone.
+    gy_ids = {int(e["id"]) for e in rust_state.graveyard_snapshot(0)}
+    assert tok_id not in gy_ids, (
+        "Rust: a sacrificed token must NOT remain in the graveyard "
+        f"(CR 111.7 token-cease-to-exist). graveyard ids={gy_ids}"
+    )
+    assert tok_id not in _r55_all_zone_ids(rust_state), (
+        "Rust: the token must be gone from EVERY zone after leaving "
+        "the battlefield (it ceased to exist)."
+    )
+
+
+def test_r55_rust_token_bounced_to_hand_ceases_to_exist():
+    """Rust regression pin: a token bounced to its owner's hand
+    ceases to exist (CR 111.7) rather than landing in hand.
+    """
+    rust_state = _r55_make_rust_state()
+    tok_id = rust_state.register_and_inject_object(
+        _R55_TOKEN_DICT, 0, _R55_ZONE_BATTLEFIELD
+    )
+    moved = rust_state.move_object(tok_id, _R55_ZONE_HAND, 0)
+    assert moved is True
+    hand_ids = {int(e["id"]) for e in rust_state.hand_snapshot(0)}
+    assert tok_id not in hand_ids, (
+        "Rust: a bounced token must NOT land in hand (CR 111.7 — a "
+        f"token in a non-bf zone ceases to exist). hand ids={hand_ids}"
+    )
+    assert tok_id not in _r55_all_zone_ids(rust_state)
+
+
+def test_r55_rust_token_exiled_ceases_to_exist():
+    """Rust regression pin: a token exiled ceases to exist (CR 111.7)
+    rather than sitting in exile.
+    """
+    rust_state = _r55_make_rust_state()
+    tok_id = rust_state.register_and_inject_object(
+        _R55_TOKEN_DICT, 1, _R55_ZONE_BATTLEFIELD
+    )
+    moved = rust_state.move_object(tok_id, _R55_ZONE_EXILE, 1)
+    assert moved is True
+    exile_ids = {int(e["id"]) for e in rust_state.exile_snapshot(1)}
+    assert tok_id not in exile_ids, (
+        "Rust: an exiled token must NOT remain in exile (CR 111.7). "
+        f"exile ids={exile_ids}"
+    )
+    assert tok_id not in _r55_all_zone_ids(rust_state)
+
+
+def test_r55_rust_nontoken_to_graveyard_stays_negative_control():
+    """Rust regression pin (negative control): a NONTOKEN creature
+    moved off bf to the graveyard STAYS in the graveyard — the
+    token-cease-to-exist SBA must NOT scrub nontokens.
+    """
+    rust_state = _r55_make_rust_state()
+    nt_id = rust_state.register_and_inject_object(
+        _R55_NONTOKEN_DICT, 0, _R55_ZONE_BATTLEFIELD
+    )
+    moved = rust_state.move_object(nt_id, _R55_ZONE_GRAVEYARD, 0)
+    assert moved is True
+    gy_ids = {int(e["id"]) for e in rust_state.graveyard_snapshot(0)}
+    assert nt_id in gy_ids, (
+        "Rust: a NONTOKEN creature must STAY in the graveyard after "
+        "leaving the battlefield — the CR 111.7 SBA only removes "
+        f"tokens. graveyard ids={gy_ids}"
+    )
+    assert nt_id in _r55_all_zone_ids(rust_state)
+
+
+def test_r55_rust_token_bf_to_bf_move_object_survives():
+    """Rust regression pin (edge): a bf->bf move_object (bounce-and-
+    replay shape) leaves a re-entered token ALONE — the cease drain
+    excludes the battlefield (the token legitimately exists on bf
+    again).
+    """
+    rust_state = _r55_make_rust_state()
+    tok_id = rust_state.register_and_inject_object(
+        _R55_TOKEN_DICT, 0, _R55_ZONE_BATTLEFIELD
+    )
+    # bf -> bf: source IS battlefield, target IS battlefield.
+    moved = rust_state.move_object(tok_id, _R55_ZONE_BATTLEFIELD, 0)
+    assert moved is True
+    bf_ids = {int(e["id"]) for e in rust_state.battlefield_snapshot()}
+    assert tok_id in bf_ids, (
+        "Rust: a token moved bf->bf must remain on the battlefield "
+        "(the cease drain only scrubs NON-battlefield zones; the "
+        f"token legitimately re-exists on bf). bf ids={bf_ids}"
+    )
+
+
+def _r55_token_carddef(name="R55 Bridge Token"):
+    """A bridge CardDef for a vanilla 1/1 token carrying the Token
+    supertype (so build_rust_state passes ("Token",) through and
+    Rust's is_token returns True — the cross-engine round-trip)."""
+    from mtg_bot.parity.cross_engine import CardDef
+
+    return CardDef(
+        name=name,
+        card_type="Creature",
+        power=1,
+        toughness=1,
+        supertypes=("Token",),
+    )
+
+
+def test_r55_bridge_token_is_token_round_trips_both_engines():
+    """Cross-engine bridge pin: a token CardDef built through BOTH
+    builders is is_token on the Python side AND ceases-to-exist on
+    the Rust side — proves the supertypes ("Token",) round-trip is
+    the load-bearing token-identity conveyance.
+    """
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        _card_def_to_python_printing,
+    )
+
+    tok_cd = _r55_token_carddef()
+    spec = DeckSpec(card_defs=(tok_cd,), p0_library=(), p1_library=())
+    build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    # Python side: the materialized printing trips is_token.
+    py_printing = _card_def_to_python_printing(tok_cd)
+    assert py_printing.is_token, (
+        "Python: a ('Token',)-supertype CardDef must materialize a "
+        "printing with is_token=True (bridge-correctness)."
+    )
+    # Rust side: inject onto bf, move to graveyard — ceases to exist.
+    tok_dict = {
+        "name": tok_cd.name,
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+        "supertypes": ["Token"],
+    }
+    tok_id = rust_state.register_and_inject_object(
+        tok_dict, 0, _R55_ZONE_BATTLEFIELD
+    )
+    rust_state.move_object(tok_id, _R55_ZONE_GRAVEYARD, 0)
+    gy_ids = {int(e["id"]) for e in rust_state.graveyard_snapshot(0)}
+    assert tok_id not in gy_ids, (
+        "Rust: the same token CardDef must cease to exist on bf-exit "
+        "(supertypes round-trip → is_token → CR 111.7 SBA)."
+    )
+
+
+def test_r55_bridge_create_token_then_sac_byte_equal_cross_engine():
+    """Cross-engine bridge pin: a carrier whose ETB create_token
+    spawns a Lander-shape token, then the token is sacrificed — the
+    post-sac field view is byte-equal cross-engine (the token ceased
+    to exist on BOTH sides, NOT one-side-in-graveyard).
+    """
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke, clear_token_printings,
+        _card_def_to_python_printing,
+    )
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import Zone
+    from mtg_bot.cards.source import get_active_source
+
+    clear_token_printings()
+    try:
+        pr = get_active_source().get_printings()
+        if pr.get("Galactic Wayfarer") is None:
+            pytest.skip("Galactic Wayfarer absent from active CardSource")
+        gw = pr.get("Galactic Wayfarer")
+        spec = trajectory.production_deck_to_deckspec(
+            ["Galactic Wayfarer"] * 6 + ["Forest"] * 54,
+            shared_rng_seed=11, pad_to_size=60, pad_with="Forest",
+        )
+        gw_cd = next(
+            c for c in spec.card_defs if c.name == "Galactic Wayfarer"
+        )
+        lander_pid = gw_cd.triggered_abilities[0]["effect"][
+            "token_printing_id"
+        ]
+        py_state, rust_state = trajectory.setup_matched_game(
+            spec, opening_hand_size=0
+        )
+        py_printing = _card_def_to_python_printing(gw_cd)
+        py_carrier = py_state.new_object(
+            py_printing, owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        py_carrier.summoning_sick = False
+        py_carrier.tapped = False
+        py_carrier.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(py_carrier)
+        dispatch_event(py_state, Event.ENTERS, obj=py_carrier)
+        rust_state.register_and_inject_object(
+            {
+                "name": "Galactic Wayfarer",
+                "card_types": ["Creature"],
+                "mana_cost": {
+                    "generic": gw.mana_cost.generic, "G": 1
+                },
+                "power": gw.power, "toughness": gw.toughness,
+                "effects": [],
+                "triggered_abilities": [
+                    {
+                        "event": "enters",
+                        "predicate": {"kind": "source_is_self"},
+                        "effect": {
+                            "kind": "create_token",
+                            "count": 1,
+                            "token_printing_id": lander_pid,
+                        },
+                    }
+                ],
+            },
+            0,
+            _R55_ZONE_BATTLEFIELD,
+        )
+        while rust_state.stack_size() > 0:
+            rust_state.resolve_top_of_stack()
+        while py_state.stack:
+            py_resolve(py_state)
+        # Pre-sac byte-equal (the spawned Lander matches cross-engine).
+        pre = compare_fields(
+            build_python_field_view(py_state),
+            ce_parity_smoke()._build_field_view(rust_state),
+        )
+        assert pre == [], f"pre-sac must be byte-equal: {pre}"
+        # Sacrifice the Lander on BOTH engines (move bf->graveyard).
+        py_lander = next(
+            o for o in py_state.battlefield
+            if o.printing.name == "Lander"
+        )
+        from mtg_bot.turn import move_off_battlefield
+        move_off_battlefield(py_state, py_lander, destination="graveyard")
+        rust_lander_id = next(
+            int(e["id"]) for e in rust_state.battlefield_snapshot()
+            if e["printing_name"] == "Lander"
+        )
+        rust_state.move_object(
+            rust_lander_id, _R55_ZONE_GRAVEYARD, 0
+        )
+        post = compare_fields(
+            build_python_field_view(py_state),
+            ce_parity_smoke()._build_field_view(rust_state),
+        )
+        assert post == [], (
+            "ROUND-55: post-sac field view must be FULLY byte-equal "
+            "cross-engine — the Lander token ceased to exist on BOTH "
+            f"engines (no one-side graveyard residue). Got {post}"
+        )
+    finally:
+        clear_token_printings()
+
+
+def test_r55_bridge_token_bounced_ceases_to_exist():
+    """Cross-engine bridge pin: a token CardDef built through the
+    bridge, then bounced to hand on the Rust side, ceases to exist
+    (CR 111.7) — the supertypes round-trip drives is_token on the
+    bounce path too, not just the sacrifice path.
+    """
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    tok_cd = _r55_token_carddef("R55 Bounce Bridge Token")
+    spec = DeckSpec(card_defs=(tok_cd,), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    tok_dict = {
+        "name": tok_cd.name,
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+        "supertypes": ["Token"],
+    }
+    tok_id = rust_state.register_and_inject_object(
+        tok_dict, 1, _R55_ZONE_BATTLEFIELD
+    )
+    rust_state.move_object(tok_id, _R55_ZONE_HAND, 1)
+    hand_ids = {int(e["id"]) for e in rust_state.hand_snapshot(1)}
+    assert tok_id not in hand_ids, (
+        "Rust: a bridge-built token bounced to hand must cease to "
+        f"exist (CR 111.7). hand ids={hand_ids}"
+    )
+    assert tok_id not in _r55_all_zone_ids(rust_state)
+
+
+def test_r55_bridge_nontoken_to_graveyard_stays_negative_control():
+    """Cross-engine bridge pin (negative control): a NONTOKEN CardDef
+    built through the bridge (NO Token supertype) STAYS in the
+    graveyard on bf-exit — the supertypes round-trip must not
+    over-trip is_token for nontoken printings.
+    """
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_rust_state,
+        _card_def_to_python_printing,
+    )
+
+    nt_cd = CardDef(
+        name="R55 Bridge Nontoken",
+        card_type="Creature",
+        power=2,
+        toughness=2,
+    )
+    # Python side: must NOT trip is_token.
+    assert not _card_def_to_python_printing(nt_cd).is_token, (
+        "Python: a CardDef with no ('Token',) supertype must "
+        "materialize is_token=False (bridge-correctness)."
+    )
+    spec = DeckSpec(card_defs=(nt_cd,), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    nt_dict = {
+        "name": nt_cd.name,
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    nt_id = rust_state.register_and_inject_object(
+        nt_dict, 0, _R55_ZONE_BATTLEFIELD
+    )
+    rust_state.move_object(nt_id, _R55_ZONE_GRAVEYARD, 0)
+    gy_ids = {int(e["id"]) for e in rust_state.graveyard_snapshot(0)}
+    assert nt_id in gy_ids, (
+        "Rust: a bridge-built NONTOKEN must STAY in the graveyard — "
+        "the CR 111.7 SBA must not over-scrub. graveyard "
+        f"ids={gy_ids}"
+    )
+
+
+def test_r55_genuine_real_eoe_lander_sac_fully_byte_equal():
+    """GENUINE real-EoE cross-engine probe (round-55): drive the REAL
+    Galactic Wayfarer Lander carrier through the real loader, spawn
+    the Lander, sacrifice it via the engine's own bf-exit primitive
+    on BOTH engines, and assert the WHOLE post-sac field view is
+    byte-equal — the sacrificed Lander token ceased to exist on Rust
+    exactly as on Python (CR 111.7). This is the round-55 closure of
+    the genuine cross-engine divergence round-54 N1 found; the
+    flipped Phase-3a probe drives the FULL activation
+    (cost+search+shuffle), this one isolates the token-SBA leg on
+    the real carrier so a regression here points squarely at the
+    token-cease-to-exist SBA.
+    """
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke, clear_token_printings,
+        _card_def_to_python_printing,
+    )
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import Zone
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.turn import move_off_battlefield
+
+    clear_token_printings()
+    try:
+        pr = get_active_source().get_printings()
+        if pr.get("Galactic Wayfarer") is None:
+            pytest.skip("Galactic Wayfarer absent from active CardSource")
+        gw = pr.get("Galactic Wayfarer")
+        spec = trajectory.production_deck_to_deckspec(
+            ["Galactic Wayfarer"] * 6 + ["Forest"] * 54,
+            shared_rng_seed=42, pad_to_size=60, pad_with="Forest",
+        )
+        gw_cd = next(
+            c for c in spec.card_defs if c.name == "Galactic Wayfarer"
+        )
+        lander_pid = gw_cd.triggered_abilities[0]["effect"][
+            "token_printing_id"
+        ]
+        py_state, rust_state = trajectory.setup_matched_game(
+            spec, opening_hand_size=0
+        )
+        py_printing = _card_def_to_python_printing(gw_cd)
+        py_carrier = py_state.new_object(
+            py_printing, owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        py_carrier.summoning_sick = False
+        py_carrier.tapped = False
+        py_carrier.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(py_carrier)
+        dispatch_event(py_state, Event.ENTERS, obj=py_carrier)
+        rust_state.register_and_inject_object(
+            {
+                "name": "Galactic Wayfarer",
+                "card_types": ["Creature"],
+                "mana_cost": {
+                    "generic": gw.mana_cost.generic, "G": 1
+                },
+                "power": gw.power, "toughness": gw.toughness,
+                "effects": [],
+                "triggered_abilities": [
+                    {
+                        "event": "enters",
+                        "predicate": {"kind": "source_is_self"},
+                        "effect": {
+                            "kind": "create_token",
+                            "count": 1,
+                            "token_printing_id": lander_pid,
+                        },
+                    }
+                ],
+            },
+            0,
+            _R55_ZONE_BATTLEFIELD,
+        )
+        while rust_state.stack_size() > 0:
+            rust_state.resolve_top_of_stack()
+        while py_state.stack:
+            py_resolve(py_state)
+        # The real Lander spawned byte-equal on both engines.
+        pre = compare_fields(
+            build_python_field_view(py_state),
+            ce_parity_smoke()._build_field_view(rust_state),
+        )
+        assert pre == [], (
+            f"real Lander spawn must be byte-equal pre-sac: {pre}"
+        )
+        py_lander = next(
+            o for o in py_state.battlefield
+            if o.printing.name == "Lander"
+        )
+        assert py_lander.printing.is_token, (
+            "sanity: the real Lander printing must be is_token "
+            "(Python source of truth)"
+        )
+        move_off_battlefield(
+            py_state, py_lander, destination="graveyard"
+        )
+        rust_lander_id = next(
+            int(e["id"]) for e in rust_state.battlefield_snapshot()
+            if e["printing_name"] == "Lander"
+        )
+        rust_state.move_object(
+            rust_lander_id, _R55_ZONE_GRAVEYARD, 0
+        )
+        post_divs = compare_fields(
+            build_python_field_view(py_state),
+            ce_parity_smoke()._build_field_view(rust_state),
+        )
+        assert post_divs == [], (
+            "ROUND-55 GENUINE real-EoE: the sacrificed real Lander "
+            "token must cease to exist on Rust exactly as on Python "
+            "(CR 111.7) — the WHOLE field view byte-equal. A "
+            "divergence is a real regression in the token-cease-to-"
+            f"exist SBA. Got {post_divs}"
+        )
+        # Both graveyards empty of the Lander (it ceased to exist).
+        rust_gy = [
+            e["printing_name"]
+            for e in rust_state.graveyard_snapshot(0)
+        ]
+        assert "Lander" not in rust_gy, (
+            f"Rust graveyard must not hold the Lander: {rust_gy}"
+        )
+        assert not any(
+            o.printing.name == "Lander"
+            for o in py_state.players[0].graveyard
+        )
+    finally:
+        clear_token_printings()
 
 
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
