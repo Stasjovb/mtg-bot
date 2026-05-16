@@ -1,0 +1,55 @@
+# mtg-bot worker daemon — systemd unit
+#
+# Install: copy to /etc/systemd/system/mtg-bot-worker.service, fill in
+# the placeholders below, then:
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable mtg-bot-worker
+#   sudo systemctl start mtg-bot-worker
+#   sudo systemctl status mtg-bot-worker
+#
+# Logs land in journalctl: `journalctl -u mtg-bot-worker -f`.
+#
+# Placeholders to fill in (run `tailscale ip -4` for the IP):
+#   ${TAILNET_IP}   — tailnet IP this machine binds on, e.g. 100.96.1.2
+#   ${N_WORKERS}    — multiprocessing pool size (cpu_count - 2 is a
+#                     reasonable default)
+#   ${USER}         — service user (NOT root; the user that owns the
+#                     mtg-bot venv)
+#   ${HOME}         — home directory of ${USER}
+#   ${REPO_ROOT}    — absolute path to the mtg-bot checkout, e.g.
+#                     /home/gregg/projects/mtg-bot
+#   ${VENV_PYTHON}  — absolute path to the Python interpreter in the
+#                     project venv, e.g.
+#                     /home/gregg/projects/mtg-bot/.venv-py313/bin/python
+
+[Unit]
+Description=MTG-Bot worker daemon (distributed self-play / eval, REST)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${USER}
+WorkingDirectory=${REPO_ROOT}
+Environment="PYTHONPATH=${REPO_ROOT}/src"
+ExecStart=${VENV_PYTHON} -m mtg_bot.worker_daemon \
+  --host ${TAILNET_IP} \
+  --port 5198 \
+  --n-workers ${N_WORKERS} \
+  --deck-pool-path ${REPO_ROOT}/data/17lands/eoe_decks.json.gz \
+  --weights-cache-root ${REPO_ROOT}/trained_weights
+
+# Crash-restart policy: every failure, 30s backoff. Matches the
+# launchd / Task Scheduler defaults so all three platforms behave
+# the same way.
+Restart=on-failure
+RestartSec=30
+
+# Tighten the process a little. The daemon is a Python HTTP service
+# plus a multiprocessing pool; no special privileges needed.
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

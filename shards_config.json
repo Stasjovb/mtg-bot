@@ -1,22 +1,7 @@
 {
-  "shards": [
-    {
-      "host": "local",
-      "n_workers": 8
-    },
-    {
-      "host": "greggs-macbook-pro",
-      "user": "greggkeithley",
-      "repo_path": "/Users/greggkeithley/projects/mtg-bot",
-      "venv_python": ".venv-py313/bin/python"
-    },
-    {
-      "host": "desktop-g72aptg",
-      "user": "gregg",
-      "repo_path": "C:\\Users\\Gregg\\Projects\\mtg-bot",
-      "venv_python": ".venv-py313\\Scripts\\python.exe",
-      "ssh_port": 50022,
-      "n_workers": 4
-    }
+  "worker_urls": [
+    "http://desktop-j05412i:5198",
+    "http://greggs-macbook-pro:5198",
+    "http://desktop-g72aptg:5198"
   ]
 }

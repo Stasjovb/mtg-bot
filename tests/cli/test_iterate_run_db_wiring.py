@@ -205,11 +205,9 @@ def _setup_mocks_for_iterate(
     monkeypatch.setattr(cli_iterate, "_train_next", _fake_train_next)
     monkeypatch.setattr(cli_iterate, "_eval_match", _fake_eval_match)
     # Orphan sweep no-ops — would otherwise scan the live system.
+    # sweep_remote_orphans was deleted with the SSH path.
     monkeypatch.setattr(
         cli_iterate, "sweep_local_orphans", lambda *a, **kw: None,
-    )
-    monkeypatch.setattr(
-        cli_iterate, "sweep_remote_orphans", lambda *a, **kw: None,
     )
     # Deck pool: pretend a non-empty list of decks loaded.
     monkeypatch.setattr(

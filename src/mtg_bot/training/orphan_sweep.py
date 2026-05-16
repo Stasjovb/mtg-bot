@@ -98,7 +98,6 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import subprocess
 import sys
 import time
@@ -510,123 +509,13 @@ def sweep_local_orphans(
     return killed
 
 
-def _build_remote_sweep_command(shard) -> str:
-    """Emit the one-line shell command the remote runs to sweep its
-    own orphans. Imports this module via ``-c`` and calls
-    ``sweep_local_orphans``. Uses ``require_repo_root_match=False``
-    on the remote because the remote's argv may use a different
-    absolute path layout than the master's.
-    """
-    repo_path = shard.repo_path or ""
-    venv_python = shard.venv_python or ""
-    # The remote sweep deliberately uses require_repo_root_match=False:
-    # we don't know whether the remote has multiple checkouts and the
-    # argv pattern is already a strong signal there. The remote also
-    # doesn't have a competing Jupyter/editor running self-play
-    # patterns — see module docstring's limitations note.
-    py = (
-        "import sys; "
-        "from mtg_bot.training.orphan_sweep import sweep_local_orphans; "
-        f"sweep_local_orphans(repo_root={repo_path!r}, label='remote')"
-    )
-    is_windows = (venv_python or "").endswith(".exe")
-    if is_windows:
-        py_q = py.replace('"', '\\"')
-        return (
-            f'cd /d "{repo_path}" && '
-            f'set PYTHONPATH=src && '
-            f'"{venv_python}" -c "{py_q}"'
-        )
-    return (
-        f'cd {shlex.quote(repo_path)} && '
-        f'PYTHONPATH=src {shlex.quote(venv_python)} '
-        f'-c {shlex.quote(py)}'
-    )
+# v2-cutover removed sweep_remote_orphans, _build_remote_sweep_command,
+# and _parse_killed_pids: the SSH path is gone, and each worker daemon
+# runs under its own native service supervisor (systemd / launchd /
+# Task Scheduler) which restarts the daemon process cleanly on crash.
+# Stale per-worker pool members (if any) are the daemon's own MP-pool
+# problem to handle, not the master orchestrator's. sweep_local_orphans
+# above (the master-side process scanner) stays — it guards the master
+# against orphan workers left over from a prior iter's local self-play.
 
 
-def sweep_remote_orphans(
-    shard,
-    *,
-    ssh_cmd_factory=None,
-    run_subprocess=None,
-    print_fn=None,
-) -> list[int]:
-    """SSH a sweep to the remote. Returns the PIDs the remote killed
-    (parsed from its stdout). Best-effort — a failed sweep prints a
-    warning and returns []. We do NOT raise: a flaky sweep should
-    never block the master's iter from launching.
-
-    ``ssh_cmd_factory(shard, remote_command) -> list[str]`` and
-    ``run_subprocess(cmd, *, timeout)`` are injection points for
-    testing — production callers leave them as None and the
-    distributed-module versions are imported lazily.
-    """
-    pf = print_fn or (lambda s: print(s, flush=True))
-    if ssh_cmd_factory is None or run_subprocess is None:
-        # Lazy import to avoid a circular dependency at module load
-        # time (distributed.py imports things from training/__init__).
-        from mtg_bot.training.distributed import (
-            _ssh_cmd as _default_ssh_cmd,
-            _run_subprocess as _default_run,
-        )
-        if ssh_cmd_factory is None:
-            ssh_cmd_factory = _default_ssh_cmd
-        if run_subprocess is None:
-            run_subprocess = _default_run
-    label = getattr(shard, "display_label", None) or getattr(
-        shard, "host", "remote",
-    )
-    sweep_cmd = _build_remote_sweep_command(shard)
-    try:
-        cp = run_subprocess(
-            ssh_cmd_factory(shard, sweep_cmd), timeout=120,
-        )
-    except subprocess.CalledProcessError as e:
-        pf(
-            f"[sweep] {label}: remote sweep failed (exit "
-            f"{e.returncode}): {(e.stderr or '').strip()[:200]}"
-        )
-        return []
-    except (subprocess.TimeoutExpired, OSError) as e:
-        pf(
-            f"[sweep] {label}: remote sweep error: "
-            f"{type(e).__name__}: {e}"
-        )
-        return []
-    stdout = (cp.stdout or "").strip()
-    if stdout:
-        for line in stdout.splitlines():
-            pf(f"[sweep] {label} (remote): {line}")
-    return _parse_killed_pids(stdout)
-
-
-def _parse_killed_pids(stdout: str) -> list[int]:
-    """Parse the ``[sweep] killed N orphan processes on <label>: [pids]``
-    line emitted by ``sweep_local_orphans``. Returns the PID list, or
-    empty if the line is absent / malformed. Tolerant to extra noise
-    lines around it.
-
-    Looks for the LAST ``[...]`` pair on the line (the PID list),
-    since the line itself starts with ``[sweep]`` which would otherwise
-    confuse a naive find/find pair.
-    """
-    out: list[int] = []
-    for line in (stdout or "").splitlines():
-        # Match the killed line specifically. The "found N candidates"
-        # line uses the same brackets but a different verb.
-        if "killed" not in line or "orphan processes" not in line:
-            continue
-        rb = line.rfind("]")
-        if rb < 0:
-            continue
-        lb = line.rfind("[", 0, rb)
-        if lb < 0:
-            continue
-        inner = line[lb + 1 : rb].strip()
-        if not inner:
-            return []
-        for tok in inner.split(","):
-            tok = tok.strip()
-            if tok.isdigit():
-                out.append(int(tok))
-    return out

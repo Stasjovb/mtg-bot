@@ -102,8 +102,7 @@ on PATH. Subcommands:
 
 - `iterate`  — AlphaZero training loop (formerly `scripts/iterate_alphazero.py`)
 - `train`    — train the value+policy network from saved data
-- `shard`    — run one self-play / eval shard (SSH-invoked from master)
-- `serve`    — bundle/queue HTTP server (port 5099)
+- `serve`    — bundle/queue HTTP server + v2 coordinator (port 5099)
 - `eval`     — head-to-head eval between two registered NN versions, e.g.
   `mtg_bot eval --new v16 --old v13 --games 3000`
 - `capture`  — capture annotated NN-driven self-play replays for the UI
@@ -116,15 +115,16 @@ self-play depth automatically — there is exactly **one** place to
 update the default `--nodes` (currently 200, the iter_005 self-play
 depth). See the "Eval depth" scope reminder below.
 
-The four production scripts (`scripts/iterate_alphazero.py`,
-`scripts/train_nn.py`, `scripts/run_self_play_shard.py`,
+The three remaining production scripts
+(`scripts/iterate_alphazero.py`, `scripts/train_nn.py`,
 `scripts/serve_setup_scripts.py`) and the four bench scripts
 (`scripts/bench_clone.py`, `scripts/bench_clone_zones.py`,
 `scripts/bench_nn_eval_server.py`, `scripts/bench_per_game_wall.py`)
 remain as **5-line shims** that dispatch into the cli module — every
-existing SSH invocation, the bundle/queue server, and
-`hooks/post-commit` keep working without modification. New code
-should prefer the `mtg_bot <subcommand>` form.
+the bundle/queue server and `hooks/post-commit` keep working without
+modification. New code should prefer the `mtg_bot <subcommand>`
+form. The v2-cutover deleted `scripts/run_self_play_shard.py` and
+`mtg_bot shard` along with the rest of the SSH path.
 
 Throwaway investigation scripts (`scripts/scout_*.py`,
 `scripts/profile_*.py`, ad-hoc `scripts/trace_*.py`) intentionally
@@ -132,16 +132,35 @@ Throwaway investigation scripts (`scripts/scout_*.py`,
 not production entrypoints, and porting them would add CLI noise
 without value. Don't migrate them.
 
-## Distributed flow (master + remotes)
+## Distributed flow (v2 — coordinator + workers, REST)
 
-The cluster is one master (Win11 desktop) + N remotes (Mac, Win10).
-For day-to-day operations — running iterations, running remote
-benches that surface in the training UI, monitoring, aborting — see
-**[`docs/RUNNING_DISTRIBUTED.md`](docs/RUNNING_DISTRIBUTED.md)**.
+Post v2-cutover, the cluster is one **coordinator** (the master's
+`mtg_bot serve` on port 5099 with the v2 endpoints + heartbeat
+poller + queue.db) plus N **workers** (`mtg_bot.worker_daemon` on
+port 5198, running as a long-lived native service on each machine).
+All traffic is REST over Tailscale; no SSH, no per-iter shard
+processes.
 
-For one-time per-machine bootstrap (Python, repo clone, SSH keys,
-Tailscale enrollment), see
-[`docs/SETUP_DISTRIBUTED.md`](docs/SETUP_DISTRIBUTED.md).
+The wire contract:
+[`docs/DISTRIBUTED_API_v2.md`](docs/DISTRIBUTED_API_v2.md).
+
+Runtime walkthrough of an `mtg_bot iterate` run:
+[`docs/DISTRIBUTED_RUN_FLOW.md`](docs/DISTRIBUTED_RUN_FLOW.md).
+
+Day-to-day operations — running iterations, monitoring, aborting:
+[`docs/RUNNING_DISTRIBUTED.md`](docs/RUNNING_DISTRIBUTED.md).
+
+Per-machine bootstrap (Python, repo clone, Tailscale, native
+service install): [`docs/SETUP_DISTRIBUTED.md`](docs/SETUP_DISTRIBUTED.md)
+and the operator guide at [`deploy/README.md`](deploy/README.md).
+
+Worker daemons own their own per-machine operational config
+(`--n-workers`, `--deck-pool-path`, `--weights-cache-root`,
+`--host`) via CLI flags baked into the native service file. The
+orchestrator's `/v2/start_*` request body carries ONLY `stage_id`
+and `coordinator_url`; the orchestrator never overrides per-machine
+knobs. `shards_config.json` on the master is a URL list:
+`{"worker_urls": ["http://<tailnet-host>:5198", ...]}`.
 
 ## Run database
 
@@ -151,7 +170,7 @@ Every `mtg_bot` subcommand records its run into a SQLite DB at
 **Phase 2 invariant (current):** the training UI under
 `src/mtg_bot/training_ui/` reads `runs.db` as the single source of
 truth. To keep JSON-only producers (today: `iterate`, `train`,
-`shard`, `capture`, `bench` — Phase 1 only wired `mtg_bot eval`)
+`capture`, `bench` — Phase 1 only wired `mtg_bot eval`)
 visible in the dashboard without a manual ops step, the UI runs an
 **idempotent backfill from `progress_dir/*.json` into the DB at the
 top of each `/api/runs` request**. JSON-side richer fields the DB
@@ -188,9 +207,12 @@ and late `configure(...)` writes propagate):
   transport. Used by master subcommands (the master has direct
   filesystem access).
 - `MTG_BOT_RUN_DB_URL=http://desktop-j05412i:5099` — REST transport.
-  Used by SSH-launched remote shards (no shared filesystem).
-- Neither set → every `client.*` call is a no-op. Phase 1 invariant:
-  callers' existing JSON writes still run unchanged.
+  Used by any non-master process that needs to write runs.db rows.
+  (The v2 worker daemon writes per-game progress to the coordinator's
+  v2 endpoints, not directly to runs.db — the coordinator owns the
+  durability boundary.)
+- Neither set → every `client.*` call is a no-op. Callers' existing
+  JSON writes still run unchanged.
 
 **Backup** (online — no need to stop the master):
 

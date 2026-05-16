@@ -40,7 +40,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from flask import (
     Flask, Response, jsonify, render_template_string, request,
@@ -212,6 +212,13 @@ def create_app(
     monotonic: callable = time.monotonic,
     janitor_interval_seconds: Optional[float] = None,
     janitor_stale_after_hours: Optional[float] = None,
+    queue_db_path: Optional[Path] = None,
+    weights_root: Optional[Path] = None,
+    iterate_data_dir: Optional[Path] = None,
+    replays_root: Optional[Path] = None,
+    shards_config_path: Optional[Path] = None,
+    enable_heartbeat_poller: bool = True,
+    heartbeat_poll_interval_s: float = 10.0,
 ) -> Flask:
     """Build the master HTTP server. ``progress_dir`` (when set)
     enables Stop-button propagation to remotes: each ``/queue/take``
@@ -926,6 +933,90 @@ def create_app(
         # hang per-app singletons that aren't view-bound.
         app.extensions["runs_janitor"] = janitor
 
+    # ---- v2 coordinator endpoints --------------------------------
+    # Phase 3 of the distributed-rewrite. Adds /v2/stage/*, /v2/claim,
+    # /v2/report_result, /v2/weights/<v>[/metadata], /v2/healthz to
+    # the same port-5099 Flask app. The queue.db SQLite store lives at
+    # ``<progress_dir>/coordinator_state/queue.db`` by default
+    # (overridable via ``queue_db_path``). Workers fetch weights from
+    # ``<weights_root>/<version>/weights.pt``; report_result writes
+    # npzs into ``<iterate_data_dir>`` and replays into
+    # ``<replays_root>/<stage_id>_<shard_label>/`` so train/UI keep
+    # working untouched.
+    if queue_db_path is None and progress_dir is not None:
+        queue_db_path = progress_dir / "coordinator_state" / "queue.db"
+    # Production-launch default: even without --progress-dir, the v2
+    # surface should activate at the canonical
+    # ``training_progress/coordinator_state/queue.db`` location so
+    # existing ``mtg_bot serve`` invocations get the v2 endpoints
+    # without an edit. Tests + the ``--queue-db-path ''`` opt-out path
+    # land in the ``str(queue_db_path) == "."`` branch below.
+    if queue_db_path is None:
+        queue_db_path = (
+            _REPO_ROOT_FROM_HERE / "training_progress"
+            / "coordinator_state" / "queue.db"
+        )
+    if str(queue_db_path) == ".":
+        # ``--queue-db-path ''`` collapses to ``Path('.')``; treat as
+        # explicit-disable (mirrors ``--runs-db-path ''`` semantics).
+        queue_db_path = None
+    if queue_db_path is not None:
+        from mtg_bot.cli.runs import queue_db as _queue_db  # noqa: WPS433
+        from mtg_bot.cli.runs.heartbeat_poller import (  # noqa: WPS433
+            HeartbeatPoller,
+        )
+        from mtg_bot.cli.runs.v2_endpoints import (  # noqa: WPS433
+            build_v2_blueprint,
+        )
+
+        # Defaults for the artifact directories. Resolve relative to
+        # the project root when possible; tests pass absolute paths.
+        _weights_root = weights_root or (
+            _REPO_ROOT_FROM_HERE / "trained_weights"
+        )
+        _iterate_data = iterate_data_dir or (
+            _REPO_ROOT_FROM_HERE / "iterate_data"
+        )
+        _replays_root = replays_root or (
+            _REPO_ROOT_FROM_HERE / "replays"
+        )
+        _shards_config = shards_config_path or (
+            _REPO_ROOT_FROM_HERE / "shards_config.json"
+        )
+
+        # Recovery: re-queue any in-flight claims whose TTL expired
+        # while the coordinator was down.
+        _conn = _queue_db.connect(queue_db_path)
+        try:
+            with _queue_db.WRITE_LOCK:
+                _queue_db.requeue_expired_claims(_conn)
+        finally:
+            _conn.close()
+
+        # Heartbeat poller (daemon thread). Workers without
+        # ``worker_url`` in shards_config.json are silently skipped.
+        poller_holder: dict[str, Any] = {"poller": None}
+        if enable_heartbeat_poller:
+            poller = HeartbeatPoller(
+                queue_db_path=queue_db_path,
+                shards_config_path=_shards_config,
+                poll_interval_s=heartbeat_poll_interval_s,
+            )
+            poller.start()
+            poller_holder["poller"] = poller
+            app.extensions["v2_heartbeat_poller"] = poller
+
+        bp = build_v2_blueprint(
+            queue_db_path=queue_db_path,
+            weights_root=_weights_root,
+            iterate_data_dir=_iterate_data,
+            replays_root=_replays_root,
+            process_started_at_monotonic=time.monotonic(),
+            heartbeat_poller_provider=lambda: poller_holder["poller"],
+        )
+        app.register_blueprint(bp)
+        app.extensions["v2_queue_db_path"] = queue_db_path
+
     return app
 
 
@@ -1013,6 +1104,35 @@ def main(argv=None) -> None:  # pragma: no cover
             "than this get demoted to ``killed``. Default 6.0."
         ),
     )
+    parser.add_argument(
+        "--queue-db-path", type=Path, default=None,
+        help=(
+            "Path to the v2 coordinator queue.db (SQLite). Default: "
+            "``<progress_dir>/coordinator_state/queue.db`` when "
+            "``--progress-dir`` is set, else the canonical "
+            "``training_progress/coordinator_state/queue.db``. Pass "
+            "``--queue-db-path ''`` to explicitly disable the v2 "
+            "endpoints (mirrors the ``--runs-db-path ''`` opt-out)."
+        ),
+    )
+    parser.add_argument(
+        "--shards-config", type=Path,
+        default=_REPO_ROOT_FROM_HERE / "shards_config.json",
+        help=(
+            "Path to shards_config.json. Both the new "
+            "``{workers: [...]}`` shape and the legacy "
+            "``{shards: [...]}`` shape are supported (entries without "
+            "a ``worker_url`` are no-op'd by the heartbeat poller)."
+        ),
+    )
+    parser.add_argument(
+        "--no-heartbeat-poller", action="store_true",
+        help=(
+            "Disable the v2 heartbeat poller. The queue.db endpoints "
+            "still serve; the in-memory liveness map just stays "
+            "empty. Useful for tests."
+        ),
+    )
     args = parser.parse_args(argv)
 
     repo_url = args.repo_url or _detect_repo_url(args.repo_root)
@@ -1046,6 +1166,9 @@ def main(argv=None) -> None:  # pragma: no cover
         runs_db_path=runs_db_path,
         janitor_interval_seconds=args.janitor_interval_seconds,
         janitor_stale_after_hours=args.janitor_stale_after_hours,
+        queue_db_path=args.queue_db_path,
+        shards_config_path=args.shards_config,
+        enable_heartbeat_poller=not args.no_heartbeat_poller,
     )
     print(
         f"[serve_setup] master={master_tailnet_name} repo={repo_url} "

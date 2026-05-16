@@ -565,22 +565,11 @@ def build_iterate_schema(
                     ),
                 },
                 {
-                    "name": "bundle-url", "type": "string",
-                    "default": "http://desktop-j05412i:5099/repo.bundle",
-                    "always_emit": True,
-                    "help": (
-                        "URL of master's git-bundle endpoint. Each "
-                        "remote shard fetches a fresh bundle before "
-                        "running. Leave blank to skip remote-side "
-                        "code-sync."
-                    ),
-                },
-                {
                     "name": "queue-url", "type": "string",
                     "default": "http://desktop-j05412i:5099",
                     "always_emit": True,
                     "help": (
-                        "Base URL of master's pull-mode work queue. "
+                        "Base URL of the master's v2 coordinator. "
                         "Required when --shards-config is set."
                     ),
                 },
@@ -588,22 +577,9 @@ def build_iterate_schema(
                     "name": "queue-slack-pct", "type": "float",
                     "default": 0.1,
                     "help": (
-                        "Over-queue ratio for distributed self-play "
-                        "and eval. 0.1 = 10%% extra to eliminate "
-                        "straggler wait. Set 0 for the legacy "
-                        "drain-the-whole-queue behavior."
-                    ),
-                },
-                {
-                    "name": "shard-ssh-timeout-min", "type": "float",
-                    "default": 360.0,
-                    "help": (
-                        "Hard upper-bound timeout (in MINUTES) on a "
-                        "single shard's SSH session. Caps each remote "
-                        "SSH wrapper so a Tailscale-keeps-TCP-alive "
-                        "hang can't wedge the orchestrator. Default "
-                        "360 min covers a 1000-game Mac shard at the "
-                        "structured trunk's pace."
+                        "DEPRECATED on the REST path — natural-drain "
+                        "+ auto-close handles stage completion. Kept "
+                        "for argparse back-compat only."
                     ),
                 },
             ],

@@ -151,12 +151,19 @@ def runtime_parser() -> argparse.ArgumentParser:
 
 
 def load_shards_config(path: Path):
-    """Re-export of ``mtg_bot.training.distributed.load_shards_config``.
+    """Re-export of the v2 URL-only shards-config loader.
 
-    Subcommands import this from ``_common`` to avoid each one carrying
-    the ``from mtg_bot.training.distributed import ...`` boilerplate.
+    Post v2-cutover the loader lives in
+    ``mtg_bot.cli.runs.heartbeat_poller`` (same path the coordinator's
+    heartbeat thread uses to discover workers). Returns the worker
+    list as ``[{worker_url: "..."}, ...]``; the legacy
+    ``{shards: [...]}`` SSH shape raises
+    :class:`LegacyShardsConfigError` from that module. Most callers
+    prefer :func:`mtg_bot.distributed_rest_orchestrator.load_worker_urls`
+    which returns just the URL strings; this re-export stays for
+    parity with older subcommand imports.
     """
-    from mtg_bot.training.distributed import load_shards_config as _impl
+    from mtg_bot.cli.runs.heartbeat_poller import load_shards_config as _impl
     return _impl(path)
 
 
