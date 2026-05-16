@@ -762,6 +762,92 @@ class DealDamageToOpponentCreatureByCardsInGraveyard(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageToOpponentCreatureByLifeTotal(Effect):
+    """Deal damage equal to your life total to target creature an
+    opponent controls.
+
+    BLOCKED-RUST-EFFECT slice (round 47) -- sister of
+    ``DealDamageToOpponentCreatureByArtifactCount`` (round 32),
+    ``DealDamageToOpponentCreatureByCardsInHand`` (round 35),
+    ``DealDamageToOpponentCreatureByLandsControlled`` (round 36),
+    ``DealDamageToOpponentCreatureByCreaturesYouControl`` (round 37),
+    and ``DealDamageToOpponentCreatureByCardsInGraveyard`` (round 46).
+    Same apply substrate (damage to first eligible opponent creature,
+    target legality re-checked on slot), NEW denominator (the
+    controller's clamped life total, in place of artifact-count /
+    hand-size / lands-controlled / creatures-controlled /
+    cards-in-graveyard). Establishes a SIXTH (final) orthogonal
+    X-from-count denominator on the round-32 damage substrate,
+    COMPLETING the artifact-count / hand-size / lands-controlled /
+    creatures-controlled / cards-in-graveyard / life-total sextuplet
+    on this apply substrate -- the damage-to-opponent-creature row of
+    the 6-substrate x 6-denominator X-from-count matrix is now fully
+    saturated.
+
+    Life-total is the FIRST non-zone-size, scalar-read denominator on
+    the damage substrate (the prior five all read a collection size;
+    this class reads a scalar player attribute and clamps it). The
+    clamp ``max(0, life)`` mirrors the round-42
+    ``MillTargetPlayerEqualToYourLifeTotal`` precedent
+    (``draw_mill.py:187``) -- negative life totals (arbitrary
+    lose-life-past-zero / infect-style scenarios; an SBA would
+    normally have ended the game) clamp to zero, a silent no-op.
+
+    Reads the *controller's* life total, not the target's -- a "deals
+    damage equal to your life total" effect reads *your* (the
+    controller's) life.
+
+    No EoE consumers today -- ships per round-27/31/37/45/46
+    round-trip-surface-coverage rule (each bridge arm is load-bearing
+    for the round-trip + the Rust resolve substrate completes the
+    denominator-axis sextuplet). Bespoke amount (life total) so the
+    class survives PR #3's damage collapse, but the legal-target pool
+    now consults ``self.targets[0].filter`` via the structural
+    ``TargetFilter`` grammar -- ``IsCreature() & ControlledByOpponent()``.
+    """
+
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import (
+                ControlledByOpponent, IsCreature,
+            )
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets",
+                (TargetSpec(IsCreature() & ControlledByOpponent()),),
+            )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            life_total = max(0, state.player_by_id(controller_id).life)
+            if life_total <= 0:
+                return
+            _apply_damage(state, targets[0], life_total)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return (
+            "deals damage equal to your life total to "
+            "target creature an opponent controls"
+        )
+
+
+
+@dataclass(frozen=True)
 class DealDamageToTargetCreatureSpacecraftBoosted(Effect):
     """Deal ``base`` damage to a target creature; ``boosted`` instead
     if you control a Spacecraft.
