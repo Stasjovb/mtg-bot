@@ -423,3 +423,157 @@ def test_from_state_priority_player_id_matches_active_decision_maker():
     result = recommend_from_state(state, n=3)
     # On turn 1 setup the active player is 0 and they hold priority.
     assert result["priority_player_id"] == 0
+
+
+# ---------------------------------------------------------------------
+# _decision_to_rec: the activated-ability / station / combat /
+# detail-string branches. These don't reliably surface through PIMC at
+# a turn-1 state, so they're tested directly at the translator level —
+# the same precedent as test_from_state_decision_translation_uses_name_to_id.
+# ---------------------------------------------------------------------
+
+
+def test_decision_to_rec_cast_spell_warp_and_kicker_detail():
+    """CastSpell's optional detail subtitle concatenates mana cost,
+    'warp', and 'kicker' bits with a separator."""
+    from mtg_bot.actions import CastSpell
+    from mtg_bot.recommend import _decision_to_rec
+
+    state = _live_state()
+    sample = state.players[0].hand[0]
+    rec = _decision_to_rec(
+        CastSpell(card_id=sample.id, use_warp=True, kicked=True),
+        state, {},
+    )
+    assert rec is not None
+    assert rec["action_type"] == "CastSpell"
+    assert "warp" in rec["detail"]
+    assert "kicker" in rec["detail"]
+
+
+def test_decision_to_rec_activate_ability():
+    from mtg_bot.actions import ActivateAbility
+    from mtg_bot.recommend import _decision_to_rec
+
+    state = _live_state()
+    # Put a real card onto the battlefield so _find_card_by_id resolves.
+    perm = state.players[0].hand[0]
+    state.battlefield.append(perm)
+    rec = _decision_to_rec(
+        ActivateAbility(source_id=perm.id, ability_index=2),
+        state, {perm.printing.name: "sid-x"},
+    )
+    assert rec["action_type"] == "ActivateAbility"
+    assert rec["source_id"] == perm.id
+    assert rec["source_name"] == perm.printing.name
+    assert rec["scryfall_id"] == "sid-x"
+    assert rec["detail"] == "ability 2"
+    assert rec["label"] == f"Activate ability of {perm.printing.name}"
+
+
+def test_decision_to_rec_activate_station():
+    from mtg_bot.actions import ActivateStation
+    from mtg_bot.recommend import _decision_to_rec
+
+    state = _live_state()
+    ship = state.players[0].hand[0]
+    crew = state.players[0].hand[1]
+    state.battlefield.extend([ship, crew])
+    rec = _decision_to_rec(
+        ActivateStation(spacecraft_id=ship.id, crew_id=crew.id),
+        state, {ship.printing.name: "sid-ship"},
+    )
+    assert rec["action_type"] == "ActivateStation"
+    assert rec["source_id"] == ship.id
+    assert rec["source_name"] == ship.printing.name
+    assert rec["scryfall_id"] == "sid-ship"
+    assert crew.printing.name in rec["detail"]
+    assert ship.printing.name in rec["label"]
+    assert crew.printing.name in rec["label"]
+
+
+def test_decision_to_rec_declare_attackers_plural_and_zero():
+    from mtg_bot.actions import DeclareAttackers
+    from mtg_bot.recommend import _decision_to_rec
+
+    state = _live_state()
+    rec0 = _decision_to_rec(DeclareAttackers(attacker_ids=[]), state, {})
+    assert rec0["action_type"] == "DeclareAttackers"
+    assert rec0["label"] == "Attack with no creatures"
+
+    rec1 = _decision_to_rec(DeclareAttackers(attacker_ids=[1]), state, {})
+    assert rec1["label"] == "Attack with 1 creature"
+
+    rec2 = _decision_to_rec(DeclareAttackers(attacker_ids=[1, 2]), state, {})
+    assert rec2["label"] == "Attack with 2 creatures"
+
+
+def test_decision_to_rec_declare_blockers_plural_and_zero():
+    from mtg_bot.actions import DeclareBlockers
+    from mtg_bot.recommend import _decision_to_rec
+
+    state = _live_state()
+    rec0 = _decision_to_rec(DeclareBlockers(assignments={}), state, {})
+    assert rec0["action_type"] == "DeclareBlockers"
+    assert rec0["label"] == "Don't block"
+
+    rec1 = _decision_to_rec(
+        DeclareBlockers(assignments={1: [2]}), state, {},
+    )
+    assert rec1["label"] == "Assign 1 blocker"
+
+    rec2 = _decision_to_rec(
+        DeclareBlockers(assignments={1: [2], 3: [4]}), state, {},
+    )
+    assert rec2["label"] == "Assign 2 blockers"
+
+
+def test_decision_to_rec_unknown_action_type_returns_none():
+    """Unrecognized action types must translate to None so the caller
+    filters them out (an unlabeled action never reaches the UI)."""
+    from mtg_bot.recommend import _decision_to_rec
+
+    class MysteryAction:
+        pass
+
+    state = _live_state()
+    assert _decision_to_rec(MysteryAction(), state, {}) is None
+
+
+def test_decision_to_rec_missing_card_falls_back_to_id_label():
+    """When the referenced card id isn't on the board, the label
+    fails soft with a #id placeholder rather than crashing."""
+    from mtg_bot.actions import CastSpell, PlayLand
+    from mtg_bot.recommend import _decision_to_rec, _find_card_by_id
+
+    state = _live_state()
+    assert _find_card_by_id(state, 987654321) is None
+    rec = _decision_to_rec(PlayLand(card_id=987654321), state, {})
+    assert rec["source_name"] == "#987654321"
+    assert rec["label"] == "Play #987654321"
+    rec2 = _decision_to_rec(CastSpell(card_id=987654321), state, {})
+    assert rec2["source_name"] == "#987654321"
+
+
+def test_find_card_by_id_resolves_battlefield_then_hand():
+    from mtg_bot.recommend import _find_card_by_id
+
+    state = _live_state()
+    hand_card = state.players[0].hand[0]
+    assert _find_card_by_id(state, hand_card.id) is hand_card
+
+    bf_card = state.players[1].hand[0]
+    state.battlefield.append(bf_card)
+    assert _find_card_by_id(state, bf_card.id) is bf_card
+
+
+def test_approx_cmc_handles_x_and_symbols():
+    """_approx_cmc: empty/None cost is 0, X counts as 0, generic
+    digits sum, every other pip counts as 1."""
+    from mtg_bot.recommend import _approx_cmc
+
+    assert _approx_cmc(None) == 0
+    assert _approx_cmc("") == 0
+    assert _approx_cmc("{X}{R}") == 1  # X->0, R->1
+    assert _approx_cmc("{2}{W}{W}") == 4
+    assert _approx_cmc("{10}") == 10
