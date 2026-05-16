@@ -17452,5 +17452,296 @@ def test_bridge_double_target_creatures_power_reads_effective_power_with_counter
     )
 
 
+def test_phase3a_real_galactic_wayfarer_seated_lander_bridge_correct():
+    """Phase 3a (round-53 N1): the REAL Galactic Wayfarer, run through
+    the production-deck loader, seats a Lander token CardDef carrying
+    the bridge-correct ``token_activated_abilities`` at a deterministic
+    Rust-registry pid + the cross-engine bridge map.
+
+    Pins the full loader path: ``production_deck_to_deckspec`` ->
+    ``_seat_token_printings`` (auto-registers the Lander CardDef,
+    rewrites the ENTERS trigger to the numeric ``token_printing_id``,
+    seeds ``register_token_printing``) -> ``build_rust_state``
+    (Rust ``register_printing`` -> ``parse_activated_ability`` accepts
+    the SAME Lander ability dict the Python bridge consumes).
+    """
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        build_rust_state, clear_token_printings,
+        _TOKEN_PRINTING_BY_PID,
+    )
+
+    clear_token_printings()
+    try:
+        pr = get_active_source().get_printings()
+        if pr.get("Galactic Wayfarer") is None:
+            pytest.skip("Galactic Wayfarer absent from active CardSource")
+
+        spec = trajectory.production_deck_to_deckspec(
+            ["Galactic Wayfarer"] * 6 + ["Forest"] * 54,
+            shared_rng_seed=7, pad_to_size=60, pad_with="Forest",
+        )
+        names = [cd.name for cd in spec.card_defs]
+        assert "Galactic Wayfarer" in names
+        assert "Lander" in names, "Lander token CardDef must be seated"
+        assert "Lander" not in spec.p0_library, (
+            "token registered but never drawn"
+        )
+        lander_cd = next(c for c in spec.card_defs if c.name == "Lander")
+        # The seated Lander CardDef carries the bridge-correct ability.
+        assert lander_cd.card_type == "Artifact"
+        assert lander_cd.supertypes == ("Token",)
+        assert len(lander_cd.token_activated_abilities) == 1
+        aa = lander_cd.token_activated_abilities[0]
+        assert aa["cost"] == {
+            "mana": {"generic": 2}, "sacrifice_self": True
+        }
+        assert aa["effect"] == {
+            "kind": "search_library_for_basic_land_tapped"
+        }
+        # Carrier trigger rewritten to the numeric pid.
+        gw_cd = next(
+            c for c in spec.card_defs if c.name == "Galactic Wayfarer"
+        )
+        eff = gw_cd.triggered_abilities[0]["effect"]
+        assert eff["kind"] == "create_token"
+        lander_pid = eff["token_printing_id"]
+        assert lander_pid == names.index("Lander")
+        # Bridge map seeded at that pid with the Lander printing.
+        assert _TOKEN_PRINTING_BY_PID[lander_pid].name == "Lander"
+        assert len(
+            _TOKEN_PRINTING_BY_PID[lander_pid].activated_abilities
+        ) == 1
+        # Rust registry accepts the SAME seated dicts (no raise ==
+        # parse_activated_ability + parse_activation_cost +
+        # parse_effect all accepted the Python-bridge dict).
+        rust_state = build_rust_state(spec)
+        assert rust_state.registry_size == len(names)
+    finally:
+        clear_token_printings()
+
+
+def test_phase3a_real_beamsaw_prospector_dies_lander_seated():
+    """Phase 3a: the REAL Beamsaw Prospector (a DIES-trigger Lander
+    carrier) seats the bridge-correct Lander too — pinning the
+    Phase-3a DIES recognizer-row widen end-to-end through the loader.
+    """
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        build_rust_state, clear_token_printings,
+    )
+
+    clear_token_printings()
+    try:
+        pr = get_active_source().get_printings()
+        if pr.get("Beamsaw Prospector") is None:
+            pytest.skip("Beamsaw Prospector absent from active CardSource")
+        spec = trajectory.production_deck_to_deckspec(
+            ["Beamsaw Prospector"] * 6 + ["Forest"] * 54,
+            shared_rng_seed=11, pad_to_size=60, pad_with="Forest",
+        )
+        names = [cd.name for cd in spec.card_defs]
+        assert "Lander" in names
+        bp_cd = next(
+            c for c in spec.card_defs if c.name == "Beamsaw Prospector"
+        )
+        eff = bp_cd.triggered_abilities[0]["effect"]
+        # Phase 3a's DIES-row widen — bare create_token under DIES.
+        assert eff["kind"] == "create_token"
+        assert bp_cd.triggered_abilities[0]["event"] == "dies"
+        assert eff["token_printing_id"] == names.index("Lander")
+        rust_state = build_rust_state(spec)
+        assert rust_state.registry_size == len(names)
+    finally:
+        clear_token_printings()
+
+
+def test_phase3a_seated_lander_python_byte_identical_to_real_token():
+    """Phase 3a: the loader-synthesized + seated Lander CardDef
+    materializes a Python ``CardPrinting`` whose single activated
+    ability is byte-identical to the REAL authored
+    ``TOKEN_PRINTINGS["Lander"]`` — the no-shape-drift contract
+    (mirrors the round-52 ``test_r52_lander_token_activated_ability_
+    python_byte_identical`` pin, but driven from the REAL carrier
+    through the production loader rather than a hand-built CardDef).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        clear_token_printings, _card_def_to_python_printing,
+    )
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+
+    clear_token_printings()
+    try:
+        import pytest
+
+        pr = get_active_source().get_printings()
+        if pr.get("Galactic Wayfarer") is None:
+            pytest.skip("Galactic Wayfarer absent from active CardSource")
+        spec = trajectory.production_deck_to_deckspec(
+            ["Galactic Wayfarer"] * 4 + ["Forest"] * 56,
+            shared_rng_seed=3, pad_to_size=60, pad_with="Forest",
+        )
+        lander_cd = next(
+            c for c in spec.card_defs if c.name == "Lander"
+        )
+        py_lander = _card_def_to_python_printing(lander_cd)
+        assert len(py_lander.activated_abilities) == 1
+        py_aa = py_lander.activated_abilities[0]
+        real_aa = TOKEN_PRINTINGS["Lander"].activated_abilities[0]
+        assert (
+            py_aa.cost.mana.generic == real_aa.cost.mana.generic == 2
+        )
+        assert not py_aa.cost.mana.colored
+        assert (
+            py_aa.cost.sacrifice_self
+            == real_aa.cost.sacrifice_self
+            is True
+        )
+        assert py_aa.cost.tap_self is False
+        assert isinstance(
+            py_aa.effect, SearchLibraryForBasicLandTapped
+        )
+        assert py_aa.effect.count == real_aa.effect.count == 1
+        assert py_aa.is_mana_ability is False
+        # Type-line / supertype round-trip (Token Artifact — Lander).
+        assert "Artifact" in py_lander.card_types
+        assert "Token" in py_lander.supertypes
+    finally:
+        clear_token_printings()
+
+
+def test_phase3a_real_galactic_wayfarer_etb_lander_spawn_byte_equal():
+    """Phase 3a HEADLINE admit contract: the REAL Galactic Wayfarer's
+    ETB fires + a Lander token spawns BYTE-EQUAL on BOTH engines.
+
+    This is the bench-relevant contract: the bench/trajectory walk
+    drives the carrier's ETB (cast / enters) but NEVER sac-activates
+    the Lander (the bench only emits ``activate_ability`` for tapping
+    lands for mana). So the admit's cross-engine correctness rests on
+    the token *entering* being byte-equal — which this pins
+    (``compare_fields == []``). The Lander's optional
+    ``{2},Sac:SearchLibraryForBasicLandTapped`` *activation* has a
+    documented residual cross-engine gap (Rust post-search-shuffles,
+    Python does not — ``SEARCH_LIMITATIONS.md`` #15 residual
+    Python-side gap, ``TOKEN_PRINTING_SUBSTRATE.md`` §7); it is NEVER
+    driven by the bench, so the admit stays §2-safe under the bench
+    strategy set and the activation-divergence is pinned separately as
+    a known-gap probe (round-39 latent-SBA precedent).
+    """
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke, clear_token_printings,
+        _card_def_to_python_printing,
+    )
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import Zone
+
+    clear_token_printings()
+    try:
+        pr = get_active_source().get_printings()
+        if pr.get("Galactic Wayfarer") is None:
+            pytest.skip("Galactic Wayfarer absent from active CardSource")
+        gw = pr.get("Galactic Wayfarer")
+        spec = trajectory.production_deck_to_deckspec(
+            ["Galactic Wayfarer"] * 6 + ["Forest"] * 54,
+            shared_rng_seed=7, pad_to_size=60, pad_with="Forest",
+        )
+        gw_cd = next(
+            c for c in spec.card_defs if c.name == "Galactic Wayfarer"
+        )
+        lander_pid = gw_cd.triggered_abilities[0]["effect"][
+            "token_printing_id"
+        ]
+        py_state, rust_state = trajectory.setup_matched_game(
+            spec, opening_hand_size=0
+        )
+
+        # Inject the carrier on p0 bf, BOTH engines; ETB fires the
+        # create_token (Lander) trigger.
+        py_printing = _card_def_to_python_printing(gw_cd)
+        py_carrier = py_state.new_object(
+            py_printing, owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        py_carrier.summoning_sick = False
+        py_carrier.tapped = False
+        py_carrier.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(py_carrier)
+        dispatch_event(py_state, Event.ENTERS, obj=py_carrier)
+
+        ZONE_BATTLEFIELD = 2
+        rust_state.register_and_inject_object(
+            {
+                "name": "Galactic Wayfarer",
+                "card_types": ["Creature"],
+                "mana_cost": {
+                    "generic": gw.mana_cost.generic, "G": 1
+                },
+                "power": gw.power, "toughness": gw.toughness,
+                "effects": [],
+                "triggered_abilities": [
+                    {
+                        "event": "enters",
+                        "predicate": {"kind": "source_is_self"},
+                        "effect": {
+                            "kind": "create_token",
+                            "count": 1,
+                            "token_printing_id": lander_pid,
+                        },
+                    }
+                ],
+            },
+            0,
+            ZONE_BATTLEFIELD,
+        )
+        assert rust_state.stack_size() == 1
+        assert len(py_state.stack) == 1
+
+        while rust_state.stack_size() > 0:
+            rust_state.resolve_top_of_stack()
+        while py_state.stack:
+            py_resolve(py_state)
+
+        py_view = build_python_field_view(py_state)
+        rust_view = ce_parity_smoke()._build_field_view(rust_state)
+        py_bf = sorted(t[0] for t in py_view["battlefield"])
+        rust_bf = sorted(t[0] for t in rust_view["battlefield"])
+        assert "Lander" in py_bf, f"py bf={py_bf}"
+        assert "Lander" in rust_bf, f"rust bf={rust_bf}"
+        assert py_bf == rust_bf
+        # Headline: the spawned Lander (with its activated ability) is
+        # a byte-equal permanent on BOTH engines. The token printing
+        # round-tripped bit-for-bit (the round-52 cache key folds
+        # token_activated_abilities in so the Lander never collides
+        # with a vanilla token).
+        divs = compare_fields(py_view, rust_view)
+        assert divs == [], (
+            f"real Galactic Wayfarer ETB→Lander spawn diverges: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in divs]}"
+        )
+    finally:
+        clear_token_printings()
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
