@@ -4577,6 +4577,21 @@ def test_r51_seat_token_printings_cross_game_varying_pid_no_conflict():
     ``cross_engine.cached_token_printing`` keys by token SHAPE, so the
     registered object is identity-stable across games and the guard
     never fires.
+
+    Round-57 N1 extension: this pin now ALSO asserts the round-51
+    same-shape guarantee survives the round-57 cross-shape fix. The
+    round-57 fix resets ONLY the ``pid -> CardPrinting`` map at every
+    ``_seat_token_printings`` pass entry (a different-shape token can no
+    longer collide with a prior game's stale same-pid entry — the
+    round-56 N3 finding); it deliberately does NOT clear the shape-keyed
+    cache, so the SAME logical token still resolves to the SAME
+    identity-stable object across games. This pin captures each game's
+    registered object directly and asserts cross-game object identity
+    (the round-51 axis) independently of the now-per-game pid map (the
+    round-57 axis). The sister cross-SHAPE multi-archetype axis is
+    pinned by ``test_r57_unit_cross_shape_distinct_tokens_same_pid_no_
+    conflict`` + ``test_r57_real_cross_shape_multi_archetype_no_registry_
+    conflict``.
     """
     from mtg_bot.cards.base import make_token_creature
     from mtg_bot.parity.cross_engine import (
@@ -4626,7 +4641,13 @@ def test_r51_seat_token_printings_cross_game_varying_pid_no_conflict():
             assert eff["kind"] == "create_token_tapped"
             assert eff["token_printing_id"] == pid
             assert "_token_card_def" not in eff
-            return pid
+            # Capture THIS game's registered printing object directly
+            # from the (post-round-57 per-game) pid map, so the round-51
+            # same-shape identity guarantee can be asserted across games
+            # even though the map is reset each seating pass.
+            registered = _TOKEN_PRINTING_BY_PID[pid]
+            assert registered.name == "Robot"
+            return pid, registered
 
         # Three games. Pad count drives the deterministic token pid
         # (= token's index in the seated card_defs list). Games 1 & 3
@@ -4634,9 +4655,14 @@ def test_r51_seat_token_printings_cross_game_varying_pid_no_conflict():
         # CardDef: the exact pre-fix "pid=N already registered to a
         # DIFFERENT CardPrinting" crash. Game 2 uses a different pad
         # count -> a DIFFERENT pid (the seed-varying-union scenario).
-        pid_a = _one_game(2)
-        pid_b = _one_game(5)
-        pid_c = _one_game(2)
+        # ``_one_game`` returns (pid, registered_printing_object) so the
+        # round-51 same-shape identity guarantee can be checked even
+        # though (round-57 N1) the pid map is now reset per seating
+        # pass — the identity stability lives in the shape cache, which
+        # survives the pid-map reset, NOT in stale pid-map entries.
+        pid_a, obj_a = _one_game(2)
+        pid_b, obj_b = _one_game(5)
+        pid_c, obj_c = _one_game(2)
         assert pid_a == pid_c, (
             f"same pad count -> same pid (pre-fix this collided with a "
             f"fresh token object): got {pid_a} then {pid_c}"
@@ -4645,23 +4671,52 @@ def test_r51_seat_token_printings_cross_game_varying_pid_no_conflict():
             f"different pad count -> different pid (the seed-varying-"
             f"union scenario): got {pid_b} vs {pid_a}"
         )
-        # Every game registered cleanly; the identity-stable cache means
-        # all pids that ever held "Robot" still map to ONE shared
-        # printing object (so the guard would only ever fire on a
-        # genuinely different printing — a real bug).
+        # ROUND-51 SAME-SHAPE CROSS-GAME GUARANTEE (the axis this pin
+        # protects): the SAME logical token re-seated across games —
+        # including at a SHIFTED pid (game 2) and at a REUSED pid with a
+        # FRESH token CardDef (game 3 reuses game 1's pid) — must
+        # resolve to the SAME identity-stable CardPrinting object every
+        # game and never hit the conflicting-registration guard. This
+        # holds via cross_engine.cached_token_printing's shape-keyed
+        # cache, which the round-57 pid-map-only reset deliberately does
+        # NOT clear, so the round-51 fix is intact post-round-57.
+        assert obj_a is obj_b is obj_c, (
+            "round-51: the same logical token across games must be ONE "
+            "identity-stable CardPrinting object (shape cache survives "
+            "the round-57 per-seating-pass pid-map reset); got "
+            f"{id(obj_a):#x}/{id(obj_b):#x}/{id(obj_c):#x}"
+        )
+        for o in (obj_a, obj_b, obj_c):
+            assert o.name == "Robot"
+            assert (o.power, o.toughness) == (2, 2)
+        # ROUND-57 N1 invariant: the pid map is now a PER-GAME artifact
+        # (reset at every _seat_token_printings pass entry) — only the
+        # LAST seating pass's pid is present, mapping to the SAME shared
+        # Robot object. Earlier games' (now-dead) pids are gone: that is
+        # exactly the cross-shape-collision fix (a later game's
+        # DIFFERENT-shape token reusing pid_b can no longer collide with
+        # a stale entry). The round-51 same-shape guarantee is unaffected
+        # (it lives in the shape cache, asserted above), so this is a
+        # corrected invariant, not a regression.
+        assert _TOKEN_PRINTING_BY_PID.get(pid_c) is obj_c, (
+            "round-57: the final seating pass's pid must resolve to the "
+            "identity-stable Robot printing"
+        )
+        assert pid_b not in _TOKEN_PRINTING_BY_PID, (
+            "round-57: the pid map is per-game (reset at pass entry); "
+            "an earlier game's now-dead pid must NOT linger — that "
+            "lingering was precisely what let a later different-shape "
+            "token collide cross-archetype (round-56 N3 finding)"
+        )
         robot_objs = {
-            id(v) for k, v in _TOKEN_PRINTING_BY_PID.items()
+            id(v) for v in _TOKEN_PRINTING_BY_PID.values()
             if v.name == "Robot"
         }
         assert len(robot_objs) == 1, (
-            "all cross-game Robot registrations must share ONE "
-            f"identity-stable CardPrinting object; got "
+            "the single surviving (current-game) Robot registration "
+            f"maps to the one identity-stable object; got "
             f"{len(robot_objs)} distinct objects"
         )
-        for pid in (pid_a, pid_b, pid_c):
-            rp = _TOKEN_PRINTING_BY_PID[pid]
-            assert rp.name == "Robot"
-            assert (rp.power, rp.toughness) == (2, 2)
     finally:
         clear_token_printings()
 
@@ -4982,3 +5037,315 @@ def test_r52_synthetic_lander_card_def_round_trips_both_engines():
     )
     rust_state = build_rust_state(spec)
     assert rust_state.registry_size == 2
+
+
+def test_r57_unit_cross_shape_distinct_tokens_same_pid_no_conflict():
+    """Round-57 N1 unit pin (round-56 N3 finding — the multi-distinct-
+    token cross-archetype pid collision).
+
+    Distinct from round-51 (``test_r51_seat_token_printings_cross_game_
+    varying_pid_no_conflict``): round-51 re-seats the SAME token shape
+    (Robot) across games at a varying pid — round-51's shape cache makes
+    that identity-idempotent. This pin re-seats TWO DIFFERENT token
+    shapes (a Robot 2/2 and a Lander 0/0 colorless artifact) and forces
+    the SECOND game's Lander onto the EXACT pid the FIRST game's Robot
+    occupied. Pre-fix: the module-global ``_TOKEN_PRINTING_BY_PID`` still
+    holds game-1's pid->Robot, so game-2's
+    ``register_token_printing(pid, Lander)`` hits the identity-conflict
+    guard and raises ``ValueError`` (different shapes -> different cached
+    objects -> a genuine different-printing-at-same-pid clash that
+    round-51's shape cache cannot absorb). Post-fix:
+    ``_seat_token_printings`` resets ONLY the pid map at pass entry, so
+    game 2 sees a clean slot.
+
+    The pid is forced to collide by giving each game a carrier list
+    whose length puts the (single) token at the same list index:
+      * Game 1: 1 carrier (Robot carrier) -> Robot pid = 1.
+      * Game 2: 1 carrier (Lander carrier) -> Lander pid = 1  (== Robot's
+        game-1 pid; the exact cross-shape clash).
+
+    Asserts: (a) NO ValueError across the two sequential seating passes;
+    (b) within EACH game the carrier trigger was rewritten to the
+    correct numeric pid AND that pid resolves (via the bridge map) to
+    the RIGHT shape (game 1 -> Robot 2/2; game 2 -> Lander artifact) —
+    i.e. no within-game silent mis-resolution; (c) the round-51
+    same-shape guarantee is independently still intact: re-seating the
+    SAME Robot shape a third time still shares ONE identity-stable
+    printing object (the shape cache is NOT cleared by the pid-map
+    reset).
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.parity.cross_engine import (
+        CardDef, clear_token_printings, _TOKEN_PRINTING_BY_PID,
+    )
+    from mtg_bot.parity.trajectory import (
+        _token_vanilla_card_def, _seat_token_printings,
+    )
+
+    def _robot_carrier():
+        robot = make_token_creature(
+            name="Robot", power=2, toughness=2,
+            subtypes=("Robot",), artifact=True,
+        )
+        tcd = _token_vanilla_card_def(robot)
+        return CardDef(
+            name="RobotCarrier", card_type="Creature",
+            mana_cost_generic=2, power=2, toughness=1,
+            triggered_abilities=(
+                {
+                    "event": "dies",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "create_token_tapped", "count": 1,
+                        "_token_card_def": tcd,
+                    },
+                },
+            ),
+        ), tcd
+
+    def _lander_carrier():
+        # Lander: 0/0 colorless artifact token (NOT a creature) — a
+        # genuinely different shape from the Robot. Built fresh per game
+        # (the loader's per-invocation behavior).
+        lander = CardDef(
+            name="Lander", card_type="Artifact",
+            supertypes=("Token",), subtypes=("Lander",),
+        )
+        return CardDef(
+            name="LanderCarrier", card_type="Creature",
+            mana_cost_generic=2, power=3, toughness=3,
+            triggered_abilities=(
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "create_token", "count": 1,
+                        "_token_card_def": lander,
+                    },
+                },
+            ),
+        ), lander
+
+    clear_token_printings()
+    try:
+        # --- Game 1: Robot carrier alone -> Robot pid == 1 ---
+        rc, _rtcd = _robot_carrier()
+        seated1 = _seat_token_printings([rc])
+        names1 = [c.name for c in seated1]
+        robot_pid = names1.index("Robot")
+        assert robot_pid == 1, (
+            f"single-carrier game -> token at index 1; got {robot_pid}"
+        )
+        rp = _TOKEN_PRINTING_BY_PID[robot_pid]
+        assert rp.name == "Robot" and (rp.power, rp.toughness) == (2, 2)
+        eff1 = next(
+            c for c in seated1 if c.name == "RobotCarrier"
+        ).triggered_abilities[0]["effect"]
+        assert eff1["token_printing_id"] == robot_pid
+        assert eff1["kind"] == "create_token_tapped"
+        assert "_token_card_def" not in eff1
+
+        # --- Game 2: Lander carrier alone -> Lander pid == 1 too.
+        # Pre-fix this raises (pid=1 still holds game-1's Robot, a
+        # DIFFERENT CardPrinting). Post-fix the pass-entry pid-map reset
+        # clears the stale Robot first, so this is clean. ---
+        lc, _ltcd = _lander_carrier()
+        seated2 = _seat_token_printings([lc])  # MUST NOT raise
+        names2 = [c.name for c in seated2]
+        lander_pid = names2.index("Lander")
+        assert lander_pid == robot_pid == 1, (
+            f"the cross-shape collision requires Lander to land on the "
+            f"same pid the prior game's Robot held; got Lander pid "
+            f"{lander_pid} vs Robot pid {robot_pid}"
+        )
+        # Within game 2, that pid must now resolve to the LANDER (not a
+        # stale Robot) — no within-game silent mis-resolution.
+        lp = _TOKEN_PRINTING_BY_PID[lander_pid]
+        assert lp.name == "Lander", (
+            f"post-reset, pid {lander_pid} must resolve to this game's "
+            f"Lander, not the prior game's stale Robot; got {lp.name!r}"
+        )
+        assert "Artifact" in (lp.card_types or ()) or lp.is_artifact, (
+            f"resolved Lander must be the colorless-artifact shape; got "
+            f"card_types={getattr(lp, 'card_types', None)!r}"
+        )
+        eff2 = next(
+            c for c in seated2 if c.name == "LanderCarrier"
+        ).triggered_abilities[0]["effect"]
+        assert eff2["token_printing_id"] == lander_pid
+        assert eff2["kind"] == "create_token"
+        assert "_token_card_def" not in eff2
+        # The stale Robot entry must be GONE (only this game's Lander
+        # registered) — the pid map reflects only the current game.
+        assert all(
+            v.name != "Robot" for v in _TOKEN_PRINTING_BY_PID.values()
+        ), (
+            "after the cross-shape game, no stale Robot registration "
+            "may survive in the per-game pid map"
+        )
+
+        # --- Game 3: re-seat the SAME Robot shape. Round-51 axis still
+        # holds: identity-stable shape cache survived the pid-map reset,
+        # so this shares ONE Robot CardPrinting object with game 1. ---
+        rc3, _ = _robot_carrier()
+        seated3 = _seat_token_printings([rc3])  # MUST NOT raise
+        robot_pid3 = [c.name for c in seated3].index("Robot")
+        rp3 = _TOKEN_PRINTING_BY_PID[robot_pid3]
+        assert rp3.name == "Robot"
+        assert rp3 is rp, (
+            "round-51 same-shape cross-game guarantee must survive the "
+            "round-57 pid-map reset: re-seating the SAME Robot shape "
+            "must reuse the IDENTITY-STABLE cached printing object "
+            "(the shape cache is deliberately NOT cleared by the "
+            "pid-map-only reset)"
+        )
+    finally:
+        clear_token_printings()
+
+
+def test_r57_real_cross_shape_multi_archetype_no_registry_conflict():
+    """Round-57 N1 end-to-end pin reproducing round-56 N3's EXACT gap:
+    a raw multi-archetype bench sweep carrying ≥2 DISTINCT token shapes
+    (Lander vs Robot) in one process must NOT raise the cross-archetype
+    pid-collision ``ValueError`` — and each game must still resolve
+    BOTH shapes correctly.
+
+    Round-56 N3's minimal repro (``docs/bench_trajectory_parity_smoke.md``
+    round-56 CENTRAL FINDING): the bench order
+    ``[(37,s) for s in 0..5] + [(73,s) for s in 0..5]`` in one process,
+    no ``clear_token_printings()`` between games. arch 37's union (size
+    6) assigns Lander=pid6 / Robot=pid7; arch 73's union (size 7) wants
+    Lander=pid7 / Robot=pid8, so arch-73's Lander lands on pid 7 where
+    arch-37's Robot is still registered process-wide -> pre-fix
+    ``ValueError: register_token_printing: pid=7 is already registered
+    to a DIFFERENT CardPrinting ('Robot'); refusing to overwrite with
+    'Lander'`` on the FIRST arch-73 game. The single-archetype /
+    single-shape round-51 pin cannot surface it (it re-seats the SAME
+    shape; the cross-ARCHETYPE clash needs two carriers of DIFFERENT
+    shapes whose per-game union sizes differ by the right amount).
+
+    Both archetypes carry Gravpack Monoist (DIES -> tapped Robot) AND
+    a Lander carrier (arch 73 also carries Galactic Wayfarer
+    ENTERS->Lander), so each game seats BOTH a Robot and a Lander
+    token. Post-fix (pass-entry pid-map reset, shape cache preserved):
+    every game runs clean and each game's per-game pid map resolves
+    BOTH shapes to the right printing.
+
+    Asserts, for every game in N3's exact order: (a) NO ``ValueError``
+    from the cross-archetype registry; (b) the Robot carrier (Gravpack
+    Monoist) resolves to a 2/2 TAPPED Robot AND the Lander carrier
+    resolves to a Lander artifact — i.e. both shapes correct in the
+    SAME game (no within-game silent mis-resolution despite the prior
+    archetype's stale registrations).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import clear_token_printings
+
+    pr = get_active_source().get_printings()
+    if pr.get("Gravpack Monoist") is None or pr.get(
+        "Beamsaw Prospector"
+    ) is None:
+        pytest.skip(
+            "Gravpack Monoist / Beamsaw Prospector absent from "
+            "active CardSource"
+        )
+
+    ROBOT_AND_LANDER_ARCHS = (37, 73)  # both carry Robot + Lander
+    try:
+        decks = {
+            a: trajectory.load_production_deck(archetype=a)
+            for a in ROBOT_AND_LANDER_ARCHS
+        }
+    except (FileNotFoundError, IndexError):
+        pytest.skip("17lands deck pool unavailable for archetypes 37/73")
+    for a, dn in decks.items():
+        assert "Gravpack Monoist" in dn, (
+            f"archetype {a} must carry the Robot carrier Gravpack "
+            f"Monoist (round-56 N3 scout)"
+        )
+        assert "Beamsaw Prospector" in dn, (
+            f"archetype {a} must carry a Lander carrier (round-56 N3 "
+            f"scout: arch {a} carries Beamsaw Prospector)"
+        )
+
+    # N3's EXACT bench order: all 6 seeds of arch 37, then all 6 seeds
+    # of arch 73, one process, NO clear between games. Pre-fix this is
+    # 6/12-clean-then-ValueError at (73, 0).
+    order = (
+        [(37, s) for s in range(6)] + [(73, s) for s in range(6)]
+    )
+    clear_token_printings()
+    try:
+        clean = 0
+        for arch, seed in order:
+            deck_names = decks[arch]
+            # No ValueError must escape (the whole point: a raw
+            # multi-archetype multi-distinct-token sweep must be safe).
+            py_state, _rust_state = (
+                trajectory.setup_matched_game_from_real_decks(
+                    deck_names, shared_rng_seed=seed,
+                )
+            )
+            clean += 1
+            allobj = (
+                list(py_state.players[0].library)
+                + list(py_state.players[0].hand)
+                + list(py_state.players[1].library)
+                + list(py_state.players[1].hand)
+            )
+
+            # Robot axis: Gravpack Monoist -> 2/2 TAPPED Robot.
+            gm = next(
+                (o for o in allobj
+                 if o.printing.name == "Gravpack Monoist"),
+                None,
+            )
+            assert gm is not None, (
+                f"arch {arch} seed {seed}: Gravpack Monoist must be "
+                f"materialized (Phase-4 admitted)"
+            )
+            gm_eff = gm.printing.triggered_abilities[0].effect
+            gm_tok = gm_eff.token_printing
+            assert gm_tok is not None and gm_tok.name == "Robot", (
+                f"arch {arch} seed {seed}: Gravpack Monoist must "
+                f"resolve to a Robot printing, got "
+                f"{None if gm_tok is None else gm_tok.name!r} — a "
+                f"within-game mis-resolution despite the prior "
+                f"archetype's stale registrations"
+            )
+            assert (gm_tok.power, gm_tok.toughness) == (2, 2)
+            assert gm_eff.tapped is True, (
+                f"arch {arch} seed {seed}: Gravpack Monoist makes a "
+                f"TAPPED Robot (create_token_tapped)"
+            )
+
+            # Lander axis (the OTHER shape, same game): Beamsaw
+            # Prospector -> Lander. Both shapes must resolve correctly
+            # within the SAME game even though their pids differ
+            # cross-archetype and a prior archetype's pids are stale.
+            bp = next(
+                (o for o in allobj
+                 if o.printing.name == "Beamsaw Prospector"),
+                None,
+            )
+            assert bp is not None, (
+                f"arch {arch} seed {seed}: Beamsaw Prospector must be "
+                f"materialized (Phase-3a admitted)"
+            )
+            bp_tok = bp.printing.triggered_abilities[0].effect.token_printing
+            assert bp_tok is not None and bp_tok.name == "Lander", (
+                f"arch {arch} seed {seed}: Beamsaw Prospector must "
+                f"resolve to a Lander printing, got "
+                f"{None if bp_tok is None else bp_tok.name!r} — the "
+                f"cross-shape pid collision must NOT cross-wire the "
+                f"two distinct token shapes"
+            )
+
+        assert clean == len(order), (
+            f"every game in N3's exact cross-shape multi-archetype "
+            f"order must run clean post-fix; got {clean}/{len(order)} "
+            f"(pre-fix: 6/12 then ValueError at (73,0))"
+        )
+    finally:
+        clear_token_printings()
