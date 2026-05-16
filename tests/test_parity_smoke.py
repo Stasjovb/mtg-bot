@@ -59889,6 +59889,218 @@ def test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation():
         clear_token_printings()
 
 
+def test_r54_python_search_library_basic_land_post_search_shuffle_deterministic():
+    """Round-54 (SEARCH_LIMITATIONS #15 closure) — Python-side
+    regression pin: the RESTORED post-search shuffle in
+    ``SearchLibraryForBasicLandTapped.resolve`` is deterministic per
+    ``state.rng`` seed and seed-SENSITIVE.
+
+    Before round 54 Python's resolve did NOT shuffle (Stage-3
+    simplification). Round 54 restored ``shuffle_library(state,
+    controller_id)`` (CR 701.19 / 701.22). This pins:
+      * same ``state.rng`` seed -> identical post-search library order
+        (determinism — required for the cross-engine byte-equal
+        contract and for reproducible self-play);
+      * different seed -> different order (the shuffle actually
+        consumes ``state.rng``, it's not a no-op / identity).
+    """
+    import random
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+
+    def _run(seed: int) -> list[int]:
+        state = GameState()
+        state.players.append(Player(id=0))
+        # 1 searched land + 12 distinct library cards so the post-
+        # search order is a meaningful permutation (>1 element).
+        state.players[0].library.append(
+            state.new_object(
+                BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+            )
+        )
+        for _ in range(12):
+            state.players[0].library.append(
+                state.new_object(
+                    BASIC_LANDS["Forest"], owner_id=0, zone=Zone.LIBRARY
+                )
+            )
+        state.rng = random.Random(seed)
+        SearchLibraryForBasicLandTapped().resolve(state, controller_id=0)
+        # Plains searched onto bf; 12 Forests remain, shuffled.
+        return [o.id for o in state.players[0].library]
+
+    a1 = _run(2026)
+    a2 = _run(2026)
+    b = _run(99)
+    assert a1 == a2, (
+        "Python post-search shuffle must be deterministic for a fixed "
+        f"state.rng seed (CR-correct + reproducibility). {a1} != {a2}"
+    )
+    assert len(a1) == 12, "the 12 non-searched cards must remain"
+    assert a1 != b, (
+        "Python post-search shuffle must be seed-SENSITIVE — a "
+        "different state.rng seed must (almost surely) yield a "
+        "different order. If equal, shuffle_library isn't consuming "
+        f"state.rng. seed2026={a1} seed99={b}"
+    )
+
+
+def test_r54_python_search_library_basic_land_shuffles_on_no_match():
+    """Round-54 — Python-side regression pin: the post-search shuffle
+    fires EVEN when no basic land is found (CR 701.19 / 701.22 — a
+    search shuffles the library whether or not a card was found, and
+    the Rust arm always shuffles via its break-then-shuffle path).
+    """
+    import random
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+
+    def _run(seed: int) -> list[int]:
+        state = GameState()
+        state.players.append(Player(id=0))
+        # No basic land — only creatures — so the search finds nothing
+        # and takes the early-return path, which must STILL shuffle.
+        for _ in range(10):
+            state.players[0].library.append(
+                state.new_object(
+                    SYNTHETIC_CREATURES["Wild Bear"], owner_id=0,
+                    zone=Zone.LIBRARY,
+                )
+            )
+        state.rng = random.Random(seed)
+        SearchLibraryForBasicLandTapped().resolve(state, controller_id=0)
+        assert len(state.players[0].library) == 10, (
+            "no basic land found — library size unchanged"
+        )
+        assert not any(
+            o.printing.is_basic_land for o in state.battlefield
+        ), "nothing entered the battlefield on a failed search"
+        return [o.id for o in state.players[0].library]
+
+    no_match_a = _run(7)
+    no_match_b = _run(7)
+    no_match_c = _run(123)
+    assert no_match_a == no_match_b, (
+        "no-match-path shuffle must be deterministic per seed"
+    )
+    assert no_match_a != no_match_c, (
+        "no-match-path shuffle must consume state.rng (CR 701.19 / "
+        "701.22 — search shuffles even on a failed search). If equal "
+        "across seeds the early-return path skipped shuffle_library."
+    )
+
+
+def test_r54_cross_engine_search_library_basic_land_byte_equal_shared_rng():
+    """Round-54 (SEARCH_LIMITATIONS #15 CLOSED) — the CORE cross-engine
+    contract: with the SAME ``random.Random`` threaded into both
+    engines, the FULL ``SearchLibraryForBasicLandTapped`` output
+    (searched-land identity + post-search library order) is
+    byte-identical cross-engine.
+
+    Python: ``SearchLibraryForBasicLandTapped.resolve`` ->
+    ``shuffle_library`` -> ``state.rng.shuffle`` (round-54 fix).
+    Rust: ``Effect::SearchLibraryForBasicLandTapped`` resolve arm,
+    ``set_external_rng`` -> ``_randbelow`` Fisher-Yates (#16).
+    Two ``random.Random(seed)`` at the same MT position consume the
+    identical ``_randbelow`` draw sequence -> identical permutation.
+
+    Pinned across multiple seeds so it's not lucky on one. Exercises
+    the Python resolve path (the round-54 fix) end-to-end against the
+    Rust arm — the existing entry-#16 edge-case pins only compared
+    Rust against a Python-MT *reference*; this pins the actual Python
+    *engine* resolve byte-equal to the Rust engine.
+    """
+    import random
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    import mtg_bot_engine
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+
+    for seed in (1, 7, 42, 2026):
+        # ---- Python engine: 1 Plains (searched) + 15 Islands.
+        py_state = GameState()
+        py_state.players.append(Player(id=0))
+        py_state.players[0].library.append(
+            py_state.new_object(
+                BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+            )
+        )
+        for _ in range(15):
+            py_state.players[0].library.append(
+                py_state.new_object(
+                    BASIC_LANDS["Island"], owner_id=0, zone=Zone.LIBRARY
+                )
+            )
+        py_state.rng = random.Random(seed)
+        SearchLibraryForBasicLandTapped().resolve(py_state, controller_id=0)
+        py_lib_names = [
+            o.printing.name for o in py_state.players[0].library
+        ]
+        py_bf_land = [
+            o.printing.name for o in py_state.battlefield
+            if o.printing.is_basic_land
+        ]
+
+        # ---- Rust engine: same library shape, same fresh shared rng.
+        reg = mtg_bot_engine.Registry()
+        plains_pid = reg.register_printing({
+            "name": "Plains", "card_types": ["Land"],
+            "supertypes": ["Basic"], "mana_cost": {},
+            "effects": [], "mana_produced": ["W"],
+        })
+        island_pid = reg.register_printing({
+            "name": "Island", "card_types": ["Land"],
+            "supertypes": ["Basic"], "mana_cost": {},
+            "effects": [], "mana_produced": ["U"],
+        })
+        lib_pids = [plains_pid] + [island_pid] * 15
+        rust_state = mtg_bot_engine.make_state(
+            reg, list(lib_pids), list(lib_pids)
+        )
+        rust_state.set_external_rng(random.Random(seed))
+        spell_obj_id = rust_state.register_and_inject_object(
+            {
+                "name": "Test Rampant Growth",
+                "card_types": ["Sorcery"],
+                "effects": [
+                    {
+                        "kind": "search_library_for_basic_land_tapped",
+                        "count": 1,
+                    }
+                ],
+            },
+            0,  # controller
+            0,  # ZONE_HAND
+        )
+        rust_state.push_to_stack(spell_obj_id, 0)
+        rust_state.resolve_top_of_stack()
+        rust_lib_names = [
+            d["printing_name"] for d in rust_state.library_snapshot(0)
+        ]
+
+        assert py_bf_land == ["Plains"], (
+            f"seed={seed}: Python must search the Plains onto bf"
+        )
+        assert py_lib_names == rust_lib_names, (
+            f"seed={seed}: SEARCH_LIMITATIONS #15 CLOSED — Python's "
+            "restored post-search shuffle must produce a library order "
+            "byte-identical to Rust's _randbelow Fisher-Yates under "
+            f"the SAME shared random.Random. py={py_lib_names!r} "
+            f"rust={rust_lib_names!r}"
+        )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
