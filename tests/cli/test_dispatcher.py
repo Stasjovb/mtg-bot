@@ -25,7 +25,7 @@ def test_help_lists_all_subcommands(capsys):
     help-list block."""
     cli_pkg.main([])
     captured = capsys.readouterr().out
-    for name in ("iterate", "train", "shard", "serve",
+    for name in ("iterate", "train", "serve",
                  "capture", "eval", "bench", "db"):
         assert name in captured
 
@@ -63,7 +63,7 @@ def test_dispatch_routes_each_subcommand():
     """Smoke each routing-table entry. Importlib caching means this
     pins the table contents — adding a new key without an entry in
     ``_SUBCOMMANDS`` would surface here."""
-    for subname in ("iterate", "train", "shard", "serve",
+    for subname in ("iterate", "train", "serve",
                     "capture", "eval", "bench", "db"):
         called = {"with_argv": None}
 
