@@ -4161,3 +4161,340 @@ def test_carddef_landfall_safe_etb_trigger_fires_on_land_play_parity():
         f"post-drain field view (after landfall trigger) diverges: "
         f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-triggers landfall + pump_self_until_eot extension
+# (this slice).
+#
+# Adds the SECOND safe leaf effect under the canonical compound
+# landfall predicate ``And(Subject(IsLand), Controlled(YOU))``: the
+# bare ``pump_self_until_eot`` shape (``power_bonus`` /
+# ``toughness_bonus`` fields, no ``granted_keywords`` rider). Cross-
+# engine bridge support landed in round 22 (cross-controller pump-
+# self probe at commit 92ac9ec5 in test_parity_smoke.py).
+#
+# Real-EoE consumer admitted: Icecave Crasher (4/4 {3}{G}, Trample,
+# "Landfall — Whenever a land you control enters, this creature gets
+# +1/+0 until end of turn"), present in many EoE archetypes
+# (archetypes 4 / 5 / 21 / 43 / 49 / 51 / 55 / 57 within the first
+# 60 archetypes — verified at slice time; archetype 4 carries 2
+# copies + 9 Forests so it's the canonical test target).
+#
+# Sister consumer Remnant Elemental (1/2 {1}{R}, Reach, "Landfall —
+# +2/+0 UEOT") carries the same parser-emitted bare ``PumpSelfUntilEOT``
+# shape but its ``Reach`` keyword is outside today's
+# :data:`_SAFE_KEYWORDS` set — the production-deck filter still
+# drops it. Adding ``Reach`` to the safe-keyword set is a follow-up
+# slice (needs combat-side parity verification of reach's
+# can-block-flying behavior).
+#
+# Other landfall consumers (Tannuk / Mightform Harmonizer /
+# Genemorph Imago / Eusocial Engineering / Glacier Godmaw / Icetill
+# Explorer / Territorial Bruntar) carry the same predicate but pair
+# it with bespoke or unsupported leaf effects — each needs its own
+# sister slice.
+# ---------------------------------------------------------------------------
+
+
+def _inject_icecave_crasher_on_p0_bf(py_state, rust_state):
+    """Inject an Icecave Crasher onto p0's bf on BOTH engines.
+
+    Mirrors :func:`_inject_eumidian_terrabotanist_on_p0_bf` but
+    carries the parser-emitted landfall+pump trigger
+    (``And(Subject(IsLand), Controlled(YOU))`` ->
+    ``PumpSelfUntilEOT(power_bonus=1, toughness_bonus=0)``) and
+    Trample as a printed keyword. Uses
+    ``register_and_inject_object`` on the Rust side and
+    ``new_object`` on the Python side — same per-engine shape both
+    landfall-extension probes use, with the keyword threaded through
+    the Python printing's ``keywords`` field and the Rust dict's
+    bare ``card_types`` (Trample is bridged via an Effects-side
+    grant on the Rust dict; Icecave Crasher's Trample is a printed
+    keyword so it lives on the printing's keyword set, mirroring
+    the existing keyword-inject helper's pattern).
+
+    Post-condition: Icecave Crasher is on p0's bf, ready to fire its
+    landfall trigger when a land enters under p0's control.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Subject, YOU,
+    )
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    landfall_predicate = And(
+        left=Subject(slot=None, inner=IsLand()),
+        right=Controlled(by=YOU, subject=None),
+    )
+    crasher_printing = CardPrinting(
+        name="Icecave Crasher (Injected)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=4,
+        toughness=4,
+        produces=frozenset(),
+        keywords=frozenset({"trample"}),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=landfall_predicate,
+                effect=PumpSelfUntilEOT(power_bonus=1, toughness_bonus=0),
+            ),
+        ),
+    )
+    py_crasher = py_state.new_object(
+        crasher_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_crasher.summoning_sick = False
+    py_crasher.tapped = False
+    py_crasher.damage = 0
+    py_crasher.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_crasher)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_crasher_id = rust_state.register_and_inject_object(
+        {
+            "name": "Icecave Crasher (Injected)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 3, "G": 1},
+            "effects": [],
+            "power": 4,
+            "toughness": 4,
+            "keywords": ["trample"],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {
+                        "kind": "and",
+                        "left": {"kind": "subject_is_land"},
+                        "right": {"kind": "controlled_by_you"},
+                    },
+                    "effect": {
+                        "kind": "pump_self_until_eot",
+                        "power_bonus": 1,
+                        "toughness_bonus": 0,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return int(py_crasher.id), int(rust_crasher_id)
+
+
+def test_real_eoe_deck_with_icecave_crasher_setup_parity():
+    """Substrate-gate probe: load EoE archetype 4 (carries Icecave
+    Crasher, the EoE consumer this slice unblocks) and assert byte-
+    equal field views post-setup.
+
+    Pre-extension this archetype's Icecave Crasher would be silently
+    dropped by ``_filter_deck_to_bridge_supported`` because
+    ``_printing_is_bridge_simple_creature`` rejected its landfall+
+    pump trigger (effect outside the gain_life-only landfall safe
+    set). Post-extension Icecave Crasher SURVIVES the filter and
+    lands in BOTH engines' libraries with matching trigger shape
+    and printed Trample keyword — the setup-time field-view compare
+    pins that the trigger wiring through the registry is byte-equal.
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+
+    cards = trajectory.load_production_deck(4)
+    assert "Icecave Crasher" in cards, (
+        "EoE archetype 4 no longer carries Icecave Crasher; pick a "
+        "different archetype after re-scanning the pool."
+    )
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42, pad_with="Forest",
+    )
+
+    # Substrate gate: at least one Icecave Crasher landed in the
+    # matched-game registry on BOTH sides (mirror-match means p1 also
+    # gets a copy when p0 has one). Pre-extension this list would be
+    # EMPTY — the filter would have dropped Icecave Crasher.
+    py_lib = (
+        py_state.players[0].library + py_state.players[0].hand
+        + py_state.players[1].library + py_state.players[1].hand
+    )
+    crashers = [
+        o for o in py_lib if o.printing.name == "Icecave Crasher"
+    ]
+    assert crashers, (
+        "expected at least one Icecave Crasher in the matched-game "
+        "registry (archetype 4 carries it); if this assertion fails "
+        "the carddef-triggers landfall+pump_self extension regressed."
+    )
+    # Each surviving Icecave Crasher carries the parser-emitted
+    # compound landfall trigger (And(Subject(IsLand), Controlled(YOU))
+    # -> PumpSelfUntilEOT(+1/+0)) on the Python side, AND its printed
+    # Trample keyword.
+    from mtg_bot.effects.predicates import And, Controlled, Subject, YOU
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
+    for o in crashers:
+        assert "trample" in o.printing.keywords
+        assert len(o.printing.triggered_abilities) == 1
+        ta = o.printing.triggered_abilities[0]
+        assert ta.event.value == "enters"
+        assert isinstance(ta.predicate, And)
+        assert isinstance(ta.predicate.left, Subject)
+        assert isinstance(ta.predicate.left.inner, IsLand)
+        assert isinstance(ta.predicate.right, Controlled)
+        assert ta.predicate.right.by is YOU
+        assert isinstance(ta.effect, PumpSelfUntilEOT)
+        assert ta.effect.power_bonus == 1
+        assert ta.effect.toughness_bonus == 0
+
+    # Field-view compare: registries built byte-equal across engines.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"production-deck setup with Icecave Crasher diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
+    assert len(py_view["hand_p0"]) == 7
+    assert len(py_view["hand_p1"]) == 7
+
+
+def test_carddef_landfall_safe_etb_pump_self_fires_on_land_play_parity():
+    """End-to-end fire probe for the landfall+pump_self extension.
+
+    Set up a matched game from EoE archetype 4 (Icecave-bearing
+    deck), advance to turn 1 PRECOMBAT_MAIN, side-channel inject an
+    Icecave Crasher onto p0's bf carrying the canonical landfall
+    trigger shape, then drive a play_land on the basic land in p0's
+    opening hand. The landfall trigger should fire on BOTH engines,
+    draining off the stack and lifting Icecave Crasher's effective
+    power from 4 to 5 (printed 4 + UEOT power_bonus=1). Post-drain
+    field views must be byte-equal.
+
+    Why side-channel inject rather than cast Icecave Crasher from
+    hand: archetype 4 has only 2 copies of Icecave Crasher in 60
+    cards; the seed=42 opening hand for p0 doesn't reliably contain
+    a copy (and even if it did, casting a {3}{G} creature requires
+    turn-4+ mana which isn't available on the turn-1 trigger probe).
+    The side-channel inject mirrors the existing landfall +1 life
+    probe's drive shape (:func:`_inject_eumidian_terrabotanist_on_p0_bf`).
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+    from mtg_bot.actions import _play_land, resolve_top_of_stack as py_resolve
+    from mtg_bot.game import effective_power, effective_toughness
+
+    cards = trajectory.load_production_deck(4)
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42, pad_with="Forest",
+    )
+
+    # Walk to turn 1 PRECOMBAT_MAIN (3 phase advances).
+    _advance_n_phases(py_state, rust_state, 3)
+    assert py_state.step.name == "PRECOMBAT_MAIN"
+    assert py_state.active_player_idx == 0
+
+    # Inject Icecave Crasher on p0's bf.
+    py_crasher_id, rust_crasher_id = _inject_icecave_crasher_on_p0_bf(
+        py_state, rust_state,
+    )
+
+    # Verify post-injection parity. Pre-trigger the printed P/T = 4/4
+    # on BOTH engines (no UEOT modifier yet).
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    assert inject_divs == [], (
+        f"Icecave Crasher injection surfaced post-inject divergences: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in inject_divs]}"
+    )
+    assert rust_state.effective_power(rust_crasher_id) == 4
+    assert rust_state.effective_toughness(rust_crasher_id) == 4
+    py_crasher = next(
+        o for o in py_state.battlefield if int(o.id) == py_crasher_id
+    )
+    assert effective_power(py_state, py_crasher) == 4
+    assert effective_toughness(py_state, py_crasher) == 4
+
+    # Find a basic land (any color) in p0's opening hand.
+    p0_hand = py_state.players[0].hand
+    land = next(
+        (o for o in p0_hand if o.printing.is_land),
+        None,
+    )
+    assert land is not None, (
+        f"seed=42 opening hand for p0 contains no basic land: "
+        f"{[o.printing.name for o in p0_hand]}; pick a different "
+        f"seed if the canonical seed becomes land-less after a "
+        f"deck-builder change."
+    )
+
+    # Drive play_land directly on each engine (mirrors the
+    # Eumidian probe's drive shape — see the comment there for why
+    # field-view compare runs AFTER drain rather than mid-stack).
+    py_state.players[0].lands_played_this_turn = 0
+    _play_land(py_state, 0, int(land.id))
+    rust_state.play_land(int(land.id), 0)
+
+    # Trigger should be on both stacks now.
+    assert rust_state.stack_size() == 1, (
+        "Rust: Icecave Crasher's landfall trigger should be on the "
+        "stack after the basic land enters under p0's control"
+    )
+    assert len(py_state.stack) == 1, (
+        "Python: Icecave Crasher's landfall trigger should be on the "
+        "stack after the basic land enters under p0's control"
+    )
+
+    # Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        py_resolve(py_state)
+
+    # Post-drain: Icecave Crasher's effective power = 5 on BOTH
+    # engines (printed 4 + UEOT power_bonus=1); toughness still 4
+    # (toughness_bonus=0).
+    assert rust_state.effective_power(rust_crasher_id) == 5, (
+        f"Rust Icecave Crasher effective power should be 5 after "
+        f"landfall pump (printed 4 + UEOT +1); got "
+        f"{rust_state.effective_power(rust_crasher_id)}"
+    )
+    assert rust_state.effective_toughness(rust_crasher_id) == 4, (
+        f"Rust Icecave Crasher effective toughness should still be 4 "
+        f"(toughness_bonus=0); got "
+        f"{rust_state.effective_toughness(rust_crasher_id)}"
+    )
+    assert effective_power(py_state, py_crasher) == 5, (
+        f"Python Icecave Crasher effective power should be 5; got "
+        f"{effective_power(py_state, py_crasher)}"
+    )
+    assert effective_toughness(py_state, py_crasher) == 4
+    # Cross-engine: same observable P/T.
+    assert (
+        rust_state.effective_power(rust_crasher_id)
+        == effective_power(py_state, py_crasher)
+    )
+    assert (
+        rust_state.effective_toughness(rust_crasher_id)
+        == effective_toughness(py_state, py_crasher)
+    )
+
+    # Field-view compare on the post-drain state — both stacks empty
+    # so the StackItem-id divergence has cleared; remaining fields
+    # (battlefield, hand, life) must agree byte-for-byte.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"post-drain field view (after landfall pump trigger) "
+        f"diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )

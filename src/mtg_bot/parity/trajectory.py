@@ -1382,7 +1382,7 @@ _SAFE_KEYWORDS: frozenset[str] = frozenset({
 #     any agent setup (no PendingDecision pipeline to drain on the
 #     post-resolve state).
 #
-# **Landfall extension (this slice)** adds one compound predicate
+# **Landfall extension (round-36 slice)** adds one compound predicate
 # shape: ``"land_enters_controlled_by_you"`` — a sentinel canonical
 # name for the AND-nested ``{"kind": "and", "left": {"kind":
 # "subject_is_land"}, "right": {"kind": "controlled_by_you"}}`` dict
@@ -1395,14 +1395,31 @@ _SAFE_KEYWORDS: frozenset[str] = frozenset({
 # sentinel from the nested dict shape, and ``_python_ta_to_safe_dict``
 # recognizes Python's parser-emitted ``And(Subject(slot=None,
 # inner=IsLand()), Controlled(by=YOU, subject=None))`` predicate as
-# the same canonical shape. Unlocks Eumidian Terrabotanist
-# (1/2 {1}{G}, "Landfall — Whenever a land you control enters, you
-# gain 1 life") on the production-deck loader. Tannuk, Memorial
-# Ensign carries the same predicate but pairs it with the bespoke
-# `TannukEnsignLandfallEffect` (deal-damage + second-time-bonus
-# draw); Tannuk needs both a leaf-effect deal_damage_each_opponent
-# arm AND the second-time-bonus state primitive — out of scope for
-# this slice.
+# the same canonical shape. Unlocked Eumidian Terrabotanist
+# (2/3 {1}{G}, "Landfall — Whenever a land you control enters, you
+# gain 1 life") on the production-deck loader.
+#
+# **Landfall + pump_self_until_eot extension (this slice)** rides
+# the SAME canonical landfall predicate sentinel and adds a SECOND
+# safe leaf effect under it: ``pump_self_until_eot`` (bare shape —
+# ``power_bonus`` / ``toughness_bonus`` fields, no
+# ``granted_keywords`` rider). Cross-engine bridge support landed
+# in round 22 (``cross_engine._ta_dict_to_python_effect`` "pump_
+# self_until_eot" arm + cross-controller pump-self probe at commit
+# 92ac9ec5 in test_parity_smoke.py). Unlocks Icecave Crasher
+# (4/4 {3}{G}, Trample, "Landfall — Whenever a land you control
+# enters, this creature gets +1/+0 until end of turn") on the
+# production-deck loader. Sister consumer Remnant Elemental (1/2
+# {1}{R}, Reach, +2/+0 UEOT landfall) carries the SAME bare
+# ``PumpSelfUntilEOT`` effect shape but its ``Reach`` keyword is
+# outside today's :data:`_SAFE_KEYWORDS` set — the production-deck
+# filter still drops it. Adding ``Reach`` to the safe-keyword set
+# is a follow-up slice (needs combat-side parity verification).
+# Tannuk, Memorial Ensign carries the same landfall predicate but
+# pairs it with the bespoke ``TannukEnsignLandfallEffect``
+# (deal-damage + second-time-bonus draw); Tannuk needs both a leaf-
+# effect deal_damage_each_opponent arm AND the second-time-bonus
+# state primitive — out of scope for this slice.
 #
 # Triggers explicitly NOT in this set (and therefore disqualifying):
 # ``deal_damage`` / ``deal_damage_any_target`` (target-pick at PUSH
@@ -1433,13 +1450,29 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # Landfall — "Whenever a land you control enters, ...". Compound
     # predicate sentinel; see ``_is_safe_trigger_dict`` /
     # ``_python_ta_to_safe_dict`` for the canonical-vs-nested shape
-    # mapping. ``gain_life`` is the only safe leaf effect today —
-    # admits Eumidian Terrabotanist (1/2 {1}{G}, gain 1 life on
-    # land enter); deal-damage / draw landfall consumers
-    # (Tannuk Memorial Ensign, Mightform Harmonizer's pump landfall,
-    # Genemorph Imago) need their respective leaf bridge arms before
-    # they can join.
+    # mapping. The canonical landfall predicate now rides TWO safe
+    # leaf effects:
+    #   * ``gain_life`` — admits Eumidian Terrabotanist (2/3 {1}{G},
+    #     gain 1 life on land enter). Landed in the round-36
+    #     landfall extension slice.
+    #   * ``pump_self_until_eot`` — admits Icecave Crasher (4/4
+    #     {3}{G}, +1/+0 until end of turn on land enter). Landed in
+    #     this slice. The bare ``PumpSelfUntilEOT(power_bonus,
+    #     toughness_bonus)`` shape (no granted_keywords rider) is
+    #     what Icecave Crasher's parser-emitted Landfall trigger
+    #     uses; sister consumer Remnant Elemental (Reach, +2/+0
+    #     UEOT) carries the same effect shape but its ``Reach``
+    #     keyword is outside today's :data:`_SAFE_KEYWORDS` set so
+    #     the production-deck filter still drops it.
+    # Tannuk Memorial Ensign / Mightform Harmonizer / Genemorph
+    # Imago / Eusocial Engineering / Glacier Godmaw / Icetill
+    # Explorer / Territorial Bruntar carry the same predicate but
+    # pair it with bespoke / unsupported effect shapes (deal-damage
+    # + second-time-bonus, conditional-threshold pump,
+    # double-target-power, create-token, exile-and-may-cast,
+    # mill-a-card) — each needs its own sister slice.
     ("enters", "land_enters_controlled_by_you", "gain_life"),
+    ("enters", "land_enters_controlled_by_you", "pump_self_until_eot"),
 })
 
 
@@ -1457,10 +1490,26 @@ _LANDFALL_PREDICATE_KIND = "land_enters_controlled_by_you"
 # ``"kind"``). Used by ``_is_safe_trigger_dict`` to reject any
 # trigger carrying an unrecognized effect-payload field that the
 # bridge would silently drop.
+#
+# ``pump_self_until_eot`` carries two payload keys: ``power_bonus``
+# and ``toughness_bonus`` (mirrors Rust's ``PumpSelfUntilEOT
+# { power_bonus: i32, toughness_bonus: i32 }``). Both are optional
+# in Rust's parser (default 0), but the safe-trigger filter requires
+# at least one to be present (a ``(0, 0)`` pump is a pure no-op on
+# both engines so it's harmless if it leaks through, but a typed-
+# absent payload would be a fixture smell). Riders that the bare
+# bridge does NOT carry (``granted_keywords``, etc.) are absent
+# here — the parser emits the bare-shape trigger for Icecave
+# Crasher / Remnant Elemental, and any future +X/+Y-and-gains-
+# keyword landfall consumer would have to ride a separate composer
+# arm (out of scope for this slice).
 _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     "draw_cards": frozenset({"kind", "count"}),
     "gain_life": frozenset({"kind", "amount"}),
     "scry_n": frozenset({"kind", "count"}),
+    "pump_self_until_eot": frozenset(
+        {"kind", "power_bonus", "toughness_bonus"}
+    ),
 }
 
 
@@ -1587,6 +1636,7 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     from mtg_bot.effects.generic.draw_mill import DrawCards
     from mtg_bot.effects.generic.life import GainLife
     from mtg_bot.effects.generic.library_lookat import Scry
+    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
 
     if not isinstance(ta, TriggeredAbility):
         return None
@@ -1610,9 +1660,16 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # ``And(Subject(slot=None, inner=IsLand()),
         #       Controlled(by=YOU, subject=None))``
         # — emit the canonical AND-nested dict shape both engines'
-        # bridges already translate. ``gain_life`` is the only safe
-        # leaf today; deal-damage / draw landfall consumers (Tannuk,
-        # Mightform Harmonizer, Genemorph Imago) need their own
+        # bridges already translate. Two safe leaves today:
+        # ``gain_life`` (Eumidian Terrabotanist, round-36 slice) and
+        # ``pump_self_until_eot`` (Icecave Crasher, this slice — the
+        # bare ``power_bonus`` / ``toughness_bonus`` shape with NO
+        # ``granted_keywords`` rider; sister Remnant Elemental
+        # carries the same bare shape but is dropped by the
+        # ``_SAFE_KEYWORDS`` filter on its ``Reach`` keyword). Other
+        # landfall consumers (Tannuk, Mightform Harmonizer,
+        # Genemorph Imago, Eusocial Engineering, Glacier Godmaw,
+        # Icetill Explorer, Territorial Bruntar) need their own
         # leaf-effect bridge arms before they can ride this
         # predicate.
         pred_dict = {
@@ -1620,7 +1677,7 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             "left": {"kind": "subject_is_land"},
             "right": {"kind": "controlled_by_you"},
         }
-        safe_effect_kinds = ("gain_life",)
+        safe_effect_kinds = ("gain_life", "pump_self_until_eot")
     if pred_dict is None:
         return None
     # Effect must be one of the safe leaves AND in the safe set for
@@ -1639,6 +1696,27 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # Python's ``Scry`` exposes the count as ``amount``; the dict
         # shape uses Rust's spelling ``count``.
         eff_dict = {"kind": "scry_n", "count": int(eff.amount)}
+    elif isinstance(eff, PumpSelfUntilEOT):
+        # Bare-shape PumpSelfUntilEOT (no ``granted_keywords``
+        # rider). Python's class carries an additional
+        # ``granted_keywords: frozenset[str]`` field
+        # (``effects/generic/pump.py:632``) that Rust's
+        # ``PumpSelfUntilEOT { power_bonus, toughness_bonus }``
+        # variant does NOT represent — gate on the rider being
+        # empty so a parser-emitted "Landfall — this creature gets
+        # +1/+0 and gains haste UEOT" doesn't slip through with the
+        # keyword silently dropped on the cross-engine round trip.
+        # No EoE landfall consumer carries the rider today (Icecave
+        # Crasher and Remnant Elemental both emit the bare shape),
+        # so this gate simply pins the contract.
+        if eff.granted_keywords:
+            return None
+        eff_kind = "pump_self_until_eot"
+        eff_dict = {
+            "kind": "pump_self_until_eot",
+            "power_bonus": int(eff.power_bonus),
+            "toughness_bonus": int(eff.toughness_bonus),
+        }
     else:
         return None
     if eff_kind not in safe_effect_kinds:

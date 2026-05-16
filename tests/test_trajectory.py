@@ -2117,3 +2117,294 @@ def test_printing_to_card_def_carries_landfall_trigger_through():
         },
         "effect": {"kind": "gain_life", "amount": 1},
     },)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-triggers landfall + pump_self_until_eot extension
+# (this slice).
+#
+# Adds the SECOND safe leaf effect under the canonical landfall
+# predicate: the bare ``pump_self_until_eot`` shape (``power_bonus``
+# / ``toughness_bonus`` fields, no ``granted_keywords`` rider).
+# Cross-engine bridge support landed in round 22 (cross-controller
+# pump-self probe at commit 92ac9ec5). Admits Icecave Crasher
+# (4/4 {3}{G}, Trample, "Landfall — +1/+0 UEOT") on the production-
+# deck loader; sister Remnant Elemental (Reach, +2/+0 UEOT) carries
+# the same effect shape but its Reach keyword stays outside today's
+# `_SAFE_KEYWORDS` set.
+# ---------------------------------------------------------------------------
+
+
+def test_safe_triggers_set_carries_landfall_pump_self_shape():
+    """Pin the landfall+pump_self_until_eot extension entry — a future
+    shrink would silently regress production-deck coverage of Icecave
+    Crasher (the EoE consumer this slice unblocks).
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert (
+        ("enters", "land_enters_controlled_by_you", "pump_self_until_eot")
+        in _SAFE_TRIGGERS
+    )
+
+
+def test_safe_effect_keys_carries_pump_self_until_eot():
+    """The effect-payload key whitelist gains the
+    ``pump_self_until_eot`` arm with both ``power_bonus`` and
+    ``toughness_bonus`` keys.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_EFFECT_KEYS
+
+    assert "pump_self_until_eot" in _SAFE_EFFECT_KEYS
+    assert _SAFE_EFFECT_KEYS["pump_self_until_eot"] == frozenset(
+        {"kind", "power_bonus", "toughness_bonus"}
+    )
+
+
+def test_is_safe_trigger_dict_admits_landfall_pump_self_until_eot():
+    """The full trigger-dict checker accepts a landfall+pump_self
+    trigger built from the canonical compound predicate shape and the
+    bare ``power_bonus`` / ``toughness_bonus`` payload.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    # Icecave Crasher's parser-emitted shape (+1/+0).
+    assert _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {
+            "kind": "pump_self_until_eot",
+            "power_bonus": 1,
+            "toughness_bonus": 0,
+        },
+    })
+    # Remnant Elemental's parser-emitted shape (+2/+0). The shape
+    # itself passes the gate; the production-deck filter still drops
+    # Remnant Elemental on its Reach keyword.
+    assert _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {
+            "kind": "pump_self_until_eot",
+            "power_bonus": 2,
+            "toughness_bonus": 0,
+        },
+    })
+
+
+def test_is_safe_trigger_dict_rejects_pump_self_under_source_is_self():
+    """Pump_self under source_is_self is NOT in the safe set today —
+    no clean EoE consumer (every non-landfall self-pump in EoE pairs
+    with a granted-keywords rider or sits behind an activated
+    ability). Pins the predicate-effect product gate from the OTHER
+    direction: admitting an effect under landfall doesn't admit it
+    under source_is_self.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "pump_self_until_eot",
+            "power_bonus": 1,
+            "toughness_bonus": 0,
+        },
+    })
+
+
+def test_is_safe_trigger_dict_rejects_pump_self_with_extra_payload_key():
+    """Schema-strict on the pump_self payload — an extra key beyond
+    {kind, power_bonus, toughness_bonus} is rejected so a future
+    schema extension (e.g. ``granted_keywords`` rider riding the
+    same effect kind) doesn't silently slip through with the rider
+    silently dropped on the cross-engine round trip.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {
+            "kind": "pump_self_until_eot",
+            "power_bonus": 1,
+            "toughness_bonus": 0,
+            "granted_keywords": ["haste"],
+        },
+    })
+
+
+def test_python_ta_to_safe_dict_round_trips_landfall_pump_self():
+    """A Python ``TriggeredAbility`` carrying the parser-emitted
+    landfall predicate (``And(Subject(IsLand), Controlled(YOU))``)
+    + bare ``PumpSelfUntilEOT`` round-trips to the canonical compound
+    dict shape with ``power_bonus`` / ``toughness_bonus`` payload.
+    The result satisfies :func:`_is_safe_trigger_dict`.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import (
+        And,
+        Controlled,
+        Event,
+        Subject,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=And(
+            left=Subject(slot=None, inner=IsLand()),
+            right=Controlled(by=YOU, subject=None),
+        ),
+        effect=PumpSelfUntilEOT(power_bonus=1, toughness_bonus=0),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {
+            "kind": "pump_self_until_eot",
+            "power_bonus": 1,
+            "toughness_bonus": 0,
+        },
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_rejects_pump_self_with_granted_keywords():
+    """A landfall+pump_self trigger that ALSO carries a non-empty
+    ``granted_keywords`` rider is rejected. The Rust
+    ``PumpSelfUntilEOT`` variant does NOT represent this rider, so
+    admitting the trigger would silently drop the keyword grant on
+    the round trip — a parity bug. Pins the rider-empty contract.
+    No EoE landfall consumer carries the rider today (Icecave
+    Crasher / Remnant Elemental both emit the bare shape) so this
+    rejection isn't load-bearing on coverage; it's a defense
+    against a future +X/+Y-and-gains-keyword landfall consumer
+    slipping through.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import (
+        And,
+        Controlled,
+        Event,
+        Subject,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=And(
+            left=Subject(slot=None, inner=IsLand()),
+            right=Controlled(by=YOU, subject=None),
+        ),
+        effect=PumpSelfUntilEOT(
+            power_bonus=1,
+            toughness_bonus=0,
+            granted_keywords=frozenset({"haste"}),
+        ),
+    )
+    assert _python_ta_to_safe_dict(ta) is None
+
+
+def test_simple_creature_filter_admits_icecave_crasher():
+    """End-to-end gate: the parser-emitted Icecave Crasher printing
+    now passes :func:`_printing_is_bridge_simple_creature`. Pre-
+    extension this returned False because the trigger predicate-
+    effect cross was unsafe; post-extension it's admitted, threading
+    Icecave Crasher into the production-deck loader.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+    )
+
+    src = OracleParserCardSource()
+    icecave = src.get_printings().get("Icecave Crasher")
+    assert icecave is not None, (
+        "Icecave Crasher not in OracleParserCardSource — the parser "
+        "dropped it; pump_self landfall extension test cannot verify "
+        "the production-deck unblock."
+    )
+    assert _printing_is_bridge_simple_creature(icecave) is True
+
+
+def test_simple_creature_filter_still_rejects_remnant_elemental():
+    """Remnant Elemental shares the same landfall+pump_self trigger
+    shape as Icecave Crasher but pairs it with a Reach keyword, which
+    is outside today's :data:`_SAFE_KEYWORDS` set. The trigger gate
+    admits the trigger; the keyword gate still drops the printing.
+    Pins the descope so future widening of the safe-keyword set
+    surfaces here.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+        _python_ta_to_safe_dict,
+    )
+
+    src = OracleParserCardSource()
+    remnant = src.get_printings().get("Remnant Elemental")
+    if remnant is None:
+        # Parser hasn't claimed it yet — descope rationale still
+        # applies, but there's nothing to assert against.
+        return
+    # Trigger-side gate admits the +2/+0 landfall pump.
+    assert len(remnant.triggered_abilities) == 1
+    assert _python_ta_to_safe_dict(remnant.triggered_abilities[0]) is not None
+    # Whole-printing gate still rejects on the Reach keyword.
+    assert _printing_is_bridge_simple_creature(remnant) is False
+
+
+def test_printing_to_card_def_carries_landfall_pump_self_through():
+    """Icecave Crasher's parsed printing converts to a CardDef whose
+    ``triggered_abilities`` carries the canonical compound landfall
+    dict shape with the bare pump_self payload — the same dict both
+    engines' bridge arms consume.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    src = OracleParserCardSource()
+    icecave = src.get_printings()["Icecave Crasher"]
+    cd = _printing_to_card_def(icecave)
+    assert cd.card_type == "Creature"
+    assert "trample" in cd.keywords
+    assert cd.triggered_abilities == ({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {
+            "kind": "pump_self_until_eot",
+            "power_bonus": 1,
+            "toughness_bonus": 0,
+        },
+    },)

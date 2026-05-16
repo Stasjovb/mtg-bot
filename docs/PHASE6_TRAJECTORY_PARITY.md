@@ -797,3 +797,112 @@ that fires the landfall +1 life on both engines.
 
 No divergences surfaced — all new tests pass byte-equal across
 both engines on first run.
+
+## CardDef triggers — landfall + pump_self_until_eot extension (this slice)
+
+Extends the round-36 carddef-triggers landfall extension with a
+SECOND safe leaf effect riding the canonical compound landfall
+predicate `And(Subject(IsLand), Controlled(YOU))`: the bare
+`pump_self_until_eot` shape (`power_bonus` / `toughness_bonus`
+fields, no `granted_keywords` rider). The safe-trigger triple set
+gains one new entry today:
+
+```
+("enters", "land_enters_controlled_by_you", "pump_self_until_eot")
+```
+
+Cross-engine bridge support for `pump_self_until_eot` landed in
+round 22 — `cross_engine._ta_dict_to_python_effect` "pump_self_
+until_eot" arm + the cross-controller pump-self probe at commit
+92ac9ec5 in `test_parity_smoke.py` confirmed both engines model the
++X/+Y UEOT modifier on the source identically (both walk the bf
+to find the source by id, push a `UeotModifier::PowerToughnessBonus`
+/ Python `grant_pt_pump_ueot` registry entry expiring at cleanup,
+and the combat readers compose the bonus on top of base P/T per CR
+613.7c).
+
+The predicate-effect product stays enforced at the dict level —
+the same canonical landfall predicate sentinel now rides TWO leaf
+effects (`gain_life` + `pump_self_until_eot`); other landfall
+predicate-effect crosses (landfall + `draw_cards` /
+landfall + `scry_n`) are still rejected because no safe EoE
+consumer of those crosses exists yet.
+
+### Real-EoE consumer admitted
+
+**Icecave Crasher** — 4/4 {3}{G}, Trample, "Landfall — Whenever a
+land you control enters, this creature gets +1/+0 until end of
+turn." Present in many EoE archetypes (4 / 5 / 21 / 43 / 49 / 51 /
+55 / 57 within the first 60 archetypes scanned at slice time;
+archetype 4 carries 2 copies + 9 Forests so it's the canonical
+test target). The substrate-gate trajectory test loads archetype 4
+and pins that Icecave Crasher survives the production-deck filter
+with its Trample keyword AND landfall trigger intact; the end-to-
+end fire probe injects Icecave Crasher on p0's bf via the side-
+channel pattern and drives a play_land that fires the landfall
++1/+0 UEOT pump on both engines, lifting effective power from 4 to
+5 with toughness unchanged at 4.
+
+### Descoped this slice
+
+- **Remnant Elemental** — 1/2 {1}{R}, Reach, "Landfall — +2/+0 UEOT".
+  Carries the SAME parser-emitted bare `PumpSelfUntilEOT` shape
+  (the trigger gate admits it cleanly), but pairs it with a
+  `Reach` keyword which is outside today's `_SAFE_KEYWORDS` set —
+  the production-deck filter still drops the printing on the
+  keyword gate. Pinned by
+  `test_simple_creature_filter_still_rejects_remnant_elemental`.
+  Adding `Reach` to the safe-keyword set is a follow-up slice
+  (needs combat-side parity verification of reach's
+  can-block-flying behavior across both engines).
+- **Pump_self under source_is_self** — no clean EoE consumer
+  (every non-landfall self-pump in EoE pairs with a granted-
+  keywords rider or sits behind an activated ability). Pinned by
+  `test_is_safe_trigger_dict_rejects_pump_self_under_source_is_self`
+  to keep the predicate-effect product strict in BOTH directions
+  (admitting an effect under landfall doesn't admit it under
+  source_is_self).
+- **PumpSelfUntilEOT with non-empty `granted_keywords` rider** —
+  Rust's `PumpSelfUntilEOT { power_bonus, toughness_bonus }`
+  variant does NOT represent the keyword grant; admitting a
+  rider-bearing trigger would silently drop the keyword on the
+  cross-engine round trip. Pinned by
+  `test_python_ta_to_safe_dict_rejects_pump_self_with_granted_keywords`.
+  No EoE landfall consumer carries the rider today (Icecave
+  Crasher / Remnant Elemental both emit the bare shape) so the
+  rejection isn't load-bearing on coverage; it's a defense
+  against a future "+X/+Y and gains <kw> UEOT" landfall consumer
+  slipping through. The right fix is a separate composer arm on
+  the Rust side (sister Effect variant carrying both the
+  pump and the keyword grant) and a matching bridge arm.
+- **Other landfall consumers** — Tannuk Memorial Ensign
+  (`TannukEnsignLandfallEffect` — bespoke deal-damage + second-
+  time-bonus), Mightform Harmonizer (conditional-threshold pump),
+  Genemorph Imago (3/3-or-6/6 base-PT swap), Eusocial Engineering
+  (create-token), Glacier Godmaw (creatures-you-control pump),
+  Icetill Explorer (mill-a-card), Territorial Bruntar (exile-
+  and-may-cast). Each pairs the same canonical landfall predicate
+  with an effect outside today's safe-effect set — each needs
+  its own sister slice.
+
+### Test surface
+
+- 9 new unit tests in `tests/test_trajectory.py`:
+  allowlist + safe-effect-keys contract (2),
+  `_is_safe_trigger_dict` admit + reject paths (3 — landfall+
+  pump_self admit, source_is_self+pump_self reject, extra-payload-
+  key reject), `_python_ta_to_safe_dict` round-trip + rider-reject
+  (2), parser-end-to-end consumer gate (2 — Icecave admit /
+  Remnant reject), `_printing_to_card_def` propagation (1).
+- 2 new trajectory probes in `tests/test_trajectory_parity.py`:
+  setup-time field-view compare on EoE archetype 4 with Icecave
+  Crasher surviving the production-deck filter (with its Trample
+  keyword AND parser-emitted compound landfall trigger), plus an
+  end-to-end fire probe (advance to turn 1 PRECOMBAT_MAIN, side-
+  channel inject Icecave Crasher on p0's bf, drive play_land on
+  the basic land in p0's opening hand, drain both stacks, assert
+  effective power 4 -> 5 with toughness unchanged at 4 + byte-
+  equal post-drain field views).
+
+No divergences surfaced — all new tests pass byte-equal across
+both engines on first run.
