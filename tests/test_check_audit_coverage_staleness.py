@@ -253,6 +253,296 @@ def test_parse_coverage_doc_rust_count_missing_raises():
         mod.parse_coverage_doc_rust_count("no headline here")
 
 
+# ---------------------------------------- round-54 per-entry residue check
+#
+# These pin the structural fix the round-52 count-only cron missed: a
+# BLOCKED-RUST-EFFECT residue entry naming an Effect that actually
+# exists. Covers the alias-resolution rule, a stale entry IS detected,
+# a genuinely-missing entry is NOT falsely flagged, the closed-entry
+# regression guard, the worklist parser error paths, and the
+# round-51/53 confirmed-stale trio is provably caught.
+
+
+def test_camel_to_snake_acronym_aware():
+    """The exact bug the round-54 re-walk's first pass hit: an
+    acronym run like ``UEOT`` must collapse to ``ueot``, not
+    ``u_e_o_t`` — otherwise the bridge-arm lookup misses and a
+    genuinely-closed entry would be falsely reported stale-the-other-
+    way (or, worse, a stale entry would be missed)."""
+    mod = _load_tool()
+    assert (
+        mod._camel_to_snake("DoubleTargetCreaturesPowerUEOT")
+        == "double_target_creatures_power_ueot"
+    )
+    assert (
+        mod._camel_to_snake("TapTargetOpponentPermanentAndStunIt")
+        == "tap_target_opponent_permanent_and_stun_it"
+    )
+    assert (
+        mod._camel_to_snake("DealDamageToOpponentCreatureByArtifactCount")
+        == "deal_damage_to_opponent_creature_by_artifact_count"
+    )
+
+
+def test_resolve_residue_entry_alias_resolution():
+    """The plan-name → real-variant alias pass: the audit/plan name
+    (`TwoMobileSubjects`) is NOT a live variant, but its alias
+    (`TwoSubjectPumpAndDebuffByArtifactCount`) is — the first alias
+    present in the live enum wins, and ``bridged`` is computed via the
+    acronym-aware snake_case."""
+    mod = _load_tool()
+    rust = {"TwoSubjectPumpAndDebuffByArtifactCount", "Unrelated"}
+    bridge = {"two_subject_pump_and_debuff_by_artifact_count"}
+    entry = {
+        "entry": "TwoMobileSubjects",
+        "card": "Monoist Circuit-Feeder",
+        "status": "genuinely_missing",
+        "claimed_missing_effect": "TwoMobileSubjects",
+        "aliases": [
+            "TwoMobileSubjects",  # plan-invented, NOT a live variant
+            "TwoSubjectPumpAndDebuffByArtifactCount",  # the real one
+        ],
+    }
+    r = mod.resolve_residue_entry(entry, rust, bridge)
+    assert r.resolved_variant == "TwoSubjectPumpAndDebuffByArtifactCount"
+    assert r.bridged is True
+
+
+def test_resolve_residue_entry_genuinely_missing_stays_none():
+    mod = _load_tool()
+    entry = {
+        "entry": "SacUnlessYouTap",
+        "card": "Command Bridge",
+        "status": "genuinely_missing",
+        "claimed_missing_effect": "SacUnlessYouTap",
+        "aliases": ["SacUnlessYouTap", "SacrificeSelfUnlessYouTapAPermanent"],
+    }
+    r = mod.resolve_residue_entry(entry, {"DrawCards"}, {"draw_cards"})
+    assert r.resolved_variant is None
+    assert r.bridged is False
+
+
+def test_compute_residue_staleness_detects_stale_entry():
+    """A ``genuinely_missing`` entry whose claimed Effect actually
+    resolves to a live + bridged variant is flagged STALE — exactly
+    the Mechanozoa/Warmaker/Mightform sub-class the count-only cron
+    could not catch."""
+    mod = _load_tool()
+    rust = {"TapTargetOpponentPermanentAndStunIt"}
+    bridge = {"tap_target_opponent_permanent_and_stun_it"}
+    entries = [
+        {
+            "entry": "TapTargetAndPutStunCounter",
+            "card": "Mechanozoa",
+            "status": "genuinely_missing",
+            "claimed_missing_effect": "TapTargetAndPutStunCounter",
+            "aliases": ["TapTargetOpponentPermanentAndStunIt"],
+        }
+    ]
+    drifts = mod.compute_residue_staleness(entries, rust, bridge)
+    assert len(drifts) == 1
+    d = drifts[0]
+    assert d.key == "residue_stale::TapTargetAndPutStunCounter"
+    assert "Mechanozoa" in d.label
+    assert "resolves to live" in d.hint
+    assert "TapTargetOpponentPermanentAndStunIt" in d.hint
+    # Renders as a plain STALE line, not the numeric "doc-claimed" form.
+    assert d.line().startswith("  - STALE:")
+    assert "doc-claimed" not in d.line()
+
+
+def test_compute_residue_staleness_genuinely_missing_not_flagged():
+    """A genuinely-missing entry (no alias resolves) is NOT falsely
+    flagged — the check must not minimize the count by false
+    positives."""
+    mod = _load_tool()
+    entries = [
+        {
+            "entry": "SacUnlessYouTap",
+            "card": "Command Bridge",
+            "status": "genuinely_missing",
+            "claimed_missing_effect": "SacUnlessYouTap",
+            "aliases": ["SacUnlessYouTap"],
+        }
+    ]
+    drifts = mod.compute_residue_staleness(
+        entries, {"DrawCards", "GainLife"}, {"draw_cards"}
+    )
+    assert drifts == []
+
+
+def test_compute_residue_staleness_live_but_unbridged_still_flagged():
+    """A claimed-missing Effect that exists in the live enum but has
+    NO bridge arm is STILL stale (the residue list over-counts it as
+    no-Rust-arm) — the message just notes the missing bridge arm."""
+    mod = _load_tool()
+    entries = [
+        {
+            "entry": "X",
+            "card": "Card X",
+            "status": "genuinely_missing",
+            "claimed_missing_effect": "FooBar",
+            "aliases": ["FooBar"],
+        }
+    ]
+    drifts = mod.compute_residue_staleness(entries, {"FooBar"}, set())
+    assert len(drifts) == 1
+    assert "no bridge arm" in drifts[0].hint
+
+
+def test_compute_residue_staleness_closed_entry_regression_guard():
+    """The inverse: a ``closed`` entry whose recorded
+    ``resolved_variant`` no longer resolves (variant renamed/removed
+    or its bridge arm dropped) means the closure prose itself went
+    stale — flagged as ``residue_closure_stale``."""
+    mod = _load_tool()
+    entries = [
+        {
+            "entry": "TwoMobileSubjects",
+            "card": "Monoist Circuit-Feeder",
+            "status": "closed",
+            "claimed_missing_effect": "TwoMobileSubjects",
+            "resolved_variant": "TwoSubjectPumpAndDebuffByArtifactCount",
+            "aliases": ["TwoSubjectPumpAndDebuffByArtifactCount"],
+        }
+    ]
+    # Variant gone from the live enum → closure no longer holds.
+    drifts = mod.compute_residue_staleness(entries, set(), set())
+    assert len(drifts) == 1
+    assert drifts[0].key.startswith("residue_closure_stale::")
+    assert "closure" in drifts[0].label
+    # Still-resolving closed entry → no drift.
+    ok = mod.compute_residue_staleness(
+        entries,
+        {"TwoSubjectPumpAndDebuffByArtifactCount"},
+        {"two_subject_pump_and_debuff_by_artifact_count"},
+    )
+    assert ok == []
+
+
+def test_parse_residue_worklist_real_file_is_valid():
+    """The committed ``docs/residue_worklist.json`` parses + validates
+    + has both statuses (structural-regression guard, like
+    ``test_live_inventory_parses_real_tree``)."""
+    mod = _load_tool()
+    entries = mod.parse_residue_worklist()
+    assert len(entries) >= 15
+    statuses = {e["status"] for e in entries}
+    assert statuses == {"genuinely_missing", "closed"}
+    # The round-51/53 confirmed-stale trio + the round-54 pair must
+    # all be recorded as closed (not genuinely_missing).
+    closed_cards = {
+        e["card"] for e in entries if e["status"] == "closed"
+    }
+    for card in (
+        "Mechanozoa",
+        "Warmaker Gunship",
+        "Mightform Harmonizer",
+        "Monoist Circuit-Feeder",
+        "Extinguisher Battleship",
+    ):
+        assert card in closed_cards, card
+
+
+def test_parse_residue_worklist_missing_file_raises(tmp_path):
+    mod = _load_tool()
+    with pytest.raises(RuntimeError, match="missing"):
+        mod.parse_residue_worklist(tmp_path / "nope.json")
+
+
+def test_parse_residue_worklist_bad_json_raises(tmp_path):
+    mod = _load_tool()
+    bad = tmp_path / "wl.json"
+    bad.write_text("{not json", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="not valid JSON"):
+        mod.parse_residue_worklist(bad)
+
+
+def test_parse_residue_worklist_no_entries_raises(tmp_path):
+    mod = _load_tool()
+    bad = tmp_path / "wl.json"
+    bad.write_text('{"entries": []}', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="no 'entries' list"):
+        mod.parse_residue_worklist(bad)
+
+
+def test_parse_residue_worklist_bad_status_raises(tmp_path):
+    mod = _load_tool()
+    bad = tmp_path / "wl.json"
+    bad.write_text(
+        '{"entries": [{"entry": "x", "status": "weird", '
+        '"aliases": ["A"]}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="invalid\\s+status"):
+        mod.parse_residue_worklist(bad)
+
+
+def test_parse_residue_worklist_closed_needs_resolved_variant(tmp_path):
+    mod = _load_tool()
+    bad = tmp_path / "wl.json"
+    bad.write_text(
+        '{"entries": [{"entry": "x", "status": "closed", '
+        '"aliases": ["A"]}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="must record a"):
+        mod.parse_residue_worklist(bad)
+
+
+def test_residue_check_would_have_caught_the_known_stale_trio():
+    """End-to-end proof against the REAL live tree: if Mechanozoa /
+    Warmaker Gunship / Mightform Harmonizer were (as the pre-round-54
+    audit had them) still classed ``genuinely_missing``, the per-entry
+    check flags ALL THREE — this is the round-52-cron gap closed. A
+    genuinely-missing control (Command Bridge) is NOT flagged in the
+    same batch."""
+    mod = _load_tool()
+    rust = mod.collect_rust_variant_set()
+    bridge = mod.collect_bridge_arm_set()
+    simulated_pre_r54 = [
+        {
+            "entry": "TapTargetAndPutStunCounter",
+            "card": "Mechanozoa",
+            "status": "genuinely_missing",
+            "claimed_missing_effect": "TapTargetAndPutStunCounter",
+            "aliases": ["TapTargetOpponentPermanentAndStunIt"],
+        },
+        {
+            "entry": "DealDamageToAnyTargetEqualToArtifactCount",
+            "card": "Warmaker Gunship",
+            "status": "genuinely_missing",
+            "claimed_missing_effect": (
+                "DealDamageToAnyTargetEqualToArtifactCount"
+            ),
+            "aliases": ["DealDamageToOpponentCreatureByArtifactCount"],
+        },
+        {
+            "entry": "DoubleTargetPowerUntilEOT",
+            "card": "Mightform Harmonizer",
+            "status": "genuinely_missing",
+            "claimed_missing_effect": "DoubleTargetPowerUntilEOT",
+            "aliases": ["DoubleTargetCreaturesPowerUEOT"],
+        },
+        {
+            "entry": "SacUnlessYouTap",
+            "card": "Command Bridge",
+            "status": "genuinely_missing",  # genuinely missing control
+            "claimed_missing_effect": "SacUnlessYouTap",
+            "aliases": ["SacUnlessYouTap"],
+        },
+    ]
+    drifts = mod.compute_residue_staleness(
+        simulated_pre_r54, rust, bridge
+    )
+    flagged = {d.label for d in drifts}
+    assert len(drifts) == 3
+    assert any("Mechanozoa" in f for f in flagged)
+    assert any("Warmaker Gunship" in f for f in flagged)
+    assert any("Mightform Harmonizer" in f for f in flagged)
+    assert not any("Command Bridge" in f for f in flagged)
+
+
 # ------------------------------------------------------ drift + report
 
 
@@ -299,7 +589,14 @@ def test_compute_drift_reports_each_stale_count():
     # Precise actionable content: claimed, actual, signed delta.
     assert "doc-claimed 104, actual 107 (delta +3)" in report
     assert "doc-claimed 15, actual 18 (delta +3)" in report
-    assert "round-34/49/51 staleness class" in report
+    # Round-54 widened the lineage string to include round-53 + the
+    # per-entry extension; assert the stable substring.
+    assert "round-34/49/51/53 staleness class" in report
+    assert "round-54 per-entry extension" in report
+    # Pure count-drift input → only the headline-count section, no
+    # per-entry residue section.
+    assert "Headline-count drift:" in report
+    assert "Per-entry residue staleness" not in report
     # The in-sync count must NOT appear.
     assert "_SAFE_KEYWORDS" not in report
 
