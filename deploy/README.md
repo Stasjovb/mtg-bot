@@ -257,6 +257,75 @@ rationale.
 | `--deck-pool-path` | `data/17lands/eoe_decks.json.gz` | Smoke tests against a small pool. |
 | `--weights-cache-root` | `trained_weights` | Shared filesystem deployments where weights live elsewhere. |
 | `--worker-id` | hostname | Two daemons on the same box; otherwise leave alone. |
+| `--spot-watch` | OFF | **AWS EC2 spot workers only.** See below. |
+
+## AWS EC2 spot workers — `--spot-watch`
+
+EC2 **spot** instances can be reclaimed by AWS with a ~2-minute
+warning. By default a reclaimed worker just dies mid-game: its
+in-flight claims then sit unreclaimed until the coordinator marks it
+`DEAD` (~90s of missed heartbeats) or the slower claim-TTL sweep
+fires (1200s default). That ~90s is wasted cluster time on every
+spot reclaim.
+
+`--spot-watch` (a worker-owned flag, OFF by default — leave it OFF on
+on-prem workers and in tests) starts a daemon-thread poller that
+watches the EC2 instance-metadata interruption endpoint (IMDSv2). On
+the ~2-minute reclaim warning it triggers **the exact same graceful
+drain as `POST /v2/stop`**: the worker stops claiming new games and
+finishes/reports (or releases) its in-flight game locally, in
+seconds. **Net effect: the ~90s heartbeat-DEAD reclaim lag is
+removed from the common spot-reclaim case** — the coordinator gets
+the games back almost immediately instead of waiting out the
+liveness timeout.
+
+**Enable it on the EC2 service file.** Add the flag to the daemon's
+`ExecStart` (systemd is the EC2-Linux deployment vehicle — see the
+"Linux (systemd)" section; the shipped
+`deploy/systemd/mtg-bot-worker.service` has a commented `--spot-watch`
+line ready to uncomment):
+
+```ini
+ExecStart=${VENV_PYTHON} -m mtg_bot.worker_daemon \
+  --host ${TAILNET_IP} \
+  --port 5198 \
+  --n-workers ${N_WORKERS} \
+  --deck-pool-path ${REPO_ROOT}/data/17lands/eoe_decks.json.gz \
+  --weights-cache-root ${REPO_ROOT}/trained_weights \
+  --spot-watch
+```
+
+If you bootstrap EC2 spot instances via **user-data** that templates
+the unit (or runs the daemon directly), append `--spot-watch` to the
+same invocation. No other config is needed — IMDSv2 is on by default
+on EC2 and the endpoint is link-local; nothing leaves the instance.
+
+### Operational notes / caveats
+
+- **Win here is "stop claiming + faster LOCAL drain", not instant
+  coordinator reclaim.** As of this feature the v2 coordinator has
+  **no** proactive per-worker "reclaim my claims now" endpoint. A
+  game still running when the instance finally vanishes falls back
+  to the existing heartbeat / claim-TTL reclaim — same as today,
+  just with no *new* claims piled on and the common
+  finishes-in-time case fully drained. A coordinator-side
+  instant-reclaim endpoint is possible future work (noted in
+  `docs/DISTRIBUTED_API_v2.md`), deliberately out of scope here.
+- **On-prem / non-AWS workers must NOT set `--spot-watch`.** Off
+  AWS there is no IMDS at `169.254.169.254`; the poller would just
+  log tolerated transport errors forever (harmless, but pointless
+  noise). The flag is OFF by default precisely so this is opt-in.
+- **A flaky IMDS call never kills the watcher or the daemon.**
+  Transport/parse failures are logged and polling continues; the
+  daemon's `/v2/heartbeat` stays responsive throughout. The watcher
+  fires its drain **exactly once** and only on a real interruption
+  notice — IMDS errors never spuriously drain a healthy worker.
+- **Spot reclaim is still a reclaim.** `--spot-watch` makes the
+  drain graceful and fast; it does not prevent the instance going
+  away. A game that takes longer than AWS's ~2-minute warning to
+  finish is still lost on that instance and re-queued by the
+  coordinator's existing fallback — `--spot-watch` only guarantees
+  no *new* work is claimed once the warning lands.
 
 ## Troubleshooting
 
