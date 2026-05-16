@@ -2675,31 +2675,51 @@ collection-order divergence as the next CE candidate.
 (Other smoke-flagged divergences may be added by follow-up Phase 5
 slices as the deck pool / decision script grows.)
 
-### I28. Cross-engine `cast_spell` parity via harness-side `resolve_top_of_stack_python` mirror
+### I28. Cross-engine `cast_spell` parity via harness-side `resolve_top_of_stack_{python,rust}` mirror
 
-`step_both` in `src/mtg_bot/parity/cross_engine.py` drains Python's
-stack via `resolve_top_of_stack_python` after every action whose
-kind is in `_RUST_AUTO_RESOLVE_ACTION_KINDS` (today:
-`{"cast_spell"}`). The drain mirrors `simulate.priority_loop`'s
-"resolve until empty" contract (CR 117.4): pop one StackItem via
-`resolve_top_of_stack`, run `state_based_actions`, repeat. This
-parity-aligns Python's observable state with Rust's no-stack
-`cast_creature` semantics for cross-engine comparison purposes.
+`step_both` in `src/mtg_bot/parity/cross_engine.py` drains BOTH
+engines' stacks via `resolve_top_of_stack_python` +
+`resolve_top_of_stack_rust` after every action whose kind is in
+`_RUST_AUTO_RESOLVE_ACTION_KINDS` (today: `{"cast_spell"}`). The
+Python drain mirrors `simulate.priority_loop`'s "resolve until
+empty" contract (CR 117.4): pop one StackItem via
+`resolve_top_of_stack`, run `state_based_actions`, repeat. The
+Rust drain calls `GameState::resolve_top_of_stack` (which itself
+does ENTERS / LEAVES fan-out + auto-resolve-pending) in a similar
+while-loop. Together they parity-align both engines' observable
+state with Rust's no-stack `cast_creature` semantics for cross-
+engine comparison purposes.
 
 The invariant: when the cross-engine walker applies a `cast_spell`
-action, the post-step compare sees both engines' stacks empty and
-both engines' battlefields with the resolved permanent. Production
-Python is unchanged — the harness primitive is invoked only from
-`step_both`. Production Rust is unchanged — `cast_creature`'s
-no-stack semantics are preserved (documented in the
-`state_ops_cast.rs:293` docstring and reaffirmed here).
+action, the post-step compare sees both engines' stacks at the
+shared pre-cast floor and both engines' battlefields with the
+resolved permanent + any ETB-triggered effects fully resolved.
+
+**Round 42 extension — Rust drain.** Pre-extension only the Python
+side drained; this was safe because Rust's `cast_creature` was
+truly no-stack (no ENTERS triggers fired for the bridge-admit set
+at that time). After the round-42 CardDef filter extension admitted
+Thawbringer (an ENTERS+DIES surveil card), Rust's
+`move_from_hand_to_battlefield` started dispatching ENTERS triggers
+that push `StackItem::TriggeredAbility` items onto Rust's stack with
+no Rust primitive auto-resolving them. The bench caught this as 7
+new `cast_spell::stack` divergences on Thawbringer-bearing EoE
+archetypes (0/1/10/11/12). Adding the sister Rust drain — same
+floor-respecting while-loop contract as the Python drain — closes
+the cluster: 7 → 0 divergences.
+
+Production Python is unchanged — the harness primitive is invoked
+only from `step_both`. Production Rust is unchanged —
+`cast_creature`'s no-stack semantics are preserved (documented in
+the `state_ops_cast.rs:293` docstring and reaffirmed here); only
+the harness drain is new.
 
 Extension point: any future Rust primitive that ships fused
 cast+resolve semantics for a different action kind appends its
-kind to `_RUST_AUTO_RESOLVE_ACTION_KINDS`. The drain itself is
-already trigger-loop-correct (the while-loop catches any items the
-resolve itself pushes), so the only update needed for new kinds is
-the action-kind gate.
+kind to `_RUST_AUTO_RESOLVE_ACTION_KINDS`. Both drains are already
+trigger-loop-correct (the while-loops catch any items the resolve
+itself pushes), so the only update needed for new kinds is the
+action-kind gate.
 
 ### ~~CE8.~~ CLOSED: All 8 gameplay shuffle sites accept an external `rng` parameter; cross-engine shuffles consume a shared `random.Random` stream
 

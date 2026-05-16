@@ -1696,6 +1696,140 @@ def test_cross_engine_resolve_top_of_stack_python_respects_floor(parity_smoke):
     # exercises the actual non-zero drain on a real StackItem.
 
 
+def test_cross_engine_resolve_top_of_stack_rust_drains_etb_triggers(parity_smoke):
+    """**CE5 extension regression pin (round 42 Thawbringer)**: the
+    sister primitive :func:`resolve_top_of_stack_rust` drains a non-
+    empty Rust stack down to ``floor``, mirroring the Python drain so
+    cast_creature's ENTERS-trigger fan-out (e.g. Thawbringer's
+    "enters, surveil 1") doesn't leave triggered abilities sitting on
+    Rust's stack while Python's drained to floor.
+
+    Builds the Thawbringer-bearing arch 0 game from
+    `setup_matched_game_from_real_decks`, plays through T8 to the
+    point where p1 casts Thawbringer for {2}{G}, and asserts the post-
+    cast field views byte-match on both engines (no stack divergence).
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view,
+        resolve_top_of_stack_rust,
+        step_both,
+    )
+    from mtg_bot.turn import Step
+
+    deck_names = trajectory.load_production_deck(archetype=0)
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        deck_names, shared_rng_seed=0, mulligans=False,
+    )
+    combat_agent = trajectory.RealGameCombatAgent(strategy="attack_all")
+
+    # No-op contract: drain on an empty stack returns 0.
+    assert rust_state.stack_size() == 0
+    assert resolve_top_of_stack_rust(rust_state) == 0
+
+    # Helpers imported lazily so the bench script's path bootstrap
+    # doesn't need to be on sys.path for this test.
+    import sys
+    import pathlib
+    scripts_dir = pathlib.Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from bench_trajectory_parity import (  # type: ignore[import-not-found]
+        _try_play_one_land,
+        _try_cast_one_creature,
+        _advance_phase_with_compare,
+        _game_over,
+    )
+
+    # Drive up to T8 p1 MAIN1 — the seed-deterministic point where
+    # Thawbringer is castable.
+    saw_thawbringer_cast = False
+    while not _game_over(py_state):
+        if py_state.turn_number > 8:
+            break
+        if py_state.step == Step.PRECOMBAT_MAIN:
+            _try_play_one_land(py_state, rust_state)
+            while True:
+                cast = _try_cast_one_creature(py_state, rust_state)
+                if cast is None:
+                    break
+                # If we just cast Thawbringer (card_id 77 on seed 0),
+                # the post-cast view should byte-match — step_both
+                # asserts no divergences via the harness drain on both
+                # engines. We just need to reach here without raising.
+                if cast.get("card_id") == 77:
+                    saw_thawbringer_cast = True
+                    return  # success — no divergence raised
+            _advance_phase_with_compare(py_state, rust_state)
+            continue
+        if py_state.step == Step.DECLARE_ATTACKERS:
+            trajectory.drive_combat_phase(py_state, rust_state, combat_agent)
+            _advance_phase_with_compare(py_state, rust_state)
+            continue
+        _advance_phase_with_compare(py_state, rust_state)
+
+    # If we exited the loop without seeing the Thawbringer cast, the
+    # deck-shuffle seed has drifted and this regression pin no longer
+    # covers the intended scenario — fail loudly so the test gets
+    # re-pinned rather than going silently quiet.
+    assert saw_thawbringer_cast, (
+        "Thawbringer (card_id 77) was never cast on arch=0 seed=0 — "
+        "regression pin scenario has drifted; re-pin against a "
+        "current Thawbringer-bearing game."
+    )
+
+
+def test_cross_engine_resolve_top_of_stack_rust_respects_floor(parity_smoke):
+    """**Round-42 floor contract pin (Rust mirror)**: the Rust drain
+    primitive honors a non-zero floor exactly the way the Python
+    primitive does — items at or below ``floor`` are left in place.
+
+    Mirror of :func:`test_cross_engine_resolve_top_of_stack_python_respects_floor`
+    on the Rust side; uses ``register_and_inject_object`` +
+    ``push_to_stack`` to seed Rust's stack with a sentinel entry
+    instead of constructing a ``StackItem`` directly (Rust's stack
+    items are PyO3-side and not Python-constructible).
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_rust_state,
+        resolve_top_of_stack_rust,
+        slightly_bigger_deckspec,
+    )
+
+    rust_state = build_rust_state(slightly_bigger_deckspec())
+    assert rust_state.stack_size() == 0
+
+    # Inject a sentinel sorcery into p0's hand and push it onto the
+    # stack so we have a real Rust StackItem to drain against.
+    ZONE_HAND = 0
+    sorcery_id = rust_state.register_and_inject_object(
+        {
+            "name": "Sentinel",
+            "card_types": ["Sorcery"],
+            "effects": [],
+        },
+        0,
+        ZONE_HAND,
+    )
+    rust_state.push_to_stack(sorcery_id, 0)
+    assert rust_state.stack_size() == 1
+
+    # floor == current depth → no drain.
+    drained = resolve_top_of_stack_rust(rust_state, floor=1)
+    assert drained == 0
+    assert rust_state.stack_size() == 1
+
+    # floor > current depth → no drain (defensive short-circuit).
+    drained = resolve_top_of_stack_rust(rust_state, floor=5)
+    assert drained == 0
+    assert rust_state.stack_size() == 1
+
+    # floor == 0 (default) → drain the sentinel.
+    drained = resolve_top_of_stack_rust(rust_state)
+    assert drained == 1
+    assert rust_state.stack_size() == 0
+
+
 def test_cross_engine_cast_bears_selector_activate_ability_pre_cast_walks_clean(
     parity_smoke,
 ):

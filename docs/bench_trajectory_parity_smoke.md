@@ -442,3 +442,95 @@ producing the compound `life_p0 + stack` divergence shape.
   work (I2's slice) is the highest-leverage path to surface new
   divergence shapes — admit more creatures and the new shapes will
   appear at seeds the current admit set never reaches.
+
+## Round 43 — Thawbringer `cast_spell::stack` cluster fix (CE5 Rust mirror extension)
+
+Round 43 closed the 7-divergence cluster that round-42 I2's CardDef
+filter extension surfaced. All 7 incidents were
+`cast_spell::stack` shape on Thawbringer-bearing archetypes
+(0, 1, 10, 11, 12), all at T8 action 15 — the deterministic point
+where p1 casts Thawbringer (id=77) for `{2}{G}`.
+
+### Targeted reproducer (cluster's own arch+seed range)
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 0,1,10,11,12 --seeds 0-2 --max-turns 18 --verbose
+```
+
+| Status            | Pre-fix | Post-fix |
+|-------------------|---------|----------|
+| Total games       | 15      | 15       |
+| PASS              | 0       | **7**    |
+| FAIL_DIVERGENCE   | 7       | **0**    |
+| FAIL_TIMEOUT      | 8       | 8        |
+
+| Shape                                    | Pre-fix | Post-fix |
+|------------------------------------------|---------|----------|
+| `cast_spell::stack`                      | 7       | **0**    |
+
+The 7 games that previously failed at T8 action 15 now run to a
+clean `max_turns=18` conclusion.
+
+### Wider sweep (round-41 Sweep B grid)
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 0-50 --seeds 0-5 --max-turns 20
+```
+
+| Status            | Round 42 | Round 43 |
+|-------------------|----------|----------|
+| Total games       | 306      | 306      |
+| PASS              | 16       | **33**   |
+| FAIL_DIVERGENCE   | 0        | 0        |
+| FAIL_TIMEOUT      | 290      | 273      |
+
+The +17 PASS delta over round 42 reflects the now-PASSing
+Thawbringer-bearing games. No new divergence shapes appeared.
+
+### Root cause attribution
+
+Rust's `cast_creature` is no-stack for the cast itself, but the
+`move_from_hand_to_battlefield` call inside it dispatches
+`Event::Enters` via `state_ops_zones.rs::move_object`, which can
+push a `StackItem::TriggeredAbility` for every ETB trigger the
+printing declares. For Thawbringer ("when this creature enters,
+surveil 1") that's exactly one ENTERS-trigger pushed per cast.
+Rust's `cast_creature` does NOT run a priority loop, so that
+trigger sits on Rust's stack indefinitely.
+
+Python's `_cast_spell` → `resolve_top_of_stack` → ENTERS-fan-out
+→ `resolve_top_of_stack` (drain the surveil trigger) → empty
+stack, all driven by the harness CE5 `resolve_top_of_stack_python`
+drain. Pre-fix the harness only drained Python, so Python ended at
+floor while Rust still carried the surveil ENTERS trigger — the
+divergence shape `stack(py=(), rust=((None,0,0,0,0,None,1,77),))`.
+
+The fix: extend the CE5 closure with a sister
+`resolve_top_of_stack_rust` primitive that drains Rust's stack
+down to the same pre-cast floor as Python via
+`rust_state.resolve_top_of_stack()`. Both engines now reach the
+shared pre-cast floor before the post-step compare runs.
+
+### Scope notes
+
+- Harness-only change in `src/mtg_bot/parity/cross_engine.py`. No
+  production Python touched, no production Rust touched.
+- The fix generalizes beyond Thawbringer: any future
+  CardDef-extension admit that pushes ENTERS-triggered abilities
+  during `move_from_hand_to_battlefield` will land clean on the
+  cross-engine bench without further harness work. The same drain
+  also covers DIES-triggered surveil for Thawbringer when it dies
+  in combat (the predicate-walk in `dispatch_event` handles DIES
+  events the same way).
+
+### Bench rerun result
+
+- Cluster size before (round 42 narrow sweep): 7 divergences.
+- Cluster size after (round 43): 0.
+- Wider sweep (arch 0-50 × seeds 0-5): 0 divergences, +17 PASS
+  delta vs round 42.
+- New shapes surfaced: none.
