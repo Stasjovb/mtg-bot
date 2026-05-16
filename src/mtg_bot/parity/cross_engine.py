@@ -147,6 +147,23 @@ class CardDef:
     # probe relies on the `legendary_creature` filter (or any future
     # supertype-keyed dispatch).
     supertypes: tuple[str, ...] = ()
+    # Keywords substrate (Phase 6 carddef-substrate slice) — Python's
+    # native keyword spelling (lowercase, space-separated; e.g.
+    # `"flying"`, `"first strike"`, `"double strike"`). The bridge
+    # translates space->underscore for the Rust registry per the
+    # convention split documented in
+    # ``trajectory._inject_keyword_creature_on_p0_bf`` (Python's
+    # ``combat._deals_in_step`` matches the space form; Rust's
+    # ``battlefield_has_keyword`` matches the underscore form).
+    # Empty tuple is the back-compat default — pre-substrate fixtures
+    # don't set it; the Rust parser maps the missing ``keywords`` key
+    # to an empty Vec, and Python's ``CardPrinting.keywords`` defaults
+    # to ``frozenset()``. Only the keywords confirmed parity-clean by
+    # Phase 5/6 probes (per ``trajectory._SAFE_KEYWORDS``) should land
+    # on a production-deck CardDef; arbitrary keyword strings DO pass
+    # through to both engines, but with no guarantee that the per-
+    # keyword combat/static behaviors agree byte-for-byte.
+    keywords: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -7156,6 +7173,18 @@ def build_rust_state(spec: DeckSpec):
             printing_dict["triggered_abilities"] = [
                 dict(ta) for ta in card.triggered_abilities
             ]
+        # Phase 6 carddef-substrate slice: pass keywords through to the
+        # Rust registry. The convention split (Python uses space-
+        # separated, Rust uses underscore-separated; see
+        # ``trajectory._inject_keyword_creature_on_p0_bf``) is handled
+        # here by replacing spaces with underscores on the way out.
+        # Pre-substrate fixtures default to an empty tuple so the key
+        # is omitted entirely and the Rust parser maps that absence to
+        # an empty Vec.
+        if card.keywords:
+            printing_dict["keywords"] = [
+                kw.replace(" ", "_") for kw in card.keywords
+            ]
         pid = reg.register_printing(printing_dict)
         name_to_pid[card.name] = pid
 
@@ -7284,6 +7313,12 @@ def build_python_state(spec: DeckSpec):
             _ta_dict_to_python_triggered_ability(ta)
             for ta in card.triggered_abilities
         )
+        # Phase 6 carddef-substrate slice: thread keywords into the
+        # Python CardPrinting using its native frozenset shape +
+        # space-separated spelling. Rust side already received the
+        # underscore-translated form in build_rust_state above; the
+        # split convention is the same one
+        # ``trajectory._inject_keyword_creature_on_p0_bf`` uses.
         printings[card.name] = CardPrinting(
             name=card.name,
             mana_cost_str="",
@@ -7297,6 +7332,7 @@ def build_python_state(spec: DeckSpec):
             produces=frozenset(card.mana_produced),
             activated_abilities=activated_abilities,
             triggered_abilities=triggered_abilities,
+            keywords=frozenset(card.keywords),
         )
 
     state = GameState()

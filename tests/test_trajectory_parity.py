@@ -1789,6 +1789,141 @@ def test_real_eoe_deck_play_basic_land_turn_1_parity():
 
 
 # ---------------------------------------------------------------------------
+# Phase 6 carddef-substrate slice: production-shape decklist trajectory
+# probes that exercise CARDS WITH KEYWORDS surviving the bridge filter
+# (rather than collapsing to "lands + vanilla creatures + padding").
+#
+# Round 17 deliberately filtered out every keyword-bearing card because
+# CardDef didn't carry a `keywords` field. The carddef-substrate slice
+# adds `CardDef.keywords` + threads it through `build_python_state` /
+# `build_rust_state` (Python's space-form, Rust's underscore-form
+# automatic via the same convention split documented in the round-17
+# `_inject_keyword_creature_on_p0_bf` helper) + extends
+# `_printing_is_bridge_simple_creature` to admit creatures whose
+# keywords are all in `_SAFE_KEYWORDS` (Phase 5/6 parity-clean set).
+#
+# The first new EoE creature surviving the extended filter that carries
+# a keyword Phase 6 has explicitly trajectory-probed: archetype 66's
+# `Mm'menon, the Right Hand` (3/4 flying for {3}{U}{U}) and archetype 2's
+# `Tapestry Warden` (3/4 vigilance for {3}{G}). The probes below load
+# those archetypes, set up matched states, walk the standard turn-1
+# no-op + turn-1 land prefix, and assert byte-equal field views at
+# every phase boundary. They pin two regressions:
+#
+#   1. The CardDef.keywords field flows through to BOTH engines'
+#      printing registries with the convention-translated spelling
+#      (Python frozenset of space-form vs Rust list of underscore-form).
+#   2. The keyword-bearing creature SURVIVES the production-deck
+#      filter — i.e. the loader doesn't silently drop it because of a
+#      regressed safe-keyword check.
+# ---------------------------------------------------------------------------
+
+
+def test_real_eoe_deck_with_flying_creature_setup_parity():
+    """Load EoE archetype 66 (carries `Mm'menon, the Right Hand`,
+    a 3/4 flying creature), build matched states, assert byte-equal
+    field views.
+
+    Pre-substrate this archetype would still load (the loader doesn't
+    crash on keyword-bearing cards — it just filters them out); the
+    substrate slice's contribution is that the flying creature now
+    SURVIVES the filter and lands in both engines' libraries with
+    matching `keywords` fields. The setup-time field-view compare pins
+    that the keyword wiring through the registry is byte-equal.
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+
+    cards = trajectory.load_production_deck(66)
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42, pad_with="Island",
+    )
+
+    # Verify a flying creature actually landed in the registry on both
+    # engines (sanity-check that the substrate filter extension is in
+    # effect — without it, this test would xfail-equivalent because
+    # `_filter_deck_to_bridge_supported` would have dropped the flier).
+    py_lib = (
+        py_state.players[0].library + py_state.players[0].hand
+        + py_state.players[1].library + py_state.players[1].hand
+    )
+    flyers = [
+        o for o in py_lib if "flying" in o.printing.keywords
+    ]
+    assert flyers, (
+        "expected at least one flying creature in the matched-game "
+        "registry (archetype 66 carries Mm'menon, the Right Hand); "
+        "if this assertion fails the carddef-substrate filter "
+        "extension regressed."
+    )
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"production-deck setup with flying creature diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
+    assert len(py_view["hand_p0"]) == 7
+    assert len(py_view["hand_p1"]) == 7
+
+
+def test_real_eoe_deck_with_vigilance_creature_no_op_parity():
+    """Load EoE archetype 2 (carries `Tapestry Warden`, a 3/4 vigilance
+    creature), build matched states, walk turn-1 no-op + turn-2 UNTAP,
+    assert byte-equal field views at every phase boundary.
+
+    Pins the carddef-substrate slice's keyword wiring on the most-
+    walked trajectory shape — turn-1 no-op walk — for a card carrying
+    a keyword that affects combat (vigilance per CR 702.20). The
+    keyword doesn't FIRE on this no-op walk (the creature stays in
+    the library); the value is in pinning that registering a keyword-
+    bearing printing on both engines doesn't drift the printing
+    bookkeeping anywhere downstream.
+    """
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python,
+        compare_fields,
+    )
+    from mtg_bot.parity import trajectory
+
+    cards = trajectory.load_production_deck(2)
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42, pad_with="Forest",
+    )
+
+    # Sanity: vigilance creature is in the registry.
+    all_objs = (
+        py_state.players[0].library + py_state.players[0].hand
+        + py_state.players[1].library + py_state.players[1].hand
+    )
+    vigil = [o for o in all_objs if "vigilance" in o.printing.keywords]
+    assert vigil, (
+        "expected at least one vigilance creature in the matched-game "
+        "registry (archetype 2 carries Tapestry Warden); if this "
+        "assertion fails the carddef-substrate filter extension or "
+        "the loader's vigilance allowlist regressed."
+    )
+
+    # Walk 12 phase advances: 11 to walk turn 1 UNTAP -> CLEANUP, then
+    # one more for the CLEANUP -> turn 2 UNTAP wrap. Same shape as
+    # `test_real_eoe_deck_no_op_first_turn_parity`.
+    for advance_idx in range(12):
+        advance_phase_python(py_state)
+        rust_state.advance_phase()
+        py_view, rust_view = _step_views(py_state, rust_state)
+        divs = compare_fields(py_view, rust_view)
+        assert divs == [], (
+            f"advance #{advance_idx} ({py_view['step']!r}, turn "
+            f"{py_view['turn']}) on real EoE deck w/ vigilance "
+            f"creature surfaced divergences: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+        )
+    py_view, _rust_view = _step_views(py_state, rust_state)
+    assert py_view["turn"] == 2
+    assert py_view["step"] == "UNTAP"
+
+
+# ---------------------------------------------------------------------------
 # Round-17 enhancement: trajectory tests for the new RealGameCombatAgent
 # strategies (block_with_largest_able, attack_with_unblockable_creatures_only,
 # optimal_no_loss_attack). Mirror shape of the round-16 strategy tests but
