@@ -190,7 +190,8 @@ def _build_loop(
 
 
 def test_start_self_play_fetches_weights_when_missing(tmp_path):
-    """Cache miss -> two GETs to /v2/weights/<v> + /metadata."""
+    """Cache miss -> metadata GET + weights GET, written atomically with
+    a fingerprint sidecar."""
     fake = FakeCoordinator()
     calls: list[str] = []
 
@@ -206,24 +207,43 @@ def test_start_self_play_fetches_weights_when_missing(tmp_path):
     )
     assert (target_dir / "weights.pt").is_file()
     assert (target_dir / "metadata.json").is_file()
-    # One GET for the weights blob, one for the metadata sidecar.
+    # The pair-fingerprint sidecar is the "this dir is coherent" marker.
+    assert (target_dir / cl.CACHE_FINGERPRINT_FILE).is_file()
+    # Metadata is fetched FIRST (cheap coherency probe), then weights.
     assert len(calls) == 2
-    assert any("/v2/weights/vTEST" in u for u in calls)
-    assert any("/metadata" in u for u in calls)
+    assert calls[0].endswith("/v2/weights/vTEST/metadata")
+    assert calls[1].endswith("/v2/weights/vTEST")
+    # No staging / trash temp dirs leak alongside the version dir.
+    leftovers = [
+        p.name for p in tmp_path.iterdir()
+        if p.name != "vTEST"
+    ]
+    assert leftovers == []
 
 
-def test_start_self_play_skips_weight_fetch_when_cached(tmp_path):
-    """Cache hit -> zero GETs."""
-    version_dir = tmp_path / "vTEST"
-    version_dir.mkdir(parents=True)
-    (version_dir / "weights.pt").write_bytes(b"already-here")
-    (version_dir / "metadata.json").write_text('{"version": "vTEST"}')
+def test_cache_hit_costs_one_metadata_get_not_zero(tmp_path):
+    """Coherency change of contract: a cache *hit* now always costs
+    exactly ONE cheap metadata GET (so a poisoned/stale pair can be
+    detected) — but the weights blob is NOT re-fetched.
+
+    This intentionally replaces the old "zero GETs on hit" behavior:
+    that skip-everything-if-both-files-exist guard is exactly the bug
+    that let a mismatched (old metadata, new weights) pair survive.
+    """
+    fake = FakeCoordinator()
+    # Prime the cache with a coherent pair via a first fetch.
+    cl.fetch_weights_if_missing(
+        coordinator_url="http://fake-coord:5099",
+        version="vTEST",
+        weights_root=tmp_path,
+        http_get=fake.http_get,
+    )
 
     calls: list[str] = []
 
     def http_get(url, timeout=30.0):
         calls.append(url)
-        return 500, b"shouldnt have been called", {}
+        return fake.http_get(url, timeout)
 
     target_dir = cl.fetch_weights_if_missing(
         coordinator_url="http://fake-coord:5099",
@@ -231,20 +251,507 @@ def test_start_self_play_skips_weight_fetch_when_cached(tmp_path):
         weights_root=tmp_path,
         http_get=http_get,
     )
-    assert target_dir == version_dir
-    assert calls == []
+    assert target_dir == tmp_path / "vTEST"
+    # Exactly one GET, and it's the metadata probe — no weights re-pull.
+    assert len(calls) == 1
+    assert calls[0].endswith("/v2/weights/vTEST/metadata")
 
 
-def test_fetch_weights_raises_on_non_200(tmp_path):
-    """Coordinator 404 -> RuntimeError surfaces."""
+def test_fetch_weights_raises_on_metadata_non_200(tmp_path):
+    """Coordinator 404 on the metadata probe -> RuntimeError surfaces
+    (metadata is fetched first now)."""
     fake = FakeCoordinator(weights_status=404)
-    with pytest.raises(RuntimeError, match="GET /v2/weights/vMISS"):
+    with pytest.raises(
+        RuntimeError, match="GET /v2/weights/vMISS/metadata"
+    ):
         cl.fetch_weights_if_missing(
             coordinator_url="http://fake-coord:5099",
             version="vMISS",
             weights_root=tmp_path,
             http_get=fake.http_get,
         )
+
+
+# ---------------------------------------------------------------------------
+# Weights-cache COHERENCY (the v6/metadata-vs-weights mismatch bug)
+# ---------------------------------------------------------------------------
+
+
+def _real_mlp_weights_bytes(hidden_sizes=(8, 8)) -> bytes:
+    """A real flat-MLP dual-head state_dict serialized to bytes — its
+    zip carries ``trunk.0.weight`` so the architecture sniff classifies
+    it as a flat-MLP checkpoint."""
+    import io
+
+    import torch
+
+    from mtg_bot.search.nn_evaluator import _ValuePolicyMLP
+
+    buf = io.BytesIO()
+    torch.save(_ValuePolicyMLP(hidden_sizes=hidden_sizes).state_dict(), buf)
+    return buf.getvalue()
+
+
+def _structured_weights_bytes() -> bytes:
+    """A real StructuredModel state_dict serialized to bytes — its zip
+    carries ``cls_token`` / ``printing_embed`` / ``trunk.layers.*`` so
+    the sniff classifies it as the structured/transformer checkpoint.
+    """
+    import io
+
+    import torch
+
+    from mtg_bot.search.nn_evaluator import _build_structured_model
+
+    buf = io.BytesIO()
+    torch.save(_build_structured_model().state_dict(), buf)
+    return buf.getvalue()
+
+
+@dataclass
+class _CoherentCoord:
+    """Serves a single coherent (metadata, weights) pair. ``bump`` lets
+    a test simulate the coordinator re-training the checkpoint (new
+    metadata + new weights, e.g. a new ``git_commit``)."""
+
+    metadata: bytes
+    weights: bytes
+
+    def http_get(self, url, timeout=30.0):
+        if url.endswith("/metadata"):
+            return 200, self.metadata, {}
+        return 200, self.weights, {}
+
+
+def test_atomic_pair_write_creates_fingerprint_and_no_leak(tmp_path):
+    """A fresh fetch writes metadata + weights + the fingerprint
+    sidecar, and leaves no staging/trash temp dirs behind."""
+    coord = _CoherentCoord(
+        metadata=b'{"architecture": "shared"}',
+        weights=_real_mlp_weights_bytes(),
+    )
+    vdir = cl.fetch_weights_if_missing(
+        coordinator_url="http://c:5099",
+        version="v9",
+        weights_root=tmp_path,
+        http_get=coord.http_get,
+    )
+    fp = json.loads(
+        (vdir / cl.CACHE_FINGERPRINT_FILE).read_text(encoding="utf-8")
+    )
+    assert fp["metadata_sha256"] == cl._sha256(coord.metadata)
+    assert fp["weights_sha256"] == cl._sha256(coord.weights)
+    assert fp["version"] == "v9"
+    assert [p.name for p in tmp_path.iterdir()] == ["v9"]
+
+
+def test_poisoned_cache_old_metadata_new_weights_is_refetched(tmp_path):
+    """THE BUG: an OLD metadata.json (no ``architecture``) left next to
+    a NEW structured weights.pt must be detected as incoherent and the
+    pair re-fetched from the coordinator (which serves a coherent
+    pair), NOT silently read into the wrong model class."""
+    vdir = tmp_path / "v6"
+    vdir.mkdir(parents=True)
+    # Poisoned: no architecture field + structured weights, NO
+    # fingerprint sidecar (mirrors the real stale-node state).
+    (vdir / "metadata.json").write_text(
+        '{"version": "v6"}', encoding="utf-8"
+    )
+    (vdir / "weights.pt").write_bytes(_structured_weights_bytes())
+
+    # Coordinator serves the COHERENT v6: structured metadata + the
+    # structured weights.
+    coherent_meta = json.dumps(
+        {"version": "v6", "architecture": "structured",
+         "git_commit": "deadbeef"}
+    ).encode("utf-8")
+    coord = _CoherentCoord(
+        metadata=coherent_meta, weights=_structured_weights_bytes(),
+    )
+    calls: list[str] = []
+
+    def http_get(url, timeout=30.0):
+        calls.append(url)
+        return coord.http_get(url, timeout)
+
+    out = cl.fetch_weights_if_missing(
+        coordinator_url="http://c:5099",
+        version="v6",
+        weights_root=tmp_path,
+        http_get=http_get,
+    )
+    # Both endpoints hit -> a real re-fetch happened (not a cache hit).
+    assert any(u.endswith("/metadata") for u in calls)
+    assert any(u.endswith("/v2/weights/v6") for u in calls)
+    # Cache healed: metadata now declares the structured architecture.
+    healed = json.loads(
+        (out / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert healed["architecture"] == "structured"
+    assert (out / cl.CACHE_FINGERPRINT_FILE).is_file()
+    # And the loud check is satisfied (coherent pair).
+    cl.assert_metadata_weights_coherent(out)
+
+
+def test_changed_weights_forces_refetch_via_metadata_fingerprint(tmp_path):
+    """A re-trained checkpoint changes metadata.json (new
+    ``git_commit``); the cached fingerprint's metadata SHA no longer
+    matches the server's, so BOTH files are re-fetched even though the
+    old pair was internally consistent."""
+    v1_meta = json.dumps(
+        {"architecture": "shared", "git_commit": "aaaa"}
+    ).encode("utf-8")
+    coord = _CoherentCoord(
+        metadata=v1_meta, weights=_real_mlp_weights_bytes((8, 8)),
+    )
+    cl.fetch_weights_if_missing(
+        coordinator_url="http://c:5099", version="v7",
+        weights_root=tmp_path, http_get=coord.http_get,
+    )
+    fp1 = json.loads(
+        (tmp_path / "v7" / cl.CACHE_FINGERPRINT_FILE).read_text("utf-8")
+    )
+
+    # Coordinator re-trains: new metadata (git_commit) + new weights.
+    coord.metadata = json.dumps(
+        {"architecture": "shared", "git_commit": "bbbb"}
+    ).encode("utf-8")
+    coord.weights = _real_mlp_weights_bytes((16, 16))
+    calls: list[str] = []
+
+    def http_get(url, timeout=30.0):
+        calls.append(url)
+        return coord.http_get(url, timeout)
+
+    cl.fetch_weights_if_missing(
+        coordinator_url="http://c:5099", version="v7",
+        weights_root=tmp_path, http_get=http_get,
+    )
+    fp2 = json.loads(
+        (tmp_path / "v7" / cl.CACHE_FINGERPRINT_FILE).read_text("utf-8")
+    )
+    # Weights blob WAS re-fetched (not just the metadata probe).
+    assert any(u.endswith("/v2/weights/v7") for u in calls)
+    assert fp2["metadata_sha256"] != fp1["metadata_sha256"]
+    assert fp2["weights_sha256"] != fp1["weights_sha256"]
+    assert json.loads(
+        (tmp_path / "v7" / "metadata.json").read_text("utf-8")
+    )["git_commit"] == "bbbb"
+
+
+def test_tampered_on_disk_weights_with_matching_metadata_refetched(
+    tmp_path,
+):
+    """Edge: metadata SHA still matches the server, but ``weights.pt``
+    was truncated/swapped on disk after caching. The on-disk weights
+    SHA no longer matches the fingerprint -> re-fetch the pair."""
+    coord = _CoherentCoord(
+        metadata=b'{"architecture": "shared"}',
+        weights=_real_mlp_weights_bytes(),
+    )
+    vdir = cl.fetch_weights_if_missing(
+        coordinator_url="http://c:5099", version="v8",
+        weights_root=tmp_path, http_get=coord.http_get,
+    )
+    # Corrupt the cached weights in place.
+    (vdir / "weights.pt").write_bytes(b"truncated-garbage")
+    calls: list[str] = []
+
+    def http_get(url, timeout=30.0):
+        calls.append(url)
+        return coord.http_get(url, timeout)
+
+    cl.fetch_weights_if_missing(
+        coordinator_url="http://c:5099", version="v8",
+        weights_root=tmp_path, http_get=http_get,
+    )
+    assert any(u.endswith("/v2/weights/v8") for u in calls)
+    # Restored to the good blob.
+    assert (vdir / "weights.pt").read_bytes() == coord.weights
+
+
+def test_loud_fail_when_coordinator_serves_poisoned_pair(tmp_path):
+    """Defense-in-depth: if the coordinator ITSELF serves an incoherent
+    pair (old no-architecture metadata + structured weights), fail with
+    a clear PoisonedWeightsCacheError naming the version + both sides —
+    NOT an opaque torch state_dict stack trace."""
+    bad = _CoherentCoord(
+        metadata=b'{"version": "v6"}',  # no architecture -> MLP default
+        weights=_structured_weights_bytes(),  # structured checkpoint
+    )
+    with pytest.raises(
+        cl.PoisonedWeightsCacheError,
+        match=r"poisoned weights cache for 'v6'.*architecture field "
+              r"ABSENT.*structured/transformer checkpoint",
+    ):
+        cl.fetch_weights_if_missing(
+            coordinator_url="http://bad:5099", version="v6",
+            weights_root=tmp_path, http_get=bad.http_get,
+        )
+
+
+def test_assert_coherent_passes_on_matched_structured_pair(tmp_path):
+    vdir = tmp_path / "v6"
+    vdir.mkdir(parents=True)
+    (vdir / "metadata.json").write_text(
+        '{"architecture": "structured"}', encoding="utf-8"
+    )
+    (vdir / "weights.pt").write_bytes(_structured_weights_bytes())
+    cl.assert_metadata_weights_coherent(vdir)  # no raise
+
+
+def test_assert_coherent_flags_structured_meta_with_mlp_weights(tmp_path):
+    vdir = tmp_path / "v6"
+    vdir.mkdir(parents=True)
+    (vdir / "metadata.json").write_text(
+        '{"architecture": "structured"}', encoding="utf-8"
+    )
+    (vdir / "weights.pt").write_bytes(_real_mlp_weights_bytes())
+    with pytest.raises(
+        cl.PoisonedWeightsCacheError,
+        match=r"metadata says architecture=structured but weights.pt "
+              r"is a flat-feature MLP checkpoint",
+    ):
+        cl.assert_metadata_weights_coherent(vdir)
+
+
+def test_assert_coherent_reads_architecture_from_training_block(tmp_path):
+    """Forward-compat: a trainer that nests ``architecture`` under
+    ``training`` is still classified correctly (coherent here)."""
+    vdir = tmp_path / "v6"
+    vdir.mkdir(parents=True)
+    (vdir / "metadata.json").write_text(
+        '{"training": {"architecture": "structured"}}', encoding="utf-8"
+    )
+    (vdir / "weights.pt").write_bytes(_structured_weights_bytes())
+    cl.assert_metadata_weights_coherent(vdir)  # no raise
+
+
+def test_assert_coherent_noop_on_indeterminate_or_missing(tmp_path):
+    """Synthetic/tiny blobs and missing files are NOT flagged — the
+    check is a targeted defense, not a general validator."""
+    # Missing files: no-op.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    cl.assert_metadata_weights_coherent(empty)
+    # Indeterminate weights blob (no recognizable markers): no-op even
+    # against a structured-claiming metadata.
+    vdir = tmp_path / "v6"
+    vdir.mkdir()
+    (vdir / "metadata.json").write_text(
+        '{"architecture": "structured"}', encoding="utf-8"
+    )
+    (vdir / "weights.pt").write_bytes(b"not-a-real-torch-zip")
+    cl.assert_metadata_weights_coherent(vdir)  # no raise
+    # Malformed metadata JSON: no-op (handled elsewhere).
+    (vdir / "metadata.json").write_text("{bad json", encoding="utf-8")
+    cl.assert_metadata_weights_coherent(vdir)  # no raise
+
+
+def test_corrupt_fingerprint_sidecar_is_treated_as_cache_miss(tmp_path):
+    """A malformed/unreadable fingerprint sidecar must NOT be trusted —
+    the pair is re-fetched (fail-safe toward coherency)."""
+    coord = _CoherentCoord(
+        metadata=b'{"architecture": "shared"}',
+        weights=_real_mlp_weights_bytes(),
+    )
+    vdir = cl.fetch_weights_if_missing(
+        coordinator_url="http://c:5099", version="vF",
+        weights_root=tmp_path, http_get=coord.http_get,
+    )
+    (vdir / cl.CACHE_FINGERPRINT_FILE).write_text("{not json")
+    calls: list[str] = []
+
+    def http_get(url, timeout=30.0):
+        calls.append(url)
+        return coord.http_get(url, timeout)
+
+    cl.fetch_weights_if_missing(
+        coordinator_url="http://c:5099", version="vF",
+        weights_root=tmp_path, http_get=http_get,
+    )
+    assert any(u.endswith("/v2/weights/vF") for u in calls)
+    assert (vdir / cl.CACHE_FINGERPRINT_FILE).is_file()
+    json.loads(
+        (vdir / cl.CACHE_FINGERPRINT_FILE).read_text("utf-8")
+    )  # valid again
+
+
+def test_os_replace_retry_succeeds_after_transient_permission_error(
+    tmp_path, monkeypatch
+):
+    """Windows transient PermissionError on the atomic swap is retried,
+    not turned into a non-atomic fallback."""
+    src = tmp_path / "src"
+    src.mkdir()
+    dst = tmp_path / "dst"
+    calls = {"n": 0}
+    real_replace = cl.os.replace
+
+    def flaky(a, b):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise PermissionError("winerror 32 — file in use")
+        return real_replace(a, b)
+
+    monkeypatch.setattr(cl.os, "replace", flaky)
+    monkeypatch.setattr(cl.time, "sleep", lambda *_a, **_k: None)
+    cl._os_replace_retry(src, dst, attempts=5)
+    assert calls["n"] == 3
+    assert dst.is_dir()
+
+
+def test_os_replace_retry_raises_after_exhausting_attempts(
+    tmp_path, monkeypatch
+):
+    def always_locked(a, b):
+        raise PermissionError("winerror 5 — access denied")
+
+    monkeypatch.setattr(cl.os, "replace", always_locked)
+    monkeypatch.setattr(cl.time, "sleep", lambda *_a, **_k: None)
+    with pytest.raises(PermissionError, match="access denied"):
+        cl._os_replace_retry(
+            tmp_path / "a", tmp_path / "b", attempts=3
+        )
+
+
+def test_atomic_write_pair_replaces_existing_dir_cleanly(tmp_path):
+    """A second atomic write over an existing version dir swaps it
+    in-place and leaves no trash/staging dirs behind."""
+    cl._atomic_write_pair(tmp_path, "vR", b'{"a":1}', b"weights-v1")
+    out = cl._atomic_write_pair(tmp_path, "vR", b'{"a":2}', b"weights-v2")
+    assert (out / "weights.pt").read_bytes() == b"weights-v2"
+    assert json.loads((out / "metadata.json").read_text())["a"] == 2
+    assert [p.name for p in tmp_path.iterdir()] == ["vR"]
+
+
+def test_fingerprint_sidecar_that_is_valid_json_but_not_a_dict(tmp_path):
+    """A fingerprint sidecar that parses but isn't an object is
+    untrusted -> treated as a cache miss (re-fetch)."""
+    coord = _CoherentCoord(
+        metadata=b'{"architecture": "shared"}',
+        weights=_real_mlp_weights_bytes(),
+    )
+    vdir = cl.fetch_weights_if_missing(
+        coordinator_url="http://c:5099", version="vJ",
+        weights_root=tmp_path, http_get=coord.http_get,
+    )
+    # Valid JSON, wrong shape (a list, not an object).
+    (vdir / cl.CACHE_FINGERPRINT_FILE).write_text("[1, 2, 3]")
+    assert cl._read_fingerprint(vdir) is None
+    calls: list[str] = []
+
+    def http_get(url, timeout=30.0):
+        calls.append(url)
+        return coord.http_get(url, timeout)
+
+    cl.fetch_weights_if_missing(
+        coordinator_url="http://c:5099", version="vJ",
+        weights_root=tmp_path, http_get=http_get,
+    )
+    assert any(u.endswith("/v2/weights/vJ") for u in calls)
+
+
+def test_is_cache_coherent_false_when_disk_read_raises(
+    tmp_path, monkeypatch
+):
+    """If re-hashing the on-disk pair raises OSError, the cache is
+    treated as incoherent (fail-safe)."""
+    vdir = tmp_path / "vD"
+    vdir.mkdir()
+    (vdir / "metadata.json").write_bytes(b"M")
+    (vdir / "weights.pt").write_bytes(b"W")
+    server_sha = cl._sha256(b"M")
+    (vdir / cl.CACHE_FINGERPRINT_FILE).write_text(
+        json.dumps(
+            {"metadata_sha256": server_sha, "weights_sha256": "x"}
+        )
+    )
+    orig_read = cl.Path.read_bytes
+
+    def boom(self, *a, **k):
+        if self.name == "weights.pt":
+            raise OSError("disk gone")
+        return orig_read(self, *a, **k)
+
+    monkeypatch.setattr(cl.Path, "read_bytes", boom)
+    assert cl._is_cache_coherent(vdir, server_sha) is False
+
+
+def test_atomic_write_pair_cleans_staging_on_mid_write_error(
+    tmp_path, monkeypatch
+):
+    """If a write fails mid-staging, the staging temp dir is cleaned up
+    and no partial version dir is published."""
+    real_wb = cl.Path.write_bytes
+
+    def fail_on_weights(self, data, *a, **k):
+        if self.name == "weights.pt":
+            raise OSError("simulated write failure")
+        return real_wb(self, data, *a, **k)
+
+    monkeypatch.setattr(cl.Path, "write_bytes", fail_on_weights)
+    with pytest.raises(OSError, match="simulated write failure"):
+        cl._atomic_write_pair(tmp_path, "vX", b'{"a":1}', b"weights")
+    # No version dir published, and no staging/trash leftovers.
+    assert not (tmp_path / "vX").exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_fetch_raises_when_weights_endpoint_non_200(tmp_path):
+    """Metadata 200 but the weights blob endpoint 500s -> RuntimeError
+    naming the weights endpoint (Step 3 of the fetch)."""
+
+    def http_get(url, timeout=30.0):
+        if url.endswith("/metadata"):
+            return 200, b'{"architecture": "shared"}', {}
+        return 503, b"unavailable", {}
+
+    with pytest.raises(
+        RuntimeError, match=r"GET /v2/weights/vW failed: status=503"
+    ):
+        cl.fetch_weights_if_missing(
+            coordinator_url="http://c:5099", version="vW",
+            weights_root=tmp_path, http_get=http_get,
+        )
+
+
+def test_weights_pt_sniff_returns_none_on_unreadable_file(tmp_path):
+    """``_weights_pt_looks_structured`` swallows OSError -> None
+    (indeterminate, don't block)."""
+    missing = tmp_path / "nope" / "weights.pt"
+    assert cl._weights_pt_looks_structured(missing) is None
+
+
+def test_assert_coherent_treats_non_dict_metadata_as_empty(tmp_path):
+    """Metadata that is valid JSON but a list (not an object) -> the
+    architecture back-compat-defaults to the MLP path; paired with MLP
+    weights that's coherent (no raise)."""
+    vdir = tmp_path / "v6"
+    vdir.mkdir()
+    (vdir / "metadata.json").write_text("[1, 2]", encoding="utf-8")
+    (vdir / "weights.pt").write_bytes(_real_mlp_weights_bytes())
+    cl.assert_metadata_weights_coherent(vdir)  # no raise
+    # ...but a non-dict metadata next to STRUCTURED weights is poisoned.
+    (vdir / "weights.pt").write_bytes(_structured_weights_bytes())
+    with pytest.raises(cl.PoisonedWeightsCacheError):
+        cl.assert_metadata_weights_coherent(vdir)
+
+
+def test_verify_coherent_false_skips_the_loud_check(tmp_path):
+    """``verify_coherent=False`` opts out of the load-time assertion
+    (used by callers that do their own validation downstream)."""
+    bad = _CoherentCoord(
+        metadata=b'{"version": "v6"}',
+        weights=_structured_weights_bytes(),
+    )
+    # No raise even though the pair is incoherent.
+    out = cl.fetch_weights_if_missing(
+        coordinator_url="http://bad:5099", version="v6",
+        weights_root=tmp_path, http_get=bad.http_get,
+        verify_coherent=False,
+    )
+    assert (out / "weights.pt").is_file()
 
 
 # ---------------------------------------------------------------------------
