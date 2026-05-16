@@ -60,6 +60,7 @@ from mtg_bot.effects.generic.grant_keywords import (
 from mtg_bot.effects.generic.pump import (
     DoubleTargetCreaturesPowerUEOT,
     PairedTargetPumpDebuffUEOT,
+    PumpYoursAndDebuffOpponentByArtifactCountUntilEOT,
     Pump,
     PumpCreaturesOpponentsControlUntilEOT,
     PumpCreaturesYouControlUntilEOT,
@@ -347,6 +348,7 @@ __all__ = [
     # pump
     "DoubleTargetCreaturesPowerUEOT",
     "PairedTargetPumpDebuffUEOT",
+    "PumpYoursAndDebuffOpponentByArtifactCountUntilEOT",
     "Pump",
     "PumpCreaturesOpponentsControlUntilEOT",
     "PumpCreaturesYouControlUntilEOT",

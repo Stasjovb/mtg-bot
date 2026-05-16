@@ -163,6 +163,7 @@ from mtg_bot.effects.generic import (
     PumpCreaturesYouControlUntilEOT,
     PumpSelfUntilEOT,
     PumpSelfXPowerUEOT,
+    PumpYoursAndDebuffOpponentByArtifactCountUntilEOT,
     PhaseOutEquippedCreature,
     PreventAllCombatDamageThisTurn,
     PumpTargetArtifactOrCreatureUntilEOT,

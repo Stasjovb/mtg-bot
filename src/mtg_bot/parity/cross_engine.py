@@ -7716,6 +7716,57 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             count=eff_dict.get("count", 1),
             tapped=True,
         )
+    if kind == "two_subject_pump_and_debuff_by_artifact_count":
+        # BLOCKED-RUST-EFFECT slice (round 51) -- Monoist
+        # Circuit-Feeder ETB (real EoE card; 14,727 17lands decks).
+        # Until EOT: the source-controller's FIRST creature gets
+        # +X/+0; an opponent's FIRST creature gets -0/-X; X = the
+        # source-controller's artifact count (clamped >= 0; X<=0 ->
+        # silent no-op). Rust's
+        # ``Effect::TwoSubjectPumpAndDebuffByArtifactCount`` is a
+        # UNIT variant (no fields beyond ``kind``); its resolve arm
+        # (state_ops_resolve.rs) picks BOTH targets DETERMINISTICALLY
+        # at apply time:
+        #   - source side = FIRST creature on the source-controller's
+        #     battlefield (smallest Vec index).
+        #   - opponent side = FIRST creature on the opponent's
+        #     battlefield (smallest Vec index).
+        # Per-side INDEPENDENT (CR 608.2c -- two independent "target"
+        # clauses, NOT "up to one"): a missing side is a silent no-op
+        # and the OTHER side still applies.
+        #
+        # Python's ``PumpYoursAndDebuffOpponentByArtifactCountUntil
+        # EOT`` (effects/generic/pump.py) carries the SAME
+        # deterministic-pick + per-side-independent shape; mirrors
+        # Rust's resolve scan + artifact-count denominator
+        # bit-for-bit. No fields to translate; the unit-variant arm
+        # is a bare class construction.
+        #
+        # **Distinct from ``PairedTargetPumpDebuffUEOT``**
+        # (effects/generic/pump.py) -- the AGENT-DRIVEN, two-REQUIRED-
+        # target class the real Monoist Circuit-Feeder printing parses
+        # to (the controller freely picks ANY legal own + opponent
+        # creature, CR 601.2c). The bridge does NOT route the
+        # agent-driven shape through here: that would silently degrade
+        # free target choice to a fixed first-creature pick in the
+        # production-deck loader (a §2 silent-mistranslation). This is
+        # the EXACT ``FightTargetCreatureWithTargetCreature``
+        # (deterministic bridge sibling) vs
+        # ``EnchantedCreatureFightsTargetEffect`` (agent-driven
+        # real-card class) precedent. The deterministic class is NOT
+        # production-deck-loader-admitted; the genuine real-EoE probe
+        # drives the actual ``PairedTargetPumpDebuffUEOT`` constrained
+        # by a picker shim so the agent's two-target pick is forced to
+        # the FIRST own / FIRST opponent creature, byte-equal with the
+        # Rust scan. See ``docs/SEARCH_LIMITATIONS.md``.
+        #
+        # **Real-EoE consumer (14,727 17lands decks).** Mirrors
+        # Rust's parse-arm tolerance: extra dict fields are silently
+        # ignored.
+        from mtg_bot.effects.generic.pump import (
+            PumpYoursAndDebuffOpponentByArtifactCountUntilEOT,
+        )
+        return PumpYoursAndDebuffOpponentByArtifactCountUntilEOT()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

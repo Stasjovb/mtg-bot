@@ -5365,6 +5365,154 @@ fn apply_effect(
             }
             // else: no opponent creature → silent fizzle.
         }
+        // BLOCKED-RUST-EFFECT slice (round 51) — Monoist
+        // Circuit-Feeder ETB (real EoE card; 14,727 17lands decks).
+        // Until EOT: the source-controller's FIRST creature gets
+        // +X/+0; an opponent's FIRST creature gets -0/-X; X = the
+        // source-controller's artifact count (clamped >= 0; X<=0 ->
+        // silent no-op). Sister of round-32
+        // DealDamageToOpponentCreatureByArtifactCount: SAME
+        // source-controller resolution (5-zone + stack scan) and
+        // SAME artifact-count denominator, NEW two-subject until-EOT
+        // pump+debuff apply substrate (reuses the
+        // PumpTargetCreatureUntilEOT UeotModifier::PowerToughnessBonus
+        // push shape). Mirrors Python's deterministic-pick bridge
+        // sibling PumpYoursAndDebuffOpponentByArtifactCountUntilEOT.
+        //
+        // **Per-side independence (CR 608.2c).** The oracle uses TWO
+        // independent "target" clauses (NOT "up to one"); if one
+        // side has no legal creature the ability still resolves the
+        // half that does. So each side is applied independently:
+        // missing source-side creature -> source-side no-op (opponent
+        // side still applies) and vice-versa. Matches Python's
+        // per-slot independent apply in
+        // PumpYoursAndDebuffOpponentByArtifactCountUntilEOT.
+        Effect::TwoSubjectPumpAndDebuffByArtifactCount => {
+            // Source-controller resolution (5-zone walk + stack
+            // scan; mirrors round-32 sister shape exactly).
+            let mut source_controller: Option<u8> = None;
+            'outer_sc_tspd: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_sc_tspd;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Artifact-count denominator on the source-controller's
+            // bf. Mirrors round-32
+            // DealDamageToOpponentCreatureByArtifactCount BIT-FOR-BIT
+            // (Scryfall card_types has "Artifact" for any artifact,
+            // including artifact-creatures / artifact-lands / tokens
+            // with the Artifact type) and Python's
+            // `CountControlledMatching(IsArtifact())` formula.
+            let cidx = controller as usize;
+            let mut x: i32 = 0;
+            for obj in state.players[cidx].battlefield.iter() {
+                let Some(printing) =
+                    state.registry.printings.get(obj.printing_id as usize)
+                else {
+                    continue;
+                };
+                if printing.card_types.iter().any(|t| t == "Artifact") {
+                    x = x.saturating_add(1);
+                }
+            }
+            if x <= 0 {
+                return Ok(()); // X <= 0 -> silent no-op
+            }
+            // Source-side target: FIRST creature on the
+            // source-controller's bf (smallest Vec index). Same
+            // deterministic scan FightTargetCreatureWithTargetCreature
+            // / PumpTargetCreatureUntilEOT use.
+            let own_target_id: Option<u32> = {
+                let bf = &state.players[cidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing =
+                        registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            // Opponent-side target: FIRST creature on the opponent's
+            // bf. 2-player engine = exactly one opponent at
+            // 1 - controller.
+            let opponent: u8 = 1 - controller;
+            let oidx = opponent as usize;
+            let opp_target_id: Option<u32> = {
+                let bf = &state.players[oidx].battlefield;
+                let registry = &state.registry;
+                bf.iter().find_map(|obj| {
+                    let printing =
+                        registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            // Apply the source-side +X/+0 UEOT modifier (independent
+            // of whether the opponent side has a target — CR 608.2c).
+            if let Some(target_id) = own_target_id {
+                let zone: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[cidx].battlefield);
+                for obj in zone.iter_mut() {
+                    if obj.id == target_id {
+                        obj.ueot_modifiers.push(
+                            UeotModifier::PowerToughnessBonus {
+                                power: x,
+                                toughness: 0,
+                            },
+                        );
+                        break;
+                    }
+                }
+            }
+            // Apply the opponent-side +0/-X UEOT modifier
+            // (independent of the source side).
+            if let Some(target_id) = opp_target_id {
+                let zone: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[oidx].battlefield);
+                for obj in zone.iter_mut() {
+                    if obj.id == target_id {
+                        obj.ueot_modifiers.push(
+                            UeotModifier::PowerToughnessBonus {
+                                power: 0,
+                                toughness: -x,
+                            },
+                        );
+                        break;
+                    }
+                }
+            }
+            // else (either side): no eligible creature → that side
+            // is a silent no-op; the other side still applied.
+        }
         // BLOCKED-RUST-EFFECT slice (round 35) — deal damage to an
         // opponent's creature equal to the source-controller's hand
         // size. Sister of round-32's

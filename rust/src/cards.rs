@@ -1387,6 +1387,73 @@ pub enum Effect {
     /// only the inherited `targets` tuple; no static `amount` field
     /// (the dynamic-X is the whole point of the class).
     DealDamageToOpponentCreatureByArtifactCount,
+    /// **BLOCKED-RUST-EFFECT slice (round 51) — Monoist Circuit-Feeder
+    /// ETB (real EoE card; 14,727 17lands decks).** Until end of turn:
+    /// a creature the source-controller controls gets `+X/+0`; a
+    /// creature an opponent controls gets `-0/-X`; X = the number of
+    /// artifacts the source-controller controls. Mirrors Python's NEW
+    /// deterministic-pick class `PumpYoursAndDebuffOpponentByArtifact
+    /// CountUntilEOT` (`effects/generic/pump.py` — shipped in this
+    /// slice as the BRIDGE SIBLING of the agent-driven, two-required-
+    /// target `PairedTargetPumpDebuffUEOT` that the real-card parser
+    /// emits). This is the exact `FightTargetCreatureWithTargetCreature`
+    /// (deterministic Rust unit-variant + deterministic Python bridge
+    /// sibling) vs `EnchantedCreatureFightsTargetEffect` (agent-driven
+    /// real-card class) precedent: the deterministic class exists
+    /// purely as the cross-engine bridge target; the genuine real-EoE
+    /// probe drives the actual parsed `PairedTargetPumpDebuffUEOT`
+    /// constrained by a picker shim so the agent's two-target pick is
+    /// forced to the FIRST own / FIRST opponent creature, byte-equal
+    /// with this arm's deterministic scan.
+    ///
+    /// **Why this is NOT loader-admitted (§2 bridge-correctness).** The
+    /// real Monoist Circuit-Feeder Python card parses to the
+    /// AGENT-DRIVEN `PairedTargetPumpDebuffUEOT` (two REQUIRED targets,
+    /// CR 601.2c; the controller freely picks ANY legal own creature +
+    /// ANY legal opponent creature). Routing that through the
+    /// production-deck loader's deterministic-first-creature bridge
+    /// would SILENTLY degrade free agent targeting to a fixed
+    /// first-creature pick in multi-creature board states — a §2
+    /// silent-mistranslation. Per the Fight precedent (the
+    /// deterministic `FightTargetCreatureWithTargetCreature` is NOT
+    /// loader-admitted for any real card; Meltstrider's Resolve stays
+    /// deferred), this slice ships the Effect arm + bridge sibling +
+    /// GENUINE real-EoE probe but deliberately does NOT add a
+    /// `_SAFE_*` loader admit. Documented in
+    /// `docs/SEARCH_LIMITATIONS.md`.
+    ///
+    /// **Mechanism — count + apply.** At resolve time, resolve the
+    /// source-controller (5-zone + stack scan; mirrors round-32
+    /// `DealDamageToOpponentCreatureByArtifactCount` shape — must
+    /// resolve even if the source has left bf). Count the
+    /// source-controller's battlefield permanents whose printing's
+    /// `card_types` contains "Artifact" (matches Python: artifact-lands
+    /// and artifact tokens count). Clamp `x = count.max(0)`; if
+    /// `x <= 0` → silent no-op (matches the round-32..49 X-from-count
+    /// zero short-circuit and Python's `if x <= 0: return`). Otherwise:
+    /// pick the source-side target = FIRST creature on the
+    /// source-controller's bf (smallest Vec index); pick the
+    /// opponent-side target = FIRST creature on the opponent's bf.
+    /// Each side independently: if missing, that side is a silent
+    /// no-op and the OTHER side still applies (CR 608.2c — two
+    /// independent "target" clauses, NOT "up to one"; matches Python's
+    /// per-slot independent apply). Apply an until-EOT
+    /// `PowerToughnessBonus` modifier: source side `{ power: x,
+    /// toughness: 0 }`; opponent side `{ power: 0, toughness: -x }`.
+    /// End-of-turn cleanup is the existing UEOT-modifier expiry path.
+    ///
+    /// **Target semantics — first-slice deterministic.** Same
+    /// first-creature-on-bf scan `FightTargetCreatureWithTargetCreature`
+    /// / `PumpTargetCreatureUntilEOT` use (the established campaign
+    /// no-decision-callback convention). The genuine real-EoE probe's
+    /// picker shim mirrors this exact order on the agent-driven side.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides — X
+    /// is computed from state at resolve time, not stored on the
+    /// variant. Python's `@dataclass(frozen=True)` deterministic class
+    /// has no constructor args. Mirrors the round-32..49 unit-variant
+    /// schema convention.
+    TwoSubjectPumpAndDebuffByArtifactCount,
     /// **BLOCKED-RUST-EFFECT slice (round 35) — deal damage to target
     /// creature an opponent controls equal to the number of cards in
     /// the source-controller's hand.** Mirrors Python's
@@ -4781,6 +4848,28 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // (`damage.py:406` — Warmaker Gunship's ETB).
             Ok(Effect::DealDamageToOpponentCreatureByArtifactCount)
         }
+        "two_subject_pump_and_debuff_by_artifact_count" => {
+            // BLOCKED-RUST-EFFECT slice (round 51) — Monoist
+            // Circuit-Feeder ETB (real EoE card; 14,727 17lands
+            // decks). Until EOT: source-controller's first creature
+            // gets +X/+0, an opponent's first creature gets -0/-X,
+            // X = source-controller's artifact count. Unit variant;
+            // no fields beyond `kind` (X is dynamic — read from
+            // state at resolve time, clamped >= 0). Extra dict
+            // fields silently ignored for round-trip dict-shape
+            // consistency (mirrors every other unit-variant parse
+            // arm; particularly the round-32 sister
+            // `deal_damage_to_opponent_creature_by_artifact_count`
+            // — SAME artifact-count denominator read, NEW two-
+            // subject until-EOT pump+debuff apply substrate).
+            // Mirrors Python's deterministic-pick bridge sibling
+            // `PumpYoursAndDebuffOpponentByArtifactCountUntilEOT`
+            // (`pump.py`). NOT loader-admitted — the real card's
+            // agent-driven `PairedTargetPumpDebuffUEOT` would
+            // silently degrade through the deterministic bridge
+            // (§2; see the variant docstring + SEARCH_LIMITATIONS).
+            Ok(Effect::TwoSubjectPumpAndDebuffByArtifactCount)
+        }
         "deal_damage_to_opponent_creature_by_cards_in_hand" => {
             // BLOCKED-RUST-EFFECT slice (round 35) — deal damage to
             // an opponent's creature equal to the source-controller's
@@ -6965,6 +7054,22 @@ pub(crate) fn effect_to_pydict<'py>(
             // DealDamageToOpponentCreatureByArtifactCount dict shape
             // (no static `amount` field on the @dataclass).
             d.set_item("kind", "deal_damage_to_opponent_creature_by_artifact_count")?;
+        }
+        Effect::TwoSubjectPumpAndDebuffByArtifactCount => {
+            // BLOCKED-RUST-EFFECT slice (round 51). Unit variant; no
+            // payload fields beyond `kind` (X is dynamic — computed
+            // at resolve time from the source-controller's
+            // battlefield artifact count, clamped >= 0). Mirrors
+            // Python's PumpYoursAndDebuffOpponentByArtifactCount
+            // UntilEOT dict shape (no static field on the
+            // @dataclass). Sister of round-32
+            // DealDamageToOpponentCreatureByArtifactCount with the
+            // SAME artifact-count denominator read but a two-subject
+            // until-EOT pump+debuff apply substrate.
+            d.set_item(
+                "kind",
+                "two_subject_pump_and_debuff_by_artifact_count",
+            )?;
         }
         Effect::DealDamageToOpponentCreatureByCardsInHand => {
             // BLOCKED-RUST-EFFECT slice (round 35). Unit variant; no
