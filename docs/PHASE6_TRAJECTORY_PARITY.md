@@ -906,3 +906,122 @@ channel pattern and drives a play_land that fires the landfall
 
 No divergences surfaced — all new tests pass byte-equal across
 both engines on first run.
+
+## CardDef triggers — landfall + draw_cards extension (this slice)
+
+Extends the round-37 DDDD carddef-triggers landfall + pump_self
+extension with a THIRD safe leaf effect riding the canonical
+compound landfall predicate `And(Subject(IsLand), Controlled(YOU))`:
+the bare `draw_cards` shape (single `count` payload key — mirrors
+the source_is_self+draw_cards starter entry's allowed-keys
+whitelist). The safe-trigger triple set gains one new entry today:
+
+```
+("enters", "land_enters_controlled_by_you", "draw_cards")
+```
+
+Cross-engine bridge support for `draw_cards` pre-existed in round 1
+of Phase 6 carddef-triggers (`cross_engine._ta_dict_to_python_
+effect` "draw_cards" arm + the starter source_is_self+draw_cards
+probe in `test_trajectory_parity.py`); the recognizer
+`_python_ta_to_safe_dict` already maps Python's `DrawCards` to the
+canonical `{"kind": "draw_cards", "count": int}` dict shape — only
+the landfall arm's `safe_effect_kinds` tuple needed the extension
+to admit the predicate-effect product. No new bridge or recognizer
+work landed in this slice.
+
+The canonical landfall predicate sentinel now rides THREE leaf
+effects (`gain_life` from round 36, `pump_self_until_eot` from
+round-37 DDDD, `draw_cards` from this slice). Other landfall
+predicate-effect crosses (e.g. landfall + `scry_n`) are still
+rejected because no safe EoE consumer or substrate value justifies
+admitting them yet.
+
+### Real-EoE consumer admitted
+
+**None this slice.** The EoE landfall pool's only draw-bearing
+card is **Tannuk, Memorial Ensign**, whose effect is the bespoke
+`TannukEnsignLandfallEffect` (deal-damage to each opponent +
+second-time-bonus draw composite), NOT a bare `DrawCards` leaf —
+Tannuk continues to be dropped by the production-deck filter
+(pinned by
+`test_simple_creature_filter_drops_tannuk_memorial_ensign_despite_landfall_draw_extension`).
+The substrate is pre-positioned for any future EoE / standard-
+format printing carrying a bare landfall+draw shape (parser-
+emitted equivalent of MH3 Hare Apparent's "+1/+0 and draw" or a
+clean "Landfall — draw a card" creature) so the next slice
+landing such a card need not extend the allowlist again. This
+mirrors the round-31 / round-32 BLOCKED-RUST-EFFECT precedent of
+shipping a substrate slice with a synthetic-only end-to-end
+probe when no clean real consumer exists.
+
+### Descoped this slice
+
+- **Tannuk Memorial Ensign** — bespoke
+  `TannukEnsignLandfallEffect` (deal-damage to each opponent +
+  second-time-bonus draw); needs both a leaf-effect
+  `deal_damage_each_opponent` arm AND the second-time-bonus state
+  primitive. Pinned by the printing-drop test above.
+- **Mightform Harmonizer landfall + `double_target_creatures_
+  power_ueot`** — substrate primed by round-37 CCCC (commit
+  c7c095ed) on the free-form CardDef bridge path; would be a
+  fourth predicate-effect product entry but Mightform also
+  carries `Warp` (outside `_SAFE_KEYWORDS`) AND its
+  `DoubleTargetCreaturesPowerUEOT` carries `requires_target=True`
+  needing a PUSH-time pick agent that the production-deck loader
+  doesn't seat. Both follow-ups (Warp keyword + targeting-agent
+  seating) gate the allowlist entry; admitting it preventatively
+  today would either silently allow other Warp creatures through
+  or fizzle at probe time on the targeting gap.
+- **Landfall + `scry_n`** — bridge-ready (scry_n is in the
+  starter set under source_is_self with the no-agent-default
+  bit-equal contract), but NO EoE landfall consumer carries the
+  shape; preventative-only admit deferred until a sister slice
+  has an actual consumer to point at (vs. this slice's draw_cards
+  admit, which has bridge-ready cross-controller probe
+  precedence + is broadly-applicable for the most-likely future
+  landfall printing shape across many formats).
+- **Other landfall consumers** — Eusocial Engineering
+  (create-token), Glacier Godmaw (creatures-you-control pump),
+  Genemorph Imago (3/3-or-6/6 base-PT swap), Icetill Explorer
+  (mill-a-card), Territorial Bruntar (exile-and-may-cast). Each
+  pairs the same canonical landfall predicate with an effect
+  outside today's safe-effect set — each needs its own sister
+  slice.
+
+### Test surface
+
+- 5 new unit tests in `tests/test_trajectory.py`:
+  - allowlist contract pin
+    (`test_safe_triggers_set_carries_landfall_draw_cards_shape`);
+  - dict-side accept-path
+    (`test_is_safe_trigger_dict_accepts_landfall_draw_cards` —
+    converted from the previous round-36 reject-path test pinning
+    the landfall+draw_cards rejection prior to this slice);
+  - dict-side extra-payload-key reject
+    (`test_is_safe_trigger_dict_rejects_landfall_draw_cards_with_extra_payload_key`
+    — mirrors the round-37 DDDD pump_self extra-key reject-path);
+  - Python-side round-trip
+    (`test_python_ta_to_safe_dict_round_trips_landfall_with_draw_cards`
+    — converted from the previous round-36 reject-path test);
+  - Tannuk drop-path pin
+    (`test_simple_creature_filter_drops_tannuk_memorial_ensign_despite_landfall_draw_extension`
+    — pins that admitting the bare predicate-effect product
+    doesn't accidentally admit Tannuk's bespoke effect class);
+  - draw-count payload preservation
+    (`test_python_ta_to_safe_dict_preserves_landfall_draw_cards_count`
+    — pins the count field round-trips as the parsed Python int).
+- 1 new trajectory probe in `tests/test_trajectory_parity.py`:
+  end-to-end fire probe with a SYNTHETIC landfall+draw_cards
+  carrier injected on p0's bf via the side-channel pattern
+  (mirrors `_inject_icecave_crasher_on_p0_bf` exactly with the
+  effect leaf swapped from `PumpSelfUntilEOT(+1/+0)` to
+  `DrawCards(amount=1)`), drives play_land on the basic land in
+  p0's opening hand, drains both stacks, asserts the landfall
+  trigger fired with p0's hand size unchanged (net 0 — played 1
+  land out, drew 1 card from trigger), plus byte-equal post-
+  drain field views.
+
+No divergences surfaced — all new tests pass byte-equal across
+both engines on first run. Gate: 1045 passed (1040 baseline + 5
+new tests this slice).

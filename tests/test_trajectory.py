@@ -1960,15 +1960,18 @@ def test_is_safe_trigger_dict_admits_landfall_gain_life():
     })
 
 
-def test_is_safe_trigger_dict_rejects_landfall_draw_cards():
-    """Landfall+draw_cards is NOT in the safe set today (no clean EoE
-    consumer; admitting it would unbalance the predicate-effect
-    product). Pins that the gate is strict on the predicate-effect
-    cross — admitting the predicate alone doesn't admit every leaf.
+def test_is_safe_trigger_dict_accepts_landfall_draw_cards():
+    """Landfall+draw_cards is in the safe set as of the round-37 ZZ
+    extension (this slice). Substrate is pre-positioned for any
+    future bare landfall-draw printing; no EoE consumer is admitted
+    today (Tannuk's draw rider is the bespoke second-time-bonus
+    shape, not a bare ``DrawCards`` leaf), but the predicate-effect
+    product is now structurally legal under the gate so the next
+    slice landing such a card need not extend the allowlist again.
     """
     from mtg_bot.parity.trajectory import _is_safe_trigger_dict
 
-    assert not _is_safe_trigger_dict({
+    assert _is_safe_trigger_dict({
         "event": "enters",
         "predicate": {
             "kind": "and",
@@ -2021,11 +2024,17 @@ def test_python_ta_to_safe_dict_round_trips_landfall_gain_life():
     assert _is_safe_trigger_dict(d)
 
 
-def test_python_ta_to_safe_dict_rejects_landfall_with_draw_cards():
-    """Landfall predicate + DrawCards effect is unsafe today (no
-    EoE consumer; the gate enforces the predicate-effect product).
-    Verifies the round-trip helper agrees with
-    :func:`_is_safe_trigger_dict`'s reject path.
+def test_python_ta_to_safe_dict_round_trips_landfall_with_draw_cards():
+    """Landfall predicate + DrawCards effect is in the safe set as
+    of this slice. The round-trip helper emits the canonical
+    AND-nested predicate dict + bare draw_cards effect dict, and
+    the result satisfies :func:`_is_safe_trigger_dict`.
+
+    No EoE consumer is admitted today (Tannuk Memorial Ensign's
+    draw is the bespoke second-time-bonus shape, not a bare
+    ``DrawCards`` leaf); this test pins the substrate symmetry so
+    a future EoE / standard-format landfall+draw printing lands
+    cleanly without further allowlist surgery.
     """
     from mtg_bot.effects.base import TriggeredAbility
     from mtg_bot.effects.predicates import (
@@ -2037,7 +2046,10 @@ def test_python_ta_to_safe_dict_rejects_landfall_with_draw_cards():
     )
     from mtg_bot.effects.object_predicates import IsLand
     from mtg_bot.effects.generic.draw_mill import DrawCards
-    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
 
     ta = TriggeredAbility(
         event=Event.ENTERS,
@@ -2047,7 +2059,17 @@ def test_python_ta_to_safe_dict_rejects_landfall_with_draw_cards():
         ),
         effect=DrawCards(amount=1),
     )
-    assert _python_ta_to_safe_dict(ta) is None
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "draw_cards", "count": 1},
+    }
+    assert _is_safe_trigger_dict(d)
 
 
 def test_simple_creature_filter_admits_eumidian_terrabotanist():
@@ -2408,3 +2430,104 @@ def test_printing_to_card_def_carries_landfall_pump_self_through():
             "toughness_bonus": 0,
         },
     },)
+
+
+def test_safe_triggers_set_carries_landfall_draw_cards_shape():
+    """Pin the landfall+draw_cards extension entry (this slice). A
+    future shrink would silently regress substrate coverage for any
+    future EoE / standard-format bare landfall+draw printing — the
+    extension is preventative today (no EoE consumer admitted; see
+    docstring on the entry for why Tannuk's bespoke effect doesn't
+    fit the bare-draw shape).
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert (
+        ("enters", "land_enters_controlled_by_you", "draw_cards")
+        in _SAFE_TRIGGERS
+    )
+
+
+def test_is_safe_trigger_dict_rejects_landfall_draw_cards_with_extra_payload_key():
+    """Schema-strict on the draw_cards payload under the landfall
+    predicate too — same gate the source_is_self+draw_cards arm
+    enforces. An extra key beyond {kind, count} is rejected so a
+    future schema extension (e.g. an "each opponent" rider) doesn't
+    silently slip through with the rider dropped on the cross-engine
+    round trip. Mirrors the round-37 DDDD slice's pump_self
+    extra-key reject-path test.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {
+            "kind": "draw_cards",
+            "count": 1,
+            "each_opponent": True,
+        },
+    })
+
+
+def test_simple_creature_filter_drops_tannuk_memorial_ensign_despite_landfall_draw_extension():
+    """Pin that the landfall+draw_cards extension does NOT
+    accidentally admit Tannuk, Memorial Ensign. Tannuk carries the
+    canonical landfall predicate AND draws a card on second
+    resolution per turn, but its parser-emitted effect is the
+    bespoke ``TannukEnsignLandfallEffect`` (deal-damage-each-
+    opponent + second-time-bonus draw composite) — NOT a bare
+    ``DrawCards`` leaf. The gate must reject Tannuk's printing on
+    the effect shape so the cross-engine bridge isn't asked to
+    round-trip a class neither :func:`_python_ta_to_safe_dict` nor
+    the dict-side bridge knows how to materialize.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    src = OracleParserCardSource()
+    tannuk = src.get_printings()["Tannuk, Memorial Ensign"]
+    # Sanity: Tannuk's printing carries the landfall predicate.
+    assert len(tannuk.triggered_abilities) == 1
+    assert type(tannuk.triggered_abilities[0].effect).__name__ == (
+        "TannukEnsignLandfallEffect"
+    )
+    # The whole-printing gate still drops Tannuk — landfall+draw_cards
+    # is in the safe set, but Tannuk's effect class is not the bare
+    # DrawCards leaf the gate looks for.
+    assert _printing_is_bridge_simple_creature(tannuk) is False
+
+
+def test_python_ta_to_safe_dict_preserves_landfall_draw_cards_count():
+    """The draw_cards count round-trips as the parsed Python integer;
+    the round-trip helper preserves the count value as-is. Pins the
+    count payload field's typed-int contract so a future strict-
+    validate-on-Rust-side doesn't surface as a bridge fault.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import (
+        And,
+        Controlled,
+        Event,
+        Subject,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=And(
+            left=Subject(slot=None, inner=IsLand()),
+            right=Controlled(by=YOU, subject=None),
+        ),
+        effect=DrawCards(amount=2),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d is not None
+    assert d["effect"] == {"kind": "draw_cards", "count": 2}
