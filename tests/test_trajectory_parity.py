@@ -4498,3 +4498,263 @@ def test_carddef_landfall_safe_etb_pump_self_fires_on_land_play_parity():
         f"diverges: "
         f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-triggers landfall + draw_cards extension (this slice).
+#
+# Adds the THIRD safe leaf effect under the canonical compound
+# landfall predicate ``And(Subject(IsLand), Controlled(YOU))``: the
+# bare ``draw_cards`` shape (single ``count`` payload key). Cross-
+# engine bridge support pre-existed in round 1 of Phase 6 carddef-
+# triggers (``cross_engine._ta_dict_to_python_effect`` "draw_cards"
+# arm + the source_is_self+draw_cards starter probe in
+# test_trajectory_parity.py); the recognizer already maps
+# ``DrawCards`` to the canonical dict shape — only the landfall
+# arm's ``safe_effect_kinds`` tuple needed extension.
+#
+# **No real-EoE consumer admitted by this slice.** The EoE landfall
+# pool's only draw-bearing card is Tannuk, Memorial Ensign whose
+# effect is the bespoke ``TannukEnsignLandfallEffect`` (deal-damage
+# to each opponent + second-time-bonus draw composite), NOT a bare
+# ``DrawCards`` leaf — Tannuk continues to be dropped by the
+# production-deck filter. Substrate is pre-positioned for any future
+# EoE / standard-format printing carrying a bare landfall+draw shape
+# so the next slice landing such a card need not extend the
+# allowlist again.
+#
+# The end-to-end fire probe below uses a SYNTHETIC carrier (the
+# bridge dict path Mightform / Warmaker Gunship round-37 probes
+# established) since no real EoE creature exercises the bare shape;
+# this mirrors the round-31 / round-32 BLOCKED-RUST-EFFECT
+# precedent of shipping a substrate slice with a synthetic-only
+# end-to-end probe when no clean real consumer exists.
+# ---------------------------------------------------------------------------
+
+
+def _inject_landfall_draw_carrier_on_p0_bf(py_state, rust_state):
+    """Inject a synthetic landfall+draw_cards carrier onto p0's bf on
+    BOTH engines.
+
+    Mirrors :func:`_inject_icecave_crasher_on_p0_bf` exactly except
+    the leaf effect is ``DrawCards(amount=1)`` rather than
+    ``PumpSelfUntilEOT(+1/+0)``. Same parser-emitted compound
+    landfall predicate shape (``And(Subject(IsLand), Controlled(
+    YOU))``) on both engines via the same dict shape both bridge
+    arms already translate.
+
+    No real EoE consumer carries this exact shape today — Tannuk
+    Memorial Ensign's draw is the bespoke second-time-bonus
+    composite, not a bare ``DrawCards`` leaf. The synthetic carrier
+    exercises the predicate-effect product end-to-end so the
+    substrate is verified before the next bare-landfall-draw card
+    lands in the pool.
+
+    Post-condition: a 2/2 "Synthetic Landfall Draw" creature is on
+    p0's bf carrying the parser-emitted landfall trigger emitting
+    a single bare DrawCards on resolution.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Subject, YOU,
+    )
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    landfall_predicate = And(
+        left=Subject(slot=None, inner=IsLand()),
+        right=Controlled(by=YOU, subject=None),
+    )
+    carrier_printing = CardPrinting(
+        name="Synthetic Landfall Draw Carrier",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=landfall_predicate,
+                effect=DrawCards(amount=1),
+            ),
+        ),
+    )
+    py_carrier = py_state.new_object(
+        carrier_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_carrier.summoning_sick = False
+    py_carrier.tapped = False
+    py_carrier.damage = 0
+    py_carrier.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_carrier)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_carrier_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Landfall Draw Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "U": 1},
+            "effects": [],
+            "power": 2,
+            "toughness": 2,
+            "keywords": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {
+                        "kind": "and",
+                        "left": {"kind": "subject_is_land"},
+                        "right": {"kind": "controlled_by_you"},
+                    },
+                    "effect": {
+                        "kind": "draw_cards",
+                        "count": 1,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return int(py_carrier.id), int(rust_carrier_id)
+
+
+def test_carddef_landfall_safe_etb_draw_cards_fires_on_land_play_parity():
+    """End-to-end fire probe for the landfall+draw_cards extension.
+
+    Set up a matched game from EoE archetype 4 (carries basic
+    Forests for the land-play drive), advance to turn 1
+    PRECOMBAT_MAIN, side-channel inject a synthetic landfall+
+    draw_cards carrier onto p0's bf, then drive a play_land on the
+    basic land in p0's opening hand. The landfall trigger should
+    fire on BOTH engines, draining off the stack and adding +1
+    card to p0's hand on each engine. Post-drain field views must
+    be byte-equal.
+
+    The carrier is synthetic because no real EoE creature exercises
+    the bare landfall+draw_cards shape today (Tannuk Memorial
+    Ensign carries the predicate but its bespoke effect is the
+    deal-damage-each-opponent + second-time-bonus draw composite,
+    NOT the bare DrawCards leaf this slice admits). The probe
+    exercises the predicate-effect product end-to-end so the
+    substrate is verified before the next bare-landfall-draw card
+    lands in the pool.
+
+    Drive shape mirrors the round-37 DDDD pump_self probe
+    :func:`test_carddef_landfall_safe_etb_pump_self_fires_on_land_play_parity`
+    — same archetype, same seed, same phase-walk, same injection
+    pattern.
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+    from mtg_bot.actions import _play_land, resolve_top_of_stack as py_resolve
+
+    cards = trajectory.load_production_deck(4)
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42, pad_with="Forest",
+    )
+
+    # Walk to turn 1 PRECOMBAT_MAIN (3 phase advances).
+    _advance_n_phases(py_state, rust_state, 3)
+    assert py_state.step.name == "PRECOMBAT_MAIN"
+    assert py_state.active_player_idx == 0
+
+    # Pre-injection hand sizes (mulligan-finalized opening hands).
+    py_p0_hand_pre = len(py_state.players[0].hand)
+    rust_p0_hand_pre = rust_state.hand_sizes[0]
+    assert py_p0_hand_pre == rust_p0_hand_pre, (
+        f"pre-injection hand size mismatch: py={py_p0_hand_pre} "
+        f"rust={rust_p0_hand_pre}"
+    )
+
+    # Inject the synthetic carrier on p0's bf.
+    py_carrier_id, rust_carrier_id = _inject_landfall_draw_carrier_on_p0_bf(
+        py_state, rust_state,
+    )
+
+    # Verify post-injection parity (no triggers fired yet — the
+    # carrier itself enters but its trigger predicate gates on the
+    # SUBJECT being a Land, and the carrier is a Creature so the
+    # trigger short-circuits in both engines, same Eumidian / Icecave
+    # short-circuit behavior at probe time).
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    assert inject_divs == [], (
+        f"synthetic landfall+draw carrier injection surfaced post-"
+        f"inject divergences: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in inject_divs]}"
+    )
+
+    # Find a basic land in p0's opening hand.
+    p0_hand = py_state.players[0].hand
+    land = next(
+        (o for o in p0_hand if o.printing.is_land),
+        None,
+    )
+    assert land is not None, (
+        f"seed=42 opening hand for p0 contains no basic land: "
+        f"{[o.printing.name for o in p0_hand]}; pick a different "
+        f"seed if the canonical seed becomes land-less after a "
+        f"deck-builder change."
+    )
+
+    # Drive play_land directly on each engine.
+    py_state.players[0].lands_played_this_turn = 0
+    _play_land(py_state, 0, int(land.id))
+    rust_state.play_land(int(land.id), 0)
+
+    # Trigger should be on both stacks now.
+    assert rust_state.stack_size() == 1, (
+        "Rust: synthetic carrier's landfall trigger should be on the "
+        "stack after the basic land enters under p0's control"
+    )
+    assert len(py_state.stack) == 1, (
+        "Python: synthetic carrier's landfall trigger should be on "
+        "the stack after the basic land enters under p0's control"
+    )
+
+    # Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        py_resolve(py_state)
+
+    # Post-drain: p0 hand grew by exactly 1 (the landfall draw),
+    # offset by -1 for the played land leaving hand. Net hand change
+    # vs pre-injection: drew 1, played 1 land = net 0.
+    # But more importantly the land moved bf-bound while a card moved
+    # library->hand — net hand size is unchanged from pre-play.
+    py_p0_hand_post = len(py_state.players[0].hand)
+    rust_p0_hand_post = rust_state.hand_sizes[0]
+    assert py_p0_hand_post == rust_p0_hand_post, (
+        f"post-drain hand size mismatch: py={py_p0_hand_post} "
+        f"rust={rust_p0_hand_post}"
+    )
+    # Sanity: pre-play hand size was N, post-play+drain is also N
+    # (played a land out of hand: -1, draw a card from trigger: +1).
+    assert py_p0_hand_post == py_p0_hand_pre, (
+        f"net hand change after land-play + landfall draw should be 0; "
+        f"pre={py_p0_hand_pre} post={py_p0_hand_post}"
+    )
+
+    # Field-view compare on the post-drain state — both stacks empty
+    # so the StackItem-id divergence has cleared; remaining fields
+    # (battlefield, hand, library, life) must agree byte-for-byte.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"post-drain field view (after landfall draw trigger) "
+        f"diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )

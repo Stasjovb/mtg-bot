@@ -1399,14 +1399,14 @@ _SAFE_KEYWORDS: frozenset[str] = frozenset({
 # (2/3 {1}{G}, "Landfall — Whenever a land you control enters, you
 # gain 1 life") on the production-deck loader.
 #
-# **Landfall + pump_self_until_eot extension (this slice)** rides
-# the SAME canonical landfall predicate sentinel and adds a SECOND
-# safe leaf effect under it: ``pump_self_until_eot`` (bare shape —
-# ``power_bonus`` / ``toughness_bonus`` fields, no
+# **Landfall + pump_self_until_eot extension (round-37 DDDD slice)**
+# rides the SAME canonical landfall predicate sentinel and adds a
+# SECOND safe leaf effect under it: ``pump_self_until_eot`` (bare
+# shape — ``power_bonus`` / ``toughness_bonus`` fields, no
 # ``granted_keywords`` rider). Cross-engine bridge support landed
 # in round 22 (``cross_engine._ta_dict_to_python_effect`` "pump_
 # self_until_eot" arm + cross-controller pump-self probe at commit
-# 92ac9ec5 in test_parity_smoke.py). Unlocks Icecave Crasher
+# 92ac9ec5 in test_parity_smoke.py). Unlocked Icecave Crasher
 # (4/4 {3}{G}, Trample, "Landfall — Whenever a land you control
 # enters, this creature gets +1/+0 until end of turn") on the
 # production-deck loader. Sister consumer Remnant Elemental (1/2
@@ -1415,11 +1415,43 @@ _SAFE_KEYWORDS: frozenset[str] = frozenset({
 # outside today's :data:`_SAFE_KEYWORDS` set — the production-deck
 # filter still drops it. Adding ``Reach`` to the safe-keyword set
 # is a follow-up slice (needs combat-side parity verification).
-# Tannuk, Memorial Ensign carries the same landfall predicate but
-# pairs it with the bespoke ``TannukEnsignLandfallEffect``
-# (deal-damage + second-time-bonus draw); Tannuk needs both a leaf-
-# effect deal_damage_each_opponent arm AND the second-time-bonus
-# state primitive — out of scope for this slice.
+#
+# **Landfall + draw_cards extension (this slice)** adds a THIRD
+# safe leaf effect under the canonical landfall predicate
+# sentinel: ``draw_cards`` (bare shape — single ``count`` payload
+# key; mirrors the source_is_self+draw_cards starter entry's
+# allowed-keys whitelist). Cross-engine bridge support pre-existed
+# in round 1 of Phase 6 carddef-triggers (``cross_engine._ta_dict
+# _to_python_effect`` "draw_cards" arm) and the Python recognizer
+# in ``_python_ta_to_safe_dict`` already maps ``DrawCards`` to the
+# canonical ``{"kind": "draw_cards", "count": int}`` dict shape;
+# only the landfall arm's ``safe_effect_kinds`` tuple needed the
+# extension to admit the predicate-effect product. **No real-EoE
+# consumer admitted today**: the EoE landfall pool's only
+# draw-bearing card is Tannuk, Memorial Ensign, whose effect is
+# the bespoke ``TannukEnsignLandfallEffect`` (deal-damage to each
+# opponent + second-time-bonus draw), NOT a bare ``DrawCards``
+# leaf — Tannuk continues to be dropped by the production-deck
+# filter under this slice. Substrate is pre-positioned for any
+# future EoE / standard-format printing carrying a bare
+# landfall+draw shape (the parser-emitted equivalent of MH3 Hare
+# Apparent's "+1/+0 and draw" or a clean "Landfall — draw a card"
+# creature) so the next slice landing such a card need not extend
+# the allowlist again; pinned by reject-path tests so the predicate
+# -effect product gate stays honest in the meantime.
+# Tannuk, Memorial Ensign / Mightform Harmonizer / Genemorph Imago
+# / Eusocial Engineering / Glacier Godmaw / Icetill Explorer /
+# Territorial Bruntar carry the same landfall predicate but pair
+# it with bespoke / unsupported effect shapes (deal-damage +
+# second-time-bonus, conditional-threshold pump, double-target-
+# power, create-token, exile-and-may-cast, mill-a-card); each
+# needs its own sister slice. Mightform's substrate is primed by
+# round-37 CCCC (commit c7c095ed) on the free-form CardDef bridge
+# path — but the production-deck filter would still drop it on
+# the ``Warp`` keyword (outside :data:`_SAFE_KEYWORDS`) AND the
+# ``requires_target=True`` agent-seating gap that the loader
+# doesn't fill, so the matching ``double_target_creatures_power_
+# ueot`` allowlist entry waits for those follow-ups.
 #
 # Triggers explicitly NOT in this set (and therefore disqualifying):
 # ``deal_damage`` / ``deal_damage_any_target`` (target-pick at PUSH
@@ -1450,29 +1482,63 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # Landfall — "Whenever a land you control enters, ...". Compound
     # predicate sentinel; see ``_is_safe_trigger_dict`` /
     # ``_python_ta_to_safe_dict`` for the canonical-vs-nested shape
-    # mapping. The canonical landfall predicate now rides TWO safe
+    # mapping. The canonical landfall predicate now rides THREE safe
     # leaf effects:
     #   * ``gain_life`` — admits Eumidian Terrabotanist (2/3 {1}{G},
     #     gain 1 life on land enter). Landed in the round-36
     #     landfall extension slice.
     #   * ``pump_self_until_eot`` — admits Icecave Crasher (4/4
     #     {3}{G}, +1/+0 until end of turn on land enter). Landed in
-    #     this slice. The bare ``PumpSelfUntilEOT(power_bonus,
-    #     toughness_bonus)`` shape (no granted_keywords rider) is
-    #     what Icecave Crasher's parser-emitted Landfall trigger
-    #     uses; sister consumer Remnant Elemental (Reach, +2/+0
-    #     UEOT) carries the same effect shape but its ``Reach``
-    #     keyword is outside today's :data:`_SAFE_KEYWORDS` set so
-    #     the production-deck filter still drops it.
+    #     the round-37 DDDD slice (commit 94ea1ef3 / 42a5eec9). The
+    #     bare ``PumpSelfUntilEOT(power_bonus, toughness_bonus)``
+    #     shape (no granted_keywords rider) is what Icecave
+    #     Crasher's parser-emitted Landfall trigger uses; sister
+    #     consumer Remnant Elemental (Reach, +2/+0 UEOT) carries
+    #     the same effect shape but its ``Reach`` keyword is
+    #     outside today's :data:`_SAFE_KEYWORDS` set so the
+    #     production-deck filter still drops it.
+    #   * ``draw_cards`` — this slice. Pinned-by-reject-path-test
+    #     today: the ONLY EoE landfall consumer carrying a draw
+    #     leaf is Tannuk, Memorial Ensign, but Tannuk's effect is
+    #     the bespoke ``TannukEnsignLandfallEffect`` (deal-damage
+    #     to each opponent + second-time-bonus draw), NOT a bare
+    #     ``DrawCards`` — so no real-EoE consumer is admitted on
+    #     EoE today. Substrate is pre-positioned for any future
+    #     EoE / standard-format landfall+draw printing (the
+    #     equivalent of MH3 Hare Apparent's "+1/+0 and draw" or a
+    #     parser-emitted bare landfall-draw card) so the next slice
+    #     dropping such a card need not extend the allowlist again.
+    #     Cross-engine bridge support pre-existed in round 1 of
+    #     Phase 6 carddef-triggers (``cross_engine._ta_dict_to_
+    #     python_effect`` "draw_cards" arm + the trajectory probe
+    #     at ``test_carddef_safe_etb_trigger_*`` exercising the
+    #     bare draw effect under source_is_self); the recognizer
+    #     ``_python_ta_to_safe_dict`` already maps ``DrawCards``
+    #     to the ``{"kind": "draw_cards", "count": int}`` dict
+    #     shape — only the safe-effect-kinds tuple under the
+    #     landfall predicate arm needs the extension.
     # Tannuk Memorial Ensign / Mightform Harmonizer / Genemorph
     # Imago / Eusocial Engineering / Glacier Godmaw / Icetill
     # Explorer / Territorial Bruntar carry the same predicate but
     # pair it with bespoke / unsupported effect shapes (deal-damage
     # + second-time-bonus, conditional-threshold pump,
     # double-target-power, create-token, exile-and-may-cast,
-    # mill-a-card) — each needs its own sister slice.
+    # mill-a-card) — each needs its own sister slice. Mightform
+    # Harmonizer's landfall+double-power clause has its substrate
+    # primed by the round-37 CCCC slice (commit c7c095ed) on the
+    # free-form CardDef bridge path; ``double_target_creatures_
+    # power_ueot`` is NOT yet in the allowlist here because
+    # Mightform also carries ``Warp`` (outside :data:`_SAFE_KEY
+    # WORDS`) and would still be dropped by the bridge-simple
+    # filter — adding ``double_target_creatures_power_ueot`` here
+    # without a clean non-Warp consumer would be preventative-only
+    # but for an effect whose bridge round-trip requires the
+    # ``requires_target=True`` PUSH-time pick agent that the
+    # production-deck loader doesn't seat; a follow-up slice once
+    # the loader grows targeting-agent seating.
     ("enters", "land_enters_controlled_by_you", "gain_life"),
     ("enters", "land_enters_controlled_by_you", "pump_self_until_eot"),
+    ("enters", "land_enters_controlled_by_you", "draw_cards"),
 })
 
 
@@ -1660,14 +1726,20 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # ``And(Subject(slot=None, inner=IsLand()),
         #       Controlled(by=YOU, subject=None))``
         # — emit the canonical AND-nested dict shape both engines'
-        # bridges already translate. Two safe leaves today:
-        # ``gain_life`` (Eumidian Terrabotanist, round-36 slice) and
-        # ``pump_self_until_eot`` (Icecave Crasher, this slice — the
-        # bare ``power_bonus`` / ``toughness_bonus`` shape with NO
-        # ``granted_keywords`` rider; sister Remnant Elemental
-        # carries the same bare shape but is dropped by the
-        # ``_SAFE_KEYWORDS`` filter on its ``Reach`` keyword). Other
-        # landfall consumers (Tannuk, Mightform Harmonizer,
+        # bridges already translate. THREE safe leaves today:
+        # ``gain_life`` (Eumidian Terrabotanist, round-36 slice),
+        # ``pump_self_until_eot`` (Icecave Crasher, round-37 DDDD
+        # slice — the bare ``power_bonus`` / ``toughness_bonus``
+        # shape with NO ``granted_keywords`` rider; sister Remnant
+        # Elemental carries the same bare shape but is dropped by
+        # the ``_SAFE_KEYWORDS`` filter on its ``Reach`` keyword),
+        # and ``draw_cards`` (this slice — preventative substrate
+        # extension; no EoE consumer admitted today since Tannuk
+        # Memorial Ensign's draw rider is the bespoke
+        # ``TannukEnsignLandfallEffect`` second-time-bonus shape,
+        # NOT a bare ``DrawCards`` leaf; pinned by reject-path
+        # tests so the predicate-effect product gate stays honest).
+        # Other landfall consumers (Tannuk, Mightform Harmonizer,
         # Genemorph Imago, Eusocial Engineering, Glacier Godmaw,
         # Icetill Explorer, Territorial Bruntar) need their own
         # leaf-effect bridge arms before they can ride this
@@ -1677,7 +1749,9 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             "left": {"kind": "subject_is_land"},
             "right": {"kind": "controlled_by_you"},
         }
-        safe_effect_kinds = ("gain_life", "pump_self_until_eot")
+        safe_effect_kinds = (
+            "gain_life", "pump_self_until_eot", "draw_cards",
+        )
     if pred_dict is None:
         return None
     # Effect must be one of the safe leaves AND in the safe set for
