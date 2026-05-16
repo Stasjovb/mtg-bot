@@ -6742,6 +6742,110 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DealDamageToOpponentCreatureByLandsControlled,
         )
         return DealDamageToOpponentCreatureByLandsControlled()
+    if kind == "deal_damage_to_opponent_creature_by_creatures_you_control":
+        # BLOCKED-RUST-EFFECT slice (round 37) -- deal damage to an
+        # opponent's creature equal to the source-controller's creatures
+        # count. Rust's
+        # ``Effect::DealDamageToOpponentCreatureByCreaturesYouControl``
+        # (cards.rs unit variant added in this slice; parse arm
+        # immediately after the round-36
+        # deal_damage_to_opponent_creature_by_lands_controlled arm,
+        # to_dict immediately after the round-36 arm, resolve at
+        # state_ops_resolve.rs immediately after the round-36 resolve
+        # arm with renamed loop labels for the borrow split) mirrors
+        # Python's
+        # ``DealDamageToOpponentCreatureByCreaturesYouControl``
+        # (effects/generic/damage.py -- shipped in this slice as a
+        # sister of the round-32/35/36 classes; 0 EoE consumers today).
+        # Rust substrate landed end-to-end IN this slice; the bridge
+        # translator wires the cross-engine round trip.
+        #
+        # **Sister-of-round-32/35/36 -- FOURTH denominator on same
+        # apply substrate.** Round-32's
+        # DealDamageToOpponentCreatureByArtifactCount uses artifact
+        # count as the dynamic-X; round-35's
+        # DealDamageToOpponentCreatureByCardsInHand uses HAND SIZE as
+        # the dynamic-X; round-36's
+        # DealDamageToOpponentCreatureByLandsControlled uses
+        # LANDS-CONTROLLED count as the dynamic-X; this slice uses
+        # CREATURES-CONTROLLED count as the dynamic-X. All four arms
+        # share the apply substrate (damage to first eligible opponent
+        # creature, fizzle on empty bf, 5-zone + stack source-controller
+        # scan); the denominator is the only axis that differs. This
+        # completes a FOURTH orthogonal X-from-count denominator on the
+        # same apply substrate, after round-35/36 established the
+        # bidirectionally-extensible plumbing across BOTH axes
+        # (substrate x denominator -- damage / counters / surveil x
+        # artifact-count / hand-size / lands-controlled /
+        # creatures-controlled).
+        #
+        # **Field-shape.** Unit variant on both sides; no fields
+        # beyond ``kind``. The Python class has no static ``amount``
+        # field (damage.py -- ``@dataclass(frozen=True)`` with only
+        # the inherited ``targets`` tuple, defaulted in __post_init__
+        # to a TargetSpec on IsCreature() & ControlledByOpponent()).
+        # The dynamic-X is the whole point of the class -- the count
+        # is computed at resolve time from the source-controller's
+        # creatures count, not stored on the variant. The bridge
+        # translator ignores every other key on the dict for
+        # round-trip dict-shape consistency (mirrors round-32 /
+        # round-33 / round-34 / round-35 / round-36 unit-variant
+        # precedent).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # walks the source-controller via the round-32 / round-35 /
+        # round-36 5-zone+stack scan, counts ``state.players[cidx]
+        # .battlefield`` entries whose printing's ``card_types``
+        # contains "Creature" via the round-32 walking pattern
+        # BIT-FOR-BIT (saturating_add overflow guard), and applies that
+        # damage amount via saturating_add (i16 ceiling matches sibling
+        # damage arms) to the FIRST creature on the opponent's bf.
+        # Python's resolve at damage.py reads the target from the
+        # targets tuple passed by the targeting pipeline (PUSH-time
+        # pick) and calls _apply_damage with
+        # ``creatures_count = sum(1 for o in state.battlefield if
+        # o.controller_id == controller_id and o.printing.is_creature)``
+        # as the same denominator. The chooser-driven pick converges
+        # with Rust's first-eligible-creature scan when the agent
+        # picks the first-eligible target on synthetic probes with
+        # one bait creature.
+        #
+        # **Source counts toward denominator.** Both engines walk the
+        # source-controller's vanilla bf (no source-exclusion clause);
+        # a creature-typed source on its own controller's bf at resolve
+        # time counts +1 toward the denominator. Mirrors the round-32 /
+        # round-35 / round-36 sister convention.
+        #
+        # **Dual-typed artifact-creatures.** Both engines count
+        # artifact-creatures toward BOTH the artifact-count and the
+        # creatures-controlled denominators independently (Scryfall
+        # lists both "Artifact" and "Creature" in card_types; Rust
+        # checks each type string independently in the relevant arm;
+        # Python's ``is_artifact`` and ``is_creature`` properties are
+        # independent disjunctions over card_types). The round-32
+        # sister and this slice produce DIFFERENT counts when both an
+        # artifact-creature and a vanilla creature are on the bf.
+        #
+        # **Fizzle parity.** Both engines silently no-op when the
+        # source-controller controls zero creatures (Python:
+        # ``if creatures_count <= 0: return``; Rust: the amount <= 0
+        # guard in the resolve arm). Both engines also silently no-op
+        # when no opponent creature is in play (mirrors round-32 /
+        # round-35 / round-36 sisters exactly).
+        #
+        # **No real-EoE end-to-end probe in this slice.** Zero EoE
+        # consumers today for the damage-by-creatures shape. Synthetic
+        # regression pin (per the round-17 Fight + round-30
+        # stun-counter + round-31 double-power + round-32
+        # by-artifact-count + round-33 per-other-creature-or-artifact
+        # + round-34 surveil-X + round-35 by-cards-in-hand + round-36
+        # by-lands-controlled precedent) documents the bridge
+        # plumbing; the slice ships per round-27 / round-31
+        # round-trip-surface-coverage rule.
+        from mtg_bot.effects.generic.damage import (
+            DealDamageToOpponentCreatureByCreaturesYouControl,
+        )
+        return DealDamageToOpponentCreatureByCreaturesYouControl()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
