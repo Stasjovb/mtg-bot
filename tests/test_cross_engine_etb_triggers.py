@@ -17182,5 +17182,275 @@ def test_bridge_extinguisher_sequence_synthetic_end_to_end_byte_equal():
     assert py_opp.zone == Zone.BATTLEFIELD
 
 
+def test_bridge_double_target_creatures_power_ueot_synthetic_end_to_end_byte_equal():
+    """Round-53 — synthetic cross-engine end-to-end byte-equal pin for
+    the round-31 ``double_target_creatures_power_ueot`` arm
+    (counter-free). The existing round-31 bridge pins were
+    translation-only; this fills the end-to-end gap.
+
+    Rust drives the deterministic unit-variant; Python runs the
+    agent-driven ``DoubleTargetCreaturesPowerUEOT`` shim-constrained
+    (``_PickFirstControlledCreatureAgent`` — forces the target to the
+    first own creature, byte-equal with Rust's first-creature scan).
+    Own Bear 3/3 -> 6/3 on both engines.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import DoubleTargetCreaturesPowerUEOT
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+    from tests.parity._picker_shims import (
+        _PickFirstControlledCreatureAgent,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZB = 2
+
+    rust_own = rust_state.register_and_inject_object(
+        {
+            "name": "Own Bear (3/3)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 1},
+            "power": 3, "toughness": 3, "effects": [],
+        },
+        0, ZB,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "Mightform Carrier", "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 2},
+            "power": 4, "toughness": 4, "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "double_target_creatures_power_ueot",
+                    },
+                }
+            ],
+        },
+        0, ZB,
+    )
+    assert rust_state.stack_size() == 1
+
+    own_printing = CardPrinting(
+        name="Own Bear (3/3)", mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("G", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=3, toughness=3, produces=frozenset(),
+    )
+    py_own = py_state.new_object(
+        own_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_own.summoning_sick = False
+    py_own.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_own)
+    py_state.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    src_printing = CardPrinting(
+        name="Mightform Carrier", mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("G", 2),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=4, toughness=4, produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DoubleTargetCreaturesPowerUEOT(),
+            ),
+        ),
+    )
+    py_src = py_state.new_object(
+        src_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    assert len(py_state.stack) == 1
+
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+
+    assert rust_state.effective_power(rust_own) == 6
+    assert effective_power(py_state, py_own) == 6
+    assert rust_state.effective_power(rust_own) == effective_power(
+        py_state, py_own
+    )
+    assert rust_state.effective_toughness(
+        rust_own
+    ) == effective_toughness(py_state, py_own)
+
+
+def test_bridge_double_target_creatures_power_reads_effective_power_with_counters_byte_equal():
+    """**§2 CROSS-ENGINE pin — round-53 fix to the round-31
+    ``double_target_creatures_power_ueot`` arm. "Double reads
+    EFFECTIVE power (post-counters), not base power" — byte-equal
+    doubling DELTA.**
+
+    This is the pin the original round-31 bridge pins MISSED (they
+    were translation-only, no counter scenario), which is why the §2
+    silent mistranslation stayed latent. Stage a 3/3 with +2/+2
+    counters on BOTH engines, fire the round-31 double-power effect,
+    assert the doubling DELTA (``effective_power_after -
+    effective_power_before``) is byte-equal cross-engine — i.e. both
+    engines doubled the SAME snapshot (effective power 5, NOT base 3).
+
+    NOTE on the absolute getter: Rust's public ``effective_power``
+    getter has a SEPARATE, pre-existing, separately-documented
+    combat-side asymmetry (omits ``obj.counters`` from the displayed
+    value), so absolute numbers differ by the counter amount (Rust
+    3->8, Python 5->10). That is NOT the doubling mistranslation. The
+    §2-load-bearing invariant is the DELTA: +5 on BOTH engines.
+    Documented in docs/SEARCH_LIMITATIONS.md.
+
+    Pre-round-53 this pin would FAIL: Rust's delta was +3 (base) while
+    Python's was +5 (effective). The round-53 ``read_doubling_power``
+    fix makes both +5.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import DoubleTargetCreaturesPowerUEOT
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone, effective_power
+    from tests.parity._picker_shims import (
+        _PickFirstControlledCreatureAgent,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZB = 2
+
+    # ---- Rust: 3/3 + deterministic +2/+2 counter granter, then the
+    # round-31 carrier.
+    rust_own = rust_state.register_and_inject_object(
+        {
+            "name": "Counter Bear (3/3)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 1},
+            "power": 3, "toughness": 3, "effects": [],
+        },
+        0, ZB,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "Counter Granter", "card_types": ["Creature"],
+            "mana_cost": {"generic": 1}, "power": 1, "toughness": 1,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": (
+                            "put_plus_one_counter_on_each_"
+                            "creature_you_control"
+                        ),
+                        "amount": 2,
+                    },
+                }
+            ],
+        },
+        0, ZB,
+    )
+    rust_state.resolve_top_of_stack()
+    rust_before = rust_state.effective_power(rust_own)
+    rust_state.register_and_inject_object(
+        {
+            "name": "Mightform Carrier", "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 2},
+            "power": 4, "toughness": 4, "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "double_target_creatures_power_ueot",
+                    },
+                }
+            ],
+        },
+        0, ZB,
+    )
+    rust_state.resolve_top_of_stack()
+    rust_delta = rust_state.effective_power(rust_own) - rust_before
+
+    # ---- Python: same 3/3 with +2/+2 counters set directly, then the
+    # agent-driven round-31 class shim-constrained.
+    own_printing = CardPrinting(
+        name="Counter Bear (3/3)", mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("G", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=3, toughness=3, produces=frozenset(),
+    )
+    py_own = py_state.new_object(
+        own_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_own.summoning_sick = False
+    py_own.plus_one_counters = 2
+    py_own.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_own)
+    py_before = effective_power(py_state, py_own)
+    py_state.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    src_printing = CardPrinting(
+        name="Mightform Carrier", mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("G", 2),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=4, toughness=4, produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DoubleTargetCreaturesPowerUEOT(),
+            ),
+        ),
+    )
+    py_src = py_state.new_object(
+        src_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    py_delta = effective_power(py_state, py_own) - py_before
+
+    assert rust_delta == 5, (
+        f"round-53 §2 fix: Rust doubling delta must be 5 (effective "
+        f"power 3+2); got {rust_delta}"
+    )
+    assert py_delta == 5, (
+        f"Python source-of-truth doubling delta must be 5; got "
+        f"{py_delta}"
+    )
+    assert rust_delta == py_delta, (
+        f"§2 silent mistranslation: Rust doubled {rust_delta} but "
+        f"Python doubled {py_delta} — engines disagree on which "
+        f"power 'double' reads (pre-round-53 this was 3 vs 5)."
+    )
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
