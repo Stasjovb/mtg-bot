@@ -18174,5 +18174,288 @@ def test_rust_famished_worldsire_cross_controller_source_resolution():
     )
 
 
+# ---------------------------------------------------------------------------
+# Round-56 N1 — ExileEachOpponentsGraveyard (Dauntless Scrapbot 1st
+# Sequence arm). Rust Effect::ExileEachOpponentsGraveyard (unit
+# variant) + parse + to_dict + resolve mirrors Python's
+# ExileEachOpponentsGraveyard (effects/generic/exile.py:260), a
+# structural twin of EachOpponentMillsCards (same source-controller
+# finder + 2-player opponent loop; inner op is graveyard->exile
+# instead of library->graveyard). Bridge arm: cross_engine.py
+# exile_each_opponents_graveyard (field-free, no key translation).
+# ---------------------------------------------------------------------------
+
+
+def _r56_eeg_grave_printing(name, power=1, toughness=1):
+    """A minimal vanilla creature CardPrinting for graveyard seeding."""
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    return CardPrinting(
+        name=name,
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=power,
+        toughness=toughness,
+        produces=frozenset(),
+    )
+
+
+def _r56_eeg_source_card_def():
+    """A synthetic creature whose ETB carries the bare
+    ``exile_each_opponents_graveyard`` arm. ``build_python_state``
+    auto-translates the triggered-ability dict through the genuine
+    ``_ta_dict_to_python_effect`` bridge, so the Python side exercises
+    the real bridge arm (not a hand-rolled effect object)."""
+    from mtg_bot.parity.cross_engine import CardDef
+
+    return CardDef(
+        name="Scrapbot Stand-In",
+        card_type="Artifact",
+        extra_card_types=("Creature",),
+        power=3,
+        toughness=1,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "exile_each_opponents_graveyard"},
+            },
+        ),
+    )
+
+
+def _r56_eeg_rust_source_dict():
+    return {
+        "name": "Scrapbot Stand-In",
+        "card_types": ["Artifact", "Creature"],
+        "power": 3,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "exile_each_opponents_graveyard"},
+            }
+        ],
+    }
+
+
+def test_bridge_exile_each_opponents_graveyard_translates_to_python():
+    """Phase 5 bridge extension: Rust
+    ``{"kind": "exile_each_opponents_graveyard"}`` translates to a
+    Python ``ExileEachOpponentsGraveyard`` (field-free unit effect —
+    no key translation, mirroring the parameter-free Python
+    dataclass).
+    """
+    from mtg_bot.effects.generic.exile import ExileEachOpponentsGraveyard
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "exile_each_opponents_graveyard"}
+    )
+    assert isinstance(e, ExileEachOpponentsGraveyard)
+    assert e.describe() == "exile each opponent's graveyard"
+
+
+def test_cross_engine_exile_each_opponents_graveyard_etb_resolve_parity():
+    """Cross-engine end-to-end parity: an ETB trigger carrying
+    ``exile_each_opponents_graveyard`` empties the opponent's whole
+    graveyard into THAT opponent's own exile zone, byte-equal on both
+    engines, preserving graveyard order. p1 (the opponent) has two
+    cards in its graveyard; p0's source ETBs.
+    """
+    import mtg_bot_engine  # noqa: F401
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        _card_def_to_python_printing,
+    )
+    from mtg_bot.game import Zone
+
+    spec = DeckSpec(
+        card_defs=(_r56_eeg_source_card_def(),),
+        p0_library=(),
+        p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    py_state = build_python_state(spec)
+    ZG, ZB = 3, 2
+
+    # ---- Rust: seed p1's graveyard with two cards, then ETB p0 src.
+    rust_state.register_and_inject_object(
+        {"name": "GraveA", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 1, ZG)
+    rust_state.register_and_inject_object(
+        {"name": "GraveB", "card_types": ["Creature"],
+         "power": 2, "toughness": 2}, 1, ZG)
+    assert [e["printing_name"]
+            for e in rust_state.graveyard_snapshot(1)] == [
+        "GraveA", "GraveB"]
+    rust_state.register_and_inject_object(
+        _r56_eeg_rust_source_dict(), 0, ZB)
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+
+    # ---- Python: seed p1's graveyard with the SAME two cards in the
+    # same order, then ETB the source. ``build_python_state`` already
+    # materialized the source CardDef; fire it through new_object.
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    for nm, pw, tg in (("GraveA", 1, 1), ("GraveB", 2, 2)):
+        o = py_state.new_object(
+            _r56_eeg_grave_printing(nm, pw, tg), owner_id=1,
+            zone=Zone.GRAVEYARD,
+        )
+        py_state.players[1].graveyard.append(o)
+    src_printing = _card_def_to_python_printing(_r56_eeg_source_card_def())
+    py_src = py_state.new_object(src_printing, owner_id=0,
+                                 zone=Zone.BATTLEFIELD)
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+
+    # ---- Byte-equal: p1's graveyard emptied into p1's exile (order
+    # preserved); p0's own zones untouched.
+    rust_p1_gy = [e["printing_name"]
+                  for e in rust_state.graveyard_snapshot(1)]
+    rust_p1_ex = [e["printing_name"]
+                  for e in rust_state.exile_snapshot(1)]
+    py_p1_gy = [o.printing.name for o in py_state.players[1].graveyard]
+    py_p1_ex = [o.printing.name for o in py_state.players[1].exile]
+    assert rust_p1_gy == [] == py_p1_gy
+    assert rust_p1_ex == ["GraveA", "GraveB"] == py_p1_ex
+    assert rust_p1_ex == py_p1_ex
+    assert [e["printing_name"]
+            for e in rust_state.graveyard_snapshot(0)] == []
+    assert [o.printing.name
+            for o in py_state.players[0].graveyard] == []
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
+def test_cross_engine_exile_each_opponents_graveyard_controllers_own_gy_untouched():
+    """Cross-engine parity: the controller's OWN graveyard is NOT
+    exiled — only each *opponent's* (Python skips ``p.id ==
+    controller_id``; Rust's 2-player mirror touches only
+    ``1 - controller``).
+    """
+    import mtg_bot_engine  # noqa: F401
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        _card_def_to_python_printing,
+    )
+    from mtg_bot.game import Zone
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+
+    spec = DeckSpec(
+        card_defs=(_r56_eeg_source_card_def(),),
+        p0_library=(), p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    py_state = build_python_state(spec)
+    ZG, ZB = 3, 2
+
+    rust_state.register_and_inject_object(
+        {"name": "P0Own", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 0, ZG)
+    rust_state.register_and_inject_object(
+        {"name": "P1Card", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 1, ZG)
+    rust_state.register_and_inject_object(
+        _r56_eeg_rust_source_dict(), 0, ZB)
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+
+    o0 = py_state.new_object(_r56_eeg_grave_printing("P0Own"),
+                             owner_id=0, zone=Zone.GRAVEYARD)
+    py_state.players[0].graveyard.append(o0)
+    o1 = py_state.new_object(_r56_eeg_grave_printing("P1Card"),
+                             owner_id=1, zone=Zone.GRAVEYARD)
+    py_state.players[1].graveyard.append(o1)
+    src_printing = _card_def_to_python_printing(_r56_eeg_source_card_def())
+    py_src = py_state.new_object(src_printing, owner_id=0,
+                                 zone=Zone.BATTLEFIELD)
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+
+    # p0's own graveyard intact on BOTH; p1's exiled on BOTH.
+    assert [e["printing_name"]
+            for e in rust_state.graveyard_snapshot(0)] == ["P0Own"]
+    assert [o.printing.name
+            for o in py_state.players[0].graveyard] == ["P0Own"]
+    assert [e["printing_name"]
+            for e in rust_state.exile_snapshot(0)] == []
+    assert [o.printing.name
+            for o in py_state.players[0].exile] == []
+    assert [e["printing_name"]
+            for e in rust_state.graveyard_snapshot(1)] == []
+    assert [o.printing.name
+            for o in py_state.players[1].graveyard] == []
+    assert [e["printing_name"]
+            for e in rust_state.exile_snapshot(1)] == ["P1Card"]
+    assert [o.printing.name
+            for o in py_state.players[1].exile] == ["P1Card"]
+
+
+def test_cross_engine_exile_each_opponents_graveyard_empty_gy_noop():
+    """Cross-engine parity: an empty opponent graveyard is a silent
+    no-op on both engines (no error, no state change). Mirrors
+    EachOpponentMillsCards' empty-library silent-stop shape.
+    """
+    import mtg_bot_engine  # noqa: F401
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        _card_def_to_python_printing,
+    )
+    from mtg_bot.game import Zone
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+
+    spec = DeckSpec(
+        card_defs=(_r56_eeg_source_card_def(),),
+        p0_library=(), p1_library=(),
+    )
+    rust_state = build_rust_state(spec)
+    py_state = build_python_state(spec)
+    ZB = 2
+
+    rust_state.register_and_inject_object(
+        _r56_eeg_rust_source_dict(), 0, ZB)
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+
+    src_printing = _card_def_to_python_printing(_r56_eeg_source_card_def())
+    py_src = py_state.new_object(src_printing, owner_id=0,
+                                 zone=Zone.BATTLEFIELD)
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+
+    for pid in (0, 1):
+        assert rust_state.graveyard_snapshot(pid) == []
+        assert rust_state.exile_snapshot(pid) == []
+        assert py_state.players[pid].graveyard == []
+        assert py_state.players[pid].exile == []
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

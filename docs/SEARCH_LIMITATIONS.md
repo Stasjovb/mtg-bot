@@ -2538,7 +2538,31 @@ Mightform).
 
 ---
 
-## Rust port — `card_matches_filter` `"spacecraft"` arm checks `card_types` instead of `subtypes`; real Pulsar Squadron Ace reveal-path mistranslation (round-55 find, round-56 Rust-lane fix)
+## [CLOSED round 56] Rust port — `card_matches_filter` `"spacecraft"` arm checked `card_types` instead of `subtypes`; real Pulsar Squadron Ace reveal-path mistranslation (round-55 find, round-56 Rust-lane fix)
+
+**STATUS: CLOSED (round 56, N1 / sole-Rust agent).** The one-line
+predicate swap landed: `card_matches_filter`'s `"spacecraft"` arm now
+reads `printing.subtypes.iter().any(|s| s == "Spacecraft")` (matching
+Python's `is_spacecraft` and the existing `or_spacecraft` family). The
+round-55 N3 genuine real-EoE divergence-pin
+(`...reveal_real_spacecraft_card_types_vs_subtypes_divergence_pin`)
+was **FLIPPED** from per-engine expected-divergent to a byte-equal
+cross-engine parity assertion (both engines: real `Artifact —
+Spacecraft` revealed to hand; library empty; Pulsar 0 counters; lives
+20) and passes; the byte-equal half-probe
+(`...look_top_5_no_spacecraft_counter_on_miss_parity`) still passes.
+§2 consumer check: `card_matches_filter` is a private helper with
+exactly two call sites, both inside the `LookAtTopNRevealOrCounter`
+submit / auto-resolve path; **no other consumer depended on the buggy
+`card_types` behavior** (the independent `or_spacecraft` family
+already read `subtypes` correctly) — no latent buggy consumer found,
+no half-fix. Pulsar's `BLOCKED-PROBE` residual is **discharged**
+(reported to the orchestrator for N2's `residue_worklist.json` fold).
+Probe-driver note recorded below (the inline `keep_all_on_top`
+auto-drain in `resolve_top_of_stack`). The historical analysis is
+retained below for provenance.
+
+---
 
 **Location**: `rust/src/state_ops_decisions.rs:663-698`
 (`card_matches_filter`, the private helper consumed by
@@ -2631,6 +2655,124 @@ a no-op on both engines, no rng). Picker shim
 `tests/parity/_picker_shims.py::_PickFirstLibraryOptionAgent`
 (mirrors Rust's `reveal_yes` first-filter-match strategy on the
 Python side).
+
+---
+
+## Rust port — `resolve_top_of_stack` auto-drains trigger-queued decisions inline with the `"keep_all_on_top"` strategy (never `"reveal_yes"`)
+
+**Location**: `rust/src/state_ops_resolve.rs` `resolve_top_of_stack`
+pymethod, the `StackItemKind::TriggeredAbility` branch
+(`auto_resolve_pending(self, "keep_all_on_top")?;` after the trigger
+effect applies + the slot is popped). The sibling
+`resolve_top_of_stack_pause` deliberately omits this call.
+
+**What the shortcut is**: when a triggered ability's effect queues a
+`PendingDecision` (e.g. `Effect::LookAtTopNRevealOrCounter` pushing a
+`LookAtTopNRevealOrCounterChoice`), `resolve_top_of_stack`
+auto-resolves it *inline* with the fixed `"keep_all_on_top"`
+strategy. For the reveal-or-counter choice that strategy maps to the
+**no-reveal** arm (`do_reveal_attempt = matches!(strategy,
+"reveal_yes")` is false), so a Pulsar-shaped ETB reveal trigger
+resolved via `resolve_top_of_stack` ALWAYS takes the no-reveal /
+counter-on-miss path regardless of what is in the library. This
+mirrors Python's no-agent-seated fallback (the agent-seated check
+`if options and p.agent is not None` guards the reveal), so it is the
+correct default for a seatless drain.
+
+**Why it's OK / failure mode**: it is the intended no-agent default
+and matches Python bit-for-bit when no agent is seated. The failure
+mode is purely a **probe-authoring trap**: a cross-engine probe that
+wants to exercise the Rust reveal path must drain the trigger via
+`resolve_top_of_stack_pause` (which leaves the decision on the queue)
+and THEN call `auto_resolve_pending_decisions("reveal_yes")`. Driving
+via the non-pause `resolve_top_of_stack` and then calling
+`auto_resolve_pending_decisions("reveal_yes")` is a silent no-op (the
+queue was already drained no-reveal). This is exactly why round-55
+N3's genuine Pulsar divergence-pin could only ever observe Rust's
+no-reveal arm — its Rust assertions were no-reveal-shaped — and why
+the round-56 flip also swapped the probe's Rust driver to
+`resolve_top_of_stack_pause`.
+
+**Fix scope estimate**: none needed (correct default). Documented so
+future reveal/scry/choose-mode cross-engine probes use the `_pause`
+driver when they need to drive a non-default decision strategy.
+
+**Impact estimate**: zero strength cost (intended seatless default,
+Python-parity-correct). Documentation-only — prevents the
+silent-no-op probe trap that masked the round-55 Pulsar find for one
+round.
+
+**Pinned by**:
+`tests/test_parity_smoke.py::test_cross_engine_real_eoe_pulsar_squadron_ace_etb_reveal_real_spacecraft_card_types_vs_subtypes_divergence_pin`
+(post-round-56 flip; uses `resolve_top_of_stack_pause` then
+`auto_resolve_pending_decisions("reveal_yes")` — the correct driver
+pattern for exercising a non-default Rust decision strategy).
+
+---
+
+## Dauntless Scrapbot — `ExileEachOpponentsGraveyard` Effect half shipped byte-equal; full card stays loader-gated (Lander token-registration / Sequence rider)
+
+**Location**: `rust/src/cards.rs`
+(`Effect::ExileEachOpponentsGraveyard` unit variant + parse / to_dict
+arms) + `rust/src/state_ops_resolve.rs` (resolve arm) + bridge arm
+`src/mtg_bot/parity/cross_engine.py` (`exile_each_opponents_graveyard`,
+above the `PHASE5_BRIDGE_ARMS` sentinel). Python class
+`ExileEachOpponentsGraveyard` (`src/mtg_bot/effects/generic/exile.py:260`)
++ parser recognizer `_EXILE_EACH_OPPONENTS_GRAVEYARD`
+(`src/mtg_bot/cards/parser/effects.py:933`).
+
+**What the shortcut is**: Dauntless Scrapbot (~18,378 17lands decks)
+prints "When this creature enters, exile each opponent's graveyard.
+Create a Lander token. (…)". The genuine parsed printing's ETB is a
+`Sequence([ExileEachOpponentsGraveyard(), CreateToken(Lander)])`.
+Round 56 shipped the **first Sequence leaf** end-to-end byte-equal on
+both engines (Rust `Effect::ExileEachOpponentsGraveyard`, a structural
+twin of `Effect::EachOpponentMillsCards`: same source-controller
+finder + 2-player opponent loop; inner op is the opponent's whole
+graveyard → that opponent's own exile zone, CR 406 / 400.7). The
+**second Sequence leaf**, `CreateToken(Lander)`, is **NOT** closed:
+the cross-engine `create_token` bridge raises unless a Python
+`CardPrinting` is pre-registered for the Rust `token_printing_id`
+(`register_token_printing`), and the production-deck loader's
+`_SAFE_*` allowlists do not model the Lander token-creation /
+Sequence-rider feature class. The full Dauntless Scrapbot card is
+therefore **NOT added to the production-deck loader allowlist** (no
+loader admit) — only the bridge/probe-level Effect half closes.
+
+**Why it's OK / failure mode**: this is the honest
+Effect-half-closes / full-card-stays-gated split established by r51
+(Monoist), r52 (Extinguisher), r53 (Mightform), r54 (Famished
+Worldsire). The closed exile half round-trips byte-equal (genuine
+real-EoE probe drives the ACTUAL parsed printing's ETB Sequence first
+arm cross-engine and asserts byte-equality on the exile-half
+observable: opponent graveyard emptied → opponent exile, in graveyard
+order; controller's own graveyard untouched; lives unchanged). The
+NOT-OK scenario is admitting the full card to the bench loader, which
+would silently drop the Lander Sequence leaf (a §2
+silent-mistranslation) — explicitly declined. No real-card-exposed
+divergence (the card is not on any `_SAFE_*` allowlist; no production
+path drives it today).
+
+**Fix scope estimate**: the remaining half needs the token-
+registration substrate for `create_token` rider variants (the
+round-49 N1 token-registration lane) + Sequence-rider bridging — a
+multi-round subsystem, deferred. The Effect half is complete.
+
+**Impact estimate**: zero production strength cost (Dauntless
+Scrapbot not on the loader allowlist; no production exposure). The
+real-card-coverage progress is the honest closure of the closeable
+Effect half + honest pinning of the loader-gated remainder.
+
+**Pinned by**: 4 cross-engine bridge pins
+(`tests/test_cross_engine_etb_triggers.py::test_bridge_exile_each_opponents_graveyard_translates_to_python`
++ `..._etb_resolve_parity` + `..._controllers_own_gy_untouched` +
+`..._empty_gy_noop`); 5 Rust regression pins
+(`tests/test_parity_smoke.py::test_r56_rust_exile_each_opponents_graveyard_*`);
+1 genuine real-EoE cross-engine probe
+(`tests/test_parity_smoke.py::test_cross_engine_real_eoe_dauntless_scrapbot_etb_exile_each_opponents_graveyard_parity`
+— drives the actual parsed Dauntless Scrapbot printing's ETB Sequence
+first arm; byte-equal on the exile-half observable, Lander leaf
+intentionally NOT cross-asserted).
 
 ---
 

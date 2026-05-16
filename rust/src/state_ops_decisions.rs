@@ -650,10 +650,22 @@ fn resolve_manifest_dread_to_battlefield(
 
 /// Whether the printing with `printing_id` matches `filter_name`
 /// per Python's `LookAtTopNRevealOrCounter._matches`:
-/// - `"spacecraft"`: any Spacecraft card (currently approximated by
-///   checking `card_types` for `"Spacecraft"` or subtypes carrying
-///   the string — Rust printings don't yet track subtypes, so today
-///   we accept only an exact `"Spacecraft"` card_type entry).
+/// - `"spacecraft"`: any Spacecraft card. Spacecraft is an artifact
+///   SUBTYPE (the printed type line is `Artifact — Spacecraft`:
+///   `card_types == ("Artifact",)`, `subtypes == ("Spacecraft",)`),
+///   NOT a top-level card type — verified against
+///   `data/edge_of_eternities.json` (Lumen-Class Frigate, Rescue
+///   Skiff, Wedgelight Rammer, The Seriema, …). So this reads
+///   `printing.subtypes`, mirroring Python's source of truth
+///   (`LookAtTopNRevealOrCounter._matches` → `printing.is_spacecraft`
+///   → `"Spacecraft" in printing.subtypes`) and the campaign's own
+///   `or_spacecraft` filter family (`cards.rs:2014-2027`). The prior
+///   first-slice `card_types` check ("Rust printings don't yet track
+///   subtypes") was stale — `CardPrinting.subtypes` has long existed
+///   on the Rust side — and never matched a real EoE Spacecraft;
+///   round-55 N3's genuine real-EoE Pulsar Squadron Ace probe found
+///   the resulting reveal-path divergence (round-56 Rust-lane fix,
+///   SEARCH_LIMITATIONS.md).
 /// - `"creature"`: any Creature; with `max_power > 0`, additionally
 ///   require `printed_power <= max_power`. Living Phone shape.
 /// - `"artifact"`: any Artifact.
@@ -672,11 +684,14 @@ pub(crate) fn card_matches_filter(
     };
     match filter_name {
         "spacecraft" => {
-            // Rust's CardPrinting carries only `card_types`. Real
-            // Spacecraft cards have card_type == "Spacecraft" (a
-            // top-level type, not a subtype) — first-slice match
-            // mirrors that.
-            printing.card_types.iter().any(|t| t == "Spacecraft")
+            // Spacecraft is an artifact SUBTYPE, not a card type:
+            // real EoE Spacecraft are `Artifact — Spacecraft`
+            // (card_types=["Artifact"], subtypes=["Spacecraft"]).
+            // Mirror Python's `is_spacecraft` (`"Spacecraft" in
+            // subtypes`) and the existing `or_spacecraft` family
+            // (cards.rs:2014-2027). The prior `card_types` check
+            // never matched a real Spacecraft (round-55 N3 find).
+            printing.subtypes.iter().any(|s| s == "Spacecraft")
         }
         "creature" => {
             let is_creature = printing.card_types.iter().any(|t| t == "Creature");
