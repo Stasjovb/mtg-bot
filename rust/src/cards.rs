@@ -2693,6 +2693,65 @@ pub enum Effect {
     /// no-op via auto-resolve. Mirrors Python's `if not examined:
     /// return` short-circuit.
     LookTopNPutOneInHandRestToGraveyard { n: i32 },
+    /// **BLOCKED-RUST-EFFECT slice (round 54) — Famished Worldsire ETB.**
+    /// "When this creature enters, look at the top X cards of your
+    /// library, where X is this creature's power. Put any number of
+    /// land cards from among them onto the battlefield tapped, then
+    /// shuffle." Mirrors Python's `FamishedWorldsireETBEffect`
+    /// (`effects/bespoke.py:94`) — the ONLY EoE card with this shape,
+    /// 2,324 17lands decks.
+    ///
+    /// **Unit variant; no payload.** X is dynamic (read from the
+    /// source's CURRENT effective power at resolve, post-Devour +1/+1
+    /// counters), and the "put any number" land selection is a
+    /// DETERMINISTIC greedy-all (the Python source-of-truth picks ALL
+    /// land cards from the examined set — `bespoke.py:121` — a
+    /// documented "any number" → greedy-land simplification that is
+    /// strictly ramp-positive; both engines mirror it so NO
+    /// PendingDecision is plumbed and there is no §2
+    /// silent-mistranslation surface from the choice). Extra dict
+    /// fields silently ignored for round-trip dict-shape consistency
+    /// (mirrors every other unit-variant parse arm — round-49
+    /// `gain_life_equal_to_your_life_total` precedent).
+    ///
+    /// **Resolve semantics (mirrors `FamishedWorldsireETBEffect`).**
+    /// 1. Source-controller resolution via the transient
+    ///    `current_resolve_source_controller` (fallback
+    ///    `active_player`) — CR 119.5 / 608.2; "your library" is the
+    ///    source's controller's library, same shape as
+    ///    `SearchLibraryForBasicLandTapped` (round-23/I69).
+    /// 2. `X = effective_power(source)` = base (UEOT-SetBasePT
+    ///    override / manland) + `ueot_power_bonus()` + signed
+    ///    `obj.counters` — the SAME composition Python's
+    ///    `_compute_effective_pt` folds in (round-53
+    ///    `read_doubling_power` §2 precedent). `X <= 0` → silent
+    ///    no-op (matches Python's `if x <= 0: return`; the oracle's
+    ///    look-at-top-0 is a degenerate no-op — Famished Worldsire is
+    ///    never X<=0 in practice because Devour seeds +1/+1 counters,
+    ///    but the clamp mirrors Python for parity on edge inputs).
+    /// 3. Examine the top `min(X, library_len)` cards (top = lib[0]
+    ///    post-CE3). Remove every LAND card (printing
+    ///    `card_types` contains "Land" — Python's `printing.is_land`)
+    ///    from the examined window, in top-to-bottom order; put each
+    ///    onto the source-controller's battlefield TAPPED, not
+    ///    summoning-sick (CR 302.1 is creature-only; a land entering
+    ///    via this effect has no summoning sickness regardless),
+    ///    controller-stamped to the source's controller. Non-land
+    ///    examined cards stay in the library in place (Python's
+    ///    `rest` list is never removed — `bespoke.py:122`).
+    /// 4. Fan out `Event::Enters` (landfall) for each entered land —
+    ///    queued in `pending_etb_dispatches`, drained by the caller
+    ///    after the resolving stack item pops, same as
+    ///    `SearchLibraryForBasicLandTapped`. Mirrors Python's
+    ///    `fire_landfall_triggers(state, land)` per-land call.
+    /// 5. Shuffle the WHOLE remaining library (CR 701.19 / 701.22):
+    ///    external `state.rng_ref()` Fisher-Yates (byte-identical to
+    ///    Python's `random.Random.shuffle` via
+    ///    `external_rng::next_below`) when a Python rng is installed,
+    ///    xorshift64 fallback otherwise — the exact dual-path block
+    ///    `SearchLibraryForBasicLandTapped` uses. Mirrors Python's
+    ///    `shuffle_library(state, controller_id)`.
+    FamishedWorldsireLookTopXByPowerPutLandsTapped,
     /// **Round 28 modal choose-one wrapper.** "Choose one — [mode_0];
     /// [mode_1]; ..." Mirrors Python's `ModalChooseOne(modes=...)`
     /// (combinators.py:1112, 13 EoE cards) in its first-slice shape:
@@ -5247,6 +5306,19 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::LookTopNPutOneInHandRestToGraveyard { n })
         }
+        "famished_worldsire_look_top_x_by_power_put_lands_tapped" => {
+            // BLOCKED-RUST-EFFECT slice (round 54) — Famished
+            // Worldsire ETB. Unit variant; no payload fields beyond
+            // `kind` (X is dynamic — read from the source's effective
+            // power at resolve, clamped >= 0; land selection is a
+            // deterministic greedy-all mirroring Python's
+            // `FamishedWorldsireETBEffect`, no decision plumbed).
+            // Extra dict fields silently ignored for round-trip
+            // dict-shape consistency (mirrors the round-49
+            // `gain_life_equal_to_your_life_total` unit-variant parse
+            // arm shape verbatim, swapping the literal).
+            Ok(Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped)
+        }
         "pump_target_artifact_or_creature_until_eot" => {
             // Round-28 broader-filter pump. Same schema as
             // pump_target_creature_until_eot — power_bonus +
@@ -7361,6 +7433,19 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::LookTopNPutOneInHandRestToGraveyard { n } => {
             d.set_item("kind", "look_top_n_put_one_in_hand_rest_to_graveyard")?;
             d.set_item("n", *n)?;
+        }
+        Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped => {
+            // BLOCKED-RUST-EFFECT slice (round 54). Unit variant; no
+            // payload fields beyond `kind` (X dynamic — source
+            // effective power at resolve; greedy-all land selection).
+            // Mirrors Python's `FamishedWorldsireETBEffect` dict shape
+            // (no static fields on the @dataclass). No other keys
+            // emitted (round-trip dict-shape consistency convention —
+            // round-49 `gain_life_equal_to_your_life_total` precedent).
+            d.set_item(
+                "kind",
+                "famished_worldsire_look_top_x_by_power_put_lands_tapped",
+            )?;
         }
         Effect::ChooseOneMode { modes } => {
             d.set_item("kind", "choose_one_mode")?;
