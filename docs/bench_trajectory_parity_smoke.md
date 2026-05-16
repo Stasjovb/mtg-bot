@@ -627,3 +627,139 @@ Round 46+ slice work to consider:
 3. **Re-target round-41 cluster archetypes (13-17)** at the wider
    seed range to confirm the round-42 harness pre-cast floor fix
    continues to hold past seed 2.
+
+## Round 46 targeted-admittee verification
+
+Round 46 ran a targeted bench against current main (`480fc4b4`) to
+verify that the four recently-admitted creatures from rounds 36/37/42/45
+(Eumidian Terrabotanist, Icecave Crasher, Thawbringer, Remnant
+Elemental) introduce no new cross-engine divergences. The sweep
+combined the higher-leverage seed-range (0-5) with `max-turns=22` to
+expose deeper trajectory shapes than the round-45 stable-point
+checkpoint reached.
+
+### Admittee → archetype map (first 60 archetypes scanned)
+
+| Admittee (round)               | Trigger shape                  | Archetypes carrying |
+|--------------------------------|--------------------------------|---------------------|
+| Thawbringer (r42)              | surveil ETB+DIES               | 0, 1, 10, 11, 12, 21, 30, 46 |
+| Icecave Crasher (r37)          | landfall+pump_self             | 4, 5, 21, 43, 49, 51, 55, 57, 58 |
+| Eumidian Terrabotanist (r36)   | landfall+gain_life             | 13, 14, 15, 16, 17, 30, 35, 44 |
+| Remnant Elemental (r45)        | reach + landfall+pump_self     | 28, 48                  |
+
+### Sweep A — primary targeted sweep
+
+Invocation (10 archetypes × 6 seeds = 60 games):
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 0,1,4,5,10,11,12,13,14,15 --seeds 0-5 --max-turns 22 \
+    --json-out tmp/bench_r46.json --verbose
+```
+
+| Status            | Count |
+|-------------------|-------|
+| Total games       | 60    |
+| PASS              | 18    |
+| FAIL_DIVERGENCE   | **0** |
+| FAIL_TIMEOUT      | 42    |
+| ARCHETYPE_FILTERED | 0    |
+| FAIL_EXCEPTION    | 0     |
+| Wall time         | 75.47s |
+
+### Sweep B — Remnant Elemental supplement
+
+Remnant Elemental's only round-0-to-59 carriers are arch 28 and arch 48;
+those aren't in the Sweep A grid, so a follow-up covered them:
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 28,48 --seeds 0-5 --max-turns 22 \
+    --json-out tmp/bench_r46_remnant.json --verbose
+```
+
+| Status            | Count |
+|-------------------|-------|
+| Total games       | 12    |
+| PASS              | 0     |
+| FAIL_DIVERGENCE   | **0** |
+| FAIL_TIMEOUT      | 12    |
+| Wall time         | 14.0s |
+
+### Aggregate (Sweep A + Sweep B)
+
+| Status            | Count |
+|-------------------|-------|
+| Total games       | 72    |
+| PASS              | 18    |
+| FAIL_DIVERGENCE   | **0** |
+| FAIL_TIMEOUT      | 54    |
+| Wall time         | 89.5s |
+
+### Divergence-shape histogram
+
+**No divergences fired across 72 games.** Top-5 list is empty — no new
+shapes to chase. Every previously-tracked shape (round-37 `play_land::stack`,
+`cast_spell::graveyard_p0,battlefield`; round-41 `cast_spell::stack`,
+`cast_spell::life_p0,stack`, `cast_spell::life_p1,stack`; round-43
+Thawbringer `cast_spell::stack` cluster) remains at zero.
+
+### Per-archetype breakdown
+
+| Arch | Carries                                | PASS | FAIL_TIMEOUT |
+|------|----------------------------------------|------|--------------|
+| 0    | Thawbringer                            | 3    | 3            |
+| 1    | Thawbringer                            | 3    | 3            |
+| 4    | Icecave Crasher                        | 5    | 1            |
+| 5    | Icecave Crasher                        | 1    | 5            |
+| 10   | Thawbringer                            | 2    | 4            |
+| 11   | Thawbringer                            | 2    | 4            |
+| 12   | Thawbringer                            | 2    | 4            |
+| 13   | Eumidian Terrabotanist                 | 0    | 6            |
+| 14   | Eumidian Terrabotanist                 | 0    | 6            |
+| 15   | Eumidian Terrabotanist                 | 0    | 6            |
+| 28   | Remnant Elemental                      | 0    | 6            |
+| 48   | Remnant Elemental                      | 0    | 6            |
+
+Thawbringer-bearing archetypes (0/1/10/11/12) and Icecave Crasher's
+arch 4 produce real PASS games, confirming the round-43 CE5 Rust drain
+mirror + round-37 landfall harness fix continue to hold under the
+wider seed sweep and longer `max-turns=22`.
+
+Eumidian Terrabotanist (arch 13/14/15) and Remnant Elemental
+(arch 28/48) timeouts indicate the rest of those decks' creature
+vocabulary still falls outside the CardDef bridge filter — `attack_all`
+runs out of attackers and reaches the cap. Same FAIL_TIMEOUT pattern
+the round-41/42 sweeps recorded; not a divergence, just zero coverage.
+
+### Gate
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    -m pytest tests/test_parity_smoke.py tests/test_cross_engine_etb_triggers.py \
+    tests/test_trajectory_parity.py tests/test_trajectory.py --no-cov -n 4
+```
+
+1133 passed in 31.95s — no regressions from current `480fc4b4`.
+
+### New divergence-shape candidates for round 47+
+
+**None surfaced.** All four fresh admittees (rounds 36, 37, 42, 45)
+land clean under seeds 0-5 / max-turns=22 at their carrier archetypes.
+The pipeline is stable on the targeted admittee front.
+
+Round 47+ slice work to consider:
+
+1. **CardDef filter extension for Eumidian Terrabotanist / Remnant
+   Elemental decks** — arch 13-17, 28, 48 still 100% FAIL_TIMEOUT
+   because the admitted creature isn't enough to populate `attack_all`.
+   Admitting one more creature per cluster would convert ~24 games
+   into real trajectory probes.
+2. **Wider archetype sweep** — extend to arch 0-50 × seeds 0-5 (~5 min
+   wall) to surface any shape that requires both a wider deck-pool
+   surface AND the longer max-turns this round adopted.
+3. **Re-run round-37 reproducer** (arch 4 seed 0 max-turns 15) one
+   more time to keep the historic regression-test pin alive — the
+   original landfall shapes were last confirmed dead in round 42.
