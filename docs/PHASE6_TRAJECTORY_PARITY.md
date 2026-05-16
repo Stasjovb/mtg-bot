@@ -1025,3 +1025,159 @@ probe when no clean real consumer exists.
 No divergences surfaced — all new tests pass byte-equal across
 both engines on first run. Gate: 1045 passed (1040 baseline + 5
 new tests this slice).
+
+## CardDef triggers — surveil ETB+DIES extension (round-42 slice)
+
+Closes round-41 H1's wider-sweep observation that the production
+deck filter strips creatures from almost every archetype, leaving
+~91% of bench games in `FAIL_TIMEOUT` because neither side has any
+threat. Extends `_SAFE_TRIGGERS` with TWO new entries — the first
+DIES events in the safe set:
+
+```
+("enters", "source_is_self", "surveil")
+("dies",   "source_is_self", "surveil")
+```
+
+Plus the matching `surveil` arm in `_SAFE_EFFECT_KEYS` (single
+`count` payload key) and a bare-shape `Surveil` recognizer in
+`_python_ta_to_safe_dict` gated on `use_artifact_count=False` so the
+Surveil-X variant (Cerebral Download / Anticausal Vestige) doesn't
+silently degrade across the bridge. The per-trigger event gate in
+`_python_ta_to_safe_dict` widens from ENTERS-only to
+`{ENTERS, DIES}` so Thawbringer / Wary Watchdog — whose trigger pair
+carries BOTH events — round-trip cleanly. Pre-extension the whole
+printing was dropped because the bridge-simple filter requires
+EVERY trigger to round-trip; without DIES support even the ENTERS
+side fell to the disqualifying second trigger.
+
+### Cross-engine bridge contract
+
+Pre-existed; no bridge-arm work in this slice:
+
+* **Rust** `Effect::Surveil { count: i32 }` resolve arm at
+  `state_ops_resolve.rs:2610-2649`. The terminal auto-resolve drain
+  invoked after every triggered-ability resolve
+  (`state_ops_resolve.rs:6832`) closes any queued
+  `PendingDecision::SurveilChoice` with the `keep_all_on_top`
+  strategy — no agent setup needed for the trajectory walk.
+* **Python** `Surveil(amount, use_artifact_count)` resolve arm at
+  `effects/generic/library_lookat.py:569`. The `p.agent is None`
+  short-circuit at line 605 mirrors Rust's keep_all_on_top default:
+  every observed card stays on the library top, graveyard unchanged.
+* **Bridge translator arm** `cross_engine._ta_dict_to_python_effect`
+  "surveil" since round 16 (the scry/surveil slice); count -> amount
+  translation already in place.
+
+### Real-EoE consumer admitted
+
+**Thawbringer** (4/2 {2}{G}, ENTERS+IsSelf+Surveil(1) AND
+DIES+IsSelf+Surveil(1)) — present in EoE archetype 0 (the canonical
+first archetype). Two of the three EoE Surveil-bearing creatures
+admit cleanly in principle but only Thawbringer is in the
+17lands deck pool. Wary Watchdog (3/1 {1}{G}, same trigger pair) is
+parser-side admitted but isn't seeded in any 17lands archetype.
+Wurmwall Sweeper (2/2 {2}, ENTERS+Surveil(2)) is a Spacecraft —
+card_types=("Artifact",), filtered out by the creature-only gate.
+
+Cards excluded by other filters (NOT regressed by this slice):
+
+* Starbreach Whale (ENTERS+Surveil(2) but also carries `warp_cost`).
+* Skullsnap Nuisance (ENTERS+And/Surveil with compound predicate +
+  ROOM_FULLY_UNLOCKED event — both outside the safe set).
+
+### Bench-smoke conversion rate
+
+`bench_trajectory_parity --archetypes 0-15 --seeds 0-2 --max-turns 18`
+(48 games):
+
+| Metric           | Baseline (main) | Post-extension |
+| ---------------- | --------------- | -------------- |
+| PASS             | 1 (2.1%)        | 1 (2.1%)       |
+| FAIL_TIMEOUT     | 47 (97.9%)     | 40 (83.3%)     |
+| FAIL_DIVERGENCE  | 0 (0%)          | 7 (14.6%)      |
+
+**Net 7 games converted from FAIL_TIMEOUT to FAIL_DIVERGENCE** —
+honest signal handed to the parallel I1 (Python divergence chase)
+workstream. All 7 divergences are `cast_spell::stack` shape, all on
+archetypes carrying Thawbringer (0, 1, 10, 11, 12) — the surveil
+trigger goes on the stack with a per-engine difference. This is a
+NEW real divergence the bench wasn't able to reach pre-extension
+(because Thawbringer never made it onto the battlefield to be
+cast); discovering it is exactly the round-41 H1 mandate.
+
+### Descoped this slice
+
+- **Reach / flash keywords** — measured marginal admit rate was 0-1
+  creature on EoE, vs. the same single-keyword extension surface.
+  The few reach/flash bearers all have other reject reasons too
+  (Remnant Elemental adds 1 admit on its own, but only with the
+  bare-Reach gate combined with the round-37 landfall+pump
+  substrate — a separate slice).
+- **Activated abilities** — the per-archetype admit-rate scout
+  (`scripts/scout_archetype_admit_simulation.py`) ranked allow-all
+  activated_abilities as the single highest-leverage extension
+  (mean creatures per archetype 0.54 -> 1.80, arch>=2 count 5 -> 25).
+  REJECTED on bridge-correctness grounds: `CardDef` doesn't carry
+  an `activated_abilities` field, and Rust's `CardPrinting` only
+  models the `mana_produced` shape (see the round-20 Bear Caster
+  CE20 closure at `cross_engine.py:13380-13468`). Admitting these
+  creatures would silently mistranslate the abilities — exactly the
+  kind of substrate-honest filter drop the round-39 `ward_cost` /
+  `dynamic_pt_formula` slices ship. Mana-only activated abilities
+  could in principle pass, but only 2 EoE creatures qualify and
+  both carry restricted-mana `spend_restriction`.
+- **Static abilities** — second-best leverage (arch>=2 count 5 -> 11)
+  but every EoE static ability is a CONDITIONAL P/T modifier with
+  layered condition evaluation that needs its own bridge slice.
+- **Warp / kicker / impending cost mechanics** — top single
+  individual reject reason (30 creatures with warp_cost) but a
+  cost-side substrate slice in its own right.
+- **`create_token` / `dies` + `create_token` triggers** — second
+  most-common rejected trigger shape (8+4 cards), but requires
+  `register_token_printing` setup on every loader call (the bridge
+  arm needs a pid-to-printing registry populated before state build)
+  AND a fresh subtype/card_type substrate slice for the spawned
+  tokens. A separate slice.
+- **`surveil` under landfall / `surveil`-X** — both gated out at the
+  recognizer (no EoE consumer + the X variant would silently
+  degrade).
+
+### Test surface
+
+- 15 new unit tests in `tests/test_trajectory.py`:
+  - allowlist contract pins
+    (`test_safe_triggers_set_carries_surveil_enters_shape`,
+    `test_safe_triggers_set_carries_surveil_dies_shape`,
+    `test_safe_effect_keys_carries_surveil_count_payload`);
+  - dict-side accept-path
+    (`test_is_safe_trigger_dict_admits_surveil_enters_shape`,
+    `test_is_safe_trigger_dict_admits_surveil_dies_shape`);
+  - dict-side reject paths
+    (`test_is_safe_trigger_dict_rejects_surveil_with_extra_payload_key`,
+    `test_is_safe_trigger_dict_rejects_surveil_under_landfall_predicate`);
+  - Python-side round-trip for both events
+    (`test_python_ta_to_safe_dict_round_trips_surveil_enters`,
+    `test_python_ta_to_safe_dict_round_trips_surveil_dies`);
+  - Python-side reject paths
+    (`test_python_ta_to_safe_dict_rejects_surveil_with_use_artifact_count`,
+    `test_python_ta_to_safe_dict_rejects_dies_event_with_non_surveil_effect`);
+  - filter accept/reject end-to-end
+    (`test_simple_creature_filter_admits_surveil_etb_only_creature`,
+    `test_simple_creature_filter_admits_real_eoe_wary_watchdog`,
+    `test_simple_creature_filter_drops_skullsnap_nuisance_despite_surveil_extension`);
+  - CardDef materialization pin
+    (`test_printing_to_card_def_carries_surveil_etb_through`).
+- 2 new trajectory parity tests in `tests/test_trajectory_parity.py`:
+  - substrate-gate
+    (`test_real_eoe_deck_with_thawbringer_setup_parity` — loads EoE
+    archetype 0, asserts Thawbringer SURVIVES the production-deck
+    filter and lands in both engines' libraries with both surveil
+    triggers on the printing);
+  - end-to-end walk
+    (`test_real_eoe_deck_with_thawbringer_walk_first_turns_parity` —
+    walks 3 turns of phase-by-phase parity to pin the substrate-
+    now-clean trajectory is bit-equal at every phase boundary).
+
+Gate: 1077 passed (1060 baseline + 17 new tests this slice).
+

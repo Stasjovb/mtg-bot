@@ -4750,3 +4750,144 @@ def test_carddef_landfall_safe_etb_draw_cards_fires_on_land_play_parity():
         f"diverges: "
         f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-triggers surveil extension (round-42 slice).
+#
+# Adds two new entries to :data:`_SAFE_TRIGGERS`:
+#   * ``("enters", "source_is_self", "surveil")``
+#   * ``("dies", "source_is_self", "surveil")``
+# Cards admitted on EoE today:
+#   * Thawbringer (4/2 {2}{G}, ENTERS+surveil 1 AND DIES+surveil 1)
+#     — present in archetype 0 (the canonical first archetype).
+#   * Wurmwall Sweeper (2/2 {2}, ENTERS+surveil 2) — present in
+#     archetype 6 (2x copies).
+#   * Wary Watchdog (3/1 {1}{G}) — not present in the 17lands EoE
+#     deck pool; covered by the test_trajectory.py unit test that
+#     constructs the printing from the parser directly.
+#
+# Why this slice's parity probe is "setup + walk" rather than
+# end-to-end "cast surveil creature": the production-deck loader's
+# library doesn't reliably seat a surveil creature in p0's opening
+# hand for any one seed, and side-channel injection for surveil
+# would duplicate the existing parity-smoke surveil probes
+# (test_parity_smoke.py exercises the surveil bridge arm
+# end-to-end on synthetic 7-card decks since round 16). The
+# trajectory probe's value is the substrate gate — Thawbringer /
+# Wurmwall Sweeper now SURVIVE the bridge-simple filter and land
+# in the matched-game registry with their canonical surveil
+# trigger shape, instead of being silently dropped pre-extension.
+# ---------------------------------------------------------------------------
+
+
+def test_real_eoe_deck_with_thawbringer_setup_parity():
+    """Substrate-gate probe: load EoE archetype 0 (carries Thawbringer,
+    the canonical EoE consumer of BOTH new safe-trigger entries —
+    ENTERS+surveil 1 AND DIES+surveil 1) and assert byte-equal field
+    views post-setup.
+
+    Pre-extension Thawbringer was silently dropped by
+    ``_filter_deck_to_bridge_supported`` because the DIES+IsSelf+
+    Surveil trigger had no matching entry in :data:`_SAFE_TRIGGERS`
+    AND the recognizer's event gate rejected DIES outright. Post-
+    extension Thawbringer SURVIVES the filter and lands in both
+    engines' libraries with matching surveil trigger shape — the
+    setup-time field-view compare pins that the trigger wiring
+    through the registry is byte-equal.
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+
+    cards = trajectory.load_production_deck(0)
+    assert "Thawbringer" in cards, (
+        "EoE archetype 0 no longer carries Thawbringer; "
+        "pick a different archetype after re-scanning the pool."
+    )
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42, pad_with="Forest",
+    )
+
+    # Substrate gate: at least one Thawbringer landed in the matched-
+    # game registry on BOTH sides (mirror-match means p1 also gets a
+    # copy when p0 has one). Pre-surveil-extension this list would be
+    # EMPTY — the filter would have dropped Thawbringer on the
+    # DIES+surveil trigger.
+    py_lib = (
+        py_state.players[0].library + py_state.players[0].hand
+        + py_state.players[1].library + py_state.players[1].hand
+    )
+    thawbringers = [
+        o for o in py_lib if o.printing.name == "Thawbringer"
+    ]
+    assert thawbringers, (
+        "expected at least one Thawbringer in the matched-game "
+        "registry (archetype 0 carries it); if this assertion fails "
+        "the carddef-triggers surveil extension regressed."
+    )
+    # Each surviving Thawbringer carries TWO parser-emitted surveil
+    # triggers on the Python side — ENTERS+IsSelf+Surveil(1) and
+    # DIES+IsSelf+Surveil(1).
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    for o in thawbringers:
+        assert len(o.printing.triggered_abilities) == 2
+        events = sorted(
+            (ta.event for ta in o.printing.triggered_abilities),
+            key=lambda e: e.value,
+        )
+        assert events == [Event.DIES, Event.ENTERS]
+        for ta in o.printing.triggered_abilities:
+            assert isinstance(ta.predicate, IsSelf)
+            assert ta.predicate.subject is None
+            assert isinstance(ta.effect, Surveil)
+            assert ta.effect.amount == 1
+            assert ta.effect.use_artifact_count is False
+
+    # Field-view compare: registries built byte-equal across engines.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"production-deck setup with Thawbringer diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
+    assert len(py_view["hand_p0"]) == 7
+    assert len(py_view["hand_p1"]) == 7
+
+
+def test_real_eoe_deck_with_thawbringer_walk_first_turns_parity():
+    """End-to-end walk probe: load archetype 0 (Thawbringer-bearing),
+    walk the first three turns of phase-by-phase parity using the
+    existing trajectory harness. The post-walk field views are
+    byte-equal end-to-end, which would NOT have been the case pre-
+    extension because Thawbringer's DIES+surveil trigger was an
+    unsafe shape that dropped the whole printing — silently leaving
+    the matched-game registry without a Thawbringer printing on
+    BOTH sides, mismatching whatever side a hypothetical bridge-
+    breaking partial-admit would have produced. Today the printing
+    survives identically on both sides; this test pins the per-step
+    parity across the substrate-now-clean trajectory.
+
+    No surveil trigger fires in this walk (no Thawbringer is cast
+    in the first 3 turns under the seed=42 hand), but the
+    presence of the surveil-bearing printings in the registry is
+    exercised by every step's field-view compare — any silent
+    asymmetry in how the two engines materialize the trigger shape
+    (e.g. dict-key ordering, count typing) would surface as a
+    divergence here.
+    """
+    from mtg_bot.parity import trajectory
+
+    cards = trajectory.load_production_deck(0)
+    assert "Thawbringer" in cards
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42, pad_with="Forest",
+    )
+    # Walk turn 1 (11 phase advances UNTAP -> CLEANUP) plus the wrap
+    # into turn 2 UNTAP, then turn 2's eleven phases, then turn 3
+    # UNTAP — that's 12 + 11 + 1 = 24 phase advances. Per-step parity
+    # asserts in :func:`_advance_n_phases`.
+    _advance_n_phases(py_state, rust_state, 24)
+    # Sanity: we landed on turn 3 UNTAP.
+    assert py_state.turn_number == 3
+    assert py_state.step.name == "UNTAP"

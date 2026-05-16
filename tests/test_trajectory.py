@@ -2605,3 +2605,369 @@ def test_python_ta_to_safe_dict_preserves_landfall_draw_cards_count():
     d = _python_ta_to_safe_dict(ta)
     assert d is not None
     assert d["effect"] == {"kind": "draw_cards", "count": 2}
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-triggers surveil extension (round-42 slice).
+#
+# Adds two NEW entries to :data:`_SAFE_TRIGGERS`:
+#   * ``("enters", "source_is_self", "surveil")``
+#   * ``("dies", "source_is_self", "surveil")``
+# Plus the ``"surveil"`` arm in :data:`_SAFE_EFFECT_KEYS`
+# (single ``count`` payload key) and the bare-shape
+# ``isinstance(eff, Surveil)`` recognizer in
+# :func:`_python_ta_to_safe_dict` (gated on
+# ``use_artifact_count=False`` so the Surveil-X variant doesn't
+# silently degrade across the bridge).
+#
+# The DIES event is also wired into the per-trigger event gate
+# (previously ENTERS-only) so Thawbringer / Wary Watchdog — both of
+# whose surveil trigger pair carries BOTH events — round-trip
+# cleanly. Without DIES support the whole printing would still be
+# dropped because the bridge-simple filter requires EVERY trigger to
+# round-trip.
+#
+# Cross-engine bridge support pre-existed:
+#   * Rust ``Effect::Surveil { count: i32 }`` resolve arm at
+#     ``state_ops_resolve.rs:2610-2649``; the auto-resolve default
+#     ``keep_all_on_top`` terminal drain at
+#     ``state_ops_resolve.rs:6832`` is invoked after every
+#     triggered-ability resolve, so no agent setup is needed for the
+#     trajectory walk.
+#   * Python ``Surveil(amount, use_artifact_count)`` resolve arm at
+#     ``effects/generic/library_lookat.py:569``; the
+#     ``p.agent is None`` short-circuit at line 605 mirrors Rust's
+#     keep_all_on_top default — every observed card stays on the
+#     library top, graveyard unchanged.
+#   * Bridge translator arm ``cross_engine._ta_dict_to_python_effect``
+#     "surveil" since round 16 (the scry/surveil slice).
+#
+# Cards admitted on EoE today (3 net new):
+#   * Thawbringer (4/2 {2}{G}, ENTERS+surveil 1 AND DIES+surveil 1)
+#   * Wary Watchdog (3/1 {1}{G}, ENTERS+surveil 1 AND DIES+surveil 1)
+#   * Wurmwall Sweeper (2/2 {2}, ENTERS+surveil 2)
+# ---------------------------------------------------------------------------
+
+
+def test_safe_triggers_set_carries_surveil_enters_shape():
+    """Pin the ENTERS+source_is_self+surveil entry (this slice)."""
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert (
+        ("enters", "source_is_self", "surveil") in _SAFE_TRIGGERS
+    )
+
+
+def test_safe_triggers_set_carries_surveil_dies_shape():
+    """Pin the DIES+source_is_self+surveil entry (this slice). The
+    DIES extension is the FIRST DIES entry in the safe set; admits
+    Thawbringer / Wary Watchdog (both carry the trigger pair on
+    enters AND dies).
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert (
+        ("dies", "source_is_self", "surveil") in _SAFE_TRIGGERS
+    )
+
+
+def test_safe_effect_keys_carries_surveil_count_payload():
+    """The surveil arm carries a single ``count`` payload key (mirrors
+    Rust's ``Effect::Surveil { count: i32 }`` variant). The Python
+    ``Surveil.use_artifact_count`` flag is NOT in the safe payload
+    keys — gated separately in :func:`_python_ta_to_safe_dict`.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_EFFECT_KEYS
+
+    assert _SAFE_EFFECT_KEYS["surveil"] == frozenset({"kind", "count"})
+
+
+def test_is_safe_trigger_dict_admits_surveil_enters_shape():
+    """Dict-side recognizer admits the canonical ENTERS+source_is_self
+    +surveil dict shape with the bare ``count`` payload.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "surveil", "count": 1},
+    })
+
+
+def test_is_safe_trigger_dict_admits_surveil_dies_shape():
+    """Dict-side recognizer admits the DIES variant. Mirrors the ENTERS
+    test above with a DIES event — both shapes are in the round-42
+    safe set.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert _is_safe_trigger_dict({
+        "event": "dies",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "surveil", "count": 2},
+    })
+
+
+def test_is_safe_trigger_dict_rejects_surveil_with_extra_payload_key():
+    """Schema-strict on the surveil payload — same gate the
+    source_is_self+draw_cards arm enforces. An extra key beyond
+    {kind, count} is rejected so a future schema extension (e.g. a
+    ``use_artifact_count`` Surveil-X rider) doesn't silently slip
+    through with the rider dropped on the cross-engine round trip.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "surveil",
+            "count": 1,
+            "use_artifact_count": True,
+        },
+    })
+
+
+def test_is_safe_trigger_dict_rejects_surveil_under_landfall_predicate():
+    """The predicate-effect product gate is strict — surveil under the
+    canonical landfall compound predicate is NOT in today's safe set
+    (no parser-emitted EoE consumer carries that shape). The dict
+    recognizer rejects it even though both the surveil effect and
+    the landfall predicate are individually in the safe set under
+    OTHER products.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "surveil", "count": 1},
+    })
+
+
+def test_python_ta_to_safe_dict_round_trips_surveil_enters():
+    """Python ``TriggeredAbility`` carrying ENTERS+IsSelf+Surveil
+    converts back to the canonical dict shape; the result satisfies
+    :func:`_is_safe_trigger_dict`. Pins the Python ``Surveil.amount``
+    → dict ``count`` translation (same convention as the round-16
+    scry arm).
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=Surveil(amount=2),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "surveil", "count": 2},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_round_trips_surveil_dies():
+    """Python ``TriggeredAbility`` carrying DIES+IsSelf+Surveil also
+    round-trips. Closes the DIES event recognizer wired into
+    :func:`_python_ta_to_safe_dict`'s event-string gate this slice.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.DIES,
+        predicate=IsSelf(),
+        effect=Surveil(amount=1),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "dies",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "surveil", "count": 1},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_rejects_surveil_with_use_artifact_count():
+    """Surveil-X (``use_artifact_count=True``) is the variant the
+    bridge does NOT model — Rust's ``Effect::Surveil { count: i32 }``
+    carries only the fixed-count form. The recognizer must reject the
+    X variant so it falls through to the filter drop path rather than
+    silently degrading to a fixed surveil-N on cross-engine round
+    trip. Mirrors the round-37 DDDD slice's PumpSelfUntilEOT
+    granted_keywords reject-path test.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=Surveil(amount=1, use_artifact_count=True),
+    )
+    assert _python_ta_to_safe_dict(ta) is None
+
+
+def test_python_ta_to_safe_dict_rejects_dies_event_with_non_surveil_effect():
+    """The DIES event gate is narrower than the ENTERS gate — only the
+    surveil leaf is in the safe set under DIES (no DIES+draw_cards /
+    +gain_life / +scry_n entries today). A DIES+IsSelf+DrawCards
+    trigger must be rejected because the corresponding triple isn't
+    in :data:`_SAFE_TRIGGERS`. Pins the per-event safe-effect-kinds
+    table so a future DIES extension is a single edit at the
+    safe-set source.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.DIES,
+        predicate=IsSelf(),
+        effect=DrawCards(amount=1),
+    )
+    assert _python_ta_to_safe_dict(ta) is None
+
+
+def test_simple_creature_filter_admits_surveil_etb_only_creature():
+    """A bare-vanilla creature carrying only ENTERS+IsSelf+Surveil
+    passes the bridge-simple filter end-to-end. Constructs the
+    printing in-line (no Scryfall dependency) so the test pins the
+    filter contract independent of any production-deck data churn.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    printing = CardPrinting(
+        name="ProbeSurveilBear",
+        mana_cost_str="{1}{G}",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature - Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=Surveil(amount=1),
+            ),
+        ),
+    )
+    assert _printing_is_bridge_simple_creature(printing) is True
+
+
+def test_simple_creature_filter_admits_real_eoe_wary_watchdog():
+    """Pin that Wary Watchdog (3/1 {1}{G}, ENTERS+surveil 1 AND
+    DIES+surveil 1) — the canonical EoE consumer carrying BOTH the
+    new ENTERS and DIES safe-trigger shapes — survives the production
+    -deck filter. Pre-extension this card was rejected because the
+    DIES+surveil trigger had no matching entry in
+    :data:`_SAFE_TRIGGERS` and the recognizer's event gate rejected
+    DIES outright; post-extension the gate accepts both, the
+    recognizer round-trips both shapes, and the whole printing
+    passes.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    src = OracleParserCardSource()
+    watchdog = src.get_printings()["Wary Watchdog"]
+    # Sanity: Watchdog carries the trigger pair this slice admits.
+    assert len(watchdog.triggered_abilities) == 2
+    events = sorted(ta.event.value for ta in watchdog.triggered_abilities)
+    assert events == ["dies", "enters"]
+    # Both triggers are bare Surveil(1).
+    for ta in watchdog.triggered_abilities:
+        assert type(ta.effect).__name__ == "Surveil"
+        assert ta.effect.amount == 1
+        assert ta.effect.use_artifact_count is False
+    # Post-extension the whole printing passes the bridge filter.
+    assert _printing_is_bridge_simple_creature(watchdog) is True
+
+
+def test_simple_creature_filter_drops_skullsnap_nuisance_despite_surveil_extension():
+    """Pin that the surveil extension does NOT accidentally admit
+    Skullsnap Nuisance. Skullsnap carries surveil triggers, but
+    BOTH of them are outside the round-42 safe set:
+      * ENTERS predicate is a compound ``And`` (NOT bare IsSelf — the
+        Skullsnap shape includes a tier/threshold condition).
+      * The second trigger fires on ``ROOM_FULLY_UNLOCKED``, an event
+        not in any safe-trigger entry.
+    The whole-printing gate must reject Skullsnap so the cross-engine
+    bridge isn't asked to round-trip trigger shapes it doesn't know
+    how to materialize.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    src = OracleParserCardSource()
+    skullsnap = src.get_printings()["Skullsnap Nuisance"]
+    assert len(skullsnap.triggered_abilities) == 2
+    # The whole-printing gate still drops Skullsnap on either
+    # trigger's unsafe shape — the surveil-leaf bridging alone
+    # doesn't compose with the compound / room-event predicate.
+    assert _printing_is_bridge_simple_creature(skullsnap) is False
+
+
+def test_printing_to_card_def_carries_surveil_etb_through():
+    """Wary Watchdog's parsed printing converts to a CardDef whose
+    ``triggered_abilities`` tuple carries BOTH the ENTERS+surveil 1
+    and DIES+surveil 1 canonical dict shapes — exactly what the
+    cross_engine bridge arms on both engines consume.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    src = OracleParserCardSource()
+    watchdog = src.get_printings()["Wary Watchdog"]
+    cd = _printing_to_card_def(watchdog)
+    assert cd.card_type == "Creature"
+    assert cd.power == 3
+    assert cd.toughness == 1
+    # Both triggers land on the CardDef in dict-round-trip shape; the
+    # ENTERS arm comes first in printing.triggered_abilities order, so
+    # the dict tuple preserves that ordering.
+    assert len(cd.triggered_abilities) == 2
+    entries = sorted(
+        cd.triggered_abilities, key=lambda d: d["event"],
+    )
+    assert entries == [
+        {
+            "event": "dies",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {"kind": "surveil", "count": 1},
+        },
+        {
+            "event": "enters",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {"kind": "surveil", "count": 1},
+        },
+    ]

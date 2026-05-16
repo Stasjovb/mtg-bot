@@ -1479,6 +1479,48 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     ("enters", "source_is_self", "draw_cards"),
     ("enters", "source_is_self", "gain_life"),
     ("enters", "source_is_self", "scry_n"),
+    # Surveil extension (round-42 carddef-triggers slice). Adds the
+    # bare-shape ``surveil`` effect (``count`` payload key only — no
+    # ``use_artifact_count`` rider) under both ENTERS and DIES events
+    # with the source_is_self predicate. Bridge support:
+    #   * Rust ``Effect::Surveil { count: i32 }`` variant has existed
+    #     since the I61 controller-of-effect substrate landed; its
+    #     resolve arm (state_ops_resolve.rs:2610-2649) pops the top
+    #     min(count, library.len()) cards and queues a PendingDecision
+    #     that the auto-resolve path (state_ops_resolve.rs:6832, the
+    #     ``resolve_top_of_stack``-after-triggered-ability terminal
+    #     drain) closes by keeping every card on top of the library.
+    #   * Python ``Surveil(amount: int)`` class
+    #     (effects/generic/library_lookat.py:569) walks the top N
+    #     cards in-line; when ``p.agent is None`` the surveil
+    #     callback is short-circuited and every observed card stays
+    #     on the library top (library_lookat.py:605).
+    #   * Bridge translator arm in ``cross_engine._ta_dict_to_python_
+    #     effect`` at cards.rs/cross_engine.py:444-508 has carried the
+    #     ``surveil`` arm since round 16 (the scry/surveil slice);
+    #     payload key is ``count`` mirroring Rust's terminology.
+    #
+    # **Cross-engine default-strategy contract.** Both engines'
+    # no-agent surveil resolves to "keep_all_on_top" — bit-equal
+    # post-resolve library top + graveyard, no auto-resolve drain
+    # required on the trajectory walk because the terminal
+    # post-triggered-ability path already invokes the keep_all_on_top
+    # strategy. Same contract the round-16 scry arm relies on; the
+    # earlier "PendingDecision pipeline" deferral noted in the
+    # ``_SAFE_TRIGGERS`` docstring above turned out to be moot for
+    # the default-strategy case (see the cross_engine.py:474-494
+    # surveil bridge-arm docstring for the full no-agent contract).
+    #
+    # Cards admitted on EoE today (3 net new):
+    #   * Thawbringer (4/2 {2}{G}, ENTERS+surveil 1 AND DIES+surveil 1)
+    #   * Wary Watchdog (3/1 {1}{G}, ENTERS+surveil 1 AND DIES+surveil 1)
+    #   * Wurmwall Sweeper (2/2 {2}, ENTERS+surveil 2)
+    # Starbreach Whale carries the ENTERS+surveil 2 shape too but
+    # also has ``warp_cost`` (outside the bridge); Skullsnap Nuisance
+    # carries ENTERS+And/surveil + ROOM_FULLY_UNLOCKED predicate
+    # (both outside today's safe set).
+    ("enters", "source_is_self", "surveil"),
+    ("dies", "source_is_self", "surveil"),
     # Landfall — "Whenever a land you control enters, ...". Compound
     # predicate sentinel; see ``_is_safe_trigger_dict`` /
     # ``_python_ta_to_safe_dict`` for the canonical-vs-nested shape
@@ -1576,6 +1618,18 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     "pump_self_until_eot": frozenset(
         {"kind", "power_bonus", "toughness_bonus"}
     ),
+    # Surveil — single ``count`` payload key. Rust's
+    # ``Effect::Surveil { count: i32 }`` is bare; the Python
+    # ``Surveil`` class additionally carries a ``use_artifact_count``
+    # bool that selects the Surveil-X-where-X=artifacts variant
+    # (effects/generic/library_lookat.py:580). The bridge does NOT
+    # carry the ``use_artifact_count`` flag — gating it out at the
+    # recognizer side (:func:`_python_ta_to_safe_dict`) keeps the
+    # Surveil-X variant from silently degrading to a fixed surveil-N
+    # on round-trip. No EoE consumer triggers Surveil-X today (it's
+    # an Anticausal-Vestige-and-friends mechanic on a different
+    # axis), so this gate just pins the contract.
+    "surveil": frozenset({"kind", "count"}),
 }
 
 
@@ -1701,16 +1755,24 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     from mtg_bot.effects.object_predicates import IsLand
     from mtg_bot.effects.generic.draw_mill import DrawCards
     from mtg_bot.effects.generic.life import GainLife
-    from mtg_bot.effects.generic.library_lookat import Scry
+    from mtg_bot.effects.generic.library_lookat import Scry, Surveil
     from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
 
     if not isinstance(ta, TriggeredAbility):
         return None
     if ta.once_per_turn:
         return None
-    # Event must be ENTERS for the starter safe set.
-    if ta.event is not Event.ENTERS:
+    # Event must be one of the events present in :data:`_SAFE_TRIGGERS`.
+    # Round-42 surveil extension widens the starter ENTERS-only gate to
+    # also admit DIES (the SECOND event in the safe set — adds Thawbringer
+    # / Wary Watchdog whose surveil trigger pair carries both events;
+    # without DIES support the whole printing would be dropped because
+    # the safe-trigger filter requires EVERY trigger to round-trip).
+    # The event-string is emitted further down per arm — gate here so
+    # any future event extension stays a single edit.
+    if ta.event not in (Event.ENTERS, Event.DIES):
         return None
+    event_str = "enters" if ta.event is Event.ENTERS else "dies"
     # Recognize one of the safe predicate shapes; produce the
     # corresponding round-trip dict (or bail if no match).
     pred = ta.predicate
@@ -1718,10 +1780,21 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     safe_effect_kinds: tuple[str, ...] = ()
     if isinstance(pred, IsSelf) and pred.subject is None:
         # ``IsSelf`` (default-slot form): "source_is_self" canonical
-        # kind. Three leaf effects in the safe set.
+        # kind. Three ENTERS-only leaf effects from the starter set
+        # (draw_cards / gain_life / scry_n); the round-42 surveil
+        # extension adds ``surveil`` under BOTH ENTERS and DIES.
         pred_dict = {"kind": "source_is_self"}
-        safe_effect_kinds = ("draw_cards", "gain_life", "scry_n")
-    elif _is_landfall_predicate_python(pred):
+        if ta.event is Event.ENTERS:
+            safe_effect_kinds = (
+                "draw_cards", "gain_life", "scry_n", "surveil",
+            )
+        else:  # Event.DIES — only the surveil leaf is in the safe set
+            safe_effect_kinds = ("surveil",)
+    elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:
+        # Landfall is parser-emitted under ENTERS only (CR 614 — the
+        # land enters under your control); gate on event to keep the
+        # DIES extension (round 42) from accidentally pairing the
+        # landfall predicate with a DIES event that no parser emits.
         # Landfall extension: compound
         # ``And(Subject(slot=None, inner=IsLand()),
         #       Controlled(by=YOU, subject=None))``
@@ -1791,17 +1864,37 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             "power_bonus": int(eff.power_bonus),
             "toughness_bonus": int(eff.toughness_bonus),
         }
+    elif isinstance(eff, Surveil):
+        # Bare-shape Surveil (no ``use_artifact_count`` rider).
+        # Python's class carries an additional ``use_artifact_count``
+        # flag that selects the Surveil-X-where-X=artifacts variant
+        # (effects/generic/library_lookat.py:580); Rust's
+        # ``Effect::Surveil { count: i32 }`` does NOT represent the
+        # X variant — the bridge would silently degrade Surveil-X to
+        # a fixed surveil-N on round trip. Gate on the rider being
+        # False so the Surveil-X mechanic falls through to the
+        # filter drop path. No EoE consumer's ENTERS / DIES surveil
+        # trigger uses the X variant today (it's a separate effect
+        # arm on Anticausal Vestige and friends), so this gate just
+        # pins the contract.
+        if eff.use_artifact_count:
+            return None
+        eff_kind = "surveil"
+        # Python's ``Surveil`` exposes the count as ``amount``; the
+        # dict shape uses Rust's spelling ``count`` per the
+        # cross_engine bridge arm convention.
+        eff_dict = {"kind": "surveil", "count": int(eff.amount)}
     else:
         return None
     if eff_kind not in safe_effect_kinds:
         # Effect kind is a safe leaf in the abstract but not safe
-        # under this predicate — e.g. a parser-emitted "Landfall —
-        # draw a card" would land here once such a card exists in
-        # the EoE pool. Out of the safe set until the matching
-        # ``_SAFE_TRIGGERS`` entry lands.
+        # under this (event, predicate) pair — e.g. a parser-emitted
+        # "Landfall — draw a card" would land here once such a card
+        # exists in the EoE pool. Out of the safe set until the
+        # matching ``_SAFE_TRIGGERS`` entry lands.
         return None
     return {
-        "event": "enters",
+        "event": event_str,
         "predicate": pred_dict,
         "effect": eff_dict,
     }
