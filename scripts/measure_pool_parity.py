@@ -764,15 +764,28 @@ def headline_line(res: PoolParityResult) -> str:
 # ------------------------------------------------- entrypoint
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """Default: classify, (re)write ``docs/POOL_PARITY.md``, print the
+    full markdown. With ``--headline``: classify and print ONLY the
+    one-line never-blocking headline (the post-commit-hook entry — does
+    NOT rewrite the doc, mirroring the round-52/55 cron headline
+    contract: surface a line, never block, never side-effect on disk).
+
+    Exit code is non-zero iff the residue-consistency cross-check fired
+    (a ``genuinely_missing`` card the class heuristic over-counted) —
+    for explicit CI / standalone gating only. The post-commit hook
+    never propagates it, exactly like the staleness cron.
+    """
+    argv = sys.argv[1:] if argv is None else argv
+    headline_only = "--headline" in argv
     res = classify_pool()
-    md = render_markdown(res)
-    OUTPUT_DOC.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_DOC.write_text(md, encoding="utf-8")
-    print(md)
-    # Non-zero exit iff the residue-consistency cross-check fired — for
-    # explicit CI / standalone gating only. (The post-commit hook
-    # never propagates this, same contract as the staleness cron.)
+    if headline_only:
+        print(headline_line(res))
+    else:
+        md = render_markdown(res)
+        OUTPUT_DOC.parent.mkdir(parents=True, exist_ok=True)
+        OUTPUT_DOC.write_text(md, encoding="utf-8")
+        print(md)
     return 1 if res.consistency_violations else 0
 
 
