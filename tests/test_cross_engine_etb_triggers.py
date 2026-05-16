@@ -13788,5 +13788,215 @@ def test_rust_parser_accepts_deal_damage_to_opponent_creature_by_creatures_you_c
     assert pid == 0
 
 
+def test_bridge_mill_target_player_equal_to_your_life_total_basic_translation():
+    """BLOCKED-RUST-EFFECT slice (round 42) -- mill an opponent a
+    number of cards equal to the source-controller's current life
+    total. Rust
+    ``{"kind": "mill_target_player_equal_to_your_life_total"}``
+    translates to Python
+    ``MillTargetPlayer(use_controller_life=True)``.
+
+    Mirrors Rust's parse_effect arm (added in this slice immediately
+    after the round-19 ``mill_target_player`` arm; unit variant; no
+    fields). Pin verifies the bare-shape translation for the
+    round-42 dynamic-X-from-life-total Effect arm. Sister of the
+    round-32 / 35 / 36 / 37 basic_translation pins (damage substrate)
+    and round-33 (counters) / round-34 (surveil) -- FOURTH apply
+    substrate and FIFTH denominator on the X-from-count plumbing.
+    """
+    from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "mill_target_player_equal_to_your_life_total"}
+    )
+    assert isinstance(e, MillTargetPlayer)
+    assert e.use_controller_life is True
+
+
+def test_bridge_mill_target_player_equal_to_your_life_total_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    the unit-variant precedent (round-32 by_artifact_count / round-35
+    by_cards_in_hand / round-36 by_lands_controlled / round-37
+    by_creatures_you_control / round-31 double_target_creatures_power_ueot
+    / round-30 put_stun_counter_on_tapped_creature) -- unrecognized
+    fields in the dict are ignored, not raised. Notably, the
+    ``count`` and ``amount`` keys (which the sister
+    ``mill_target_player`` arm DOES consume) are silently dropped
+    here -- the dynamic-X from life total is the whole point of this
+    variant, not a static amount.
+    """
+    from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "mill_target_player_equal_to_your_life_total",
+            "spurious_field": "ignored",
+            # ``count`` would be consumed by sister
+            # ``mill_target_player`` arm; here it's silently dropped.
+            "count": 99,
+            # ``amount`` would be consumed by sister
+            # ``mill_target_player`` arm; here it's silently dropped.
+            "amount": 7,
+        }
+    )
+    assert isinstance(e, MillTargetPlayer)
+    assert e.use_controller_life is True
+
+
+def test_bridge_mill_target_player_equal_to_your_life_total_distinct_from_static_mill_sister():
+    """Bridge arm pin: the round-42 dynamic-X-from-life-total variant
+    and the round-19 static-amount ``mill_target_player`` arm both
+    produce ``MillTargetPlayer`` Python instances, but they differ on
+    the ``use_controller_life`` flag (True vs False) AND on the
+    ``amount`` field. Pin guards against accidental cross-translation
+    drift between the two sisters at the bridge layer.
+    """
+    from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e_dynamic = _ta_dict_to_python_effect(
+        {"kind": "mill_target_player_equal_to_your_life_total"}
+    )
+    e_static = _ta_dict_to_python_effect(
+        {"kind": "mill_target_player", "count": 2}
+    )
+    assert isinstance(e_dynamic, MillTargetPlayer)
+    assert isinstance(e_static, MillTargetPlayer)
+    # The two sisters differ on use_controller_life.
+    assert e_dynamic.use_controller_life is True
+    assert e_static.use_controller_life is False
+    # Static-amount sister carries the explicit count via ``amount``.
+    assert e_static.amount == 2
+    # Dynamic sister keeps the class default ``amount=1`` (unused;
+    # life total drives the count at resolve time).
+    assert e_dynamic.amount == 1
+    # The two instances are NOT equal -- they differ on a frozen
+    # dataclass field (use_controller_life).
+    assert e_dynamic != e_static
+
+
+def test_bridge_mill_target_player_equal_to_your_life_total_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([MillTargetPlayer(use_controller_life=True), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    the round-42 arm against accidental dispatch loss inside Sequence
+    (mirrors the round-30 stun-counter / round-31 double-power /
+    round-32 by-artifact-count / round-35 by-cards-in-hand / round-36
+    by-lands-controlled / round-37 by-creatures-you-control
+    Sequence-composability pins).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards, MillTargetPlayer
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "mill_target_player_equal_to_your_life_total"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], MillTargetPlayer)
+    assert e.effects[0].use_controller_life is True
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_mill_target_player_equal_to_your_life_total_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "mill_target_player_equal_to_your_life_total"}``
+    on a triggered_ability carrier. No EoE consumer for the trigger
+    carrier today (Space-Time Anomaly is an instant, not a trigger),
+    but the lockstep gate doesn't depend on the trigger event --
+    registering through any abilities carrier exercises the
+    parse_effect arm. Pinning here keeps the Python bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Mirrors Rust's parse_effect arm added in this slice immediately
+    after the round-19 ``mill_target_player`` arm.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- MillTargetPlayerEqualToYourLifeTotal",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"U": 1, "generic": 2},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "mill_target_player_equal_to_your_life_total"
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_rejects_mill_target_player_equal_to_your_life_total_with_typo():
+    """Negative lockstep pin: a misspelled kind (e.g.
+    ``mill_target_player_equal_to_your_life`` -- missing ``_total``
+    suffix) surfaces as ValueError on Rust's parse_effect arm because
+    the new variant isn't registered for that spelling. Pin against
+    accidental schema drift between bridge dict shape and Rust
+    parser's accepted-kinds set.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- typo lockstep",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"U": 1},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    # Misspelled -- missing ``_total`` suffix.
+                    "kind": "mill_target_player_equal_to_your_life"
+                },
+            }
+        ],
+    }
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown effect kind"):
+        reg.register_printing(d)
+
+
+def test_rust_parser_accepts_mill_target_player_equal_to_your_life_total_in_cast_effects():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "mill_target_player_equal_to_your_life_total"}``
+    on a cast-spell ``effects`` carrier (the Space-Time Anomaly
+    consumer-shape -- it's an instant). Sister of the
+    triggered_ability-carrier lockstep pin -- the same parse_effect
+    arm dispatches both carriers, so any drift surfaces on either pin.
+    Mirrors the round-25/26/27/30/31/32/33/34/35/36/37 cast-spell vs
+    trigger lockstep convention.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- MillTargetPlayerEqualToYourLifeTotal (Instant)",
+        "card_types": ["Instant"],
+        "mana_cost": {"U": 1, "B": 1, "generic": 2},
+        "effects": [
+            {"kind": "mill_target_player_equal_to_your_life_total"},
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

@@ -1887,6 +1887,46 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # consistency with what Rust's parser accepts.
         from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
         return MillTargetPlayer(amount=eff_dict.get("count", 1))
+    if kind == "mill_target_player_equal_to_your_life_total":
+        # BLOCKED-RUST-EFFECT slice (round 42) -- mill an opponent
+        # a number of cards equal to the source-controller's current
+        # life total. Rust's
+        # ``Effect::MillTargetPlayerEqualToYourLifeTotal`` (cards.rs
+        # sister of ``MillTargetPlayer``) is a UNIT VARIANT -- no
+        # fields beyond ``kind`` (the count is dynamic, read from
+        # state at resolve time). Mirrors Python's
+        # ``MillTargetPlayer(use_controller_life=True)``
+        # (draw_mill.py:151) -- the existing class's flag lane, no
+        # new Python class needed because the use_controller_life
+        # path already exists and is tested. Sister of round-32 / 35 /
+        # 36 / 37 (damage substrate, four denominators), round-33
+        # (counters substrate), and round-34 (surveil substrate) --
+        # FOURTH apply substrate and FIFTH denominator on the
+        # X-from-count plumbing, confirming bidirectional
+        # extensibility across substrate AND denominator axes.
+        #
+        # **Schema parity.** Rust unit variant -> Python kw-arg flag.
+        # Extra dict fields (notably ``amount`` and ``count``) are
+        # silently ignored on the dynamic-X lane -- the dynamic-X
+        # from life total is the whole point of this variant. The
+        # ``amount`` field is consumed by the sister
+        # ``mill_target_player`` arm above (the static-count lane);
+        # here it's silently dropped (mirrors round-32 / 35 / 36 / 37
+        # extra-keys-tolerance precedent).
+        #
+        # **Target semantics.** Rust picks
+        # ``target_idx = 1 - controller`` deterministically (mirrors
+        # the existing ``mill_target_player`` arm's first-slice
+        # defender pick). Python's
+        # ``MillTargetPlayer(use_controller_life=True)`` is
+        # target-required: ``legal_targets`` emits one ``("player",
+        # p.id)`` per non-lost player, and probes drive the cross-
+        # controller routing via ``_PickFirstOpponentTargetAgent``
+        # (the agent's ``("player", target_id) where target_id !=
+        # player_id`` filter mirrors Rust's ``1 - controller`` pick
+        # exactly on a 2-player harness).
+        from mtg_bot.effects.generic.draw_mill import MillTargetPlayer
+        return MillTargetPlayer(use_controller_life=True)
     if kind == "exile_target_creature_until_source_leaves":
         # "Exile any target creature until SOURCE leaves the
         # battlefield." Rust's
