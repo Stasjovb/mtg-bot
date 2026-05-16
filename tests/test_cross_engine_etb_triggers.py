@@ -16370,5 +16370,296 @@ def test_phase4_seat_token_printings_preserves_tapped_kind():
         clear_token_printings()
 
 
+def test_bridge_two_subject_pump_and_debuff_by_artifact_count_translates_to_python():
+    """Round-51 BLOCKED-RUST-EFFECT slice — Monoist Circuit-Feeder ETB.
+    Rust ``{"kind": "two_subject_pump_and_debuff_by_artifact_count"}``
+    translates to Python's DETERMINISTIC bridge sibling
+    ``PumpYoursAndDebuffOpponentByArtifactCountUntilEOT`` (NOT the
+    agent-driven ``PairedTargetPumpDebuffUEOT`` the real card parses
+    to — see the bridge-arm docstring + SEARCH_LIMITATIONS for the §2
+    rationale; this is the exact Fight precedent
+    ``FightTargetCreatureWithTargetCreature`` deterministic-sibling
+    pattern).
+
+    The Rust effect variant ships in this slice
+    (``rust/src/cards.rs`` ``Effect::TwoSubjectPumpAndDebuffBy
+    ArtifactCount`` unit-variant + parse arm + to_dict arm +
+    ``rust/src/state_ops_resolve.rs`` resolve arm). Python's
+    deterministic class ships in this slice
+    (``effects/generic/pump.py``). This pins the bridge translation
+    that wires them up.
+    """
+    from mtg_bot.effects.generic.pump import (
+        PumpYoursAndDebuffOpponentByArtifactCountUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "two_subject_pump_and_debuff_by_artifact_count"}
+    )
+    assert isinstance(
+        e, PumpYoursAndDebuffOpponentByArtifactCountUntilEOT
+    )
+    # Unit variant — no constructor args; deterministic pick (no agent
+    # target choice).
+    assert e.requires_target() is False
+
+
+def test_bridge_two_subject_pump_debuff_ignores_extra_dict_keys():
+    """Unit-variant tolerance: extra dict fields are silently ignored
+    (mirrors every other unit-variant bridge arm + Rust's parse-arm
+    tolerance). A future schema extension carrying extra keys must not
+    crash the translator.
+    """
+    from mtg_bot.effects.generic.pump import (
+        PumpYoursAndDebuffOpponentByArtifactCountUntilEOT,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "two_subject_pump_and_debuff_by_artifact_count",
+            "spurious": 99,
+        }
+    )
+    assert isinstance(
+        e, PumpYoursAndDebuffOpponentByArtifactCountUntilEOT
+    )
+
+
+def test_rust_parser_accepts_two_subject_pump_debuff_in_triggered_ability():
+    """Lockstep gate: the bridge dict shape must register cleanly on
+    the Rust side too. Keeps the Python bridge from drifting away from
+    Rust's parse_effect coverage (mirrors the
+    ``damage_each_opponent`` / ``deal_damage_any_target`` Rust-parser
+    pins).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Monoist Bridge Pin",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"generic": 4, "B": 2},
+        "power": 4,
+        "toughness": 4,
+        "keywords": ["flying"],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "two_subject_pump_and_debuff_by_artifact_count"
+                    ),
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_bridge_two_subject_pump_debuff_synthetic_end_to_end_byte_equal():
+    """Synthetic cross-engine end-to-end byte-equal pin for the new
+    arm. A vanilla carrier with the
+    ``two_subject_pump_and_debuff_by_artifact_count`` ETB trigger fires
+    on both engines; X = 1 (one artifact: the bait artifact on the
+    source-controller's bf). The source-controller's FIRST creature
+    gets +1/+0; the opponent's FIRST creature gets +0/-1. Assert the
+    effective P/T deltas are byte-equal across engines.
+
+    This is the synthetic sister of the GENUINE real-EoE Monoist
+    Circuit-Feeder probe in ``tests/test_parity_smoke.py`` (which
+    drives the actual parsed ``PairedTargetPumpDebuffUEOT`` printing
+    constrained by a picker shim). Here the Rust side runs the
+    deterministic unit-variant directly and the Python side runs the
+    deterministic bridge sibling — no agent needed (both pick the
+    first creature on each side intrinsically).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import (
+        PumpYoursAndDebuffOpponentByArtifactCountUntilEOT,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import (
+        Zone, effective_power, effective_toughness,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+
+    # ---- Rust side: bait artifact (X=1) on p0, own creature on p0,
+    # opponent creature on p1, then the source carrying the ETB.
+    rust_artifact_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Artifact",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 1},
+            "effects": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    rust_own_id = rust_state.register_and_inject_object(
+        {
+            "name": "Own Bear (2/2)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2, "toughness": 2, "effects": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    rust_opp_id = rust_state.register_and_inject_object(
+        {
+            "name": "Opp Bear (3/3)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "R": 1},
+            "power": 3, "toughness": 3, "effects": [],
+        },
+        1, ZONE_BATTLEFIELD,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "Monoist Synthetic Source",
+            "card_types": ["Artifact", "Creature"],
+            "mana_cost": {"generic": 4, "B": 2},
+            "power": 4, "toughness": 4, "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": (
+                            "two_subject_pump_and_debuff_by_"
+                            "artifact_count"
+                        ),
+                    },
+                }
+            ],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+
+    # ---- Python side: same board, deterministic bridge sibling.
+    art_printing = CardPrinting(
+        name="Bait Artifact", mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=()),
+        type_line="Artifact", supertypes=(),
+        card_types=("Artifact",), subtypes=(),
+        power=None, toughness=None, produces=frozenset(),
+    )
+    py_art = py_state.new_object(
+        art_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_art.summoning_sick = False
+    py_art.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_art)
+
+    own_printing = CardPrinting(
+        name="Own Bear (2/2)", mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=2, toughness=2, produces=frozenset(),
+    )
+    py_own = py_state.new_object(
+        own_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_own.summoning_sick = False
+    py_own.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_own)
+
+    opp_printing = CardPrinting(
+        name="Opp Bear (3/3)", mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("R", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=3, toughness=3, produces=frozenset(),
+    )
+    py_opp = py_state.new_object(
+        opp_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_opp.summoning_sick = False
+    py_opp.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_opp)
+
+    src_printing = CardPrinting(
+        name="Monoist Synthetic Source", mana_cost_str="",
+        mana_cost=ManaCost(generic=4, colored=(("B", 2),)),
+        type_line="Artifact Creature", supertypes=(),
+        card_types=("Artifact", "Creature"), subtypes=(),
+        power=4, toughness=4, produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=(
+                    PumpYoursAndDebuffOpponentByArtifactCountUntilEOT()
+                ),
+            ),
+        ),
+    )
+    py_src = py_state.new_object(
+        src_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    assert len(py_state.stack) == 1
+
+    # ---- Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    from mtg_bot.actions import resolve_top_of_stack
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # X = 1 (one Bait Artifact on p0's bf — the source is also an
+    # artifact, so X = 2 actually: Bait Artifact + the source itself).
+    # The source is an Artifact Creature so it counts. own gets +2/+0,
+    # opp gets +0/-2.
+    assert rust_state.effective_power(rust_own_id) == 4  # 2 + 2
+    assert rust_state.effective_toughness(rust_own_id) == 2
+    assert rust_state.effective_power(rust_opp_id) == 3
+    assert rust_state.effective_toughness(rust_opp_id) == 1  # 3 - 2
+
+    assert effective_power(py_state, py_own) == 4
+    assert effective_toughness(py_state, py_own) == 2
+    assert effective_power(py_state, py_opp) == 3
+    assert effective_toughness(py_state, py_opp) == 1
+
+    # Cross-engine byte-equal P/T deltas.
+    assert rust_state.effective_power(rust_own_id) == effective_power(
+        py_state, py_own
+    )
+    assert rust_state.effective_toughness(
+        rust_own_id
+    ) == effective_toughness(py_state, py_own)
+    assert rust_state.effective_power(rust_opp_id) == effective_power(
+        py_state, py_opp
+    )
+    assert rust_state.effective_toughness(
+        rust_opp_id
+    ) == effective_toughness(py_state, py_opp)
+    # Bait artifact untouched (not a creature; never targeted).
+    assert rust_state.effective_power(rust_artifact_id) is None
+    assert py_art.printing.power is None
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

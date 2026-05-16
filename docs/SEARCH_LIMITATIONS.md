@@ -1847,6 +1847,105 @@ in the inner loop.
 
 ---
 
+## Rust port — `Effect::TwoSubjectPumpAndDebuffByArtifactCount` deterministic targeting; real Monoist Circuit-Feeder NOT loader-admitted (round 51)
+
+**Location**:
+`rust/src/cards.rs` (variant declaration + `parse_effect` arm +
+`effect_to_pydict` arm — `TwoSubjectPumpAndDebuffByArtifactCount`),
+`rust/src/state_ops_resolve.rs` (resolve arm — deterministic
+source-side + opponent-side first-creature scan, per-side
+independent until-EOT `+X/+0` / `+0/-X` apply),
+`src/mtg_bot/effects/generic/pump.py`
+(`PumpYoursAndDebuffOpponentByArtifactCountUntilEOT` — the
+deterministic-pick Python bridge sibling) AND
+`PairedTargetPumpDebuffUEOT` (the AGENT-DRIVEN, two-required-target
+class the real Monoist Circuit-Feeder printing parses to —
+`src/mtg_bot/cards/parser/effects.py:3554-3563`),
+`src/mtg_bot/parity/cross_engine.py` (bridge arm forwarding the
+unit-variant dict to the deterministic sibling),
+`src/mtg_bot/parity/trajectory.py` (the `_SAFE_*` allowlists this
+slice deliberately does NOT extend).
+
+Pinned by:
+`tests/test_parity_smoke.py::test_rust_monoist_*` (6 synthetic Rust
+regression pins),
+`tests/test_cross_engine_etb_triggers.py::test_bridge_two_subject_pump_*`
+/ `::test_rust_parser_accepts_two_subject_pump_debuff_*` /
+`::test_bridge_two_subject_pump_debuff_synthetic_end_to_end_byte_equal`
+(4 cross-engine bridge pins), and
+`tests/test_parity_smoke.py::test_cross_engine_real_eoe_monoist_circuit_feeder_etb_two_subject_pump_debuff_by_artifact_count_parity`
+(the GENUINE real-EoE probe — drives the actual parsed
+`PairedTargetPumpDebuffUEOT` printing, shim-constrained).
+
+**What we do today**: this slice ships the Monoist Circuit-Feeder
+ETB Effect arm. Rust's resolve arm picks BOTH subjects
+deterministically (first creature on the source-controller's bf,
+first creature on the opponent's bf) and applies a per-side
+independent until-EOT `+X/+0` / `+0/-X` (X = source-controller's
+artifact count). The Python deterministic sibling
+`PumpYoursAndDebuffOpponentByArtifactCountUntilEOT` mirrors that
+shape so the cross-engine bridge round-trips byte-equal. This is
+the exact `FightTargetCreatureWithTargetCreature` (deterministic
+unit-variant) precedent.
+
+**Deliberate divergence — the real card is NOT production-deck-
+loader-admitted.** The real Monoist Circuit-Feeder printing parses
+(faithfully) to the AGENT-DRIVEN, two-REQUIRED-target
+`PairedTargetPumpDebuffUEOT`: the controller freely picks ANY legal
+creature they control + ANY legal creature an opponent controls
+(CR 601.2c — both required). Rust's effect (and the deterministic
+Python bridge sibling) instead picks the FIRST creature on each
+side with no decision callback. Adding Monoist to the
+`trajectory.py` `_SAFE_*` allowlists would route the agent-driven
+card through the deterministic bridge in production-deck mirror
+games — silently degrading free agent target choice to a fixed
+first-creature pick whenever either side has more than one
+eligible creature.
+
+**Why it's OK (and which scenarios make it not-OK).** This is the
+SAME §2 bridge-correctness decision the round-17 Fight slice made:
+the deterministic `FightTargetCreatureWithTargetCreature` sibling
+is likewise NOT loader-admitted (the only real Fight consumer,
+Meltstrider's Resolve, stays deferred). The Effect arm + bridge
+arm + GENUINE real-EoE probe still close the real-card residue
+*at the cross-engine-bridge level*: the actual parsed printing's
+ETB now round-trips byte-equal cross-engine (the probe drives the
+real `PairedTargetPumpDebuffUEOT` shim-constrained so the
+two-target pick equals Rust's deterministic scan in the single-
+creature-each scenario). The scenario where this would be wrong is
+a production-deck mirror game where Monoist's controller has ≥2
+own creatures or the opponent has ≥2 creatures and an agent would
+rationally pick a non-first creature (e.g. pump the biggest
+attacker, debuff the biggest blocker) — there the deterministic
+bridge's first-creature pick is a strategy divergence, not just a
+representational one. That is why the loader admit is declined
+rather than forced.
+
+**Failure mode**: none in production today (Monoist stays
+drop-filtered by the loader, so it never enters a production-deck
+mirror game through the bridge). If a future slice plumbs an
+agent-driven two-target cross-engine decision substrate, Monoist
+flips admit by adding a `_SAFE_*` entry that routes to the
+agent-driven `PairedTargetPumpDebuffUEOT` on BOTH engines (Rust
+would need a target-carrying variant + decision callback) — at
+which point this deterministic arm becomes the synthetic-probe
+substrate only (same trajectory as the Fight Aura follow-up).
+
+**Fix scope estimate**: multi-round. Needs a cross-engine
+agent-driven two-required-target decision substrate (Rust
+target-carrying variant + per-slot decision callback + bridge
+plumbing for the `(my_creature, creature)` slot-kind pair),
+shared with the deferred Aura-attachment / Fight follow-ups.
+
+**Impact estimate**: zero strength cost today (real card not
+loader-admitted; no production exposure). Real-card-coverage
+progress is the cross-engine-bridge closure (the genuine real-EoE
+probe is byte-equal), not a production-deck admit. ~14,727 of
+129,996 17lands EoE decks run Monoist Circuit-Feeder — the largest
+single bridge-correct real-card residue closed this round.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:

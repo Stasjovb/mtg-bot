@@ -57814,6 +57814,573 @@ def test_cross_engine_real_eoe_mechanozoa_etb_tap_target_opponent_permanent_and_
     assert rust_state.get_stun_counters(rust_mechanozoa_id) == (
         py_mechanozoa.stun_counters
     )
+
+
+# =====================================================================
+# BLOCKED-RUST-EFFECT slice (round 51) — Monoist Circuit-Feeder ETB.
+#
+# Rust regression pins for the new
+# `Effect::TwoSubjectPumpAndDebuffByArtifactCount` variant + the
+# GENUINE real-EoE cross-engine probe (drives the ACTUAL parsed
+# Monoist Circuit-Feeder printing — which carries the agent-driven
+# `PairedTargetPumpDebuffUEOT` — constrained by a picker shim so the
+# two-target pick is byte-equal with Rust's deterministic scan).
+#
+# The real card is NOT production-deck-loader-admitted: its
+# agent-driven multi-target shape would silently degrade to a fixed
+# first-creature pick through the deterministic bridge (§2; see
+# `docs/SEARCH_LIMITATIONS.md` and the Fight precedent — the
+# deterministic `FightTargetCreatureWithTargetCreature` sibling is
+# likewise not loader-admitted).
+# =====================================================================
+
+
+def _build_rust_monoist_state(
+    *, n_artifacts=1, own_creature=True, opp_creature=True,
+):
+    """Build a Rust state with the Monoist Circuit-Feeder ETB carrier
+    on p0's bf. Optionally pre-stage `n_artifacts` bait artifacts on
+    p0, one own creature on p0, one opponent creature on p1.
+
+    Returns (rust_state, source_id, own_id_or_None, opp_id_or_None).
+
+    The source itself is an Artifact Creature, so at resolve time the
+    artifact count = n_artifacts + 1 (the bait artifacts + the source
+    itself, which is on p0's bf by the time its own ETB resolves).
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    for i in range(n_artifacts):
+        rust_state.register_and_inject_object(
+            {
+                "name": f"Bait Artifact {i}",
+                "card_types": ["Artifact"],
+                "mana_cost": {"generic": 1},
+                "effects": [],
+            },
+            0, ZONE_BATTLEFIELD,
+        )
+    own_id = None
+    if own_creature:
+        own_id = rust_state.register_and_inject_object(
+            {
+                "name": "Own Bear (2/2)",
+                "card_types": ["Creature"],
+                "mana_cost": {"generic": 1, "G": 1},
+                "power": 2, "toughness": 2, "effects": [],
+            },
+            0, ZONE_BATTLEFIELD,
+        )
+    opp_id = None
+    if opp_creature:
+        opp_id = rust_state.register_and_inject_object(
+            {
+                "name": "Opp Bear (5/5)",
+                "card_types": ["Creature"],
+                "mana_cost": {"generic": 4, "R": 1},
+                "power": 5, "toughness": 5, "effects": [],
+            },
+            1, ZONE_BATTLEFIELD,
+        )
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "Monoist Circuit-Feeder",
+            "card_types": ["Artifact", "Creature"],
+            "mana_cost": {"generic": 4, "B": 2},
+            "power": 4, "toughness": 4,
+            "keywords": ["flying"],
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": (
+                            "two_subject_pump_and_debuff_by_"
+                            "artifact_count"
+                        ),
+                    },
+                }
+            ],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    return rust_state, source_id, own_id, opp_id
+
+
+def test_rust_monoist_two_subject_pump_debuff_basic_both_sides():
+    """Round-51 — basic pin. 1 bait artifact + the source (also an
+    artifact) => X=2. Own Bear gets +2/+0 (2/2 -> 4/2); Opp Bear gets
+    +0/-2 (5/5 -> 5/3). Source itself untouched (it's not the picked
+    own-side creature — Own Bear entered before it).
+    """
+    rust_state, src, own, opp = _build_rust_monoist_state(n_artifacts=1)
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    assert rust_state.effective_power(own) == 4
+    assert rust_state.effective_toughness(own) == 2
+    assert rust_state.effective_power(opp) == 5
+    assert rust_state.effective_toughness(opp) == 3
+    # Source is an artifact-creature on p0's bf at index AFTER Own
+    # Bear, so the own-side scan picks Own Bear, not the source.
+    assert rust_state.effective_power(src) == 4
+    assert rust_state.effective_toughness(src) == 4
+
+
+def test_rust_monoist_zero_artifacts_silent_no_op():
+    """X<=0 silent no-op. If there are NO artifacts at all... but the
+    source IS an artifact-creature, so the minimum X is 1 (the source
+    itself). To get a true X=0, the source must not be an artifact —
+    drive a non-artifact carrier so artifact_count = 0 -> no pump on
+    either side.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    own = rust_state.register_and_inject_object(
+        {
+            "name": "Own Bear (2/2)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2, "toughness": 2, "effects": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    opp = rust_state.register_and_inject_object(
+        {
+            "name": "Opp Bear (5/5)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 4, "R": 1},
+            "power": 5, "toughness": 5, "effects": [],
+        },
+        1, ZONE_BATTLEFIELD,
+    )
+    # Non-artifact carrier (plain Creature) so artifact_count = 0.
+    rust_state.register_and_inject_object(
+        {
+            "name": "Monoist Non-Artifact Variant",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 4, "B": 2},
+            "power": 4, "toughness": 4, "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": (
+                            "two_subject_pump_and_debuff_by_"
+                            "artifact_count"
+                        ),
+                    },
+                }
+            ],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    # X=0 -> silent no-op: both creatures keep printed P/T.
+    assert rust_state.effective_power(own) == 2
+    assert rust_state.effective_toughness(own) == 2
+    assert rust_state.effective_power(opp) == 5
+    assert rust_state.effective_toughness(opp) == 5
+
+
+def test_rust_monoist_only_own_side_target_present():
+    """Per-side independence (CR 608.2c): no opponent creature ->
+    opponent side is a silent no-op; the own side STILL applies.
+    X = 1 bait + source = 2; Own Bear 2/2 -> 4/2.
+    """
+    rust_state, src, own, _ = _build_rust_monoist_state(
+        n_artifacts=1, opp_creature=False,
+    )
+    rust_state.resolve_top_of_stack()
+    assert rust_state.effective_power(own) == 4
+    assert rust_state.effective_toughness(own) == 2
+
+
+def test_rust_monoist_only_opp_side_target_present():
+    """Per-side independence: no own-side creature -> own side is a
+    silent no-op; the opponent side STILL applies. X = 1 bait +
+    source = 2; Opp Bear 5/5 -> 5/3.
+    """
+    rust_state, src, _, opp = _build_rust_monoist_state(
+        n_artifacts=1, own_creature=False,
+    )
+    rust_state.resolve_top_of_stack()
+    assert rust_state.effective_power(opp) == 5
+    assert rust_state.effective_toughness(opp) == 3
+
+
+def test_rust_monoist_higher_artifact_count_scales_x():
+    """X scales with artifact count. 3 bait artifacts + the source =
+    X=4. Own Bear 2/2 -> 6/2; Opp Bear 5/5 -> 5/1.
+    """
+    rust_state, src, own, opp = _build_rust_monoist_state(n_artifacts=3)
+    rust_state.resolve_top_of_stack()
+    assert rust_state.effective_power(own) == 6  # 2 + 4
+    assert rust_state.effective_toughness(own) == 2
+    assert rust_state.effective_power(opp) == 5
+    assert rust_state.effective_toughness(opp) == 1  # 5 - 4
+
+
+def test_rust_monoist_cross_controller_reads_source_controller_artifacts():
+    """Cross-controller: the source is controlled by p1 while p0 is
+    active. X must read p1's (the source-controller's) artifact count,
+    NOT p0's. p1 has 2 bait artifacts + the source (artifact-creature)
+    = X=3; p0 has 5 bait artifacts (a decoy that must NOT be counted).
+    p1's own creature gets +3/+0; p0's creature (the opponent from the
+    source-controller's view) gets +0/-3.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    # p0 decoy artifacts (must NOT be counted — wrong controller).
+    for i in range(5):
+        rust_state.register_and_inject_object(
+            {
+                "name": f"p0 Decoy Artifact {i}",
+                "card_types": ["Artifact"],
+                "mana_cost": {"generic": 1}, "effects": [],
+            },
+            0, ZONE_BATTLEFIELD,
+        )
+    # p1 (source-controller) artifacts.
+    for i in range(2):
+        rust_state.register_and_inject_object(
+            {
+                "name": f"p1 Artifact {i}",
+                "card_types": ["Artifact"],
+                "mana_cost": {"generic": 1}, "effects": [],
+            },
+            1, ZONE_BATTLEFIELD,
+        )
+    # p1's own creature (source-controller side -> +X/+0).
+    p1_own = rust_state.register_and_inject_object(
+        {
+            "name": "p1 Own Bear (2/2)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2, "toughness": 2, "effects": [],
+        },
+        1, ZONE_BATTLEFIELD,
+    )
+    # p0's creature (opponent from the source-controller's view ->
+    # +0/-X).
+    p0_opp = rust_state.register_and_inject_object(
+        {
+            "name": "p0 Bear (8/8)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 7, "R": 1},
+            "power": 8, "toughness": 8, "effects": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    # Source controlled by p1.
+    rust_state.register_and_inject_object(
+        {
+            "name": "Monoist Circuit-Feeder",
+            "card_types": ["Artifact", "Creature"],
+            "mana_cost": {"generic": 4, "B": 2},
+            "power": 4, "toughness": 4,
+            "keywords": ["flying"], "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": (
+                            "two_subject_pump_and_debuff_by_"
+                            "artifact_count"
+                        ),
+                    },
+                }
+            ],
+        },
+        1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    # X = 2 (p1 artifacts) + 1 (source itself) = 3. p0's 5 decoy
+    # artifacts are NOT counted.
+    assert rust_state.effective_power(p1_own) == 5  # 2 + 3
+    assert rust_state.effective_toughness(p1_own) == 2
+    assert rust_state.effective_power(p0_opp) == 8
+    assert rust_state.effective_toughness(p0_opp) == 5  # 8 - 3
+
+
+def test_cross_engine_real_eoe_monoist_circuit_feeder_etb_two_subject_pump_debuff_by_artifact_count_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Monoist Circuit-Feeder
+    (14,727 17lands decks).**
+
+    This is the first real-card residue closure of the real-card
+    pivot. Unlike the round-45→49 0-EoE-consumer matrix slices (which
+    used synthetic-only probes), this probe drives the **ACTUAL parsed
+    Monoist Circuit-Feeder printing** on the Python side:
+    ``get_active_source().get_printings()["Monoist Circuit-Feeder"]``
+    — which the parser maps (cards/parser/effects.py:3554-3563) to the
+    AGENT-DRIVEN, two-REQUIRED-target ``PairedTargetPumpDebuffUEOT(
+    formula=CountControlledMatching(IsArtifact()), positive_power=1,
+    positive_toughness=0, negative_power=0, negative_toughness=-1)``.
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "Flying
+         When this creature enters, until end of turn, target creature
+         you control gets +X/+0 and target creature an opponent
+         controls gets -0/-X, where X is the number of artifacts you
+         control."
+
+    **§2 bridge-correctness — why this is genuine AND byte-equal.**
+    The real card's ETB prompts the controller for TWO independent
+    targets (CR 601.2c — both required). Rust's
+    ``Effect::TwoSubjectPumpAndDebuffByArtifactCount`` picks both
+    deterministically (FIRST own / FIRST opponent creature). To make
+    the genuine agent-driven Python card byte-equal with the
+    deterministic Rust scan, the probe seats
+    ``_PickFirstBattlefieldCreatureEitherSideAgent`` on p0 — it
+    answers each slot's per-kind-filtered pool with the
+    smallest-battlefield-index creature, i.e. exactly Rust's
+    first-creature-on-that-side pick. With ONE own creature and ONE
+    opponent creature staged the pick is forced, so the comparison is
+    a true cross-engine byte-equality check, not a tautology.
+
+    This is the EXACT Fight precedent: Python runs the agent-driven
+    real-card class (``PairedTargetPumpDebuffUEOT``) shim-constrained;
+    Rust runs the deterministic unit-variant. The deterministic Python
+    bridge sibling (``PumpYoursAndDebuffOpponentByArtifactCountUntil
+    EOT``) is exercised by the synthetic sister pin in
+    ``test_cross_engine_etb_triggers.py``.
+
+    **EoE-pool delta.** Monoist Circuit-Feeder flips drop→admit at the
+    *bridge/probe* level (the Effect arm + bridge arm ship here so the
+    real card's ETB now round-trips cross-engine). It is deliberately
+    NOT added to the production-deck loader ``_SAFE_*`` allowlist:
+    routing the agent-driven multi-target shape through the
+    deterministic bridge would silently degrade free target choice to
+    a fixed first-creature pick in multi-creature board states (a §2
+    silent-mistranslation — documented in
+    ``docs/SEARCH_LIMITATIONS.md``; same Fight precedent where the
+    deterministic sibling is not loader-admitted).
+
+    Probe shape:
+      1. Stage 2 bait artifacts on p0 + 1 own creature (2/2) on p0 +
+         1 opponent creature (5/5) on p1. The genuinely-parsed Monoist
+         is an Artifact Creature, so at resolve time X = 2 (bait) + 1
+         (Monoist itself, on p0's bf) = 3.
+      2. Python: materialize the REAL parsed Monoist printing, seat
+         the picker shim, fire its ENTERS trigger (the parser-emitted
+         ``PairedTargetPumpDebuffUEOT`` lands on the stack with both
+         targets shim-picked to Own Bear + Opp Bear).
+      3. Rust: drive the bridge-dict unit-variant carrier (the loader
+         doesn't admit the agent-driven shape — the established
+         Fight/Warmaker cross-engine driving pattern).
+      4. Drain both stacks; assert effective P/T byte-equal:
+         Own Bear 2/2 -> 5/2 (+3/+0); Opp Bear 5/5 -> 5/2 (+0/-3).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+    from mtg_bot.effects.generic.pump import PairedTargetPumpDebuffUEOT
+    from tests.parity._picker_shims import (
+        _PickFirstBattlefieldCreatureEitherSideAgent,
+    )
+
+    real = get_active_source().get_printings().get("Monoist Circuit-Feeder")
+    if real is None:
+        import pytest
+        pytest.skip("Monoist Circuit-Feeder absent from active CardSource")
+    # Sanity: the genuinely-parsed printing carries the AGENT-DRIVEN
+    # PairedTargetPumpDebuffUEOT (NOT the deterministic bridge sibling)
+    # — this is the §2-load-bearing fact this probe pins.
+    assert real.is_artifact and real.is_creature
+    assert "flying" in real.keywords
+    assert len(real.triggered_abilities) == 1
+    real_eff = real.triggered_abilities[0].effect
+    assert isinstance(real_eff, PairedTargetPumpDebuffUEOT), (
+        f"genuine Monoist must parse to the agent-driven "
+        f"PairedTargetPumpDebuffUEOT; got {type(real_eff).__name__}"
+    )
+    assert real_eff.positive_power == 1
+    assert real_eff.positive_toughness == 0
+    assert real_eff.negative_power == 0
+    assert real_eff.negative_toughness == -1
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+
+    # ---- Rust side: bridge-dict unit-variant carrier. 2 bait
+    # artifacts + Monoist (artifact-creature) = X=3.
+    for i in range(2):
+        rust_state.register_and_inject_object(
+            {
+                "name": f"Bait Artifact {i}",
+                "card_types": ["Artifact"],
+                "mana_cost": {"generic": 1}, "effects": [],
+            },
+            0, ZONE_BATTLEFIELD,
+        )
+    rust_own = rust_state.register_and_inject_object(
+        {
+            "name": "Own Bear (2/2)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2, "toughness": 2, "effects": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    rust_opp = rust_state.register_and_inject_object(
+        {
+            "name": "Opp Bear (5/5)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 4, "R": 1},
+            "power": 5, "toughness": 5, "effects": [],
+        },
+        1, ZONE_BATTLEFIELD,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "Monoist Circuit-Feeder",
+            "card_types": ["Artifact", "Creature"],
+            "mana_cost": {"generic": 4, "B": 2},
+            "power": 4, "toughness": 4,
+            "keywords": ["flying"], "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": (
+                            "two_subject_pump_and_debuff_by_"
+                            "artifact_count"
+                        ),
+                    },
+                }
+            ],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+
+    # ---- Python side: GENUINE parsed Monoist printing + bait, shim
+    # agent forces the two-target pick to Own Bear + Opp Bear.
+    art0 = CardPrinting(
+        name="Bait Artifact 0", mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=()),
+        type_line="Artifact", supertypes=(),
+        card_types=("Artifact",), subtypes=(),
+        power=None, toughness=None, produces=frozenset(),
+    )
+    art1 = CardPrinting(
+        name="Bait Artifact 1", mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=()),
+        type_line="Artifact", supertypes=(),
+        card_types=("Artifact",), subtypes=(),
+        power=None, toughness=None, produces=frozenset(),
+    )
+    for ap in (art0, art1):
+        o = py_state.new_object(ap, owner_id=0, zone=Zone.BATTLEFIELD)
+        o.summoning_sick = False
+        o.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(o)
+
+    own_printing = CardPrinting(
+        name="Own Bear (2/2)", mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=2, toughness=2, produces=frozenset(),
+    )
+    py_own = py_state.new_object(
+        own_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_own.summoning_sick = False
+    py_own.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_own)
+
+    opp_printing = CardPrinting(
+        name="Opp Bear (5/5)", mana_cost_str="",
+        mana_cost=ManaCost(generic=4, colored=(("R", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=5, toughness=5, produces=frozenset(),
+    )
+    py_opp = py_state.new_object(
+        opp_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_opp.summoning_sick = False
+    py_opp.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_opp)
+
+    # Seat the shim BEFORE the trigger fires (the two-slot push calls
+    # choose_target at trigger-push time — actions.py:3249).
+    py_state.players[0].agent = (
+        _PickFirstBattlefieldCreatureEitherSideAgent()
+    )
+
+    # Materialize the GENUINE parsed Monoist printing on p0's bf.
+    py_src = py_state.new_object(
+        real, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    assert len(py_state.stack) == 1, (
+        "Python: the genuine Monoist printing's ENTERS trigger "
+        "(PairedTargetPumpDebuffUEOT) should land on the stack with "
+        f"both targets shim-picked. Got {len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # X = 2 bait artifacts + Monoist (artifact-creature) = 3.
+    # Own Bear: 2/2 -> 5/2 (+3/+0). Opp Bear: 5/5 -> 5/2 (+0/-3).
+    assert rust_state.effective_power(rust_own) == 5
+    assert rust_state.effective_toughness(rust_own) == 2
+    assert rust_state.effective_power(rust_opp) == 5
+    assert rust_state.effective_toughness(rust_opp) == 2
+
+    assert effective_power(py_state, py_own) == 5
+    assert effective_toughness(py_state, py_own) == 2
+    assert effective_power(py_state, py_opp) == 5
+    assert effective_toughness(py_state, py_opp) == 2
+
+    # GENUINE cross-engine byte-equal P/T (real parsed Python card vs
+    # Rust bridge-dict unit-variant).
+    assert rust_state.effective_power(rust_own) == effective_power(
+        py_state, py_own
+    )
+    assert rust_state.effective_toughness(
+        rust_own
+    ) == effective_toughness(py_state, py_own)
+    assert rust_state.effective_power(rust_opp) == effective_power(
+        py_state, py_opp
+    )
+    assert rust_state.effective_toughness(
+        rust_opp
+    ) == effective_toughness(py_state, py_opp)
+    # Lives unchanged (effect only touches creature P/T).
     assert rust_state.get_life(0) == py_state.players[0].life
     assert rust_state.get_life(1) == py_state.players[1].life
 
