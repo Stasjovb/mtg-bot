@@ -7,8 +7,17 @@
   coordinator per cluster. Worker daemons run on every machine
   (master + remotes) via the separate `install-mtg-bot-worker.ps1`.
 
-  Run from an elevated PowerShell prompt (the task runs as SYSTEM, so
-  registration needs admin).
+  Run from an elevated PowerShell prompt (Register-ScheduledTask
+  needs admin).
+
+  Default principal: the **current user** with stored credentials —
+  you'll be prompted once for your password, which Task Scheduler
+  stores encrypted. Required when the venv's base Python lives
+  somewhere SYSTEM can't read (Microsoft Store Python under
+  ``C:\Users\...\WindowsApps\``, or any per-user python.org install
+  whose ACLs exclude SYSTEM). Pass ``-RunAsSystem`` if your base
+  Python is system-wide (e.g. ``C:\Python313\`` from a python.org
+  "Install for all users" install).
 
   Usage (example):
 
@@ -35,7 +44,8 @@ param(
     [Parameter(Mandatory=$true)] [string] $RepoRoot,
     [Parameter(Mandatory=$true)] [string] $VenvPython,
     [int]    $Port = 5099,
-    [string] $TaskName = "MTGBotCoordinator"
+    [string] $TaskName = "MTGBotCoordinator",
+    [switch] $RunAsSystem
 )
 
 # Sanity-check paths so registration fails fast on typos.
@@ -87,25 +97,56 @@ $Settings = New-ScheduledTaskSettingsSet `
     -RestartCount 999 `
     -RestartInterval (New-TimeSpan -Minutes 1)
 
-$Principal = New-ScheduledTaskPrincipal `
-    -UserId "SYSTEM" `
-    -LogonType ServiceAccount `
-    -RunLevel Highest
-
 # (No PYTHONPATH here: the venv's editable install registered the
 # mtg_bot package via ``pip install -e .``, so ``<venv>/python -m
 # mtg_bot.cli serve`` resolves directly. ``$Action.Environment``
 # isn't a property on the action object that
 # ``New-ScheduledTaskAction`` returns; setting it raises.)
 
-Register-ScheduledTask `
-    -TaskName $TaskName `
-    -Action $Action `
-    -Trigger $Trigger `
-    -Settings $Settings `
-    -Principal $Principal `
-    -Description "MTG-Bot coordinator (port-5099 Flask: bundle/queue + v2 REST + heartbeat poller)" `
-    -Force
+if ($RunAsSystem) {
+    # Run as SYSTEM. Only works when the venv's base Python lives
+    # somewhere SYSTEM can both READ and EXECUTE. Microsoft Store
+    # Python (under ``C:\Users\...\WindowsApps\``) and per-user
+    # python.org installs DO NOT meet this — the venv launcher will
+    # fail to spawn the base interpreter with
+    # "The file cannot be accessed by the system." Use the default
+    # (current-user principal with stored creds) in those cases.
+    $Principal = New-ScheduledTaskPrincipal `
+        -UserId "SYSTEM" `
+        -LogonType ServiceAccount `
+        -RunLevel Highest
+
+    Register-ScheduledTask `
+        -TaskName $TaskName `
+        -Action $Action `
+        -Trigger $Trigger `
+        -Settings $Settings `
+        -Principal $Principal `
+        -Description "MTG-Bot coordinator (port-5099 Flask: bundle/queue + v2 REST + heartbeat poller)" `
+        -Force
+} else {
+    # Run as the current user. Task Scheduler stores the credentials
+    # encrypted with LogonType=Password, so the task fires at
+    # ``-AtStartup`` even when no one is logged in. This is the only
+    # principal that works when the venv's base Python is per-user
+    # (Store Python under WindowsApps, or python.org "Install for me
+    # only"); SYSTEM literally cannot execute those binaries.
+    $userName = "$env:USERDOMAIN\$env:USERNAME"
+    $cred = Get-Credential -UserName $userName -Message "Password for $userName (task runs as this user, reboot-survivable)"
+    if (-not $cred) { throw "No credentials supplied; aborting registration." }
+    $plain = $cred.GetNetworkCredential().Password
+
+    Register-ScheduledTask `
+        -TaskName $TaskName `
+        -Action $Action `
+        -Trigger $Trigger `
+        -Settings $Settings `
+        -User $userName `
+        -Password $plain `
+        -RunLevel Highest `
+        -Description "MTG-Bot coordinator (port-5099 Flask: bundle/queue + v2 REST + heartbeat poller)" `
+        -Force
+}
 
 Write-Host "Registered Task Scheduler entry '$TaskName'."
 Write-Host "Run 'Start-ScheduledTask -TaskName $TaskName' to launch now,"
