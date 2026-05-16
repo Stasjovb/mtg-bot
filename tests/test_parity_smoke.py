@@ -25654,8 +25654,23 @@ def test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_
     """Probe: Susurian Dirgecraft (EoE Spacecraft) ETB
     ``each opponent sacrifices a nontoken creature of their choice``
     on a p1 bf where the FIRST creature (bf-iter index 0) is a TOKEN
-    and the SECOND is a NONTOKEN bait creature -- PINS the documented
-    Rust-vs-Python divergence on the nontoken-filter shortcut.
+    and the SECOND is a NONTOKEN bait creature.
+
+    **ROUND-55 — FLIPPED from divergence pin to cross-engine PARITY
+    assertion.** This probe USED to document the Rust-vs-Python
+    divergence on the ``EachOpponentSacrificesCreature`` nontoken-
+    filter shortcut (Rust picked the token at bf-iter index 0; Python
+    filtered tokens and picked the nontoken). Round-55 N2 closed that
+    shared root: ``RegistryData::is_token`` (derived from the bridge-
+    round-tripped ``supertypes`` Vec — the SAME notion the token-
+    cease-to-exist SBA uses) now gates the resolver's ``find_map``
+    predicate on ``!is_token``. Both engines apply the nontoken
+    filter, so BOTH sacrifice the NONTOKEN bait and BOTH keep the
+    token on p1's bf. The body now asserts cross-engine PARITY; a
+    reappearing divergence is a real regression. The historical
+    divergence narrative below is retained for context.
+
+    --- Historical (pre-round-55) divergence narrative ---
 
     Sibling of
     ``test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opponent_sacrifices_parity``
@@ -25820,6 +25835,15 @@ def test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_
         "card_types": ["Creature"],
         "power": 1,
         "toughness": 1,
+        # ROUND-55: convey token-ness to Rust. Mirrors the Python
+        # side's ``make_token_creature`` (which stamps the "Token"
+        # supertype) so Rust's ``RegistryData::is_token`` (derived
+        # from ``supertypes``) returns True for this printing — the
+        # bridge round-trips token-ness via the supertypes Vec, same
+        # as ``build_rust_state``'s ``card_defs`` path. Without this
+        # Rust would treat the token as a nontoken and the resolver's
+        # nontoken filter would (wrongly) pick it.
+        "supertypes": ["Token"],
     }
     # Claim the next free pid for the token before injecting; this
     # is the pid that the cross_engine `register_token_printing`
@@ -26013,7 +26037,20 @@ def test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_
         f"Got stack size={len(py_state.stack)}"
     )
 
-    # ---- Drain both stacks, then assert per-engine divergence. ----
+    # ---- Drain both stacks, then assert CROSS-ENGINE PARITY. ----
+    # ROUND-55: this probe was FLIPPED from a divergence pin to a
+    # cross-engine parity assertion. Round-55 N2 added
+    # ``RegistryData::is_token`` (derived from the bridge-round-
+    # tripped ``supertypes`` Vec) and gated the
+    # ``Effect::EachOpponentSacrificesCreature`` resolver's
+    # ``find_map`` predicate on ``!is_token`` — the SAME shared root
+    # the token-cease-to-exist SBA closed. Both engines now apply
+    # the nontoken filter (CR / printed oracle text: "each opponent
+    # sacrifices a NONTOKEN creature of their choice"), so on a p1
+    # bf of [token@0, nontoken@1] BOTH sacrifice the NONTOKEN bait
+    # and BOTH leave the token on p1's bf. A reappearing divergence
+    # here is a real regression in the Rust nontoken filter or the
+    # ``is_token`` derivation — investigate, do NOT re-baseline.
     _drain_stack_both(py_state, rust_state)
 
     # Stacks empty on both sides post-drain.
@@ -26032,8 +26069,6 @@ def test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_
         f"{rust_state.graveyard_sizes[1]}"
     )
 
-    # ---- Per-engine divergence assertions on WHICH creature was
-    # sacrificed. ----
     rust_p1_gy_names = [
         e["printing_name"] for e in rust_state.graveyard_snapshot(1)
     ]
@@ -26042,29 +26077,28 @@ def test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_
         for e in rust_state.battlefield_snapshot()
         if int(e.get("controller_id", -1)) == 1
     ]
-    # Rust: bf-iter-first-creature scan picks the TOKEN (no
-    # nontoken filter on the Rust side). Token is sacrificed; the
-    # nontoken bait remains on p1's bf.
-    assert "Spacecraft Sacrifice Token" in rust_p1_gy_names, (
-        f"Rust: expected the TOKEN in p1's graveyard (bf-iter-first-"
-        f"creature scan picks it; no nontoken filter on Rust). "
-        f"This pins the divergent shortcut at "
-        f"state_ops_resolve.rs:6529-6539; see SEARCH_LIMITATIONS.md "
-        f'"EachOpponentSacrificesCreature Rust nontoken-filter '
-        f'shortcut". Got rust_p1_gy_names={rust_p1_gy_names}'
+    # ROUND-55: Rust now applies the nontoken filter — the NONTOKEN
+    # bait is sacrificed; the token remains on p1's bf (parity with
+    # Python).
+    assert "Sac Bait Beta" in rust_p1_gy_names, (
+        f"Rust: ROUND-55 — expected the NONTOKEN bait in p1's "
+        f"graveyard (the resolver's find_map now filters tokens via "
+        f"!registry.is_token, matching Python's printed-oracle "
+        f"nontoken filter). Got rust_p1_gy_names={rust_p1_gy_names}"
     )
-    assert "Sac Bait Beta" not in rust_p1_gy_names, (
-        f"Rust: the nontoken bait should NOT be sacrificed (Rust's "
-        f"shortcut picked the token at bf-iter index 0 first). Got "
+    assert "Spacecraft Sacrifice Token" not in rust_p1_gy_names, (
+        f"Rust: ROUND-55 — the token must NOT be sacrificed (the "
+        f"nontoken filter now excludes it). Got "
         f"rust_p1_gy_names={rust_p1_gy_names}"
     )
-    assert "Sac Bait Beta" in rust_p1_bf_names, (
-        f"Rust: nontoken bait should remain on p1's bf. Got "
+    assert "Spacecraft Sacrifice Token" in rust_p1_bf_names, (
+        f"Rust: ROUND-55 — token should remain on p1's bf (filtered "
+        f"out of the sacrifice candidate set). Got "
         f"rust_p1_bf_names={rust_p1_bf_names}"
     )
-    assert "Spacecraft Sacrifice Token" not in rust_p1_bf_names, (
-        f"Rust: token should be gone from p1's bf (sacrificed). "
-        f"Got rust_p1_bf_names={rust_p1_bf_names}"
+    assert "Sac Bait Beta" not in rust_p1_bf_names, (
+        f"Rust: nontoken bait should be gone from p1's bf "
+        f"(sacrificed). Got rust_p1_bf_names={rust_p1_bf_names}"
     )
 
     # Python: nontoken-filter drops the token from the legal list;
@@ -26117,21 +26151,21 @@ def test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_
     assert py_state.players[0].life == py_p0_life_before
     assert py_state.players[1].life == py_p1_life_before
 
-    # ---- CROSS-ENGINE NON-PARITY documentation ----
-    # The load-bearing observable: p1's bf token-count after
-    # sacrifice. Rust: 0 (the token was the bf-iter-first creature
-    # and got sacrificed). Python: 1 (the token was filtered out
-    # of the legal set and the nontoken got sacrificed instead).
+    # ---- CROSS-ENGINE PARITY (ROUND-55 — flipped from divergence
+    # pin). The load-bearing observable: p1's bf token-count after
+    # sacrifice. BOTH engines: 1 (the token was filtered out of the
+    # sacrifice candidate set on BOTH sides; the nontoken was
+    # sacrificed). Also p1 graveyard names match cross-engine.
     rust_p1_bf_token_count = sum(
         1 for n in rust_p1_bf_names if n == "Spacecraft Sacrifice Token"
     )
     py_p1_bf_token_count = sum(
         1 for n in py_p1_bf_names if n == "Spacecraft Sacrifice Token"
     )
-    assert rust_p1_bf_token_count == 0, (
-        f"Rust: p1 bf should hold ZERO tokens post-sacrifice "
-        f"(the token was the bf-iter-first creature and got "
-        f"sacrificed by the Rust shortcut). Got "
+    assert rust_p1_bf_token_count == 1, (
+        f"Rust: ROUND-55 — p1 bf should still hold the token (the "
+        f"nontoken filter dropped it from the sacrifice candidate "
+        f"set; the nontoken was sacrificed instead). Got "
         f"rust_p1_bf_token_count={rust_p1_bf_token_count}"
     )
     assert py_p1_bf_token_count == 1, (
@@ -26140,16 +26174,20 @@ def test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_
         f"candidate set). Got "
         f"py_p1_bf_token_count={py_p1_bf_token_count}"
     )
-    assert rust_p1_bf_token_count != py_p1_bf_token_count, (
-        f"Cross-engine: this probe PINS a known divergence -- "
-        f"Rust's bf-iter-first-creature shortcut sacrifices the "
-        f"token (bf token-count -> 0); Python's nontoken-filter "
-        f"sacrifices the nontoken instead (bf token-count -> 1). "
-        f"If both engines now agree on the bf token-count, the "
-        f"Rust gap has been closed and this probe should be "
-        f"flipped to assert parity. "
+    assert rust_p1_bf_token_count == py_p1_bf_token_count, (
+        f"ROUND-55 cross-engine PARITY: both engines must agree on "
+        f"the p1 bf token-count after the nontoken sacrifice (the "
+        f"EachOpponentSacrificesCreature nontoken-filter shortcut "
+        f"is CLOSED — shared root with the token-cease-to-exist "
+        f"SBA). A divergence here is a real regression. "
         f"rust_p1_bf_token_count={rust_p1_bf_token_count} "
         f"py_p1_bf_token_count={py_p1_bf_token_count}"
+    )
+    assert sorted(rust_p1_gy_names) == sorted(py_p1_gy_names), (
+        f"ROUND-55 cross-engine PARITY: p1 graveyard contents must "
+        f"match cross-engine (both sacrificed the NONTOKEN bait). "
+        f"rust_p1_gy_names={rust_p1_gy_names} "
+        f"py_p1_gy_names={py_p1_gy_names}"
     )
 
 
@@ -59849,8 +59887,6 @@ def test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation():
         post_divs = compare_fields(py_view, rust_view)
         diverged_fields = sorted(set(d.field for d in post_divs))
         # library_p0 + battlefield CLOSED (Python-lane round-54).
-        # graveyard_p0 is the precisely-narrowed remaining Rust
-        # token-cease-to-exist SBA gap (orthogonal to #15).
         assert "library_p0" not in diverged_fields, (
             "SEARCH_LIMITATIONS #15 CLOSED — library_p0 must be "
             "byte-equal post-shuffle. Regression in the resolve "
@@ -59862,28 +59898,47 @@ def test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation():
             f"both engines, CR 302.1). Got {diverged_fields}: "
             f"{[(d.field, d.py_value, d.rust_value) for d in post_divs]}"
         )
-        assert diverged_fields == ["graveyard_p0"], (
-            "EXPECTED narrowed residual is EXACTLY {graveyard_p0} — "
-            "the Rust token-ceases-to-exist SBA gap (CR 111.7; Rust "
-            "leaves the sacrificed Lander token in graveyard, Python "
-            "correctly removes it). This is a Rust-lane gap, NOT "
-            "SEARCH_LIMITATIONS #15 (CLOSED round-54). A NEW field "
-            "here is a real regression — investigate before "
-            f"re-baselining. Got {diverged_fields}: "
+        # ---- CONTRACT 2c: ROUND-55 — the ``graveyard_p0`` residual is
+        # now CLOSED. The Rust token-cease-to-exist SBA (CR 111.7 /
+        # 704.5d) landed (round-55 N2): Rust's registry now derives
+        # ``is_token`` from the ``supertypes`` Vec (which the bridge
+        # round-trips for token printings — ``("Token",)``), and every
+        # bf-exit site queues the leaving id onto
+        # ``pending_token_cease``; ``drain_pending_token_cease`` (run
+        # at the tail of ``drain_pending_leaves_dispatches`` and
+        # ``apply_sbas``, AFTER the DIES + LEAVES dispatches so the
+        # token is still its own dies/leaves observer — Python's
+        # by-reference ``move_off_battlefield`` semantics) removes the
+        # token from whatever non-bf zone it landed in. The sacrificed
+        # Lander token now ceases to exist on Rust exactly as on
+        # Python, so the WHOLE field view is byte-equal:
+        # ``compare_fields() == []``. This FLIPS round-54 N1's
+        # precisely-narrowed ``graveyard_p0`` known-gap pin to a clean
+        # parity assertion. A reappearing divergence here is a real
+        # regression (Rust token-SBA or the Python-lane #15 fixes) —
+        # investigate, do NOT re-baseline.
+        assert post_divs == [], (
+            "ROUND-55: the Lander sac-activation is FULLY byte-equal "
+            "cross-engine — the Rust token-cease-to-exist SBA (CR "
+            "111.7) closed the last ``graveyard_p0`` residual. Any "
+            "divergence here is a regression in the Rust token-SBA or "
+            "the round-54 Python-lane #15 fixes. Got "
+            f"{diverged_fields}: "
             f"{[(d.field, d.py_value, d.rust_value) for d in post_divs]}"
         )
-        # Sanity: the residual is specifically the sacrificed Lander
-        # token sitting in Rust's graveyard while Python's is empty
-        # (token ceased to exist). Pin the exact shape so a different
-        # graveyard divergence can't masquerade as the known gap.
-        gv = next(d for d in post_divs if d.field == "graveyard_p0")
-        assert gv.py_value == (), (
+        # Sanity: the sacrificed Lander token ceased to exist on BOTH
+        # engines — graveyard_p0 empty on both (no token residue).
+        assert py_view["graveyard_p0"] == (), (
             "Python graveyard_p0 must be empty — the sacrificed Lander "
-            f"token ceased to exist (CR 111.7). Got {gv.py_value!r}"
+            f"token ceased to exist (CR 111.7). Got "
+            f"{py_view['graveyard_p0']!r}"
         )
-        assert any(t[0] == "Lander" for t in gv.rust_value), (
-            "Rust graveyard_p0 must hold the sacrificed Lander token "
-            f"(the documented Rust token-SBA gap). Got {gv.rust_value!r}"
+        assert not any(
+            t[0] == "Lander" for t in rust_view["graveyard_p0"]
+        ), (
+            "ROUND-55: Rust graveyard_p0 must NOT hold the sacrificed "
+            "Lander token — the token-cease-to-exist SBA removes it "
+            f"(CR 111.7). Got {rust_view['graveyard_p0']!r}"
         )
     finally:
         clear_token_printings()

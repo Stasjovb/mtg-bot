@@ -997,6 +997,15 @@ impl GameState {
                     // and drain so the LEAVES trigger lands on the
                     // stack before the cost-pay phase returns.
                     state.pending_leaves_dispatches.push(sac_obj_id);
+                    // Round-55: token-cease sibling. The Lander
+                    // `{2},Sac:` cost path lands here — a sacrificed
+                    // Lander token ceases to exist (CR 111.7) instead
+                    // of sitting in the graveyard. drain_pending_
+                    // leaves_dispatches' tail removes it AFTER the
+                    // LEAVES dispatch (so the token is still an
+                    // observer for its own LEAVES trigger — Python's
+                    // by-reference move_off_battlefield semantics).
+                    crate::state_ops_zones::queue_token_cease(state, sac_obj_id);
                     crate::state_ops_resolve::drain_pending_leaves_dispatches(
                         state,
                     )?;
@@ -1056,6 +1065,12 @@ impl GameState {
                         );
                         // LTB fan-out (parity with Phase 5b).
                         state.pending_leaves_dispatches.push(sac_obj_id);
+                        // Round-55: token-cease sibling (parity with
+                        // Phase 5b) — a sacrificed token target
+                        // (sacrifice_another_* etc.) ceases to exist.
+                        crate::state_ops_zones::queue_token_cease(
+                            state, sac_obj_id,
+                        );
                         crate::state_ops_resolve::drain_pending_leaves_dispatches(
                             state,
                         )?;

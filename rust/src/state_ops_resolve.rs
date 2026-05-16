@@ -723,12 +723,24 @@ pub(crate) fn drain_pending_leaves_dispatches(state: &mut GameState) -> PyResult
     loop {
         let drained: Vec<u32> = std::mem::take(&mut state.pending_leaves_dispatches);
         if drained.is_empty() {
-            return Ok(());
+            break;
         }
         for leaving_id in drained {
             dispatch_event(state, Event::LeavesBattlefield, leaving_id)?;
         }
     }
+    // Round-55 token-cease-to-exist (CR 111.7 / 704.5d). The LEAVES
+    // (and any preceding DIES) dispatch has now fired with the token
+    // still in its destination zone (so its own death/leave triggers
+    // saw it as an extra observer — Python's by-reference semantics
+    // in `move_off_battlefield`). Now remove it so the final state
+    // has the token in NO zone, byte-equal to Python (whose token
+    // never lands in graveyard/exile/hand at all). A LEAVES trigger
+    // that itself caused a token bf-exit re-filled the queue during
+    // the loop above; this single drain after the loop catches it
+    // (the drain is itself idempotent / re-entrant-safe).
+    crate::state_ops_zones::drain_pending_token_cease(state);
+    Ok(())
 }
 
 /// Read effective power of a battlefield creature (printed +
@@ -1199,6 +1211,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         },
         // Round-10: Mill. Caller's controller puts the top `count`
@@ -1540,6 +1556,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         },
         // Round-12: TapTarget. Twiddle-shaped: tap a target permanent.
@@ -1791,6 +1811,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         },
         // Round-15: AddCounters. Routes through round-2's signed net-
@@ -2143,6 +2167,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         },
         // Round-17: DamageEachOpponent. CR 701.4 + AOE pattern — the
@@ -4882,6 +4910,10 @@ fn apply_effect(
                 // pushed first).
                 mark_left_battlefield_if_nonland(state, leaving_printing_id);
                 state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         }
         // DestroyTargetNonlandPermanent. CR 701.7 with non-land filter
@@ -4940,6 +4972,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         }
         // DestroyTargetNoncreaturePermanent (round 52). CR 701.7 with a
@@ -5001,6 +5037,10 @@ fn apply_effect(
                 // the drain runs in `resolve_top_of_stack` after the
                 // resolving slot pops).
                 state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         }
         // DestroyTargetArtifact. CR 701.7 with Artifact filter — Drill
@@ -5060,6 +5100,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
@@ -5120,6 +5164,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         }
         // DealDamageAnyTarget — Lightning Bolt's "any target" shape
@@ -7765,6 +7813,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             // Apply inner effect.
             apply_effect(state, inner_effect.as_ref(), source_obj_id)?;
         }
@@ -7894,6 +7946,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
         }
         // Round-28 EoE Equipment-ETB attach. Locate the source on
         // its controller's battlefield (Equipment ETB resolution
@@ -8110,6 +8166,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
         }
         // Round-28 enchanted-permanent tap. Same `attached_to` lookup
         // as DestroyEnchantedPermanent but mutates the target's
@@ -8341,6 +8401,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
         }
         // Round-28 broader-filter "until leaves" exile. Same shape
         // as ExileTargetCreatureUntilSourceLeaves but filters on
@@ -8458,6 +8522,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
         }
         // Round-14 rider-widened "until leaves" exile (Option B —
         // additive sibling variant). Same shape as the bare
@@ -8546,6 +8614,10 @@ fn apply_effect(
             Arc::make_mut(&mut state.players[owner_idx].exile).push(obj);
             mark_left_battlefield_if_nonland(state, printing_id);
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
         }
         // Round-28 may-do decision wrapper. "You may [inner_effect]."
         // Pushes a PendingDecision::MayDoChoice onto the queue and
@@ -9567,13 +9639,36 @@ fn apply_effect(
                 return Ok(()); // source not found: silent fizzle
             };
             let opponent_idx = (1 - controller) as usize;
-            // Pick first creature on opponent's bf.
+            // Pick first NONTOKEN creature on opponent's bf.
+            //
+            // **Round-55 shared-root closure.** The printed oracle
+            // text on Susurian Dirgecraft (+ the other 3+ EoE
+            // consumers of this arm) is "each opponent sacrifices a
+            // NONTOKEN creature of their choice" — the nontoken
+            // filter is part of the rules text. Python's
+            // `EachOpponentSacrificesCreature.resolve`
+            // (effects/generic/opponent_punishers.py:47-52) builds
+            // its `legal` list filtering `not o.printing.is_token`
+            // BEFORE the agent picks. Pre-round-55 Rust had no
+            // `is_token` notion so this `find_map` matched the FIRST
+            // creature regardless of token status — diverging from
+            // the rules text (and Python) whenever a token sat at
+            // bf-iter index 0 ahead of a nontoken. Round-55's
+            // `RegistryData::is_token` (derived from the bridge-
+            // round-tripped `supertypes` Vec) closes the SAME shared
+            // root as the token-cease-to-exist SBA: gate the
+            // predicate on `!is_token` so both engines pick the
+            // first NONTOKEN creature identically. This is the
+            // SEARCH_LIMITATIONS "EachOpponentSacrificesCreature
+            // nontoken-filter shortcut" entry's fix-scope step 1.
             let target_id: Option<u32> = {
                 let bf = &state.players[opponent_idx].battlefield;
                 let registry = &state.registry;
                 bf.iter().find_map(|obj| {
                     let printing = registry.printings.get(obj.printing_id as usize)?;
-                    if printing.card_types.iter().any(|t| t == "Creature") {
+                    if printing.card_types.iter().any(|t| t == "Creature")
+                        && !registry.is_token(obj.printing_id)
+                    {
                         Some(obj.id)
                     } else {
                         None
@@ -9618,6 +9713,10 @@ fn apply_effect(
             // present resolving spell and the subsequent
             // `stack.pop()` would pop the wrong slot.
             state.pending_leaves_dispatches.push(leaving_obj_id);
+            // Round-55: token-cease sibling of the LEAVES push. The
+            // id is queued unconditionally; the is_token gate lives
+            // in drain_pending_token_cease (CR 111.7 / 704.5d).
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
         }
         Effect::EachOpponentMillsCards { count } => {
             if *count < 0 {

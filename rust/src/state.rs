@@ -1318,6 +1318,35 @@ pub struct GameState {
     /// fingerprint: the queue is empty across stack resolution
     /// boundaries.
     pub pending_leaves_dispatches: Vec<u32>,
+    /// **Round-55 token-cease-to-exist queue (CR 111.7 / 704.5d).**
+    /// Sibling of `pending_dies_dispatches` / `pending_leaves_
+    /// dispatches`. `mark_left_battlefield_if_nonland` (the one
+    /// helper every bf-exit site calls) pushes a token's id here
+    /// when that printing `is_token`. The id is drained — and the
+    /// token removed from whatever non-battlefield zone it landed
+    /// in — at the END of `drain_pending_leaves_dispatches` (the
+    /// universal post-bf-exit drain, also called by `apply_sbas`
+    /// after the DIES drain) and again at the tail of `apply_sbas`
+    /// as a belt-and-suspenders sweep for any bf-exit path that
+    /// doesn't itself drain LEAVES.
+    ///
+    /// **Why deferred rather than eager.** Python's
+    /// `turn.move_off_battlefield` (turn.py:241-263) removes the
+    /// token from the battlefield, then fires DIES (`_fire_dies_
+    /// triggers(state, obj)`) and LEAVES with the token passed BY
+    /// REFERENCE — the token is in no zone but its own death/leave
+    /// triggers still fire. Rust's bf-exit primitives push the
+    /// object to its destination zone, queue DIES/LEAVES by id,
+    /// then drain. Deferring the cease-removal until AFTER those
+    /// drains keeps the token findable as an extra observer during
+    /// its own DIES/LEAVES fan-out (faithful to Python's by-ref
+    /// semantics) while guaranteeing the final state has the token
+    /// in NO zone — byte-equal to Python, whose token never lands
+    /// in graveyard/exile/hand at all.
+    ///
+    /// Not serialized into the fingerprint — empty across stack /
+    /// SBA resolution boundaries, like the sibling dispatch queues.
+    pub pending_token_cease: Vec<u32>,
     /// **CE20 follow-up Slice 4 (Equipment-equip) — payload-target
     /// resolve-time slot.** Optional `target_id` swapped in by the
     /// stack resolver (and the CE20 activated-ability dispatch
@@ -1458,6 +1487,7 @@ impl Clone for GameState {
             pending_etb_dispatches: self.pending_etb_dispatches.clone(),
             pending_dies_dispatches: self.pending_dies_dispatches.clone(),
             pending_leaves_dispatches: self.pending_leaves_dispatches.clone(),
+            pending_token_cease: self.pending_token_cease.clone(),
             current_resolve_payload_target_id: self.current_resolve_payload_target_id,
             // CE20 Slice 5 (Walker loyalty Slice C): clone the once-
             // per-turn-per-walker ledger. CoW-friendly; HashSet's
@@ -1937,6 +1967,11 @@ pub fn make_synthetic_state(
         // (move_object, apply_sbas, etc.) after the primitive
         // returns.
         pending_leaves_dispatches: Vec::new(),
+        // Round-55: empty token-cease queue at construction; filled
+        // by `mark_left_battlefield_if_nonland` on a token bf-exit,
+        // drained at the tail of `drain_pending_leaves_dispatches`
+        // and `apply_sbas`.
+        pending_token_cease: Vec::new(),
         // CE20 follow-up Slice 4: transient payload-target slot;
         // set by the stack resolver before apply_effect for
         // targeted activations, restored after. None by default.

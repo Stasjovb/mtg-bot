@@ -4260,6 +4260,31 @@ impl RegistryData {
     pub fn len(&self) -> usize {
         self.printings.len()
     }
+
+    /// Round-55 token-identity bit. Mirrors Python's
+    /// `CardPrinting.is_token` (`cards/base.py:1036`), which is
+    /// `"Token" in self.supertypes`. Rust's `CardPrinting` already
+    /// carries the Round-30 `supertypes: Vec<String>` substrate, and
+    /// the cross-engine bridge round-trips a token printing's
+    /// `("Token",)` supertype tuple verbatim through
+    /// `build_rust_state`'s `printing_dict["supertypes"]` (so a token
+    /// registered cross-engine is `is_token` on BOTH sides). No new
+    /// per-printing field is needed — token-ness is a pure derivation
+    /// of the existing supertypes Vec, exactly as on the Python side.
+    ///
+    /// An unknown printing id (registry miss) is treated as
+    /// non-token, matching the fail-open convention used by
+    /// `mark_left_battlefield_if_nonland` for the LTB void flag.
+    /// Token-creation arms (`CreateToken` / `CreateTokenTapped` /
+    /// `CreateTokenEachPlayer`) reference a `token_printing_id` that
+    /// was registered with the `("Token",)` supertype tuple, so the
+    /// freshly-minted GameObjects resolve as tokens here without any
+    /// per-object flag.
+    pub fn is_token(&self, id: u32) -> bool {
+        self.lookup(id)
+            .map(|p| p.supertypes.iter().any(|s| s == "Token"))
+            .unwrap_or(false)
+    }
 }
 
 // --- dict -> Rust ------------------------------------------------
