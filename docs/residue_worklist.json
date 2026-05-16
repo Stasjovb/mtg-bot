@@ -88,7 +88,7 @@
         "CastFromExileWithCostHike"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
+      "verified_absent_at_commit": "5bd56d4a",
       "note": "No Rust arm. play-from-exile-with-cost-hike permission subsystem; multi-round. Re-verified genuinely absent at f5d07cf4 (round-55 N1): no alias resolves to a live Rust variant; printed name 'Lightstall Inquisitor' is in NO bridge arm."
     },
     {
@@ -99,7 +99,7 @@
         "EachOpponentExilesFromHand"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
+      "verified_absent_at_commit": "5bd56d4a",
       "note": "No Rust arm (same card as CastFromExileWithCostHike — second arm of Lightstall Inquisitor). Re-verified genuinely absent at f5d07cf4 (round-55 N1): no alias resolves to a live Rust variant; printed name in NO bridge arm."
     },
     {
@@ -111,7 +111,7 @@
         "SacrificeSelfUnlessYouTapAPermanent"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
+      "verified_absent_at_commit": "5bd56d4a",
       "name_in_arm_ack": "add_mana_to_pool",
       "note": "No Rust arm. land-ETB trigger path + tap-a-permanent cost decision subsystem; multi-round. Re-verified genuinely absent at f5d07cf4 (round-55 N1): no alias resolves to a live Rust variant. The printed name 'Command Bridge' appears in the wired `add_mana_to_pool` arm, but that is the card's MANA ABILITY ({T}: Add {color}, round-27 mana-ability primitive consumer list) — a DIFFERENT ability than the claimed land-ETB `SacUnlessYouTap` trigger, which is still genuinely missing. Per-arm ack records that audited re-walk."
     },
@@ -124,7 +124,7 @@
         "ReturnNoncreatureNonlandFromGYWithMVLEManaSpent"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
+      "verified_absent_at_commit": "5bd56d4a",
       "note": "No mana-value-condition GY-return arm. X = mana spent to cast self -> cast-cost-paid ledger subsystem; multi-round. Re-verified genuinely absent at f5d07cf4 (round-55 N1): no alias resolves to a live Rust variant; printed name 'Astelli Reclaimer' in NO bridge arm."
     },
     {
@@ -136,7 +136,7 @@
         "GrantDiesReturnTriggerAndPumpUntilEOT"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
+      "verified_absent_at_commit": "5bd56d4a",
       "note": "No nested-trigger-grant substrate (grants a NEW triggered ability onto the target); multi-round. Re-verified genuinely absent at f5d07cf4 (round-55 N1): no alias resolves to a live Rust variant. Name 'Perigee Beckoner' appears only in a cards.rs PumpTargetCreatureUntilEOT schema-deferral doc-comment (cited as an `another:bool` self-exclusion example the Rust first-slice does NOT carry) — NOT in any wired cross_engine.py bridge arm, so the non-lexical name-in-arm signal correctly does not fire; genuinely missing."
     },
     {
@@ -160,7 +160,7 @@
         "EnchantedDealsDamageThenPropagate"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
+      "verified_absent_at_commit": "5bd56d4a",
       "note": "No self-replicating damage substrate. Aura attached_to + damage-feedback subsystem; multi-round. Re-verified genuinely absent at f5d07cf4 (round-55 N1): no alias resolves to a live Rust variant; printed name 'Pain for All' in NO bridge arm."
     },
     {
@@ -172,7 +172,7 @@
         "ExileEachOpponentGraveyardThenCreateLander"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
+      "verified_absent_at_commit": "5bd56d4a",
       "note": "No exile-each-graveyard substrate + Lander token-registration loader-gated; multi-round. Re-verified genuinely absent at f5d07cf4 (round-55 N1): no alias resolves to a live Rust variant; printed name 'Dauntless Scrapbot' in NO bridge arm."
     },
     {
@@ -184,7 +184,7 @@
         "DestroyTargetIfNotDamagedThisTurnDraw"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
+      "verified_absent_at_commit": "5bd56d4a",
       "note": "No damage-this-turn ledger neither engine maintains for this; multi-round. Re-verified genuinely absent at f5d07cf4 (round-55 N1): no alias resolves to a live Rust variant; printed name \"Faller's Faithful\" in NO bridge arm."
     },
     {
@@ -195,7 +195,7 @@
         "EnchantedCreatureFightsTarget"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
+      "verified_absent_at_commit": "5bd56d4a",
       "name_in_arm_ack": "fight_target_creature_with_target_creature",
       "note": "Bare bilateral Fight shipped (FightTargetCreatureWithTargetCreature); the Aura-shape Effect::EnchantedCreatureFightsTarget (source fighter = Aura's attached_to) is still missing — Aura-attachment subsystem. See SEARCH_LIMITATIONS.md. Re-verified genuinely absent at f5d07cf4 (round-55 N1): the only alias `EnchantedCreatureFightsTarget` does NOT resolve to a live Rust variant. The printed name \"Meltstrider's Resolve\" appears in the wired `fight_target_creature_with_target_creature` arm, but that is the BARE-BILATERAL Fight sibling (a DIFFERENT effect than the claimed Aura-shape); the cards.rs doc-comment itself names \"Meltstrider's Resolve specifically\" as the deferred Aura-shape follow-up. Per-arm ack records that audited re-walk; the Aura-shape is genuinely missing."
     },
@@ -208,7 +208,7 @@
         "VoidExileFromGYCopyAndCastForFree"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
+      "verified_absent_at_commit": "5bd56d4a",
       "note": "Void condition shipped (ConditionalIfVoid r29); the exile-then-cast-copy-for-free half is still new Rust — cast-from-exile-copy subsystem; multi-round. Re-verified genuinely absent at f5d07cf4 (round-55 N1): no alias resolves to a live Rust variant; printed name 'Roving Actuator' in NO bridge arm."
     },
     {
@@ -235,7 +235,7 @@
         "TapEnchantedThenControlSwapNoUntap"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
+      "verified_absent_at_commit": "5bd56d4a",
       "note": "TapEnchantedPermanent shipped; control-swap + don't-untap composition is still new Rust — Aura-attachment subsystem; multi-round. Re-verified genuinely absent at f5d07cf4 (round-55 N1): no alias resolves to a live Rust variant; printed name 'Tractor Beam' in NO bridge arm."
     },
     {
@@ -248,7 +248,7 @@
         "LookAtTopNRevealOrCounter"
       ],
       "status": "closed",
-      "note": "STALE-corrected round 54 (orchestrator fold of N2 r54 live-verify, code-verified): Effect IS shipped — Effect::LookAtTopNRevealOrCounter (cards.rs:3302, doc-comment names \"Pulsar-Squadron-Ace\") + Python LookAtTopNRevealOrCounter(filter_name=\"spacecraft\",counter_on_miss=True) oracle-matching defaults + bridge cross_engine.py:3467 (r28/29). The \"spacecraft\" filter IS the alleged sub-mode; the r50 \"PARTIAL needs Spacecraft sub-mode\" label was STALE. 6th confirmed-stale entry; missed by the r54 re-walk + per-entry cron because plan-name ChoiceTriggerSpacecraftRevealOrCounter did not lexically alias-resolve to LookAtTopNRevealOrCounter (resolver gap -> round-55 hardening). Residual is probe-only, not a new Rust Effect.",
+      "note": "STALE-corrected round 54 (orchestrator fold of N2 r54 live-verify, code-verified): Effect IS shipped — Effect::LookAtTopNRevealOrCounter (cards.rs:3302, doc-comment names \"Pulsar-Squadron-Ace\") + Python LookAtTopNRevealOrCounter(filter_name=\"spacecraft\",counter_on_miss=True) oracle-matching defaults + bridge cross_engine.py:3467 (r28/29). The \"spacecraft\" filter IS the alleged sub-mode; the r50 \"PARTIAL needs Spacecraft sub-mode\" label was STALE. 6th confirmed-stale entry; missed by the r54 re-walk + per-entry cron because plan-name ChoiceTriggerSpacecraftRevealOrCounter did not lexically alias-resolve to LookAtTopNRevealOrCounter (resolver gap -> round-55 hardening). Residual is probe-only, not a new Rust Effect. GENUINE-PROBE-UPDATE round 55 (N3): the FIRST genuine real-EoE Pulsar cross-engine probe was run and surfaced a REAL Rust bug (high-value find) — card_matches_filter's \"spacecraft\" arm (state_ops_decisions.rs ~674) checks printing.card_types for \"Spacecraft\", but real EoE Spacecraft are Artifact-—-Spacecraft (subtype, not card_type); Python uses is_spacecraft -> \"Spacecraft\" in subtypes. Rust mis-bottoms + wrongly counters on the real printing. BLOCKED-PROBE residual NOT discharged; a byte-equal half-probe + a divergence-pin (green today, flips on fix) landed; SEARCH_LIMITATIONS r55. Round-56 fix = one-line predicate swap card_types->subtypes (Rust-lane, .pyd rebuild). Effect itself stays shipped — this is an orthogonal filter-helper bug, not a new Effect ask.",
       "closed_round": 54,
       "resolved_variant": "LookAtTopNRevealOrCounter",
       "reclassified_to": "BLOCKED-PROBE (Effect+\"spacecraft\"-filter+bridge shipped r28/29; residual is verify-only — no genuine real-EoE Pulsar cross-engine probe yet, NOT a new Rust arm)"
@@ -261,8 +261,8 @@
         "LandfallComplexEffectSeedship"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "f5d07cf4",
-      "note": "§2.6 LandfallWithComplexEffect tail — needs a new effect arm (distinct from the Remnant-Elemental compose-existing case). landfall predicate is etb-subject-substrate's job; the effect arm is genuinely new Rust. Re-verified genuinely absent at f5d07cf4 (round-55 N1): no alias resolves to a live Rust variant; printed name 'Seedship Agrarian' in NO bridge arm."
+      "note": "LABEL-STALE (N3 r55 verify-first, code-verified) but NOT cron-\"closed\"-eligible: the \"landfall-composer\" label is wrong — real parse = Effect::CreateToken (Lander) on Event.BECOMES_TAPPED + Effect::PutPlusOneCounterOnSelf on landfall; BOTH Effects ARE shipped in Rust (cards.rs:4471/4560). So this is NOT a new-Rust-Effect ask. It CANNOT be status=closed because closed requires shipped+BRIDGED and the BECOMES_TAPPED event is §2-declined / unbridged (the cron correctly rejects a closed here). Real residual = BECOMES_TAPPED event bridge + Lander token-registration, a non-Effect gate. The binary genuinely_missing/closed schema lacks a precise bucket for \"Effects exist, card gated by an unbridged event\" — ROUND-56 schema enhancement flagged: add a blocked_non_effect status. Kept genuinely_missing (cron-valid, no false-green) with this precise note.",
+      "verified_absent_at_commit": "5bd56d4a"
     }
   ]
 }
