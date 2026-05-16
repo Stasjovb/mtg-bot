@@ -71,6 +71,45 @@ def _isolate_runs_db_env(tmp_path, monkeypatch):
     monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_token_printing_registry():
+    """Per-test isolation of the cross-engine token-printing registry.
+
+    ``cross_engine._TOKEN_PRINTING_BY_PID`` (+ the round-51
+    ``_TOKEN_PRINTING_CACHE_BY_KEY`` shape cache) is module-global —
+    it persists across tests in the same process. ``trajectory.
+    _seat_token_printings`` registers a token printing at a
+    per-deck-deterministic pid (its index in the per-game ``card_defs``
+    union). Before round-53 N1's Phase 3a, the production-deck loader
+    seated a token printing only for the round-49/50 vanilla / tapped
+    carriers (none of which any *real* archetype deck admitted, so the
+    pre-existing real-deck loader tests never seated anything). Phase
+    3a admits the real EoE Lander carriers (Galactic Wayfarer 33,469
+    decks, Beamsaw Prospector 24,310 — these ARE in real archetype
+    decks), so those pre-existing tests now seat a ``Lander`` printing
+    into the module-global registry. A LATER test that seats a
+    DIFFERENT-shape token (e.g. a ``Robot``) at the SAME pid then hits
+    the identity-based conflicting-registration guard
+    (``register_token_printing`` ``ValueError``).
+
+    This autouse fixture clears the registry + the round-51 shape
+    cache around EVERY test, generalizing the round-50-finding-1 /
+    round-51 ``cached_token_printing`` cross-game-safety work from
+    "same logical token across games in ONE test" to "no token
+    registration leaks ACROSS tests". Tests that already wrap their
+    own ``try/finally: clear_token_printings()`` stay correct (the
+    clear is idempotent); pre-existing real-deck loader tests that
+    never knew they needed it become leak-safe with no per-test edit.
+    """
+    from mtg_bot.parity.cross_engine import clear_token_printings
+
+    clear_token_printings()
+    try:
+        yield
+    finally:
+        clear_token_printings()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _flip_heuristic_defaults_off_for_tests():
     """Wrap ``MtgGameStateAdapter.__init__`` so the ``heuristics``

@@ -698,9 +698,21 @@ def test_production_deck_to_deckspec_filters_unsupported_cards():
 
     cards = load_production_deck(0)
     spec = production_deck_to_deckspec(cards, shared_rng_seed=42)
-    # All card_defs are basic Lands or vanilla Creatures (the only two
-    # bridge-supported shapes).
+    # card_defs are basic Lands, bridge-simple Creatures, OR a
+    # loader-SEATED token CardDef (round-49 vanilla-token / Phase 3a
+    # round-53 ability-bearing-Lander substrate). Seated token defs
+    # carry the ``Token`` supertype, are NEVER in either player's
+    # library (registered for the pid only), and may be a non-creature
+    # type (the Lander is ``Artifact``).
+    lib_names = set(spec.p0_library) | set(spec.p1_library)
     for cd in spec.card_defs:
+        is_seated_token = "Token" in (cd.supertypes or ())
+        if is_seated_token:
+            # A seated token printing — registered, never drawn.
+            assert cd.name not in lib_names, (
+                f"seated token {cd.name!r} must not be in any library"
+            )
+            continue
         assert cd.card_type in ("Land", "Creature")
         if cd.card_type == "Creature":
             assert cd.power is not None

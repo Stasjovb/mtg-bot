@@ -15732,21 +15732,33 @@ def test_r49_recognizer_admits_clean_vanilla_token_carrier():
 
 
 def test_r49_recognizer_declines_non_vanilla_lander_token():
-    """§2 silent-mistranslation gate: a CreateToken whose token
-    printing carries an activated ability (the EoE ``Lander``,
-    ``{2}, Sac: SearchLibraryForBasicLandTapped``) is DECLINED — the
-    CardDef bridge has no activated-ability field, so admitting it
-    would silently drop the Lander's ability cross-engine. This is
-    why the whole high-deck-count Lander cluster (Galactic Wayfarer
-    33k decks, Beamsaw Prospector, Edge Rover, Biomechan Engineer,
-    Glacier Godmaw) stays dropped until the Phase-3 token-activated-
-    ability sub-substrate.
+    """§2 gate (round-49 Phase-1 pin, CONVERTED for Phase 3a round-53).
+
+    Phase 1 declined the whole high-deck-count Lander cluster because
+    the CardDef bridge had no activated-ability field — the Lander's
+    ``{2}, Sac: SearchLibraryForBasicLandTapped`` would silently
+    vanish cross-engine. The round-52 N1 precursor landed the
+    ``token_activated_abilities`` substrate + bridge plumbing, and
+    **Phase 3a (round 53)** adds
+    ``_token_with_safe_activated_ability_card_def`` which §2-strictly
+    ADMITS the bare Lander. So Galactic Wayfarer / Beamsaw Prospector
+    are the round-49-design-doc-anticipated reject→convert (the
+    round-50 Gravpack-Monoist sister-precedent).
+
+    The §2-honest split, pinned here:
+      * ``_token_vanilla_card_def`` is UNCHANGED — it STILL declines
+        the Lander (activated ability + non-creature body).
+      * ``_token_with_safe_activated_ability_card_def`` (the new
+        sibling) ADMITS the bare bridge-correct Lander.
+      * the carrier's trigger now round-trips +
+        ``_printing_is_bridge_simple_creature`` returns True.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import (
         _python_ta_to_safe_dict,
         _printing_is_bridge_simple_creature,
         _token_vanilla_card_def,
+        _token_with_safe_activated_ability_card_def,
     )
 
     pr = get_active_source().get_printings()
@@ -15754,13 +15766,23 @@ def test_r49_recognizer_declines_non_vanilla_lander_token():
         carrier = pr.get(name)
         assert carrier is not None, name
         ta = carrier.triggered_abilities[0]
-        assert _python_ta_to_safe_dict(ta) is None, (
-            f"{name}: Lander-token carrier must be declined "
-            f"(non-vanilla token)"
+        # Phase 3a: the carrier's Lander trigger now ROUND-TRIPS.
+        sd = _python_ta_to_safe_dict(ta)
+        assert sd is not None, (
+            f"{name}: Phase 3a must ADMIT the bare-Lander carrier "
+            f"(reject→convert of the round-49 Phase-1 decline)"
         )
-        assert _printing_is_bridge_simple_creature(carrier) is False
-        # The token-vanilla gate itself declines the Lander printing.
+        assert sd["effect"]["kind"] == "create_token"
+        assert _printing_is_bridge_simple_creature(carrier) is True
+        # The vanilla gate is UNCHANGED — still declines the Lander.
         assert _token_vanilla_card_def(ta.effect.token_printing) is None
+        # The Phase-3a sibling gate ADMITS it (the §2-honest split).
+        tok_cd = _token_with_safe_activated_ability_card_def(
+            ta.effect.token_printing
+        )
+        assert tok_cd is not None
+        assert tok_cd.name == "Lander"
+        assert len(tok_cd.token_activated_abilities) == 1
 
 
 def test_r49_recognizer_declines_unsupported_riders():

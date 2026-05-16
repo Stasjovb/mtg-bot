@@ -1741,11 +1741,29 @@ def test_cross_engine_resolve_top_of_stack_rust_drains_etb_triggers(parity_smoke
         _game_over,
     )
 
-    # Drive up to T8 p1 MAIN1 â€” the seed-deterministic point where
-    # Thawbringer is castable.
-    saw_thawbringer_cast = False
+    # Drive the seed-0 arch-0 game until a triggered-ability-bearing
+    # creature is cast — its ETB fan-out pushes a trigger onto Rust's
+    # stack that the harness drain must clear to byte-match Python.
+    #
+    # Round-53 N1 re-pin: pre-Phase-3a this scenario keyed on
+    # Thawbringer (card_id 77 on seed 0). Phase 3a admits **Galactic
+    # Wayfarer** (a real EoE ENTERS+create_token Lander carrier) into
+    # archetype 0's bridge-filtered deck, which shifts the
+    # seed-deterministic card-id assignment AND the playable line — on
+    # seed 0 Thawbringer is no longer cast in the first turns, but
+    # Galactic Wayfarer reliably is (T7). Galactic Wayfarer is an even
+    # better CE5 vehicle: its ETB pushes a real ``create_token``
+    # (Lander) trigger that Rust must drain to byte-match Python's
+    # drain. Detect the cast by PRINTING NAME (robust to Phase-3a /
+    # future card-id shifts) rather than the brittle hardcoded
+    # card_id. The CE5 regression contract is unchanged — the post-
+    # cast view byte-matches via the harness drain on BOTH engines
+    # (``_try_cast_one_creature`` casts via ``step_both``; reaching
+    # the success return without a raised divergence IS the pin).
+    _TRIGGER_CARRIERS = {"Galactic Wayfarer", "Thawbringer"}
+    saw_trigger_carrier_cast = False
     while not _game_over(py_state):
-        if py_state.turn_number > 8:
+        if py_state.turn_number > 10:
             break
         if py_state.step == Step.PRECOMBAT_MAIN:
             _try_play_one_land(py_state, rust_state)
@@ -1753,13 +1771,17 @@ def test_cross_engine_resolve_top_of_stack_rust_drains_etb_triggers(parity_smoke
                 cast = _try_cast_one_creature(py_state, rust_state)
                 if cast is None:
                     break
-                # If we just cast Thawbringer (card_id 77 on seed 0),
-                # the post-cast view should byte-match â€” step_both
-                # asserts no divergences via the harness drain on both
-                # engines. We just need to reach here without raising.
-                if cast.get("card_id") == 77:
-                    saw_thawbringer_cast = True
-                    return  # success â€” no divergence raised
+                cast_id = cast.get("card_id")
+                cast_name = None
+                for o in list(getattr(py_state, "battlefield", [])) + [
+                    si.source for si in getattr(py_state, "stack", [])
+                ]:
+                    if int(getattr(o, "id", -1)) == cast_id:
+                        cast_name = o.printing.name
+                        break
+                if cast_name in _TRIGGER_CARRIERS:
+                    saw_trigger_carrier_cast = True
+                    return  # success — no divergence raised
             _advance_phase_with_compare(py_state, rust_state)
             continue
         if py_state.step == Step.DECLARE_ATTACKERS:
@@ -1768,14 +1790,15 @@ def test_cross_engine_resolve_top_of_stack_rust_drains_etb_triggers(parity_smoke
             continue
         _advance_phase_with_compare(py_state, rust_state)
 
-    # If we exited the loop without seeing the Thawbringer cast, the
+    # If we exited the loop without seeing a trigger-carrier cast, the
     # deck-shuffle seed has drifted and this regression pin no longer
-    # covers the intended scenario â€” fail loudly so the test gets
+    # covers the intended scenario — fail loudly so the test gets
     # re-pinned rather than going silently quiet.
-    assert saw_thawbringer_cast, (
-        "Thawbringer (card_id 77) was never cast on arch=0 seed=0 â€” "
+    assert saw_trigger_carrier_cast, (
+        "No triggered-ability-bearing creature (Galactic Wayfarer / "
+        "Thawbringer) was cast on arch=0 seed=0 within 10 turns — "
         "regression pin scenario has drifted; re-pin against a "
-        "current Thawbringer-bearing game."
+        "current trigger-carrier-bearing game."
     )
 
 
