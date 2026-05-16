@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  mtg-bot worker daemon - launchd plist
+
+  Install on macOS:
+
+    cp deploy/launchd/com.mtg-bot.worker.plist ~/Library/LaunchAgents/
+    # ... edit the placeholders ...
+    launchctl load -w ~/Library/LaunchAgents/com.mtg-bot.worker.plist
+
+  Status:
+
+    launchctl list | grep mtg-bot
+    log show --predicate 'subsystem == "com.mtg-bot.worker"' --info --last 1h
+
+  Stop / uninstall:
+
+    launchctl unload ~/Library/LaunchAgents/com.mtg-bot.worker.plist
+
+  Logs land in ~/Library/Logs/mtg-bot/ per StandardOutPath /
+  StandardErrorPath below.
+
+  Placeholders to fill in (run `tailscale ip -4` for the IP):
+    {{TAILNET_IP}}    - tailnet IP this Mac binds on, e.g.
+                        100.96.1.5
+    {{N_WORKERS}}     - multiprocessing pool size (Mac with 8 cores ->
+                        6 is a reasonable default)
+    {{HOME}}          - absolute path of the operator's home dir, e.g.
+                        /Users/gregg
+    {{REPO_ROOT}}     - absolute path to the mtg-bot checkout, e.g.
+                        /Users/gregg/projects/mtg-bot
+    {{VENV_PYTHON}}   - absolute path to the venv Python, e.g.
+                        /Users/gregg/projects/mtg-bot/.venv-py313/bin/python
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mtg-bot.worker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{VENV_PYTHON}}</string>
+        <string>-m</string>
+        <string>mtg_bot.worker_daemon</string>
+        <string>--host</string>
+        <string>{{TAILNET_IP}}</string>
+        <string>--port</string>
+        <string>5198</string>
+        <string>--n-workers</string>
+        <string>{{N_WORKERS}}</string>
+        <string>--deck-pool-path</string>
+        <string>{{REPO_ROOT}}/data/17lands/eoe_decks.json.gz</string>
+        <string>--weights-cache-root</string>
+        <string>{{REPO_ROOT}}/trained_weights</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{REPO_ROOT}}</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>{{REPO_ROOT}}/src</string>
+    </dict>
+
+    <!-- Run at boot AND restart on crash with a small backoff. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Capture stdout / stderr. mtg-bot/Logs/ is created on first
+         run if it doesn't already exist. -->
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/Library/Logs/mtg-bot/worker.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/Library/Logs/mtg-bot/worker.err.log</string>
+</dict>
+</plist>
