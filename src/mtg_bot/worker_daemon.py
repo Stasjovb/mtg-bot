@@ -5,9 +5,17 @@ Implements the worker-side REST surface described in
 
 Phase 2b scope (this module): the Flask app, the state machine, the
 ``/v2/start_self_play`` / ``/v2/start_eval`` / ``/v2/stop`` /
-``/v2/heartbeat`` endpoints, a CLI entry point, **and the real
-claim/play/report loop** that talks to the coordinator's v2 endpoints
-(``/v2/claim``, ``/v2/report_result``, ``/v2/weights/<v>``).
+``/v2/heartbeat`` / ``/v2/self_update`` endpoints, a CLI entry point,
+**and the real claim/play/report loop** that talks to the
+coordinator's v2 endpoints (``/v2/claim``, ``/v2/report_result``,
+``/v2/weights/<v>``).
+
+``/v2/self_update`` (IDLE-only, 409 otherwise) refreshes the worker's
+code from the coordinator's ``/repo.bundle``, conditionally rebuilds
+the Rust engine + deps, and re-execs the daemon in place. The pipeline
+lives in :mod:`mtg_bot.worker_daemon_self_update`; this module owns the
+endpoint, the ``UPDATING`` state, and surfacing progress + the current
+``git_commit`` on ``/v2/heartbeat``.
 
 The claim-loop body is encapsulated in
 :class:`ClaimLoopRunner` so tests can swap the game runner for a stub
@@ -42,6 +50,7 @@ import psutil
 from flask import Flask, jsonify, request
 
 from mtg_bot import worker_daemon_claim_loop as _claim_loop
+from mtg_bot import worker_daemon_self_update as _self_update
 from mtg_bot.worker_daemon_claim_loop import resolve_worker_id
 
 if TYPE_CHECKING:  # pragma: no cover - imports just for type hints
@@ -108,6 +117,9 @@ class State:
     EVAL_RUNNING = "EVAL_RUNNING"
     STOPPING = "STOPPING"
     ERROR = "ERROR"
+    # IDLE-only: code refresh from the coordinator's /repo.bundle +
+    # conditional rebuild + re-exec. See /v2/self_update.
+    UPDATING = "UPDATING"
 
 
 # Delay (seconds) between STARTING and RUNNING in the skeleton's stub
@@ -146,6 +158,12 @@ class WorkerState:
       ``/v2/heartbeat``).
     - ``stop_requested``: a graceful_stop flag the claim-loop polls
       between games.
+    - ``last_update``: the most recent ``/v2/self_update`` progress
+      dict (``{phase, old_commit, target_commit, ...}``) or ``None``.
+      Surfaced verbatim on ``/v2/heartbeat`` so an orchestrator can
+      watch a self-update without a side channel. A successful update
+      re-execs the process, so a fresh daemon comes up with this
+      ``None`` again and an advanced ``git_commit``.
     """
 
     def __init__(self, start_delay_s: float = DEFAULT_START_DELAY_S):
@@ -167,6 +185,7 @@ class WorkerState:
         # /report. None when IDLE.
         self.stop_requested = False
         self.loop_thread: threading.Thread | None = None
+        self.last_update: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # Transitions
@@ -271,6 +290,34 @@ class WorkerState:
                 self.last_progress_at = _utcnow_iso()
                 self.loop_thread = None
 
+    def try_begin_update(self) -> tuple[bool, str]:
+        """Attempt the IDLE → UPDATING transition for ``/v2/self_update``.
+
+        Returns ``(accepted, current_state)``. Mirrors :meth:`try_start`'s
+        gating contract: a self-update is only allowed from a quiescent
+        daemon, so a worker mid-stage (or mid-update) is refused with a
+        409 carrying the returned current state. ``last_update`` is
+        reset so the heartbeat reflects only the in-progress attempt.
+        """
+        with self._lock:
+            if self.state != State.IDLE:
+                return False, self.state
+            self.state = State.UPDATING
+            self.last_update = None
+            self.error = None
+            self.last_progress_at = _utcnow_iso()
+        return True, State.UPDATING
+
+    def set_last_update(self, phase: dict[str, Any]) -> None:
+        """Record a self-update progress dict (stamped with ``at``).
+
+        Called from the self-update pipeline's ``on_phase`` callback at
+        each transition; read back verbatim on ``/v2/heartbeat``.
+        """
+        with self._lock:
+            self.last_update = {**phase, "at": _utcnow_iso()}
+            self.last_progress_at = _utcnow_iso()
+
     def on_claim(self) -> None:
         """Counter bump on a successful /claim — moves a slot into
         in-flight and increments active_workers."""
@@ -327,6 +374,7 @@ class WorkerState:
                 "process_started_at": self.process_started_at,
                 "pool_size": self.pool_size,
                 "active_workers": self.active_workers,
+                "last_update": self.last_update,
             }
 
 
@@ -412,6 +460,11 @@ def create_app(
     worker_id: str | None = None,
     n_workers: int = 0,
     deck_pool_path: str | None = None,
+    repo_root: Path | None = None,
+    self_update_reexec: Callable[[], None] | None = None,
+    self_update_runner: "_self_update.Runner | None" = None,
+    self_update_opener: "_self_update.Opener | None" = None,
+    self_update_delay_s: float = 0.2,
 ) -> Flask:
     """Build the Flask app with the v2 endpoints wired.
 
@@ -457,6 +510,23 @@ def create_app(
         daemon's ``--deck-pool-path`` CLI flag. ``None`` falls back to
         the runner's system-wide default
         (``data/17lands/eoe_decks.json.gz``).
+    repo_root:
+        The worker's git checkout ``/v2/self_update`` operates on.
+        Defaults to the daemon's cwd (the service file's
+        ``WorkingDirectory``). Tests point this at a scratch repo.
+    self_update_reexec:
+        Override the process-replacement primitive the self-update
+        pipeline calls on success. Defaults to
+        :func:`mtg_bot.worker_daemon_self_update.reexec` (real
+        ``os.execv``). Tests pass a recorder so the interpreter isn't
+        actually replaced.
+    self_update_runner / self_update_opener:
+        Override the ``subprocess.run`` / ``urllib.urlopen`` seams the
+        self-update pipeline shells/fetches through. Default to the
+        real stdlib callables; tests inject fakes.
+    self_update_delay_s:
+        Seconds the background self-update thread waits before doing
+        work, so the 202 response flushes first. Tests pass 0.0.
     """
     app = Flask(__name__)
     state = WorkerState(start_delay_s=start_delay_s)
@@ -482,6 +552,37 @@ def create_app(
     # like the pool size or the deck pool path are decided here.
     app.config["N_WORKERS"] = int(n_workers)
     app.config["DECK_POOL_PATH"] = deck_pool_path
+
+    # --- self-update wiring -------------------------------------------
+    effective_repo_root = (
+        Path(repo_root) if repo_root is not None else Path.cwd()
+    )
+    app.config["REPO_ROOT"] = effective_repo_root
+    effective_su_reexec = self_update_reexec or _self_update.reexec
+    effective_su_runner = self_update_runner
+    effective_su_opener = self_update_opener
+
+    def _su_current_commit_short() -> str | None:
+        """Best-effort short SHA of ``effective_repo_root``'s HEAD,
+        through the injected runner when set. ``None`` on a non-git
+        deploy rather than failing the heartbeat / handler."""
+        kw = (
+            {"runner": effective_su_runner}
+            if effective_su_runner is not None
+            else {}
+        )
+        try:
+            return _self_update.current_commit(
+                effective_repo_root, **kw
+            )[:7] or None
+        except _self_update.SelfUpdateError:
+            return None
+
+    # Current checkout SHA, resolved ONCE per process. The code can't
+    # change under a running process — a successful self-update
+    # re-execs, so the next (fresh) process re-resolves and reports the
+    # advanced commit.
+    app.config["GIT_COMMIT"] = _su_current_commit_short()
 
     def _state_callbacks() -> _claim_loop.StateCallbacks:
         return _claim_loop.StateCallbacks(
@@ -582,6 +683,89 @@ def create_app(
     def start_eval():  # noqa: D401 - Flask handler
         return _start("eval")
 
+    def _spawn_self_update(cfg: "_self_update.SelfUpdateConfig") -> None:
+        """Run the self-update pipeline off-thread so the 202 ships
+        first. On success the pipeline re-execs (this process is
+        replaced); on failure it flips the daemon to ERROR with the
+        detail surfaced on /v2/heartbeat.
+        """
+
+        def _on_error(detail: str) -> None:
+            state.set_last_update(
+                {"phase": _self_update.PHASE_ERROR, "error": detail}
+            )
+            state.mark_error(detail)
+
+        cbs = _self_update.SelfUpdateCallbacks(
+            on_phase=state.set_last_update,
+            reexec=effective_su_reexec,
+            on_error=_on_error,
+            on_up_to_date=state.mark_idle,
+        )
+        # Only forward the runner/opener seams when overridden so the
+        # pipeline's stdlib defaults apply in production.
+        extra: dict[str, Any] = {}
+        if effective_su_runner is not None:
+            extra["runner"] = effective_su_runner
+        if effective_su_opener is not None:
+            extra["opener"] = effective_su_opener
+
+        def _run() -> None:
+            if self_update_delay_s:
+                time.sleep(self_update_delay_s)
+            _self_update.perform_self_update(cfg, cbs, **extra)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        with state._lock:  # noqa: SLF001
+            state.loop_thread = t
+
+    @app.route("/v2/self_update", methods=["POST"])
+    def self_update():  # noqa: D401 - Flask handler
+        """IDLE-only code refresh. Pulls the coordinator's
+        ``/repo.bundle``, conditionally rebuilds the Rust engine + deps
+        (only when ``rust/`` / ``Cargo.*`` / ``pyproject.toml``
+        changed), then re-execs the daemon. Returns 202 immediately;
+        the caller verifies completion by polling ``/v2/heartbeat``
+        (the ``git_commit`` advances and ``state`` returns to IDLE on
+        a fresh process, or goes ERROR with ``last_update.error`` on a
+        build failure).
+        """
+        body = request.get_json(silent=True) or {}
+        coordinator_url = body.get("coordinator_url")
+        if not coordinator_url:
+            return (
+                jsonify({"error": "coordinator_url is required"}),
+                400,
+            )
+        ref = body.get("ref") or _self_update.DEFAULT_REF
+        accepted, current_state = state.try_begin_update()
+        if not accepted:
+            return (
+                jsonify(
+                    {"error": "worker_busy", "current_state": current_state}
+                ),
+                409,
+            )
+        old_commit = _su_current_commit_short()
+        cfg = _self_update.SelfUpdateConfig(
+            repo_root=effective_repo_root,
+            coordinator_url=coordinator_url,
+            ref=ref,
+        )
+        _spawn_self_update(cfg)
+        return (
+            jsonify(
+                {
+                    "accepted": True,
+                    "old_commit": old_commit,
+                    "ref": ref,
+                    "coordinator_url": coordinator_url,
+                }
+            ),
+            202,
+        )
+
     @app.route("/v2/stop", methods=["POST"])
     def stop():  # noqa: D401 - Flask handler
         # Capture the previous state BEFORE flipping anything.
@@ -598,6 +782,24 @@ def create_app(
                     {
                         "state": State.IDLE,
                         "previous_state": State.IDLE,
+                        "drain_in_flight_games": 0,
+                        "stopped_at": stopped_at,
+                    }
+                ),
+                200,
+            )
+        if previous_state == State.UPDATING:
+            # A self-update is in flight (fetch / rebuild / re-exec).
+            # There's no stage to drain and tearing the state machine
+            # out from under the update thread would race the re-exec.
+            # /v2/stop is a no-op here — report the current state and
+            # let the update finish (it re-execs or goes ERROR on its
+            # own).
+            return (
+                jsonify(
+                    {
+                        "state": State.UPDATING,
+                        "previous_state": State.UPDATING,
                         "drain_in_flight_games": 0,
                         "stopped_at": stopped_at,
                     }
@@ -653,6 +855,12 @@ def create_app(
             "error": snap["error"],
             "uptime_s": snap["uptime_s"],
             "process_started_at": snap["process_started_at"],
+            # Current checkout SHA (short) so the orchestrator can
+            # verify a /v2/self_update landed. ``None`` on a non-git
+            # deploy. ``last_update`` is the in-progress / last
+            # self-update phase dict (``None`` on a fresh process).
+            "git_commit": app.config.get("GIT_COMMIT"),
+            "last_update": snap["last_update"],
             "host": host,
         }
         return jsonify(payload), 200

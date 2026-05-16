@@ -262,6 +262,63 @@ in-flight games (lets workers finish their current game), reports
 results normally, then transitions to IDLE. Returns 200 with the
 worker's state at the time of receipt.
 
+### `POST /v2/self_update`
+
+Operator/orchestrator tells the worker "refresh your code." The
+worker pulls the coordinator's existing `GET /repo.bundle`
+(Tailscale-only — no GitHub creds, so ephemeral AWS workers update
+with nothing but tailnet access), `git reset --hard`s to the
+requested ref, **conditionally** rebuilds the Rust engine + deps,
+then re-execs itself in place (`os.execv` — supervisor-independent).
+
+```json
+// Request
+{
+  "coordinator_url": "http://desktop-j05412i:5099",
+  "ref": "main"                                    // optional, default "main"
+}
+
+// Response 202 (accepted; running in background)
+{
+  "accepted": true,
+  "old_commit": "abc1234",   // short SHA before update (null on non-git deploy)
+  "ref": "main",
+  "coordinator_url": "http://desktop-j05412i:5099"
+}
+
+// Response 400 if coordinator_url is missing
+{ "error": "coordinator_url is required" }
+
+// Response 409 if the worker is not IDLE
+{ "error": "worker_busy", "current_state": "SELF_PLAY_RUNNING" }
+```
+
+**IDLE-only**, exactly like `/v2/start_*` — a worker mid-stage (or
+mid-update) is refused with 409. Stop the worker first (`/v2/stop`)
+or wait for natural drain.
+
+**Conditional rebuild.** The worker diffs the old vs. target commit
+and only runs `maturin develop --release` when `rust/`,
+`Cargo.toml`, `Cargo.lock`, or `pyproject.toml` changed;
+`pip install -e .` only when `pyproject.toml` changed. A code-only
+commit skips the multi-minute build and re-execs immediately — the
+"only rebuild the engine when the engine changed" property without
+physically splitting the engine into its own package (caveat in
+`deploy/README.md`).
+
+**Verification is via `/v2/heartbeat`, not this response.** Because
+the daemon re-execs, the 202 ships before the work runs. Poll
+`/v2/heartbeat`: on success a *fresh* process comes up with
+`uptime_s` reset, an advanced `git_commit`, `state: IDLE`, and
+`last_update: null`. On a no-delta fetch the same process returns to
+`IDLE` with `last_update.phase = "up_to_date"`. On a
+fetch/reset/build failure the daemon goes `ERROR` with the detail in
+both `error` and `last_update.error` (no re-exec — an operator
+intervenes; safe because self-update only runs from IDLE, so no game
+is in flight). `last_update.phase` progresses
+`fetching → resetting → building → reexec` (or `up_to_date` /
+`error`).
+
 ### `GET /v2/heartbeat`
 
 Returns the worker's state, stage progress, and rich machine
@@ -277,6 +334,8 @@ reads it for the per-machine sub-card display.
   "last_progress_at": "2026-05-15T18:42:13Z",
   "error": null,
   "uptime_s": 31415,
+  "git_commit": "abc1234",
+  "last_update": null,
   "host": {
     "pool_size": 8,
     "active_workers": 7,
@@ -292,10 +351,21 @@ reads it for the per-machine sub-card display.
 ```
 
 `state` enum: `IDLE | SELF_PLAY_STARTING | SELF_PLAY_RUNNING |
-EVAL_STARTING | EVAL_RUNNING | STOPPING | ERROR`.
+EVAL_STARTING | EVAL_RUNNING | STOPPING | ERROR | UPDATING`.
 
 `error` is non-null only in `ERROR` state — carries the last fatal
 exception's repr for surfacing in the training UI.
+
+`git_commit` — short SHA of the worker's current checkout, resolved
+once per process (a successful self-update re-execs, so the fresh
+process reports the advanced commit). `null` on a non-git deploy.
+The orchestrator uses this to confirm a `/v2/self_update` landed.
+
+`last_update` — the most recent `/v2/self_update` progress dict
+(`{phase, old_commit, target_commit, rebuild_rust, rebuild_deps,
+error?, at}`) or `null` on a fresh process that has not run one.
+`phase` ∈ `fetching | resetting | building | reexec | up_to_date |
+error`.
 
 `host` field semantics:
 - `pool_size` — configured `n_workers` for the daemon's
@@ -334,6 +404,16 @@ IDLE ─────────────────► STARTING ──► R
 ```
 
 Identical shape for the `EVAL_*` states.
+
+`UPDATING` is a separate IDLE-gated branch: `IDLE ──/v2/self_update──►
+UPDATING`, then either the process re-execs (a brand-new `IDLE`
+daemon replaces it), `UPDATING ──(no delta)──► IDLE`, or
+`UPDATING ──(fetch/build fail)──► ERROR`. `/v2/start_*` and a second
+`/v2/self_update` both 409 while `UPDATING`; `/v2/stop` is a no-op
+that reports `UPDATING` (it must not race the re-exec). A worker
+re-execing mid-update looks exactly like a normal process restart to
+the coordinator (brief STALE, then ALIVE) — see "Coordinator's view"
+below.
 
 ### Coordinator's view of a worker
 
@@ -387,7 +467,7 @@ already-reported claim is a silent 200 (network retry).
 | metadata.json | coord → worker | `GET /v2/weights/<v>/metadata` | same |
 | npz samples | worker → coord | multipart in `/report_result` | per-game |
 | replay .json.gz | worker → coord | multipart in `/report_result` | per-game when captured |
-| git bundle | coord → worker | `GET /repo.bundle` | unchanged (existing endpoint) |
+| git bundle | coord → worker | `GET /repo.bundle` | unchanged endpoint; consumed by `/v2/self_update` (worker-initiated `git fetch` of the bundle, no GitHub creds) |
 
 No separate file-pull endpoints on workers — all worker→coord file
 traffic rides in the per-game `/report_result` POST. Avoids the
@@ -415,6 +495,7 @@ traffic rides in the per-game `/report_result` POST. Avoids the
 | Worker discovery | **Static `shards_config.json` is the single source of truth.** Coordinator AND orchestrator both read it — no `/workers/register` RPC. Coordinator polls each `worker_url`'s `/v2/heartbeat` every 10s for liveness + machine health (CPU/mem/active-games), maintains ALIVE/STALE/DEAD per worker, surfaces it in the UI's per-machine sub-cards. |
 | Idempotency | `/report_result` keyed by `claim_id`. On-time duplicate = silent 200. Late duplicate (after claim TTL expired) = `409 Conflict`. |
 | Backward compat | **Hard cut after migration.** SSH path stays runnable until local + Mac + Win10 are all on REST. Then `_push_weights_to_remote` / `_pull_remote_replays` / SSH-launch / orphan-sweep-via-SSH get deleted, not deprecated. |
+| Code distribution to workers | **`/v2/self_update` pulls the coordinator's `/repo.bundle`, never `git pull origin`.** Tailscale-only trust model — no GitHub creds on any worker, so ephemeral AWS instances update with nothing but tailnet access. IDLE-gated; conditional Rust/deps rebuild; `os.execv` re-exec (supervisor-independent — systemd is `Restart=on-failure`, so a clean exit would NOT restart). |
 
 ## Phasing (from scoping discussion)
 
