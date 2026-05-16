@@ -1225,6 +1225,89 @@ fn apply_effect(
                 }
             }
         }
+        // BLOCKED-RUST-EFFECT slice (round 42) -- mill an opponent
+        // a number of cards equal to the source-controller's current
+        // life total. Sister of round-32 / 35 / 36 / 37 (damage
+        // substrate), round-33 (counters substrate), and round-34
+        // (surveil substrate) -- same dynamic-X-from-count plumbing,
+        // NEW apply substrate (mill-target-player) AND NEW denominator
+        // axis (source-controller's life total). Mirrors Python's
+        // `MillTargetPlayer(use_controller_life=True)`
+        // (`draw_mill.py:151` -- Space-Time Anomaly's instant
+        // resolution).
+        //
+        // **Source-controller resolution.** Uses
+        // `current_resolve_source_controller` (mirrors the existing
+        // `Effect::MillTargetPlayer` arm's I77 post-fix pattern at
+        // state_ops_resolve.rs:1199 — both mill arms route through
+        // the same controller-of-effect substrate). Fallback to
+        // `state.active_player` if unset (matches the existing
+        // MillTargetPlayer arm's defensive fallback for trigger
+        // shapes where the source-controller wasn't seeded).
+        //
+        // **Life-total denominator.** `state.players[controller].life`
+        // is i32; `max(0, life)` clamps negative life totals
+        // (arbitrary lose-life-past-zero / infect-style scenarios)
+        // to zero — silent no-op, matching Python's
+        // `n = max(0, state.player_by_id(controller_id).life)`
+        // clamp at draw_mill.py:187.
+        //
+        // **Apply / fizzle.** Bit-equal to the `MillTargetPlayer`
+        // arm's pop-N + push-to-graveyard logic: take from lib[0]
+        // (post-CE3 top-of-library convention), reset per-object
+        // state on graveyard move (CR 400.7), stop early on empty
+        // library mid-mill (matches Python's `if not target.library:
+        // break`). Target player = `1 - controller` (first-slice
+        // deterministic single-opponent pick; mirrors the existing
+        // MillTargetPlayer arm's defender-pick).
+        //
+        // **Inlining note.** Same E0624 cross-file `#[pymethods]`
+        // friction as the existing MillTargetPlayer arm — re-inlines
+        // the pop-N + push-to-graveyard logic instead of routing
+        // through state_ops_library.rs's mill_target_player primitive.
+        Effect::MillTargetPlayerEqualToYourLifeTotal => {
+            let controller = state
+                .current_resolve_source_controller
+                .map(|c| c as usize)
+                .unwrap_or(state.active_player as usize);
+            // Life-total denominator: clamp negative life to 0
+            // (matches Python's `max(0, life)` clamp).
+            let life = state.players[controller].life;
+            let count = life.max(0) as usize;
+            if count == 0 {
+                // life <= 0 -> silent no-op (count = 0).
+                return Ok(());
+            }
+            let target_idx = 1 - controller;
+            let library_mut = Arc::make_mut(&mut state.players[target_idx].library);
+            let n_to_mill = count.min(library_mut.len());
+            if n_to_mill == 0 {
+                // empty target library — silent no-op (mid-mill empty
+                // is the same shape via the loop break below, but
+                // pre-check saves an Arc::make_mut churn).
+                return Ok(());
+            }
+            // Post-CE3: top of library = lib[0]. Remove from head
+            // n_to_mill times. Mirrors the round-19 MillTargetPlayer
+            // arm's pop-N shape bit-for-bit (only the count source
+            // differs — dynamic from life vs static from variant
+            // field).
+            let mut milled: Vec<GameObject> = Vec::with_capacity(n_to_mill);
+            for _ in 0..n_to_mill {
+                milled.push(library_mut.remove(0));
+            }
+            let gy_mut = Arc::make_mut(&mut state.players[target_idx].graveyard);
+            for mut obj in milled {
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                obj.summoning_sick = false;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                gy_mut.push(obj);
+            }
+        }
         // Round-11: ExileTarget. Move a target permanent from its
         // current zone to its owner's exile zone (CR 406). First-
         // slice convention: owner == controller, so "owner's exile"

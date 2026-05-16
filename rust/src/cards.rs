@@ -82,6 +82,71 @@ pub enum Effect {
     /// library has fewer than `count` cards, all remaining cards mill
     /// (Python parity).
     MillTargetPlayer { count: i32 },
+    /// **BLOCKED-RUST-EFFECT slice (round 42) -- mill an opponent
+    /// player a number of cards equal to the source-controller's
+    /// current life total.** Mirrors Python's
+    /// `MillTargetPlayer(use_controller_life=True)` (Space-Time
+    /// Anomaly, EoE; `effects/generic/draw_mill.py:151`). Sister of
+    /// rounds 32 / 35 / 36 / 37 (damage substrate, four denominators:
+    /// artifact-count / hand-size / lands-controlled / creatures-you-
+    /// control), round 33 (counters-on-self substrate, one denominator
+    /// so far), and round 34 (surveil substrate, one denominator so
+    /// far) — same dynamic-X-from-count plumbing, NEW apply substrate
+    /// (mill-target-player in place of damage / counters / surveil)
+    /// AND NEW denominator axis (source-controller life total, vs the
+    /// four bf-permanent-count denominators and hand-size denominator
+    /// already shipped). Establishes the FIFTH denominator and the
+    /// FOURTH apply substrate on the X-from-count plumbing,
+    /// confirming bidirectional extensibility across substrate AND
+    /// denominator axes.
+    ///
+    /// **Mechanism — count + apply.** At resolve time, resolve the
+    /// source's controller (5-zone walk + stack scan; mirrors
+    /// round-32 / 35 / 36 / 37 sister source-controller resolution
+    /// pattern). Read `state.players[controller].life`; clamp to a
+    /// non-negative count via `max(0, life)` (a negative life total
+    /// — e.g. arbitrary loss-of-life past zero — produces a
+    /// zero-count silent no-op, matching Python's
+    /// `max(0, state.player_by_id(controller_id).life)` clamp at
+    /// `draw_mill.py:187`). Mill that many cards from the opponent's
+    /// library top (= `1 - controller` per round-32 / 35 / 36 / 37
+    /// sister target shape; first-slice deterministic single-opponent
+    /// pick). If the opponent's library is empty mid-mill, stop early
+    /// (matches Python's `if not target.library: break` shape and
+    /// mirrors the round-19 MillTargetPlayer arm's
+    /// `n_to_mill = min(count, lib.len())` clamp).
+    ///
+    /// **Source-controller resolution.** 5-zone scan + stack scan
+    /// (mirrors round-32 / 35 / 36 / 37 sister shape — needs to
+    /// resolve even if source has left bf, e.g. counterspelled
+    /// trigger that still drives the count from the original ETB
+    /// snapshot). If untrackable -> silent fizzle.
+    ///
+    /// **Target semantics — first-slice deterministic.** Pick
+    /// `1 - controller` on a 2-player engine (mirrors the round-19
+    /// MillTargetPlayer arm's deterministic `target_idx = 1 -
+    /// controller` shape post-I77 controller-of-effect fix). Future
+    /// multiplayer fanout needs an explicit target-player choice
+    /// callback (mirrors round-19's deferred-multiplayer note).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides —
+    /// the count is computed from state at resolve time, not stored
+    /// on the variant. Python's `MillTargetPlayer` carries an
+    /// `amount: int = 1` AND a `use_controller_life: bool = False`
+    /// flag; this Rust arm is the dedicated dynamic-X sister to the
+    /// existing `MillTargetPlayer { count: i32 }` arm, matching the
+    /// sister-variant precedent established by rounds 32 / 35 / 36 /
+    /// 37 (damage substrate splits the static-amount sister
+    /// `DealDamageToOpponentCreature { amount }` from the
+    /// dynamic-X-from-count sisters). The Python bridge translates
+    /// this Rust unit variant to
+    /// `MillTargetPlayer(use_controller_life=True)` (the existing
+    /// Python class's flag lane) — no new Python class needed
+    /// because the flag-on-existing-class shape already exists and is
+    /// tested; only the Rust substrate and the bridge arm are new.
+    /// Mirrors round-30 / 31 / 32 / 33 / 34 / 35 / 36 / 37
+    /// unit-variant schema convention.
+    MillTargetPlayerEqualToYourLifeTotal,
     /// Exile target permanent (CR 406). Removes from its current
     /// zone to its owner's exile zone. First-slice owner =
     /// controller.
@@ -3596,6 +3661,20 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::MillTargetPlayer { count })
         }
+        "mill_target_player_equal_to_your_life_total" => {
+            // BLOCKED-RUST-EFFECT slice (round 42) — mill an opponent
+            // a number of cards equal to the source-controller's
+            // current life total. Unit variant; no fields beyond
+            // `kind` (the count is dynamic — read from state at
+            // resolve time). Extra dict fields silently ignored for
+            // round-trip dict-shape consistency (mirrors every other
+            // unit-variant parse arm — round 30 / 31 / 33 / 34 / 35 /
+            // 36 / 37 precedent). Mirrors Python's
+            // `MillTargetPlayer(use_controller_life=True)`
+            // (`draw_mill.py:151` — Space-Time Anomaly's instant
+            // resolution).
+            Ok(Effect::MillTargetPlayerEqualToYourLifeTotal)
+        }
         "exile_target" => {
             let target_any = require(dict, "target")?;
             let target_dict = target_any.downcast::<PyDict>().map_err(|_| {
@@ -5078,7 +5157,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total"
         ))),
     }
 }
@@ -5896,6 +5975,23 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::MillTargetPlayer { count } => {
             d.set_item("kind", "mill_target_player")?;
             d.set_item("count", *count)?;
+        }
+        Effect::MillTargetPlayerEqualToYourLifeTotal => {
+            // BLOCKED-RUST-EFFECT slice (round 42). Unit variant; no
+            // payload fields beyond `kind` (count is dynamic —
+            // computed at resolve time from the source-controller's
+            // current life total). Mirrors Python's
+            // `MillTargetPlayer(use_controller_life=True)` dict shape
+            // — the `amount` field is ignored on the dynamic lane
+            // (the count comes from life total, not the static
+            // amount). Sister of round-32 / 35 / 36 / 37 (damage
+            // substrate), round-33 (counters substrate), round-34
+            // (surveil substrate) — FOURTH apply substrate and FIFTH
+            // denominator on the X-from-count plumbing.
+            d.set_item(
+                "kind",
+                "mill_target_player_equal_to_your_life_total",
+            )?;
         }
         Effect::ExileTarget { target } => {
             d.set_item("kind", "exile_target")?;
