@@ -200,6 +200,75 @@ class EachOpponentLosesLife(Effect):
 
 
 @dataclass(frozen=True)
+class EachOpponentLosesLifeEqualToArtifactCount(Effect):
+    """Each opponent loses life equal to the number of artifacts you
+    control.
+
+    BLOCKED-RUST-EFFECT slice (round 44) -- sister of the round-26
+    static ``EachOpponentLosesLife`` (same recipient set + apply step:
+    each opponent of the source-controller, direct life subtraction
+    CR 118.4 not damage), with a NEW dynamic-X denominator (count of
+    permanents the controller controls whose ``printing.is_artifact`` is
+    True, in place of the static ``amount`` field). FIFTH apply
+    substrate to pick up the X-from-count plumbing established by
+    round-32's ``DealDamageToOpponentCreatureByArtifactCount`` (damage),
+    round-33's ``PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact``
+    (counters), round-34's ``SurveilXEqualToArtifactCount`` (surveil),
+    and round-42's ``MillTargetPlayerEqualToYourLifeTotal`` (mill --
+    different denominator). Walks the apply-substrate axis to a fifth
+    entry, confirming the round-35 bidirectionally-extensible
+    X-from-count plumbing generalizes across both axes.
+
+    Lands that are also artifacts count, tokens like Lander count.
+    Dual-typed artifact-creatures count toward BOTH the artifact-count
+    and any creatures-controlled denominators independently (mirrors
+    Scryfall typeline conventions; the ``is_artifact`` printing
+    property is an independent disjunction over ``card_types``).
+
+    The source itself counts toward the denominator if it is an
+    Artifact still on the source-controller's bf at resolve time
+    (vanilla walk over ``state.battlefield`` -- no source-exclusion
+    clause, mirrors round-32 / round-34 sister convention).
+
+    Zero-artifact = silent no-op (no per-opponent loop entered);
+    matches Python's ``if artifact_count <= 0: return`` short-circuit
+    convention used by the round-32/35/36/37 sister damage classes.
+
+    No EoE consumers today -- ships per round-27/31/37 round-trip-
+    surface-coverage rule. The Python class lands in this slice as the
+    bridge translator's other side; the dynamic-X is the whole point of
+    the class so there are no constructor args (mirrors the round-32
+    artifact-count damage class' unit-shape convention).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        artifact_count = sum(
+            1 for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_artifact
+        )
+        if artifact_count <= 0:
+            return
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            p.life -= artifact_count
+            state.log.append(
+                f"P{p.id} loses {artifact_count} life "
+                f"(life: {p.life}; X = artifacts you control)"
+            )
+
+    def describe(self) -> str:
+        return (
+            "each opponent loses life equal to the number of artifacts "
+            "you control"
+        )
+
+
+
+@dataclass(frozen=True)
 class TargetOpponentLosesNYouGainN(Effect):
     """Target opponent loses ``amount`` life; the ability's controller
     gains ``amount`` life. Matches Susurian Voidborn's

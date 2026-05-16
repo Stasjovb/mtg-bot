@@ -3892,6 +3892,104 @@ fn apply_effect(
             state.players[opponent_idx].life =
                 state.players[opponent_idx].life.saturating_sub(*amount);
         }
+        // BLOCKED-RUST-EFFECT slice (round 44) -- each opponent of the
+        // source-controller loses life equal to the source-controller's
+        // artifact count. Sister of round-26's
+        // `Effect::EachOpponentLosesLife { amount }` (same recipient set
+        // + apply step) and round-32's
+        // `DealDamageToOpponentCreatureByArtifactCount` / round-34's
+        // `SurveilXEqualToArtifactCount` (same artifact-count
+        // denominator). FIFTH apply substrate to pick up the X-from-
+        // count plumbing established by round-32 (damage), round-33
+        // (counters), round-34 (surveil), round-42 (mill).
+        //
+        // **Direct life subtraction (CR 118.4) -- NOT damage.** Mirrors
+        // round-26 EachOpponentLosesLife exactly: routes around damage-
+        // prevention / Worship-style replacement effects (CR 614).
+        // Two-player engine: 2-player "each opponent" reduces to "the
+        // one opponent" at `1 - controller`.
+        //
+        // **Artifact denominator.** Walk the source-controller's bf
+        // once; for each obj count +1 if `printing.card_types` contains
+        // "Artifact". BIT-FOR-BIT mirror of the round-32 / round-34
+        // artifact-count walking pattern -- same scan, same predicate,
+        // same `saturating_add` overflow guard. Lands that are also
+        // artifacts count, tokens like Lander count. Dual-typed
+        // artifact-creatures count for BOTH the artifact-count and the
+        // creatures-controlled denominators independently. The source
+        // itself counts toward the denominator if it is an Artifact
+        // still on the bf at resolve time (mirrors Python's vanilla
+        // walk over `state.battlefield` -- no source-exclusion clause).
+        //
+        // **Source-finder dispatch (round-26 / round-32 sister
+        // pattern).** 5-zone walk + stack scan. Source not found
+        // anywhere = silent fizzle (lost-track-of-source tolerance,
+        // mirrors EachOpponentLosesLife / DiscardSelf shape).
+        //
+        // **Zero-count = silent no-op** (matches Python's `if
+        // artifact_count <= 0: return` short-circuit before the
+        // per-opponent loop; also mirrors GainLife / DrawCards / Mill /
+        // EachOpponentLosesLife / DiscardSelf zero-amount conventions).
+        Effect::EachOpponentLosesLifeEqualToArtifactCount => {
+            // Source-controller resolution (5-zone walk + stack scan;
+            // mirrors round-26 EachOpponentLosesLife sister shape
+            // exactly).
+            let mut source_controller: Option<u8> = None;
+            'outer_sc_eollac: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_sc_eollac;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Count source-controller's artifacts on bf. Mirrors
+            // Python's `sum(1 for o in state.battlefield if
+            // o.controller_id == controller_id and o.printing.is_artifact)`
+            // shape. Walks the round-32 artifact-count loop
+            // BIT-FOR-BIT.
+            let cidx = controller as usize;
+            let mut amount: i32 = 0;
+            for obj in state.players[cidx].battlefield.iter() {
+                let Some(printing) = state.registry.printings.get(obj.printing_id as usize)
+                else {
+                    continue;
+                };
+                if printing.card_types.iter().any(|t| t == "Artifact") {
+                    amount = amount.saturating_add(1);
+                }
+            }
+            if amount <= 0 {
+                return Ok(()); // no artifacts → silent no-op (matches Python's `if artifact_count <= 0: return`)
+            }
+            // Each opponent: the OTHER player in 2-player land.
+            let opponent_id = 1 - controller;
+            let opponent_idx = opponent_id as usize;
+            // Direct life subtraction -- not damage. Negative life is
+            // handled by SBA loop. Mirrors round-26 sister BIT-FOR-BIT.
+            state.players[opponent_idx].life =
+                state.players[opponent_idx].life.saturating_sub(amount);
+        }
         // LoseLife: CR 118.4 — "life loss" (not damage). The SOURCE's
         // controller loses `amount` life. Punisher / drawback pattern
         // (Decode Transmissions shape) — 7 cards in the EoE pool per
