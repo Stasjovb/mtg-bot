@@ -15,12 +15,166 @@ first.
 
 ---
 
-## Current state (as of 2026-05-14, main `39d01c02`) — round-19 refresh
+## Current state (as of 2026-05-15, main `c62935d2`) — round-34 refresh
 
-Headline inventory measured directly off `main` at round-19 refresh
-time. Supersedes both the round-10 refresh (was at `ebb5c6ec`) and
-the §1 table below (last recomputed at `a2755769`, now ~22 slices
-and 9 rounds ago).
+Headline inventory measured directly off `main` at round-34 refresh
+time (round 19 was 16 rounds + ~150 commits ago at `ec44f0d0`; the
+audit was last numerically refreshed at `39d01c02`). Supersedes the
+round-19 section below it, which is kept verbatim for cross-round
+narrative context.
+
+| Bucket | Round-19 | Round-34 | Delta |
+| --- | --- | --- | --- |
+| Bridge-arm `if kind ==` arms in `_ta_dict_to_python_effect` | 40 | **76+ effect arms** (+ 8 predicate arms + standing action/keyword arms) | +36 |
+| Real-EoE probes (`test_cross_engine_real_eoe_*`) | 51 (refresh-time count incl. divergence pins as separate rows) | **50 distinct test functions** | ~ |
+| Synthetic ETB probes (`test_cross_engine_synthetic_etb_*`) | 29 | **29** | 0 |
+| Cross-controller-routing probes (subset of synthetic) | 21 | 21 | 0 |
+| Divergence pins (subset of real-EoE) | 2 | **2** (Pinnacle Kill-Ship empty-bf, Susurian Dirgecraft token-first) | 0 |
+| BLOCKED-BRIDGE-ARM (cards waiting only on a bridge arm) | ~12 | **0** | -12 (closed round 22-32) |
+| BLOCKED-RUST-EFFECT residue (confirmed no Rust arm) | ~28 | **~21** | -7 (closed rounds 30-35) |
+
+### Bridge-arm count notes
+
+The bridge surface has expanded substantially since round 19:
+attach/equip, stun-counter (`put_stun_counter_on_tapped_creature`,
+`tap_target_opponent_permanent_and_stun_it`), `look_at_top_n_reveal_or_counter`,
+`optional_sac_artifact_for_effect`, `search_library_for_basic_land_tapped`,
+`search_library_for_card`, `look_top_n_put_one_in_hand_rest_to_graveyard`,
+`put_plus_one_counter_on_each_of_up_to_n_target_creatures`, `may_do`,
+`destroy_target_nonland_permanent`, `damage_each_creature`,
+`destroy_all_creatures`, `each_opponent_loses_life`, `lose_life`,
+`tap_enchanted_permanent`, `add_mana_to_pool`, `add_counters`,
+`sacrifice`, `pump_self_until_eot`, `move_self_counters_to_target_creature_you_control`,
+`pump_target_artifact_or_creature_until_eot`, `put_charge_counters_on_self`,
+`draw_cards_equal_to_resolving_combat_damage`,
+`deal_damage_equal_to_source_power_any_target`,
+`become_land_creature_ueot`, `conditional_if_void`,
+`conditional_on_tapped_creatures`, `choose_one_mode`,
+`destroy_enchanted_permanent`, `grant_keyword_to_target_creature_until_eot`,
+`destroy_target_land`, `return_all_creatures_from_your_graveyard_to_battlefield`,
+`manifest_dread` (+ `manifest_dread_then_attach_self`,
+`manifest_dread_then_put_plus_one_counters_on_it`),
+`double_target_creatures_power_ueot` (round 31),
+`deal_damage_to_opponent_creature_by_artifact_count` (round 32),
+`put_plus_one_counters_on_self_per_other_creature_or_artifact` (round 33),
+`surveil_x_equal_to_artifact_count` (round 34),
+`deal_damage_to_opponent_creature_by_cards_in_hand` (round 35),
+plus a tail of single-card arms.
+
+### Round-19 → round-34 BLOCKED-RUST-EFFECT closures (per §2.6 walk)
+
+The round-19 re-audit ended with 14 §2.6 residue entries left as
+"truly BLOCKED-RUST-EFFECT (no Rust arm)". Walking that residue
+against `rust/src/cards.rs::Effect` on `c62935d2`:
+
+| Round-19 §2.6 residue entry | Cards | Rust substrate today | Status change |
+| --- | --- | --- | --- |
+| `TapTargetAndPutStunCounter` (Mechanozoa + Cryogen Relic activated half) | 2 | `Effect::PutStunCounterOnTappedCreature` at `cards.rs:1731` + `Effect::TapTargetOpponentPermanentAndStunIt` at `cards.rs:1747` (round 30, `2f2f79d0`); per-object `stun_counters` slot + CR 701.20 untap-step gate | **CLOSED round 30.** Both cards now BLOCKED-BRIDGE-ARM at most; bridge arms `put_stun_counter_on_tapped_creature` (cross_engine.py:2971) and `tap_target_opponent_permanent_and_stun_it` (cross_engine.py:3025) shipped concurrently. Cross-engine end-to-end probe deferred per substrate-only precedent. |
+| `DoubleTargetPowerUntilEOT` (Mightform Harmonizer) | 1 | `Effect::DoubleTargetCreaturesPowerUEOT` at `cards.rs:886` (round 31, `90bc39ca`) | **CLOSED round 31.** Bridge arm `double_target_creatures_power_ueot` (cross_engine.py:5951). Real-EoE landfall probe still deferred (waits on `etb-subject-substrate` branch — Subject(IsLand) predicate). |
+| `DealDamageToAnyTargetEqualToArtifactCount` (Warmaker Gunship) | 1 | `Effect::DealDamageToOpponentCreatureByArtifactCount` at `cards.rs:923` (round 32, `1583b7a2`) | **CLOSED round 32.** Bridge arm `deal_damage_to_opponent_creature_by_artifact_count` (cross_engine.py:6012). End-to-end deferred (Warmaker Gunship is a Spacecraft; needs create_token + Spacecraft predicate plumbing). First X-from-permanent-count denominator in Rust. |
+| (NEW — Luxknight Breacher counters-per-other) | 1 | `Effect::PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact` at `cards.rs:1013` (round 33, `be6a5988`) | **CLOSED round 33.** Bridge arm `put_plus_one_counters_on_self_per_other_creature_or_artifact` (cross_engine.py:6383). End-to-end deferred — "enters with N counters" is modelled as an ETB trigger, end-to-end probe needs ENTERS-trigger event-dispatcher harness from `etb-subject-substrate`/`dies-event-harness`. |
+| (NEW — Cerebral Download surveil-X-by-artifact-count) | 1 | `Effect::SurveilXEqualToArtifactCount` at `cards.rs:1066` (round 34, `515fb4be`) | **CLOSED round 34.** Bridge arm `surveil_x_equal_to_artifact_count` (cross_engine.py:6467). End-to-end deferred — Cerebral Download is an INSTANT (Sequence: surveil-X then draw-3); needs cast-spell driver harness. |
+| (NEW — Roaring Furnace damage-by-cards-in-hand) | 1 | `Effect::DealDamageToOpponentCreatureByCardsInHand` at `cards.rs:970` (round 35, `c62935d2`) | **CLOSED round 35.** Bridge arm `deal_damage_to_opponent_creature_by_cards_in_hand` (cross_engine.py:6546). End-to-end deferred — Roaring Furnace is a Room (split-card variant); Room/door subsystem is review-gated. First X-from-cards-in-hand denominator; confirms X-from-count plumbing is bidirectionally extensible across both (substrate × denominator). |
+| `CastFromExileWithCostHike` (Lightstall Inquisitor) | 1 | No Rust arm | **STILL BLOCKED.** |
+| `SacUnlessYouTap` (Command Bridge) | 1 | No Rust arm | **STILL BLOCKED.** |
+| `ReturnPermanentCardWithMVXorLessFromGY` (Astelli Reclaimer) | 1 | No mana-value-condition GY-return arm | **STILL BLOCKED.** |
+| `PumpAndGrantDiesReturnTrigger` (Perigee Beckoner) | 1 | No nested-trigger-grant substrate | **STILL BLOCKED.** |
+| `TwoMobileSubjects` (Monoist Circuit-Feeder) | 1 | No simultaneous-two-target substrate | **STILL BLOCKED.** |
+| `EachOpponentExilesFromHand` (Lightstall Inquisitor — same card as above) | 1 | No Rust arm | **STILL BLOCKED.** |
+| `EnchantedDealsDamageThenPropagate` (Pain for All) | 1 | No self-replicating damage substrate | **STILL BLOCKED.** |
+| `ExileEachOpponentGYAndCreateToken` (Dauntless Scrapbot) | 1 | No exile-each-graveyard substrate | **STILL BLOCKED.** |
+| `Faller's Faithful` damage-this-turn (§2.7) | 1 | No damage-this-turn ledger | **STILL BLOCKED.** |
+| Aura-shape `Fight` for Meltstrider's Resolve | 1 | No `Effect::EnchantedCreatureFightsTarget` (only bare bilateral) | **STILL BLOCKED.** See `SEARCH_LIMITATIONS.md` "FightTargetCreatureWithTargetCreature first-slice" entry. |
+| `OptionalCreateTwoTokensOrSelfPump` (Terrapact Intimidator) | 1 | `Effect::MayDo` at `cards.rs:1850` substrated; per-token parameterization still pending | Partial — substrate exists; bridge `may_do` arm wired (cross_engine.py:1254). Reclassify to BLOCKED-BRIDGE-ARM with token-parameterization follow-up. |
+| `Roving Actuator` void-style exile-then-cast-copy | 1 | `Effect::ConditionalIfVoid` substrated (round 29); cast-copy half still missing | Partial — trigger shell can lift; cast-copy effect is the residual gap. |
+| `Famished Worldsire` look-X-and-put-lands-tapped | 1 | `Effect::DealDamageEqualToSourcePowerAnyTarget` (X-from-source-power pattern) + `Effect::SearchLibraryForBasicLandTapped` exist; specific composition missing | Partial — X-plumbing pattern unblocked; composition needs new Rust. |
+| `Tractor Beam` TapEnchantedYouControlAndDontUntap | 1 | `Effect::TapEnchantedPermanent` at `cards.rs:1711` substrated (control-swap + don't-untap composition still missing) | Partial — bridge `tap_enchanted_permanent` wired (cross_engine.py:4612). |
+| `Pulsar Squadron Ace` choice-trigger reveal-or-counter | 1 | `Effect::LookAtTopNRevealOrCounter` at `cards.rs:2423` substrated; sub-mode for Spacecraft revelation pending | Partial — bridge `look_at_top_n_reveal_or_counter` wired (cross_engine.py:3180). |
+| `DestroyNoncreatureThenAOEDamage` (Extinguisher Battleship) | 1 | All components substrated (`DestroyTargetNonlandPermanent` at `cards.rs:635`, `DamageEachCreature` at `cards.rs:145`, `Sequence`); bridge arms wired (cross_engine.py:4158, 4262, 1184) | Reclassify to BLOCKED-BRIDGE-ARM (composition probe pending). |
+
+### Updated BLOCKED-RUST-EFFECT residue (~21 cards)
+
+Subtracting the round-30-through-35 closures (~7 cards: 2 stun, 1
+double-power, 1 damage-by-artifact, 1 counters-per-other, 1
+surveil-X-by-artifact, 1 damage-by-cards-in-hand) and the
+half-substrated partials reclassified to BLOCKED-BRIDGE-ARM
+(Terrapact Intimidator, Extinguisher Battleship) leaves the truly
+no-Rust-arm residue at:
+
+`Lightstall Inquisitor` (cast-from-exile-with-cost-hike + each-opp-exiles-from-hand — 1 card, 2 arms),
+`Command Bridge` (sac-unless-you-tap — 1 card),
+`Astelli Reclaimer` (MV-condition GY-return — 1 card),
+`Perigee Beckoner` (pump-and-grant-dies-trigger — 1 card),
+`Monoist Circuit-Feeder` (two-mobile-subjects — 1 card),
+`Pain for All` (self-propagating damage — 1 card),
+`Dauntless Scrapbot` (exile-each-opp-GY-and-create-token — 1 card),
+`Faller's Faithful` (damage-this-turn ledger — 1 card),
+`Meltstrider's Resolve` (Aura-shape Fight via `attached_to` — 1 card),
+`Roving Actuator` (exile-then-cast-copy half — 1 card),
+`Famished Worldsire` (look-X-then-put-lands-tapped composition — 1 card),
+`Tractor Beam` (control-swap + don't-untap composition — 1 card),
+`Pulsar Squadron Ace` (Spacecraft sub-mode of look-N-reveal-or-counter — 1 card),
+plus the §2.6 single-card tail entries from `LandfallWithComplexEffect`
+(Seedship Agrarian, Remnant Elemental — counter/pump landfall composers
+that need new Rust arms), and any audit entries elsewhere this round
+didn't enumerate. **Approximate residue: ~21 cards / ~14 distinct
+new-Rust-arm asks.**
+
+### Round-22 → round-32 BLOCKED-BRIDGE-ARM closure (count → 0)
+
+The round-19 re-audit identified ~12 cards in the BLOCKED-BRIDGE-ARM
+bucket (most reclassified from BLOCKED-RUST-EFFECT once their Rust
+substrate was discovered). Rounds 22-32 closed every entry on that
+list via per-arm bridge slices: `attach_to_target_creature_you_control`
+(round 22), `equip_to_target_creature_you_control` (round 22),
+`optional_sac_artifact_for_effect` (round 24),
+`look_at_top_n_reveal_or_counter` (round 25),
+`search_library_for_basic_land_tapped` (round 26),
+`search_library_for_card` (round 29 via
+`feature/bridge-search-library-for-card` merge),
+`look_top_n_put_one_in_hand_rest_to_graveyard` (round 27),
+`put_plus_one_counter_on_each_of_up_to_n_target_creatures` (round 27),
+`tap_enchanted_permanent` + `add_counters` + `sacrifice` and the
+broader long-tail of unit-variant arms across rounds 23-32.
+
+**Current BLOCKED-BRIDGE-ARM count: 0.** Every effect with a Rust
+substrate has a bridge arm. Cards still pending probes are pending
+for one of three reasons: (a) the probe-slice work hasn't been
+budgeted (still-eligible-to-ship today), (b) the probe needs a
+review-gated branch (`etb-subject-substrate` for landfall/ANOTHER-X
+predicates, `dies-event-harness` for DIES triggers, `cast-spell-driver`
+for instant/sorcery cross-engine probes, Room/door subsystem for
+Roaring Furnace), or (c) the card is in the BLOCKED-RUST-EFFECT
+residue above.
+
+### Recommendation (round-34 refresh)
+
+The audit's structural assumption ("BLOCKED-BRIDGE-ARM is a queue;
+BLOCKED-RUST-EFFECT needs new code") has stabilized. The remaining
+backlog has two distinct shapes:
+
+1. **Review-gated branches** (`etb-subject-substrate`,
+   `dies-event-harness`, cast-spell driver harness, Room/door
+   subsystem). Merging these unblocks the end-to-end cross-engine
+   probes for the dynamic-X family (rounds 31-35), every landfall
+   composer, and Cerebral Download / Roaring Furnace specifically.
+2. **True new Rust** (~13-14 distinct unique arms left). Each
+   shipped one round of work (rounds 28-35 averaged 1 arm/round);
+   at sustained cadence the residue closes in 13-14 rounds.
+
+The audit refresh cadence proposed in round 19 (cron diffing Rust
++ bridge arm counts vs audit tally) was not implemented; rounds
+28-35 again each added shadow-substrate the prior text didn't
+track. The cron remains the right intervention.
+
+---
+
+## Historical: round-19 refresh narrative (as-of `39d01c02`, 2026-05-14)
+
+Kept verbatim for cross-round reference; the round-34 headline
+section above supersedes the counts.
+
+
 
 | Bucket | Count |
 | --- | --- |

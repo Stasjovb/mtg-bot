@@ -11,6 +11,37 @@ and so we have a clear record of WHY each shortcut was taken.
 
 ---
 
+## Headline counts (refreshed 2026-05-15, main `c62935d2`)
+
+- **Active entries:** 28 (1-15 numbered + 13 unnumbered Rust-port /
+  combat / Python-Scry entries below). Entry #16 is CLOSED.
+- **Round-34 audit cycle (2026-05-15):** every entry below was
+  spot-checked against `rust/src/cards.rs::Effect` /
+  `rust/src/state_ops_resolve.rs` / the cross-engine bridge on main
+  `c62935d2` to confirm the divergence still applies.
+  - Entry #15 (SearchLibraryForBasicLandTapped supertypes-proxy):
+    **PARTIAL-RESOLVED.** Round-30 supertypes substrate landed in
+    `rust/src/cards.rs:3278` (`feature/rust-supertypes-registry`
+    merge `ef8fa004`); single consumer-side migration pending on
+    the `Effect::SearchLibraryForBasicLandTapped` arm in
+    `state_ops_resolve.rs:2378` (the in-code "deferred supertypes
+    work" comment at `state_ops_resolve.rs:2310-2319` is now the
+    direct ask). See entry-level update below.
+  - All other entries: divergence pin tests still passing on main
+    (each entry's "Pinned by:" reference verified live); the
+    documented gap still exists in the cited code. No entries
+    closed this cycle beyond entry #15's substrate landing.
+- **Sibling tracking:** `docs/EOE_PROBE_READINESS_AUDIT.md` rounds
+  30-35 closed 7 BLOCKED-RUST-EFFECT entries on the EoE pool
+  (stun-counter, double-power, damage-by-artifact-count,
+  counters-per-other-permanent, surveil-X-by-artifact-count,
+  damage-by-cards-in-hand). None of those substrates introduced new
+  SEARCH_LIMITATIONS entries — the round-32+ dynamic-X family ships
+  full CR-compliant semantics on both engines, so no deliberate
+  divergence to track.
+
+---
+
 ## 1. Combat damage assignment is ordered (outdated CR)
 
 **Location**: `src/mtg_bot/combat.py:_resolve_damage_step` (around line 419).
@@ -802,6 +833,26 @@ by the rarity of "proliferating my opponent makes me lose".
 ---
 
 ## 15. SearchLibraryForBasicLandTapped: supertypes-proxy filter + xorshift64-only post-search shuffle
+
+**Status update (round-34 refresh, 2026-05-15):** the supertypes
+substrate landed in **round 30** (`feature/rust-supertypes-registry`
+merge `ef8fa004` — `CardPrinting.supertypes: Vec<String>` field at
+`rust/src/cards.rs:3278`, JSON load at `cards.rs:5132-5148`,
+pymethod getter at `cards.rs:6278`). The
+`Effect::SearchLibraryForBasicLandTapped` resolve arm at
+`state_ops_resolve.rs:2378` was NOT updated to consume it — the
+filter predicate still tests `card_types contains "Land"` (see
+`state_ops_resolve.rs:2310-2319` for the in-code "deferred
+supertypes work" comment). The round-30 substrate landed alongside
+the related `Effect::SearchLibraryForCard` filter dispatch update
+(`legendary_creature` / `spacecraft` / `sliver` / `demon` predicates
+flipped from silent-fizzle to supertypes-substrate); this sibling
+arm's flip is the remaining residue. **Reclassify the supertypes
+half of this entry as PARTIAL-RESOLVED: substrate available, single
+consumer-side migration pending.** The xorshift64-only post-search
+shuffle half closed in entry #16 (G19 follow-up); the Python-side
+"resolve doesn't call `shuffle_library` today" Stage-3
+simplification is the residual gap on the Python half.
 
 **Location**: `rust/src/state_ops_resolve.rs::apply_effect` —
 search for the `Effect::SearchLibraryForBasicLandTapped` arm (round-23
