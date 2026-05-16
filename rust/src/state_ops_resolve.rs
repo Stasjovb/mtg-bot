@@ -779,6 +779,75 @@ fn read_battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 
+/// **Round-53 §2 fix — effective-power snapshot for the round-31
+/// `Effect::DoubleTargetCreaturesPowerUEOT` (Mightform Harmonizer
+/// landfall) resolve arm.**
+///
+/// Returns the target creature's CURRENT effective power as the
+/// number to double, computed to MATCH Python's source-of-truth
+/// `DoubleTargetCreaturesPowerUEOT.resolve` (`pump.py:234`), which
+/// snapshots `mtg_bot.game.effective_power(state, obj)` =
+/// `_compute_effective_pt` (game.py:2138).
+///
+/// **Why this exists / what it fixes.** The round-31 resolve arm
+/// snapshotted via `read_battlefield_creature_power`, which
+/// DELIBERATELY omits `obj.counters` (a pinned combat-side
+/// asymmetry — see the comment at `state_ops_combat.rs:551-556`).
+/// Python's `_compute_effective_pt` FOLDS IN the signed +1/+1 net at
+/// game.py:2251 (`p += obj.plus_one_counters - obj.minus_one_counters`).
+/// So on a target carrying +1/+1 counters the round-31 Rust arm
+/// doubled BASE power while Python doubled EFFECTIVE power — a real
+/// §2 silent mistranslation, latent only because the round-31/36
+/// genuine Mightform probe staged a counter-free creature
+/// (`docs/SEARCH_LIMITATIONS.md`, round-53 entry). On a 3/3 with
+/// +2/+2 counters: pre-fix Rust doubled 3, Python doubled 5.
+///
+/// **The fix.** This helper composes
+/// `base (UEOT-SetBasePT override / manland / printed)
+///  + ueot_power_bonus()  + obj.counters`
+/// where `obj.counters` (signed i32) is Rust's analogue of Python's
+/// `plus_one_counters - minus_one_counters` (the SBA path at
+/// `state_ops_sba.rs:200` uses exactly `base + obj.counters +
+/// ueot_*_bonus()` — same composition, confirming the mapping). The
+/// round-31 arm now reads through here, so BOTH engines double the
+/// SAME effective-power snapshot.
+///
+/// **Documented residual (SEARCH_LIMITATIONS).** Layer-7c static
+/// anthems and layer-7e P/T switches are NOT folded here (nor by the
+/// combat-side reader, nor reachable by any bridge-correct Mightform
+/// Harmonizer scenario — the card has no anthem/switch rider and the
+/// genuine probe stages none). Same established combat-side
+/// asymmetry; documented alongside the round-53 SEARCH_LIMITATIONS
+/// entry.
+fn read_doubling_power(state: &GameState, obj_id: u32) -> i32 {
+    let mut found: Option<&GameObject> = None;
+    for player in state.players.iter() {
+        if let Some(obj) =
+            player.battlefield.iter().find(|o| o.id == obj_id)
+        {
+            found = Some(obj);
+            break;
+        }
+    }
+    let Some(obj) = found else {
+        return 0;
+    };
+    let Some(printing) =
+        state.registry.printings.get(obj.printing_id as usize)
+    else {
+        return 0;
+    };
+    let printed_base = printing.power.unwrap_or(0) as i32;
+    let base = obj
+        .ueot_base_pt_override()
+        .map(|(p, _)| p)
+        .or_else(|| {
+            obj.ueot_becomes_land_creature_pt().map(|(p, _)| p)
+        })
+        .unwrap_or(printed_base);
+    base + obj.ueot_power_bonus() + obj.counters
+}
+
 /// Push `amount` damage onto the battlefield creature's per-instance
 /// `damage` marker (saturating add into i16). Routes through
 /// `Arc::make_mut` on the containing battlefield Vec to preserve CoW.
@@ -5286,12 +5355,26 @@ fn apply_effect(
             let Some(target_id) = target_id else {
                 return Ok(()); // no eligible creature → silent fizzle
             };
-            // Snapshot effective power at resolve time. Uses the
-            // private helper from the round-17 Fight slice (lives in
-            // this file; the public `state.effective_power` getter
-            // would need the &self/&mut state borrow split that the
-            // per-slice file-isolation rule blocks).
-            let snapshot = read_battlefield_creature_power(state, target_id) as i32;
+            // Snapshot effective power at resolve time.
+            //
+            // **Round-53 §2 fix.** Was
+            // `read_battlefield_creature_power` (the round-17 Fight
+            // helper), which DELIBERATELY omits `obj.counters` (a
+            // pinned combat-side asymmetry). Python's source-of-truth
+            // `DoubleTargetCreaturesPowerUEOT.resolve` (`pump.py:234`)
+            // snapshots `effective_power` = `_compute_effective_pt`,
+            // which FOLDS IN +1/+1 counters (game.py:2251). On a
+            // target with +1/+1 counters the two engines doubled
+            // DIFFERENT values (Rust base, Python effective) — a real
+            // §2 silent mistranslation, latent only because the
+            // round-31/36 genuine Mightform probe staged a
+            // counter-free creature. Now reads `read_doubling_power`
+            // (base + ueot_power_bonus + obj.counters) so BOTH engines
+            // double the SAME effective-power snapshot. Pinned by the
+            // round-53 +1/+1-counter regression + cross-engine pins +
+            // the extended genuine Mightform probe. Documented in
+            // `docs/SEARCH_LIMITATIONS.md`.
+            let snapshot = read_doubling_power(state, target_id);
             if snapshot <= 0 {
                 return Ok(()); // ≤ 0 power → silent fizzle (no inversion)
             }
