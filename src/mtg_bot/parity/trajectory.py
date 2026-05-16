@@ -3443,9 +3443,33 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
     import dataclasses
 
     from mtg_bot.parity.cross_engine import (
+        _reset_token_printing_pid_map_for_seating_pass,
         cached_token_printing,
         register_token_printing,
     )
+
+    # Round-57 N1 fix (round-56 N3 finding — the multi-distinct-token
+    # cross-archetype pid collision). The ``pid -> CardPrinting`` map
+    # is a per-GAME artifact (a token's pid is its index in THIS game's
+    # ``card_defs`` union, which varies by archetype AND seed) but is a
+    # module-global that persists across games. A different token shape
+    # (Lander) that lands on a pid a prior game's different token shape
+    # (Robot) still holds would otherwise hit ``register_token_printing``'s
+    # identity-conflict guard and raise — even though the prior game's
+    # registration is dead. Resetting ONLY the pid map at pass entry
+    # restores the per-game invariant the map is supposed to have.
+    # Round-51's shape-keyed cache (``_TOKEN_PRINTING_CACHE_BY_KEY``) is
+    # deliberately NOT cleared, so the same logical token still resolves
+    # to the SAME identity-stable object across games (round-51's
+    # same-shape cross-game guarantee is preserved). The full
+    # correctness argument (round-51 safety preserved / cross-shape
+    # collision fixed / no within-game silent mis-resolution) is in
+    # ``_reset_token_printing_pid_map_for_seating_pass``'s docstring.
+    # Unconditional + before the fast-path return so the pid map ALWAYS
+    # reflects only the current game (a carrier-free game leaves no
+    # stale entries behind for the next game either); the cost is one
+    # ``dict.clear()``.
+    _reset_token_printing_pid_map_for_seating_pass()
 
     # Phase 4 (round 50): the seating pass handles BOTH the Phase-1
     # bare ``create_token`` symbolic carrier AND the Phase-4
