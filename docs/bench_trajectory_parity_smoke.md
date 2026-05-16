@@ -1276,3 +1276,77 @@ slice touches code on the gate's path.
    confirms there is **no divergence** anywhere the path *can* be
    reached, so there is **no round-51 divergence-fix** from this
    measurement — only the substrate-blocker fix.
+
+## Round 51 — cross-game-safe `_seat_token_printings` (round-50 finding 1 closed)
+
+Round 51 N1 fixed the round-50-finding-1 substrate bug: the
+`_seat_token_printings` cross-game token-registry conflict that made
+every multi-game token-carrier sweep 56/60 `FAIL_EXCEPTION`. Fix
+(merge to `origin/main`): `cross_engine.cached_token_printing` — an
+identity-idempotent token-`CardPrinting` cache keyed by token SHAPE
+(not pid), so the same logical token resolves to the SAME Python
+object across every game/seed and `register_token_printing` never
+hits the identity-based conflicting-registration guard. Chosen over
+clear-at-pass-entry because the cache also preserves concurrently-
+seated tokens from OTHER carriers (round-50 N3's stated reason).
+
+### Before → after (same Gravpack-bearing grid shape)
+
+| Status            | Round 50 (56/60-exc sweep) | Round 51 |
+|-------------------|----------------------------|----------|
+| Grid              | arch 9,37,49,73,122,123,152,153,169,198 × s0-5 (60) | arch 9,37,49,73,122 × s0-5 (**30**, ≤30-game cap) |
+| PASS              | 2                          | 10       |
+| FAIL_DIVERGENCE   | **0**                      | **0**    |
+| FAIL_TIMEOUT      | 2                          | 20       |
+| ARCHETYPE_FILTERED | 0                         | 0        |
+| **FAIL_EXCEPTION** | **56**                    | **0**    |
+| Wall time         | 73.4s                      | 37.9s    |
+
+(Round-51 sweep scoped to 5 archetypes / 30 games to fit the agent's
+≤30-game / <2-min hard cap; the per-archetype shape matches round 50's
+on the overlapping archetypes. The relevant signal is the
+`FAIL_EXCEPTION` column: **56 → 0**. The 56 round-50 exceptions were
+all the single deterministic `register_token_printing` `ValueError`
+on game 2+ of each archetype; round 51 has **zero**, every seed now
+running cleanly through the cross-game registry.)
+
+**`FAIL_TIMEOUT` is the unchanged, documented combat-model limitation
+(round-50 finding 2), NOT a regression.** Gravpack Monoist is a 2/1
+flier; the bridge-filtered creatureless mirror can't block it, so
+under `attack_all` games run to max-turns instead of producing the
+DIES that fires the trigger. The substrate-blocker fix removes the
+exception wall *behind* which those games were never even reached;
+the timeout ceiling above it is the same round-42+/round-50
+single-creature-deck limitation. **0 `FAIL_DIVERGENCE`** everywhere
+the path runs (consistent with round-50's per-game-clear validation:
+once the registry bug is out of the way, every Gravpack-bearing real
+game is byte-equal across engines).
+
+### Gate
+
+Parity gate **1216 → 1218** (+2: the two round-51 multi-game
+regression pins in `tests/test_trajectory.py` —
+`test_r51_seat_token_printings_cross_game_varying_pid_no_conflict`
+[unit-level deterministic core] +
+`test_r51_real_gravpack_archetype_multi_game_no_registry_conflict`
+[end-to-end: 3 games of real archetype 37 across seeds 0/1/2 through
+`setup_matched_game_from_real_decks` in one process, no registry clear
+between games, asserting no `ValueError` + correct per-game bridge
+resolution]). Both verified to FAIL with the exact round-50
+`ValueError` when the fix is reverted, PASS with it. No Rust change →
+no `.pyd` rebuild.
+
+### Forward picture
+
+The round-51 substrate-blocker is closed, so the round-49/50 forward
+picture holds unblocked: **Phase 3** (Lander-token-activated-ability
+sub-substrate — Galactic Wayfarer / Beamsaw Prospector / Edge Rover /
+Biomechan Engineer / Glacier Godmaw, ~88k+ cumulative decks) is the
+single largest remaining EoE-pool-delta lever and is now safe to
+bench in multi-game sweeps the moment a Lander carrier is admitted
+(the cross-game registry is no longer a blocker for ANY token
+carrier). The bench combat-model limitation (an evasive flier never
+dying in the creatureless filtered mirror, so the tapped-token spawn's
+real-game byte-equality stays synthetic-pinned) is unchanged and
+remains the round-42+ standing recommendation, independent of this
+fix.
