@@ -48855,6 +48855,354 @@ def test_rust_scry_n_cross_controller_routing_p1_source():
     assert p1_lib_after == p1_lib_before
 
 
+def test_cross_engine_synthetic_etb_target_opponent_loses_life_cross_controller_routes_to_source_controller_opponent_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``target_opponent_loses_life(amount=3)``
+    trigger fired by a permanent CONTROLLED BY P1 while
+    ACTIVE_PLAYER=P0 -- the cross-controller leg of the round-22
+    ``target_opponent_loses_life`` bridge arm. Both engines must derive
+    the losing-life seat from the SOURCE's controller (P1) so the
+    OPPONENT (P0) loses the life, NOT P1 (which would happen if the
+    resolve derived the opponent set from active_player's opponent on
+    a pre-fix substrate).
+
+    **The substrate.** Per the Rust regression pin
+    ``test_rust_target_opponent_loses_life_cross_controller_routing``
+    (tests/test_parity_smoke.py:45440): Rust's
+    ``Effect::TargetOpponentLosesLife { amount }`` resolve arm
+    (state_ops_resolve.rs:3744-3787) performs an INTRINSIC 5-zone
+    walk + stack-scan fallback to recover the source's controller,
+    then computes ``opponent_id = 1 - controller`` and applies
+    ``saturating_sub(amount)`` to that opponent's life total. The
+    intrinsic source-controller derivation is the I-fix family for
+    this arm: the cross-controller case works correctly without any
+    caller plumbing because the resolve walks zones directly to find
+    the source. Python's ``TargetOpponentLosesLife.resolve``
+    (effects/generic/life.py:278-296) is target-required
+    (``requires_target=True``; ``legal_targets`` emits ``("player",
+    id)`` for each non-controller non-lost player), so the agent on
+    the SOURCE's controller picks the target via the Decision
+    pipeline. The trigger pushes with ``controller_id`` = the source's
+    controller, so Python derives the same opponent set correctly.
+
+    **Same-controller sister coverage.** The Rust regression pin
+    ``test_rust_target_opponent_loses_life_basic_amount_three`` at
+    line 45397 exercises source_owner=p0 (active_player and source
+    controller coincide -- the OPPONENT pick is P1 regardless of
+    routing). The Rust regression pin
+    ``test_rust_target_opponent_loses_life_cross_controller_routing``
+    at line 45440 already exercises the cross-controller leg on the
+    Rust side. This probe ships the missing CROSS-ENGINE leg: source
+    on P1's bf (controller=1), P0 has the target life,
+    ACTIVE_PLAYER=P0. The SOURCE's controller (P1) and the active
+    player (P0) DIFFER, so the OPPONENT pick is P0 if-and-only-if
+    the resolve uses the SOURCE's controller (post-fix). A pre-fix
+    Rust that derived the opponent set from active_player would
+    have hit P1 (its own controller) which is a no-op for "target
+    opponent" -- a degenerate silent no-op or self-target raise.
+
+    **Why synthetic, not Dubious Delicacy.** The bridge arm
+    docstring (cross_engine.py:3729-3735) defers cross-engine
+    end-to-end probes per the round-17/18/19 synthetic-only-when-
+    riders-cascade precedent (the player-target Decision pipeline
+    is its own surface beyond the bare bridge-arm slice). Spinning
+    up Dubious Delicacy (Artifact carrier with activated
+    ``{2}, {T}, Sacrifice this artifact:`` cost) would also exercise
+    the activated-ability cost-payment Decision pipeline -- a
+    different surface. A synthetic 2/2 vanilla ("Cross-Controller
+    Life-Drain Bear") with the bridged ETB trigger keeps this probe
+    self-contained and mirrors the I81/I82/I83 + I65 mill cross-
+    controller probe shape exactly.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Inject Cross-Controller Life-Drain Bear (the source) onto
+         P1's bf** with controller=1 (Rust's
+         ``register_and_inject_object``; Python's ``new_object`` +
+         bf append + manual ``_trigger_etb_abilities``). The
+         injection's ENTERS dispatch fires the SourceIsSelf
+         trigger; the trigger lands on the stack with controller=1
+         (the SOURCE's controller).
+
+      3. **Seat ``_PickFirstOpponentTargetAgent`` on P1** (the
+         source's controller, who picks the target opponent). The
+         agent's opponent-controller filter returns ``("player",
+         0)`` from the legal_targets pool (which contains exactly
+         one entry: the P0 player, since P1 is the controller and
+         the only non-controller non-lost player is P0).
+
+      4. **Drain both stacks.** The trigger resolves: Rust's
+         intrinsic 5-zone walk finds the source on P1's bf, derives
+         source-controller=1, computes opponent_id = 0, and
+         subtracts 3 from P0's life (20 -> 17). Python's resolve
+         uses the trigger's controller_id=1 and the agent's picked
+         target=("player", 0); subtracts 3 from P0's life (20 -> 17).
+
+      5. **Cross-engine assert (post-fix contract):**
+         - P0's life dropped by 3 on both engines (20 -> 17).
+         - P1's life unchanged on both engines (the source-
+           controller doesn't lose life from "target opponent").
+         - Source still on P1's bf (inject anchor; P1 bf size = 1).
+         - No residual stack on either engine.
+         - No bf / hand / graveyard size deltas (only life moves).
+
+    **Pre-fix vs post-fix observable.**
+    Pre-fix Rust would have:
+      - Derived opponent_id from active_player=P0, computed
+        opponent_id = 1, subtracted 3 from P1's life (the source's
+        OWN controller). P0's life would still be 20; P1's life
+        would be 17 (or, if the pre-fix raised on self-target,
+        a degenerate fizzle leaving both at 20).
+    Post-fix Rust derives source-controller=1 from the source's
+    location on P1's bf, computes opponent_id = 0, subtracts 3 from
+    P0's life. The OBSERVABLE distinguishing the two: post-fix P0
+    life = 17 / P1 life = 20; pre-fix P0 life = 20 / P1 life = 17.
+    Python's always-correct behavior (target-driven via Decision
+    pipeline + correct controller_id from trigger emission) makes
+    the cross-engine pin sharp.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline.
+      * amount = 0 silent no-op -- the same-controller Rust pin at
+        line 45423 exercises this path; this probe drives amount=3
+        for a sharp life delta on both seats.
+      * Saturating life clamp at low life -- the same-controller
+        Rust pin at line 45466 exercises that path; this probe
+        starts at 20 life so saturating_sub does not engage.
+      * Negative-amount raise -- the bridge arm raises at parse
+        time (target_opponent_loses_life bridge arm at
+        cross_engine.py:3741-3746); not exercised in this probe
+        which uses amount=3.
+      * Multi-opponent fanout -- the 2-player harness reduces
+        "target opponent" to the one opponent of the source's
+        controller. The N-player target-pick UX is exercised at
+        the Decision pipeline level elsewhere.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller Life-Drain Bear on P1's battlefield
+        (controller=1; unchanged from inject).
+      * P0's life: 17 (was 20, lost 3).
+      * P1's life: 20 (unchanged; source-controller doesn't lose).
+      * P0 / P1 hand / graveyard / library: unchanged (life-only).
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines (the
+    # whole point of the probe is the cross-controller case where
+    # the SOURCE's controller != active_player).
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side: inject Cross-Controller Life-Drain Bear onto
+    # P1's bf with controller=1. The ETB trigger fires
+    # TargetOpponentLosesLife(amount=3); the resolve's intrinsic
+    # source-finder walks zones to derive source-controller=1, then
+    # computes opponent_id = 0 = P0. P0 loses 3 life. ----
+    ZONE_BATTLEFIELD = 2
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p0_hand_size_before = rust_state.hand_sizes[0]
+    rust_p1_hand_size_before = rust_state.hand_sizes[1]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+
+    rust_source_dict = {
+        "name": "Cross-Controller Life-Drain Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "target_opponent_loses_life",
+                    "amount": 3,
+                },
+            }
+        ],
+    }
+    rust_state.register_and_inject_object(
+        rust_source_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller Life-Drain Bear's arrival on P1 "
+        "should fire the SourceIsSelf ENTERS trigger and land "
+        "TargetOpponentLosesLife on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import TargetOpponentLosesLife
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    source_printing = CardPrinting(
+        name="Cross-Controller Life-Drain Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=TargetOpponentLosesLife(amount=3),
+            ),
+        ),
+    )
+    # Custom agent for P1 (the source's controller, who picks the
+    # target opponent): mirror Rust's deterministic single-opponent
+    # pick. The agent returns ("player", 0) -- the only legal target
+    # in the legal_targets pool, since P1 is the controller and is
+    # excluded from its own "opponent" set.
+    py_state.players[1].agent = _PickFirstOpponentTargetAgent()
+
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_p0_hand_size_before = len(py_state.players[0].hand)
+    py_p1_hand_size_before = len(py_state.players[1].hand)
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller Life-Drain Bear's arrival on P1 "
+        "should fire the IsSelf ENTERS trigger and land "
+        "TargetOpponentLosesLife on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Post-drain: P0's life dropped by 3, P1's life unchanged. The
+    # cross-controller routing is the load-bearing pin: pre-fix Rust
+    # would have computed opponent_id from active_player=P0, hit P1
+    # (its own source-controller) with the life loss, leaving P0's
+    # life at 20 instead of 17.
+    assert rust_state.get_life(0) == rust_p0_life_before - 3, (
+        f"Rust cross-controller routing contract: P0's life should "
+        f"drop by 3 ({rust_p0_life_before - 3}); got "
+        f"{rust_state.get_life(0)}. A pre-fix Rust would have "
+        f"derived opponent_id from active_player=P0, looked at P1's "
+        f"life (the source's OWN controller), and either silent-"
+        f"no-opped or self-targeted -- leaving P0's life at "
+        f"{rust_p0_life_before}."
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before, (
+        f"Rust: P1's life should be unchanged at "
+        f"{rust_p1_life_before} (the source-controller's opponent "
+        f"is P0, not P1; P1 doesn't lose life from its own "
+        f"target-opponent-loses-life trigger); got "
+        f"{rust_state.get_life(1)}"
+    )
+
+    # Python observable: same shape on the equivalent zones.
+    assert py_state.players[0].life == py_p0_life_before - 3, (
+        f"Python: P0's life should drop by 3 "
+        f"({py_p0_life_before - 3}); got "
+        f"{py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == py_p1_life_before, (
+        f"Python: P1's life should be unchanged at "
+        f"{py_p1_life_before}; got {py_state.players[1].life}"
+    )
+
+    # Hand / graveyard sizes unchanged on both engines (life-only
+    # effect; no zone moves).
+    assert rust_state.hand_sizes[0] == rust_p0_hand_size_before
+    assert rust_state.hand_sizes[1] == rust_p1_hand_size_before
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_size_before
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_size_before
+    assert len(py_state.players[0].hand) == py_p0_hand_size_before
+    assert len(py_state.players[1].hand) == py_p1_hand_size_before
+    assert len(py_state.players[0].graveyard) == py_p0_gy_size_before
+    assert len(py_state.players[1].graveyard) == py_p1_gy_size_before
+
+    # Source still on P1's bf (inject anchor).
+    rust_p1_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert rust_p1_bf_after == 1, (
+        f"Rust: P1's bf should still hold the source. "
+        f"after p1_bf={rust_p1_bf_after}"
+    )
+    assert py_p1_bf_after == 1, (
+        f"Python: P1's bf should still hold the source. "
+        f"after p1_bf={py_p1_bf_after}"
+    )
+
+    # Cross-engine: per-zone parity on counts + lives.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+    assert rust_p1_bf_after == py_p1_bf_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
