@@ -13998,5 +13998,258 @@ def test_rust_parser_accepts_mill_target_player_equal_to_your_life_total_in_cast
     assert pid == 0
 
 
+def test_bridge_create_token_each_player_basic_translation():
+    """BLOCKED-RUST-EFFECT slice (round 43) -- each living player
+    creates N tokens of the given printing under their own control.
+    Rust ``{"kind": "create_token_each_player", "count": N,
+    "token_printing_id": pid}`` translates to Python
+    ``CreateToken(token_printing=<registered>, count=N,
+    each_player=True)``.
+
+    Sister of the existing ``create_token`` bridge arm; same two-
+    field schema, distinguished by variant (closed-vocab convention
+    -- the each-player vs self-only choice rides on the variant
+    name / dict ``kind``, not on a bool field). Pins the
+    each_player=True flag on the returned Python CreateToken.
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect, clear_token_printings,
+        register_token_printing,
+    )
+
+    clear_token_printings()
+    lander = make_token_creature(
+        name="Lander Token (each-player bridge pin)",
+        power=0, toughness=0, subtypes=("Lander",), artifact=True,
+    )
+    register_token_printing(13, lander)
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "create_token_each_player",
+            "count": 1,
+            "token_printing_id": 13,
+        }
+    )
+    assert isinstance(e, CreateToken)
+    assert e.token_printing is lander
+    assert e.count == 1
+    assert e.each_player is True
+    # Other rider flags default per the dataclass (Rust each-player
+    # variant has no mirror for them; the bridge constructs the
+    # bare shape).
+    assert e.tapped is False
+    assert e.attacking is False
+    assert e.schedule_end_of_combat_sacrifice is False
+    clear_token_printings()
+
+
+def test_bridge_create_token_each_player_count_default_one():
+    """Missing ``count`` defaults to 1 (mirrors the sister
+    ``create_token`` arm's lenient default convention). Each-player
+    fanout with count=1 is the EoE consumer shape (Edge Rover ->
+    each player creates a Lander token, count=1).
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect, clear_token_printings,
+        register_token_printing,
+    )
+
+    clear_token_printings()
+    lander = make_token_creature(
+        name="Lander Token (each-player default-count pin)",
+        power=0, toughness=0, subtypes=("Lander",), artifact=True,
+    )
+    register_token_printing(14, lander)
+    e = _ta_dict_to_python_effect(
+        {"kind": "create_token_each_player", "token_printing_id": 14}
+    )
+    assert isinstance(e, CreateToken)
+    assert e.token_printing is lander
+    assert e.count == 1
+    assert e.each_player is True
+    clear_token_printings()
+
+
+def test_bridge_create_token_each_player_distinct_from_static_create_token_sister():
+    """Bridge arm pin: the round-43 each-player variant and the
+    round-12 static ``create_token`` arm both produce ``CreateToken``
+    Python instances, but they differ on the ``each_player`` flag
+    (True vs False). Pin guards against accidental cross-translation
+    drift between the two sisters at the bridge layer (mirrors
+    round-42 distinct-from-sister pin for mill_target_player_equal).
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect, clear_token_printings,
+        register_token_printing,
+    )
+
+    clear_token_printings()
+    soldier = make_token_creature(
+        name="Soldier (each-vs-static pin)",
+        power=1, toughness=1, subtypes=("Soldier",),
+    )
+    register_token_printing(15, soldier)
+    e_each = _ta_dict_to_python_effect(
+        {
+            "kind": "create_token_each_player",
+            "count": 1,
+            "token_printing_id": 15,
+        }
+    )
+    e_static = _ta_dict_to_python_effect(
+        {"kind": "create_token", "count": 1, "token_printing_id": 15}
+    )
+    assert isinstance(e_each, CreateToken)
+    assert isinstance(e_static, CreateToken)
+    # The two sisters differ on each_player.
+    assert e_each.each_player is True
+    assert e_static.each_player is False
+    # The two instances are NOT equal -- they differ on a frozen
+    # dataclass field (each_player).
+    assert e_each != e_static
+    clear_token_printings()
+
+
+def test_bridge_create_token_each_player_missing_registration_raises_keyerror():
+    """``create_token_each_player`` with a ``token_printing_id`` not
+    present in the registry raises ``KeyError`` with a clear hint --
+    silent divergence from a missing setup step would be much harder
+    to debug than an immediate failure at translation time. Mirrors
+    the sister ``create_token`` arm's missing-registration shape.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect, clear_token_printings,
+    )
+
+    clear_token_printings()
+    with pytest.raises(KeyError, match="token_printing_id=888"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "create_token_each_player",
+                "count": 1,
+                "token_printing_id": 888,
+            }
+        )
+
+
+def test_rust_parser_accepts_create_token_each_player_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "create_token_each_player", ...}`` on a
+    triggered_ability carrier. The EoE consumer (Edge Rover) uses a
+    dies-trigger carrier; pinning here keeps the Python bridge from
+    drifting away from Rust's parse_effect coverage on this surface.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    # Pre-register the inner Lander token so the carrier's
+    # triggered-ability dict can reference its pid.
+    lander_pid = reg.register_printing({
+        "name": "Round-43 Bridge Pin Lander",
+        "card_types": ["Artifact"],
+    })
+    assert lander_pid == 0
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- CreateTokenEachPlayer",
+        "card_types": ["Creature"],
+        "power": 2, "toughness": 2,
+        "mana_cost": {"R": 1, "generic": 2},
+        "triggered_abilities": [
+            {
+                "event": "dies",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "create_token_each_player",
+                    "count": 1,
+                    "token_printing_id": lander_pid,
+                },
+            }
+        ],
+    }
+    carrier_pid = reg.register_printing(d)
+    assert carrier_pid == 1
+
+
+def test_rust_parser_rejects_create_token_each_player_with_typo():
+    """Negative lockstep pin: a misspelled kind (e.g.
+    ``create_tokens_each_player`` -- spurious ``s`` plural) surfaces
+    as ValueError on Rust's parse_effect arm because the new variant
+    isn't registered for that spelling. Pin against accidental schema
+    drift between bridge dict shape and Rust parser's accepted-kinds
+    set (mirrors round-42 typo-rejection pin).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    # Pre-register an inner printing so the only failure mode is the
+    # typo on the outer effect kind.
+    inner_pid = reg.register_printing({
+        "name": "Round-43 Typo Pin Inner",
+        "card_types": ["Artifact"],
+    })
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- create_token_each typo",
+        "card_types": ["Creature"],
+        "power": 1, "toughness": 1,
+        "mana_cost": {"R": 1},
+        "triggered_abilities": [
+            {
+                "event": "dies",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    # Misspelled -- spurious ``s`` on ``tokens``.
+                    "kind": "create_tokens_each_player",
+                    "count": 1,
+                    "token_printing_id": inner_pid,
+                },
+            }
+        ],
+    }
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown effect kind"):
+        reg.register_printing(d)
+
+
+def test_rust_parser_accepts_create_token_each_player_in_cast_effects():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "create_token_each_player", ...}`` on a
+    cast-spell ``effects`` carrier. Sister of the
+    triggered_ability-carrier lockstep pin -- the same parse_effect
+    arm dispatches both carriers, so any drift surfaces on either pin.
+    Mirrors the round-25/26/27/30/31/32/33/34/35/36/37/42 cast-spell
+    vs trigger lockstep convention.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    lander_pid = reg.register_printing({
+        "name": "Round-43 Cast-effects Pin Lander",
+        "card_types": ["Artifact"],
+    })
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- CreateTokenEachPlayer (Sorcery)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "effects": [
+            {
+                "kind": "create_token_each_player",
+                "count": 1,
+                "token_printing_id": lander_pid,
+            },
+        ],
+    }
+    carrier_pid = reg.register_printing(d)
+    assert carrier_pid == 1
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

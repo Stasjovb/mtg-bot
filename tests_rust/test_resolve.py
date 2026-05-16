@@ -16249,3 +16249,157 @@ def test_resolve_mill_target_player_equal_to_life_total_distinct_from_static_mil
     # Mills p0's life = 20 cards, NOT 99 or 7. Extra fields silently
     # ignored.
     assert state.library_sizes[1] == p1_lib_before - 20
+
+
+# ---------------------------------------------------------------------
+# BLOCKED-RUST-EFFECT slice (round 43): CreateTokenEachPlayer
+# Each-player create-token sister-variant of the existing
+# `Effect::CreateToken` arm. EoE consumer: Edge Rover ("each player
+# creates a Lander token"). Pins mirror the static `create_token` arm's
+# pin shape (count=N spawns, zero/no-op, unknown printing raises,
+# negative count raises) plus the each-player-specific shapes
+# (per-recipient fanout, has_lost skip, extra-recipients ENTERS
+# fanout).
+# ---------------------------------------------------------------------
+
+
+def _each_player_lander_dict(count, token_printing_id):
+    """A create-token-each-player spell: each living player creates
+    ``count`` tokens of the named printing. EoE shape mirror of
+    Edge Rover's dies trigger (\"each player creates a Lander token\")
+    but driven by a synthetic sorcery for simplicity (the trigger
+    delivery path is not under test here -- only the apply substrate)."""
+    return {
+        "name": "Test Each-Player Conscript",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "effects": [
+            {
+                "kind": "create_token_each_player",
+                "count": count,
+                "token_printing_id": token_printing_id,
+            }
+        ],
+    }
+
+
+def test_resolve_create_token_each_player_spawns_on_every_living_player(
+    synthetic_state,
+):
+    """Happy path: count=1 + 2 living players -> 1 token on p0's bf,
+    1 token on p1's bf. Sister of `create_token` arm but with fanout."""
+    token_pid, _ = _register_soldier_token(synthetic_state)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _each_player_lander_dict(count=1, token_printing_id=token_pid),
+        0, ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    bf_before = list(synthetic_state.battlefield_sizes)
+    synthetic_state.resolve_top_of_stack()
+    bf_after = list(synthetic_state.battlefield_sizes)
+
+    # Both players got +1 token (the sorcery source goes to p0's
+    # graveyard post-resolve, so the +1 on p0's bf is exactly the
+    # token spawn -- no spell-source contribution).
+    assert bf_after[0] == bf_before[0] + 1
+    assert bf_after[1] == bf_before[1] + 1
+
+
+def test_resolve_create_token_each_player_count_two_spawns_two_per_player(
+    synthetic_state,
+):
+    """count=2 fans out per-recipient: each living player creates 2
+    tokens. 2 living players -> 4 total tokens (2 per side). Pins
+    the per-recipient count semantics distinct from "total count
+    split across recipients"."""
+    token_pid, _ = _register_soldier_token(synthetic_state)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _each_player_lander_dict(count=2, token_printing_id=token_pid),
+        0, ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    bf_before = list(synthetic_state.battlefield_sizes)
+    synthetic_state.resolve_top_of_stack()
+    bf_after = list(synthetic_state.battlefield_sizes)
+
+    assert bf_after[0] == bf_before[0] + 2
+    assert bf_after[1] == bf_before[1] + 2
+
+
+def test_resolve_create_token_each_player_zero_count_no_op(synthetic_state):
+    """count=0 is a legal no-op -- no token created on any recipient
+    bf, no error, stack still pops. Mirrors sister `create_token` arm."""
+    token_pid, _ = _register_soldier_token(synthetic_state)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _each_player_lander_dict(count=0, token_printing_id=token_pid),
+        0, ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    bf_before = list(synthetic_state.battlefield_sizes)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert list(synthetic_state.battlefield_sizes) == bf_before
+
+
+def test_resolve_create_token_each_player_negative_count_raises(synthetic_state):
+    """Negative count is a schema error -- mirrors the sister
+    `create_token` arm's raise-on-negative shape. The validation
+    must fire BEFORE any state mutation (whole-or-nothing contract)
+    so a mid-fanout failure can't half-give some recipients tokens."""
+    token_pid, _ = _register_soldier_token(synthetic_state)
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _each_player_lander_dict(count=-1, token_printing_id=token_pid),
+        0, ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        synthetic_state.resolve_top_of_stack()
+
+
+def test_resolve_create_token_each_player_unknown_printing_raises(synthetic_state):
+    """A token_printing_id not present in the registry surfaces as
+    ValueError -- BEFORE any state mutation. Pins the whole-or-
+    nothing validation contract (no half-fanout)."""
+    bogus_pid = synthetic_state.registry_size + 999
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _each_player_lander_dict(count=1, token_printing_id=bogus_pid),
+        0, ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+    bf_before = list(synthetic_state.battlefield_sizes)
+
+    with pytest.raises(ValueError, match="token_printing_id"):
+        synthetic_state.resolve_top_of_stack()
+
+    # Whole-or-nothing: no half-fanout. Both bf sizes unchanged
+    # after the error path.
+    assert list(synthetic_state.battlefield_sizes) == bf_before
+
+
+def test_resolve_create_token_each_player_skips_lost_players(synthetic_state):
+    """A player who has lost (`has_lost == True`) does NOT receive a
+    token. Mirrors Python's `if not p.has_lost` guard at
+    tokens.py:212. Pins CR 102.5 living-players-only fanout."""
+    token_pid, _ = _register_soldier_token(synthetic_state)
+    # Mark p1 as lost (Round-26 G11 closure: `lose_game` flips the
+    # sticky `has_lost` flag).
+    synthetic_state.lose_game(1)
+
+    spell_obj_id = synthetic_state.register_and_inject_object(
+        _each_player_lander_dict(count=1, token_printing_id=token_pid),
+        0, ZONE_HAND,
+    )
+    synthetic_state.push_to_stack(spell_obj_id, 0)
+
+    bf_before = list(synthetic_state.battlefield_sizes)
+    synthetic_state.resolve_top_of_stack()
+    bf_after = list(synthetic_state.battlefield_sizes)
+
+    # Only p0 (living) got a token; p1 (lost) bf unchanged.
+    assert bf_after[0] == bf_before[0] + 1
+    assert bf_after[1] == bf_before[1]

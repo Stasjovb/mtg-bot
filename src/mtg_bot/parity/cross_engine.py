@@ -1827,6 +1827,78 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             token_printing=token_printing,
             count=eff_dict.get("count", 1),
         )
+    if kind == "create_token_each_player":
+        # BLOCKED-RUST-EFFECT slice (round 43) -- "Each player
+        # creates N tokens of the given printing under their own
+        # control." Rust's
+        # ``Effect::CreateTokenEachPlayer { count, token_printing_id }``
+        # (cards.rs sister-variant of ``CreateToken``) carries the
+        # same two-field schema as the static sister arm above; the
+        # each-player vs self-only choice rides on the variant name
+        # (= the dict ``kind``), not on a boolean field -- this
+        # mirrors round-32/33/34/35/.. sister-variant precedent
+        # (closed-vocab convention: bool fields are second-class on
+        # the bridge, every binary choice lives in a separate
+        # variant). Python's
+        # ``CreateToken(token_printing=..., count=N, each_player=True)``
+        # (``effects/generic/tokens.py:169-294``) is the existing
+        # class's flag lane -- no new Python class needed because
+        # the ``each_player=True`` recipient-fanout branch
+        # (tokens.py:210-214) already exists and is tested
+        # (``test_rules_cards_combat.py:238`` Edge Rover end-to-end +
+        # ``test_create_token_each_player_skips_lost_players``).
+        #
+        # **Schema parity.** Rust's two-field variant
+        # (``count: i32``, ``token_printing_id: u32``) -> Python's
+        # two-kwarg construction (``token_printing``, ``count``)
+        # with the ``each_player=True`` flag explicitly set. Other
+        # rider flags (``tapped``, ``attacking``,
+        # ``schedule_end_of_combat_sacrifice``) stay at their
+        # dataclass defaults; the Rust resolve arm doesn't plumb
+        # them for the same reason the sister ``create_token`` arm
+        # doesn't (no EoE each-player consumer engages them; Edge
+        # Rover -> Lander is the only consumer today).
+        #
+        # **Printing-id -> Python-CardPrinting lookup.** Same
+        # ``_TOKEN_PRINTING_BY_PID`` registration map as the sister
+        # ``create_token`` arm above; probes that drive this arm
+        # cross-engine must call
+        # ``register_token_printing(pid, py_printing)`` BEFORE
+        # building either state. Missing registrations raise
+        # ``KeyError`` with the same hint shape as the sister arm.
+        #
+        # **Recipient fanout parity.** Both engines iterate living
+        # players (``has_lost == False``) in ``state.players`` index
+        # order and push tokens onto each recipient's own
+        # battlefield. Python's
+        # ``recipients = [p.id for p in state.players if not p.has_lost]``
+        # (tokens.py:212) mirrors Rust's
+        # ``for idx in 0..n_players { if !has_lost { living.push(idx) } }``
+        # pre-pass. ENTERS dispatch fans out in the same fanout
+        # order on both sides.
+        #
+        # **Schema lenience.** Missing ``count`` defaults to 1
+        # (mirrors the sister ``create_token`` arm's lenient default);
+        # missing ``token_printing_id`` raises immediately because
+        # there is no plausible default.
+        from mtg_bot.effects.generic.tokens import CreateToken
+        token_pid = eff_dict["token_printing_id"]
+        try:
+            token_printing = _TOKEN_PRINTING_BY_PID[token_pid]
+        except KeyError as exc:
+            raise KeyError(
+                f"cross_engine create_token_each_player bridge: no "
+                f"Python CardPrinting registered for "
+                f"token_printing_id={token_pid!r}. Probes that drive "
+                f"the create_token_each_player arm cross-engine must "
+                f"call register_token_printing(pid, py_printing) "
+                f"BEFORE building either state."
+            ) from exc
+        return CreateToken(
+            token_printing=token_printing,
+            count=eff_dict.get("count", 1),
+            each_player=True,
+        )
     if kind == "mill_target_player":
         # "Target player puts the top N cards of their library into
         # their graveyard." Rust's
