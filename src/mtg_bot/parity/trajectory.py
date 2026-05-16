@@ -1820,6 +1820,88 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     ("enters", "land_enters_controlled_by_you", "gain_life"),
     ("enters", "land_enters_controlled_by_you", "pump_self_until_eot"),
     ("enters", "land_enters_controlled_by_you", "draw_cards"),
+    # Landfall + mill extension (round-48 bench-admit-set slice). Adds
+    # a FOURTH safe leaf effect under the canonical landfall predicate
+    # sentinel: ``mill`` (bare shape — single ``count`` payload key,
+    # see :data:`_SAFE_EFFECT_KEYS` "mill" docstring). This is the
+    # round-48 N1 highest-signal lever per the round-47 bench entry's
+    # FAIL_TIMEOUT root-cause investigation: the timeout-dominant
+    # archetypes (round-46/47 Sweep A grid 0,1,4,5,10,11,12,13,14,15)
+    # collapse to ~1-2 admitted creature copies + ~58 basics, so games
+    # never end -> FAIL_TIMEOUT. This entry admits a real EoE card.
+    #
+    # **Real-EoE consumer admitted today: Icetill Explorer**
+    # (2/4 {2}{G}{G}, no keywords, single trigger
+    # "Landfall — Whenever a land you control enters, mill a card",
+    # i.e. ``ENTERS / And(SubjectIsLand, ControlledByYou) /
+    # SelfMill(amount=1)``). It carries no keywords, no
+    # activated/static abilities, no warp/ward/dynamic-P-T, and its
+    # ONLY trigger is this landfall+mill — every gate in
+    # :func:`_printing_is_bridge_simple_creature` passes once the
+    # ``mill`` leaf rides the landfall predicate. EoE-pool delta
+    # (scripts/scout_r48_timeout_archetype_admit_delta.py): Icetill
+    # Explorer appears in Sweep-A archetypes 10/11/12 (x1 each,
+    # 1->2 admitted creature copies per deck) plus archetypes 2 (x2),
+    # 3 (x2), 51 (x1) outside the grid. The other EoE SelfMill
+    # carrier, Seedship Broodtender (ENTERS / IsSelf / SelfMill(3)),
+    # is NOT admitted — it also carries an activated ability, a
+    # declined silent-mistranslation class, so it stays correctly
+    # dropped at the ``activated_abilities`` gate (the
+    # source_is_self+mill substrate entry below pins this reject-path).
+    #
+    # **Cross-engine parity contract.** ``mill`` is a pure
+    # deterministic zone move (own library top -> own graveyard) with
+    # NO PendingDecision / agent / target interaction — identical
+    # resolve semantics to the already-shipped ``draw_cards`` /
+    # ``gain_life`` landfall leaves. Bridge support pre-existed:
+    #   * Rust ``Effect::Mill { count }`` parsed at cards.rs:3991,
+    #     serialized at cards.rs:6450, resolved at
+    #     state_ops_resolve.rs:1034-1051 reading
+    #     ``current_resolve_source_controller`` (I65 controller-of-
+    #     effect fix). Empty-library mid-mill silently stops (CR
+    #     704.5b applies to DRAWING not MILLING) — both engines break
+    #     out of the loop, observably matching.
+    #   * Python ``SelfMill(amount)`` (library_lookat.py:624) pops
+    #     ``amount`` cards from ``library[0]`` to the controller's
+    #     graveyard, breaking on empty library — bit-equal.
+    #   * Bridge arm ``cross_engine._ta_dict_to_python_effect`` "mill"
+    #     (cross_engine.py:725, shipped round-16) maps the dict's
+    #     ``count`` -> ``SelfMill(amount=count)``; the
+    #     ``amount``/``count`` field-name discrepancy is local to the
+    #     bridge translation, same shape as the established
+    #     ``draw_cards count -> amount`` arm.
+    # The landfall predicate path itself is the SAME one round-36's
+    # landfall+gain_life (Eumidian Terrabotanist) and round-37's
+    # landfall+pump_self (Icecave Crasher) validated bit-equal on
+    # both engines under the ENTERS dispatch — only the leaf effect
+    # differs, and ``mill``'s resolve is strictly simpler (single
+    # zone move, no scalar/keyword rider).
+    ("enters", "land_enters_controlled_by_you", "mill"),
+    # ENTERS + source_is_self + mill substrate (round-48, sister to
+    # the landfall+mill entry above on the source_is_self predicate
+    # axis — mirrors how round-1's ENTERS+IsSelf leaf set carries
+    # draw_cards/gain_life/scry_n + round-42's surveil). **No real-EoE
+    # consumer admitted today**: the only EoE ENTERS+IsSelf+SelfMill
+    # carrier is Seedship Broodtender (1/4 {2}{G},
+    # "When ~ enters, mill three cards", SelfMill(3)) which ALSO has
+    # an activated ability — a declined silent-mistranslation class
+    # the loader doesn't seat — so Seedship Broodtender stays dropped
+    # at the ``activated_abilities`` gate. This substrate entry is
+    # pre-positioned for any future EoE / standard-format bare
+    # "When ~ enters, mill N" creature (Stitcher's Supplier-style,
+    # one of the most common ETB-mill shapes in the broader pool) so
+    # the next slice landing such a card need not extend the
+    # allowlist again; pinned by a reject-path test so the
+    # predicate-effect product gate stays honest in the meantime.
+    # Same substrate-only landing precedent as round-37 DDDD
+    # (landfall+draw) / round-43 (ATTACKS+surveil) / round-44
+    # (ATTACKS+draw/gain) / round-47 (DIES+draw). The
+    # ``_SAFE_EFFECT_KEYS`` "mill" whitelist + the recognizer's
+    # ENTERS+IsSelf ``safe_effect_kinds`` widening (below) are the
+    # only other edits this leaf needs; the event-string gate and the
+    # ``_is_safe_trigger_dict`` dict-side gate stay unchanged since
+    # both already admit ENTERS + the ``count`` payload-key whitelist.
+    ("enters", "source_is_self", "mill"),
 })
 
 
@@ -1869,6 +1951,23 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # an Anticausal-Vestige-and-friends mechanic on a different
     # axis), so this gate just pins the contract.
     "surveil": frozenset({"kind", "count"}),
+    # Mill (self-mill) — single ``count`` payload key (round-48
+    # bench-admit-set slice). Rust's ``Effect::Mill { count: i32 }``
+    # (cards.rs:75, parsed at cards.rs:3991, serialized at
+    # cards.rs:6450) is bare: controller mills the top ``count`` cards
+    # of THEIR OWN library into THEIR OWN graveyard (CR 701.13b — the
+    # controller-target shortcut sibling of ``MillTargetPlayer``).
+    # Python's ``SelfMill(amount: int = 1)``
+    # (effects/generic/library_lookat.py:624) is the matched class;
+    # its single ``amount`` field round-trips to Rust's ``count``
+    # spelling via the existing ``mill`` bridge arm
+    # (cross_engine._ta_dict_to_python_effect:725, shipped round-16's
+    # scry/surveil-family slice). The bare ``count`` payload is the
+    # only field on either side — no rider the bridge would silently
+    # drop (unlike Surveil's ``use_artifact_count`` or PumpSelf's
+    # ``granted_keywords``). The recognizer in
+    # :func:`_python_ta_to_safe_dict` gates this whitelist.
+    "mill": frozenset({"kind", "count"}),
 }
 
 
@@ -1994,7 +2093,11 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     from mtg_bot.effects.object_predicates import IsLand
     from mtg_bot.effects.generic.draw_mill import DrawCards
     from mtg_bot.effects.generic.life import GainLife
-    from mtg_bot.effects.generic.library_lookat import Scry, Surveil
+    from mtg_bot.effects.generic.library_lookat import (
+        Scry,
+        SelfMill,
+        Surveil,
+    )
     from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
 
     if not isinstance(ta, TriggeredAbility):
@@ -2038,8 +2141,15 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # starter set on the ATTACKS event axis.
         pred_dict = {"kind": "source_is_self"}
         if ta.event is Event.ENTERS:
+            # Round-48 widens the ENTERS+IsSelf arm from
+            # {draw_cards, gain_life, scry_n, surveil} to also include
+            # ``mill`` (bare SelfMill — substrate-only; the only EoE
+            # ENTERS+IsSelf+SelfMill carrier, Seedship Broodtender,
+            # is dropped on its activated ability so no real consumer
+            # is admitted on this leaf; the landfall+mill entry below
+            # is the one that admits a real card, Icetill Explorer).
             safe_effect_kinds = (
-                "draw_cards", "gain_life", "scry_n", "surveil",
+                "draw_cards", "gain_life", "scry_n", "surveil", "mill",
             )
         elif ta.event is Event.ATTACKS:
             # Round-44 widens the ATTACKS arm from {surveil} to
@@ -2104,8 +2214,16 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             "left": {"kind": "subject_is_land"},
             "right": {"kind": "controlled_by_you"},
         }
+        # Round-48 widens the landfall arm from
+        # {gain_life, pump_self_until_eot, draw_cards} to also include
+        # ``mill`` — admits the real EoE card Icetill Explorer
+        # (2/4 {2}{G}{G}, "Landfall — Whenever a land you control
+        # enters, mill a card"). See the
+        # ``("enters", "land_enters_controlled_by_you", "mill")``
+        # entry in :data:`_SAFE_TRIGGERS` for the full
+        # cross-engine-parity provenance.
         safe_effect_kinds = (
-            "gain_life", "pump_self_until_eot", "draw_cards",
+            "gain_life", "pump_self_until_eot", "draw_cards", "mill",
         )
     if pred_dict is None:
         return None
@@ -2166,6 +2284,25 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # dict shape uses Rust's spelling ``count`` per the
         # cross_engine bridge arm convention.
         eff_dict = {"kind": "surveil", "count": int(eff.amount)}
+    elif isinstance(eff, SelfMill):
+        # Bare-shape SelfMill (round-48 bench-admit-set slice). Python's
+        # ``SelfMill`` class (effects/generic/library_lookat.py:624)
+        # carries a SINGLE ``amount`` field — no rider the bridge would
+        # silently drop (contrast Surveil's ``use_artifact_count`` or
+        # PumpSelf's ``granted_keywords``). The dict shape uses Rust's
+        # spelling ``count`` per the ``mill`` cross_engine bridge arm
+        # convention (cross_engine.py:725, shipped round-16); the
+        # ``amount``/``count`` field-name discrepancy is local to the
+        # bridge translation, same shape as the established
+        # ``draw_cards count -> amount`` and ``surveil count -> amount``
+        # arms. SelfMill is a pure deterministic zone move (own library
+        # top -> own graveyard); empty-library mid-mill silently stops
+        # on BOTH engines (CR 704.5b applies to drawing, not milling)
+        # — see the ``("enters", "land_enters_controlled_by_you",
+        # "mill")`` entry in :data:`_SAFE_TRIGGERS` for the full
+        # cross-engine parity contract.
+        eff_kind = "mill"
+        eff_dict = {"kind": "mill", "count": int(eff.amount)}
     else:
         return None
     if eff_kind not in safe_effect_kinds:
