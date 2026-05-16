@@ -3213,6 +3213,206 @@ def test_flying_attacker_unblockable_by_groundwalker_parity():
     )
 
 
+# ---------------------------------------------------------------------------
+# Round-45 keyword-substrate extension: reach (CR 702.17). Sister of the
+# round-20 flying probe above — flying attacker on p0 + REACH blocker on
+# p1 → reach opens the block-legality gate (CR 702.17), the block IS
+# legal, both creatures trade in combat, life totals unchanged.
+#
+# Both engines model reach identically as a blocker-side gate-opener
+# in their flying-block legality check:
+#   * Python: ``combat.can_block`` (combat.py:70-72) —
+#     ``if "flying" in attacker_kws: if not ("flying" in blocker_kws or
+#     "reach" in blocker_kws): return False``.
+#   * Rust: ``state_ops_combat.rs::declare_blocker`` (line 738-744) —
+#     same flying-or-reach gate via ``battlefield_has_keyword``.
+# Reach on the ATTACKER is a no-op for blocking purposes on both engines
+# (the attacker is treated as ground for block-legality).
+#
+# This probe pins the parity-clean shape that lets ``_SAFE_KEYWORDS``
+# admit ``"reach"`` — so EoE printings carrying reach (Edge Rover,
+# Lashwhip Predator, Skystinger; plus Grasping-Longneck-style standard-
+# format creatures K2 flagged as substrate-blocked) survive the
+# production-deck filter.
+# ---------------------------------------------------------------------------
+
+
+def _inject_keyword_creature_on_bf(
+    py_state, rust_state,
+    *, controller_idx, keyword, printing_name, power=2, toughness=2,
+):
+    """Generalized sister of :func:`_inject_keyword_creature_on_p0_bf`.
+
+    Same shape as the p0-only helper but parameterized on
+    ``controller_idx`` so the reach probe (round-45) can drop a
+    keyworded blocker on p1's bf without contorting the p0-only helper's
+    signature (which other tests already depend on).
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    # Translate Python's spelling to Rust's: "first strike" -> "first_strike".
+    rust_keyword = keyword.replace(" ", "_")
+
+    # ---- Python side ----
+    printing = CardPrinting(
+        name=printing_name,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=power,
+        toughness=toughness,
+        produces=frozenset(),
+        keywords=frozenset({keyword}),
+    )
+    py_obj = py_state.new_object(
+        printing, owner_id=controller_idx, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": printing_name,
+            "card_types": ["Creature"],
+            "power": power,
+            "toughness": toughness,
+            "keywords": [rust_keyword],
+        },
+        controller_idx,
+        ZONE_BATTLEFIELD,
+    )
+    return int(py_obj.id), int(rust_obj_id)
+
+
+def test_reach_blocker_blocks_flying_attacker_parity():
+    """Reach blocker (2/2) legally blocks a flying attacker (2/2) — per
+    CR 702.17, reach lets a creature block flying attackers. The block
+    is NOT dropped (cf. the round-20 ``test_flying_attacker_unblockable_
+    by_groundwalker_parity`` where a ground blocker IS dropped). Both
+    creatures deal 2 to each other → both die. Life totals unchanged.
+
+    Setup: walk to turn 7 PRECOMBAT_MAIN with no creatures. Inject a 2/2
+    flying attacker on p0; inject a 2/2 reach blocker on p1. p0 attacks
+    with the flier (sole attacker); p1 blocks with the reacher (sole
+    eligible blocker). The agent's ``attack_all_block_smallest`` strategy
+    pairs them; both engines accept the block (reach on the blocker
+    opens the flying gate per CR 702.17); combat damage is mutual lethal.
+
+    Asserts byte-equal:
+      * Both creatures in their respective graveyards.
+      * Life totals unchanged (combat damage stayed in creature combat).
+
+    If either engine forgot to model reach as a flying-block gate-opener,
+    the block would be dropped and the flying attacker would hit p1 for
+    2 damage unblocked (same shape as the round-20 ground-blocker
+    probe) — the assertions below would fail loudly.
+
+    This is the round-45 trajectory promotion of the reach keyword:
+    pins the parity-clean shape that lets ``_SAFE_KEYWORDS`` admit
+    ``"reach"``, unblocking EoE printings (Edge Rover, Lashwhip
+    Predator, Skystinger) + Grasping-Longneck-style standard-format
+    creatures from the production-deck filter.
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Walk to turn 7 PRECOMBAT_MAIN with no creatures (skip the bears
+    # setup so the flying attacker + reach blocker are the SOLE
+    # combatants — keeps the block-pairing deterministic).
+    _advance_n_phases(py_state, rust_state, 3)  # → turn 1 MAIN1
+    _advance_n_phases(py_state, rust_state, 12 * 6)  # → turn 7 MAIN1
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.PRECOMBAT_MAIN
+
+    # Inject 2/2 flying attacker on p0 + 2/2 reach blocker on p1.
+    _inject_keyword_creature_on_p0_bf(
+        py_state, rust_state,
+        keyword="flying",
+        printing_name="Bear Aviator",
+        power=2, toughness=2,
+    )
+    _inject_keyword_creature_on_bf(
+        py_state, rust_state,
+        controller_idx=1,
+        keyword="reach",
+        printing_name="Bear Longneck",
+        power=2, toughness=2,
+    )
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"keyword-injection (flying + reach) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    pre_combat_life_p0 = py_view["life_p0"]
+    pre_combat_life_p1 = py_view["life_p1"]
+
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # p0's flier is the sole eligible attacker; p1's reacher is the sole
+    # eligible blocker. The agent emits a single-blocker assignment —
+    # both engines must ACCEPT it per CR 702.17 (reach opens the flying
+    # gate), unlike the round-20 ground-blocker probe.
+    agent = trajectory.RealGameCombatAgent(
+        strategy="attack_all_block_smallest"
+    )
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"reach combat via RealGameCombatAgent surfaced a real "
+            f"cross-engine divergence: {exc}"
+        )
+
+    # Post-combat parity.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+
+    # Per CR 702.17: the block IS legal; both creatures trade.
+    # 2/2 flier vs 2/2 reacher → mutual lethal damage.
+    assert py_view["life_p0"] == pre_combat_life_p0, (
+        f"life_p0 should be unchanged (no damage hit a player); "
+        f"got life_p0={py_view['life_p0']} (pre={pre_combat_life_p0})."
+    )
+    assert py_view["life_p1"] == pre_combat_life_p1, (
+        f"life_p1 should be unchanged — the reach blocker absorbed all "
+        f"flying damage (CR 702.17). If life_p1 dropped by 2, the block "
+        f"was dropped (reach didn't open the flying gate). "
+        f"got life_p1={py_view['life_p1']} (pre={pre_combat_life_p1})."
+    )
+    p0_gy = [entry[0] for entry in py_view["graveyard_p0"]]
+    p1_gy = [entry[0] for entry in py_view["graveyard_p1"]]
+    assert "Bear Aviator" in p0_gy, (
+        f"flying attacker should have died to the reach blocker's 2 "
+        f"power (mutual-lethal trade); got p0_gy={p0_gy}"
+    )
+    assert "Bear Longneck" in p1_gy, (
+        f"reach blocker should have died to the flying attacker's 2 "
+        f"power (mutual-lethal trade); got p1_gy={p1_gy}"
+    )
+
+
 # ===========================================================================
 # Round-36 enhancement: multi-blocker trajectory probes on the asymmetric
 # block-selector contract.

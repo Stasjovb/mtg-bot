@@ -1205,14 +1205,15 @@ def test_safe_keywords_set_covers_phase_6_round_18_probes():
     from mtg_bot.parity.trajectory import _SAFE_KEYWORDS
 
     # Round 17: trample, vigilance, lifelink. Round 18: deathtouch,
-    # double-strike, haste. Phase 5 selectors: flying, first strike.
-    # Plus menace / defender / indestructible (Phase 5 only — included
-    # in the safe set so multi-keyword EoE creatures with these keep
-    # surviving the filter).
+    # double-strike, haste. Round 45: reach. Phase 5 selectors: flying,
+    # first strike. Plus menace / defender / indestructible (Phase 5
+    # only — included in the safe set so multi-keyword EoE creatures
+    # with these keep surviving the filter).
     expected_subset = {
         "flying", "vigilance", "lifelink", "trample", "haste",
         "deathtouch", "first strike", "double strike",
         "menace", "defender", "indestructible",
+        "reach",
     }
     missing = expected_subset - _SAFE_KEYWORDS
     assert not missing, (
@@ -1273,6 +1274,110 @@ def test_simple_creature_filter_rejects_unsafe_keyword_creature():
         keywords=frozenset({"flash"}),
     )
     assert _printing_is_bridge_simple_creature(flasher) is False
+
+
+def test_safe_keywords_set_admits_reach():
+    """Round-45 extension: ``"reach"`` is in the safe-keyword set.
+
+    Pins the round-45 keyword extension. Both engines model reach
+    identically as a blocker-side gate-opener in the flying-block
+    legality check (Python ``combat.can_block``; Rust
+    ``state_ops_combat::declare_blocker``); the trajectory probe
+    ``test_reach_blocker_blocks_flying_attacker_parity`` exercises
+    the byte-equal mutual-lethal trade.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_KEYWORDS
+
+    assert "reach" in _SAFE_KEYWORDS, (
+        f"_SAFE_KEYWORDS regressed; round-45 extension missing 'reach' "
+        f"(parity-clean per CR 702.17, exercised by "
+        f"test_reach_blocker_blocks_flying_attacker_parity). "
+        f"Current set: {sorted(_SAFE_KEYWORDS)}"
+    )
+
+
+def test_simple_creature_filter_admits_reach_creature():
+    """A creature whose only keyword is ``"reach"`` passes the bridge-
+    simple filter. Sister of
+    :func:`test_simple_creature_filter_admits_safe_keyword_creature`
+    pinning the round-45 extension on the production-deck loader path.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+    )
+
+    reacher = CardPrinting(
+        name="Synthetic Reacher",
+        mana_cost_str="{1}{G}",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"reach"}),
+    )
+    assert _printing_is_bridge_simple_creature(reacher) is True
+
+
+def test_simple_creature_filter_admits_flying_plus_reach_creature():
+    """A creature carrying both ``"flying"`` and ``"reach"`` passes the
+    bridge-simple filter — both keywords are in ``_SAFE_KEYWORDS`` post-
+    round-45. Pins that the multi-keyword admit composes correctly
+    (``frozenset.issubset`` over the safe set), so EoE creatures
+    carrying reach alongside another safe keyword (e.g. multi-keyword
+    standard-format cards) survive.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+    )
+
+    flying_reacher = CardPrinting(
+        name="Synthetic Flying Reacher",
+        mana_cost_str="{2}{G}",
+        mana_cost=ManaCost(generic=2, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"flying", "reach"}),
+    )
+    assert _printing_is_bridge_simple_creature(flying_reacher) is True
+
+
+def test_simple_creature_filter_rejects_reach_plus_unsafe_keyword():
+    """A creature carrying ``"reach"`` PLUS an unsafe keyword (e.g.
+    ``"flash"``) still fails the bridge-simple filter. Pins that
+    admitting reach didn't loosen the gate on the unsafe direction —
+    one unsafe keyword is enough to drop, regardless of how many safe
+    keywords accompany it.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+    )
+
+    reach_plus_flash = CardPrinting(
+        name="Synthetic Reach Flasher",
+        mana_cost_str="{2}{G}",
+        mana_cost=ManaCost(generic=2, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset({"reach", "flash"}),
+    )
+    assert _printing_is_bridge_simple_creature(reach_plus_flash) is False
 
 
 def test_printing_to_card_def_carries_keywords_through():
@@ -2376,13 +2481,18 @@ def test_simple_creature_filter_admits_icecave_crasher():
     assert _printing_is_bridge_simple_creature(icecave) is True
 
 
-def test_simple_creature_filter_still_rejects_remnant_elemental():
+def test_simple_creature_filter_admits_remnant_elemental():
     """Remnant Elemental shares the same landfall+pump_self trigger
-    shape as Icecave Crasher but pairs it with a Reach keyword, which
-    is outside today's :data:`_SAFE_KEYWORDS` set. The trigger gate
-    admits the trigger; the keyword gate still drops the printing.
-    Pins the descope so future widening of the safe-keyword set
-    surfaces here.
+    shape as Icecave Crasher and pairs it with Reach. Pre-round-45
+    this printing was the descope counterpart for the Icecave-Crasher
+    admit (Reach was outside :data:`_SAFE_KEYWORDS`); the round-45
+    extension admits ``"reach"`` as parity-clean (CR 702.17,
+    ``test_reach_blocker_blocks_flying_attacker_parity``), and Remnant
+    Elemental is now ADMITTED end-to-end.
+
+    Pins the round-45 production-deck unblock — first EoE printing
+    that flips from drop to admit specifically because of the reach
+    extension.
     """
     from mtg_bot.cards.parser.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
@@ -2393,14 +2503,15 @@ def test_simple_creature_filter_still_rejects_remnant_elemental():
     src = OracleParserCardSource()
     remnant = src.get_printings().get("Remnant Elemental")
     if remnant is None:
-        # Parser hasn't claimed it yet — descope rationale still
+        # Parser hasn't claimed it yet — admit rationale still
         # applies, but there's nothing to assert against.
         return
     # Trigger-side gate admits the +2/+0 landfall pump.
     assert len(remnant.triggered_abilities) == 1
     assert _python_ta_to_safe_dict(remnant.triggered_abilities[0]) is not None
-    # Whole-printing gate still rejects on the Reach keyword.
-    assert _printing_is_bridge_simple_creature(remnant) is False
+    # Whole-printing gate now ADMITS post-round-45 (reach moved into
+    # the safe set; the trigger and keyword gates both pass).
+    assert _printing_is_bridge_simple_creature(remnant) is True
 
 
 def test_printing_to_card_def_carries_landfall_pump_self_through():

@@ -1318,13 +1318,25 @@ def _parse_mana_cost_string(s: str) -> tuple[int, tuple[tuple[str, int], ...]]:
 #                     these keywords alongside flying / vigilance
 #                     etc. (e.g. multi-keyword EoE creatures) still
 #                     survive the filter.
+#   * reach         — round-45 trajectory probe
+#                     (test_reach_blocker_blocks_flying_attacker_parity).
+#                     Both engines model reach as a blocker-side
+#                     gate-opener in their flying-block legality
+#                     check (Python: ``combat.can_block`` —
+#                     ``"flying" in blocker_kws or "reach" in
+#                     blocker_kws``; Rust: ``state_ops_combat.rs``
+#                     ``declare_blocker`` — ``blocker_has_flying ||
+#                     blocker_has_reach``). Reach on the ATTACKER is
+#                     a no-op for blocking purposes on both engines
+#                     (a reach attacker is treated as ground for
+#                     block-legality), matching CR 702.17.
 #
 # Keywords explicitly NOT in this set (and therefore disqualifying):
 # flash (CR 702.8 cast-timing; trajectory probes for it land in a
-# follow-up slice); reach (no Phase 5 probe yet); hexproof
-# (Phase 5 selector exists but lifecycle is fragile in trajectory
-# context); ward / protection / scry (cost-modifying / replacement
-# effects out of CardDef's per-creature surface).
+# follow-up slice); hexproof (Phase 5 selector exists but lifecycle
+# is fragile in trajectory context); ward / protection / scry (cost-
+# modifying / replacement effects out of CardDef's per-creature
+# surface).
 _SAFE_KEYWORDS: frozenset[str] = frozenset({
     "flying",
     "vigilance",
@@ -1337,6 +1349,7 @@ _SAFE_KEYWORDS: frozenset[str] = frozenset({
     "menace",
     "defender",
     "indestructible",
+    "reach",
 })
 
 

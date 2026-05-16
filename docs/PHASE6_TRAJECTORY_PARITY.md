@@ -848,13 +848,12 @@ channel pattern and drives a play_land that fires the landfall
 - **Remnant Elemental** — 1/2 {1}{R}, Reach, "Landfall — +2/+0 UEOT".
   Carries the SAME parser-emitted bare `PumpSelfUntilEOT` shape
   (the trigger gate admits it cleanly), but pairs it with a
-  `Reach` keyword which is outside today's `_SAFE_KEYWORDS` set —
-  the production-deck filter still drops the printing on the
-  keyword gate. Pinned by
-  `test_simple_creature_filter_still_rejects_remnant_elemental`.
-  Adding `Reach` to the safe-keyword set is a follow-up slice
-  (needs combat-side parity verification of reach's
-  can-block-flying behavior across both engines).
+  `Reach` keyword. Pre-round-45 the production-deck filter dropped
+  the printing on the keyword gate; **round-45 admits `Reach` to
+  `_SAFE_KEYWORDS`** (parity-clean per CR 702.17, exercised by
+  `test_reach_blocker_blocks_flying_attacker_parity`), and Remnant
+  Elemental flips from drop to admit. Now pinned by
+  `test_simple_creature_filter_admits_remnant_elemental`.
 - **Pump_self under source_is_self** — no clean EoE consumer
   (every non-landfall self-pump in EoE pairs with a granted-
   keywords rider or sits behind an activated ability). Pinned by
