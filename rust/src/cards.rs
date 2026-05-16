@@ -217,6 +217,70 @@ pub enum Effect {
     /// exist when they leave the battlefield" CR 110.5g handling is
     /// deferred. Negative `count` raises.
     CreateToken { count: i32, token_printing_id: u32 },
+    /// **BLOCKED-RUST-EFFECT slice (round 43) -- each living player
+    /// creates `count` token creatures under their own control.**
+    /// Sister of the static `CreateToken { count, token_printing_id }`
+    /// arm above; the only behavioral difference is the recipient set
+    /// (every living player, each under their own control, vs the
+    /// source-controller alone). Mirrors Python's
+    /// `CreateToken(token_printing=..., count=N, each_player=True)`
+    /// (`effects/generic/tokens.py:198,210` — when `each_player=True`,
+    /// `recipients = [p.id for p in state.players if not p.has_lost]`).
+    ///
+    /// EoE consumer: Edge Rover (Artifact Creature -- Robot Scout,
+    /// "When this creature dies, each player creates a Lander
+    /// token."). This is the FIRST each-player token shape in the
+    /// audit's BLOCKED-RUST-EFFECT residue, and a precondition for
+    /// the broader "each player creates X" family if future EoE
+    /// expansions (or other set work) prints sister cards.
+    ///
+    /// **Mechanism -- recipient fanout.** Iterate over
+    /// `0..state.players.len()`, skip any player with `has_lost ==
+    /// true` (CR 102.5 living-players-only convention; mirrors
+    /// Python's `if not p.has_lost` guard at tokens.py:212). For each
+    /// living recipient, push `count` fresh tokens onto THEIR
+    /// battlefield (NOT the source-controller's), tagged with
+    /// `controller = recipient`. Each recipient gets the SAME static
+    /// `count`. Tokens enter summoning-sick like every other ETB
+    /// (mirrors the sister `CreateToken` arm's summoning_sick=true).
+    ///
+    /// **Schema parity with Python.** Mirrors the sister
+    /// `CreateToken` arm's two-field schema; adds NO new field
+    /// because the `each_player` boolean is encoded by variant name
+    /// (closed-vocab convention -- bool fields are second-class in
+    /// the bridge, every other binary choice lives in a separate
+    /// variant). Python's `each_player=True` is the same shape
+    /// (per-instance bool on the existing dataclass), but the bridge
+    /// MAPS to a distinct dict `kind` for round-trip clarity.
+    ///
+    /// **Negative `count` raises** loudly (mirrors the sister
+    /// `CreateToken` arm). `count == 0` is a legal no-op.
+    /// **Unknown `token_printing_id` raises** at resolve time before
+    /// any state mutation (mirrors the sister arm's whole-or-nothing
+    /// validation contract -- one invalid registry id should not
+    /// half-fanout some recipients before erroring).
+    ///
+    /// **First-slice scope (parity with the sister arm).**
+    /// CR 614 token-creation replacement effects (Anointed Procession
+    /// doubling, Moonlit-Meditation copy-replacement, Exalted Sunborn
+    /// counter-stamping) and the `tapped` / `attacking` /
+    /// `schedule_end_of_combat_sacrifice` flag bundle are NOT
+    /// plumbed in this Rust arm -- the EoE consumer (Edge Rover ->
+    /// Lander) doesn't engage any of those riders, and the sister
+    /// `CreateToken` arm's first-slice docs explicitly defer the
+    /// same surface for the same reason. Those richer surfaces
+    /// still resolve through the Python path.
+    ///
+    /// **Each-player ENTERS dispatch.** Mirrors the sister
+    /// `CreateToken` arm's `pending_etb_dispatches.extend(token_ids)`
+    /// shape: every fresh token id is queued for ENTERS event
+    /// dispatch by the surrounding resolver, regardless of which
+    /// player it ended up under. The CE4 etb_timestamp stamping
+    /// preserves a strict per-token monotonic order across all
+    /// recipients combined (recipient iteration order =
+    /// `state.players` index order = controller id order, mirroring
+    /// Python's `for p in state.players` natural order).
+    CreateTokenEachPlayer { count: i32, token_printing_id: u32 },
     /// Controller adds `amount` mana of `color` to their mana pool.
     /// CR 106.1 — the resolution of a mana ability. Color is one of
     /// W/U/B/R/G/C; amount is non-negative. AddManaToPool is the
@@ -3749,6 +3813,22 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let token_printing_id: u32 = require(dict, "token_printing_id")?.extract()?;
             Ok(Effect::CreateToken { count, token_printing_id })
         }
+        "create_token_each_player" => {
+            // BLOCKED-RUST-EFFECT slice (round 43) -- each living
+            // player creates `count` tokens of the given printing
+            // under their own control. Sister of the static
+            // `create_token` arm above; same field schema (`count`
+            // + `token_printing_id`), distinguished by variant
+            // (closed-vocab convention -- the each-player vs
+            // self-only choice rides on the variant name, not a
+            // boolean field, mirroring round-19/30/31/.. sister-
+            // variant precedent). Mirrors Python's
+            // `CreateToken(token_printing=..., count=N,
+            // each_player=True)` (`tokens.py:198`).
+            let count: i32 = require(dict, "count")?.extract()?;
+            let token_printing_id: u32 = require(dict, "token_printing_id")?.extract()?;
+            Ok(Effect::CreateTokenEachPlayer { count, token_printing_id })
+        }
         "add_mana_to_pool" => {
             let color: String = require(dict, "color")?.extract()?;
             // Validate against the closed mana-color vocab. Shared
@@ -5157,7 +5237,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player"
         ))),
     }
 }
@@ -6036,6 +6116,20 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::CreateToken { count, token_printing_id } => {
             d.set_item("kind", "create_token")?;
+            d.set_item("count", *count)?;
+            d.set_item("token_printing_id", *token_printing_id)?;
+        }
+        Effect::CreateTokenEachPlayer { count, token_printing_id } => {
+            // BLOCKED-RUST-EFFECT slice (round 43). Two-field schema
+            // mirrors the sister `CreateToken` arm above; the
+            // each-player vs self-only choice rides on the variant
+            // name (and thus on the dict `kind` string), not on a
+            // boolean field. Mirrors Python's
+            // `CreateToken(each_player=True)` -- the Python class
+            // has a single `each_player: bool` field, but the bridge
+            // dict-shape uses a distinct `kind` for round-trip
+            // clarity.
+            d.set_item("kind", "create_token_each_player")?;
             d.set_item("count", *count)?;
             d.set_item("token_printing_id", *token_printing_id)?;
         }
