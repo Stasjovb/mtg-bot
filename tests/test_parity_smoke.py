@@ -52113,6 +52113,407 @@ def test_cross_engine_synthetic_etb_untap_target_cross_controller_routes_to_sour
     assert rust_state.battlefield_sizes[1] == py_p1_bf_after
 
 
+def test_cross_engine_synthetic_etb_attach_to_target_creature_you_control_cross_controller_routes_to_source_controller_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``attach_to_target_creature_you_control``
+    trigger fired by an Equipment CONTROLLED BY P1 while
+    ACTIVE_PLAYER=P0 -- the cross-controller leg of the round-19
+    ``attach_to_target_creature_you_control`` bridge arm. Both engines
+    must derive the attach scope from the SOURCE's controller (P1) so
+    the Equipment attaches to a creature on P1's bf, NOT P0's bf
+    (which would happen if the resolve derived the scope from
+    active_player on a non-intrinsic substrate).
+
+    **The substrate.** Per the bridge arm at cross_engine.py:2864 +
+    the Rust regression pin
+    ``test_rust_attach_to_target_creature_you_control_basic``
+    (tests/test_parity_smoke.py:40829): Rust's
+    ``Effect::AttachToTargetCreatureYouControl`` resolve arm
+    (state_ops_resolve.rs:6455-6502) performs an INTRINSIC battlefield
+    walk via ``source_obj_id`` to locate the source (the Equipment),
+    capture its controller (cidx), then iterate
+    ``state.players[cidx].battlefield`` to find the FIRST Creature
+    that ISN'T the source itself, and stamp ``source.attached_to =
+    Some(target_id)`` (CR 303.4 / 301.5 -- attach is a battlefield-
+    only relationship). The intrinsic source-finder is the I-fix
+    family for this arm: the cross-controller case works correctly
+    without any caller plumbing because the resolve walks zones
+    directly to find the source. Python's
+    ``AttachToTargetCreatureYouControl.resolve``
+    (effects/generic/attach.py) is target-driven via the
+    ``targets[0]`` ``("creature", target_id)`` pick that the
+    targeting Decision pipeline sets up at PUSH time -- the agent on
+    the trigger's controller_id (=P1) picks via
+    ``choose_target`` over the source-controller's bf creatures. The
+    trigger pushes with ``controller_id`` = the source's controller,
+    so Python derives the same scope correctly.
+
+    **Same-controller sister coverage.** The Rust regression pins at
+    line 40829 (basic on p0), 40895 (no-creature silent fizzle), and
+    40940 (artifact-skip) cover the same-controller leg + the
+    creature-filter on the picker. This probe ships the missing
+    CROSS-ENGINE leg AND the cross-controller routing pin: source
+    Equipment on P1's bf (controller=1), one bait Bear on P1's bf
+    (MUST be the attach target), one bait Bear on P0's bf (must NOT
+    be picked -- distinguishing observable for the routing pin),
+    ACTIVE_PLAYER=P0. The SOURCE's controller (P1) and the active
+    player (P0) DIFFER, so the attach target is on P1's bf if-and-
+    only-if the resolve uses the SOURCE's controller (via the
+    intrinsic walk on Rust + trigger.controller_id on Python). A
+    pre-fix Rust that derived the scope from active_player would
+    have iterated state.players[0].battlefield, found the P0 bait
+    Bear, and stamped source.attached_to = P0 bait id instead.
+
+    **Why synthetic, not a real EoE card.** The bridge arm docstring
+    (cross_engine.py near attach_to_target_creature_you_control)
+    defers cross-engine end-to-end probes per the round-17/18/19
+    synthetic-only-when-riders-cascade precedent (typical EoE
+    consumers like Squire's Lightblade / Illvoi Light Jammer cascade
+    UEOT keyword-grant riders -- "first strike until end of turn",
+    "hexproof until end of turn" -- that the bare bridge arm does
+    NOT carry; Meltstrider's Gear is the cleanest bare-shape EoE
+    consumer per the bridge arm note but its end-to-end shape
+    cascades a separate set of pieces). A synthetic 2-cost Equipment
+    ("Cross-Controller Attach Carrier") with the bridged ETB trigger
+    keeps this probe self-contained.
+
+    **Source carrier choice load-bears.** The source Equipment is
+    NOT a Creature (Artifact / Equipment subtype only) so the
+    creature-filter on the picker naturally skips it without
+    needing the Rust ``obj.id == src_id`` self-skip guard to fire.
+    The two bait creatures (one per side) make the cross-controller
+    routing observable two-slot diverging: post-fix
+    source.attached_to = P1 bait id; pre-fix source.attached_to =
+    P0 bait id. Rust's intrinsic walk picks the right side; Python's
+    trigger.controller_id-driven targeting picks the right side via
+    ``_PickFirstControlledCreatureAgent`` seated on P1.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Inject one Attach Bait Bear (2/2) onto P0's bf**
+         (controller=0; must NOT be picked; load-bearing
+         distinguishing observable for the routing pin).
+
+      3. **Inject one Attach Bait Bear (2/2) onto P1's bf**
+         (controller=1; MUST be picked as the attach target).
+
+      4. **Inject Cross-Controller Attach Carrier (the source
+         Equipment) onto P1's bf** with controller=1. The
+         injection's ENTERS dispatch fires the SourceIsSelf trigger;
+         the trigger lands on the stack with controller=1 (the
+         SOURCE's controller). The carrier is an Artifact /
+         Equipment (NOT a Creature) so it's naturally skipped by
+         the creature-filter without needing the self-skip guard.
+
+      5. **Seat ``_PickFirstControlledCreatureAgent`` on P1** (the
+         SOURCE's controller, which is whose agent gets called for
+         the choose_target on the trigger's controller_id=1 path).
+         The agent's same-controller filter restricts to P1's own
+         creatures -- P1 bait Bear is the only such creature in
+         legal_targets, so the shim picks it.
+
+      6. **Drain both stacks.** The trigger resolves: Rust's
+         intrinsic source-finder walks both bfs to find the
+         Equipment on P1's bf, captures cidx=1, walks
+         state.players[1].battlefield to find the first Creature
+         that isn't the source, picks the P1 bait Bear, and stamps
+         source.attached_to = P1 bait id. Python's resolve uses the
+         trigger's controller_id=1 directly, the agent's pick comes
+         from the legal_targets list (P1 bait Bear), and the
+         resolve stamps source.attached_to similarly.
+
+      7. **Cross-engine assert (post-fix contract):**
+         - Source.attached_to = P1 bait id on both engines.
+         - P0 bait Bear is UNCHANGED on its bf (NOT the attach
+           target; load-bearing for the routing pin).
+         - All three objects still on their original bfs (no zone
+           moves -- attach is a flag stamp, not a zone change).
+         - Lives unchanged on both seats.
+         - No residual stack on either engine.
+
+    **Pre-fix vs post-fix observable.**
+    Pre-fix Rust would have:
+      - Derived the attach scope from active_player=P0, walked
+        state.players[0].battlefield, found the P0 bait Bear at
+        bf[0], and stamped source.attached_to = P0 bait id.
+    Post-fix Rust uses the intrinsic source-finder walk to capture
+    cidx=1 from the Equipment's location on P1's bf, walks P1's bf,
+    picks the P1 bait Bear. The OBSERVABLE distinguishing the two:
+    post-fix source.attached_to = P1 bait id; pre-fix
+    source.attached_to = P0 bait id. Single-slot diverging
+    observable on the source's attached_to field -- the cross-
+    engine pin lands sharply.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline.
+      * Empty source-controller's bf (no creature) silent fizzle --
+        the same-controller Rust pin at line 40895 exercises this
+        path; this probe seats one bait on each side so the picker
+        resolves cleanly.
+      * Equip-to-target activated-ability path (CR 702.6) -- the
+        sister ``equip_to_target_creature_you_control`` arm with
+        its CE20 Slice-4 payload-target pickup is its own surface
+        beyond this ETB-shape probe.
+      * UEOT keyword-grant riders (Squire's Lightblade /
+        Illvoi Light Jammer) -- the bare arm does NOT carry these.
+      * Self-attach prevention -- the carrier is an Artifact /
+        Equipment (NOT a Creature) so the creature-filter naturally
+        skips it without needing the Rust ``obj.id == src_id`` self-
+        skip guard to fire.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller Attach Carrier on P1's bf (controller=1;
+        unchanged from inject; attached_to = P1 bait id).
+      * P1 Attach Bait Bear on P1's bf (controller=1; unchanged).
+      * P0 Attach Bait Bear on P0's bf (controller=0; unchanged).
+      * Lives unchanged at 20 on both seats.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstControlledCreatureAgent
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines (the
+    # whole point of the probe is the cross-controller case where
+    # the SOURCE's controller != active_player).
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side: inject one bait Bear on P0's bf, one bait Bear
+    # on P1's bf, then the source Equipment on P1's bf with
+    # controller=1. ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_dict = {
+        "name": "Attach Bait Bear (2/2 cross-controller probe)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    # Bait Bear on P0's bf (must NOT be picked).
+    rust_p0_bear_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # Bait Bear on P1's bf (MUST be the attach target).
+    rust_p1_bear_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD,
+    )
+    # No triggered abilities on the bears -> no stack growth from
+    # the injections.
+    assert rust_state.stack_size() == 0
+
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+
+    rust_source_dict = {
+        "name": "Cross-Controller Attach Carrier",
+        "card_types": ["Artifact"],
+        "subtypes": ["Equipment"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "attach_to_target_creature_you_control",
+                },
+            }
+        ],
+    }
+    rust_source_id = rust_state.register_and_inject_object(
+        rust_source_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller Attach Carrier's arrival on P1 "
+        "should fire the SourceIsSelf ENTERS trigger and land "
+        "AttachToTargetCreatureYouControl on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    # Pre-resolve sanity: source.attached_to is None.
+    assert _rust_attached_to(rust_state, rust_source_id) is None, (
+        "Rust: source.attached_to must be None pre-resolve "
+        "(register_and_inject_object default)."
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.attach import (
+        AttachToTargetCreatureYouControl,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="Attach Bait Bear (2/2 cross-controller probe)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    source_printing = CardPrinting(
+        name="Cross-Controller Attach Carrier",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=()),
+        type_line="Artifact - Equipment",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=("Equipment",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=AttachToTargetCreatureYouControl(),
+            ),
+        ),
+    )
+
+    def _inject_bf(printing, owner_id):
+        obj = py_state.new_object(
+            printing, owner_id=owner_id, zone=Zone.BATTLEFIELD,
+        )
+        obj.summoning_sick = False
+        obj.tapped = False
+        obj.damage = 0
+        obj.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(obj)
+        return obj
+
+    py_p0_bear = _inject_bf(bait_printing, owner_id=0)
+    py_p1_bear = _inject_bf(bait_printing, owner_id=1)
+
+    # Sanity: pre-source-inject the bears are unattached (None).
+    assert getattr(py_p0_bear, "attached_to", None) is None
+    assert getattr(py_p1_bear, "attached_to", None) is None
+
+    # The trigger's controller is P1 (the SOURCE's controller), so
+    # P1's agent is what choose_target gets called against. Mirror
+    # the round-19 Equipment ETB precedent's
+    # _PickFirstControlledCreatureAgent shim seated on P1 -- the
+    # agent's same-controller filter restricts legal_targets to
+    # P1's own creatures (P1 bait Bear is the only such), and the
+    # shim picks it.
+    py_state.players[1].agent = _PickFirstControlledCreatureAgent()
+
+    py_source = _inject_bf(source_printing, owner_id=1)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller Attach Carrier's arrival on P1 "
+        "should fire the IsSelf ENTERS trigger and land "
+        "AttachToTargetCreatureYouControl on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+    # Pre-resolve sanity: Python source.attached_to is None.
+    assert getattr(py_source, "attached_to", None) is None, (
+        "Python: source.attached_to must be None pre-resolve."
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state on Rust: source.attached_to = P1 bait id.
+    # The cross-controller routing is the load-bearing pin: pre-fix
+    # Rust would have walked state.players[0].battlefield
+    # (active_player), picked the P0 bait Bear, and stamped
+    # source.attached_to = P0 bait id.
+    rust_attached = _rust_attached_to(rust_state, rust_source_id)
+    assert rust_attached == rust_p1_bear_id, (
+        f"Rust cross-controller routing contract: source.attached_to "
+        f"should be P1 bait id ({rust_p1_bear_id}); got "
+        f"{rust_attached}. A pre-fix Rust would have walked "
+        f"state.players[0].battlefield (active_player), found the P0 "
+        f"bait Bear (id={rust_p0_bear_id}), and stamped "
+        f"source.attached_to = {rust_p0_bear_id} instead."
+    )
+    # P0 bait Bear stays unattached (no one attached to it).
+    rust_bf = rust_state.battlefield_snapshot()
+    rust_p0_bear_entry = next(
+        (e for e in rust_bf if int(e["id"]) == rust_p0_bear_id), None,
+    )
+    rust_p1_bear_entry = next(
+        (e for e in rust_bf if int(e["id"]) == rust_p1_bear_id), None,
+    )
+    assert rust_p0_bear_entry is not None
+    assert rust_p1_bear_entry is not None
+    # Lives unchanged on both seats (attach is a flag-only stamp).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+
+    # Per-engine post-state on Python: same shape.
+    assert py_source.attached_to == py_p1_bear.id, (
+        f"Python: source.attached_to should be P1 bait id "
+        f"({py_p1_bear.id}); got {py_source.attached_to}"
+    )
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    # P0 bait Bear stays in its place (controller_id=0, on bf).
+    assert py_p0_bear.controller_id == 0
+    assert py_p0_bear in py_state.battlefield
+    assert py_p1_bear.controller_id == 1
+    assert py_p1_bear in py_state.battlefield
+    assert py_source.controller_id == 1
+    assert py_source in py_state.battlefield
+
+    # Cross-engine: same lives, same attach pick, same bf sizes.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    py_p0_bf_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_p1_bf_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert rust_state.battlefield_sizes[0] == py_p0_bf_after
+    assert rust_state.battlefield_sizes[1] == py_p1_bf_after
+    # P0 bait Bear is on P0's bf (controller_id=0); P1 bait Bear and
+    # the source are on P1's bf (controller_id=1).
+    assert rust_p0_bear_entry["controller_id"] == 0
+    assert rust_p1_bear_entry["controller_id"] == 1
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
