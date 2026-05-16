@@ -174,12 +174,32 @@ the coordinator's heartbeat poller:
    curl http://desktop-j05412i:5099/v2/healthz | jq .
    ```
 
-4. **Run `mtg_bot iterate`** as usual. The orchestrator reads the
+4. **Run the cutover-day smoke script** before promoting the cluster
+   to a real iter:
+
+   ```bash
+   PYTHONPATH=src .venv-py313/Scripts/python.exe deploy/smoke-test.py \
+       --shards-config shards_config.json \
+       --coordinator-url http://desktop-j05412i:5099 \
+       --weights-version v6 \
+       --games-per-worker 2
+   ```
+
+   The script POSTs a tiny synthetic stage (2 games, 32 nodes,
+   1 sample) to each worker via the v2 REST contract, polls each
+   stage to `complete` (or times out after `--timeout-s`, default
+   300s), and reports pass/fail per worker plus a final
+   `/v2/heartbeat` snapshot. Exit code is 0 iff every worker passes.
+
+   Re-run after every daemon restart, coordinator restart, and on
+   cutover day before promoting the cluster to a real iter.
+
+5. **Run `mtg_bot iterate`** as usual. The orchestrator reads the
    URL list, builds the stage spec, POSTs `/v2/stage/create` on the
    coordinator, POSTs `/v2/start_self_play` on each worker, polls
    the stage to `complete`, then moves on to train + eval.
 
-5. **Stop the cluster** with `systemctl stop`, `launchctl unload`,
+6. **Stop the cluster** with `systemctl stop`, `launchctl unload`,
    or `Stop-ScheduledTask`. Each daemon's `/v2/stop` endpoint is
    also available for graceful drain on individual workers.
 
