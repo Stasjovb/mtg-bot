@@ -56444,6 +56444,290 @@ def test_cross_engine_synthetic_etb_deal_damage_to_opponent_creature_by_life_tot
     assert py_reaper.damage == 0
 
 
+def test_cross_engine_synthetic_etb_each_opp_loses_life_eq_your_life_total_bridge_dict_round_trip_parity(
+    parity_smoke,
+):
+    """Round-48 BLOCKED-RUST-EFFECT slice -- drive the new
+    ``each_opponent_loses_life_equal_to_your_life_total`` Effect arm
+    end-to-end on BOTH engines via the cross-engine bridge dict (NOT
+    direct Python class instantiation). SECOND denominator on the
+    life-loss-each-opponent apply substrate (sister of round-44
+    each-opp-life-loss-by-artifact -- SAME apply substrate, the ONLY
+    mechanical difference is the denominator read). The life-total
+    denominator was established by round-42
+    ``MillTargetPlayerEqualToYourLifeTotal`` (mill substrate) and
+    round-47 ``DealDamageToOpponentCreatureByLifeTotal`` (damage
+    substrate); this slice walks the X-from-count matrix to a third
+    (substrate, life-total) cell.
+
+    **The substrate.** Rust's
+    ``Effect::EachOpponentLosesLifeEqualToYourLifeTotal`` (cards.rs
+    unit variant added in this slice; resolve at state_ops_resolve.rs
+    immediately after the round-44 EachOpponentLosesLifeEqualToArtifactCount
+    resolve arm) resolves the source-controller via the 5-zone walk +
+    stack scan (round-44 sister shape), reads
+    ``state.players[controller].life`` clamped to ``max(0, life)``,
+    then in 2-player land subtracts that amount from the one
+    opponent's life via ``saturating_sub``. Python's
+    ``EachOpponentLosesLifeEqualToYourLifeTotal.resolve``
+    (effects/generic/life.py -- shipped in this slice as the bridge's
+    other side) reads ``max(0, state.player_by_id(controller_id).life)``,
+    then iterates each non-controller non-lost player and subtracts the
+    amount from their life. Both engines converge on the 2-player
+    observable: the one non-controller player loses
+    ``max(0, controller_life)`` life.
+
+    **Why the bridge-dict round trip matters.** This slice ships a
+    brand-new Python class (no pre-existing parser route -- the
+    dynamic-X variant doesn't have an oracle-text recognizer in this
+    slice; that's a follow-up for whenever an EoE consumer surfaces).
+    The end-to-end probe drives a synthetic CardDef whose
+    ``triggered_abilities`` carries the bridge-dict shape
+    ``{"kind": "each_opponent_loses_life_equal_to_your_life_total"}``;
+    Rust's parse_effect arm dispatches to the new variant directly,
+    Python's ``_ta_dict_to_python_effect`` arm constructs the new
+    class. This pin verifies the round-trip on both engines through
+    the inject + ENTERS-dispatch + drain harness (mirrors the round-42
+    mill-by-life-total / round-44 life-loss-by-artifact / round-47
+    damage-by-life-total bridge-dict round-trip-probe pattern).
+
+    **Probe shape (synthetic same-controller inject-and-fire-ENTERS).**
+
+      1. **active_player=P0** (default).
+
+      2. **Set P0's life to 15** (the denominator -- a non-default
+         value so the pin is load-bearing on the dynamic life-total
+         read, not a coincidental 20==20). Set P1's life to 30 (the
+         victim; chosen high enough that 30-15=15 stays positive so
+         no SBA loss confounds the observable).
+
+      3. **Inject Round-48 LifeTotal Bear (the source) onto P0's bf**
+         with controller=0 via Rust's ``register_and_inject_object``
+         and Python's ``new_object`` + bf append + manual
+         ``_trigger_etb_abilities``. The source is a vanilla 2/2
+         Creature. The ENTERS dispatch fires the SourceIsSelf trigger
+         on both engines; the trigger lands on the stack with
+         controller=0.
+
+      4. **Drain both stacks** (untargeted). The trigger resolves:
+         Rust's intrinsic 5-zone walk finds the source on P0's bf,
+         derives source-controller=0, reads P0's life (15, clamped
+         max(0,15)=15), subtracts 15 from P1's life. Python's resolve
+         reads max(0, P0.life)=15, subtracts 15 from P1's life. Both
+         converge.
+
+      5. **Cross-engine assert (round-trip contract):**
+         - P1's life dropped by 15 on both engines (30 -> 15).
+         - P0's life unchanged on both engines (controller is excluded
+           from its own each-opponent set; the read is non-destructive).
+         - 1 permanent on P0's bf (the source); 0 on P1's bf.
+         - No residual stack on either engine.
+         - No bf / hand / graveyard size deltas (only life moves).
+
+    **Out of scope:**
+
+      * Cross-controller routing -- the round-26 EachOpponentLosesLife
+        cross-controller probe (line 50048) already pins the source-
+        controller derivation on this apply substrate; this probe ships
+        the SAME APPLY with a NEW DENOMINATOR, so the routing
+        observable is sister-covered.
+      * Zero/negative-life clamp -- the Rust regression pins
+        ``test_resolve_each_opp_loses_life_eq_your_life_total_zero_life_no_op``
+        and ``..._negative_life_clamps_to_zero`` (tests_rust/test_resolve.py)
+        cover the clamp path without the cross-engine harness.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Round-48 LifeTotal Bear on P0's bf (controller=0; 1 entry).
+      * P0's bf size = 1; P1's bf size = 0.
+      * P0's life: 15 (unchanged; controller excluded, read is
+        non-destructive).
+      * P1's life: 15 (was 30, lost 15 = P0's life total).
+      * P0 / P1 hand / graveyard / library: unchanged (life-only).
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+
+    ZONE_BATTLEFIELD = 2
+
+    # ---- Rust side: set lives, inject the source onto P0's bf, then
+    # verify the trigger lands and the drain reduces P1's life by 15. --
+    rust_state.set_life(0, 15)
+    rust_state.set_life(1, 30)
+    rust_p0_hand_size_before = rust_state.hand_sizes[0]
+    rust_p1_hand_size_before = rust_state.hand_sizes[1]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+
+    rust_source_dict = {
+        "name": "Round-48 LifeTotal Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "each_opponent_loses_life_equal_to_your_life_total"
+                },
+            }
+        ],
+    }
+    rust_state.register_and_inject_object(
+        rust_source_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: LifeTotal Bear's arrival on P0 should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "EachOpponentLosesLifeEqualToYourLifeTotal on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: same shape via new_object +
+    # _trigger_etb_abilities. The Python class is constructed via the
+    # bridge translator on the ENTERS dispatch -- this is the round-trip
+    # leg that pins the bridge end-to-end. ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import (
+        EachOpponentLosesLifeEqualToYourLifeTotal,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    source_printing = CardPrinting(
+        name="Round-48 LifeTotal Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=EachOpponentLosesLifeEqualToYourLifeTotal(),
+            ),
+        ),
+    )
+
+    py_state.players[0].life = 15
+    py_state.players[1].life = 30
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_p0_hand_size_before = len(py_state.players[0].hand)
+    py_p1_hand_size_before = len(py_state.players[1].hand)
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: LifeTotal Bear's arrival on P0 should fire the "
+        "IsSelf ENTERS trigger and land "
+        "EachOpponentLosesLifeEqualToYourLifeTotal on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Post-drain: P1's life dropped by 15 (= P0's life total); P0's
+    # life unchanged (the read is non-destructive and controller is
+    # excluded from its own each-opponent set). The dynamic-X
+    # denominator is the load-bearing pin -- pre-fix Rust without the
+    # by-life-total arm would have raised "unknown effect kind" at
+    # register time, never reaching here.
+    assert rust_state.get_life(0) == py_p0_life_before, (
+        f"Rust: P0's life should be unchanged ({py_p0_life_before}); "
+        f"got {rust_state.get_life(0)}. P0 is the source-controller, "
+        f"excluded from its own each-opponent set; the life-total read "
+        f"is non-destructive."
+    )
+    assert rust_state.get_life(1) == py_p1_life_before - 15, (
+        f"Rust: P1's life should drop by 15 (= P0's life total) to "
+        f"{py_p1_life_before - 15}; got {rust_state.get_life(1)}."
+    )
+    assert py_state.players[0].life == py_p0_life_before, (
+        f"Python: P0's life should be unchanged "
+        f"({py_p0_life_before}); got {py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == py_p1_life_before - 15, (
+        f"Python: P1's life should drop by 15 to "
+        f"{py_p1_life_before - 15}; got {py_state.players[1].life}"
+    )
+    # Cross-engine: byte-equal life totals on both players.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Hand / graveyard sizes unchanged on both engines.
+    assert rust_state.hand_sizes[0] == rust_p0_hand_size_before
+    assert rust_state.hand_sizes[1] == rust_p1_hand_size_before
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_size_before
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_size_before
+    assert len(py_state.players[0].hand) == py_p0_hand_size_before
+    assert len(py_state.players[1].hand) == py_p1_hand_size_before
+    assert len(py_state.players[0].graveyard) == py_p0_gy_size_before
+    assert len(py_state.players[1].graveyard) == py_p1_gy_size_before
+
+    # Bf counts: 1 on P0 (the source), 0 on P1.
+    rust_p0_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    py_p0_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert rust_p0_bf_after == 1, (
+        f"Rust: P0's bf should hold 1 permanent (the source); "
+        f"got {rust_p0_bf_after}"
+    )
+    assert rust_p1_bf_after == 0
+    assert py_p0_bf_after == 1
+    assert py_p1_bf_after == 0
+    assert rust_p0_bf_after == py_p0_bf_after
+    assert rust_p1_bf_after == py_p1_bf_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
