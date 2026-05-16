@@ -14975,5 +14975,266 @@ def test_rust_parser_rejects_gain_life_equal_to_artifact_count_with_typo():
         reg.register_printing(d)
 
 
+def test_bridge_deal_damage_to_opponent_creature_by_life_total_basic_translation():
+    """BLOCKED-RUST-EFFECT slice (round 47) -- deal damage to an
+    opponent's creature equal to the source-controller's LIFE TOTAL.
+    Rust
+    ``{"kind": "deal_damage_to_opponent_creature_by_life_total"}``
+    translates to Python
+    ``DealDamageToOpponentCreatureByLifeTotal()``.
+
+    Mirrors Rust's parse_effect arm (added in this slice immediately
+    after the round-46
+    deal_damage_to_opponent_creature_by_cards_in_graveyard arm; unit
+    variant; no fields). Pin verifies the bare-shape translation for
+    the round-47 dynamic-X-from-life-total Effect arm. Sister of the
+    round-32 / 35 / 36 / 37 / 46 basic_translation pins -- same apply
+    substrate, SIXTH (final) denominator on the damage substrate.
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByLifeTotal,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature_by_life_total"}
+    )
+    assert isinstance(e, DealDamageToOpponentCreatureByLifeTotal)
+
+
+def test_bridge_deal_damage_to_opponent_creature_by_life_total_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    the unit-variant precedent (round-32 by_artifact_count / round-35
+    by_cards_in_hand / round-36 by_lands_controlled / round-37
+    by_creatures_you_control / round-46 by_cards_in_graveyard) --
+    unrecognized fields in the dict are ignored, not raised. Notably,
+    an ``amount`` key (which the sister DealDamageToOpponentCreature
+    arm DOES consume) is silently dropped here -- the dynamic-X from
+    the clamped life total is the whole point of this variant, not a
+    static amount.
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByLifeTotal,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "deal_damage_to_opponent_creature_by_life_total",
+            "spurious_field": "ignored",
+            # ``amount`` would be consumed by sister
+            # ``deal_damage_to_opponent_creature`` arm; here it's
+            # silently dropped -- the count is dynamic.
+            "amount": 99,
+        }
+    )
+    assert isinstance(e, DealDamageToOpponentCreatureByLifeTotal)
+
+
+def test_bridge_deal_damage_to_opponent_creature_by_life_total_equality_default_constructor():
+    """Bridge arm pin: two
+    ``DealDamageToOpponentCreatureByLifeTotal()`` instances are equal
+    under dataclass(frozen=True) default __eq__ semantics (provided
+    their auto-defaulted ``targets`` tuple converges via
+    __post_init__). Pins the frozen-dataclass equality contract for
+    downstream hash-based keying (e.g. de-dup in Sequence composers).
+    Sister of the round-32 / 35 / 36 / 37 / 46 equality pins.
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByLifeTotal,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature_by_life_total"}
+    )
+    e2 = DealDamageToOpponentCreatureByLifeTotal()
+    assert e1 == e2
+
+
+def test_bridge_deal_damage_to_opponent_creature_by_life_total_distinct_from_sisters():
+    """Bridge arm pin: the round-47 life-total variant and its five
+    sister denominators (round-46 cards-in-graveyard, round-37
+    creatures-controlled, round-36 lands-controlled, round-35
+    hand-size, round-32 artifact-count) are SIX DISTINCT effect types
+    even though they share the same apply substrate (damage to first
+    eligible opponent creature). The denominator is the only axis that
+    differs; Python uses six distinct @dataclass classes (damage.py --
+    ByArtifactCount, ByCardsInHand, ByLandsControlled,
+    ByCreaturesYouControl, ByCardsInGraveyard, ByLifeTotal) and Rust
+    uses six distinct unit variants. Pin guards against accidental
+    cross-translation drift among the six sisters at the bridge layer
+    -- the damage-to-opponent-creature row of the X-from-count matrix
+    is now fully saturated.
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByArtifactCount,
+        DealDamageToOpponentCreatureByCardsInGraveyard,
+        DealDamageToOpponentCreatureByCardsInHand,
+        DealDamageToOpponentCreatureByCreaturesYouControl,
+        DealDamageToOpponentCreatureByLandsControlled,
+        DealDamageToOpponentCreatureByLifeTotal,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e_life = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature_by_life_total"}
+    )
+    e_graveyard = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature_by_cards_in_graveyard"}
+    )
+    e_creatures = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature_by_creatures_you_control"}
+    )
+    e_lands = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature_by_lands_controlled"}
+    )
+    e_hand = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature_by_cards_in_hand"}
+    )
+    e_art = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_opponent_creature_by_artifact_count"}
+    )
+    assert isinstance(e_life, DealDamageToOpponentCreatureByLifeTotal)
+    assert isinstance(
+        e_graveyard, DealDamageToOpponentCreatureByCardsInGraveyard
+    )
+    assert isinstance(
+        e_creatures, DealDamageToOpponentCreatureByCreaturesYouControl
+    )
+    assert isinstance(e_lands, DealDamageToOpponentCreatureByLandsControlled)
+    assert isinstance(e_hand, DealDamageToOpponentCreatureByCardsInHand)
+    assert isinstance(e_art, DealDamageToOpponentCreatureByArtifactCount)
+    # Cross-isinstance negatives -- the six classes are siblings, not
+    # subclasses of one another.
+    assert not isinstance(
+        e_life, DealDamageToOpponentCreatureByCardsInGraveyard
+    )
+    assert not isinstance(
+        e_life, DealDamageToOpponentCreatureByCreaturesYouControl
+    )
+    assert not isinstance(
+        e_life, DealDamageToOpponentCreatureByLandsControlled
+    )
+    assert not isinstance(e_life, DealDamageToOpponentCreatureByCardsInHand)
+    assert not isinstance(e_life, DealDamageToOpponentCreatureByArtifactCount)
+    assert not isinstance(
+        e_graveyard, DealDamageToOpponentCreatureByLifeTotal
+    )
+    assert not isinstance(
+        e_creatures, DealDamageToOpponentCreatureByLifeTotal
+    )
+    assert not isinstance(e_lands, DealDamageToOpponentCreatureByLifeTotal)
+    assert not isinstance(e_hand, DealDamageToOpponentCreatureByLifeTotal)
+    assert not isinstance(e_art, DealDamageToOpponentCreatureByLifeTotal)
+    # Strict type identity (rules out any subclass-relation drift).
+    assert type(e_life) is not type(e_graveyard)
+    assert type(e_life) is not type(e_creatures)
+    assert type(e_life) is not type(e_lands)
+    assert type(e_life) is not type(e_hand)
+    assert type(e_life) is not type(e_art)
+
+
+def test_bridge_deal_damage_to_opponent_creature_by_life_total_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([DealDamageToOpponentCreatureByLifeTotal(), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    the round-47 arm against accidental dispatch loss inside Sequence
+    (mirrors the round-30 stun-counter / round-31 double-power /
+    round-32 by-artifact-count / round-35 by-cards-in-hand / round-36
+    by-lands-controlled / round-37 by-creatures-you-control / round-46
+    by-cards-in-graveyard Sequence-composability pins).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByLifeTotal,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "deal_damage_to_opponent_creature_by_life_total"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], DealDamageToOpponentCreatureByLifeTotal
+    )
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_deal_damage_to_opponent_creature_by_life_total_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape
+    ``{"kind": "deal_damage_to_opponent_creature_by_life_total"}``
+    on a triggered_ability carrier. No EoE consumer today, but the
+    lockstep gate doesn't depend on the trigger event -- registering
+    through any abilities carrier exercises the parse_effect arm.
+    Pinning here keeps the Python bridge from drifting away from
+    Rust's parse_effect coverage.
+
+    Mirrors Rust's parse_effect arm added in this slice immediately
+    after the round-46
+    deal_damage_to_opponent_creature_by_cards_in_graveyard arm.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- DealDamageToOpponentCreatureByLifeTotal",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"R": 1, "generic": 2},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_to_opponent_creature_by_life_total"
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_rejects_deal_damage_to_opponent_creature_by_life_total_with_typo():
+    """Negative lockstep pin: a misspelled kind (e.g.
+    ``deal_damage_to_opponent_creature_by_life_totals`` -- spurious
+    trailing "s") surfaces as ValueError on Rust's parse_effect arm
+    because the new variant isn't registered for that spelling. Pin
+    against accidental schema drift between bridge dict shape and
+    Rust parser's accepted-kinds set.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- life-total typo lockstep",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"R": 1},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    # Misspelled -- spurious trailing "s".
+                    "kind": "deal_damage_to_opponent_creature_by_life_totals"
+                },
+            }
+        ],
+    }
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown effect kind"):
+        reg.register_printing(d)
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
