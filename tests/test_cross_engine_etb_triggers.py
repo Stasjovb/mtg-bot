@@ -17765,5 +17765,414 @@ def test_phase3a_real_galactic_wayfarer_etb_lander_spawn_byte_equal():
         clear_token_printings()
 
 
+def test_bridge_famished_worldsire_look_top_x_by_power_put_lands_tapped_basic_translation():
+    """BLOCKED-RUST-EFFECT slice (round 54) -- Famished Worldsire ETB.
+    Rust ``{"kind":
+    "famished_worldsire_look_top_x_by_power_put_lands_tapped"}``
+    translates to Python ``FamishedWorldsireETBEffect()``.
+
+    Mirrors Rust's parse_effect arm (added in this slice immediately
+    after the round-28 ``look_top_n_put_one_in_hand_rest_to_graveyard``
+    arm; unit variant; no fields -- X is dynamic = source effective
+    power, land selection deterministic greedy-all on both engines).
+    GENUINELY-unshipped real-card residue: live-verified absent from
+    all 108 Rust Effect variants + unbridged this round, while the
+    Python source-of-truth FamishedWorldsireETBEffect
+    (effects/bespoke.py:94) already existed.
+    """
+    from mtg_bot.effects.bespoke import FamishedWorldsireETBEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": (
+                "famished_worldsire_look_top_x_by_power_put_lands_tapped"
+            )
+        }
+    )
+    assert isinstance(e, FamishedWorldsireETBEffect)
+
+
+def test_bridge_famished_worldsire_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    the round-28/49 unit-variant precedent -- unrecognized fields are
+    ignored, not raised. Notably an ``n`` key (which the sibling
+    ``look_top_n_put_one_in_hand_rest_to_graveyard`` arm DOES consume)
+    is silently dropped here -- X is dynamic (source effective power),
+    not a static field.
+    """
+    from mtg_bot.effects.bespoke import FamishedWorldsireETBEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": (
+                "famished_worldsire_look_top_x_by_power_put_lands_tapped"
+            ),
+            "spurious_field": "ignored",
+            # ``n`` would be consumed by the sibling look-top-N arm;
+            # here it's silently dropped -- X is dynamic (source power).
+            "n": 99,
+        }
+    )
+    assert isinstance(e, FamishedWorldsireETBEffect)
+
+
+def test_bridge_famished_worldsire_equality_default_constructor():
+    """Bridge arm pin: two ``FamishedWorldsireETBEffect()`` instances
+    are equal under dataclass(frozen=True) default __eq__ (no
+    constructor args -> trivially equal). Pins the frozen-dataclass
+    equality contract for downstream hash-based keying (Sequence
+    de-dup). Mirrors the round-49 unit-variant equality pin.
+    """
+    from mtg_bot.effects.bespoke import FamishedWorldsireETBEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {
+            "kind": (
+                "famished_worldsire_look_top_x_by_power_put_lands_tapped"
+            )
+        }
+    )
+    e2 = FamishedWorldsireETBEffect()
+    assert e1 == e2
+
+
+def test_bridge_famished_worldsire_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([FamishedWorldsireETBEffect(), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    the round-54 arm against accidental dispatch loss inside Sequence
+    (mirrors the round-30..49 unit-variant Sequence-composability
+    pins).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.bespoke import FamishedWorldsireETBEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {
+                    "kind": (
+                        "famished_worldsire_look_top_x_by_power_"
+                        "put_lands_tapped"
+                    )
+                },
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], FamishedWorldsireETBEffect)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_famished_worldsire_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind":
+    "famished_worldsire_look_top_x_by_power_put_lands_tapped"}`` on a
+    triggered_ability carrier. Mirrors Rust's parse_effect arm added in
+    this slice immediately after the round-28
+    ``look_top_n_put_one_in_hand_rest_to_graveyard`` arm. Keeps the
+    Python bridge from drifting away from Rust's parse_effect coverage.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- FamishedWorldsire r54",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 3, "generic": 5},
+        "power": 0,
+        "toughness": 0,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "famished_worldsire_look_top_x_by_power_"
+                        "put_lands_tapped"
+                    )
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_rejects_famished_worldsire_with_typo():
+    """Negative lockstep pin: a misspelled kind (spurious trailing "s")
+    surfaces as ValueError on Rust's parse_effect arm because the new
+    variant isn't registered for that spelling. Pin against accidental
+    schema drift between bridge dict shape and Rust parser's
+    accepted-kinds set. Sister of the round-45/48/49 typo-rejection
+    pins.
+    """
+    import mtg_bot_engine
+    import pytest
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- typo lockstep r54",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 3},
+        "power": 0,
+        "toughness": 0,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    # Misspelled -- spurious trailing "s".
+                    "kind": (
+                        "famished_worldsire_look_top_x_by_power_"
+                        "put_lands_tappeds"
+                    )
+                },
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="unknown effect kind"):
+        reg.register_printing(d)
+
+
+def _fw_etb_dict():
+    """Famished Worldsire printing dict carrying the round-54
+    SourceIsSelf ENTERS trigger -> the new bridge-dict unit-variant
+    carrier (the loader doesn't admit the Ward-rider real card --
+    cross-engine driving pattern, round-31/51/52/53 precedent)."""
+    return {
+        "name": "Famished Worldsire",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 3, "generic": 5},
+        "power": 0,
+        "toughness": 0,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": (
+                        "famished_worldsire_look_top_x_by_power_"
+                        "put_lands_tapped"
+                    )
+                },
+            }
+        ],
+    }
+
+
+def test_rust_famished_worldsire_zero_power_silent_noop():
+    """Rust regression pin: X = source effective power. A 0/0 source
+    with NO +1/+1 counters (Famished Worldsire's printed P/T) -> X = 0
+    -> ``if x <= 0: return`` silent no-op. Library untouched, no land
+    enters the battlefield. Mirrors Python's chained
+    ``if source is None: return`` / ``if x <= 0: return``.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    forest = reg.register_printing(
+        {
+            "name": "Forest",
+            "card_types": ["Land"],
+            "supertypes": ["Basic"],
+            "subtypes": ["Forest"],
+            "mana_cost": {},
+        }
+    )
+    # p0 library top-to-bottom: 3 Forests (index 0 = top per CE3).
+    st = mtg_bot_engine.make_state(reg, [forest, forest, forest], [])
+    assert [d["printing_id"] for d in st.library_snapshot(0)] == [
+        forest,
+        forest,
+        forest,
+    ]
+    # Famished Worldsire (0/0, NO counter granter -> effective power 0).
+    st.register_and_inject_object(_fw_etb_dict(), 0, 2)
+    while st.stack_size() > 0:
+        st.resolve_top_of_stack()
+    # X=0 -> silent no-op: all 3 Forests still in library, none on bf.
+    lib_after = [d["printing_id"] for d in st.library_snapshot(0)]
+    assert lib_after == [forest, forest, forest], (
+        f"X=0 must be a silent no-op (library untouched); got "
+        f"{lib_after}"
+    )
+    bf_names = [
+        e["printing_name"] for e in st.battlefield_snapshot()
+    ]
+    assert bf_names.count("Forest") == 0, (
+        f"X=0: no land should have entered the battlefield; got "
+        f"bf={bf_names}"
+    )
+
+
+def test_rust_famished_worldsire_greedy_all_lands_enter_tapped():
+    """Rust regression pin: X = source power (via +1/+1 counters,
+    matching Devour land). Source 0/0 + 3 +1/+1 counters -> X = 3.
+    Top-3 library = 3 lands -> ALL 3 enter the battlefield TAPPED
+    (deterministic greedy-all, mirroring Python's ``bespoke.py:121``).
+    Library emptied -> no shuffle (Rust gate ``lib_len_post >= 2``;
+    Python's unconditional shuffle of a 0/1-card library is a no-op
+    too -> byte-equal, no RNG).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    forest = reg.register_printing(
+        {
+            "name": "Forest",
+            "card_types": ["Land"],
+            "supertypes": ["Basic"],
+            "subtypes": ["Forest"],
+            "mana_cost": {},
+        }
+    )
+    st = mtg_bot_engine.make_state(reg, [forest, forest, forest], [])
+    fw_id = st.register_and_inject_object(_fw_etb_dict(), 0, 2)
+    # Famished's ENTERS trigger is now on the stack but NOT yet
+    # resolved. Seed +3/+3 +1/+1 counters on it (modeling Devour
+    # land's counter seed without the loader-gated Devour rider) so
+    # ``read_famished_source_power`` reads base(0) + counters(3) = X=3
+    # at resolve. This directly exercises the §2 counter-fold path
+    # (the round-53 Mightform `read_doubling_power` precedent —
+    # Rust's absolute `effective_power` getter omits counters; the
+    # Famished arm's private read folds them in to MATCH Python's
+    # `effective_power`/`_compute_effective_pt`).
+    assert st.get_counters(fw_id) == 0
+    assert st.set_counters(fw_id, 3) is True
+    assert st.get_counters(fw_id) == 3
+    while st.stack_size() > 0:
+        st.resolve_top_of_stack()
+    lib_after = [d["printing_id"] for d in st.library_snapshot(0)]
+    assert lib_after == [], (
+        f"X=3, top-3 all lands -> library emptied; got {lib_after}"
+    )
+    bf = st.battlefield_snapshot()
+    forests_on_bf = [e for e in bf if e["printing_name"] == "Forest"]
+    assert len(forests_on_bf) == 3, (
+        f"all 3 Forests should be on the battlefield; got "
+        f"{len(forests_on_bf)}"
+    )
+    assert all(e["tapped"] for e in forests_on_bf), (
+        f"every Famished-put land enters TAPPED; got "
+        f"{[(e['printing_name'], e['tapped']) for e in forests_on_bf]}"
+    )
+
+
+def test_rust_famished_worldsire_nonland_stays_no_shuffle():
+    """Rust regression pin: non-land cards in the examined window stay
+    in the library (Python's ``rest`` is never removed --
+    ``bespoke.py:122``). Scenario sized so the post-resolve library has
+    < 2 cards -> no shuffle on EITHER engine (Rust gate ``>= 2``;
+    Python's unconditional 1-card shuffle is a no-op) -> deterministic,
+    no RNG.
+
+    Source power 2 (2 +1/+1 counters). Library top-to-bottom =
+    [Forest, Vanilla Bear]. Examined window = top 2 = both. Only
+    Forest is a land -> Forest to bf tapped; Bear (non-land) stays.
+    Library after = [Bear] (1 card -> NO shuffle).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    forest = reg.register_printing(
+        {
+            "name": "Forest",
+            "card_types": ["Land"],
+            "supertypes": ["Basic"],
+            "subtypes": ["Forest"],
+            "mana_cost": {},
+        }
+    )
+    bear = reg.register_printing(
+        {
+            "name": "Vanilla Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+        }
+    )
+    # Library top-to-bottom: Forest (top), Vanilla Bear (second).
+    st = mtg_bot_engine.make_state(reg, [forest, bear], [])
+    fw_id = st.register_and_inject_object(_fw_etb_dict(), 0, 2)
+    # Seed +2/+2 counters before the ETB resolves -> X = base(0) +
+    # counters(2) = 2 (§2 counter-fold path).
+    assert st.set_counters(fw_id, 2) is True
+    while st.stack_size() > 0:
+        st.resolve_top_of_stack()
+    # X=2, examined = [Forest, Bear]. Only Forest is a land -> Forest
+    # to bf tapped; Bear (non-land) stays. Library after = [Bear]
+    # (1 card -> no shuffle).
+    lib_after = [d["printing_id"] for d in st.library_snapshot(0)]
+    assert lib_after == [bear], (
+        f"non-land Bear must stay in the library in place; got "
+        f"{lib_after}"
+    )
+    bf = st.battlefield_snapshot()
+    forests = [e for e in bf if e["printing_name"] == "Forest"]
+    assert len(forests) == 1 and forests[0]["tapped"], (
+        f"the single examined land enters tapped; got {forests}"
+    )
+    assert not any(
+        e["printing_name"] == "Vanilla Bear" for e in bf
+    ), "the non-land Bear must NOT enter the battlefield"
+
+
+def test_rust_famished_worldsire_cross_controller_source_resolution():
+    """Rust regression pin: 'your library' resolves under the SOURCE's
+    controller, NOT the active player (CR 119.5 / 608.2). Famished
+    Worldsire owned by p1 enters while p0 is the active player -> X
+    reads p1's Famished power and lands enter from p1's library onto
+    p1's battlefield (same I69 source-controller convention
+    ``SearchLibraryForBasicLandTapped`` uses). Sized to empty post
+    library -> no shuffle, deterministic.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    forest = reg.register_printing(
+        {
+            "name": "Forest",
+            "card_types": ["Land"],
+            "supertypes": ["Basic"],
+            "subtypes": ["Forest"],
+            "mana_cost": {},
+        }
+    )
+    # p0 library empty; p1 library = 2 Forests.
+    st = mtg_bot_engine.make_state(reg, [], [forest, forest])
+    assert st.active_player == 0
+    # p1's Famished Worldsire (controller=1). p0 is the active player.
+    fw_id = st.register_and_inject_object(_fw_etb_dict(), 1, 2)
+    # Seed +2/+2 counters before the ETB resolves -> X = 2.
+    assert st.set_counters(fw_id, 2) is True
+    while st.stack_size() > 0:
+        st.resolve_top_of_stack()
+    # p1's library emptied (X=2, both Forests are lands); p0 untouched.
+    assert [d["printing_id"] for d in st.library_snapshot(1)] == []
+    assert [d["printing_id"] for d in st.library_snapshot(0)] == []
+    bf = st.battlefield_snapshot()
+    p1_forests = [
+        e
+        for e in bf
+        if e["printing_name"] == "Forest" and e["controller_id"] == 1
+    ]
+    assert len(p1_forests) == 2 and all(
+        e["tapped"] for e in p1_forests
+    ), (
+        f"both Forests enter p1's battlefield tapped (source's "
+        f"controller, NOT active player p0); got {p1_forests}"
+    )
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

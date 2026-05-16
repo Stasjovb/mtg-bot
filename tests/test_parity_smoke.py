@@ -60099,6 +60099,230 @@ def test_r54_cross_engine_search_library_basic_land_byte_equal_shared_rng():
             f"the SAME shared random.Random. py={py_lib_names!r} "
             f"rust={rust_lib_names!r}"
         )
+def test_cross_engine_real_eoe_famished_worldsire_etb_look_top_x_by_power_put_lands_tapped_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Famished Worldsire
+    (~2,324 17lands decks).**
+
+    Drives the **ACTUAL parsed Famished Worldsire printing** on the
+    Python side: ``get_active_source().get_printings()["Famished
+    Worldsire"]`` — which the parser maps
+    (cards/parser/effects.py:3724-3729) to the bespoke
+    ``FamishedWorldsireETBEffect`` (effects/bespoke.py:94) on an
+    ``Event.ENTERS`` SourceIsSelf trigger.
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "Ward {3}
+         Devour land 3 (As this creature enters, you may sacrifice any
+         number of lands. It enters with three times that many +1/+1
+         counters on it.)
+         When this creature enters, look at the top X cards of your
+         library, where X is this creature's power. Put any number of
+         land cards from among them onto the battlefield tapped, then
+         shuffle."
+
+    **§2 — why this probe is load-bearing AND byte-equal.** Famished
+    Worldsire is printed **0/0** (verified: ``real.power == 0``); ALL
+    of its power comes from Devour-land +1/+1 counters. So X = its
+    *effective* power, which MUST fold in ``+1/+1`` counters. Rust's
+    new ``read_famished_source_power`` composes
+    ``base + ueot_power_bonus() + obj.counters`` to MATCH Python's
+    ``effective_power``/``_compute_effective_pt`` — the EXACT §2
+    counter-fold class the round-53 ``read_doubling_power`` Mightform
+    fix closed. A base-power read would compute X=0 -> 0 lands -> a
+    silent cross-engine mistranslation. This probe stages +2/+2
+    counters on the source so X=2, directly exercising that path.
+
+    **Deterministic, no RNG.** The scenario is sized so the
+    post-resolve library has < 2 cards: library top-to-bottom =
+    [Forest, Grizzly Bears]. X=2, examined window = both; only the
+    Forest is a land -> Forest to battlefield TAPPED; the non-land
+    Bear stays in the library (Python's ``rest`` is never removed —
+    ``bespoke.py:122``). Library after = [Bear] (1 card). Neither
+    engine shuffles a <2-card library (Rust gate ``lib_len_post >=
+    2``; Python's unconditional ``random.Random.shuffle`` of a
+    1-element list is a no-op), so the comparison is fully
+    deterministic with NO rng threading.
+
+    Rust drives the bridge-dict unit-variant carrier (the loader
+    does NOT admit the real card — see EoE-pool delta below — the
+    established Fight/Monoist/Mightform cross-engine driving
+    pattern). The +1/+1 counters are seeded on the source before its
+    ETB resolves: Rust ``set_counters``; Python ``plus_one_counters``.
+
+    **EoE-pool delta.** Famished Worldsire flips drop->admit at the
+    *bridge/probe* level (the Effect arm + bridge arm ship here so the
+    real card's ETB now round-trips cross-engine). It is deliberately
+    NOT added to the production-deck loader ``_SAFE_*`` allowlist: the
+    printing carries ``Ward {3}`` (verified: ``real.ward_cost is not
+    None``) + ``Devour land 3`` riders that the loader's feature
+    allowlist does not model — admitting it would silently drop those
+    riders (a §2 silent-mistranslation). Documented in
+    ``docs/SEARCH_LIMITATIONS.md`` round-54 entry (mirrors the r51
+    Monoist / r52 Extinguisher / r53 Mightform
+    Effect-half-closes / full-card-stays-gated precedent).
+
+    Probe shape:
+      1. Stage p0 library top-to-bottom = [Forest, Grizzly Bears] on
+         BOTH engines.
+      2. Materialize the source on p0's battlefield; seed +2/+2 +1/+1
+         counters; fire its ENTERS trigger (Rust: bridge-dict carrier;
+         Python: the GENUINE parsed printing's bespoke ETB).
+      3. Drain both stacks; assert byte-equal: library == [Vanilla
+         Bear] on both; exactly one Forest on the battlefield, tapped,
+         controlled by p0, on both.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        _FOREST, _BEARS,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import (
+        _trigger_etb_abilities, resolve_top_of_stack,
+    )
+    from mtg_bot.game import Zone, effective_power
+    from mtg_bot.effects.bespoke import FamishedWorldsireETBEffect
+
+    real = get_active_source().get_printings().get(
+        "Famished Worldsire"
+    )
+    if real is None:
+        import pytest
+        pytest.skip(
+            "Famished Worldsire absent from active CardSource"
+        )
+    # Sanity: the genuinely-parsed printing carries the bespoke
+    # FamishedWorldsireETBEffect on a single ENTERS trigger, and is
+    # the §2-load-bearing 0/0 + Ward-rider real card this probe pins.
+    assert real.is_creature
+    assert real.power == 0 and real.toughness == 0, (
+        f"Famished Worldsire is printed 0/0 (power comes only from "
+        f"Devour counters); got {real.power}/{real.toughness}"
+    )
+    assert getattr(real, "ward_cost", None) is not None, (
+        "Famished Worldsire carries Ward {3} — the loader-gating "
+        "rider that keeps the full card out of the _SAFE_* allowlist"
+    )
+    assert len(real.triggered_abilities) == 1
+    real_eff = real.triggered_abilities[0].effect
+    assert isinstance(real_eff, FamishedWorldsireETBEffect), (
+        f"genuine Famished Worldsire must parse to the bespoke "
+        f"FamishedWorldsireETBEffect; got {type(real_eff).__name__}"
+    )
+
+    spec = DeckSpec(
+        card_defs=(_FOREST, _BEARS),
+        # Library head-first: index 0 = top (Rust CE3 / Python
+        # library[0]=top). Forest on top, Grizzly Bears second.
+        p0_library=("Forest", "Grizzly Bears"),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+
+    # ---- Rust side: bridge-dict unit-variant carrier. The loader
+    # doesn't admit the Ward-rider real card; drive the carrier
+    # directly (Fight/Monoist/Mightform precedent). Seed +2/+2
+    # counters before the ETB resolves -> X = base(0) + counters(2).
+    rust_fw_id = rust_state.register_and_inject_object(
+        {
+            "name": "Famished Worldsire",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 3, "generic": 5},
+            "power": 0,
+            "toughness": 0,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": (
+                            "famished_worldsire_look_top_x_by_power_"
+                            "put_lands_tapped"
+                        )
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+    assert rust_state.set_counters(rust_fw_id, 2) is True
+
+    # ---- Python side: GENUINE parsed Famished Worldsire printing +
+    # +2/+2 counters on the source so effective_power = 2.
+    py_src = py_state.new_object(
+        real, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_src.summoning_sick = False
+    py_src.plus_one_counters = 2
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    assert effective_power(py_state, py_src) == 2, (
+        "Python: source effective power must be 2 (0 base + 2 "
+        "counters) — the §2 counter-fold this probe pins"
+    )
+    _trigger_etb_abilities(py_state, py_src)
+    assert len(py_state.stack) == 1, (
+        "Python: the genuine Famished Worldsire printing's ENTERS "
+        f"trigger should land on the stack. Got {len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- GENUINE cross-engine byte-equal assertions.
+    # Library: only the non-land Grizzly Bears remains, on BOTH engines
+    # (the examined Forest was removed; <2-card library => no shuffle
+    # on either side => deterministic).
+    rust_lib = [
+        e["printing_name"] for e in rust_state.library_snapshot(0)
+    ]
+    py_lib = [o.printing.name for o in py_state.players[0].library]
+    assert rust_lib == ["Grizzly Bears"], (
+        f"Rust p0 library should hold only the non-land Grizzly Bears; "
+        f"got {rust_lib}"
+    )
+    assert py_lib == ["Grizzly Bears"], (
+        f"Python p0 library should hold only the non-land Vanilla "
+        f"Bear; got {py_lib}"
+    )
+    assert rust_lib == py_lib
+
+    # Battlefield: exactly one Forest, tapped, controlled by p0, on
+    # BOTH engines (the greedy-put land).
+    rust_bf_forests = [
+        e
+        for e in rust_state.battlefield_snapshot()
+        if e["printing_name"] == "Forest"
+    ]
+    py_bf_forests = [
+        o for o in py_state.battlefield if o.printing.name == "Forest"
+    ]
+    assert len(rust_bf_forests) == 1
+    assert len(py_bf_forests) == 1
+    assert rust_bf_forests[0]["tapped"] is True
+    assert py_bf_forests[0].tapped is True
+    assert rust_bf_forests[0]["controller_id"] == 0
+    assert py_bf_forests[0].controller_id == 0
+    # Cross-engine: same number of tapped Forests entered.
+    assert len(rust_bf_forests) == len(py_bf_forests)
+    assert (
+        rust_bf_forests[0]["tapped"] == py_bf_forests[0].tapped
+    )
+    # Lives unchanged (the effect only moves cards / shuffles).
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
 
 
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
