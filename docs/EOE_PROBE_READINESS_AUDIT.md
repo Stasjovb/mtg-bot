@@ -304,11 +304,16 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 621a6e62 (round-54 HEAD, post N1+N2+N3),
-     resynced by the round-54 post-merge fold slice
-     (Rust variant + bridge-arm +1 each from N2 Famished
-     Worldsire; _SAFE_* unchanged — N1 shuffle fix + N2
-     loader-admit-declined). -->
+     Measured at main 5bd56d4a (round-55 HEAD, post N1+N2+N3),
+     resynced by the round-55 post-merge re-verify+fold slice.
+     Counts UNCHANGED (109/111/19) — N2's token-cease-to-exist
+     SBA shipped no new Effect variant; N1 cron-hardening + N3
+     Pulsar-probe are tooling/test only. The 11 still-
+     genuinely-missing entries were re-stamped
+     verified_absent_at_commit=5bd56d4a (cron structural check
+     re-confirmed absence at this HEAD); Seedship Agrarian
+     reclassified out (stale label — both its Effects already
+     shipped). -->
 rust_effect_variants = 109
 bridge_arms = 111
 safe_triggers = 19
