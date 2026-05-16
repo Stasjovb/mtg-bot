@@ -275,9 +275,10 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main a1d4bcf7 (round-51 HEAD), round-52 N3. -->
-rust_effect_variants = 107
-bridge_arms = 109
+     Measured at main 66a961d5 (round-52 HEAD, post N1+N2+N3),
+     resynced by the round-52 post-N2 coverage-resync slice. -->
+rust_effect_variants = 108
+bridge_arms = 110
 safe_triggers = 18
 safe_keywords = 12
 safe_effect_keys = 8
