@@ -1145,12 +1145,20 @@ def test_parse_residue_worklist_accepts_blocked_non_effect(tmp_path):
 
 def test_real_worklist_has_round56_reclassification():
     """Structural-regression guard on the committed worklist: it
-    carries exactly the round-56 reclassification — Seedship Agrarian
-    is ``blocked_non_effect`` with both shipped Effects + a blocker
-    string, and its declared shipped variants ARE live Rust variants
-    (so the cron stays exit-0 in-sync on the real tree). It is the
-    ONLY blocked_non_effect entry; every genuinely_missing entry is a
-    TRUE new-Rust-Effect ask (none resolve to a live variant)."""
+    carries the round-56 reclassifications and every
+    ``blocked_non_effect`` entry's declared shipped variants ARE live
+    Rust variants (so the cron stays exit-0 in-sync on the real tree);
+    every genuinely_missing entry is a TRUE new-Rust-Effect ask (none
+    resolve to a live variant).
+
+    Round-56 settled state: Seedship Agrarian (reclassified by N2 in
+    the round-56 slice) AND Dauntless Scrapbot (folded at the round-56
+    post-N1-merge resync, exactly as N2 queued, once N1 shipped
+    ``ExileEachOpponentsGraveyard``) are both ``blocked_non_effect``.
+    The guard asserts the structural invariant for EVERY bne entry
+    rather than a brittle hardcoded count/index — pinning an exact
+    count is the snapshot-pin anti-pattern this campaign exists to
+    eliminate (a legitimate post-merge fold must not turn it red)."""
     mod = _load_tool()
     entries = mod.parse_residue_worklist()
     statuses = {e["status"] for e in entries}
@@ -1162,17 +1170,27 @@ def test_real_worklist_has_round56_reclassification():
     bne = [
         e for e in entries if e["status"] == "blocked_non_effect"
     ]
-    assert len(bne) == 1
-    seed = bne[0]
-    assert seed["card"] == "Seedship Agrarian"
+    by_card = {e["card"]: e for e in bne}
+    # The two known round-56 reclassifications must both be present.
+    assert "Seedship Agrarian" in by_card
+    assert "Dauntless Scrapbot" in by_card
+    seed = by_card["Seedship Agrarian"]
     assert seed["shipped_variants"] == [
         "CreateToken",
         "PutPlusOneCounterOnSelf",
     ]
-    assert seed["non_effect_blocker"].strip()
-    # `verified_absent_at_commit` is meaningless for blocked_non_effect
-    # (the Effects are present) — it must NOT carry one.
-    assert "verified_absent_at_commit" not in seed
+    daunt = by_card["Dauntless Scrapbot"]
+    assert "ExileEachOpponentsGraveyard" in daunt["shipped_variants"]
+    # Generic structural invariant for EVERY blocked_non_effect entry
+    # (robust to future legitimate folds): non-empty shipped_variants
+    # + a blocker string + no meaningless absence stamp.
+    for e in bne:
+        assert e["shipped_variants"], e["card"]
+        assert e["non_effect_blocker"].strip(), e["card"]
+        # `verified_absent_at_commit` is meaningless for
+        # blocked_non_effect (the Effects are present) — must NOT carry
+        # one.
+        assert "verified_absent_at_commit" not in e, e["card"]
     # The declared shipped Effects ARE live Rust variants → the round-56
     # invariant holds on the real tree (no regression row).
     rust = mod.collect_rust_variant_set()
