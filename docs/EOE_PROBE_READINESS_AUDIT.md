@@ -245,6 +245,44 @@ kept verbatim below for cross-round narrative continuity.
 | `_SAFE_TRIGGERS` triples | 3 (round-1 starter) | **15** | +12 |
 | `SEARCH_LIMITATIONS.md` active entries | 28 | **27** (−1, round-37 supertypes-proxy close) | −1 |
 
+### Round-52: staleness-sentinel block (the round-19 cron, implemented)
+
+The round-19 cron proposal is now **implemented** rather than
+re-validated for a fourth time.
+`scripts/check_audit_coverage_staleness.py` derives the live
+Rust-`Effect`-variant / bridge-`kind==`-arm / `_SAFE_TRIGGERS` /
+`_SAFE_KEYWORDS` / `_SAFE_EFFECT_KEYS` inventory off the working tree
+and diffs it against the machine-readable block below + the
+auto-generated `RUST_EFFECT_COVERAGE.md` headline. It is wired into
+`hooks/post-commit` as a main-only, never-blocking step (same
+contract as the perf hook) and is runnable standalone / as a CI gate
+(`python scripts/check_audit_coverage_staleness.py`, exit 1 on drift).
+
+**On its first run the tool confirmed the headline table directly
+above was ALREADY stale at `a1d4bcf7`** (round-51 HEAD): the
+round-49-refresh prose froze at `8e584628` while rounds 49–51 shipped
+substrate on top. The block below carries the *true current* counts
+measured at `a1d4bcf7`; the round-48 prose column is left verbatim
+for narrative continuity (per the doc's keep-verbatim convention) —
+the block, not the prose, is the cron's source of truth from here on.
+A refresh updates **this block** (and the prose if rewriting the
+narrative); the cron then re-baselines automatically on the next
+`main` merge.
+
+<!-- STALENESS-SENTINEL:BEGIN -->
+<!-- Machine-readable headline counts diffed by
+     scripts/check_audit_coverage_staleness.py on every main commit.
+     `key = value`, ints only, `#`/`<!--` lines ignored. Update these
+     whenever the live inventory moves (a refresh edits this block);
+     the cron reports drift until they match the working tree again.
+     Measured at main a1d4bcf7 (round-51 HEAD), round-52 N3. -->
+rust_effect_variants = 107
+bridge_arms = 109
+safe_triggers = 18
+safe_keywords = 12
+safe_effect_keys = 8
+<!-- STALENESS-SENTINEL:END -->
+
 **The BLOCKED-RUST-EFFECT headline did NOT move materially over
 rounds 35–48 — and that is the central finding of this refresh.**
 The round-34 residue's truly-no-Rust-arm asks (`Astelli Reclaimer`
