@@ -1382,6 +1382,28 @@ _SAFE_KEYWORDS: frozenset[str] = frozenset({
 #     any agent setup (no PendingDecision pipeline to drain on the
 #     post-resolve state).
 #
+# **Landfall extension (this slice)** adds one compound predicate
+# shape: ``"land_enters_controlled_by_you"`` — a sentinel canonical
+# name for the AND-nested ``{"kind": "and", "left": {"kind":
+# "subject_is_land"}, "right": {"kind": "controlled_by_you"}}`` dict
+# both engines already parse (Rust at `cards.rs::parse_predicate` —
+# subject-anchored type filters slice; Python via
+# `cross_engine._ta_dict_to_python_predicate`'s "and" / "subject_is_
+# land" / "controlled_by_you" arms). The canonical sentinel keeps
+# the ``(event, predicate_kind, effect_kind)`` triple shape uniform
+# across the allowlist; ``_is_safe_trigger_dict`` extracts the
+# sentinel from the nested dict shape, and ``_python_ta_to_safe_dict``
+# recognizes Python's parser-emitted ``And(Subject(slot=None,
+# inner=IsLand()), Controlled(by=YOU, subject=None))`` predicate as
+# the same canonical shape. Unlocks Eumidian Terrabotanist
+# (1/2 {1}{G}, "Landfall — Whenever a land you control enters, you
+# gain 1 life") on the production-deck loader. Tannuk, Memorial
+# Ensign carries the same predicate but pairs it with the bespoke
+# `TannukEnsignLandfallEffect` (deal-damage + second-time-bonus
+# draw); Tannuk needs both a leaf-effect deal_damage_each_opponent
+# arm AND the second-time-bonus state primitive — out of scope for
+# this slice.
+#
 # Triggers explicitly NOT in this set (and therefore disqualifying):
 # ``deal_damage`` / ``deal_damage_any_target`` (target-pick at PUSH
 # time requires an agent shim — the production-deck loader doesn't
@@ -1402,12 +1424,33 @@ _SAFE_KEYWORDS: frozenset[str] = frozenset({
 # end-to-end firing parity. See ``test_carddef_safe_etb_trigger_*``
 # in tests/test_trajectory.py and the synthetic real-game probe in
 # test_trajectory_parity.py for the Phase 6 ENTERS+IsSelf+DrawCards
-# probe shape.
+# probe shape; the landfall extension's analogue is
+# ``test_carddef_landfall_safe_etb_trigger_fires_on_land_play_parity``.
 _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     ("enters", "source_is_self", "draw_cards"),
     ("enters", "source_is_self", "gain_life"),
     ("enters", "source_is_self", "scry_n"),
+    # Landfall — "Whenever a land you control enters, ...". Compound
+    # predicate sentinel; see ``_is_safe_trigger_dict`` /
+    # ``_python_ta_to_safe_dict`` for the canonical-vs-nested shape
+    # mapping. ``gain_life`` is the only safe leaf effect today —
+    # admits Eumidian Terrabotanist (1/2 {1}{G}, gain 1 life on
+    # land enter); deal-damage / draw landfall consumers
+    # (Tannuk Memorial Ensign, Mightform Harmonizer's pump landfall,
+    # Genemorph Imago) need their respective leaf bridge arms before
+    # they can join.
+    ("enters", "land_enters_controlled_by_you", "gain_life"),
 })
+
+
+# Canonical name for the compound landfall predicate shape — Rust's
+# ``Predicate::And(Predicate::SubjectIsLand, Predicate::ControlledByYou)``
+# / Python's ``And(Subject(slot=None, inner=IsLand()),
+# Controlled(by=YOU, subject=None))``. Used as the sentinel
+# ``predicate_kind`` token in ``_SAFE_TRIGGERS`` so the compound
+# shape composes uniformly with the leaf entries (e.g.
+# ``("enters", "source_is_self", "draw_cards")`` shape).
+_LANDFALL_PREDICATE_KIND = "land_enters_controlled_by_you"
 
 
 # Effect arms in the safe set — each arm's allowed keys (other than
@@ -1419,6 +1462,40 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     "gain_life": frozenset({"kind", "amount"}),
     "scry_n": frozenset({"kind", "count"}),
 }
+
+
+def _is_landfall_predicate_dict(pred: object) -> bool:
+    """True iff ``pred`` is the canonical landfall compound predicate
+    dict shape: ``{"kind": "and", "left": {"kind": "subject_is_land"},
+    "right": {"kind": "controlled_by_you"}}``.
+
+    Strict on the left/right ordering and on the exact two-arm shape
+    — that ordering is what the parser emits today
+    (``cards/parser/triggers.py:603-1266``) and what cross_engine's
+    bridge translates onto each engine via the ``and`` /
+    ``subject_is_land`` / ``controlled_by_you`` arms in
+    ``_ta_dict_to_python_predicate``. Both engines accept the dict
+    without raising; the strict check here keeps the safe-trigger
+    gate honest by treating any other compound shape (``Or`` /
+    ``Not(IsLand)`` / nested-AND / different ordering) as unsafe
+    until its own slice lands.
+    """
+    if not isinstance(pred, dict):
+        return False
+    if set(pred.keys()) != {"kind", "left", "right"}:
+        return False
+    if pred.get("kind") != "and":
+        return False
+    left = pred.get("left")
+    right = pred.get("right")
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+    if tuple(left.keys()) != ("kind",) or tuple(right.keys()) != ("kind",):
+        return False
+    return (
+        left.get("kind") == "subject_is_land"
+        and right.get("kind") == "controlled_by_you"
+    )
 
 
 def _is_safe_trigger_dict(ta_dict: dict) -> bool:
@@ -1447,9 +1524,21 @@ def _is_safe_trigger_dict(ta_dict: dict) -> bool:
         pred_kind: Optional[str] = None
     elif isinstance(pred, dict) and tuple(pred.keys()) == ("kind",):
         pred_kind = pred.get("kind")
+    elif _is_landfall_predicate_dict(pred):
+        # Landfall extension: compound dict
+        # ``{"kind": "and",
+        #    "left": {"kind": "subject_is_land"},
+        #    "right": {"kind": "controlled_by_you"}}``
+        # collapses to the canonical sentinel kind so it composes
+        # with the leaf-shape allowlist entries. Strict on the
+        # left/right ordering and on the absence of any extra
+        # top-level keys — that ordering is exactly what the
+        # parser emits today (``cards/parser/triggers.py:603-1266``)
+        # and what cross_engine's bridge arms parse on both engines.
+        pred_kind = _LANDFALL_PREDICATE_KIND
     else:
-        # Any predicate carrying nested fields (subject, inner, left,
-        # right, ...) is NOT in the starter safe set.
+        # Any other predicate carrying nested fields (subject, inner,
+        # left, right, ...) is NOT in the safe set.
         return False
     eff = ta_dict.get("effect")
     if not isinstance(eff, dict):
@@ -1486,7 +1575,15 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     consumes.
     """
     from mtg_bot.effects.base import TriggeredAbility
-    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.predicates import (
+        And,
+        Controlled,
+        IsSelf,
+        Event,
+        Subject,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsLand
     from mtg_bot.effects.generic.draw_mill import DrawCards
     from mtg_bot.effects.generic.life import GainLife
     from mtg_bot.effects.generic.library_lookat import Scry
@@ -1498,30 +1595,101 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     # Event must be ENTERS for the starter safe set.
     if ta.event is not Event.ENTERS:
         return None
-    # Predicate must be IsSelf (the round-trip dict-kind is
-    # "source_is_self"). ``IsSelf`` carries an optional ``subject``
-    # slot field — accept only the default-slot form.
-    if not isinstance(ta.predicate, IsSelf):
+    # Recognize one of the safe predicate shapes; produce the
+    # corresponding round-trip dict (or bail if no match).
+    pred = ta.predicate
+    pred_dict: Optional[dict] = None
+    safe_effect_kinds: tuple[str, ...] = ()
+    if isinstance(pred, IsSelf) and pred.subject is None:
+        # ``IsSelf`` (default-slot form): "source_is_self" canonical
+        # kind. Three leaf effects in the safe set.
+        pred_dict = {"kind": "source_is_self"}
+        safe_effect_kinds = ("draw_cards", "gain_life", "scry_n")
+    elif _is_landfall_predicate_python(pred):
+        # Landfall extension: compound
+        # ``And(Subject(slot=None, inner=IsLand()),
+        #       Controlled(by=YOU, subject=None))``
+        # — emit the canonical AND-nested dict shape both engines'
+        # bridges already translate. ``gain_life`` is the only safe
+        # leaf today; deal-damage / draw landfall consumers (Tannuk,
+        # Mightform Harmonizer, Genemorph Imago) need their own
+        # leaf-effect bridge arms before they can ride this
+        # predicate.
+        pred_dict = {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        }
+        safe_effect_kinds = ("gain_life",)
+    if pred_dict is None:
         return None
-    if ta.predicate.subject is not None:
-        return None
-    # Effect must be one of the three safe leaves.
+    # Effect must be one of the safe leaves AND in the safe set for
+    # this predicate (the predicate-effect product is enforced by
+    # ``_SAFE_TRIGGERS``, not the effect kinds alone — e.g.
+    # draw_cards under landfall is unsafe today).
     eff = ta.effect
     if isinstance(eff, DrawCards):
+        eff_kind = "draw_cards"
         eff_dict: dict = {"kind": "draw_cards", "count": int(eff.amount)}
     elif isinstance(eff, GainLife):
+        eff_kind = "gain_life"
         eff_dict = {"kind": "gain_life", "amount": int(eff.amount)}
     elif isinstance(eff, Scry):
+        eff_kind = "scry_n"
         # Python's ``Scry`` exposes the count as ``amount``; the dict
         # shape uses Rust's spelling ``count``.
         eff_dict = {"kind": "scry_n", "count": int(eff.amount)}
     else:
         return None
+    if eff_kind not in safe_effect_kinds:
+        # Effect kind is a safe leaf in the abstract but not safe
+        # under this predicate — e.g. a parser-emitted "Landfall —
+        # draw a card" would land here once such a card exists in
+        # the EoE pool. Out of the safe set until the matching
+        # ``_SAFE_TRIGGERS`` entry lands.
+        return None
     return {
         "event": "enters",
-        "predicate": {"kind": "source_is_self"},
+        "predicate": pred_dict,
         "effect": eff_dict,
     }
+
+
+def _is_landfall_predicate_python(pred: object) -> bool:
+    """True iff ``pred`` is the canonical landfall compound predicate
+    on the Python side: ``And(Subject(slot=None, inner=IsLand()),
+    Controlled(by=YOU, subject=None))``.
+
+    Mirrors :func:`_is_landfall_predicate_dict` on the Python-object
+    side. Strict on operand ordering AND on the optional-slot
+    fields' default values — anything else (a non-default subject
+    slot, ``Or``-form, an inner type other than ``IsLand``, a
+    Controlled-by-OPPONENT) is out of the safe set until its own
+    slice lands.
+    """
+    from mtg_bot.effects.predicates import (
+        And,
+        Controlled,
+        Subject,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsLand
+
+    if not isinstance(pred, And):
+        return False
+    left = pred.left
+    right = pred.right
+    if not isinstance(left, Subject) or left.slot is not None:
+        return False
+    if not isinstance(left.inner, IsLand):
+        return False
+    if not isinstance(right, Controlled):
+        return False
+    if right.by is not YOU:
+        return False
+    if right.subject is not None:
+        return False
+    return True
 
 
 def _printing_is_bridge_simple_creature(printing) -> bool:

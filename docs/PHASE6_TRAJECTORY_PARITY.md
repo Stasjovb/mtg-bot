@@ -703,3 +703,97 @@ unlock once **either**:
 
 No divergences surfaced — all new tests pass byte-equal across
 both engines on first run.
+
+## CardDef triggers — landfall extension (this slice)
+
+Extends the round-34 carddef-triggers safe-trigger allowlist
+with **one** compound predicate shape: the canonical landfall
+predicate `And(Subject(IsLand), Controlled(YOU))`. The safe-
+trigger triple set gains exactly one entry today:
+
+```
+("enters", "land_enters_controlled_by_you", "gain_life")
+```
+
+`"land_enters_controlled_by_you"` is a sentinel canonical name for
+the AND-nested compound dict
+`{"kind": "and", "left": {"kind": "subject_is_land"},
+ "right": {"kind": "controlled_by_you"}}` that both engines'
+bridge arms already parse (Rust at `cards.rs::parse_predicate` —
+subject-anchored type filters slice; Python via
+`cross_engine._ta_dict_to_python_predicate`'s `and` /
+`subject_is_land` / `controlled_by_you` arms). The sentinel keeps
+the `(event, predicate_kind, effect_kind)` triple shape uniform
+across the leaf-shape entries; `_is_safe_trigger_dict` extracts the
+sentinel from the nested dict shape via the new
+`_is_landfall_predicate_dict` helper, and `_python_ta_to_safe_dict`
+recognizes Python's parser-emitted compound predicate shape via the
+new `_is_landfall_predicate_python` helper.
+
+The predicate-effect product is enforced at the dict level — the
+predicate alone doesn't admit every leaf. Today only `gain_life`
+rides the landfall predicate; landfall+`draw_cards` /
+landfall+`scry_n` are still rejected because no safe EoE consumer
+of those crosses exists yet.
+
+### Real-EoE consumer admitted
+
+**Eumidian Terrabotanist** — 2/3 {1}{G}, "Landfall — Whenever a
+land you control enters, you gain 1 life." Present in EoE
+archetypes 13, 14, 15, 16, 17, 30, 35, 44 (within the first 50
+archetypes scanned at slice time). The substrate-gate trajectory
+test loads archetype 13 and pins that Eumidian survives the
+production-deck filter; the end-to-end fire probe injects Eumidian
+on p0's bf via the side-channel pattern (mirroring the Phase 5/6
+keyword-injection helper plus the existing Eumidian parity-smoke
+probe at `test_parity_smoke.py:10098`) and drives a play_land
+that fires the landfall +1 life on both engines.
+
+### Descoped this slice
+
+- **Tannuk, Memorial Ensign** — 2/4 {1}{R}{G}, "Landfall — Whenever
+  a land you control enters, Tannuk deals 1 damage to each
+  opponent. If this is the second time this ability has resolved
+  this turn, draw a card." Same predicate as Eumidian, but the
+  effect is the bespoke `TannukEnsignLandfallEffect` (deal damage
+  to each opponent + per-source second-time-bonus tracking).
+  Tannuk needs both a leaf-effect `deal_damage_each_opponent` arm
+  on the safe-trigger product AND the second-time-bonus state
+  primitive — the cleanest unblock is a sister slice that adds
+  the leaf arm without the bonus, then a third slice for the
+  bonus tracking. Pinned by
+  `test_simple_creature_filter_still_rejects_tannuk_memorial_ensign`
+  in `tests/test_trajectory.py`.
+- **Mightform Harmonizer / Genemorph Imago / Territorial Bruntar** —
+  other landfall consumers in the EoE pool that pair the same
+  predicate with effects outside today's safe-effect set
+  (`DoubleTargetCreaturesPowerUEOT`, conditional-threshold pump,
+  exile-and-cast). Each needs its own sister slice.
+- **Operand-swapped predicate shape** (`And(Controlled(YOU),
+  Subject(IsLand))`) — the parser only emits the
+  `subject_is_land`-on-the-left form today; the gate is strict on
+  that ordering. Pinned by
+  `test_is_landfall_predicate_dict_rejects_swapped_operand_order`.
+- **`Or`-form landfall** — out of the safe set; pinned by
+  `test_is_landfall_predicate_dict_rejects_or_form`.
+
+### Test surface
+
+- 12 new unit tests in `tests/test_trajectory.py`:
+  allowlist contract (1), `_is_landfall_predicate_dict` admit
+  + reject paths (4), `_is_safe_trigger_dict` predicate-effect
+  product admit + reject paths (2), `_python_ta_to_safe_dict`
+  round-trip + reject (2), parser-end-to-end consumer gate (3 —
+  Eumidian admit / Tannuk reject / `_printing_to_card_def`
+  propagation).
+- 2 new trajectory probes in `tests/test_trajectory_parity.py`:
+  setup-time field-view compare on EoE archetype 13 with
+  Eumidian Terrabotanist surviving the production-deck filter,
+  plus an end-to-end fire probe (advance to turn 1
+  PRECOMBAT_MAIN, side-channel inject Eumidian on p0's bf,
+  drive play_land on the basic land in p0's opening hand,
+  drain both stacks, assert +1 life on p0 + byte-equal post-
+  drain field views).
+
+No divergences surfaced — all new tests pass byte-equal across
+both engines on first run.

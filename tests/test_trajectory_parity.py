@@ -3848,3 +3848,316 @@ def test_carddef_safe_etb_trigger_fires_on_cast_parity():
         f"post-drain field view diverges: "
         f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-triggers landfall extension (this slice).
+#
+# Adds the canonical compound landfall predicate
+# (``And(Subject(IsLand), Controlled(YOU))``) to the safe-trigger
+# allowlist with a single leaf effect today (``gain_life``). FIRST
+# real-EoE consumer admitted by the production-deck loader on this
+# substrate: Eumidian Terrabotanist (2/3 {1}{G}, "Landfall — Whenever
+# a land you control enters, you gain 1 life"), present in EoE
+# archetype 13 (and 14/15/16/17/30/35/44 within the first 50
+# archetypes — verified at slice time).
+#
+# Tannuk, Memorial Ensign carries the same predicate but pairs it
+# with the bespoke `TannukEnsignLandfallEffect` (deal 1 to each
+# opponent, plus a second-time-bonus draw); Tannuk needs both a
+# leaf-effect ``deal_damage_each_opponent`` arm AND a second-time-
+# bonus state primitive — descoped to a follow-up slice.
+#
+# The probes below mirror the round-19 (carddef-substrate) +
+# round-34/35 (carddef-triggers) pattern: load a real EoE archetype
+# carrying the consumer, set up matched states, verify the
+# substrate-gate holds (consumer survives the bridge filter), then
+# fire the trigger via a side-channel inject + play-land driver
+# (the production-deck shuffle won't reliably land the consumer in
+# either opening hand, so we inject Eumidian onto p0's bf after
+# setup, then drive a Forest play that fires the landfall +1 life).
+# ---------------------------------------------------------------------------
+
+
+def _inject_eumidian_terrabotanist_on_p0_bf(py_state, rust_state):
+    """Inject a Eumidian Terrabotanist onto p0's bf on BOTH engines.
+
+    Mirrors the existing :func:`_inject_keyword_creature_on_p0_bf`
+    pattern but carries the parser-emitted landfall trigger
+    (``And(Subject(IsLand), Controlled(YOU))`` -> ``GainLife(1)``)
+    instead of a keyword. Uses ``register_and_inject_object`` on the
+    Rust side (to get a fresh printing-id wired with the trigger
+    on-the-fly, mirroring the parity-smoke landfall probe) and
+    ``new_object`` on the Python side (likewise — no need to share
+    printing ids; both engines just need the SAME trigger shape on
+    the SAME object id slot).
+
+    Post-condition: Eumidian is on p0's bf, ready to fire its
+    landfall trigger when a land enters under p0's control.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Subject, YOU,
+    )
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    terra_predicate = And(
+        left=Subject(slot=None, inner=IsLand()),
+        right=Controlled(by=YOU, subject=None),
+    )
+    terra_printing = CardPrinting(
+        name="Eumidian Terrabotanist (Injected)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=terra_predicate,
+                effect=GainLife(amount=1),
+            ),
+        ),
+    )
+    py_terra = py_state.new_object(
+        terra_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_terra.summoning_sick = False
+    py_terra.tapped = False
+    py_terra.damage = 0
+    py_terra.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_terra)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_terra_id = rust_state.register_and_inject_object(
+        {
+            "name": "Eumidian Terrabotanist (Injected)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "effects": [],
+            "power": 2,
+            "toughness": 3,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {
+                        "kind": "and",
+                        "left": {"kind": "subject_is_land"},
+                        "right": {"kind": "controlled_by_you"},
+                    },
+                    "effect": {"kind": "gain_life", "amount": 1},
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return int(py_terra.id), int(rust_terra_id)
+
+
+def test_real_eoe_deck_with_eumidian_terrabotanist_setup_parity():
+    """Substrate-gate probe: load EoE archetype 13 (carries Eumidian
+    Terrabotanist, the FIRST real-EoE consumer of the landfall
+    safe-trigger extension) and assert byte-equal field views post-
+    setup.
+
+    Pre-extension this archetype's Eumidian Terrabotanist would be
+    silently dropped by ``_filter_deck_to_bridge_supported`` because
+    ``_printing_is_bridge_simple_creature`` rejected its landfall
+    trigger (predicate outside the source_is_self starter set).
+    Post-extension Eumidian SURVIVES the filter and lands in BOTH
+    engines' libraries with matching landfall trigger shape — the
+    setup-time field-view compare pins that the trigger wiring
+    through the registry is byte-equal.
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+
+    cards = trajectory.load_production_deck(13)
+    assert "Eumidian Terrabotanist" in cards, (
+        "EoE archetype 13 no longer carries Eumidian Terrabotanist; "
+        "pick a different archetype after re-scanning the pool."
+    )
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42, pad_with="Forest",
+    )
+
+    # Substrate gate: at least one Eumidian Terrabotanist landed in the
+    # matched-game registry on BOTH sides (mirror-match means p1 also
+    # gets a copy when p0 has one). Pre-landfall-extension this list
+    # would be EMPTY — the filter would have dropped Eumidian.
+    py_lib = (
+        py_state.players[0].library + py_state.players[0].hand
+        + py_state.players[1].library + py_state.players[1].hand
+    )
+    eumidians = [
+        o for o in py_lib if o.printing.name == "Eumidian Terrabotanist"
+    ]
+    assert eumidians, (
+        "expected at least one Eumidian Terrabotanist in the matched-"
+        "game registry (archetype 13 carries it); if this assertion "
+        "fails the carddef-triggers landfall extension regressed."
+    )
+    # Each surviving Eumidian carries the parser-emitted compound
+    # landfall trigger (And(Subject(IsLand), Controlled(YOU)) ->
+    # GainLife(1)) on the Python side.
+    from mtg_bot.effects.predicates import And, Controlled, Subject, YOU
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.life import GainLife
+    for o in eumidians:
+        assert len(o.printing.triggered_abilities) == 1
+        ta = o.printing.triggered_abilities[0]
+        assert ta.event.value == "enters"
+        assert isinstance(ta.predicate, And)
+        assert isinstance(ta.predicate.left, Subject)
+        assert isinstance(ta.predicate.left.inner, IsLand)
+        assert isinstance(ta.predicate.right, Controlled)
+        assert ta.predicate.right.by is YOU
+        assert isinstance(ta.effect, GainLife)
+        assert ta.effect.amount == 1
+
+    # Field-view compare: registries built byte-equal across engines.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"production-deck setup with Eumidian Terrabotanist diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
+    assert len(py_view["hand_p0"]) == 7
+    assert len(py_view["hand_p1"]) == 7
+
+
+def test_carddef_landfall_safe_etb_trigger_fires_on_land_play_parity():
+    """End-to-end fire probe for the landfall extension.
+
+    Set up a matched game from EoE archetype 13 (Eumidian-bearing
+    deck), advance to turn 1 PRECOMBAT_MAIN, side-channel inject a
+    Eumidian Terrabotanist onto p0's bf carrying the canonical
+    landfall trigger shape, then drive a play_land on the basic land
+    in p0's opening hand. The landfall trigger should fire on BOTH
+    engines, draining off the stack and lifting p0's life from 20 to
+    21. Post-drain field views must be byte-equal.
+
+    Why side-channel inject rather than cast Eumidian from hand:
+    archetype 13's filtered library has at most 1 copy of Eumidian
+    in 60 cards; the seed=42 opening hand for p0 doesn't reliably
+    contain Eumidian. The side-channel inject mirrors the existing
+    Phase 5/6 keyword-injection pattern
+    (:func:`_inject_keyword_creature_on_p0_bf`) and the parity-smoke
+    Eumidian probe (test_parity_smoke.py:10098). The substrate-gate
+    test above pins that Eumidian DOES survive the production-deck
+    filter; this probe pins the firing parity end-to-end.
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+    from mtg_bot.actions import _play_land, resolve_top_of_stack as py_resolve
+
+    cards = trajectory.load_production_deck(13)
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        cards, shared_rng_seed=42, pad_with="Forest",
+    )
+
+    # Walk to turn 1 PRECOMBAT_MAIN (3 phase advances).
+    _advance_n_phases(py_state, rust_state, 3)
+    assert py_state.step.name == "PRECOMBAT_MAIN"
+    assert py_state.active_player_idx == 0
+
+    # Inject Eumidian on p0's bf.
+    _inject_eumidian_terrabotanist_on_p0_bf(py_state, rust_state)
+
+    # Verify post-injection parity (the inject is parity-clean —
+    # mirrors the round-17 keyword-inject probe's contract).
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    assert inject_divs == [], (
+        f"Eumidian Terrabotanist injection surfaced post-inject "
+        f"divergences: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in inject_divs]}"
+    )
+
+    # Snapshot p0 life (= 20 by default).
+    py_p0_life_before = py_state.players[0].life
+    rust_p0_life_before = rust_state.get_life(0)
+    assert py_p0_life_before == rust_p0_life_before == 20
+
+    # Find a basic land (any color) in p0's opening hand. The
+    # production-deck filter ensures any land in the registry is a
+    # basic land; archetype 13 is mono-G-leaning so Forest is most
+    # likely, but accept any basic the seed-42 hand contains.
+    p0_hand = py_state.players[0].hand
+    land = next(
+        (o for o in p0_hand if o.printing.is_land),
+        None,
+    )
+    assert land is not None, (
+        f"seed=42 opening hand for p0 contains no basic land: "
+        f"{[o.printing.name for o in p0_hand]}; pick a different "
+        f"seed if the canonical seed becomes land-less after a "
+        f"deck-builder change."
+    )
+
+    # Drive play_land directly on each engine (NOT via step_both,
+    # because the post-play-land mid-stack state has the triggered-
+    # ability item on the stack and Python's StackItem-without-id
+    # vs Rust's id-bearing trigger naturally diverge on the
+    # stack-signature field-view compare. Mirrors the existing
+    # parity-smoke landfall probe's drive shape — see
+    # `test_cross_engine_real_eoe_eumidian_terrabotanist_landfall_parity`.
+    # Field-view compare happens AFTER both stacks drain, when the
+    # transient stack divergence has cleared.)
+    py_state.players[0].lands_played_this_turn = 0
+    _play_land(py_state, 0, int(land.id))
+    rust_state.play_land(int(land.id), 0)
+
+    # Trigger should be on both stacks now.
+    assert rust_state.stack_size() == 1, (
+        "Rust: Eumidian's landfall trigger should be on the stack "
+        "after the basic land enters under p0's control"
+    )
+    assert len(py_state.stack) == 1, (
+        "Python: Eumidian's landfall trigger should be on the stack "
+        "after the basic land enters under p0's control"
+    )
+
+    # Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        py_resolve(py_state)
+
+    # Post-drain: p0 life is 21 on BOTH engines (gain 1 from landfall);
+    # p1 life unchanged at 20.
+    assert rust_state.get_life(0) == rust_p0_life_before + 1, (
+        f"Rust p0 life should be {rust_p0_life_before + 1} (+1 from "
+        f"landfall); got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == 20
+    assert py_state.players[0].life == py_p0_life_before + 1, (
+        f"Python p0 life should be {py_p0_life_before + 1} (+1 from "
+        f"landfall); got {py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == 20
+    # Cross-engine: same observable life totals.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Field-view compare on the post-drain state — both stacks empty
+    # so the StackItem-id divergence has cleared; remaining fields
+    # (battlefield, hand, life) must agree.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"post-drain field view (after landfall trigger) diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
