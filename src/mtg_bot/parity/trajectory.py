@@ -1902,6 +1902,104 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # ``_is_safe_trigger_dict`` dict-side gate stay unchanged since
     # both already admit ENTERS + the ``count`` payload-key whitelist.
     ("enters", "source_is_self", "mill"),
+    # ENTERS + source_is_self + create_token substrate (round-49 N1
+    # token-printing pre-registration substrate, Phase 1 — see
+    # ``docs/TOKEN_PRINTING_SUBSTRATE.md``). Adds the FIRST CreateToken
+    # leaf to the safe set: the fixed-single-token "When ~ enters,
+    # create N tokens of <fixed printing>" shape (Wedgelight-Rammer /
+    # Doomed-Traveler family), restricted to a VANILLA token printing
+    # (non-None P/T, no keywords, no activated/triggered/static
+    # abilities; card-types may be multi — ``Artifact Creature`` /
+    # ``Enchantment Creature``) and a BARE rider profile (``count``
+    # only — ``each_player`` / ``tapped`` / ``attacking`` /
+    # ``schedule_end_of_combat_sacrifice`` all default-False).
+    #
+    # **Why VANILLA-token only (the §2 silent-mistranslation gate).**
+    # The bridge resolves a Rust ``token_printing_id: u32`` to a Python
+    # ``CardPrinting`` via the ``register_token_printing`` map; the
+    # loader synthesizes a token CardDef from the carrier's parsed
+    # ``token_printing``. CardDef carries name / card-types / P/T /
+    # subtypes / keywords / triggered_abilities only — it has NO
+    # activated-ability field. A non-vanilla token (the EoE ``Lander``,
+    # which carries ``{2}, Sac: SearchLibraryForBasicLandTapped``)
+    # would have its activated ability SILENTLY DROPPED on the bridge:
+    # Python materializes a Lander that can sac for a land, Rust
+    # materializes one that can't. That is exactly the round-38-E1 /
+    # §2 silent-mistranslation class. The recognizer
+    # (``_python_ta_to_safe_dict``) refuses any non-vanilla token so
+    # the carrier falls through to the filter drop path until the
+    # token-activated-ability sub-substrate lands (Phase 3 in the
+    # design doc).
+    #
+    # **Why BARE rider only.** Rust's ``Effect::CreateToken { count,
+    # token_printing_id }`` (rust/src/cards.rs:219) has NO
+    # ``tapped`` / ``each_player`` / ``attacking`` /
+    # ``schedule_end_of_combat_sacrifice`` field — the bridge arm
+    # constructs ``CreateToken(token_printing=…, count=…)`` with every
+    # rider at its Python dataclass default (False). A carrier whose
+    # parsed ``CreateToken`` sets ``tapped=True`` (Gravpack Monoist)
+    # or ``each_player=True`` (Edge Rover) would round-trip to a token
+    # that enters untapped / under one player only on Rust while
+    # Python honored the rider — a byte-divergent post-resolve token
+    # object. The recognizer gates each rider to its default so those
+    # shapes stay dropped (Phase 4 / Phase 5 in the design doc add the
+    # sister-variant Rust support).
+    #
+    # **Cross-engine parity contract (bare-rider vanilla token).**
+    # Both engines create ``count`` tokens of the fixed printing under
+    # the trigger's resolved controller. Rust's resolve arm
+    # (state_ops_resolve.rs) carries the I81 controller-of-effect fix
+    # (both the recipient battlefield Vec pick AND the token's
+    # ``controller`` byte derive from
+    # ``current_resolve_source_controller``); Python's
+    # ``CreateToken.resolve`` (effects/generic/tokens.py:195) has
+    # always taken ``controller_id`` via the standard
+    # ``Effect.resolve`` signature and has been correct on this
+    # surface since before I81. The token GameObject's per-object
+    # fields (printing_name, P/T, summoning_sick=True at ETB, tapped=
+    # False, untap-eligible) are bit-equal because the token printing
+    # is a vanilla creature on BOTH engines (registered from the same
+    # CardDef → same Rust ``parse_printing`` shape + same Python
+    # ``CardPrinting``). ETB dispatch fans out identically (the token
+    # itself is vanilla — no nested ETB trigger to compound the
+    # surface).
+    #
+    # **Loader-side auto-registration.** Unlike the per-probe
+    # ``register_token_printing(hand_picked_pid, …)`` pattern, the
+    # production-deck loader assigns the token printing a DETERMINISTIC
+    # pid: ``production_deck_to_deckspec`` appends the token CardDef to
+    # the union ``card_defs`` tuple (deduped by name, absent from both
+    # libraries so it is registered but never drawn), and its pid =
+    # its index in ``build_rust_state``'s sequential registration
+    # order. ``_seat_token_printings`` rewrites the carrier's trigger
+    # dict's ``token_printing_id`` to that index and calls
+    # ``cross_engine.register_token_printing(pid, py_token_printing)``
+    # so the Python bridge resolves the same pid. See
+    # ``docs/TOKEN_PRINTING_SUBSTRATE.md`` §1.4 / §4 Phase 1.
+    #
+    # **No real-EoE consumer admitted today (substrate-only landing).**
+    # Same precedent as round-37 DDDD (landfall+draw) / round-43
+    # (ATTACKS+surveil) / round-44 (ATTACKS+draw/gain) / round-47
+    # (DIES+draw). A fresh EoE-pool delta walk
+    # (scripts/scout_r49_create_token_shapes.py, full EoE printing set
+    # + the 318-name / 129,996-deck 17lands pool) confirms ZERO
+    # creatures flip drop→admit on this Phase-1 entry: every
+    # high-deck-count fixed-single-token creature carrier produces the
+    # ``Lander`` token (non-vanilla — DECLINED §2, Phase 3) or carries
+    # a declined rider (Gravpack Monoist ``tapped=True``) or a declined
+    # carrier feature (Knight Luminary ``warp``, Honored Knight-Captain
+    # activated ability); the ONLY clean creature carrier with a
+    # vanilla token is Tunnel Surveyor (Glimmer 1/1) which appears in 0
+    # of 129,996 17lands decks. The fixed-single-token "When ~ enters,
+    # create a token" shape is one of the most common token shapes in
+    # the broader MTG pool, so the substrate is broadly pre-positioned
+    # for any future EoE / standard-format printing carrying a
+    # bare-rider vanilla-token ENTERS+IsSelf+CreateToken — the next
+    # slice landing such a card (or the Phase-3 Lander sub-substrate)
+    # need not extend the allowlist again. Pinned by reject-path tests
+    # (non-vanilla-token / tapped-rider / each-player-rider stay
+    # dropped) so the predicate-effect product gate stays honest.
+    ("enters", "source_is_self", "create_token"),
 })
 
 
@@ -1968,6 +2066,25 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # ``granted_keywords``). The recognizer in
     # :func:`_python_ta_to_safe_dict` gates this whitelist.
     "mill": frozenset({"kind", "count"}),
+    # CreateToken (round-49 N1 token-printing substrate, Phase 1) —
+    # payload keys ``count`` + ``token_printing_id``. This is the
+    # POST-SEATING dict shape: the recognizer
+    # (``_python_ta_to_safe_dict``) first emits a SYMBOLIC reference
+    # (``_token_card_def``) which the loader's ``_seat_token_printings``
+    # pass rewrites into a numeric ``token_printing_id`` once the union
+    # ``card_defs`` tuple is frozen and the token's Rust-registry pid
+    # is known. ``_is_safe_trigger_dict`` validates the final
+    # post-seating shape, so this whitelist mirrors Rust's two-field
+    # ``Effect::CreateToken { count, token_printing_id }``
+    # (rust/src/cards.rs:219, parse_effect cards.rs:4162). Rider flags
+    # (``tapped`` / ``each_player`` / ``attacking`` /
+    # ``schedule_end_of_combat_sacrifice``) are deliberately ABSENT —
+    # Rust's variant has no mirror for them and the recognizer gates
+    # each to its Python default, so a dict carrying any of them is
+    # rejected here (mirrors the Surveil ``use_artifact_count`` /
+    # PumpSelf ``granted_keywords`` rider-exclusion pattern). See
+    # ``docs/TOKEN_PRINTING_SUBSTRATE.md`` §2.3.
+    "create_token": frozenset({"kind", "count", "token_printing_id"}),
 }
 
 
@@ -2064,6 +2181,100 @@ def _is_safe_trigger_dict(ta_dict: dict) -> bool:
     return True
 
 
+# Token printing keyword set the bridge round-trips (Phase 1: only
+# the empty set is honored, but the helper is keyword-aware so the
+# Phase-3+ keyword-bearing-token follow-ups are a single-line widen).
+# The EoE vanilla token printings (Robot 2/2, Human Soldier 1/1,
+# Glimmer 1/1, Gremlin 1/1) carry NO keywords; a keyword-bearing
+# token (the Drone token's ``flying``) is deferred until the keyword
+# round-trip on TOKEN printings is pinned (creature-printing keyword
+# round-trip is pinned, but a token's keyword would need its own
+# combat-side parity probe — Phase 1 keeps the gate tight).
+_SAFE_TOKEN_KEYWORDS: frozenset[str] = frozenset()
+
+
+def _token_vanilla_card_def(token_printing) -> Optional["CardDef"]:
+    """Build a :class:`cross_engine.CardDef` from a token
+    ``CardPrinting`` iff the token is bridge-VANILLA, else ``None``.
+
+    Round-49 N1 token-printing substrate (Phase 1). "Vanilla" here is
+    the §2 silent-mistranslation gate: the synthesized CardDef carries
+    only name / card-types / P/T / subtypes / keywords /
+    triggered_abilities, so any token field the CardDef bridge can't
+    represent MUST be absent or the cross-engine round trip would
+    silently drop it. Specifically the token must have:
+
+      * ``Creature`` among its card types and non-None printed P/T
+        (a token GameObject's per-object signature includes power /
+        toughness; a None-P/T token can't be a creature body).
+      * NO activated abilities — CardDef has no activated-ability
+        field. This is the gate that DECLINES the EoE ``Lander``
+        token (``{2}, Sac: SearchLibraryForBasicLandTapped``); its
+        ability would vanish on the bridge (Python Lander can sac for
+        a land, Rust can't). Lander carriers (Galactic Wayfarer,
+        Beamsaw Prospector, Edge Rover, …) therefore stay dropped
+        until the Phase-3 token-activated-ability sub-substrate.
+      * NO static abilities (CardDef has no static-ability field;
+        layered/conditional eval, declined campaign-wide).
+      * NO nested triggered abilities (a token whose own ETB/DIES
+        trigger would itself have to round-trip — out of Phase 1
+        scope; require zero so the surface stays a single leaf).
+      * NO keywords outside :data:`_SAFE_TOKEN_KEYWORDS` (Phase 1:
+        the empty set — keyword-bearing tokens like the Drone's
+        ``flying`` need their own token-keyword combat parity probe).
+      * NO ``can_only_block_creatures_with_flying`` block restriction
+        (the EoE Drone token's flag — CardDef can't carry it).
+
+    The token's ``card_types`` may be MULTI-type (the EoE ``Robot``
+    is ``Artifact Creature``, ``Glimmer`` is ``Enchantment
+    Creature``); the primary type is "Creature" and the rest flow
+    through ``CardDef.extra_card_types``. The ``Token`` supertype is
+    stamped so both engines remove the token from non-battlefield
+    zones per CR 704.5d (Python ``CardPrinting.is_token`` reads
+    ``"Token" in supertypes``; Rust mirrors via the registry
+    ``supertypes`` list).
+    """
+    if token_printing is None:
+        return None
+    card_types = tuple(getattr(token_printing, "card_types", ()) or ())
+    if "Creature" not in card_types:
+        return None
+    if token_printing.power is None or token_printing.toughness is None:
+        return None
+    if token_printing.activated_abilities:
+        return None
+    if getattr(token_printing, "static_abilities", None):
+        return None
+    if getattr(token_printing, "triggered_abilities", None):
+        return None
+    kw = frozenset(token_printing.keywords or frozenset())
+    if kw and not kw.issubset(_SAFE_TOKEN_KEYWORDS):
+        return None
+    if getattr(
+        token_printing, "can_only_block_creatures_with_flying", False
+    ):
+        return None
+    # Primary type = "Creature"; remaining types (Artifact /
+    # Enchantment) flow through extra_card_types in their printed
+    # order minus the primary, so the combined tuple
+    # ``(card_type, *extra_card_types)`` round-trips card-type-for-
+    # card-type. The token printing's spell_effect / cost fields are
+    # irrelevant (tokens are created, never cast) and intentionally
+    # not threaded.
+    extra = tuple(t for t in card_types if t != "Creature")
+    from mtg_bot.parity.cross_engine import CardDef as _CardDef
+    return _CardDef(
+        name=token_printing.name,
+        card_type="Creature",
+        extra_card_types=extra,
+        power=int(token_printing.power),
+        toughness=int(token_printing.toughness),
+        subtypes=tuple(token_printing.subtypes or ()),
+        supertypes=("Token",),
+        keywords=tuple(sorted(kw)),
+    )
+
+
 def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     """Convert a Python ``TriggeredAbility`` back to the Rust-shape
     dict iff it matches one of the :data:`_SAFE_TRIGGERS` shapes.
@@ -2099,6 +2310,7 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         Surveil,
     )
     from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
+    from mtg_bot.effects.generic.tokens import CreateToken
 
     if not isinstance(ta, TriggeredAbility):
         return None
@@ -2148,8 +2360,15 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # is dropped on its activated ability so no real consumer
             # is admitted on this leaf; the landfall+mill entry below
             # is the one that admits a real card, Icetill Explorer).
+            # Round-49 N1 widens it further to include ``create_token``
+            # (the fixed-single-vanilla-token "When ~ enters, create N
+            # tokens of <fixed printing>" shape — substrate-only; every
+            # high-deck-count carrier produces the non-vanilla Lander
+            # token or carries a declined rider, so no real consumer is
+            # admitted today; see ``docs/TOKEN_PRINTING_SUBSTRATE.md``).
             safe_effect_kinds = (
                 "draw_cards", "gain_life", "scry_n", "surveil", "mill",
+                "create_token",
             )
         elif ta.event is Event.ATTACKS:
             # Round-44 widens the ATTACKS arm from {surveil} to
@@ -2303,6 +2522,63 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # cross-engine parity contract.
         eff_kind = "mill"
         eff_dict = {"kind": "mill", "count": int(eff.amount)}
+    elif isinstance(eff, CreateToken):
+        # Round-49 N1 token-printing substrate, Phase 1. Fixed-single-
+        # token "create N tokens of <fixed printing>" shape. Two §2
+        # silent-mistranslation gates:
+        #
+        #  (1) **Bare rider only.** Rust's ``Effect::CreateToken
+        #      { count, token_printing_id }`` (rust/src/cards.rs:219)
+        #      has NO ``tapped`` / ``each_player`` / ``attacking`` /
+        #      ``schedule_end_of_combat_sacrifice`` field; the bridge
+        #      arm constructs the bare ``CreateToken(token_printing=…,
+        #      count=…)``. A carrier whose parsed CreateToken sets any
+        #      of these riders (Gravpack Monoist ``tapped=True``,
+        #      Edge Rover ``each_player=True``) would round-trip to a
+        #      token that enters untapped / under one player only on
+        #      Rust while Python honored the rider — a byte-divergent
+        #      post-resolve token object. Reject so those carriers
+        #      fall to the filter drop path (Phase 4 / Phase 5 add the
+        #      Rust sister-variant support).
+        #  (2) **Vanilla token only.** The loader synthesizes a token
+        #      CardDef from the parsed ``token_printing``; CardDef
+        #      carries name / card-types / P/T / subtypes / keywords /
+        #      triggered_abilities but has NO activated-ability field.
+        #      A non-vanilla token (the EoE ``Lander``, which carries
+        #      ``{2}, Sac: SearchLibraryForBasicLandTapped``) would
+        #      have its activated ability SILENTLY DROPPED on the
+        #      bridge. Reject any token printing carrying activated /
+        #      static abilities, keywords the safe-keyword set doesn't
+        #      cover, nested triggered abilities, or a non-creature /
+        #      None-P-T body. (The token's triggered abilities, if
+        #      any, would also have to round-trip — out of Phase 1's
+        #      scope; require zero.)
+        #
+        # The emitted dict carries a SYMBOLIC ``_token_card_def`` (the
+        # synthesized token CardDef) rather than a numeric
+        # ``token_printing_id``. The numeric pid is assigned by the
+        # loader's ``_seat_token_printings`` pass once the union
+        # ``card_defs`` tuple is frozen and the token's Rust-registry
+        # position is known (``docs/TOKEN_PRINTING_SUBSTRATE.md`` §1.4).
+        # ``_is_safe_trigger_dict`` validates the POST-seating shape
+        # (``token_printing_id`` numeric), so a never-seated dict that
+        # leaked to the dict-side gate would correctly be rejected.
+        if eff.tapped or eff.each_player or eff.attacking:
+            return None
+        if getattr(eff, "schedule_end_of_combat_sacrifice", False):
+            return None
+        tp = eff.token_printing
+        token_cd = _token_vanilla_card_def(tp)
+        if token_cd is None:
+            return None
+        eff_kind = "create_token"
+        eff_dict = {
+            "kind": "create_token",
+            "count": int(eff.count),
+            # Symbolic token reference — replaced with a numeric
+            # ``token_printing_id`` by ``_seat_token_printings``.
+            "_token_card_def": token_cd,
+        }
     else:
         return None
     if eff_kind not in safe_effect_kinds:
@@ -2731,12 +3007,162 @@ def production_deck_to_deckspec(
     # already have it — dict-dedup makes this a no-op then).
     union_card_defs.setdefault(pad_card_def.name, pad_card_def)
 
+    # Round-49 N1 token-printing substrate (Phase 1): seat any
+    # create_token carrier's token printing. This appends synthetic
+    # token CardDefs to the registry (absent from both libraries),
+    # rewrites the carrier triggers' symbolic ``_token_card_def`` into
+    # the numeric Rust-registry pid, and registers the matching Python
+    # printing into the cross-engine bridge's
+    # ``register_token_printing`` map. No-op when no carrier carries a
+    # create_token trigger (every pre-round-49 production deck).
+    card_defs_ordered = _seat_token_printings(
+        list(union_card_defs.values())
+    )
+
     return DeckSpec(
-        card_defs=tuple(union_card_defs.values()),
+        card_defs=tuple(card_defs_ordered),
         p0_library=tuple(p0_filtered),
         p1_library=tuple(p1_filtered),
         shared_rng_seed=shared_rng_seed,
     )
+
+
+def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
+    """Loader-side token-printing pre-registration pass (round-49 N1,
+    Phase 1).
+
+    Walks ``card_defs`` for carriers whose ``triggered_abilities``
+    carry a symbolic ``create_token`` dict (one with a
+    ``_token_card_def`` key emitted by :func:`_python_ta_to_safe_dict`).
+    For each distinct token CardDef (deduped by name):
+
+      1. Append the token CardDef to the registry list IF not already
+         present, AFTER every carrier card def. Its position in the
+         returned list == its Rust ``Registry`` pid, because
+         :func:`cross_engine.build_rust_state` registers
+         ``spec.card_defs`` in tuple order and
+         :meth:`Registry.register_printing` assigns
+         ``id = printings.len()`` (sequential). The token CardDef is
+         deliberately NOT added to either player's library — it is
+         registered (so the pid is valid) but never drawn / played
+         (CR: tokens only exist on the battlefield, created by the
+         effect).
+      2. Rewrite every carrier trigger referencing that token: drop
+         the symbolic ``_token_card_def`` key, add the numeric
+         ``token_printing_id`` = the token's final list index. The
+         resulting dict now satisfies :func:`_is_safe_trigger_dict`
+         (``{kind, count, token_printing_id}``) AND both engines'
+         ``create_token`` bridge / parser arms.
+      3. Register ``(pid, python_token_printing)`` into
+         :func:`cross_engine.register_token_printing` so the Python
+         bridge's ``create_token`` arm resolves the same pid to the
+         same printing :func:`cross_engine.build_python_state`
+         materializes for that token CardDef (both call
+         :func:`cross_engine._card_def_to_python_printing` — single
+         source of truth, no shape drift).
+
+    ``CardDef`` is frozen, so carriers with rewritten triggers are
+    rebuilt via :func:`dataclasses.replace`. Idempotency: a repeat
+    ``register_token_printing`` of the SAME printing object on the
+    same pid is a no-op (the bridge map's conflicting-registration
+    check only fires on a DIFFERENT printing under an existing pid).
+    Two carriers printing the same-named token share one token CardDef
+    + one pid (dedup by name) — the Python printings are constructed
+    from the same CardDef so they're shape-identical, but to keep the
+    bridge map's identity-based idempotency exact we register the
+    FIRST constructed printing and reuse it.
+
+    Returns the (possibly extended + carrier-rewritten) card-def list,
+    ordered as carriers-then-tokens so the token pids are stable and
+    deterministic.
+    """
+    import dataclasses
+
+    from mtg_bot.parity.cross_engine import (
+        _card_def_to_python_printing,
+        register_token_printing,
+    )
+
+    def _carrier_token_refs(cd: CardDef):
+        """Yield (idx, token_card_def) for each create_token trigger
+        on ``cd`` that still carries a symbolic ``_token_card_def``."""
+        for i, ta in enumerate(cd.triggered_abilities):
+            if not isinstance(ta, dict):
+                continue
+            eff = ta.get("effect")
+            if not isinstance(eff, dict):
+                continue
+            if eff.get("kind") != "create_token":
+                continue
+            tcd = eff.get("_token_card_def")
+            if tcd is not None:
+                yield i, tcd
+
+    # Fast path: no create_token carrier -> return the list untouched
+    # (every pre-round-49 production deck). Avoids the dataclasses /
+    # cross_engine import cost on the hot loader path when there's
+    # nothing to seat.
+    has_token_carrier = any(
+        any(True for _ in _carrier_token_refs(cd)) for cd in card_defs
+    )
+    if not has_token_carrier:
+        return card_defs
+
+    # Stable token order: first appearance across the carrier list
+    # (deterministic — card_defs order is the union-dict insertion
+    # order, itself deterministic from the deck card-name order).
+    token_cd_by_name: dict[str, CardDef] = {}
+    for cd in card_defs:
+        for _idx, tcd in _carrier_token_refs(cd):
+            token_cd_by_name.setdefault(tcd.name, tcd)
+
+    # Carriers occupy pids [0, len(card_defs)); tokens get the pids
+    # immediately after, in token_cd_by_name insertion order. A token
+    # whose name already appears as a regular card def reuses that
+    # def's pid (a token-named real card in the pool is implausible
+    # for the EoE token names — Robot / Glimmer / Lander aren't
+    # castable cards — but the dedup keeps the contract honest).
+    existing_names = {cd.name: i for i, cd in enumerate(card_defs)}
+    result = list(card_defs)
+    token_pid_by_name: dict[str, int] = {}
+    for tname, tcd in token_cd_by_name.items():
+        if tname in existing_names:
+            token_pid_by_name[tname] = existing_names[tname]
+            continue
+        token_pid_by_name[tname] = len(result)
+        result.append(tcd)
+
+    # Register each token's Python printing into the bridge map at
+    # its pid. Build via the shared CardDef->printing helper so it is
+    # bit-identical to what build_python_state materializes.
+    for tname, pid in token_pid_by_name.items():
+        py_printing = _card_def_to_python_printing(token_cd_by_name[tname])
+        register_token_printing(pid, py_printing)
+
+    # Rewrite every carrier's symbolic create_token triggers into the
+    # numeric token_printing_id shape. CardDef is frozen -> replace.
+    rewritten: list[CardDef] = []
+    for cd in result:
+        refs = list(_carrier_token_refs(cd))
+        if not refs:
+            rewritten.append(cd)
+            continue
+        new_tas = list(cd.triggered_abilities)
+        for idx, tcd in refs:
+            old = new_tas[idx]
+            old_eff = old["effect"]
+            new_eff = {
+                "kind": "create_token",
+                "count": old_eff["count"],
+                "token_printing_id": token_pid_by_name[tcd.name],
+            }
+            new_ta = dict(old)
+            new_ta["effect"] = new_eff
+            new_tas[idx] = new_ta
+        rewritten.append(
+            dataclasses.replace(cd, triggered_abilities=tuple(new_tas))
+        )
+    return rewritten
 
 
 def _filter_deck_to_bridge_supported(

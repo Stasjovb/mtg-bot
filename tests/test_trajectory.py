@@ -4117,3 +4117,159 @@ def test_printing_to_card_def_carries_landfall_mill_through():
             "effect": {"kind": "mill", "count": 1},
         },
     )
+
+
+# ===== Round-49 N1 token-printing substrate (Phase 1) helper pins =====
+
+
+def test_is_safe_trigger_dict_accepts_post_seating_create_token():
+    """The POST-seating create_token dict
+    ``{kind, count, token_printing_id}`` satisfies
+    :func:`_is_safe_trigger_dict`. Pins the dict-side gate's
+    create_token whitelist (mirrors
+    ``test_python_ta_to_safe_dict_round_trips_enters_self_mill``).
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token", "count": 1, "token_printing_id": 5,
+        },
+    })
+
+
+def test_is_safe_trigger_dict_rejects_symbolic_and_rider_create_token():
+    """The dict-side gate rejects (a) the PRE-seating symbolic shape
+    (``_token_card_def`` is not in the create_token key whitelist) so
+    a never-seated dict that leaked to a real engine build is caught,
+    and (b) any create_token dict carrying a rider field
+    (``tapped`` / ``each_player``) — Rust's two-field variant has no
+    mirror, mirrors the Surveil-``use_artifact_count`` exclusion.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    # Symbolic (un-seated) shape -> rejected.
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token", "count": 1, "_token_card_def": object(),
+        },
+    })
+    # Rider on the effect dict -> rejected.
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token", "count": 1,
+            "token_printing_id": 5, "tapped": True,
+        },
+    })
+
+
+def test_seat_token_printings_noop_without_create_token_carrier():
+    """``_seat_token_printings`` is a fast-path no-op (returns the
+    SAME list object) when no card def carries a symbolic
+    create_token trigger — every pre-round-49 production deck. Pins
+    the back-compat guarantee.
+    """
+    from mtg_bot.parity.cross_engine import CardDef
+    from mtg_bot.parity.trajectory import _seat_token_printings
+
+    cds = [
+        CardDef(name="Forest", card_type="Land", mana_produced=("G",)),
+        CardDef(
+            name="Grizzly Bears", card_type="Creature",
+            mana_cost_generic=1, mana_cost_colored=(("G", 1),),
+            power=2, toughness=2,
+        ),
+    ]
+    out = _seat_token_printings(cds)
+    assert out is cds, "no-create_token-carrier path must be a no-op"
+
+
+def test_seat_token_printings_dedups_shared_token():
+    """Two carriers printing the same-named token share ONE seated
+    token CardDef + ONE pid (dedup by name). The token is appended
+    AFTER all carriers; both carriers' triggers rewrite to the same
+    numeric pid.
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.parity.cross_engine import (
+        CardDef, clear_token_printings, _TOKEN_PRINTING_BY_PID,
+    )
+    from mtg_bot.parity.trajectory import (
+        _token_vanilla_card_def, _seat_token_printings,
+    )
+
+    clear_token_printings()
+    try:
+        robot = make_token_creature(
+            name="Shared Robot", power=2, toughness=2,
+            subtypes=("Robot",), artifact=True,
+        )
+        tcd = _token_vanilla_card_def(robot)
+
+        def _maker(nm):
+            return CardDef(
+                name=nm, card_type="Creature", mana_cost_generic=2,
+                power=1, toughness=1,
+                triggered_abilities=(
+                    {
+                        "event": "enters",
+                        "predicate": {"kind": "source_is_self"},
+                        "effect": {
+                            "kind": "create_token", "count": 1,
+                            "_token_card_def": tcd,
+                        },
+                    },
+                ),
+            )
+
+        forest = CardDef(
+            name="Forest", card_type="Land", mana_produced=("G",)
+        )
+        seated = _seat_token_printings(
+            [_maker("Maker A"), _maker("Maker B"), forest]
+        )
+        names = [c.name for c in seated]
+        # Exactly ONE Shared Robot, appended after the makers + forest.
+        assert names.count("Shared Robot") == 1
+        assert names.index("Shared Robot") == len(names) - 1
+        pid = names.index("Shared Robot")
+        for nm in ("Maker A", "Maker B"):
+            c = next(x for x in seated if x.name == nm)
+            eff = c.triggered_abilities[0]["effect"]
+            assert eff["token_printing_id"] == pid
+            assert "_token_card_def" not in eff
+        assert _TOKEN_PRINTING_BY_PID[pid].name == "Shared Robot"
+    finally:
+        clear_token_printings()
+
+
+def test_printing_is_bridge_simple_creature_rejects_lander_cluster():
+    """EoE-pool-delta reject pin (round-49 N1 substrate-only landing):
+    the high-deck-count Lander cluster STAYS DROPPED after Phase 1 —
+    the Lander token's activated ability is the §2 decline. This is
+    the reject-path pin the Phase-3 token-activated-ability slice will
+    later CONVERT to admit (round-37 DDDD / round-44 / round-48
+    sister-precedent). Gravpack Monoist (Robot vanilla token but
+    tapped=True rider) also stays dropped.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    pr = get_active_source().get_printings()
+    for name in (
+        "Galactic Wayfarer", "Beamsaw Prospector", "Edge Rover",
+        "Biomechan Engineer", "Glacier Godmaw", "Gravpack Monoist",
+    ):
+        c = pr.get(name)
+        if c is None:
+            continue
+        assert _printing_is_bridge_simple_creature(c) is False, (
+            f"{name} must stay DROPPED under Phase 1 "
+            f"(Lander non-vanilla token / declined rider — §2)"
+        )

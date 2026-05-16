@@ -164,6 +164,20 @@ class CardDef:
     # through to both engines, but with no guarantee that the per-
     # keyword combat/static behaviors agree byte-for-byte.
     keywords: tuple[str, ...] = ()
+    # Extra card types (round-49 N1 token-printing substrate, Phase 1).
+    # ``card_type`` is the PRIMARY single type ("Creature" / "Land");
+    # this carries any ADDITIONAL types so a multi-type permanent —
+    # the EoE token printings ``Robot`` (Artifact Creature) /
+    # ``Glimmer`` (Enchantment Creature) — round-trips with its full
+    # ``card_types`` tuple on both engines. The combined ordered
+    # ``card_types`` is ``(card_type, *extra_card_types)``. Empty tuple
+    # is the back-compat default — pre-substrate fixtures don't set it,
+    # so ``build_rust_state`` / ``build_python_state`` emit the legacy
+    # single-element ``[card_type]`` shape unchanged. Both builders'
+    # token-aware branches read this field; no Rust-side change is
+    # needed because ``register_printing`` already accepts a multi-
+    # element ``card_types`` list (verified round-49).
+    extra_card_types: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -7908,7 +7922,11 @@ def build_rust_state(spec: DeckSpec):
         # CardDef field that Rust doesn't yet understand stays inert.
         printing_dict = {
             "name": card.name,
-            "card_types": [card.card_type],
+            # Round-49 N1: primary type + any extra types (multi-type
+            # token printings — Robot=Artifact Creature, Glimmer=
+            # Enchantment Creature). Empty ``extra_card_types`` keeps
+            # the legacy single-element shape bit-identical.
+            "card_types": [card.card_type, *card.extra_card_types],
             "mana_cost": dict(
                 (("generic", card.mana_cost_generic),) if card.mana_cost_generic else ()
             ) | {color: n for color, n in card.mana_cost_colored},
@@ -8005,6 +8023,122 @@ def build_rust_state(spec: DeckSpec):
     )
 
 
+def _card_def_to_python_printing(card: "CardDef"):
+    """Materialize a Python ``CardPrinting`` from a :class:`CardDef`.
+
+    Single source of truth for the CardDef → Python printing shape.
+    Both :func:`build_python_state` (per deck card) and the round-49
+    N1 token-printing loader pass
+    (``trajectory._seat_token_printings``, which registers the
+    synthesized token CardDef's Python printing into the
+    ``register_token_printing`` map) call this so the bridge's token
+    printing is constructed bit-identically to what
+    ``build_python_state`` materializes for the same token CardDef —
+    no risk of a shape drift between the two construction sites.
+
+    The materialization is exactly the inline body that lived in
+    ``build_python_state`` before round-49 (basic-land subtype
+    heuristic + Round-30 explicit supertype/subtype override +
+    land mana-ability auto-wire + ETB-trigger bridge + keyword
+    threading), factored out unchanged plus the round-49
+    ``extra_card_types`` multi-type-token threading.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+
+    cost = ManaCost(
+        generic=card.mana_cost_generic,
+        colored=tuple(sorted(card.mana_cost_colored)),
+    )
+    # Type-line is reconstructed from card_type + a basic-land
+    # subtype heuristic; this is cosmetic for the engine but keeps
+    # the printing well-formed.
+    if card.card_type == "Land":
+        type_line = f"Basic Land - {card.name}"
+        supertypes: tuple[str, ...] = ("Basic",)
+        subtypes: tuple[str, ...] = (card.name,)
+    else:
+        type_line = card.card_type
+        supertypes = ()
+        subtypes = ()
+    # Round-30 supertypes substrate: explicit CardDef.supertypes /
+    # CardDef.subtypes override the type-line heuristic. This lets
+    # probes that need a specific supertype (e.g. "Legendary" on a
+    # creature for the `legendary_creature` filter) or a specific
+    # subtype (e.g. "Spacecraft", "Sliver", "Demon") wire it
+    # explicitly. The Rust side reads the same fields from CardDef
+    # via the `if card.supertypes:` / `if card.subtypes:` branches
+    # in the registry-dict builder above; this branch keeps the
+    # Python printing in lockstep.
+    if card.supertypes:
+        supertypes = tuple(card.supertypes)
+    if card.subtypes:
+        subtypes = tuple(card.subtypes)
+    # Lands with ``mana_produced`` get an explicit ``{T}: Add {C}``
+    # activated ability so ``ActivateAbility(land_id, 0)`` works on
+    # the Python side. Rust's ``ActivateAbility`` dispatch reads the
+    # printing's ``mana_produced`` directly (no per-printing ability
+    # list); Python's ``_activate_ability`` walks the printing's
+    # ``activated_abilities`` tuple. Without this explicit wire-up
+    # the two engines would diverge on the very first
+    # ``activate_ability`` call: Rust would tap the land and credit
+    # the pool, Python would silently no-op (empty ability list →
+    # ability_index out of range → return). That divergence is a
+    # harness construction issue, not a real engine divergence —
+    # ``cards.lands.make_basic_land`` ships the same explicit
+    # ability wire-up for production printings (see
+    # ``cards.lands.Command Bridge`` for a parallel pattern). Mana
+    # abilities flagged ``is_mana_ability=True`` bypass the stack
+    # at resolve time (CR 605), matching Rust's direct-pool-credit
+    # shape on the ``ActivateAbility`` arm.
+    activated_abilities: tuple[ActivatedAbility, ...] = ()
+    if card.card_type == "Land" and card.mana_produced:
+        activated_abilities = tuple(
+            ActivatedAbility(
+                cost=ActivationCost(tap_self=True),
+                effect=AddManaToPool(produces=((color, 1),)),
+                is_mana_ability=True,
+            )
+            for color in card.mana_produced
+        )
+    # ETB-trigger Slice 3: bridge the harness-side
+    # ``triggered_abilities`` dict-list into Python's
+    # ``TriggeredAbility`` shape so the Python engine wires the
+    # same predicate-path triggers Rust does. Each dict matches
+    # both `parse_triggered_ability` (Rust) and
+    # `_ta_dict_to_python_triggered_ability` (this module).
+    triggered_abilities = tuple(
+        _ta_dict_to_python_triggered_ability(ta)
+        for ta in card.triggered_abilities
+    )
+    # Phase 6 carddef-substrate slice: thread keywords into the
+    # Python CardPrinting using its native frozenset shape +
+    # space-separated spelling. Rust side already received the
+    # underscore-translated form in build_rust_state above; the
+    # split convention is the same one
+    # ``trajectory._inject_keyword_creature_on_p0_bf`` uses.
+    return CardPrinting(
+        name=card.name,
+        mana_cost_str="",
+        mana_cost=cost,
+        type_line=type_line,
+        supertypes=supertypes,
+        # Round-49 N1: primary type + any extra types (multi-type
+        # token printings — Robot=Artifact Creature, Glimmer=
+        # Enchantment Creature). Empty ``extra_card_types`` keeps the
+        # legacy single-element tuple bit-identical.
+        card_types=(card.card_type, *card.extra_card_types),
+        subtypes=subtypes,
+        power=card.power,
+        toughness=card.toughness,
+        produces=frozenset(card.mana_produced),
+        activated_abilities=activated_abilities,
+        triggered_abilities=triggered_abilities,
+        keywords=frozenset(card.keywords),
+    )
+
+
 def build_python_state(spec: DeckSpec):
     """Construct a Python ``GameState`` from the same ``spec``.
 
@@ -8031,101 +8165,15 @@ def build_python_state(spec: DeckSpec):
       * step=Step.UNTAP (Rust uses PHASE_UNTAP=0 → "UNTAP")
       * empty hands / battlefield / graveyard / exile / stack
     """
-    from mtg_bot.cards.base import CardPrinting, ManaCost
-    from mtg_bot.effects.generic.mana import AddManaToPool
-    from mtg_bot.effects.base import ActivatedAbility, ActivationCost
+    from mtg_bot.cards.base import CardPrinting
     from mtg_bot.game import GameState, Player, Zone
     from mtg_bot.turn import Step
 
     # Materialize Python CardPrintings from CardDefs.
-    printings: dict[str, CardPrinting] = {}
-    for card in spec.card_defs:
-        cost = ManaCost(
-            generic=card.mana_cost_generic,
-            colored=tuple(sorted(card.mana_cost_colored)),
-        )
-        # Type-line is reconstructed from card_type + a basic-land
-        # subtype heuristic; this is cosmetic for the engine but keeps
-        # the printing well-formed.
-        if card.card_type == "Land":
-            type_line = f"Basic Land - {card.name}"
-            supertypes: tuple[str, ...] = ("Basic",)
-            subtypes: tuple[str, ...] = (card.name,)
-        else:
-            type_line = card.card_type
-            supertypes = ()
-            subtypes = ()
-        # Round-30 supertypes substrate: explicit CardDef.supertypes /
-        # CardDef.subtypes override the type-line heuristic. This lets
-        # probes that need a specific supertype (e.g. "Legendary" on a
-        # creature for the `legendary_creature` filter) or a specific
-        # subtype (e.g. "Spacecraft", "Sliver", "Demon") wire it
-        # explicitly. The Rust side reads the same fields from CardDef
-        # via the `if card.supertypes:` / `if card.subtypes:` branches
-        # in the registry-dict builder above; this branch keeps the
-        # Python printing in lockstep.
-        if card.supertypes:
-            supertypes = tuple(card.supertypes)
-        if card.subtypes:
-            subtypes = tuple(card.subtypes)
-        # Lands with ``mana_produced`` get an explicit ``{T}: Add {C}``
-        # activated ability so ``ActivateAbility(land_id, 0)`` works on
-        # the Python side. Rust's ``ActivateAbility`` dispatch reads the
-        # printing's ``mana_produced`` directly (no per-printing ability
-        # list); Python's ``_activate_ability`` walks the printing's
-        # ``activated_abilities`` tuple. Without this explicit wire-up
-        # the two engines would diverge on the very first
-        # ``activate_ability`` call: Rust would tap the land and credit
-        # the pool, Python would silently no-op (empty ability list →
-        # ability_index out of range → return). That divergence is a
-        # harness construction issue, not a real engine divergence —
-        # ``cards.lands.make_basic_land`` ships the same explicit
-        # ability wire-up for production printings (see
-        # ``cards.lands.Command Bridge`` for a parallel pattern). Mana
-        # abilities flagged ``is_mana_ability=True`` bypass the stack
-        # at resolve time (CR 605), matching Rust's direct-pool-credit
-        # shape on the ``ActivateAbility`` arm.
-        activated_abilities: tuple[ActivatedAbility, ...] = ()
-        if card.card_type == "Land" and card.mana_produced:
-            activated_abilities = tuple(
-                ActivatedAbility(
-                    cost=ActivationCost(tap_self=True),
-                    effect=AddManaToPool(produces=((color, 1),)),
-                    is_mana_ability=True,
-                )
-                for color in card.mana_produced
-            )
-        # ETB-trigger Slice 3: bridge the harness-side
-        # ``triggered_abilities`` dict-list into Python's
-        # ``TriggeredAbility`` shape so the Python engine wires the
-        # same predicate-path triggers Rust does. Each dict matches
-        # both `parse_triggered_ability` (Rust) and
-        # `_ta_dict_to_python_triggered_ability` (this module).
-        triggered_abilities = tuple(
-            _ta_dict_to_python_triggered_ability(ta)
-            for ta in card.triggered_abilities
-        )
-        # Phase 6 carddef-substrate slice: thread keywords into the
-        # Python CardPrinting using its native frozenset shape +
-        # space-separated spelling. Rust side already received the
-        # underscore-translated form in build_rust_state above; the
-        # split convention is the same one
-        # ``trajectory._inject_keyword_creature_on_p0_bf`` uses.
-        printings[card.name] = CardPrinting(
-            name=card.name,
-            mana_cost_str="",
-            mana_cost=cost,
-            type_line=type_line,
-            supertypes=supertypes,
-            card_types=(card.card_type,),
-            subtypes=subtypes,
-            power=card.power,
-            toughness=card.toughness,
-            produces=frozenset(card.mana_produced),
-            activated_abilities=activated_abilities,
-            triggered_abilities=triggered_abilities,
-            keywords=frozenset(card.keywords),
-        )
+    printings: dict[str, CardPrinting] = {
+        card.name: _card_def_to_python_printing(card)
+        for card in spec.card_defs
+    }
 
     state = GameState()
     p0 = Player(id=0)

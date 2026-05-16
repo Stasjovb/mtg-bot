@@ -15679,5 +15679,286 @@ def test_rust_parser_rejects_gain_life_equal_to_your_life_total_with_typo():
         reg.register_printing(d)
 
 
+# ===== Round-49 N1 token-printing substrate (Phase 1) bridge pins =====
+#
+# Pins the loader-side fixed-single-vanilla-token
+# ENTERS+IsSelf+create_token substrate: the recognizer admit/decline
+# gates (§2 silent-mistranslation discipline), the _token_vanilla_card_def
+# gate, and the _seat_token_printings loader pass producing a valid
+# deterministic Rust-registry pid + bridge-map registration + a dict the
+# Rust parser accepts. No Rust code changed this round, so these are
+# Python-side substrate pins; the Rust create_token parser/resolve arms
+# are already pinned by the round-3/21/43 create_token pin family above.
+# See docs/TOKEN_PRINTING_SUBSTRATE.md.
+
+
+def test_r49_recognizer_admits_clean_vanilla_token_carrier():
+    """A clean creature carrier with ENTERS+IsSelf+CreateToken(count=1,
+    no riders) and a VANILLA token round-trips through
+    _python_ta_to_safe_dict, emitting the symbolic _token_card_def
+    shape (pid assigned later by the loader-seating pass). Tunnel
+    Surveyor (Creature, Glimmer 1/1 Enchantment-Creature vanilla
+    token) is the canonical clean EoE consumer (0 deck presence, so
+    substrate-only — but it exercises the full recognizer path).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.trajectory import (
+        _python_ta_to_safe_dict,
+        _printing_is_bridge_simple_creature,
+    )
+    from mtg_bot.parity.cross_engine import CardDef
+
+    pr = get_active_source().get_printings()
+    ts = pr.get("Tunnel Surveyor")
+    assert ts is not None
+    d = _python_ta_to_safe_dict(ts.triggered_abilities[0])
+    assert d is not None, "clean vanilla-token carrier must be admitted"
+    assert d["event"] == "enters"
+    assert d["predicate"] == {"kind": "source_is_self"}
+    eff = d["effect"]
+    assert eff["kind"] == "create_token"
+    assert eff["count"] == 1
+    # Pre-seating: symbolic token CardDef, NO numeric pid yet.
+    assert "token_printing_id" not in eff
+    tcd = eff["_token_card_def"]
+    assert isinstance(tcd, CardDef)
+    assert tcd.name == "Glimmer"
+    assert tcd.card_type == "Creature"
+    assert tcd.extra_card_types == ("Enchantment",)
+    assert tcd.power == 1 and tcd.toughness == 1
+    assert tcd.supertypes == ("Token",)
+    # Whole printing passes the bridge-simple creature filter.
+    assert _printing_is_bridge_simple_creature(ts) is True
+
+
+def test_r49_recognizer_declines_non_vanilla_lander_token():
+    """§2 silent-mistranslation gate: a CreateToken whose token
+    printing carries an activated ability (the EoE ``Lander``,
+    ``{2}, Sac: SearchLibraryForBasicLandTapped``) is DECLINED — the
+    CardDef bridge has no activated-ability field, so admitting it
+    would silently drop the Lander's ability cross-engine. This is
+    why the whole high-deck-count Lander cluster (Galactic Wayfarer
+    33k decks, Beamsaw Prospector, Edge Rover, Biomechan Engineer,
+    Glacier Godmaw) stays dropped until the Phase-3 token-activated-
+    ability sub-substrate.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.trajectory import (
+        _python_ta_to_safe_dict,
+        _printing_is_bridge_simple_creature,
+        _token_vanilla_card_def,
+    )
+
+    pr = get_active_source().get_printings()
+    for name in ("Galactic Wayfarer", "Beamsaw Prospector"):
+        carrier = pr.get(name)
+        assert carrier is not None, name
+        ta = carrier.triggered_abilities[0]
+        assert _python_ta_to_safe_dict(ta) is None, (
+            f"{name}: Lander-token carrier must be declined "
+            f"(non-vanilla token)"
+        )
+        assert _printing_is_bridge_simple_creature(carrier) is False
+        # The token-vanilla gate itself declines the Lander printing.
+        assert _token_vanilla_card_def(ta.effect.token_printing) is None
+
+
+def test_r49_recognizer_declines_unsupported_riders():
+    """§2 gate: tapped=True (Gravpack Monoist) and each_player=True
+    (Edge Rover) riders are DECLINED — Rust's
+    ``Effect::CreateToken { count, token_printing_id }`` has no field
+    for them, so the bridge would round-trip a token that enters
+    untapped / under one player only on Rust while Python honored the
+    rider (byte-divergent post-resolve token object). Synthetic
+    riders pinned directly so the gate is exercised independent of
+    the EoE pool's exact carriers.
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    robot = make_token_creature(
+        name="R49 Robot", power=2, toughness=2,
+        subtypes=("Robot",), artifact=True,
+    )
+    base_kw = dict(event=Event.ENTERS, predicate=IsSelf())
+    # Bare rider -> admitted (sanity anchor for the decline cases).
+    ok = TriggeredAbility(
+        effect=CreateToken(token_printing=robot, count=1), **base_kw
+    )
+    assert _python_ta_to_safe_dict(ok) is not None
+    # tapped=True -> declined.
+    tapped = TriggeredAbility(
+        effect=CreateToken(token_printing=robot, count=1, tapped=True),
+        **base_kw,
+    )
+    assert _python_ta_to_safe_dict(tapped) is None
+    # each_player=True -> declined.
+    eachp = TriggeredAbility(
+        effect=CreateToken(
+            token_printing=robot, count=1, each_player=True
+        ),
+        **base_kw,
+    )
+    assert _python_ta_to_safe_dict(eachp) is None
+    # attacking=True -> declined.
+    atk = TriggeredAbility(
+        effect=CreateToken(
+            token_printing=robot, count=1, attacking=True
+        ),
+        **base_kw,
+    )
+    assert _python_ta_to_safe_dict(atk) is None
+
+
+def test_r49_token_vanilla_card_def_gate():
+    """_token_vanilla_card_def returns a multi-type-aware CardDef for
+    a vanilla token and None for any non-vanilla shape (activated
+    ability / keyword / nested trigger / non-creature / None-P/T /
+    block-restriction). Pins the §2 gate's per-disqualifier behavior.
+    """
+    from mtg_bot.cards.base import make_token_creature, CardPrinting, ManaCost
+    from mtg_bot.effects.base import (
+        ActivatedAbility, ActivationCost, TriggeredAbility,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.mana import AddManaToPool
+    from mtg_bot.parity.trajectory import _token_vanilla_card_def
+
+    # Vanilla artifact-creature token -> multi-type CardDef.
+    robot = make_token_creature(
+        name="R49 Robot V", power=2, toughness=2,
+        subtypes=("Robot",), artifact=True,
+    )
+    cd = _token_vanilla_card_def(robot)
+    assert cd is not None
+    assert cd.card_type == "Creature"
+    assert cd.extra_card_types == ("Artifact",)
+    assert cd.power == 2 and cd.toughness == 2
+    assert cd.subtypes == ("Robot",)
+    assert cd.supertypes == ("Token",)
+    # Plain creature token -> single-type CardDef (empty extra).
+    plain = make_token_creature(
+        name="R49 Soldier", power=1, toughness=1, subtypes=("Soldier",),
+    )
+    pcd = _token_vanilla_card_def(plain)
+    assert pcd is not None and pcd.extra_card_types == ()
+    # None -> None.
+    assert _token_vanilla_card_def(None) is None
+    # Activated ability on the token -> declined.
+    with_aa = make_token_creature(
+        name="R49 Lander-like", power=1, toughness=1,
+        activated_abilities=(
+            ActivatedAbility(
+                cost=ActivationCost(sacrifice_self=True),
+                effect=DrawCards(amount=1),
+            ),
+        ),
+    )
+    assert _token_vanilla_card_def(with_aa) is None
+    # Keyword on the token -> declined (Phase 1 _SAFE_TOKEN_KEYWORDS
+    # is the empty set; keyword-bearing tokens need their own probe).
+    with_kw = make_token_creature(
+        name="R49 Flyer", power=1, toughness=1, keywords=frozenset({"flying"}),
+    )
+    assert _token_vanilla_card_def(with_kw) is None
+    # Nested triggered ability on the token -> declined.
+    with_ta = make_token_creature(name="R49 Trig", power=1, toughness=1)
+    object.__setattr__(
+        with_ta, "triggered_abilities",
+        (TriggeredAbility(
+            event=Event.ENTERS, predicate=IsSelf(),
+            effect=DrawCards(amount=1),
+        ),),
+    )
+    assert _token_vanilla_card_def(with_ta) is None
+    # Non-creature / None-P/T body -> declined (Lander shape: Artifact
+    # only, no power/toughness).
+    artifact_only = CardPrinting(
+        name="R49 Lander-shape", mana_cost_str="", mana_cost=ManaCost(),
+        type_line="Token Artifact", supertypes=("Token",),
+        card_types=("Artifact",), subtypes=("Lander",),
+    )
+    assert _token_vanilla_card_def(artifact_only) is None
+
+
+def test_r49_loader_seating_assigns_deterministic_pid_and_registers():
+    """End-to-end loader pass: production_deck_to_deckspec on a deck
+    with a vanilla-token carrier (Tunnel Surveyor) appends the token
+    CardDef to card_defs (absent from libraries), rewrites the
+    carrier trigger to a numeric token_printing_id == the token's
+    Rust-registry pid (= card_defs index), registers the matching
+    Python printing into the cross_engine bridge map, AND the Rust
+    Registry accepts the seated carrier dict at that pid. This is the
+    headline substrate pin: deterministic auto-registration with NO
+    hand-picked magic pid.
+    """
+    import mtg_bot_engine
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        clear_token_printings, _TOKEN_PRINTING_BY_PID, build_rust_state,
+    )
+
+    clear_token_printings()
+    try:
+        deck = ["Tunnel Surveyor"] * 4 + ["Forest"] * 36
+        spec = trajectory.production_deck_to_deckspec(
+            deck, shared_rng_seed=42, pad_to_size=60, pad_with="Forest",
+        )
+        names = [cd.name for cd in spec.card_defs]
+        assert "Tunnel Surveyor" in names
+        assert "Glimmer" in names, "token CardDef must be seated"
+        glimmer_idx = names.index("Glimmer")
+        # Token absent from BOTH libraries (registered, never drawn).
+        assert "Glimmer" not in spec.p0_library
+        assert "Glimmer" not in spec.p1_library
+        # Carrier trigger rewritten to the numeric pid == card_defs idx.
+        ts_cd = next(c for c in spec.card_defs if c.name == "Tunnel Surveyor")
+        eff = ts_cd.triggered_abilities[0]["effect"]
+        assert eff["kind"] == "create_token"
+        assert "_token_card_def" not in eff, "symbolic ref must be gone"
+        assert eff["token_printing_id"] == glimmer_idx
+        # Bridge map seeded at that pid with the Glimmer printing.
+        assert glimmer_idx in _TOKEN_PRINTING_BY_PID
+        assert _TOKEN_PRINTING_BY_PID[glimmer_idx].name == "Glimmer"
+        # Rust Registry accepts the seated carrier dict — build the
+        # Rust state and confirm the carrier registered at the SAME
+        # pid the loader assigned the trigger (registration order ==
+        # card_defs order == Registry pid order).
+        rust_state = build_rust_state(spec)
+        assert rust_state is not None
+        # Re-derive the Rust pids the same way build_rust_state does
+        # to confirm Glimmer's pid matches the seated trigger.
+        reg = mtg_bot_engine.Registry()
+        name_to_pid = {}
+        for c in spec.card_defs:
+            pd = {
+                "name": c.name,
+                "card_types": [c.card_type, *c.extra_card_types],
+                "mana_cost": {}, "effects": [],
+            }
+            if c.power is not None:
+                pd["power"] = c.power
+            if c.toughness is not None:
+                pd["toughness"] = c.toughness
+            if c.card_type == "Land":
+                pd["supertypes"] = ["Basic"]
+            if c.supertypes:
+                pd["supertypes"] = list(c.supertypes)
+            if c.subtypes:
+                pd["subtypes"] = list(c.subtypes)
+            if c.mana_produced:
+                pd["mana_produced"] = list(c.mana_produced)
+            if c.triggered_abilities:
+                pd["triggered_abilities"] = [dict(t) for t in c.triggered_abilities]
+            name_to_pid[c.name] = reg.register_printing(pd)
+        assert name_to_pid["Glimmer"] == glimmer_idx == eff["token_printing_id"]
+    finally:
+        clear_token_printings()
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
