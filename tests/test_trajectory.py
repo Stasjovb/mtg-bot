@@ -2502,6 +2502,80 @@ def test_simple_creature_filter_drops_tannuk_memorial_ensign_despite_landfall_dr
     assert _printing_is_bridge_simple_creature(tannuk) is False
 
 
+def test_filter_drops_dynamic_pt_formula_grovestrider():
+    """Round-39 fix: Harmonious Grovestrider carries a
+    ``dynamic_pt_formula`` (``*/*`` CDA — P/T each equal to lands
+    controlled) that the CardDef bridge can't represent. The parser
+    encodes the printed P/T as 0/0 placeholder; without the formula
+    threaded across the bridge, Python materializes a literal 0/0
+    creature on resolve and CR 704.5f SBA sends it to graveyard,
+    while Rust keeps it on the battlefield (surfaced as
+    ``cast_spell::graveyard_p0,battlefield`` in round-38 E1's bench
+    smoke). The filter now rejects it so the cross-engine harness
+    never sees the mistranslation. The card's real engine-side
+    behavior (the ``harmonious_grovestrider`` arm in
+    ``game._dynamic_base_pt``) is unaffected — only the bridge-
+    crossing path is gated off.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    src = OracleParserCardSource()
+    p = src.get_printings()["Harmonious Grovestrider"]
+    assert p.dynamic_pt_formula == "harmonious_grovestrider"
+    assert _printing_is_bridge_simple_creature(p) is False
+
+
+def test_filter_drops_dynamic_pt_formula_cosmogoyf_emissary():
+    """Sister cards to Grovestrider — both carry ``dynamic_pt_formula``
+    placeholders that the bridge can't round-trip. Cosmogoyf (0/1
+    placeholder; P=exile-count, T=exile-count+1) and Emissary Escort
+    (1/2 with +X/+0 from greatest other-artifact MV) both leak the
+    same bridge gap as Grovestrider. Drop them at the filter rather
+    than ship them as 0/1 / 0/4 vanillas across the bridge.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    src = OracleParserCardSource()
+    printings = src.get_printings()
+    cosmogoyf = printings["Cosmogoyf"]
+    assert cosmogoyf.dynamic_pt_formula == "cosmogoyf"
+    assert _printing_is_bridge_simple_creature(cosmogoyf) is False
+    emissary = printings["Emissary Escort"]
+    assert emissary.dynamic_pt_formula == "emissary_escort"
+    assert _printing_is_bridge_simple_creature(emissary) is False
+
+
+def test_filter_drops_ward_cost_bearers():
+    """Round-39 fix: the CardDef bridge doesn't carry ``ward_cost``,
+    so any Ward-bearing creature bridges as a bare no-Ward creature
+    on both engines. That's bit-equal under the bench's ``attack_all``
+    strategy (the attacker never targets the warded creature), but
+    a future targeted-spell trajectory probe would surface as a
+    mystery divergence. Drop these at the filter today so the
+    substrate stays honest. Lockstep with the
+    ``dynamic_pt_formula`` drop above — Grovestrider carries BOTH
+    (covered above); these are the bare-Ward sisters.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    src = OracleParserCardSource()
+    printings = src.get_printings()
+    # Pick at least one Ward-only creature (no other unsafe field) to
+    # prove the ward_cost branch IS the rejecting check. Mouth of the
+    # Storm and Famished Worldsire are the obvious candidates; both
+    # are EoE creatures with ward but no triggered ability that would
+    # already disqualify them.
+    for name in ("Mouth of the Storm", "Famished Worldsire"):
+        p = printings.get(name)
+        if p is None:
+            continue
+        assert p.ward_cost is not None
+        assert _printing_is_bridge_simple_creature(p) is False
+
+
 def test_python_ta_to_safe_dict_preserves_landfall_draw_cards_count():
     """The draw_cards count round-trips as the parsed Python integer;
     the round-trip helper preserves the count value as-is. Pins the
