@@ -311,17 +311,33 @@ class NNPimcConfig:
                         with meta_path.open("r", encoding="utf-8") as _f:
                             _meta = _json.load(_f)
                         _training = _meta.get("training") or {}
-                        for _src, _dst in (
-                            ("structured_emb_dim", "structured_emb_dim"),
-                            ("structured_n_heads", "structured_n_heads"),
-                            ("structured_n_layers", "structured_n_layers"),
-                            ("structured_hidden_dim", "structured_hidden_dim"),
-                            ("structured_action_history_n",
+                        # The trainer's canonical schema nests the
+                        # structured-trunk hparams under
+                        # ``training.structured_config`` (v5/v7/v8 all
+                        # use this). Newer versions may also surface
+                        # flat ``training.structured_<field>`` keys.
+                        # Read the nested dict first; fall back to flat.
+                        _sc = _training.get("structured_config") or {}
+                        for _nest_key, _flat_key, _dst in (
+                            ("emb_dim", "structured_emb_dim",
+                             "structured_emb_dim"),
+                            ("n_heads", "structured_n_heads",
+                             "structured_n_heads"),
+                            ("n_layers", "structured_n_layers",
+                             "structured_n_layers"),
+                            ("hidden_dim", "structured_hidden_dim",
+                             "structured_hidden_dim"),
+                            ("action_history_n",
+                             "structured_action_history_n",
                              "structured_action_history_n"),
-                            ("structured_n_printings", "structured_n_printings"),
+                            ("n_printings",
+                             "structured_n_printings",
+                             "structured_n_printings"),
                         ):
-                            if _training.get(_src) is not None:
-                                eval_kwargs[_dst] = _training[_src]
+                            if _sc.get(_nest_key) is not None:
+                                eval_kwargs[_dst] = _sc[_nest_key]
+                            elif _training.get(_flat_key) is not None:
+                                eval_kwargs[_dst] = _training[_flat_key]
                     except (OSError, ValueError):
                         # Defensive: a malformed metadata.json should not
                         # crash the worker. Fall through to the default
