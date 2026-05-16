@@ -16889,5 +16889,298 @@ def test_r52_token_cache_key_distinguishes_lander_from_vanilla_robot():
         clear_token_printings()
 
 
+def test_bridge_destroy_target_noncreature_permanent_translates_to_python():
+    """Round-52 — Extinguisher Battleship ETB head. Rust
+    ``{"kind": "destroy_target_noncreature_permanent"}`` translates to
+    Python's ``DestroyTargetNoncreaturePermanent`` whose ``TargetSpec``
+    filter is exactly ``~IsCreature() & ~IsPlayer()`` (NOT the round-24
+    ``DestroyTargetNonlandPermanent`` ``~IsLand()`` filter — the two
+    candidate sets DIVERGE; see the bridge-arm §2 docstring +
+    SEARCH_LIMITATIONS).
+
+    The Rust effect variant ships in this slice
+    (``rust/src/cards.rs`` ``Effect::DestroyTargetNoncreaturePermanent``
+    unit-variant + parse arm + to_dict arm +
+    ``rust/src/state_ops_resolve.rs`` resolve arm). Python's class
+    pre-existed (``effects/generic/destroy.py``). This pins the bridge
+    translation that wires them up.
+    """
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetNoncreaturePermanent,
+    )
+    from mtg_bot.effects.object_predicates import IsCreature, IsPlayer
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_noncreature_permanent"}
+    )
+    assert isinstance(e, DestroyTargetNoncreaturePermanent)
+    # Filter is the precise NONCREATURE filter (not nonland).
+    assert e.targets == (TargetSpec(~IsCreature() & ~IsPlayer()),)
+
+
+def test_bridge_destroy_target_noncreature_permanent_is_not_nonland():
+    """§2 precision pin: the noncreature arm must NOT collapse onto the
+    pre-existing ``destroy_target_nonland_permanent`` arm. Their Python
+    filters DIVERGE — ``~IsCreature()`` admits lands + excludes
+    creatures; ``~IsLand()`` admits creatures + excludes lands. A
+    regression that wired ``destroy_target_noncreature_permanent`` to
+    ``DestroyTargetNonlandPermanent`` would silently mistranslate the
+    real Extinguisher Battleship target set.
+    """
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetNoncreaturePermanent, DestroyTargetNonlandPermanent,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    noncreature = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_noncreature_permanent"}
+    )
+    nonland = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_nonland_permanent"}
+    )
+    assert isinstance(noncreature, DestroyTargetNoncreaturePermanent)
+    assert isinstance(nonland, DestroyTargetNonlandPermanent)
+    assert type(noncreature) is not type(nonland)
+    assert noncreature.targets != nonland.targets
+
+
+def test_bridge_destroy_target_noncreature_permanent_ignores_extra_keys():
+    """Unit-variant tolerance: extra dict fields silently ignored
+    (mirrors every other unit-variant bridge arm + Rust's parse-arm
+    silent-drop convention).
+    """
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetNoncreaturePermanent,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_noncreature_permanent", "spurious": 7}
+    )
+    assert isinstance(e, DestroyTargetNoncreaturePermanent)
+
+
+def test_rust_parser_accepts_extinguisher_sequence_in_triggered_ability():
+    """Lockstep gate: the full Extinguisher Battleship ETB bridge dict
+    (``Sequence{[destroy_target_noncreature_permanent,
+    damage_each_creature{4}]}``) must register cleanly on the Rust side
+    too. Keeps the Python bridge from drifting away from Rust's
+    parse_effect coverage (mirrors the Monoist / damage_each_opponent
+    Rust-parser pins).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "Extinguisher Bridge Pin",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 8},
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "sequence",
+                    "effects": [
+                        {
+                            "kind": (
+                                "destroy_target_noncreature_permanent"
+                            ),
+                        },
+                        {"kind": "damage_each_creature", "amount": 4},
+                    ],
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_bridge_extinguisher_sequence_synthetic_end_to_end_byte_equal():
+    """Synthetic cross-engine end-to-end byte-equal pin for the full
+    Extinguisher Battleship ETB Sequence
+    (``destroy_target_noncreature_permanent`` → ``damage_each_creature
+    {4}``). A noncreature-artifact carrier with this ETB fires on both
+    engines; a single bait Enchantment is the forced destroy target;
+    one creature each side takes the 4-damage AOE.
+
+    This is the synthetic sister of the GENUINE real-EoE Extinguisher
+    Battleship probe in ``tests/test_parity_smoke.py`` (which drives the
+    actual parsed printing constrained by a picker shim). Here the
+    Python side composes the same effects directly under ``Sequence``.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.cards import (
+        DestroyTargetNoncreaturePermanent, DealNDamageToEachCreature,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZB = 2
+
+    # ---- Rust side.
+    rust_bait = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Enchantment", "card_types": ["Enchantment"],
+            "mana_cost": {"generic": 2}, "effects": [],
+        },
+        0, ZB,
+    )
+    rust_own = rust_state.register_and_inject_object(
+        {
+            "name": "Own Bear (2/2)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2, "toughness": 2, "effects": [],
+        },
+        0, ZB,
+    )
+    rust_opp = rust_state.register_and_inject_object(
+        {
+            "name": "Opp Bear (3/3)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "R": 1},
+            "power": 3, "toughness": 3, "effects": [],
+        },
+        1, ZB,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "Extinguisher Synthetic", "card_types": ["Artifact"],
+            "mana_cost": {"generic": 8}, "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "sequence",
+                        "effects": [
+                            {
+                                "kind": (
+                                    "destroy_target_noncreature_"
+                                    "permanent"
+                                ),
+                            },
+                            {
+                                "kind": "damage_each_creature",
+                                "amount": 4,
+                            },
+                        ],
+                    },
+                }
+            ],
+        },
+        0, ZB,
+    )
+    assert rust_state.stack_size() == 1
+
+    # ---- Python side: same board, Sequence composed directly.
+    bait_printing = CardPrinting(
+        name="Bait Enchantment", mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=()),
+        type_line="Enchantment", supertypes=(),
+        card_types=("Enchantment",), subtypes=(),
+        power=None, toughness=None, produces=frozenset(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+
+    own_printing = CardPrinting(
+        name="Own Bear (2/2)", mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=2, toughness=2, produces=frozenset(),
+    )
+    py_own = py_state.new_object(
+        own_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_own.summoning_sick = False
+    py_own.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_own)
+
+    opp_printing = CardPrinting(
+        name="Opp Bear (3/3)", mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("R", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=3, toughness=3, produces=frozenset(),
+    )
+    py_opp = py_state.new_object(
+        opp_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_opp.summoning_sick = False
+    py_opp.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_opp)
+
+    src_printing = CardPrinting(
+        name="Extinguisher Synthetic", mana_cost_str="",
+        mana_cost=ManaCost(generic=8, colored=()),
+        type_line="Artifact", supertypes=(),
+        card_types=("Artifact",), subtypes=(),
+        power=None, toughness=None, produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=Sequence(
+                    effects=(
+                        DestroyTargetNoncreaturePermanent(),
+                        DealNDamageToEachCreature(amount=4),
+                    ),
+                ),
+            ),
+        ),
+    )
+    py_state.players[0].agent = _PickFirstLegalTargetAgent()
+    py_src = py_state.new_object(
+        src_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    assert len(py_state.stack) == 1
+
+    # ---- Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Cross-engine byte-equal: bait destroyed; creatures took 4.
+    assert rust_state.find_object_zone(rust_bait) == 3  # graveyard
+    assert py_bait.zone == Zone.GRAVEYARD
+    assert rust_state.get_damage(rust_own) == 4
+    assert rust_state.get_damage(rust_opp) == 4
+    assert py_own.damage == 4
+    assert py_opp.damage == 4
+    assert rust_state.get_damage(rust_own) == py_own.damage
+    assert rust_state.get_damage(rust_opp) == py_opp.damage
+    assert py_own.zone == Zone.BATTLEFIELD
+    assert py_opp.zone == Zone.BATTLEFIELD
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
