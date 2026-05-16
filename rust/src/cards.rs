@@ -702,6 +702,74 @@ pub enum Effect {
     /// class). Mirrors round-32 / round-33 / round-34 / round-35 /
     /// round-36 / round-37 / round-42 unit-variant schema convention.
     EachOpponentLosesLifeEqualToArtifactCount,
+    /// **BLOCKED-RUST-EFFECT slice (round 48) -- each opponent of the
+    /// source-controller loses life equal to the source-controller's
+    /// CURRENT LIFE TOTAL.** Mirrors Python's
+    /// `EachOpponentLosesLifeEqualToYourLifeTotal`
+    /// (`effects/generic/life.py` -- shipped in this slice; no
+    /// pre-existing class). Sister of round-44's
+    /// `EachOpponentLosesLifeEqualToArtifactCount` -- SAME recipient set
+    /// + dispatch (each opponent of the source-controller, direct life
+    /// subtraction CR 118.4 not damage) and SAME apply substrate
+    /// (life-loss-each-opponent), only the DENOMINATOR read differs
+    /// (source-controller's current life total instead of their
+    /// artifact count). This is the SECOND denominator on the
+    /// life-loss-each-opponent apply substrate (artifact-count round-44
+    /// -> life-total round-48); the round-42
+    /// `MillTargetPlayerEqualToYourLifeTotal` (mill substrate) and
+    /// round-47 `DealDamageToOpponentCreatureByLifeTotal` (damage
+    /// substrate) are the life-total-denominator precedents on OTHER
+    /// substrates. Walks the X-from-count matrix to a third
+    /// (substrate, life-total) cell.
+    ///
+    /// **Mechanism -- read + apply.** At resolve time, read the
+    /// source-controller's current life total and clamp negative life
+    /// to 0 (`life.max(0)`) -- matches Python's `max(0, life)` clamp
+    /// and the round-42 `MillTargetPlayerEqualToYourLifeTotal` /
+    /// round-47 `DealDamageToOpponentCreatureByLifeTotal` life-total-
+    /// denominator clamping precedent (negative life can arise from a
+    /// prior loss/damage in the same resolution window before the SBA
+    /// loop runs; a negative denominator would be nonsensical). If the
+    /// clamped life is 0 -> silent no-op (matches Python's `if amount
+    /// <= 0: return` short-circuit before the per-opponent loop, also
+    /// mirrors GainLife / DrawCards / Mill / EachOpponentLosesLife /
+    /// EachOpponentLosesLifeEqualToArtifactCount / DiscardSelf
+    /// zero-amount no-op convention).
+    ///
+    /// **Apply -- each opponent loses `life` life.** In 2-player land
+    /// this is "the one opponent" at `1 - controller`. Direct life
+    /// subtraction via `saturating_sub` -- not damage; not reducible by
+    /// damage-prevention / Worship-style replacement effects (CR 614);
+    /// negative life is handled by the SBA loop on both engines, no
+    /// clamp on the APPLY side here (the clamp is on the DENOMINATOR
+    /// read only). Mirrors the round-44 sister
+    /// `Effect::EachOpponentLosesLifeEqualToArtifactCount` apply step
+    /// BIT-FOR-BIT, only the amount source differs (life-total read vs
+    /// artifact-count walk).
+    ///
+    /// **Source-controller resolution.** 5-zone scan + stack scan
+    /// (mirrors the round-44 sister
+    /// `EachOpponentLosesLifeEqualToArtifactCount` shape exactly --
+    /// needs to resolve even if source has left bf, e.g.
+    /// counterspelled trigger that still drives the count from the
+    /// original ETB snapshot). If untrackable -> silent fizzle
+    /// (lost-track-of-source tolerance, mirrors
+    /// EachOpponentLosesLife / DiscardSelf shape). NOTE: unlike the
+    /// round-42 mill arm (which leans on
+    /// `current_resolve_source_controller`), the dynamic-X each-opponent
+    /// arms use the 5-zone walk for cross-arm consistency with the
+    /// round-44 sister and so the inject-and-fire-ENTERS synthetic
+    /// harness (where the resolve-harness shortcut isn't set) resolves
+    /// correctly.
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides --
+    /// the count is computed from state at resolve time, not stored
+    /// on the variant. Python's `@dataclass(frozen=True)` class has
+    /// no constructor args (the dynamic-X is the whole point of the
+    /// class). Mirrors round-32 / round-33 / round-34 / round-35 /
+    /// round-36 / round-37 / round-42 / round-44 / round-45 / round-47
+    /// unit-variant schema convention.
+    EachOpponentLosesLifeEqualToYourLifeTotal,
     /// **BLOCKED-RUST-EFFECT slice (round 45) -- the source's
     /// controller GAINS life equal to the number of ARTIFACTS the
     /// source-controller controls.** Mirrors Python's
@@ -4280,6 +4348,30 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // extensible plumbing generalizes across both axes).
             Ok(Effect::EachOpponentLosesLifeEqualToArtifactCount)
         }
+        "each_opponent_loses_life_equal_to_your_life_total" => {
+            // BLOCKED-RUST-EFFECT slice (round 48) -- each opponent of
+            // the source-controller loses life equal to the
+            // source-controller's CURRENT LIFE TOTAL. Unit variant; no
+            // fields beyond `kind` (the count is dynamic -- read from
+            // state at resolve time, clamped to >= 0). Extra dict
+            // fields silently ignored for round-trip dict-shape
+            // consistency (mirrors every other unit-variant parse arm;
+            // particularly the round-44 sister
+            // `each_opponent_loses_life_equal_to_artifact_count` -- same
+            // apply substrate, only the denominator read differs -- and
+            // the round-42 `mill_target_player_equal_to_your_life_total`
+            // / round-47 `deal_damage_to_opponent_creature_by_life_total`
+            // life-total-denominator precedents on OTHER substrates).
+            // Mirrors Python's `EachOpponentLosesLifeEqualToYourLifeTotal`
+            // (`life.py` -- shipped in this slice as the SECOND
+            // denominator on the life-loss-each-opponent apply
+            // substrate; 0 EoE consumers today, slice ships per
+            // round-27/31/37 round-trip-surface-coverage rule and to
+            // extend the X-from-count matrix to a third (substrate,
+            // life-total) cell, confirming the round-35 bidirectionally-
+            // extensible plumbing generalizes across both axes).
+            Ok(Effect::EachOpponentLosesLifeEqualToYourLifeTotal)
+        }
         "gain_life_equal_to_artifact_count" => {
             // BLOCKED-RUST-EFFECT slice (round 45) -- the source's
             // controller GAINS life equal to the source-controller's
@@ -6583,6 +6675,23 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item(
                 "kind",
                 "each_opponent_loses_life_equal_to_artifact_count",
+            )?;
+        }
+        Effect::EachOpponentLosesLifeEqualToYourLifeTotal => {
+            // BLOCKED-RUST-EFFECT slice (round 48). Unit variant; no
+            // payload fields beyond `kind` (count is dynamic --
+            // computed at resolve time from the source-controller's
+            // current life total, clamped to >= 0). Mirrors Python's
+            // EachOpponentLosesLifeEqualToYourLifeTotal dict shape (no
+            // static `amount` field on the @dataclass). Sister of
+            // round-44 EachOpponentLosesLifeEqualToArtifactCount with
+            // the same recipient set and apply step but a life-total
+            // denominator (SECOND denominator on the life-loss-each-
+            // opponent apply substrate; life-total precedent set by
+            // round-42 mill / round-47 damage on other substrates).
+            d.set_item(
+                "kind",
+                "each_opponent_loses_life_equal_to_your_life_total",
             )?;
         }
         Effect::GainLifeEqualToArtifactCount => {
