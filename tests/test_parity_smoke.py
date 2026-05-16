@@ -59282,6 +59282,222 @@ def test_cross_engine_real_eoe_extinguisher_battleship_etb_destroy_noncreature_t
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_with_counters_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Mightform Harmonizer
+    (~5,759 17lands decks) — §2 ROUND-53 COUNTER-INCLUSIVE FIX.**
+
+    Sister of the round-31/36 ``..._landfall_double_power_parity``
+    probe, which staged a COUNTER-FREE creature and so never exercised
+    the §2 path. THIS probe drives the SAME genuine parsed Mightform
+    Harmonizer printing's landfall trigger against a target carrying
+    +1/+1 counters — the scenario the round-53 fix addresses.
+
+    The real card parses to the AGENT-DRIVEN
+    ``DoubleTargetCreaturesPowerUEOT`` on an ``Event.ENTERS`` landfall
+    trigger (predicate ``And(Subject(IsLand()), Controlled(YOU))``).
+    Pre-round-53, Rust's resolve arm snapshotted base power
+    (counter-omitting ``read_battlefield_creature_power``) while
+    Python's source-of-truth snapshots effective power (counters
+    folded in) — a real §2 silent mistranslation, real-card-exposed
+    but latent because the existing genuine probe used no counters.
+
+    Probe shape:
+      1. Stage a 3/3 own creature on p0, give it 2 +1/+1 counters
+         (Rust: deterministic counter granter; Python: set
+         ``plus_one_counters = 2`` directly), so effective power = 5.
+      2. Python: materialize the REAL parsed Mightform printing on
+         p0's bf, seat ``_PickFirstControlledCreatureAgent``, a Forest
+         enters under p0 -> the GENUINE landfall trigger fires
+         (parser-emitted ``DoubleTargetCreaturesPowerUEOT`` with
+         target shim-picked to the counter creature).
+      3. Rust: drive the bridge-dict unit-variant carrier (landfall
+         ``Predicate::Subject`` substrate not loader-admitted — the
+         established Fight/Monoist cross-engine driving pattern).
+      4. Drain both stacks; assert the doubling DELTA
+         (``effective_power_after - effective_power_before``) is
+         **5 on BOTH engines** (effective power 3+2, NOT base 3) and
+         byte-equal cross-engine. (Rust's absolute getter omits
+         counters — a separate pre-existing documented combat-side
+         asymmetry — so absolute reads differ by the counter amount;
+         the §2 invariant is the DELTA.)
+
+    NOT loader-admitted (same honest split as the round-31/36 sister
+    + round-51 Monoist / round-52 Extinguisher): agent-driven target
+    through the deterministic bridge would degrade free target choice;
+    full card independently gated by the landfall predicate substrate
+    + ``warp_cost``. Documented in docs/SEARCH_LIMITATIONS.md.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone, effective_power
+    from mtg_bot.effects.generic.pump import DoubleTargetCreaturesPowerUEOT
+    from tests.parity._picker_shims import (
+        _PickFirstControlledCreatureAgent,
+    )
+
+    real = get_active_source().get_printings().get(
+        "Mightform Harmonizer"
+    )
+    if real is None:
+        import pytest
+        pytest.skip(
+            "Mightform Harmonizer absent from active CardSource"
+        )
+    assert real.is_creature
+    assert len(real.triggered_abilities) == 1
+    real_eff = real.triggered_abilities[0].effect
+    assert isinstance(real_eff, DoubleTargetCreaturesPowerUEOT), (
+        f"genuine Mightform must parse to the agent-driven "
+        f"DoubleTargetCreaturesPowerUEOT; got "
+        f"{type(real_eff).__name__}"
+    )
+    assert real_eff.requires_target() is True
+    assert getattr(real, "warp_cost", None) is not None
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZB = 2
+
+    # ---- Rust: 3/3 Counter Bear + deterministic +2/+2 granter, then
+    # the bridge-dict unit-variant carrier (landfall-predicate shape
+    # not loader-admitted — drive the unit-variant directly).
+    rust_own = rust_state.register_and_inject_object(
+        {
+            "name": "Counter Bear (3/3)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 1},
+            "power": 3, "toughness": 3, "effects": [],
+        },
+        0, ZB,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "Counter Granter", "card_types": ["Creature"],
+            "mana_cost": {"generic": 1}, "power": 1, "toughness": 1,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": (
+                            "put_plus_one_counter_on_each_"
+                            "creature_you_control"
+                        ),
+                        "amount": 2,
+                    },
+                }
+            ],
+        },
+        0, ZB,
+    )
+    rust_state.resolve_top_of_stack()  # apply +2/+2 counters
+    rust_before = rust_state.effective_power(rust_own)
+    rust_state.register_and_inject_object(
+        {
+            "name": "Mightform Harmonizer",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 2},
+            "power": 4, "toughness": 4, "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "double_target_creatures_power_ueot",
+                    },
+                }
+            ],
+        },
+        0, ZB,
+    )
+    rust_state.resolve_top_of_stack()
+    rust_delta = rust_state.effective_power(rust_own) - rust_before
+
+    # ---- Python: GENUINE parsed Mightform printing + a real landfall
+    # trigger against the +2/+2 counter creature.
+    own_printing = CardPrinting(
+        name="Counter Bear (3/3)", mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("G", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=3, toughness=3, produces=frozenset(),
+    )
+    py_own = py_state.new_object(
+        own_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_own.summoning_sick = False
+    py_own.plus_one_counters = 2
+    py_own.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_own)
+    py_before = effective_power(py_state, py_own)
+
+    py_state.players[0].agent = _PickFirstControlledCreatureAgent()
+    py_src = py_state.new_object(
+        real, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+
+    forest_printing = CardPrinting(
+        name="Forest", mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line="Basic Land — Forest", supertypes=("Basic",),
+        card_types=("Land",), subtypes=("Forest",),
+        power=None, toughness=None, produces=frozenset({"G"}),
+    )
+    py_land = py_state.new_object(
+        forest_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_land.summoning_sick = False
+    py_land.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_land)
+    _trigger_etb_abilities(py_state, py_land)
+    assert len(py_state.stack) == 1, (
+        "Python: the genuine Mightform printing's landfall trigger "
+        "should land on the stack with its target shim-picked. "
+        f"Got {len(py_state.stack)}"
+    )
+
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    py_delta = effective_power(py_state, py_own) - py_before
+
+    # §2: both engines doubled EFFECTIVE power (3 base + 2 counters =
+    # 5). Pre-round-53 Rust's delta was 3 (base) — the bug.
+    assert rust_delta == 5, (
+        f"Rust doubling delta must be 5 (effective power 3+2, "
+        f"counters folded by the round-53 read_doubling_power fix); "
+        f"got {rust_delta}"
+    )
+    assert py_delta == 5, (
+        f"Python source-of-truth doubling delta must be 5; got "
+        f"{py_delta}"
+    )
+    # GENUINE cross-engine byte-equal §2 invariant.
+    assert rust_delta == py_delta, (
+        f"§2 silent mistranslation on the GENUINE Mightform card: "
+        f"Rust doubled {rust_delta} but Python doubled {py_delta}."
+    )
+    # Lives unchanged.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
