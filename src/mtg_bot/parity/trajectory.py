@@ -1571,6 +1571,63 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # landing such a card in the pool need not extend the allowlist
     # again.
     ("attacks", "source_is_self", "surveil"),
+    # ATTACKS+IsSelf draw_cards / gain_life extension (round-44 slice).
+    # Adds the SECOND and THIRD ATTACKS leaves to the safe set after
+    # round-43's surveil ATTACKS — completes the
+    # ``draw_cards`` / ``gain_life`` / ``surveil`` triple under
+    # source_is_self for ATTACKS, mirroring the round-1 ENTERS+IsSelf
+    # leaf set (draw_cards / gain_life / scry_n / surveil) on the
+    # ATTACKS event axis. Pure substrate slice — no
+    # cross-engine bridge work needed since both events and both leaf
+    # effects already round-trip on the bridge:
+    #
+    #   * ATTACKS event dispatch: Rust ``state_ops_combat.rs:684``
+    #     fires every ATTACKS-event triggered ability after each
+    #     declared-attacker on the active player's combat step
+    #     (round-43 verified the dispatch path bit-equal vs Python's
+    #     ``combat._fire_attacks_triggers`` at combat.py:196 +
+    #     predicate-style ``Event.ATTACKS`` fan-out at
+    #     combat.py:208-217).
+    #   * ``draw_cards`` leaf: ``cross_engine._ta_dict_to_python_effect``
+    #     "draw_cards" arm (round 1 of Phase 6 carddef-triggers) +
+    #     Python ``DrawCards(amount: int)`` (effects/generic/draw_mill.py).
+    #     Rust ``Effect::DrawCards { count: i32 }`` resolves
+    #     deterministically on both engines (no
+    #     PendingDecision / agent setup needed — drawing is a pure
+    #     mechanical zone move from library top to hand).
+    #   * ``gain_life`` leaf: ``cross_engine._ta_dict_to_python_effect``
+    #     "gain_life" arm (round 1 of Phase 6) + Python
+    #     ``GainLife(amount: int)`` (effects/generic/life.py). Rust
+    #     ``Effect::GainLife { amount: i32 }`` resolves deterministically
+    #     too (no agent setup needed — life-total mutation is a pure
+    #     scalar update).
+    #
+    # **No real-EoE consumer admitted today.** Same precedent as
+    # round-43 (substrate-only) and round-37 DDDD (landfall+draw
+    # substrate-only). The 17lands deck pool's only ATTACKS+IsSelf+
+    # ``draw_cards`` / ``gain_life`` printings would unlock under this
+    # extension if any existed; surveying EoE printings via
+    # ``scripts/scout_archetype_admit_simulation.py`` (round-44
+    # update) confirms zero EoE creatures carry the bare
+    # ATTACKS+IsSelf+DrawCards or ATTACKS+IsSelf+GainLife shape with
+    # all other gates clean. The shape is a common one in the broader
+    # MTG card pool (Curiosity-style "Whenever ~ attacks, draw a card"
+    # and Soulmender-style "Whenever ~ attacks, you gain N life"
+    # appear in older sets) so the substrate is pre-positioned for any
+    # future EoE / standard-format printing carrying this shape — the
+    # next slice landing such a card need not extend the allowlist
+    # again.
+    #
+    # **Cross-engine default-strategy contract.** Identical to
+    # round-43 surveil-ATTACKS: no agent setup needed for the
+    # trajectory walk. The terminal post-triggered-ability path
+    # already drains the deterministic ``DrawCards`` / ``GainLife``
+    # resolves; both engines' resolve arms execute in lockstep
+    # because both leaf effects mutate state via pure mechanical
+    # zone moves / scalar updates (no PendingDecision queue
+    # interaction).
+    ("attacks", "source_is_self", "draw_cards"),
+    ("attacks", "source_is_self", "gain_life"),
     # Landfall — "Whenever a land you control enters, ...". Compound
     # predicate sentinel; see ``_is_safe_trigger_dict`` /
     # ``_python_ta_to_safe_dict`` for the canonical-vs-nested shape
@@ -1844,19 +1901,33 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # (draw_cards / gain_life / scry_n); the round-42 surveil
         # extension adds ``surveil`` under BOTH ENTERS and DIES; the
         # round-43 surveil ATTACKS extension adds ``surveil`` under
-        # ATTACKS (only the surveil leaf — same per-event narrowing as
-        # the DIES arm).
+        # ATTACKS; the round-44 ATTACKS+draw_cards/gain_life extension
+        # adds those two leaves under ATTACKS, mirroring the ENTERS
+        # starter set on the ATTACKS event axis.
         pred_dict = {"kind": "source_is_self"}
         if ta.event is Event.ENTERS:
             safe_effect_kinds = (
                 "draw_cards", "gain_life", "scry_n", "surveil",
             )
+        elif ta.event is Event.ATTACKS:
+            # Round-44 widens the ATTACKS arm from {surveil} to
+            # {surveil, draw_cards, gain_life}. ``scry_n`` is
+            # intentionally left out today — no EoE consumer carries
+            # ATTACKS+IsSelf+Scry and the scry resolver shares the
+            # ``keep_all_on_top`` PendingDecision substrate with
+            # surveil, so the round-43 ATTACKS+surveil precedent
+            # already pins it; a future slice landing such a consumer
+            # ships ``scry_n`` under ATTACKS as a single-line edit
+            # here AND a single new ``_SAFE_TRIGGERS`` entry.
+            safe_effect_kinds = ("surveil", "draw_cards", "gain_life")
         else:
-            # Event.DIES and Event.ATTACKS — only the surveil leaf is
-            # in the safe set today. A future per-event extension (e.g.
-            # ATTACKS+gain_life for Soulmender-style triggers) lands as
-            # a single edit here AND a single new ``_SAFE_TRIGGERS``
-            # entry; the recognizer's event-string gate above and the
+            # Event.DIES — only the surveil leaf is in the safe set
+            # today. A future per-event extension (e.g. DIES+gain_life
+            # for Grasping-Longneck-style triggers, blocked today
+            # because Grasping Longneck carries Reach which is outside
+            # :data:`_SAFE_KEYWORDS`) lands as a single edit here AND
+            # a single new ``_SAFE_TRIGGERS`` entry; the recognizer's
+            # event-string gate above and the
             # ``_is_safe_trigger_dict`` dict-side gate stay unchanged.
             safe_effect_kinds = ("surveil",)
     elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:

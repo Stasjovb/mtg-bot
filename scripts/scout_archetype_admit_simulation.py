@@ -28,28 +28,53 @@ def _make_passes_fn(
     allow_static_abilities: bool = False,
     allow_warp_cost: bool = False,
     allow_activated_abilities: bool = False,
-    allow_surveil_etb_dies: bool = False,
+    allow_extra_self_triggers: tuple[tuple[str, str], ...] = (),
 ):
+    """Build a passes_fn for scouting.
+
+    ``allow_extra_self_triggers`` admits extra (event_name, effect_name)
+    triggers under the source_is_self predicate, where event_name is one
+    of "enters" / "dies" / "attacks" and effect_name is one of
+    "draw_cards" / "gain_life". Used to scout the round-44 candidate
+    extensions on top of round-43's already-shipped baseline.
+    """
     safe = _SAFE_KEYWORDS | extra_safe_keywords
 
-    def _ta_safe_with_surveil(ta) -> bool:
-        """Return True if ta passes the current bridge gate, OR if the
-        surveil extension is enabled and the trigger matches surveil shape."""
+    def _ta_safe(ta) -> bool:
+        """Return True if ta passes the current bridge gate, OR if it
+        matches one of the (event, effect) shapes admitted by
+        ``allow_extra_self_triggers``."""
         if _python_ta_to_safe_dict(ta) is not None:
             return True
-        if allow_surveil_etb_dies:
+        if allow_extra_self_triggers:
             from mtg_bot.effects.base import TriggeredAbility
             from mtg_bot.effects.predicates import IsSelf, Event
-            from mtg_bot.effects.generic.library_lookat import Surveil
-            if (
-                isinstance(ta, TriggeredAbility)
-                and not ta.once_per_turn
-                and isinstance(ta.predicate, IsSelf)
-                and getattr(ta.predicate, "subject", None) is None
-                and isinstance(ta.effect, Surveil)
-                and ta.effect.use_artifact_count is False
-                and ta.event in (Event.ENTERS, Event.DIES)
-            ):
+            from mtg_bot.effects.generic.draw_mill import DrawCards
+            from mtg_bot.effects.generic.life import GainLife
+
+            if not isinstance(ta, TriggeredAbility):
+                return False
+            if ta.once_per_turn:
+                return False
+            if not isinstance(ta.predicate, IsSelf):
+                return False
+            if getattr(ta.predicate, "subject", None) is not None:
+                return False
+            event_map = {
+                Event.ENTERS: "enters",
+                Event.DIES: "dies",
+                Event.ATTACKS: "attacks",
+            }
+            event_name = event_map.get(ta.event)
+            if event_name is None:
+                return False
+            if isinstance(ta.effect, DrawCards):
+                effect_name = "draw_cards"
+            elif isinstance(ta.effect, GainLife):
+                effect_name = "gain_life"
+            else:
+                return False
+            if (event_name, effect_name) in allow_extra_self_triggers:
                 return True
         return False
 
@@ -62,7 +87,7 @@ def _make_passes_fn(
             return False
         if printing.triggered_abilities:
             for ta in printing.triggered_abilities:
-                if not _ta_safe_with_surveil(ta):
+                if not _ta_safe(ta):
                     return False
         if printing.activated_abilities and not allow_activated_abilities:
             return False
@@ -121,13 +146,28 @@ def main():
     decks = decks[:n_archetypes]
 
     extensions = {
-        "BASELINE (no change)": _make_passes_fn(),
-        "+ reach keyword": _make_passes_fn(extra_safe_keywords=frozenset({"reach"})),
-        "+ flash keyword": _make_passes_fn(extra_safe_keywords=frozenset({"flash"})),
-        "+ ALLOW warp_cost": _make_passes_fn(allow_warp_cost=True),
-        "+ ALLOW activated_abilities": _make_passes_fn(allow_activated_abilities=True),
-        "+ ALLOW static_abilities": _make_passes_fn(allow_static_abilities=True),
-        "+ surveil ETB+dies": _make_passes_fn(allow_surveil_etb_dies=True),
+        "BASELINE (round-43 shipped)": _make_passes_fn(),
+        # Round-44 candidate single-trigger extensions (orthogonal axes:
+        # event x effect under source_is_self predicate). All bridge arms
+        # for draw_cards / gain_life pre-exist on both engines.
+        "+ enters+self+draw_cards (already)": _make_passes_fn(
+            allow_extra_self_triggers=(("enters", "draw_cards"),)
+        ),
+        "+ enters+self+gain_life (already)": _make_passes_fn(
+            allow_extra_self_triggers=(("enters", "gain_life"),)
+        ),
+        "+ dies+self+draw_cards": _make_passes_fn(
+            allow_extra_self_triggers=(("dies", "draw_cards"),)
+        ),
+        "+ dies+self+gain_life": _make_passes_fn(
+            allow_extra_self_triggers=(("dies", "gain_life"),)
+        ),
+        "+ attacks+self+draw_cards": _make_passes_fn(
+            allow_extra_self_triggers=(("attacks", "draw_cards"),)
+        ),
+        "+ attacks+self+gain_life": _make_passes_fn(
+            allow_extra_self_triggers=(("attacks", "gain_life"),)
+        ),
     }
 
     print(f"Analyzing {n_archetypes} archetypes from EoE deck pool.")
