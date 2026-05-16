@@ -3024,23 +3024,25 @@ def test_python_ta_to_safe_dict_round_trips_surveil_attacks():
     assert _is_safe_trigger_dict(d)
 
 
-def test_python_ta_to_safe_dict_rejects_attacks_event_with_non_surveil_effect():
-    """The ATTACKS event gate is narrower than the ENTERS gate — only
-    the surveil leaf is in the safe set under ATTACKS (no ATTACKS+
-    draw_cards / +gain_life / +scry_n entries today). An ATTACKS+
-    IsSelf+DrawCards trigger must be rejected because the
-    corresponding triple isn't in :data:`_SAFE_TRIGGERS`. Mirrors the
-    round-42 DIES+non-surveil reject-path test exactly.
+def test_python_ta_to_safe_dict_rejects_attacks_event_with_non_safe_effect():
+    """Round-44 widens the ATTACKS arm to admit ``draw_cards`` and
+    ``gain_life`` alongside round-43's ``surveil`` — but ``scry_n``
+    remains OUT of the safe set under ATTACKS (no EoE consumer; see the
+    round-44 ``_SAFE_TRIGGERS`` ATTACKS+draw_cards/gain_life docstring
+    for the consumer survey). Pin the negative case so the recognizer's
+    per-event narrowing under the ``elif ta.event is Event.ATTACKS``
+    arm stays honest. Sister of the round-42 DIES+non-surveil reject-
+    path test — both anchor the per-event narrowing.
     """
     from mtg_bot.effects.base import TriggeredAbility
     from mtg_bot.effects.predicates import IsSelf, Event
-    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.library_lookat import Scry
     from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
 
     ta = TriggeredAbility(
         event=Event.ATTACKS,
         predicate=IsSelf(),
-        effect=DrawCards(amount=1),
+        effect=Scry(amount=1),
     )
     assert _python_ta_to_safe_dict(ta) is None
 
@@ -3197,3 +3199,248 @@ def test_printing_to_card_def_carries_surveil_etb_through():
             "effect": {"kind": "surveil", "count": 1},
         },
     ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-triggers ATTACKS+draw_cards/gain_life extension
+# (round-44 slice).
+#
+# Adds TWO new entries to :data:`_SAFE_TRIGGERS`:
+#   * ``("attacks", "source_is_self", "draw_cards")``
+#   * ``("attacks", "source_is_self", "gain_life")``
+# Plus widens the ATTACKS arm of :func:`_python_ta_to_safe_dict`'s
+# ``IsSelf`` branch from ``{"surveil"}`` (round 43) to
+# ``{"surveil", "draw_cards", "gain_life"}``. The
+# :data:`_SAFE_EFFECT_KEYS` table is unchanged from round-43 — the
+# ``draw_cards`` / ``gain_life`` payload-key whitelists were defined
+# in round 1 of Phase 6 and are event-agnostic.
+#
+# Bridge support pre-existed in BOTH engines:
+#   * Rust ATTACKS event dispatch via ``state_ops_combat.rs:684``
+#     (round-43 verification slice).
+#   * Python ATTACKS dispatch via ``combat.py:_fire_attacks_triggers``
+#     (combat.py:196).
+#   * ``draw_cards`` / ``gain_life`` leaf bridge arms at
+#     ``cross_engine._ta_dict_to_python_effect`` since round 1 of
+#     Phase 6 carddef-triggers; both leaves are deterministic
+#     (zone-move and scalar update respectively) so the resolve
+#     contract is bit-equal across engines without any agent setup.
+#
+# No real-EoE consumer admitted today (substrate-only, sister of the
+# round-43 ATTACKS+surveil slice's no-consumer extension). Survey via
+# ``scripts/scout_archetype_admit_simulation.py`` (round-44 update)
+# confirms zero EoE creatures carry the bare ATTACKS+IsSelf+
+# DrawCards or ATTACKS+IsSelf+GainLife shape with all other gates
+# clean.
+# ---------------------------------------------------------------------------
+
+
+def test_safe_triggers_set_carries_attacks_draw_cards_shape():
+    """Pin the ATTACKS+source_is_self+draw_cards entry (this slice).
+    The SECOND ATTACKS leaf in the safe set after round-43's
+    surveil-ATTACKS.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert (
+        ("attacks", "source_is_self", "draw_cards") in _SAFE_TRIGGERS
+    )
+
+
+def test_safe_triggers_set_carries_attacks_gain_life_shape():
+    """Pin the ATTACKS+source_is_self+gain_life entry (this slice).
+    The THIRD ATTACKS leaf in the safe set, sister to draw_cards
+    above.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert (
+        ("attacks", "source_is_self", "gain_life") in _SAFE_TRIGGERS
+    )
+
+
+def test_is_safe_trigger_dict_admits_attacks_draw_cards_shape():
+    """Dict-side recognizer admits the canonical ATTACKS+source_is_self
+    +draw_cards dict shape with the bare ``count`` payload (sister of
+    the round-1 ENTERS+IsSelf+draw_cards admit).
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert _is_safe_trigger_dict({
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    })
+
+
+def test_is_safe_trigger_dict_admits_attacks_gain_life_shape():
+    """Dict-side recognizer admits the canonical ATTACKS+source_is_self
+    +gain_life dict shape with the bare ``amount`` payload.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert _is_safe_trigger_dict({
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "gain_life", "amount": 2},
+    })
+
+
+def test_python_ta_to_safe_dict_round_trips_attacks_draw_cards():
+    """Python ``TriggeredAbility`` carrying ATTACKS+IsSelf+DrawCards
+    converts back to the canonical dict shape; the result satisfies
+    :func:`_is_safe_trigger_dict`. Closes the round-44 ATTACKS arm
+    extension that adds ``draw_cards`` to the per-event safe-effect-
+    kinds tuple alongside round-43's ``surveil``.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.ATTACKS,
+        predicate=IsSelf(),
+        effect=DrawCards(amount=1),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_round_trips_attacks_gain_life():
+    """Python ``TriggeredAbility`` carrying ATTACKS+IsSelf+GainLife
+    converts back to the canonical dict shape; the result satisfies
+    :func:`_is_safe_trigger_dict`. Sister to draw_cards above —
+    pinned independently because the recognizer's effect-arm
+    dispatch goes through a separate ``isinstance(eff, GainLife)``
+    branch.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.ATTACKS,
+        predicate=IsSelf(),
+        effect=GainLife(amount=2),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "gain_life", "amount": 2},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_is_safe_trigger_dict_rejects_attacks_scry_shape():
+    """``scry_n`` is intentionally NOT in the ATTACKS+source_is_self
+    safe set today — no EoE consumer carries the shape, and the
+    PendingDecision substrate scry shares with surveil is already
+    pinned by round-43's surveil-ATTACKS entry. Pin the negative
+    case so a future ATTACKS+IsSelf+scry_n consumer surfacing in
+    the pool requires an explicit allowlist edit.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "scry_n", "count": 1},
+    })
+
+
+def test_simple_creature_filter_admits_attacks_draw_cards_only_creature():
+    """A bare-vanilla creature carrying only ATTACKS+IsSelf+DrawCards
+    passes the bridge-simple filter end-to-end (sister of the round-43
+    ATTACKS+surveil-only filter-admit test). Constructs the printing
+    in-line so the test pins the filter contract independent of any
+    production-deck data churn.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    printing = CardPrinting(
+        name="ProbeAttacksDrawBear",
+        mana_cost_str="{1}{U}",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1),)),
+        type_line="Creature - Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ATTACKS,
+                predicate=IsSelf(),
+                effect=DrawCards(amount=1),
+            ),
+        ),
+    )
+    assert _printing_is_bridge_simple_creature(printing) is True
+
+
+def test_simple_creature_filter_admits_attacks_gain_life_only_creature():
+    """A bare-vanilla creature carrying only ATTACKS+IsSelf+GainLife
+    passes the bridge-simple filter end-to-end (sister of draw_cards
+    above).
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    printing = CardPrinting(
+        name="ProbeAttacksGainBear",
+        mana_cost_str="{1}{W}",
+        mana_cost=ManaCost(generic=1, colored=(("W", 1),)),
+        type_line="Creature - Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ATTACKS,
+                predicate=IsSelf(),
+                effect=GainLife(amount=2),
+            ),
+        ),
+    )
+    assert _printing_is_bridge_simple_creature(printing) is True
+
+
+def test_python_ta_to_safe_dict_rejects_attacks_draw_cards_with_extra_payload():
+    """The :data:`_SAFE_EFFECT_KEYS` whitelist for ``draw_cards`` is
+    ``{"kind", "count"}`` (round 1 starter). Adding any extra payload
+    key (e.g. a hypothetical ``per_attack_modifier``) must fall out of
+    the safe set — the bridge would silently drop it on round-trip.
+    Pin the negative case at the dict-side recognizer.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1, "ghost_field": "x"},
+    })
