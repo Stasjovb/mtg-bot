@@ -2083,6 +2083,177 @@ same honest split as round-51 Monoist Circuit-Feeder).
 
 ---
 
+## Rust port — round-31 `Effect::DoubleTargetCreaturesPowerUEOT` doubled BASE power on counter-bearing targets (real §2 silent mistranslation, FIXED round 53); Mightform Harmonizer still NOT loader-admitted (round 53)
+
+**Location**:
+`rust/src/state_ops_resolve.rs` (the round-31
+`Effect::DoubleTargetCreaturesPowerUEOT` resolve arm — was
+`read_battlefield_creature_power`, round-53 repointed to the NEW
+private `read_doubling_power` helper in the same file),
+`src/mtg_bot/effects/generic/pump.py:195`
+(`DoubleTargetCreaturesPowerUEOT` — the AGENT-DRIVEN real-card class
+the genuine Mightform Harmonizer printing parses to; the
+source-of-truth `effective_power` snapshot at `pump.py:234`; pre-dates
+this slice, unchanged),
+`src/mtg_bot/parity/cross_engine.py` (the round-31
+`double_target_creatures_power_ueot` bridge arm — unchanged),
+`src/mtg_bot/parity/trajectory.py` (the `_SAFE_*` allowlists this
+slice deliberately does NOT extend).
+
+Pinned by:
+`tests/test_parity_smoke.py::test_rust_mightform31_*` (5 Rust
+regression pins incl. the §2
+`..._doubles_effective_power_including_plus_one_counters` pin),
+`tests/test_cross_engine_etb_triggers.py::test_bridge_double_target_creatures_power_ueot_synthetic_end_to_end_byte_equal`
++ `::test_bridge_double_target_creatures_power_reads_effective_power_with_counters_byte_equal`
+(2 new cross-engine pins — the §2 counter-parity pin the original
+round-31 translation-only bridge pins missed),
+`tests/test_parity_smoke.py::test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_with_counters_parity`
+(the new GENUINE real-EoE counter probe — drives the actual parsed
+Mightform landfall trigger against a +1/+1-counter target), AND the
+pre-existing round-31/36
+`::test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity`
+(counter-free genuine probe — confirms the fix is non-regressive on
+the path it already covered).
+
+**Round-50-plan-staleness correction (read this first).** The
+round-50 `docs/RESIDUE_CARD_PLANS.md` entry #3 + the round-53 task
+brief asserted Mightform Harmonizer's effect arm
+(`Effect::DoubleTargetPowerUntilEOT`) was an UNSHIPPED new-Rust ask
+("no Rust arm. Confirmed" — audit §round-19 line 504, §2.6 line 902).
+**That was stale.** `Effect::DoubleTargetCreaturesPowerUEOT` shipped
+Rust-end-to-end in **round 31** (commit 90bc39ca: variant + parse +
+to_dict + resolve + 8 cross-engine bridge pins), and round 31/36
+added a GENUINE real-EoE landfall+double-power probe. This is the
+SAME staleness class the round-50 plan itself flagged for Mechanozoa
+/ Warmaker Gunship; the audit's residue line was never re-checked
+post-round-31. Implementing the round-53 slice surfaced this — and,
+in doing so, surfaced a REAL latent bug in the shipped round-31 arm
+(below). Per the §2 directive ("STOP, report, fix the side that's
+wrong — Python is the source of truth"), the round-53 slice pivoted
+from "add a duplicate variant" to "fix the round-31 arm's §2 bug +
+pin the regression the original round-31 pins missed".
+
+**The bug (FIXED round 53).** Python's source-of-truth
+`DoubleTargetCreaturesPowerUEOT.resolve` (`pump.py:234`) snapshots
+`snapshot = effective_power(state, obj)` =
+`mtg_bot.game._compute_effective_pt`, which FOLDS IN the signed +1/+1
+net at `game.py:2251`
+(`p += obj.plus_one_counters - obj.minus_one_counters`). The round-31
+Rust resolve arm snapshotted via `read_battlefield_creature_power`,
+which DELIBERATELY OMITS `obj.counters` (a pinned combat-side
+asymmetry — see the comment at `state_ops_combat.rs:551-556`). So on
+a target carrying +1/+1 counters the two engines doubled DIFFERENT
+power values: on a 3/3 with +2/+2 counters, pre-fix Rust snapshotted
+`3` (printed base) and pushed `+3/+0`; Python snapshotted `5`
+(effective) and pushed `+5/+0`. The doubling DELTA diverged (3 vs 5)
+— a genuine, real-card-exposed §2 silent mistranslation. It stayed
+LATENT because the round-31/36 genuine Mightform probe (and every
+round-31 bridge pin) staged only counter-free creatures.
+
+**The fix.** Round 53 added a private `read_doubling_power` helper
+(`state_ops_resolve.rs`) that composes `base (UEOT-SetBasePT
+override / manland / printed) + ueot_power_bonus() + obj.counters`
+and repointed the round-31 resolve arm to it. `obj.counters` (signed
+i32) is Rust's analogue of Python's `plus_one_counters -
+minus_one_counters` (the SBA path at `state_ops_sba.rs:200` uses the
+identical `base + obj.counters + ueot_*_bonus()` composition,
+confirming the mapping). Post-fix the 3/3+2/+2 doubling delta is `5`
+on BOTH engines (was `3` on Rust). The counter-free path is unchanged
+(3/3 → 6/3) — the round-31/36 genuine probe still passes.
+
+**Documented residual (the part NOT fixed — and why it's OK).** The
+fix folds in +1/+1 counters but NOT layer-7c static anthems or
+layer-7e P/T switches (`read_doubling_power` does not walk those, and
+neither does the combat-side reader). Two reasons this is acceptable:
+(1) no bridge-correct Mightform Harmonizer scenario reaches them —
+the card has no anthem/switch rider and the genuine probes stage
+none; (2) it matches the established combat-side asymmetry rather
+than introducing a new divergence. Separately, Rust's PUBLIC
+`effective_power`/`battlefield_creature_power` getter STILL omits
+`obj.counters` from its displayed value (the pre-existing pinned
+combat-side asymmetry — NOT changed by this slice). Consequence: on a
+counter-bearing creature the absolute cross-engine
+`effective_power` numbers differ by the counter amount (Rust 3→8,
+Python 5→10 in the pin scenario) even though the DOUBLING is now
+correct. The §2-load-bearing invariant the pins assert is therefore
+the doubling DELTA (`effective_power_after - effective_power_before`),
+which is byte-equal (+5) on both engines — NOT the absolute getter.
+Closing the combat-side getter asymmetry is a separate, broader slice
+(it touches the whole combat/SBA power-read surface, not just this
+arm) and is out of scope here.
+
+**Deliberate divergence — Mightform Harmonizer is NOT
+production-deck-loader-admitted.** Unchanged from the round-31/36
+position; restated here for completeness. Two independent gates,
+mirroring the round-51 Monoist / round-52 Extinguisher splits:
+
+1. *Agent-driven target (deterministic-bridge divergence).* The real
+   card's `DoubleTargetCreaturesPowerUEOT` is AGENT-DRIVEN
+   (`requires_target() is True` — the controller picks ANY legal
+   creature they control, CR 601.2c). Rust's resolve arm picks the
+   FIRST creature on the source-controller's bf with no decision
+   callback. Same §2 decision as round-17 Fight / round-51 Monoist:
+   the genuine probes drive the real agent-driven class
+   shim-constrained (`_PickFirstControlledCreatureAgent` + a single
+   staged legal target so the pick is forced byte-equal with Rust's
+   deterministic scan). Routing the agent-driven card through the
+   deterministic bridge in the production-deck loader would silently
+   degrade free target choice in multi-creature board states.
+2. *Landfall `Predicate::Subject` substrate + `warp_cost`.* The full
+   card's trigger is the landfall compound
+   `And(Subject(IsLand()), Controlled(YOU))` on `Event.ENTERS`; the
+   real printing also carries `Warp {2}{G}`. The landfall-predicate
+   substrate is review-gated (`feature/etb-subject-substrate`); the
+   `warp_cost` is a §2-declined cost-mechanic class. The
+   production-deck loader's `_SAFE_*` allowlists do NOT admit either;
+   this slice does NOT extend them.
+
+**Why it's OK (and which scenarios make it not-OK).** The round-53
+fix + the new §2 pins + the new genuine counter probe close the real
+§2 mistranslation *at the cross-engine-bridge level*: the actual
+parsed Mightform landfall effect now round-trips byte-equal
+cross-engine on the doubling delta INCLUDING the counter-bearing
+case. The scenario where the deterministic bridge would still be
+wrong is a production-deck mirror game where the controller has ≥2
+creatures and an agent would rationally pick a non-first one — that
+strategy divergence is why the loader admit stays declined; and
+independently the landfall-predicate + warp gates keep the card out
+of production-deck mirror games entirely today.
+
+**Failure mode**: none in production today (Mightform stays
+drop-filtered by the loader on BOTH the agent-driven-target gate AND
+the landfall-predicate/warp gate, so it never enters a
+production-deck mirror game through the bridge). Pre-round-53 the §2
+counter mistranslation was a latent real-card-exposed bug (it would
+have surfaced the moment a counter-bearing Mightform target entered
+any cross-engine comparison that exercised counters); round 53
+closes it. If a future slice plumbs (a) an agent-driven single-target
+cross-engine decision substrate AND (b) the landfall predicate
+substrate AND (c) `warp_cost`, Mightform flips admit; until then the
+deterministic arm is the synthetic-probe + genuine-shim-constrained-
+probe substrate only (same trajectory as the Fight / Monoist /
+Extinguisher deterministic siblings).
+
+**Fix scope estimate**: the §2 counter bug is FIXED (this slice,
+~15 LOC helper + 1-line repoint). The remaining loader-admit gates
+are multi-round: the agent-driven single-target decision substrate
+(shared with Monoist / Fight-Aura), the landfall `Predicate::Subject`
+substrate (review-gated), and the `warp_cost` cost-mechanic. The
+combat-side absolute-getter counter-omission asymmetry is a separate
+broad slice.
+
+**Impact estimate**: the §2 fix closes a real, real-card-exposed
+silent mistranslation on Mightform Harmonizer (~5,759 of 129,996
+17lands EoE decks) — zero production strength cost (card not
+loader-admitted; the bug had no production exposure path *yet*, but
+was a correctness landmine for any future counter-exercising
+comparison). Real-card-coverage progress is the cross-engine-bridge
+closure of the counter case (the genuine real-EoE counter probe is
+byte-equal on the doubling delta), loader-drop-filtered by design.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
