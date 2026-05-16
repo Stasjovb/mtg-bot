@@ -6437,6 +6437,185 @@ def test_resolve_each_opp_loses_life_eq_artifact_count_source_in_graveyard_uses_
     assert synthetic_state.life_totals[1] == p1_life_before - 2
 
 
+# --- round-48 EachOpponentLosesLifeEqualToYourLifeTotal dispatch ---
+#
+# **EachOpponentLosesLifeEqualToYourLifeTotal scope** (mirrored in the
+# Rust variant docstring on `cards.rs::Effect`):
+#
+# - **Sister of round-44 EachOpponentLosesLifeEqualToArtifactCount.**
+#   SAME recipient set (each opponent of the source-controller) + SAME
+#   apply step (direct life subtraction CR 118.4, NOT damage) + SAME
+#   apply substrate (life-loss-each-opponent). The ONLY mechanical
+#   difference: the denominator is the source-controller's CURRENT LIFE
+#   TOTAL (clamped to >= 0) instead of their artifact count. SECOND
+#   denominator on the life-loss-each-opponent apply substrate.
+# - **Life-total denominator clamp.** Read source-controller's life;
+#   clamp negative life to 0 (`life.max(0)`). Mirrors round-42
+#   MillTargetPlayerEqualToYourLifeTotal / round-47
+#   DealDamageToOpponentCreatureByLifeTotal life-total clamp BIT-FOR-BIT
+#   and Python's `max(0, life)`.
+# - **Source-finder dispatch (round-44 sister pattern).** 5-zone walk +
+#   stack scan. Source not found anywhere = silent fizzle.
+# - **Two-player "each opponent" reduces to "the one opponent".**
+#   Direct life subtraction via `saturating_sub`. Negative life handled
+#   by SBA loop; no clamp on the APPLY side.
+# - **Zero clamped life = silent no-op** (matches Python's `if amount
+#   <= 0: return` short-circuit before the per-opponent loop).
+
+
+def _eollylt_punisher_dict():
+    """A round-48 punisher creature whose ETB-style trigger fires
+    EachOpponentLosesLifeEqualToYourLifeTotal. Vanilla 2/2 Creature on
+    color cost {1}{B}; effect is the unit-variant dynamic-X arm (no
+    fields). Sister-shaped to `_eollac_punisher_dict` (round-44
+    EachOpponentLosesLifeEqualToArtifactCount) but with the life-total
+    denominator.
+    """
+    return {
+        "name": "Test Round-48 LifeTotal Punisher",
+        "card_types": ["Creature"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [
+            {"kind": "each_opponent_loses_life_equal_to_your_life_total"}
+        ],
+    }
+
+
+def test_resolve_each_opp_loses_life_eq_your_life_total_basic(
+    synthetic_state,
+):
+    """Source-controller p0 at default life 20 -> p1 (the one
+    opponent) loses 20 life. p0 (controller) untouched. The dynamic-X
+    denominator is the source-controller's current life total."""
+    src_id = synthetic_state.register_and_inject_object(
+        _eollylt_punisher_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_life(0, 20)
+    synthetic_state.set_life(1, 20)
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 untouched; p1 -20 (= p0's life total).
+    assert synthetic_state.life_totals[0] == 20
+    assert synthetic_state.life_totals[1] == 20 - 20
+
+
+def test_resolve_each_opp_loses_life_eq_your_life_total_reads_current_life(
+    synthetic_state,
+):
+    """The denominator reads the source-controller's CURRENT life, not
+    a fixed 20. Set p0 to 7 -> p1 loses exactly 7 life. Pins the
+    dynamic life-total read."""
+    src_id = synthetic_state.register_and_inject_object(
+        _eollylt_punisher_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_life(0, 7)
+    synthetic_state.set_life(1, 30)
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.life_totals[0] == 7
+    assert synthetic_state.life_totals[1] == 30 - 7
+
+
+def test_resolve_each_opp_loses_life_eq_your_life_total_zero_life_no_op(
+    synthetic_state,
+):
+    """Source-controller at 0 life -> clamped denominator is 0 ->
+    silent no-op (matches Python's `if amount <= 0: return`). Stack
+    still pops; p1's life untouched."""
+    src_id = synthetic_state.register_and_inject_object(
+        _eollylt_punisher_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_life(0, 0)
+    synthetic_state.set_life(1, 18)
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # 0 life -> no-op; p1 untouched.
+    assert synthetic_state.life_totals[1] == 18
+
+
+def test_resolve_each_opp_loses_life_eq_your_life_total_negative_life_clamps_to_zero(
+    synthetic_state,
+):
+    """Source-controller at NEGATIVE life -> denominator clamps to 0
+    (`life.max(0)`) -> silent no-op. Mirrors the round-42
+    MillTargetPlayerEqualToYourLifeTotal / round-47
+    DealDamageToOpponentCreatureByLifeTotal clamp BIT-FOR-BIT and
+    Python's `max(0, life)`. p1's life untouched (the clamped
+    denominator is 0, not -5)."""
+    src_id = synthetic_state.register_and_inject_object(
+        _eollylt_punisher_dict(), 0, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_life(0, -5)
+    synthetic_state.set_life(1, 12)
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Negative life clamps to 0 -> no-op; p1 NOT -(-5)=+5, NOT -5.
+    assert synthetic_state.life_totals[1] == 12
+
+
+def test_resolve_each_opp_loses_life_eq_your_life_total_opponent_source_targets_p0(
+    synthetic_state,
+):
+    """The recipient set is OPPONENTS-OF-CONTROLLER and the
+    denominator is the SOURCE-CONTROLLER's life, NOT defender-of-
+    active-player / active-player's life. Source on p1's bf
+    (controller=1) at life 9 while active_player stays p0 -> p0 (the
+    one opponent of p1) loses 9 life, p1 untouched. Mirrors round-44
+    EachOpponentLosesLifeEqualToArtifactCount sister behavior."""
+    src_id = synthetic_state.register_and_inject_object(
+        _eollylt_punisher_dict(), 1, ZONE_BATTLEFIELD
+    )
+    synthetic_state.set_life(0, 20)
+    synthetic_state.set_life(1, 9)
+    assert synthetic_state.active_player == 0
+
+    # Push with controller=1 (p1's source resolving on the stack).
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 (the one opponent of p1) loses 9 (= p1's life); p1 untouched.
+    assert synthetic_state.life_totals[0] == 20 - 9
+    assert synthetic_state.life_totals[1] == 9
+
+
+def test_resolve_each_opp_loses_life_eq_your_life_total_source_in_graveyard_uses_controller(
+    synthetic_state,
+):
+    """Source-finder walks five zones. Inject a source-shaped object
+    into p0's graveyard: the zone-scan picks up p0 as the controller
+    and resolves the life-loss on p1 with the denominator read from
+    p0's CURRENT life (11). Documents the "source has left the
+    battlefield by resolve time" tolerance -- mirrors round-44
+    EachOpponentLosesLifeEqualToArtifactCount sister shape exactly."""
+    src_id = synthetic_state.register_and_inject_object(
+        _eollylt_punisher_dict(), 0, ZONE_GRAVEYARD,
+    )
+    synthetic_state.set_life(0, 11)
+    synthetic_state.set_life(1, 25)
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1 -11 (denominator from p0's current life); p0 untouched.
+    assert synthetic_state.life_totals[0] == 11
+    assert synthetic_state.life_totals[1] == 25 - 11
+
+
 # --- round-45 GainLifeEqualToArtifactCount dispatch ---
 #
 # **GainLifeEqualToArtifactCount scope** (mirrored in the Rust variant
