@@ -49203,6 +49203,289 @@ def test_cross_engine_synthetic_etb_target_opponent_loses_life_cross_controller_
     assert rust_p1_bf_after == py_p1_bf_after
 
 
+# ---------------------------------------------------------------------------
+# Round-32 BLOCKED-RUST-EFFECT deferred-EoE-probe closeout —
+# Cerebral Download (Instant: ``Surveil X, where X is the number of
+# artifacts you control. Then draw three cards.``).
+#
+# Closes the round-32 deferred-EoE probe from the Effect::SurveilXEqual
+# ToArtifactCount slice (commit 515fb4be), where the bridge arm shipped
+# with synthetic-only pins because driving Cerebral Download's cast
+# end-to-end through both engines requires seating both the surveil-X
+# resolution AND the draw-3 resolution in the same parity probe.
+#
+# **Real cross-engine probe shape.** Side-channel-inject Cerebral
+# Download into p0's hand on both engines (mirrors counterspell_side_
+# channel pattern); seat 2 artifacts on p0's bf so X = 2; use the
+# deckspec-seated library (identical on both engines) as the
+# Surveil + Draw window. Push Cerebral Download onto the stack on
+# both engines and resolve. Compare the post-resolve hand contents.
+#
+# **Real divergence surfaced (xfail-pinned).** The two engines diverge
+# on Sequence(Surveil, DrawCards) ordering:
+#
+#   * **Python.** Surveil with no agent short-circuits to "keep all on
+#     top" via ``if p.agent is None`` (library_lookat.py:605) — the
+#     library is NEVER mutated during Surveil; cards stay in place.
+#     Then DrawCards draws the top N (the same cards that were
+#     "examined").
+#
+#   * **Rust.** Surveil pops min(artifact_count, library_len) cards
+#     off the library top into a SurveilChoice PendingDecision
+#     (state_ops_resolve.rs:4965-4979). Library is now SHORTER by N.
+#     Inside the same Sequence::apply_effect for-loop, DrawCards 3
+#     runs IMMEDIATELY (state_ops_resolve.rs:5111-5114) and draws
+#     from the post-pop top — i.e. DIFFERENT CARDS than Python sees.
+#     Only AFTER the spell's full effect-fan-out loop completes does
+#     ``auto_resolve_pending(self, "keep_all_on_top")`` fire (line
+#     8514) and re-insert the surveiled cards at lib[0].
+#
+# **Concrete trace** on slightly_bigger_deckspec (p0 lib =
+# [Forest, Mountain, Forest, Grizzly Bears]; 2 artifacts on bf):
+#
+#   * **Python p0 hand** = [Forest, Mountain, Forest]; library =
+#     [Grizzly Bears]. Surveil examined the top two cards (Forest,
+#     Mountain) but kept them on top via the no-agent shortcut;
+#     DrawCards-3 then drew the next 3 cards (Forest, Mountain,
+#     Forest) leaving Grizzly Bears.
+#   * **Rust p0 hand** = [Forest, Grizzly Bears]; library = [Forest,
+#     Mountain]. Surveil popped (Forest, Mountain) into the
+#     SurveilChoice; library shrank to (Forest, Grizzly Bears);
+#     DrawCards-3 drew Forest + Grizzly Bears then fizzled the
+#     third draw (empty library). After the spell loop completed,
+#     auto_resolve_pending re-inserted (Forest, Mountain) at lib[0]
+#     in original order.
+#
+# This is a Sequence-composer-vs-PendingDecision-shape divergence,
+# NOT a Surveil-or-DrawCards-arm bug — both arms are individually
+# bit-for-bit. The fix scope is moving Rust's SurveilChoice
+# auto-resolve to fire INSIDE the Sequence loop (after each effect
+# pushes a decision) rather than at the end of resolve_top_of_stack.
+# That cascades into the entire pending-decisions architecture (pure
+# auto-resolve today; agent-driven submit later) and is out of scope
+# for this slice. Documented in SEARCH_LIMITATIONS.md.
+# ---------------------------------------------------------------------------
+
+
+_CEREBRAL_DOWNLOAD_PRINTING_NAME = "Cerebral Download"
+_BAIT_ARTIFACT_PRINTING_NAME = "Bait Artifact (CD probe)"
+
+
+def _cerebral_download_side_channel(py_state, rust_state):
+    """Side-channel mirror of a Cerebral Download cast + full resolve
+    on a deckspec-seated library.
+
+    Inject Cerebral Download (Instant whose spell_effect is
+    Sequence([Surveil(use_artifact_count=True), DrawCards(3)])) into
+    p0's hand on both engines, seat two artifacts on p0's battlefield
+    (so the dynamic X = 2), then push Cerebral Download onto the stack
+    and resolve. The library is the deckspec-seated p0 library on
+    both engines (identical card sequence by construction in
+    :func:`build_python_state` / :func:`build_rust_state`).
+
+    Same side-channel-a-method-neither-engine-reaches-via-apply_action
+    pattern as :func:`counterspell_side_channel` — Rust's CastSpell
+    action arm only routes to ``cast_creature``; Instant casts are
+    still side-channel-only on the cross-engine harness.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.turn import state_based_actions
+
+    # ---- Python side ----------------------------------------------------
+    bait_artifact_printing = CardPrinting(
+        name=_BAIT_ARTIFACT_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+    )
+    cd_printing = CardPrinting(
+        name=_CEREBRAL_DOWNLOAD_PRINTING_NAME,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Instant",
+        supertypes=(),
+        card_types=("Instant",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        spell_effect=Sequence(effects=(
+            Surveil(use_artifact_count=True),
+            DrawCards(amount=3),
+        )),
+    )
+
+    # Seat two artifacts on p0's bf — drive dynamic X = 2.
+    for _ in range(2):
+        artifact_obj = py_state.new_object(
+            bait_artifact_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+        )
+        artifact_obj.summoning_sick = False
+        py_state.battlefield.append(artifact_obj)
+
+    # Inject Cerebral Download into p0's hand.
+    cd_obj = py_state.new_object(
+        cd_printing, owner_id=0, zone=Zone.HAND,
+    )
+    cd_obj.summoning_sick = False
+    py_state.players[0].hand.append(cd_obj)
+
+    # Mimic p0's cast: hand -> stack.
+    py_state.players[0].hand.remove(cd_obj)
+    cd_obj.zone = Zone.STACK
+    py_state.stack.append(
+        StackItem(source=cd_obj, controller_id=0)
+    )
+
+    # Drain the spell — runs Sequence(Surveil(use_artifact_count=True),
+    # DrawCards(3)). Python's Surveil with no agent short-circuits to
+    # keep-all-on-top (the library is unmodified); DrawCards(3) then
+    # draws lib[0..3] into the hand.
+    resolve_top_of_stack(py_state)
+    state_based_actions(py_state)
+
+    # ---- Rust side ------------------------------------------------------
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    # Seat two artifacts on p0 bf.
+    for _ in range(2):
+        rust_state.register_and_inject_object(
+            {
+                "name": _BAIT_ARTIFACT_PRINTING_NAME,
+                "card_types": ["Artifact"],
+            },
+            0,
+            ZONE_BATTLEFIELD,
+        )
+
+    # Inject Cerebral Download (Instant whose effects are
+    # [Sequence{[SurveilXEqualToArtifactCount, DrawCards{count: 3}]}])
+    # into p0's hand. Rust's resolve_top_of_stack walks
+    # printing.effects in order via apply_effect, and Sequence
+    # iterates its children in lockstep — so the round-34 bridge arm's
+    # surveil_x_equal_to_artifact_count + the draw_cards arm fire in
+    # composed order off the same StackItem.
+    cd_rust_id = rust_state.register_and_inject_object(
+        {
+            "name": _CEREBRAL_DOWNLOAD_PRINTING_NAME,
+            "card_types": ["Instant"],
+            "effects": [
+                {
+                    "kind": "sequence",
+                    "effects": [
+                        {"kind": "surveil_x_equal_to_artifact_count"},
+                        {"kind": "draw_cards", "count": 3},
+                    ],
+                },
+            ],
+        },
+        0,
+        ZONE_HAND,
+    )
+
+    # Push Cerebral Download onto the stack as p0's cast and drain.
+    rust_state.push_to_stack(cd_rust_id, 0)
+    rust_state.resolve_top_of_stack()
+    rust_state.apply_sbas()
+
+
+def test_cross_engine_cerebral_download_real_eoe_cast_xfails_on_sequence_surveil_then_draw():
+    """Round-32 BLOCKED-RUST-EFFECT deferred-EoE probe close: drive
+    Cerebral Download (Instant; Sequence(Surveil(X=artifact-count),
+    DrawCards(3))) cast end-to-end on both engines and assert the
+    post-resolve hand contents.
+
+    **Currently xfails** because the two engines diverge on
+    Sequence(Surveil, DrawCards) ordering — see the module-level
+    comment block above for the bit-for-bit trace. Python's
+    no-agent Surveil never mutates the library, so DrawCards-3
+    pulls the top three deckspec cards. Rust's Surveil pops X cards
+    into a SurveilChoice PendingDecision, DrawCards-3 runs against
+    the post-pop top, then auto_resolve_pending re-inserts the
+    surveiled cards at lib[0] — Rust's hand gains DIFFERENT cards
+    than Python's hand.
+
+    The xfail pin lets the divergence surface visibly without
+    blocking the gate; landing the fix (move SurveilChoice auto-
+    resolve into the Sequence::apply_effect loop) flips this from
+    xfail to pass and closes the round-32 deferred-EoE probe.
+    Documented in ``docs/SEARCH_LIMITATIONS.md``.
+    """
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity.cross_engine import (
+        build_python_state,
+        build_rust_state,
+        slightly_bigger_deckspec,
+    )
+
+    spec = slightly_bigger_deckspec()
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Snapshot p0's library on both engines BEFORE the cast — both
+    # should be the same deckspec sequence.
+    py_lib_names_before = [
+        card.printing.name for card in py_state.players[0].library
+    ]
+    rust_lib_names_before = [
+        d["printing_name"] for d in rust_state.library_snapshot(0)
+    ]
+    assert py_lib_names_before == rust_lib_names_before, (
+        "deckspec library should be identical on both engines pre-cast"
+    )
+    # slightly_bigger_deckspec p0 library:
+    # ("Forest", "Mountain", "Forest", "Grizzly Bears")
+    # Top = lib[0] = "Forest".
+    assert len(py_lib_names_before) == 4
+    assert py_lib_names_before[0] == "Forest"
+
+    _cerebral_download_side_channel(py_state, rust_state)
+
+    # Post-resolve hand contents (we only care about cards that landed
+    # in p0's hand from the deckspec library — filter out the Cerebral
+    # Download itself, which is in the graveyard now).
+    py_hand_names = sorted(
+        card.printing.name for card in py_state.players[0].hand
+    )
+    rust_hand_names = sorted(
+        d["printing_name"] for d in rust_state.hand_snapshot(0)
+    )
+
+    # Real-EoE cross-engine assertion: both engines' p0 hand contents
+    # must agree byte-for-byte. With the Sequence(Surveil, DrawCards)
+    # divergence active, Python's hand contents (sorted) are
+    # ['Forest', 'Forest', 'Mountain'] (the deckspec top 3) and Rust's
+    # hand contents (sorted) are ['Forest', 'Grizzly Bears'] (the
+    # deckspec post-pop top, only 2 because library had 4 - 2 surveil
+    # = 2 left when DrawCards-3 ran, and the third draw fizzles via
+    # attempted_draw_on_empty). Pinned as xfail until the Rust-side
+    # SurveilChoice auto-resolve moves into the Sequence loop.
+    if py_hand_names != rust_hand_names:
+        pytest.xfail(
+            f"round-32 deferred-EoE divergence: Sequence(Surveil, "
+            f"DrawCards) ordering differs across engines. "
+            f"Python p0 hand = {py_hand_names}, "
+            f"Rust p0 hand = {rust_hand_names}. "
+            f"See SEARCH_LIMITATIONS.md 'Sequence(Surveil, DrawCards) "
+            f"PendingDecision-vs-inline ordering'."
+        )
+    # Should not reach here while the divergence is unfixed -- if it
+    # does, the divergence has been closed and the xfail above can be
+    # promoted to a real assert.
+    assert py_hand_names == rust_hand_names
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
