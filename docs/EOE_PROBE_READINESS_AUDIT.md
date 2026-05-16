@@ -17,6 +17,13 @@ first.
 
 ## Current state (as of 2026-05-15, main `c62935d2`) — round-34 refresh
 
+> **STALE — superseded by the round-35→48 batch refresh above.** This
+> round-34 section's X-from-count narrative and BLOCKED-RUST-EFFECT
+> headline were frozen at `c62935d2` and went stale (flagged rounds
+> 47, 48); the round-49 batch refresh section at the top of the doc
+> has the true current counts. Kept verbatim below for cross-round
+> narrative continuity only.
+
 Headline inventory measured directly off `main` at round-34 refresh
 time (round 19 was 16 rounds + ~150 commits ago at `ec44f0d0`; the
 audit was last numerically refreshed at `39d01c02`). Supersedes the
@@ -166,6 +173,224 @@ The audit refresh cadence proposed in round 19 (cron diffing Rust
 + bridge arm counts vs audit tally) was not implemented; rounds
 28-35 again each added shadow-substrate the prior text didn't
 track. The cron remains the right intervention.
+
+---
+
+## Current state (as of 2026-05-16, main `8e584628`) — round-35→48 batch refresh
+
+This section is the round-49 batch refresh covering rounds 35
+through 48 (the round-34 headline section above was flagged stale
+twice — rounds 47 and 48 — because its X-from-count narrative and
+BLOCKED-RUST-EFFECT headline were frozen at round 34 while 13
+substrate slices shipped on top of it). Methodology: a fresh
+diff-walk of every `Merge feature/rust-*` / `feature/phase5-ce-bridge-*`
+/ `feature/phase6-*` commit on `main` between `c62935d2` (round-35
+HEAD) and `8e584628` (round-48 HEAD), cross-checked against the live
+`rust/src/cards.rs::Effect` enum and `cross_engine._ta_dict_to_python_effect`
+arm inventory measured directly off the worktree. Supersedes the
+round-34 headline counts; the round-34 and round-19 sections are
+kept verbatim below for cross-round narrative continuity.
+
+### Headline inventory (measured off `8e584628`)
+
+| Bucket | Round-34 | Round-48 (true) | Delta |
+| --- | --- | --- | --- |
+| Bridge-arm effect `kind ==` literals in `_ta_dict_to_python_effect` | 76+ | **106 distinct** | +30 |
+| Rust `Effect::` enum variants (top-level) | (untracked) | **~104** | — |
+| BLOCKED-RUST-EFFECT residue (truly no-Rust-arm asks) | ~21 cards / ~14 distinct asks | **~21 cards / ~13–14 distinct asks** | ≈0 (see note) |
+| `_SAFE_KEYWORDS` (production-deck bridge filter) | 11 | **12** (+`reach`, round 45) | +1 |
+| `_SAFE_TRIGGERS` triples | 3 (round-1 starter) | **15** | +12 |
+| `SEARCH_LIMITATIONS.md` active entries | 28 | **27** (−1, round-37 supertypes-proxy close) | −1 |
+
+**The BLOCKED-RUST-EFFECT headline did NOT move materially over
+rounds 35–48 — and that is the central finding of this refresh.**
+The round-34 residue's truly-no-Rust-arm asks (`Astelli Reclaimer`
+MV-condition GY-return, `Command Bridge` sac-unless-tap, `Pain for
+All` self-propagating damage, `Meltstrider's Resolve` Aura-shape
+Fight, `Lightstall Inquisitor`, `Perigee Beckoner`, `Monoist
+Circuit-Feeder`, `Dauntless Scrapbot`, `Faller's Faithful`, `Roving
+Actuator` cast-copy half, `Famished Worldsire` composition, `Tractor
+Beam` composition, `Pulsar Squadron Ace` Spacecraft sub-mode) were
+each re-checked against the current `Effect` enum and **remain
+unclosed** — none gained a matching Rust arm in rounds 35–48. The
+~13–14 distinct-new-Rust-arm-ask figure is therefore the *true
+current* count, not a stale carry-over: it genuinely did not shrink.
+
+What rounds 35–48 actually shipped on the Rust lane was **not
+residue closure** — it was **X-from-count matrix saturation**
+(denominator-axis sweeps with 0–1 EoE consumers, shipped per the
+round-27/31 round-trip-surface-coverage rule) plus one new
+`CreateTokenEachPlayer` substrate. These add Rust surface and bridge
+arms but do not subtract residue cards, because the cards they would
+unblock are either (a) review-gated (Roaring Furnace = Room/door
+subsystem; Cerebral Download = cast-spell driver) or (b)
+token-registration-loader-gated, not Rust-blocked. The campaign's
+center of gravity over rounds 35–48 moved from "drain the residue"
+to "complete the primitive matrix"; the audit's prior framing
+(residue is a shrinking queue) was the source of the staleness flags.
+
+### X-from-count primitive matrix — current 6-substrate × 6-denominator state
+
+The X-from-count family is **6 apply-substrates × 6 count-denominators**.
+Live state measured off the `Effect` enum on `8e584628` (round-48
+HEAD; this batch section is bounded at round 48 by design). **Forward
+note:** round-49 N2 (`feature/rust-gain-life-self-by-life-total-r49`,
+merged `e0f4729d`) added `GainLifeEqualToYourLifeTotal`, moving the
+`gain_life_self` row from 1/6 → **2/6** (artifact-count r45 +
+life-total r49) — recorded here so the next refresh need not
+re-discover it, but the table below stays at its r48 snapshot.
+
+| Apply substrate \ Denominator | artifact_count | hand_size | lands_controlled | creatures_you_control | graveyard_size | life_total | Row |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **damage-to-opp-creature** | ✓ r32 | ✓ r35 | ✓ r36 | ✓ r37 | ✓ r46 | ✓ r47 | **6/6 SATURATED (as of r47)** |
+| **each_opponent_loses_life** | ✓ r44 | — | — | — | — | ✓ r48 | **2/6 (as of r48)** |
+| **surveil** | ✓ r34 | — | — | — | — | — | 1/6 |
+| **mill** (mill_target_player) | — | — | — | — | — | ✓ r42 | 1/6 |
+| **gain_life_self** | ✓ r45 | — | — | — | — | — | 1/6 |
+| **counters_on_self** | ✓ r33* | — | — | — | — | — | ~1/6 |
+
+\* `counters_on_self` is `Effect::PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact`
+(round 33) — a "per other creature OR artifact" denominator, the
+artifact-count-adjacent cell; the literal `artifact_count` column is
+the closest single-axis label.
+
+Backing Rust variants (one per ✓):
+`DealDamageToOpponentCreatureBy{ArtifactCount,CardsInHand,LandsControlled,CreaturesYouControl,CardsInGraveyard,LifeTotal}`
+(damage row, complete); `EachOpponentLosesLifeEqualToArtifactCount`
+(r44) + `EachOpponentLosesLifeEqualToYourLifeTotal` (r48);
+`SurveilXEqualToArtifactCount` (r34);
+`MillTargetPlayerEqualToYourLifeTotal` (r42);
+`GainLifeEqualToArtifactCount` (r45);
+`PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact` (r33).
+
+**Narrative correction vs round-34:** the round-34 text described
+the matrix as "well-established, adding cells is mechanical" but
+froze the substrate list at 6 substrates / damage-row-only
+denominators. The true round-48 state is that the **damage-to-opp-creature
+row is fully saturated** (all 6 denominators landed, rounds
+32→47, one denominator per ~1-round slice on a strict bit-for-bit
+sister-shape cadence) while the other five substrates remain
+sparsely populated (each 1–2 denominator cells). The matrix's
+remaining headroom is **the 28 empty cells** (6×6 = 36 total minus
+6 saturated damage cells minus 2 each-opp-loses-life minus the four
+single ✓ cells), each ~1 round of Rust work at the established
+cadence; the damage row's saturation is the proof-of-concept that
+the plumbing generalizes bidirectionally across BOTH axes.
+
+### BLOCKED-RUST-EFFECT closures/changes, round 35→48 (per-round diff walk)
+
+| Round | Merge | Rust substrate shipped | EoE consumer | Residue effect |
+| --- | --- | --- | --- | --- |
+| 35 | `c62935d2` | `DealDamageToOpponentCreatureByCardsInHand` | Roaring Furnace (Room — review-gated) | 0 (Room-gated, not residue) |
+| 36 | `69968b14` | `DealDamageToOpponentCreatureByLandsControlled` | 0 EoE | 0 (round-trip-surface) |
+| 36 | `0d459dd4` | Rust `Sequence(Surveil,DrawCards)` PendingDecision fix | Cerebral Download (xfail→pass) | bug fix, not residue |
+| 37 | `7b302272` | `DealDamageToOpponentCreatureByCreaturesYouControl` | 0 EoE | 0 (round-trip-surface) |
+| 37 | `22799c77` | Rust `IfYouDoChoice` PendingDecision sister fix | none (preventative) | bug fix, not residue |
+| 37 | `39ba1fcc` | `SearchLibraryForBasicLandTapped` supertypes migration | (regression-pin) | SEARCH_LIMITATIONS 28→27 |
+| 42 | `d2252337` | `MillTargetPlayerEqualToYourLifeTotal` | 0 EoE | 0 (round-trip-surface) |
+| 43 | `76fc9cb2` | `CreateTokenEachPlayer` | DIES+CreateToken cluster (loader-gated) | reclassified, not residue −1 |
+| 43 | `c41bf32d` | CE5 Rust drain mirror (Thawbringer) | harness fix | bench cluster 7→0 |
+| 44 | `995c8ed0` | `EachOpponentLosesLifeEqualToArtifactCount` | 0 EoE | 0 (round-trip-surface) |
+| 45 | `f645bada` | `GainLifeEqualToArtifactCount` | 0 EoE | 0 (round-trip-surface) |
+| 46 | `3e650207` | `DealDamageToOpponentCreatureByCardsInGraveyard` | 0 EoE | 0 (completes damage row to 5/6) |
+| 47 | `1589a42d` | `DealDamageToOpponentCreatureByLifeTotal` | 0 EoE | **0 — damage row 6/6 SATURATED** |
+| 48 | `ca9013e8` | `EachOpponentLosesLifeEqualToYourLifeTotal` | 0 EoE | 0 (each-opp-loses-life → 2/6) |
+
+Net: **13 Rust/harness slices, 0 residue-card closures.** Every
+substrate slice was either a matrix-denominator sweep (0 EoE
+consumers, shipped for round-trip surface coverage) or a
+harness/bug fix. The residue stays at the round-34 figure because
+the residue cards need *bespoke* new Rust shapes (self-propagating
+damage, MV-condition GY-return, Aura-shape Fight, two-mobile-subject,
+cast-from-exile-with-cost-hike) that no denominator sweep touches.
+
+### Bridge-arm coverage changes (Phase 6 production-deck filter), round 35→48
+
+The `cross_engine` effect-arm count grew 76→**106** distinct
+`kind ==` literals (the round-34 "76+" was already an undercount;
+the +30 reflects both genuinely-new arms and arms the round-34 prose
+elided). On the production-deck **bridge-filter** side
+(`parity/trajectory.py`), the round-35→48 extensions:
+
+- **`_SAFE_KEYWORDS` 11→12**: `reach` added round 45 (`3b7e98ea`) —
+  both engines model reach identically as a blocker-side
+  flying-block gate-opener (Python `combat.can_block:70-72`; Rust
+  `state_ops_combat::declare_blocker:738-744`). Admitted Remnant
+  Elemental; 2/50 archetypes picked up ≥1 admit.
+- **`_SAFE_TRIGGERS` 3→15** across rounds 36–48: round-36 landfall
+  predicate sentinel + `gain_life` (Eumidian Terrabotanist, FIRST
+  real-EoE production-deck admit); round-37 DDDD landfall+`pump_self_until_eot`
+  (Icecave Crasher); round-42 ENTERS/DIES+`surveil` (Thawbringer);
+  round-43 ATTACKS+`surveil`; round-44 ATTACKS+`draw_cards`/`gain_life`;
+  round-47 DIES+`gain_life`/`draw_cards`; round-48 landfall+`mill`
+  (Icetill Explorer) + ENTERS+`source_is_self`+`mill`. Net safe
+  set: ENTERS×{draw_cards,gain_life,scry_n,surveil,mill} +
+  DIES×{draw_cards,gain_life,surveil} + ATTACKS×{draw_cards,gain_life,surveil}
+  + landfall×{gain_life,pump_self,draw_cards,mill}.
+- **`_SAFE_EFFECT_KEYS`**: now 6 arms (`draw_cards`, `gain_life`,
+  `scry_n`, `pump_self_until_eot`, `surveil`, `mill`) each with a
+  strict allowed-payload-key whitelist gating silent rider drops.
+
+Real-EoE creatures admitted to the production-deck loader by these
+extensions: **Eumidian Terrabotanist** (r36), **Icecave Crasher**
+(r37), **Thawbringer** / **Wary Watchdog** / **Wurmwall Sweeper**
+(r42), **Remnant Elemental** (r45 reach), **Icetill Explorer**
+(r48). The bench-visible conversion these produced is tracked in
+`docs/bench_trajectory_parity_smoke.md` (round-48: +3
+FAIL_TIMEOUT→PASS on arch 10/11/12, 0-divergence held across 90
+games on the `landfall+mill` path's real-game first exposure).
+
+### Bridge-correctness discipline held (round 42 → 48)
+
+Every Phase 6 filter-extension slice since round 42 honored the §2
+silent-mistranslation decline list. Confirmed-declined classes that
+were NOT re-admitted over rounds 42–48: `activated_abilities`
+(Seedship Broodtender stays dropped, round 48), `static_abilities`,
+`warp_cost`, `ward_cost` + `dynamic_pt_formula` (Harmonious
+Grovestrider stays dropped, round 39), `BECOMES_TAPPED` event,
+`CreateToken` (token-registration-loader-gated), target-pick
+effects (no targeting-agent in the loader), bespoke Effect classes
+(Tannuk / Famished Worldsire / Terrapact Intimidator /
+Possibility Technician). Round-49 N3's Part-A scan of the
+timeout-dominant Sweep-A archetypes 13/14/15 found **zero remaining
+bridge-safe creatures** — every filtered-out creature on those
+three decks is blocked solely by a §2-declined class
+(`PumpTargetCreatureUntilEOT` target-pick + `granted_keywords`
+rider; `CreateToken`; `BECOMES_TAPPED`; `static_abilities`; bespoke
+Effect; `dynamic_pt_formula`+`ward_cost`; `cost_reductions`),
+confirming round-48's forecast that the cheap vanilla-creature
+filter-admit headroom on the Sweep-A grid is exhausted and the
+next bulk-conversion lever is the CreateToken / target-pick
+*substrate* lane (round-49 N1 owns the token-registration
+substrate).
+
+### Recommendation (round-35→48 refresh)
+
+1. **The X-from-count damage row is done (6/6).** No more
+   damage-denominator slices remain; the next denominator sweeps
+   should walk the OTHER five substrate rows
+   (each_opponent_loses_life is 2/6; surveil / mill / gain_life_self
+   / counters_on_self each ~1/6). 28 empty matrix cells, ~1 round
+   each at the established sister-shape cadence.
+2. **The ~13–14-distinct-new-Rust-arm residue is genuinely stuck**
+   behind bespoke shapes, not denominator sweeps. Closing it needs
+   targeted bespoke-substrate slices (self-propagating damage,
+   MV-condition GY-return, Aura-shape Fight) OR the review-gated
+   branches (Room/door, cast-spell driver, dies-event harness,
+   etb-subject-substrate, token-registration substrate).
+3. **The filter-admit lever's cheap headroom is exhausted on the
+   Sweep-A grid** (round-49 N3 confirmed arch 13/14/15 have zero
+   remaining bridge-safe creatures). Future filter admits need the
+   token-registration / target-pick substrate; the campaign's
+   bulk-conversion center of gravity is back on the Rust-substrate
+   lane.
+4. **The round-19 cron proposal is now twice-validated** (rounds
+   34 and 49 both found multi-round shadow-substrate the audit text
+   didn't track; the audit went stale and was flagged twice). A
+   commit-hook that diffs `Effect`-variant + bridge-arm + `_SAFE_*`
+   counts against the audit's last-recorded headline on every
+   `main` merge would have caught the round-47/48 staleness
+   automatically.
 
 ---
 
