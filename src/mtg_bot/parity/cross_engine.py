@@ -239,8 +239,109 @@ def clear_token_printings() -> None:
     registry. Intended for fixture teardown when a probe wants
     explicit cross-test isolation. The registry is empty by default
     on a fresh import; production code never calls this.
+
+    Also drops the round-51 identity-idempotent token-printing cache
+    (:data:`_TOKEN_PRINTING_CACHE_BY_KEY`) so a fixture that wants a
+    fully fresh bridge state gets one — the cache is keyed by token
+    SHAPE, never by pid, so leaving it would not cause a conflicting-
+    registration error, but a probe asserting "the registry is empty"
+    expects the cache cleared too.
     """
     _TOKEN_PRINTING_BY_PID.clear()
+    _TOKEN_PRINTING_CACHE_BY_KEY.clear()
+
+
+# Round-51 N1 fix (round-50 N3 finding 1): identity-idempotent token
+# CardPrinting cache, keyed by a STABLE token-shape signature (NOT by
+# pid). ``trajectory._seat_token_printings`` builds a token's Python
+# ``CardPrinting`` via ``_card_def_to_python_printing`` once per
+# ``setup_matched_game_from_real_decks`` invocation and registers it
+# into ``_TOKEN_PRINTING_BY_PID`` at the token's per-game Rust-registry
+# pid. That pid is the token CardDef's index in the per-game
+# ``card_defs`` union, which varies by seed (different opening hands ->
+# different filtered libraries -> different union ordering). Before this
+# fix every game past the first for a given token carrier built a FRESH
+# ``CardPrinting`` object and called ``register_token_printing`` for it;
+# the registry's identity-based conflicting-registration guard
+# (``existing is not py_printing``) then raised ``ValueError`` because
+# the same logical token resolved to a different Python object (and/or
+# a different pid colliding with a stale entry). 56/60 FAIL_EXCEPTION on
+# a real multi-game Gravpack-Monoist bench sweep.
+#
+# The fix: ``cached_token_printing(card_def)`` returns the SAME
+# ``CardPrinting`` object for the same logical token across every game,
+# keyed by the token's forward-relevant shape (name + card-types + P/T
+# + subtypes + supertypes + keywords + the serialized triggered-ability
+# tuple). Because the object identity is now stable, a repeat
+# ``register_token_printing(pid, cached)`` is identity-idempotent: when
+# the seed leaves the pid unchanged it's an exact no-op, and when the
+# seed shifts the pid the same object is registered under the new pid
+# (the stale old-pid entry harmlessly maps to the SAME object, so even
+# if a later token reuses that pid the guard only fires on a genuinely
+# different printing — which would be a real bug, exactly what the
+# guard exists to catch). This preserves the identity-based guard's
+# value as a probe-collision detector while making the production
+# multi-game loader path conflict-free. Chosen over a blanket
+# ``clear_token_printings()`` at pass entry because the cache also
+# keeps any concurrently-seated tokens from OTHER carriers intact
+# (a clear-at-entry would drop a co-seated carrier's registration if
+# two carriers' tokens land in the same union — round-50 N3's stated
+# reason to prefer the cache).
+_TOKEN_PRINTING_CACHE_BY_KEY: dict[tuple, "CardPrinting"] = {}
+
+
+def _token_printing_cache_key(card_def: "CardDef") -> tuple:
+    """Build a stable, hashable shape signature for a token
+    :class:`CardDef`.
+
+    Two token CardDefs that materialize to byte-identical
+    ``CardPrinting``\\ s (the loader synthesizes the token CardDef
+    deterministically from the same token printing every game, so the
+    same logical token always produces an equal — but not ``is`` —
+    CardDef) map to the SAME key, so ``cached_token_printing`` returns
+    the SAME object for them. The key is the token's forward-relevant
+    fields; ``triggered_abilities`` is serialized via ``repr`` because
+    its entries are dicts (vanilla tokens carry ``()`` so this is
+    almost always empty, but the key stays correct if a future phase
+    admits a token with a leaf trigger).
+    """
+    return (
+        card_def.name,
+        card_def.card_type,
+        tuple(card_def.extra_card_types),
+        card_def.mana_cost_generic,
+        tuple(card_def.mana_cost_colored),
+        tuple(card_def.mana_produced),
+        card_def.power,
+        card_def.toughness,
+        tuple(card_def.subtypes),
+        tuple(card_def.supertypes),
+        tuple(card_def.keywords),
+        repr(tuple(card_def.triggered_abilities)),
+    )
+
+
+def cached_token_printing(card_def: "CardDef"):
+    """Return the identity-stable Python ``CardPrinting`` for a token
+    :class:`CardDef`, building it once via
+    :func:`_card_def_to_python_printing` and reusing the SAME object
+    for every same-shape token CardDef across all games / seeds.
+
+    Round-51 N1 (round-50 N3 finding 1) — see
+    :data:`_TOKEN_PRINTING_CACHE_BY_KEY`. The returned printing is
+    bit-identical to what :func:`build_python_state` materializes for
+    the same token CardDef (both ultimately call
+    :func:`_card_def_to_python_printing`); the only difference vs.
+    calling that helper directly is that this caches by shape so the
+    object identity is stable across the cross-game module-global
+    ``register_token_printing`` registrations.
+    """
+    key = _token_printing_cache_key(card_def)
+    cached = _TOKEN_PRINTING_CACHE_BY_KEY.get(key)
+    if cached is None:
+        cached = _card_def_to_python_printing(card_def)
+        _TOKEN_PRINTING_CACHE_BY_KEY[key] = cached
+    return cached
 
 
 def _ta_dict_to_python_effect(eff_dict: dict):

@@ -3186,20 +3186,37 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
          :func:`cross_engine.register_token_printing` so the Python
          bridge's ``create_token`` arm resolves the same pid to the
          same printing :func:`cross_engine.build_python_state`
-         materializes for that token CardDef (both call
-         :func:`cross_engine._card_def_to_python_printing` — single
-         source of truth, no shape drift).
+         materializes for that token CardDef. The printing is obtained
+         via :func:`cross_engine.cached_token_printing` (round-51 N1),
+         which builds it once via
+         :func:`cross_engine._card_def_to_python_printing` (the single
+         source of truth ``build_python_state`` also uses — no shape
+         drift) and returns the SAME object for the same logical token
+         across every game / seed.
 
     ``CardDef`` is frozen, so carriers with rewritten triggers are
-    rebuilt via :func:`dataclasses.replace`. Idempotency: a repeat
-    ``register_token_printing`` of the SAME printing object on the
-    same pid is a no-op (the bridge map's conflicting-registration
-    check only fires on a DIFFERENT printing under an existing pid).
-    Two carriers printing the same-named token share one token CardDef
-    + one pid (dedup by name) — the Python printings are constructed
-    from the same CardDef so they're shape-identical, but to keep the
-    bridge map's identity-based idempotency exact we register the
-    FIRST constructed printing and reuse it.
+    rebuilt via :func:`dataclasses.replace`.
+
+    Cross-game idempotency (round-51 N1 fix; round-50 N3 finding 1):
+    this pass runs once per
+    :func:`setup_matched_game_from_real_decks` invocation, and the
+    token's pid is its index in the per-game ``card_defs`` union, which
+    VARIES BY SEED (different opening hands -> different filtered
+    libraries -> different union ordering). The
+    ``register_token_printing`` map is a module-global that PERSISTS
+    across games. Building a fresh printing per game (the pre-round-51
+    behavior) made game 2+ of any token-carrier-bearing archetype hit
+    the registry's identity-based conflicting-registration guard
+    (``existing is not py_printing``) and raise ``ValueError`` — 56/60
+    FAIL_EXCEPTION on a real multi-game Gravpack-Monoist bench sweep.
+    :func:`cross_engine.cached_token_printing` keys the printing by
+    token SHAPE (not pid) and returns the SAME object every game, so a
+    repeat ``register_token_printing`` is identity-idempotent (exact
+    no-op when the pid is unchanged; same-object re-register under a
+    new pid when the seed shifted the union, never a conflict). Two
+    carriers printing the same-named token still share one token
+    CardDef + one pid (dedup by name); the shared cache makes their
+    Python printing the same object too.
 
     Returns the (possibly extended + carrier-rewritten) card-def list,
     ordered as carriers-then-tokens so the token pids are stable and
@@ -3208,7 +3225,7 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
     import dataclasses
 
     from mtg_bot.parity.cross_engine import (
-        _card_def_to_python_printing,
+        cached_token_printing,
         register_token_printing,
     )
 
@@ -3272,10 +3289,16 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
         result.append(tcd)
 
     # Register each token's Python printing into the bridge map at
-    # its pid. Build via the shared CardDef->printing helper so it is
-    # bit-identical to what build_python_state materializes.
+    # its pid. ``cached_token_printing`` returns the identity-stable
+    # printing for this token shape (built once via the shared
+    # CardDef->printing helper, so it is bit-identical to what
+    # build_python_state materializes) and reuses the SAME object
+    # across every game / seed -> ``register_token_printing`` is
+    # cross-game identity-idempotent and never hits the registry's
+    # conflicting-registration guard (round-51 N1 fix; round-50 N3
+    # finding 1).
     for tname, pid in token_pid_by_name.items():
-        py_printing = _card_def_to_python_printing(token_cd_by_name[tname])
+        py_printing = cached_token_printing(token_cd_by_name[tname])
         register_token_printing(pid, py_printing)
 
     # Rewrite every carrier's symbolic create_token triggers into the
