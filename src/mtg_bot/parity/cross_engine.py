@@ -7532,6 +7532,89 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             GainLifeEqualToYourLifeTotal,
         )
         return GainLifeEqualToYourLifeTotal()
+    if kind == "create_token_tapped":
+        # Phase 6 token-printing substrate -- Phase 4 (round 50): the
+        # ``tapped`` create-token rider. Rust's
+        # ``Effect::CreateTokenTapped { count, token_printing_id }``
+        # (cards.rs sister-variant of ``CreateToken``) carries the
+        # same two-field schema as the static sister arm above; the
+        # tapped-vs-untapped choice rides on the variant name (= the
+        # dict ``kind``), not on a boolean field -- this mirrors the
+        # round-43 ``create_token_each_player`` sister + the
+        # round-19/30/31/.. sister-variant precedent (closed-vocab
+        # convention: bool fields are second-class on the bridge,
+        # every binary choice lives in a separate variant). Python's
+        # ``CreateToken(token_printing=..., count=N, tapped=True)``
+        # (``effects/generic/tokens.py:169-294``) is the existing
+        # class's flag lane -- no new Python class needed because the
+        # ``tapped=True`` post-ETB branch (tokens.py:286-287, ``if
+        # self.tapped: obj.tapped = True``) already exists and is
+        # tested.
+        #
+        # **EoE consumer: Gravpack Monoist** (Creature -- Robot,
+        # flying; "When this creature dies, create a tapped 2/2 Robot
+        # token." -- 25,252 17lands decks). The Robot token is vanilla
+        # so this arm + the loader recognizer widen flip Gravpack
+        # Monoist drop->admit with NO Phase-3 Lander-activated-ability
+        # dependency. Round 49's Phase-1 recognizer DECLINED the
+        # ``tapped=True`` rider precisely because the bare
+        # ``create_token`` variant has no ``tapped`` mirror
+        # (TOKEN_PRINTING_SUBSTRATE.md §2.3); this arm closes that
+        # decline.
+        #
+        # **Schema parity.** Rust's two-field variant
+        # (``count: i32``, ``token_printing_id: u32``) -> Python's
+        # two-kwarg construction (``token_printing``, ``count``) with
+        # the ``tapped=True`` flag explicitly set. Other rider flags
+        # (``each_player``, ``attacking``,
+        # ``schedule_end_of_combat_sacrifice``) stay at their
+        # dataclass defaults; the Rust resolve arm doesn't plumb them
+        # for the same reason the sister ``create_token`` /
+        # ``create_token_each_player`` arms don't (no EoE tapped
+        # consumer engages them -- Gravpack Monoist -> one tapped
+        # Robot under its own controller is the only consumer today).
+        #
+        # **Printing-id -> Python-CardPrinting lookup.** Same
+        # ``_TOKEN_PRINTING_BY_PID`` registration map as the sister
+        # ``create_token`` arm above; probes / the loader's
+        # ``_seat_token_printings`` pass must call
+        # ``register_token_printing(pid, py_printing)`` BEFORE
+        # building either state. Missing registrations raise
+        # ``KeyError`` with the same hint shape as the sister arm.
+        #
+        # **Cross-engine parity contract.** Both engines create
+        # ``count`` tokens of the fixed printing under the trigger's
+        # resolved controller, each entering TAPPED (Rust's resolve
+        # arm sets ``tapped: true`` on the pushed GameObject; Python's
+        # ``CreateToken.resolve`` flips ``obj.tapped = True`` post-ETB
+        # at tokens.py:286-287). The token enters tapped but its ETB
+        # still fires on both engines (CR 603.6e -- entering tapped
+        # does not suppress the enters trigger). Post-resolve the
+        # token's per-object signature (printing name / P/T /
+        # controller / summoning_sick / **tapped**) is byte-equal.
+        #
+        # **Schema lenience.** Missing ``count`` defaults to 1
+        # (mirrors the sister ``create_token`` arm's lenient default);
+        # missing ``token_printing_id`` raises immediately because
+        # there is no plausible default.
+        from mtg_bot.effects.generic.tokens import CreateToken
+        token_pid = eff_dict["token_printing_id"]
+        try:
+            token_printing = _TOKEN_PRINTING_BY_PID[token_pid]
+        except KeyError as exc:
+            raise KeyError(
+                f"cross_engine create_token_tapped bridge: no Python "
+                f"CardPrinting registered for token_printing_id="
+                f"{token_pid!r}. Probes that drive the "
+                f"create_token_tapped arm cross-engine must call "
+                f"register_token_printing(pid, py_printing) BEFORE "
+                f"building either state."
+            ) from exc
+        return CreateToken(
+            token_printing=token_printing,
+            count=eff_dict.get("count", 1),
+            tapped=True,
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
