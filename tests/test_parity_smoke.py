@@ -51701,6 +51701,418 @@ def test_cross_engine_synthetic_etb_discard_self_cross_controller_routes_to_sour
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_synthetic_etb_untap_target_cross_controller_routes_to_source_controller_opponent_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``untap_target`` (any_creature filter)
+    trigger fired by a permanent CONTROLLED BY P1 while
+    ACTIVE_PLAYER=P0 -- the cross-controller leg of the round-23
+    ``untap_target`` bridge arm. Both engines must scan P1's opponent
+    set = [P0]'s bf for a creature to untap, NOT P1's own bf (where
+    the untapper sits, untapped). Pre-fix Rust would have derived
+    defender from active_player=P0 (defender=1), scanned P1's bf for
+    bf[0] = the untapper itself, and idempotent-no-op'd on it
+    (already-untapped). Post-fix Rust derives source-controller=1
+    from ``current_resolve_source_controller``, defender = 1 - 1 = 0,
+    scans P0's bf for bf[0] = pre-tapped Bait Bear, and untaps it.
+    Python's always-correct trigger.controller_id=1 path makes the
+    cross-engine pin sharp.
+
+    **The substrate.** Per the round-23 bridge arm at cross_engine.py
+    line 4416 + the Rust regression pin
+    ``test_rust_untap_target_cross_controller_routing``
+    (tests/test_parity_smoke.py:47464): Rust's
+    ``Effect::UntapTarget { target: TargetFilter }`` resolve arm
+    (state_ops_resolve.rs:1429-1476) carries the I72 controller-of-
+    effect fix: defender = 1 - controller, where controller derives
+    from ``current_resolve_source_controller`` (with active_player
+    fallback). The mutation applied is ``tapped = false`` on the
+    target (idempotent on already-untapped). Symmetric counterpart
+    to round-8's TapTarget (I71): identical defender-swap shape;
+    differs only in the inverse mutation. Python's ``Untap`` base
+    class (effects/generic/tap.py) drives off ``targets: tuple`` with
+    ``TargetSpec(IsCreature())``; the targeting pipeline picks at
+    PUSH time via the source-controller's agent ``choose_target``
+    over legal_targets, and ``Untap.resolve`` re-verifies the slot's
+    filter at fire time before flipping ``obj.tapped = False`` per
+    CR 608.2b.
+
+    **Sister probes.** The Rust regression pin at line 47464 covers
+    the Rust-side cross-controller routing; this slice ships the
+    missing CROSS-ENGINE leg. The round-8 TapTarget cross-controller
+    cross-engine probe at line 33502 is the symmetric counterpart
+    (same defender-swap template; different mutation direction --
+    untap instead of tap). The bare bridge arm's docstring at
+    cross_engine.py:4416-4515 explicitly defers cross-engine end-to-
+    end probes per the round-17/18/19 synthetic-only-when-riders-
+    cascade precedent (the only EoE oracle hit is Tezzeret's "Untap
+    target artifact or creature", a rider-narrowed shape that needs
+    its own Rust Effect variant). This slice ships the cross-engine
+    cross-controller pin with the established synthetic-Bear template.
+
+    **Why synthetic, not a real EoE card.** No bare-shape EoE
+    consumer exists today (per the bridge arm's ``EoE consumer
+    status`` note at cross_engine.py:4477-4486). A synthetic 2/2
+    vanilla ("Cross-Controller Untapper Bear") with the bridged
+    trigger keeps this probe self-contained and mirrors the round-8
+    tap_target cross-controller cross-engine probe exactly except
+    the mutation is inverted (the bait Bear starts TAPPED on P0's
+    bf and ends UNTAPPED post-resolve).
+
+    **Source carrier choice load-bears.** A vanilla Creature source
+    on P1 (untapped) means pre-fix Rust's defender = 1 (P1) scan
+    would find the source itself (a Creature on P1's bf at bf[0]
+    after the bait inject), pick it, and idempotent-no-op flip its
+    tapped=false (already false; no observable change). Post-fix
+    routes correctly: scans P0's bf at index 0, finds the pre-tapped
+    bait Bear, untaps it. The OBSERVABLE distinguishing the two:
+    post-fix bait Bear on P0's bf = tapped=False; pre-fix bait Bear
+    on P0's bf = tapped=True (untouched). Single-slot diverging
+    observable -- the cross-engine pin lands sharply on the bait's
+    tapped state.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Pre-seat a vanilla bait creature on P0's bf**
+         (Cross-Controller Untap Bait Bear, 2/2) and TAP it. P0
+         controls and owns the bait; it's the only eligible
+         opponent-controlled creature from the source's perspective.
+         The pre-tap is the load-bearing precondition (without it
+         the post-fix observable collapses to a no-op).
+
+      3. **Inject Cross-Controller Untapper Bear (the source) onto
+         P1's bf** with controller=1 (Rust's
+         ``register_and_inject_object``; Python's ``new_object`` +
+         bf append + manual ``_trigger_etb_abilities``). The
+         injection's ENTERS dispatch fires the SourceIsSelf
+         trigger; the trigger lands on the stack with controller=1
+         (the SOURCE's controller). Both injection helpers leave
+         the source untapped by default.
+
+      4. **Seat ``_PickFirstOpponentTargetAgent`` on P1** (the
+         SOURCE's controller, which is whose agent gets called
+         for the choose_target on the trigger's controller_id=1
+         path). The agent's opponent-controller filter mirrors
+         Rust's defender-side scan exactly on the 2-player harness
+         -- legal_targets is restricted to P1's opponents (= P0)'s
+         creatures by the IsCreature() slot filter, and the shim
+         picks the first such target (Bait Bear).
+
+      5. **Drain both stacks.** The trigger resolves: Rust's
+         current_resolve_source_controller derivation finds the
+         untapper on P1's bf, derives source-controller=1, computes
+         defender = 0, picks P0's bf[0] = Bait Bear, sets its
+         tapped=false. Python's resolve uses the trigger's
+         controller_id=1 directly, the agent's pick comes from the
+         legal_targets list (Bait Bear), and ``Untap.resolve`` flips
+         Bait Bear's tapped flag.
+
+      6. **Cross-engine assert (post-fix contract):**
+         - Bait Bear on P0's bf is UNTAPPED on both engines (was
+           tapped=True pre-resolve).
+         - The untapper itself on P1's bf is UNTAPPED on both
+           engines (unchanged from inject default; pre-fix would
+           have idempotent-no-op'd it -- still untapped, but the
+           load-bearing observable is on the BAIT).
+         - Lives unchanged on both seats.
+         - No residual stack on either engine.
+
+    **Pre-fix vs post-fix observable.**
+    Pre-fix Rust would have:
+      - Derived the defender via active_player=P0, defender=1-0=1,
+        scanned P1's bf for bf[0] = the untapper itself (already
+        untapped; idempotent no-op). The bait Bear on P0's bf would
+        have stayed TAPPED.
+    Post-fix Rust derives source-controller=1 from
+    current_resolve_source_controller, computes defender=0, picks
+    P0's bf[0] = Bait Bear, untaps it. The OBSERVABLE distinguishing
+    the two: post-fix Bait Bear is untapped; pre-fix Bait Bear stays
+    tapped. Single-slot diverging observable on the bait's tapped
+    state -- the cross-engine pin lands sharply.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-
+        ENTERS pattern bypasses the mana pipeline.
+      * The ``any_player`` filter variant -- not applicable;
+        untap_target is filter-narrow-by-design (Rust raises
+        PyValueError on AnyPlayer at state_ops_resolve.rs:
+        1429-1434 since you can't untap a player).
+      * UntapTargetOtherPermanent / UntapTargetLand variants --
+        separate Rust Effect variants with their own bridge arms
+        and their own cross-controller pins (round-25 + round-23
+        Deserted Temple lane respectively).
+      * Idempotent re-untap of an already-untapped target -- the
+        same-controller Rust pin at line 47409 exercises this
+        path; this probe drives the tapped->untapped path which
+        is the load-bearing routing observable.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller Untapper Bear on P1's battlefield
+        (controller=1; unchanged from inject; tapped=False).
+      * Bait Bear on P0's battlefield (tapped=False -- the pre-
+        resolve tapped=True flipped to False by the resolve).
+      * P0 / P1 lives: unchanged at 20.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines (the
+    # whole point of the probe is the cross-controller case where
+    # the SOURCE's controller != active_player).
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    # Inject the bait creature on P0's bf FIRST -- the SOURCE-
+    # controller's opponent (since the untapper will live on P1).
+    rust_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Cross-Controller Untap Bait Bear",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    # Tap it explicitly -- the load-bearing precondition. Without
+    # this pre-tap, the post-fix observable collapses to a no-op
+    # (the bait is already untapped, so the untap is a silent
+    # idempotent flip).
+    assert rust_state.tap_object(rust_bait_id) is True, (
+        "Rust: bait Bear should flip to tapped=true on first tap "
+        "(starts untapped per register_and_inject_object default)."
+    )
+    rust_untapper_dict = {
+        "name": "Cross-Controller Untapper Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "U": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "untap_target",
+                    "target": {"kind": "any_creature"},
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p1_bf_before = rust_state.battlefield_sizes[1]
+    # Inject the untapper onto P1's bf with controller=1. ENTERS fires
+    # via the deferred-dispatch queue; the SourceIsSelf trigger lands
+    # on the stack with controller=1 (the SOURCE's controller).
+    rust_untapper_id = rust_state.register_and_inject_object(
+        rust_untapper_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller Untapper Bear's arrival on P1 "
+        "should fire the SourceIsSelf ENTERS trigger and land "
+        "UntapTarget on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.tap import Untap
+    from mtg_bot.effects.object_predicates import IsCreature
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.game import Zone
+
+    # Bait Bear on P0's bf -- the SOURCE-controller-opponent. Pre-
+    # tapped to make the untap observable.
+    bait_printing = CardPrinting(
+        name="Cross-Controller Untap Bait Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = True  # Pre-tapped: the load-bearing precondition.
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+
+    untapper_printing = CardPrinting(
+        name="Cross-Controller Untapper Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=Untap(targets=(TargetSpec(IsCreature()),)),
+            ),
+        ),
+    )
+    # The trigger's controller is P1 (the SOURCE's controller), so
+    # P1's agent is what choose_target gets called against. Mirror
+    # the round-8 tap_target cross-controller probe's
+    # _PickFirstOpponentTargetAgent shim seated on P1 -- the slot's
+    # filter restricts legal_targets to P1's opponents = [P0]'s
+    # creatures, and the shim picks the first such target (Bait
+    # Bear).
+    py_state.players[1].agent = _PickFirstOpponentTargetAgent()
+
+    py_untapper = py_state.new_object(
+        untapper_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_untapper.summoning_sick = False
+    py_untapper.tapped = False
+    py_untapper.damage = 0
+    py_untapper.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_untapper)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_untapper)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller Untapper Bear's arrival on P1 "
+        "should fire the IsSelf ENTERS trigger and land "
+        "Untap on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Post-drain: lives unchanged on both seats. Bait Bear (on P0's
+    # bf) is now UNTAPPED on both engines AND the untapper itself
+    # stays UNTAPPED -- the load-bearing cross-controller routing
+    # pin: pre-fix Rust would have looked at P1's bf, found the
+    # untapper itself at bf[0] (already untapped), idempotent-no-
+    # op'd, and left the bait on P0's bf TAPPED.
+    assert rust_state.get_life(0) == rust_p0_life_before, (
+        f"Rust p0 life should be unchanged ({rust_p0_life_before}); "
+        f"got {rust_state.get_life(0)}"
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before, (
+        f"Rust p1 life should be unchanged ({rust_p1_life_before}); "
+        f"got {rust_state.get_life(1)}"
+    )
+    rust_bf = rust_state.battlefield_snapshot()
+    rust_bait_entry = next(
+        (e for e in rust_bf if int(e["id"]) == rust_bait_id), None,
+    )
+    rust_untapper_entry = next(
+        (e for e in rust_bf if int(e["id"]) == rust_untapper_id),
+        None,
+    )
+    assert rust_bait_entry is not None, (
+        "Rust: Bait Bear (id={}) must still be on the battlefield "
+        "after resolve".format(rust_bait_id)
+    )
+    assert rust_untapper_entry is not None, (
+        "Rust: Untapper (id={}) must still be on the battlefield "
+        "after resolve".format(rust_untapper_id)
+    )
+    assert rust_bait_entry["tapped"] is False, (
+        "Rust cross-controller routing contract: Bait Bear on P0's "
+        "bf should be UNTAPPED post-resolve (the untapper's SOURCE-"
+        "controller is P1, defender=0, the scan lands on Bait "
+        "Bear and flips its tapped to false). A pre-fix Rust would "
+        "have derived the defender from active_player=P0 "
+        "(defender=1), scanned P1's bf (bf[0] = the untapper "
+        "itself, already untapped), idempotent-no-op'd, and left "
+        "the bait on P0's bf TAPPED. "
+        f"Got tapped={rust_bait_entry['tapped']}"
+    )
+    assert rust_untapper_entry["tapped"] is False, (
+        "Rust: the untapper itself on P1's bf should remain UNTAPPED "
+        "post-resolve (the post-fix scan looks at P0's bf, not P1's, "
+        "so the untapper is never visited; was untapped at inject "
+        "and remains untapped). "
+        f"Got tapped={rust_untapper_entry['tapped']}"
+    )
+    # P1's bf carries the untapper (and only the untapper).
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p1_after == rust_p1_bf_before + 1, (
+        f"Rust: P1's bf should grow by exactly 1 (the untapper). "
+        f"before={rust_p1_bf_before} after={rust_bf_p1_after}"
+    )
+
+    # Python observable: same shape.
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    assert py_bait.tapped is False, (
+        "Python: Bait Bear on P0's bf should be UNTAPPED post-"
+        f"resolve (was pre-tapped to True). Got tapped={py_bait.tapped}"
+    )
+    assert py_untapper.tapped is False, (
+        "Python: the untapper itself should remain UNTAPPED. "
+        f"Got tapped={py_untapper.tapped}"
+    )
+
+    # Cross-engine: same lives, same tapped flags, same post-drain
+    # bf sizes.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    assert rust_bait_entry["tapped"] == py_bait.tapped
+    assert rust_untapper_entry["tapped"] == py_untapper.tapped
+    py_p0_bf_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_p1_bf_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert rust_state.battlefield_sizes[0] == py_p0_bf_after
+    assert rust_state.battlefield_sizes[1] == py_p1_bf_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
