@@ -2937,6 +2937,232 @@ def test_simple_creature_filter_drops_skullsnap_nuisance_despite_surveil_extensi
     assert _printing_is_bridge_simple_creature(skullsnap) is False
 
 
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-triggers surveil ATTACKS extension (round-43 slice).
+#
+# Adds ONE new entry to :data:`_SAFE_TRIGGERS`:
+#   * ``("attacks", "source_is_self", "surveil")``
+# Plus widens the per-trigger event gate in
+# :func:`_python_ta_to_safe_dict` from {ENTERS, DIES} to
+# {ENTERS, DIES, ATTACKS}, and adds the ``"attacks"`` event-string
+# emitter arm. The :data:`_SAFE_EFFECT_KEYS` table is unchanged from
+# round-42 — the surveil arm's payload-key whitelist (``{"kind",
+# "count"}``) is identical regardless of the dispatch event.
+#
+# Bridge support pre-existed in BOTH engines:
+#   * Rust ATTACKS event dispatch via ``state_ops_combat.rs:684``
+#     (Slice 7 of the carddef-triggers ramp).
+#   * Python ATTACKS dispatch via ``combat.py:_fire_attacks_triggers``
+#     (combat.py:196).
+#   * Surveil leaf bridge arm at
+#     ``cross_engine._ta_dict_to_python_effect`` "surveil" since round
+#     16 (the scry/surveil slice); resolve arm contract is identical
+#     to round-42's ENTERS/DIES surveil — keep_all_on_top default on
+#     both engines, no agent setup required for the trajectory walk.
+#
+# No real-EoE consumer admitted today (substrate-only, sister of the
+# round-37 DDDD landfall+draw slice's no-consumer extension).
+# Fear of Surveillance (2/2 {1}{W}, Vigilance, ATTACKS+IsSelf+
+# Surveil(1)) is the canonical EoE printing carrying the bare shape
+# but is absent from the 17lands deck pool (low pick rate).
+# Appendage Amalgam carries the same trigger but its ``Flash``
+# keyword is outside today's :data:`_SAFE_KEYWORDS` set.
+# ---------------------------------------------------------------------------
+
+
+def test_safe_triggers_set_carries_surveil_attacks_shape():
+    """Pin the ATTACKS+source_is_self+surveil entry (this slice). The
+    THIRD event in the safe set after ENTERS (Slice 1) and DIES
+    (round 42).
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert (
+        ("attacks", "source_is_self", "surveil") in _SAFE_TRIGGERS
+    )
+
+
+def test_is_safe_trigger_dict_admits_surveil_attacks_shape():
+    """Dict-side recognizer admits the canonical ATTACKS+source_is_self
+    +surveil dict shape with the bare ``count`` payload.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert _is_safe_trigger_dict({
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "surveil", "count": 1},
+    })
+
+
+def test_python_ta_to_safe_dict_round_trips_surveil_attacks():
+    """Python ``TriggeredAbility`` carrying ATTACKS+IsSelf+Surveil
+    converts back to the canonical dict shape; the result satisfies
+    :func:`_is_safe_trigger_dict`. Closes the ATTACKS event recognizer
+    wired into :func:`_python_ta_to_safe_dict`'s event-string gate
+    this slice.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.ATTACKS,
+        predicate=IsSelf(),
+        effect=Surveil(amount=1),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "surveil", "count": 1},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_rejects_attacks_event_with_non_surveil_effect():
+    """The ATTACKS event gate is narrower than the ENTERS gate — only
+    the surveil leaf is in the safe set under ATTACKS (no ATTACKS+
+    draw_cards / +gain_life / +scry_n entries today). An ATTACKS+
+    IsSelf+DrawCards trigger must be rejected because the
+    corresponding triple isn't in :data:`_SAFE_TRIGGERS`. Mirrors the
+    round-42 DIES+non-surveil reject-path test exactly.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.ATTACKS,
+        predicate=IsSelf(),
+        effect=DrawCards(amount=1),
+    )
+    assert _python_ta_to_safe_dict(ta) is None
+
+
+def test_python_ta_to_safe_dict_rejects_attacks_surveil_with_use_artifact_count():
+    """Surveil-X under the ATTACKS event is also gated out (mirrors the
+    round-42 ENTERS reject-path test). Rust's ``Effect::Surveil
+    { count: i32 }`` carries only the fixed-count form regardless of
+    dispatch event — gating the X variant at the recognizer keeps the
+    bridge from silently degrading it on a hypothetical future
+    ATTACKS+IsSelf+Surveil(X) printing.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.ATTACKS,
+        predicate=IsSelf(),
+        effect=Surveil(amount=1, use_artifact_count=True),
+    )
+    assert _python_ta_to_safe_dict(ta) is None
+
+
+def test_simple_creature_filter_admits_attacks_surveil_only_creature():
+    """A bare-vanilla creature carrying only ATTACKS+IsSelf+Surveil
+    passes the bridge-simple filter end-to-end. Constructs the
+    printing in-line (no Scryfall dependency) so the test pins the
+    filter contract independent of any production-deck data churn.
+    Mirrors the round-42 ETB-only surveil filter-admit test.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    printing = CardPrinting(
+        name="ProbeAttacksSurveilBear",
+        mana_cost_str="{1}{W}",
+        mana_cost=ManaCost(generic=1, colored=(("W", 1),)),
+        type_line="Creature - Bear",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=("Bear",),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ATTACKS,
+                predicate=IsSelf(),
+                effect=Surveil(amount=1),
+            ),
+        ),
+    )
+    assert _printing_is_bridge_simple_creature(printing) is True
+
+
+def test_simple_creature_filter_admits_real_eoe_fear_of_surveillance():
+    """Pin that Fear of Surveillance (1/2 {1}{W}, Vigilance, ATTACKS+
+    IsSelf+Surveil(1)) — the canonical EoE consumer carrying the new
+    safe-trigger shape this slice adds — survives the bridge-simple
+    filter end-to-end. Pre-extension this card was rejected because
+    the ATTACKS+IsSelf+Surveil trigger had no matching entry in
+    :data:`_SAFE_TRIGGERS` and the recognizer's event gate rejected
+    ATTACKS outright; post-extension the gate accepts ATTACKS, the
+    recognizer round-trips the shape, and the whole printing passes.
+
+    Note: Fear of Surveillance is in the Scryfall EoE set but ABSENT
+    from the 17lands deck pool (data/17lands/eoe_decks.json.gz) — so
+    the production-deck loader doesn't see it today. This test pins
+    the filter contract directly off the Scryfall-parsed printing so
+    the substrate is exercised regardless of deck-pool churn.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    src = OracleParserCardSource()
+    printings = src.get_printings()
+    assert "Fear of Surveillance" in printings, (
+        "Fear of Surveillance no longer in the EoE Scryfall data; "
+        "pick a different ATTACKS+IsSelf+Surveil consumer after "
+        "re-scanning the set, or remove this test if the round-43 "
+        "substrate is later subsumed by a broader event extension."
+    )
+    fos = printings["Fear of Surveillance"]
+    # Sanity: Fear of Surveillance carries the trigger this slice admits.
+    assert len(fos.triggered_abilities) == 1
+    ta = fos.triggered_abilities[0]
+    assert ta.event.value == "attacks"
+    assert type(ta.effect).__name__ == "Surveil"
+    assert ta.effect.amount == 1
+    assert ta.effect.use_artifact_count is False
+    # Post-extension the whole printing passes the bridge filter.
+    assert _printing_is_bridge_simple_creature(fos) is True
+
+
+def test_printing_to_card_def_carries_attacks_surveil_through():
+    """Fear of Surveillance's parsed printing converts to a CardDef
+    whose ``triggered_abilities`` tuple carries the canonical
+    ATTACKS+surveil 1 dict shape — exactly what the cross_engine
+    bridge arms on both engines consume.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    src = OracleParserCardSource()
+    fos = src.get_printings()["Fear of Surveillance"]
+    cd = _printing_to_card_def(fos)
+    assert cd.card_type == "Creature"
+    assert cd.power == 2
+    assert cd.toughness == 2
+    assert len(cd.triggered_abilities) == 1
+    assert cd.triggered_abilities[0] == {
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "surveil", "count": 1},
+    }
+
+
 def test_printing_to_card_def_carries_surveil_etb_through():
     """Wary Watchdog's parsed printing converts to a CardDef whose
     ``triggered_abilities`` tuple carries BOTH the ENTERS+surveil 1

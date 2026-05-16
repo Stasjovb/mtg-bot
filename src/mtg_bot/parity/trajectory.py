@@ -1521,6 +1521,56 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # (both outside today's safe set).
     ("enters", "source_is_self", "surveil"),
     ("dies", "source_is_self", "surveil"),
+    # Surveil ATTACKS extension (round-43 slice). The FIRST ATTACKS
+    # event in the safe set. Mirrors round-42's surveil ETB+DIES pair
+    # on the orthogonal event axis — same bridge arms, same
+    # default-strategy contract, just a different dispatch event.
+    #
+    # Bridge support (both pre-existed before this slice):
+    #   * Rust ATTACKS event dispatch in
+    #     ``state_ops_combat.rs:684`` (Slice 7 of the carddef-triggers
+    #     ramp per the cards.rs:5742 parser arm comment), invoked
+    #     after every declared-attacker on the active player's combat
+    #     step. The dispatch wraps each attacker in the
+    #     ``crate::cards::Event::Attacks`` subject view and runs the
+    #     standard ``fire_triggers``/PendingDecision pipeline that
+    #     terminates in the ``keep_all_on_top`` auto-resolve drain
+    #     (state_ops_resolve.rs:6832) — identical to round-42's
+    #     no-agent contract on the ENTERS/DIES surveil paths.
+    #   * Python ATTACKS dispatch via ``combat._fire_attacks_triggers``
+    #     (combat.py:196) followed by predicate-style ``Event.ATTACKS``
+    #     fan-out in ``combat.py:208-217`` — also runs every triggered
+    #     ability whose event is ATTACKS, then the standard p.agent-is
+    #     -None surveil short-circuit at ``library_lookat.py:605``
+    #     fires the same keep-all-on-top semantics as the ENTERS/DIES
+    #     paths.
+    #
+    # **Cross-engine default-strategy contract.** Identical to
+    # round-42 surveil ETB/DIES: no agent setup needed for the
+    # trajectory walk. The auto-resolve keep_all_on_top default
+    # terminates BOTH engines' surveil resolves identically — bit-equal
+    # post-resolve library top + graveyard. The only axis that differs
+    # from round-42 is the dispatch event; both bridges' resolve arms
+    # are oblivious to which event fired the trigger because the
+    # PendingDecision and library-lookat substrates fork only on the
+    # effect shape (Surveil), not the upstream event.
+    #
+    # **No real-EoE consumer admitted today.** Pinned-by-reject-path
+    # test (sister of round-37 DDDD landfall+draw and round-32+/35+/36+
+    # damage-by-X precedent): the production-deck loader's pool
+    # (data/17lands/eoe_decks.json.gz, 5000 archetypes) does NOT
+    # contain Fear of Surveillance (the EoE printing carrying the bare
+    # ATTACKS+IsSelf+Surveil(1) shape with vigilance keyword and no
+    # other unsafe fields) — Fear of Surveillance is in the Scryfall
+    # EoE set but absent from the 17lands deck pool (low pick rate).
+    # Appendage Amalgam carries the same ATTACKS+surveil trigger but
+    # its ``Flash`` keyword is outside the :data:`_SAFE_KEYWORDS` set
+    # and would still be dropped at the keyword gate. Substrate is
+    # pre-positioned for any future EoE / standard-format printing
+    # carrying a bare ATTACKS+IsSelf+Surveil shape; the next slice
+    # landing such a card in the pool need not extend the allowlist
+    # again.
+    ("attacks", "source_is_self", "surveil"),
     # Landfall — "Whenever a land you control enters, ...". Compound
     # predicate sentinel; see ``_is_safe_trigger_dict`` /
     # ``_python_ta_to_safe_dict`` for the canonical-vs-nested shape
@@ -1768,11 +1818,21 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     # / Wary Watchdog whose surveil trigger pair carries both events;
     # without DIES support the whole printing would be dropped because
     # the safe-trigger filter requires EVERY trigger to round-trip).
+    # Round-43 surveil ATTACKS extension widens further to admit
+    # ATTACKS (the THIRD event in the safe set — pre-positions the
+    # substrate for any future ATTACKS+IsSelf+Surveil consumer; no real-
+    # EoE consumer admitted today since Fear of Surveillance is absent
+    # from the 17lands deck pool and Appendage Amalgam has Flash).
     # The event-string is emitted further down per arm — gate here so
     # any future event extension stays a single edit.
-    if ta.event not in (Event.ENTERS, Event.DIES):
+    if ta.event not in (Event.ENTERS, Event.DIES, Event.ATTACKS):
         return None
-    event_str = "enters" if ta.event is Event.ENTERS else "dies"
+    if ta.event is Event.ENTERS:
+        event_str = "enters"
+    elif ta.event is Event.DIES:
+        event_str = "dies"
+    else:  # Event.ATTACKS
+        event_str = "attacks"
     # Recognize one of the safe predicate shapes; produce the
     # corresponding round-trip dict (or bail if no match).
     pred = ta.predicate
@@ -1782,13 +1842,22 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # ``IsSelf`` (default-slot form): "source_is_self" canonical
         # kind. Three ENTERS-only leaf effects from the starter set
         # (draw_cards / gain_life / scry_n); the round-42 surveil
-        # extension adds ``surveil`` under BOTH ENTERS and DIES.
+        # extension adds ``surveil`` under BOTH ENTERS and DIES; the
+        # round-43 surveil ATTACKS extension adds ``surveil`` under
+        # ATTACKS (only the surveil leaf — same per-event narrowing as
+        # the DIES arm).
         pred_dict = {"kind": "source_is_self"}
         if ta.event is Event.ENTERS:
             safe_effect_kinds = (
                 "draw_cards", "gain_life", "scry_n", "surveil",
             )
-        else:  # Event.DIES — only the surveil leaf is in the safe set
+        else:
+            # Event.DIES and Event.ATTACKS — only the surveil leaf is
+            # in the safe set today. A future per-event extension (e.g.
+            # ATTACKS+gain_life for Soulmender-style triggers) lands as
+            # a single edit here AND a single new ``_SAFE_TRIGGERS``
+            # entry; the recognizer's event-string gate above and the
+            # ``_is_safe_trigger_dict`` dict-side gate stay unchanged.
             safe_effect_kinds = ("surveil",)
     elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:
         # Landfall is parser-emitted under ENTERS only (CR 614 — the
