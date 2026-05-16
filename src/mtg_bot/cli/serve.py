@@ -945,6 +945,21 @@ def create_app(
     # working untouched.
     if queue_db_path is None and progress_dir is not None:
         queue_db_path = progress_dir / "coordinator_state" / "queue.db"
+    # Production-launch default: even without --progress-dir, the v2
+    # surface should activate at the canonical
+    # ``training_progress/coordinator_state/queue.db`` location so
+    # existing ``mtg_bot serve`` invocations get the v2 endpoints
+    # without an edit. Tests + the ``--queue-db-path ''`` opt-out path
+    # land in the ``str(queue_db_path) == "."`` branch below.
+    if queue_db_path is None:
+        queue_db_path = (
+            _REPO_ROOT_FROM_HERE / "training_progress"
+            / "coordinator_state" / "queue.db"
+        )
+    if str(queue_db_path) == ".":
+        # ``--queue-db-path ''`` collapses to ``Path('.')``; treat as
+        # explicit-disable (mirrors ``--runs-db-path ''`` semantics).
+        queue_db_path = None
     if queue_db_path is not None:
         from mtg_bot.cli.runs import queue_db as _queue_db  # noqa: WPS433
         from mtg_bot.cli.runs.heartbeat_poller import (  # noqa: WPS433
@@ -1093,9 +1108,11 @@ def main(argv=None) -> None:  # pragma: no cover
         "--queue-db-path", type=Path, default=None,
         help=(
             "Path to the v2 coordinator queue.db (SQLite). Default: "
-            "``<progress_dir>/coordinator_state/queue.db``. When the "
-            "default progress_dir is missing AND no explicit path is "
-            "passed, the v2 endpoints stay disabled."
+            "``<progress_dir>/coordinator_state/queue.db`` when "
+            "``--progress-dir`` is set, else the canonical "
+            "``training_progress/coordinator_state/queue.db``. Pass "
+            "``--queue-db-path ''`` to explicitly disable the v2 "
+            "endpoints (mirrors the ``--runs-db-path ''`` opt-out)."
         ),
     )
     parser.add_argument(
