@@ -450,3 +450,125 @@ def test_eval_stage_counters_aggregate_wins(tmp_path):
     assert body["wins_new"] == 2
     assert body["wins_old"] == 0
     assert body["n_games_done"] == 2
+
+
+def _claim_one_as(client, worker_id: str) -> dict:
+    res = client.post("/v2/claim", json={
+        "worker_id": worker_id,
+        "stage_id": "iter_009_self_play_v6",
+    })
+    assert res.status_code == 200, res.get_json()
+    return res.get_json()
+
+
+def test_stage_counters_carries_n_samples_and_total_duration(tmp_path):
+    """Aggregate response includes summed ``n_samples`` and
+    ``total_duration_s`` from the per-game results."""
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    _create_stage(client, _spec(n_games=2))
+    payloads = [
+        {"n_samples": 7, "duration_s": 4.5, "shard_label": "wA"},
+        {"n_samples": 5, "duration_s": 2.5, "shard_label": "wA"},
+    ]
+    for p in payloads:
+        claim = _claim_one(client)
+        meta = {
+            "claim_id": claim["claim_id"],
+            "outcome": "completed",
+            "winner": 0,
+            **p,
+        }
+        res = client.post(
+            "/v2/report_result",
+            data={"meta": json.dumps(meta)},
+            content_type="multipart/form-data",
+        )
+        assert res.status_code == 200
+    body = client.get("/v2/stage/iter_009_self_play_v6").get_json()
+    assert body["n_samples"] == 12
+    assert body["total_duration_s"] == 7.0
+    assert body["n_games_done"] == 2
+
+
+def test_stage_counters_machines_per_worker_breakdown(tmp_path):
+    """When multiple workers report games, ``machines`` carries one
+    row per shard_label with that worker's done/samples/crashed/
+    timed_out + duration sums. Workers with only in-flight claims
+    (no reports yet) still surface with ``n_in_flight > 0``."""
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    _create_stage(client, _spec(n_games=4))
+
+    # wA reports 2 completed games, wB reports 1 completed + 1
+    # timed-out, wC claims one game and never reports (in-flight).
+    reports = [
+        ("wA", {"outcome": "completed", "winner": 0, "n_samples": 10, "duration_s": 5.0, "shard_label": "wA"}),
+        ("wA", {"outcome": "completed", "winner": 1, "n_samples": 12, "duration_s": 6.0, "shard_label": "wA"}),
+        ("wB", {"outcome": "completed", "winner": 0, "n_samples": 8, "duration_s": 3.0, "shard_label": "wB"}),
+        ("wB", {"outcome": "timed_out", "winner": None, "n_samples": 0, "duration_s": 600.0, "shard_label": "wB", "timed_out": 1}),
+    ]
+    for worker_id, meta_extra in reports:
+        claim = _claim_one_as(client, worker_id)
+        meta = {"claim_id": claim["claim_id"], **meta_extra}
+        res = client.post(
+            "/v2/report_result",
+            data={"meta": json.dumps(meta)},
+            content_type="multipart/form-data",
+        )
+        assert res.status_code == 200
+
+    body = client.get("/v2/stage/iter_009_self_play_v6").get_json()
+    # Aggregate sanity: 4 done, total samples / duration.
+    assert body["n_games_done"] == 4
+    assert body["n_samples"] == 30
+    assert body["timed_out"] == 1
+
+    # machines is a sorted-by-label list.
+    machines = {m["label"]: m for m in body["machines"]}
+    assert set(machines.keys()) == {"wA", "wB"}
+    assert machines["wA"]["n_games_done"] == 2
+    assert machines["wA"]["n_samples"] == 22
+    assert machines["wA"]["total_duration_s"] == 11.0
+    assert machines["wA"]["timed_out"] == 0
+    assert machines["wA"]["n_in_flight"] == 0
+    assert machines["wB"]["n_games_done"] == 2
+    assert machines["wB"]["n_samples"] == 8
+    assert machines["wB"]["timed_out"] == 1
+    # n_workers reflects distinct machines with any activity.
+    assert body["n_workers"] == 2
+
+
+def test_stage_counters_surfaces_in_flight_worker_before_first_report(tmp_path):
+    """A worker that has claimed but not yet reported still appears in
+    ``machines`` with ``n_in_flight > 0`` so the UI can show the
+    machine card as soon as work is dispatched."""
+    app = _make_app(tmp_path)
+    client = app.test_client()
+    _create_stage(client, _spec(n_games=3))
+    # wB claims, doesn't report.
+    claim_b = _claim_one_as(client, "wB")
+    assert claim_b is not None
+    # wA claims AND reports one game.
+    claim_a = _claim_one_as(client, "wA")
+    meta = {
+        "claim_id": claim_a["claim_id"],
+        "outcome": "completed", "winner": 0,
+        "n_samples": 3, "duration_s": 1.0, "shard_label": "wA",
+    }
+    res = client.post(
+        "/v2/report_result",
+        data={"meta": json.dumps(meta)},
+        content_type="multipart/form-data",
+    )
+    assert res.status_code == 200
+
+    body = client.get("/v2/stage/iter_009_self_play_v6").get_json()
+    machines = {m["label"]: m for m in body["machines"]}
+    assert "wA" in machines
+    assert "wB" in machines  # surfaced via claims, not results
+    assert machines["wA"]["n_games_done"] == 1
+    assert machines["wA"]["n_in_flight"] == 0
+    assert machines["wB"]["n_games_done"] == 0
+    assert machines["wB"]["n_in_flight"] == 1
+    assert body["n_workers"] == 2

@@ -179,11 +179,17 @@ def main(argv=None) -> None:
         progress_json_path=progress_json_path,
         label=label,
     ):
+        # Stream per-poll progress (totals + per-machine breakdown)
+        # into runs.db so the training UI's stats cards populate live.
+        progress_writer = _rest_orch.make_runs_db_progress_writer(
+            run_id, started_perf=t0,
+        )
         result = _rest_orch.run_stage(
             coordinator_url=args.queue_url,
             worker_urls=worker_urls,
             spec=spec,
             poll_interval_s=args.poll_interval_s,
+            progress_writer=progress_writer,
         )
     elapsed = time.perf_counter() - t0
 
