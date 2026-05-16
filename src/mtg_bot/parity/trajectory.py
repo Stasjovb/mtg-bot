@@ -2060,6 +2060,39 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # Gravpack-Monoist assertion is moved to an admit-path pin).
     ("dies", "source_is_self", "create_token_tapped"),
     ("enters", "source_is_self", "create_token_tapped"),
+    # DIES + source_is_self + bare create_token (Phase 3a — round-53
+    # N1, ``docs/TOKEN_PRINTING_SUBSTRATE.md`` §7). The round-49 Phase-1
+    # ENTERS entry above admits the bare-rider fixed-single-token shape;
+    # Phase 1 deliberately left bare ``create_token`` OUT of the DIES
+    # row because every DIES Lander carrier was declined on the
+    # non-vanilla token and the only DIES+vanilla-token consumer
+    # (Gravpack Monoist) is the tapped shape. Phase 3a's
+    # ``_token_with_safe_activated_ability_card_def`` ADMITS the bare
+    # ``Lander`` token (its ONLY activated ability is the round-52-
+    # precursor-verified bridge-correct
+    # ``{2},Sac:SearchLibraryForBasicLandTapped`` shape, emitted on the
+    # synthesized token CardDef via ``token_activated_abilities``), so
+    # **Beamsaw Prospector** ("When ~ dies, create a Lander." —
+    # Creature — Human Artificer, **24,310** of 129,996 17lands EoE
+    # decks) is now the real DIES+IsSelf+bare-create_token consumer.
+    # The bare ``create_token`` kind round-trips identically under DIES
+    # vs ENTERS (the bridge's ``create_token`` arm is event-agnostic;
+    # ``_seat_token_printings`` recognizes the kind under any event and
+    # threads the token's ``token_activated_abilities`` through
+    # ``dataclasses.replace`` + ``cached_token_printing`` — the round-52
+    # cache key folds ``token_activated_abilities`` in so a Lander never
+    # collides with a same-named vanilla token). Paired with the
+    # ENTERS+create_token entry (line ~2002, round-49) this flips
+    # **Galactic Wayfarer** (ENTERS+IsSelf+bare-Lander — Creature —
+    # Human Scout, **33,469** decks) drop→admit too. Phase 3a
+    # cumulative real-EoE delta: **2 carriers / 57,779 17lands decks**
+    # (the §2-honest subset — see §7 for the per-carrier decline
+    # ledger: Edge Rover each_player→Phase 5, Biomechan Engineer
+    # carrier-activated-ability, Glacier Godmaw / Biotech Specialist
+    # sibling un-bridged trigger, Sunstar Expansionist And-StateBound
+    # predicate, Seedship Agrarian BECOMES_TAPPED event, Bioengineered
+    # Future non-creature→Phase 2 ALL stay declined).
+    ("dies", "source_is_self", "create_token"),
 })
 
 
@@ -2355,6 +2388,161 @@ def _token_vanilla_card_def(token_printing) -> Optional["CardDef"]:
     )
 
 
+# The exact bridge-correct activated-ability dict for the EoE
+# ``Lander`` token: ``{2}, Sacrifice this artifact: Search your
+# library for a basic land card, put it onto the battlefield tapped,
+# then shuffle.`` Round-52 N1's Phase-3 precursor verified this shape
+# round-trips Python<->Rust with NO §2 gap (the cost is
+# ``mana={generic:2}`` + ``sacrifice_self`` — the exact subset both
+# engines pay identically — and the effect
+# ``search_library_for_basic_land_tapped`` is FULLY DETERMINISTIC on
+# BOTH engines: first ``count`` basic lands in library order, no
+# PendingDecision, no agent seating). This is the ONLY token-activated
+# ability Phase 3a admits; any token whose activated ability differs
+# from this exact dict stays declined (§2 — a divergent cost component
+# or a non-deterministic / agent-seated effect would silently
+# mistranslate). ``count`` is pinned to 1 because the real EoE Lander
+# searches for exactly one basic land; a hypothetical multi-land
+# variant is a separate recognizer-widen (Phase 3b territory) and is
+# NOT admitted here.
+_LANDER_SAFE_ACTIVATED_ABILITY: dict = {
+    "cost": {"mana": {"generic": 2}, "sacrifice_self": True},
+    "effect": {"kind": "search_library_for_basic_land_tapped"},
+    "is_mana_ability": False,
+}
+
+
+def _token_with_safe_activated_ability_card_def(
+    token_printing,
+) -> Optional["CardDef"]:
+    """Build a :class:`cross_engine.CardDef` from a token
+    ``CardPrinting`` iff the token's ONLY activated ability is the
+    exact bridge-correct Lander shape (and it is otherwise clean),
+    else ``None``.
+
+    Round-53 N1 Phase 3a (``docs/TOKEN_PRINTING_SUBSTRATE.md`` §7).
+    Sibling of :func:`_token_vanilla_card_def`: that helper admits a
+    VANILLA token (a creature body, NO activated abilities — declines
+    the Lander). This helper admits the ``Lander`` cluster's token,
+    whose ONLY activated ability is
+
+      ``{2}, Sac: SearchLibraryForBasicLandTapped``
+
+    The round-52 N1 Phase-3 PRECURSOR landed the
+    ``CardDef.token_activated_abilities`` substrate + its
+    Python<->Rust bridge plumbing
+    (:func:`cross_engine._aa_dict_to_python_activated_ability` /
+    :func:`cross_engine._aa_dict_to_python_activation_cost` /
+    ``build_rust_state``'s ``activated_abilities`` registry key) and
+    proved this exact shape round-trips byte-identical with NO §2 gap
+    (the cost is the ``mana``+``sacrifice_self`` subset both engines
+    pay identically; the effect is fully deterministic on BOTH engines
+    — no agent / PendingDecision). This helper consumes that substrate:
+    it emits a token CardDef carrying
+    ``token_activated_abilities=(_LANDER_SAFE_ACTIVATED_ABILITY,)``.
+
+    **§2 silent-mistranslation discipline (STRICT).** The token must:
+
+      * be a NON-creature permanent (the real Lander is
+        ``Artifact — Lander``, no P/T). A token that is ALSO a
+        creature is handled by the vanilla path; this path is for the
+        ability-bearing artifact token.
+      * carry EXACTLY ONE activated ability, byte-equal to the real
+        authored ``TOKEN_PRINTINGS["Lander"]`` ability AND to
+        :data:`_LANDER_SAFE_ACTIVATED_ABILITY` (cost
+        ``mana={generic:2}`` + ``sacrifice_self`` and nothing else;
+        effect ``SearchLibraryForBasicLandTapped(count=1)``;
+        ``is_mana_ability=False``). ANY deviation (a different cost
+        component, a tap requirement, a non-deterministic effect, a
+        ``count`` other than 1) keeps the token DECLINED — admitting a
+        token whose ability silently differs cross-engine is exactly
+        the §2 class this campaign exists to avoid.
+      * carry NO keywords / static abilities / triggered abilities /
+        nested abilities (CardDef carries only the synthesized
+        single activated ability via ``token_activated_abilities``;
+        any other token feature would silently vanish on the bridge).
+
+    The synthesized CardDef's ``card_type`` is the token's primary
+    card type with the rest threaded through ``extra_card_types``
+    (the Lander is single-type ``Artifact``; the multi-type path is
+    kept general). The ``Token`` supertype is stamped so both engines
+    remove the token from non-battlefield zones per CR 704.5d.
+    """
+    from mtg_bot.effects.base import ActivatedAbility
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+
+    if token_printing is None:
+        return None
+    card_types = tuple(getattr(token_printing, "card_types", ()) or ())
+    if not card_types:
+        return None
+    # This path is the NON-creature ability-bearing token (the Lander
+    # is Artifact — Lander, no P/T). A creature token with an activated
+    # ability is out of Phase-3a scope (its P/T body + the ability
+    # would BOTH have to round-trip; the only EoE consumer here is the
+    # bare Lander).
+    if "Creature" in card_types:
+        return None
+    if token_printing.power is not None or token_printing.toughness is not None:
+        return None
+    if getattr(token_printing, "static_abilities", None):
+        return None
+    if getattr(token_printing, "triggered_abilities", None):
+        return None
+    if token_printing.keywords:
+        return None
+    if getattr(
+        token_printing, "can_only_block_creatures_with_flying", False
+    ):
+        return None
+    aas = tuple(token_printing.activated_abilities or ())
+    if len(aas) != 1:
+        return None
+    aa = aas[0]
+    if not isinstance(aa, ActivatedAbility):
+        return None
+    # STRICT cost gate: exactly {2} generic + sacrifice_self, nothing
+    # else. Any extra cost component (tap / other sac / target) would
+    # round-trip differently or be silently dropped (§2).
+    cost = aa.cost
+    if cost.mana is None:
+        return None
+    if cost.mana.generic != 2 or cost.mana.colored:
+        return None
+    if not cost.sacrifice_self:
+        return None
+    for _extra in (
+        "tap_self",
+        "requires_target_creature_you_control",
+        "sacrifice_another_creature_or_artifact",
+        "sacrifice_a_land",
+        "sacrifice_another_artifact",
+        "sacrifice_food",
+        "sacrifice_a_desert",
+    ):
+        if getattr(cost, _extra, False):
+            return None
+    # STRICT effect gate: the fully-deterministic single-land search.
+    if not isinstance(aa.effect, SearchLibraryForBasicLandTapped):
+        return None
+    if aa.effect.count != 1:
+        return None
+    if getattr(aa, "is_mana_ability", False):
+        return None
+    extra = tuple(t for t in card_types if t != card_types[0])
+    from mtg_bot.parity.cross_engine import CardDef as _CardDef
+    return _CardDef(
+        name=token_printing.name,
+        card_type=card_types[0],
+        extra_card_types=extra,
+        subtypes=tuple(token_printing.subtypes or ()),
+        supertypes=("Token",),
+        token_activated_abilities=(dict(_LANDER_SAFE_ACTIVATED_ABILITY),),
+    )
+
+
 def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     """Convert a Python ``TriggeredAbility`` back to the Rust-shape
     dict iff it matches one of the :data:`_SAFE_TRIGGERS` shapes.
@@ -2494,17 +2682,26 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # vanilla, so the Phase-1 vanilla-token gate +
             # ``CreateTokenTapped`` Rust sister variant + the
             # ``create_token_tapped`` bridge arm flip it drop→admit
-            # with no Phase-3 dependency. Bare (non-tapped)
-            # ``create_token`` is intentionally NOT in the DIES set —
-            # no real EoE DIES+IsSelf+bare-create_token consumer exists
-            # (every Lander-token DIES carrier is declined on the
-            # non-vanilla token; the only DIES+vanilla-token consumer
-            # is Gravpack Monoist, which is the tapped shape). A future
-            # bare-DIES consumer ships ``create_token`` here + a
-            # ``_SAFE_TRIGGERS`` entry as a single-line edit.
+            # with no Phase-3 dependency.
+            #
+            # Phase 3a (round-53 N1) adds bare ``create_token`` under
+            # DIES — the round-50 comment ("no real EoE
+            # DIES+IsSelf+bare-create_token consumer exists") held only
+            # while every DIES Lander carrier was declined on the
+            # non-vanilla token. Phase 3a's
+            # ``_token_with_safe_activated_ability_card_def`` admits the
+            # bare Lander, so **Beamsaw Prospector** ("When ~ dies,
+            # create a Lander." — Creature — Human Artificer, 24,310
+            # 17lands decks) is now exactly that consumer. The bare
+            # ``create_token`` kind round-trips identically under DIES
+            # vs ENTERS (the bridge's ``create_token`` arm is event-
+            # agnostic; the seating pass already recognizes the kind
+            # under any event), so this is a single-line widen + the
+            # paired ``("dies","source_is_self","create_token")``
+            # ``_SAFE_TRIGGERS`` entry.
             safe_effect_kinds = (
                 "surveil", "gain_life", "draw_cards",
-                "create_token_tapped",
+                "create_token", "create_token_tapped",
             )
     elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:
         # Landfall is parser-emitted under ENTERS only (CR 614 — the
@@ -2690,7 +2887,28 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         if getattr(eff, "schedule_end_of_combat_sacrifice", False):
             return None
         tp = eff.token_printing
+        # Phase 1/4: a VANILLA token (creature body, no abilities).
+        # Phase 3a (round-53 N1): the EoE ``Lander`` token — a
+        # non-creature artifact whose ONLY activated ability is the
+        # bridge-correct ``{2},Sac:SearchLibraryForBasicLandTapped``
+        # shape (round-52 N1 precursor proved it round-trips with NO
+        # §2 gap). The vanilla helper declines the Lander (it has an
+        # activated ability + no creature body); fall back to the
+        # ability-bearing-token helper, which §2-strictly requires the
+        # token's ONLY activated ability to be exactly that Lander
+        # shape and the token to be otherwise clean. ANY other
+        # ability-bearing token (a different cost / effect / extra
+        # ability / keyword) returns None from BOTH helpers and stays
+        # DECLINED. The emitted CardDef carries
+        # ``token_activated_abilities`` which ``_seat_token_printings``
+        # threads unchanged through ``dataclasses.replace`` and
+        # ``cached_token_printing`` (the round-52 cache key folds
+        # ``token_activated_abilities`` in, so a Lander never collides
+        # with a same-named vanilla token — verified by the round-52
+        # cache-key pin).
         token_cd = _token_vanilla_card_def(tp)
+        if token_cd is None:
+            token_cd = _token_with_safe_activated_ability_card_def(tp)
         if token_cd is None:
             return None
         # Phase 4: the ``tapped`` rider routes to the

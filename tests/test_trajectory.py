@@ -4250,36 +4250,228 @@ def test_seat_token_printings_dedups_shared_token():
 
 
 def test_printing_is_bridge_simple_creature_rejects_lander_cluster():
-    """EoE-pool-delta reject pin: the high-deck-count Lander cluster
-    STAYS DROPPED after Phase 1 + Phase 4 — the Lander token's
-    activated ability is the §2 decline. This is the reject-path pin
-    the Phase-3 token-activated-ability slice will later CONVERT to
-    admit (round-37 DDDD / round-44 / round-48 sister-precedent).
+    """Phase 3a (round-53 N1) reject→admit conversion + the §2 decline
+    ledger for the Lander cluster.
 
-    Phase 4 (round 50) note: Gravpack Monoist was in this reject list
-    under Phase 1 (its Robot token is vanilla but the ``tapped=True``
-    rider had no Rust mirror — §2.3). Phase 4's
-    ``Effect::CreateTokenTapped`` sister variant + the
-    ``create_token_tapped`` bridge/recognizer CONVERTED it to the
-    admit path — see
-    ``test_phase4_gravpack_monoist_flips_drop_to_admit`` below. The
-    Lander carriers below still produce the non-vanilla Lander token
-    so they stay DROPPED until Phase 3.
+    Phase 1 (round-49) declined the ENTIRE high-deck-count Lander
+    cluster because the Lander token's activated ability would silently
+    vanish on the bridge (§2.3). The round-52 N1 Phase-3 precursor
+    landed the ``token_activated_abilities`` substrate + bridge
+    plumbing; Phase 3a (this round) adds
+    ``_token_with_safe_activated_ability_card_def`` which ADMITS the
+    bare Lander token (its ONLY activated ability is the bridge-correct
+    ``{2},Sac:SearchLibraryForBasicLandTapped`` shape) and widens the
+    DIES recognizer row with bare ``create_token``.
+
+    **CONVERTED drop→admit** (the headline lever): Galactic Wayfarer
+    (ENTERS+IsSelf+bare-Lander) + Beamsaw Prospector
+    (DIES+IsSelf+bare-Lander) — see
+    ``test_phase3a_lander_carriers_flip_drop_to_admit``.
+
+    **STAY DECLINED — the §2 ledger** (each for a reason ORTHOGONAL to
+    the Lander token now round-tripping; admitting any would be a §2
+    silent-mistranslation):
+
+      * **Edge Rover** — its CreateToken rider is ``each_player=True``.
+        No loader recognizer / auto-registration arm for the
+        each-player shape (Phase 5 in the design doc); the
+        ``create_token_each_player`` Rust variant + bridge arm exist
+        (round-43) but the recognizer gates ``each_player`` to its
+        default. DECLINED → Phase 5.
+      * **Biomechan Engineer** — the CARRIER has an activated ability
+        (``activated_abilities`` non-empty). ``_printing_is_bridge_
+        simple_creature`` declines any creature with a carrier
+        activated ability campaign-wide (CardDef has no carrier-
+        activated-ability field — it would silently vanish). The
+        Lander rider itself round-trips; the carrier feature is the
+        decline. DECLINED (carrier activated ability).
+      * **Glacier Godmaw** — a SECOND triggered ability
+        (``ENTERS + landfall-And + PumpCreaturesYouControlUntilEOT``
+        with ``granted_keywords={haste,vigilance}``) does not
+        round-trip through ``_python_ta_to_safe_dict`` (no bridge arm
+        for mass-pump-with-granted-keywords). The filter requires
+        EVERY trigger to round-trip; the Lander trigger does, the
+        sibling does not. DECLINED (sibling un-bridged trigger).
+
+    These three are the standing Phase-3a §2 declines. The remaining
+    cluster members (Sunstar Expansionist And-StateBound predicate,
+    Seedship Agrarian BECOMES_TAPPED event, Biotech Specialist
+    IS_SACRIFICED sibling, Bioengineered Future non-creature →
+    Phase 2) are covered by the dedicated decline pin below.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
 
     pr = get_active_source().get_printings()
-    for name in (
-        "Galactic Wayfarer", "Beamsaw Prospector", "Edge Rover",
-        "Biomechan Engineer", "Glacier Godmaw",
-    ):
+    # Phase 3a CONVERTED these drop→admit.
+    for name in ("Galactic Wayfarer", "Beamsaw Prospector"):
+        c = pr.get(name)
+        if c is None:
+            continue
+        assert _printing_is_bridge_simple_creature(c) is True, (
+            f"{name} must FLIP drop→admit under Phase 3a "
+            f"(bare Lander token now round-trips via "
+            f"_token_with_safe_activated_ability_card_def)"
+        )
+    # These STAY DECLINED — each for a §2 reason orthogonal to the
+    # Lander token round-tripping (see docstring ledger).
+    for name in ("Edge Rover", "Biomechan Engineer", "Glacier Godmaw"):
         c = pr.get(name)
         if c is None:
             continue
         assert _printing_is_bridge_simple_creature(c) is False, (
-            f"{name} must stay DROPPED under Phase 1/4 "
-            f"(Lander non-vanilla token — §2; Phase 3 will convert)"
+            f"{name} must STAY DROPPED under Phase 3a "
+            f"(§2 decline orthogonal to the Lander — see ledger)"
+        )
+
+
+def test_phase3a_lander_carriers_flip_drop_to_admit():
+    """Phase 3a (round-53 N1) EoE-pool-delta ADMIT pin — the headline
+    real-card lever.
+
+    Galactic Wayfarer (Creature — Human Scout, "When ~ enters, create
+    a Lander." — **33,469** of 129,996 17lands EoE decks) and Beamsaw
+    Prospector (Creature — Human Artificer, "When ~ dies, create a
+    Lander." — **24,310** decks) flip drop→admit:
+    **57,779 cumulative 17lands decks**, the single largest token-
+    substrate real-card lever after Phase 4's Gravpack Monoist.
+
+    The flip is enabled by ``_token_with_safe_activated_ability_card_
+    def`` admitting the bare ``Lander`` token (its ONLY activated
+    ability is the round-52-precursor-verified bridge-correct
+    ``{2},Sac:SearchLibraryForBasicLandTapped`` shape, emitted on the
+    synthesized token CardDef via ``token_activated_abilities``) +ENTERS
+    (round-49) / DIES (this round) ``create_token`` recognizer rows.
+
+    NOTE the cumulative count (57,779) is BELOW the round-52-flagged
+    "~88k+" naive estimate: that estimate summed the high-deck-count
+    list before applying §2 per-carrier. The §2-honest admit set is
+    exactly these two carriers — every other high-deck Lander carrier
+    is declined for a reason orthogonal to the Lander (see
+    ``test_printing_is_bridge_simple_creature_rejects_lander_cluster``
+    + ``test_phase3a_lander_cluster_residue_stays_declined``).
+    Coverage is NOT forced (brief §2 discipline).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+        _python_ta_to_safe_dict,
+    )
+
+    pr = get_active_source().get_printings()
+
+    gw = pr.get("Galactic Wayfarer")
+    assert gw is not None, "Galactic Wayfarer must be in the EoE pool"
+    assert _printing_is_bridge_simple_creature(gw) is True
+    (gw_ta,) = gw.triggered_abilities
+    gw_sd = _python_ta_to_safe_dict(gw_ta)
+    assert gw_sd is not None
+    assert gw_sd["event"] == "enters"
+    assert gw_sd["predicate"] == {"kind": "source_is_self"}
+    assert gw_sd["effect"]["kind"] == "create_token"
+    assert gw_sd["effect"]["count"] == 1
+    # Pre-seating symbolic form — the Lander token CardDef carries the
+    # bridge-correct activated ability via token_activated_abilities.
+    gw_tcd = gw_sd["effect"]["_token_card_def"]
+    assert gw_tcd.name == "Lander"
+    assert gw_tcd.card_type == "Artifact"
+    assert gw_tcd.power is None and gw_tcd.toughness is None
+    assert len(gw_tcd.token_activated_abilities) == 1
+    gw_aa = gw_tcd.token_activated_abilities[0]
+    assert gw_aa["cost"] == {"mana": {"generic": 2}, "sacrifice_self": True}
+    assert gw_aa["effect"] == {
+        "kind": "search_library_for_basic_land_tapped"
+    }
+    assert gw_aa["is_mana_ability"] is False
+
+    bp = pr.get("Beamsaw Prospector")
+    assert bp is not None, "Beamsaw Prospector must be in the EoE pool"
+    assert _printing_is_bridge_simple_creature(bp) is True
+    (bp_ta,) = bp.triggered_abilities
+    bp_sd = _python_ta_to_safe_dict(bp_ta)
+    assert bp_sd is not None
+    assert bp_sd["event"] == "dies", (
+        "Beamsaw Prospector is a DIES-trigger Lander carrier — Phase 3a "
+        "widens the DIES recognizer row with bare create_token"
+    )
+    assert bp_sd["predicate"] == {"kind": "source_is_self"}
+    assert bp_sd["effect"]["kind"] == "create_token"
+    assert bp_sd["effect"]["count"] == 1
+    assert bp_sd["effect"]["_token_card_def"].name == "Lander"
+
+
+def test_phase3a_lander_cluster_residue_stays_declined():
+    """Phase 3a §2-discipline pin: the lower-deck-count Lander-cluster
+    residue STAYS DECLINED, each for a precise reason.
+
+    These are the "do not force coverage" declines (brief §2). Each
+    carrier's Lander token itself round-trips post-Phase-3a, but the
+    carrier is declined for an ORTHOGONAL bridge-incorrectness:
+
+      * **Sunstar Expansionist** (12,252 decks) — its CreateToken
+        trigger predicate is ``And(IsSelf, StateBound(Opponent
+        ControlsMoreLandsThanYou))``, a conditional StateBound shape
+        with no recognizer arm (the create_token recognizer only
+        handles the bare ``IsSelf`` predicate). Declined at the
+        recognizer (``_python_ta_to_safe_dict`` returns None).
+      * **Seedship Agrarian** (14,078 decks) — its Lander trigger
+        event is ``BECOMES_TAPPED``, which has no bridge arm (a known
+        campaign landmine — would silently mistranslate). Declined at
+        the recognizer.
+      * **Biotech Specialist** (5,058 decks) — a SECOND trigger
+        (``IS_SACRIFICED + And + DealDamageToTargetOpponent``) does
+        not round-trip; the filter requires every trigger to. Declined
+        on the sibling trigger.
+      * **Bioengineered Future** (1,560 decks) — a non-creature
+        (Enchantment). The loader creature-filter declines it; the
+        bridge-simple non-creature path is Phase 2. Declined
+        (non-creature → Phase 2).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+        _python_ta_to_safe_dict,
+    )
+
+    pr = get_active_source().get_printings()
+
+    se = pr.get("Sunstar Expansionist")
+    if se is not None:
+        assert _printing_is_bridge_simple_creature(se) is False
+        # ta[0] is the Lander CreateToken under the And-StateBound
+        # predicate → recognizer returns None.
+        assert _python_ta_to_safe_dict(se.triggered_abilities[0]) is None, (
+            "Sunstar Expansionist's CreateToken rides an "
+            "And-StateBound predicate — must NOT round-trip"
+        )
+
+    sa = pr.get("Seedship Agrarian")
+    if sa is not None:
+        assert _printing_is_bridge_simple_creature(sa) is False
+        # The Lander trigger's BECOMES_TAPPED event is unbridged.
+        lander_ta = next(
+            t for t in sa.triggered_abilities
+            if getattr(getattr(t, "effect", None), "token_printing", None)
+            is not None
+            and t.effect.token_printing.name == "Lander"
+        )
+        assert _python_ta_to_safe_dict(lander_ta) is None, (
+            "Seedship Agrarian's Lander trigger is BECOMES_TAPPED "
+            "(no bridge arm) — must NOT round-trip"
+        )
+
+    bs = pr.get("Biotech Specialist")
+    if bs is not None:
+        assert _printing_is_bridge_simple_creature(bs) is False, (
+            "Biotech Specialist has an IS_SACRIFICED+damage sibling "
+            "trigger that does not round-trip — stays declined"
+        )
+
+    bf = pr.get("Bioengineered Future")
+    if bf is not None:
+        assert _printing_is_bridge_simple_creature(bf) is False, (
+            "Bioengineered Future is a non-creature (Enchantment) — "
+            "creature-filter declines it; Phase 2 territory"
         )
 
 
@@ -4601,31 +4793,127 @@ def test_r52_card_def_token_activated_abilities_back_compat_default():
 
 
 def test_r52_real_lander_token_still_declined_substrate_only():
-    """Round-52 N1 SUBSTRATE-ONLY pin: the real authored EoE
-    ``Lander`` token printing (``{2}, Sac:
-    SearchLibraryForBasicLandTapped``) is STILL declined by
-    ``_token_vanilla_card_def`` (returns ``None``) — this precursor
-    lands the ``token_activated_abilities`` substrate WITHOUT admitting
-    any Lander carrier. The vanilla-token gate's
-    ``if token_printing.activated_abilities: return None`` branch is
-    unchanged; a later Phase-3 slice flips it. This is the
-    round-37/43/44/47/49 substrate-only-landing contract (EoE-pool
-    delta = 0 this round).
+    """Round-52→53 contract pin: the vanilla-token helper
+    ``_token_vanilla_card_def`` STILL declines the real EoE ``Lander``
+    (it has an activated ability + no creature body), but Phase 3a's
+    sibling ``_token_with_safe_activated_ability_card_def`` now ADMITS
+    it (the §2-honest split — the vanilla path is unchanged; the
+    ability-bearing-token path is the new gate).
     """
     from mtg_bot.cards.tokens import TOKEN_PRINTINGS
-    from mtg_bot.parity.trajectory import _token_vanilla_card_def
+    from mtg_bot.parity.trajectory import (
+        _token_vanilla_card_def,
+        _token_with_safe_activated_ability_card_def,
+    )
 
     real_lander = TOKEN_PRINTINGS["Lander"]
     assert len(real_lander.activated_abilities) == 1, (
         "real Lander must carry its {2},Sac ability (fixture sanity)"
     )
+    # The vanilla gate is UNCHANGED — still declines the Lander.
     assert _token_vanilla_card_def(real_lander) is None, (
-        "SUBSTRATE-ONLY: the real Lander token must STILL be declined "
-        "this slice — no Lander carrier is admitted by the production "
-        "loader until a later Phase-3 slice (TOKEN_PRINTING_SUBSTRATE "
-        "§6). The substrate makes the shape REPRESENTABLE; it does not "
-        "open the gate."
+        "_token_vanilla_card_def must still decline the Lander "
+        "(activated ability + non-creature body) — Phase 3a does NOT "
+        "widen the vanilla gate; it adds a sibling."
     )
+    # Phase 3a's sibling gate ADMITS the bare bridge-correct Lander.
+    cd = _token_with_safe_activated_ability_card_def(real_lander)
+    assert cd is not None, (
+        "Phase 3a: the bare Lander (its ONLY activated ability is the "
+        "bridge-correct {2},Sac:Search shape) must be ADMITTED by "
+        "_token_with_safe_activated_ability_card_def"
+    )
+    assert cd.name == "Lander"
+    assert cd.card_type == "Artifact"
+    assert cd.supertypes == ("Token",)
+    assert cd.power is None and cd.toughness is None
+    assert len(cd.token_activated_abilities) == 1
+    aa = cd.token_activated_abilities[0]
+    assert aa["cost"] == {"mana": {"generic": 2}, "sacrifice_self": True}
+    assert aa["effect"] == {"kind": "search_library_for_basic_land_tapped"}
+    assert aa["is_mana_ability"] is False
+
+
+def test_phase3a_token_with_safe_activated_ability_card_def_gate():
+    """Phase 3a §2-strict gate pin: ``_token_with_safe_activated_
+    ability_card_def`` admits ONLY the exact bridge-correct bare Lander
+    and declines every per-disqualifier variant (the §2 silent-
+    mistranslation boundary).
+    """
+    from mtg_bot.cards.base import (
+        CardPrinting, ManaCost, ActivatedAbility, ActivationCost,
+        parse_mana_cost, make_token_creature,
+    )
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import (
+        _token_with_safe_activated_ability_card_def as F,
+    )
+
+    def _lander(**over):
+        cost = over.pop(
+            "cost",
+            ActivationCost(
+                mana=parse_mana_cost("{2}"), mana_str="{2}",
+                sacrifice_self=True,
+            ),
+        )
+        effect = over.pop("effect", SearchLibraryForBasicLandTapped())
+        kw = dict(
+            name="Lander", mana_cost_str="", mana_cost=ManaCost(),
+            type_line="Token Artifact — Lander",
+            supertypes=("Token",), card_types=("Artifact",),
+            subtypes=("Lander",),
+            activated_abilities=(
+                ActivatedAbility(cost=cost, effect=effect),
+            ),
+        )
+        kw.update(over)
+        return CardPrinting(**kw)
+
+    # Canonical bare Lander → ADMIT.
+    ok = F(_lander())
+    assert ok is not None and ok.card_type == "Artifact"
+    assert ok.power is None and ok.toughness is None
+    assert len(ok.token_activated_abilities) == 1
+
+    # None → None.
+    assert F(None) is None
+    # A creature token (vanilla path's job) → declined here.
+    assert F(make_token_creature("Robot", 2, 2, artifact=True)) is None
+    # Wrong cost mana ({3} not {2}) → §2 decline.
+    assert F(_lander(cost=ActivationCost(
+        mana=parse_mana_cost("{3}"), sacrifice_self=True))) is None
+    # Colored mana in cost → §2 decline.
+    assert F(_lander(cost=ActivationCost(
+        mana=parse_mana_cost("{1}{G}"), sacrifice_self=True))) is None
+    # Missing sacrifice_self → §2 decline.
+    assert F(_lander(cost=ActivationCost(
+        mana=parse_mana_cost("{2}")))) is None
+    # Extra cost component (tap_self) → §2 decline.
+    assert F(_lander(cost=ActivationCost(
+        mana=parse_mana_cost("{2}"), sacrifice_self=True,
+        tap_self=True))) is None
+    # Wrong effect (DrawCards) → §2 decline.
+    assert F(_lander(effect=DrawCards(amount=1))) is None
+    # count != 1 → §2 decline.
+    assert F(_lander(
+        effect=SearchLibraryForBasicLandTapped(count=2))) is None
+    # Two activated abilities → §2 decline (must be exactly one).
+    two = _lander()
+    two = CardPrinting(
+        name="Lander", mana_cost_str="", mana_cost=ManaCost(),
+        type_line="Token Artifact — Lander", supertypes=("Token",),
+        card_types=("Artifact",), subtypes=("Lander",),
+        activated_abilities=(
+            two.activated_abilities[0], two.activated_abilities[0],
+        ),
+    )
+    assert F(two) is None
+    # Keyword on the token → §2 decline.
+    assert F(_lander(keywords=frozenset({"flying"}))) is None
 
 
 def test_r52_synthetic_lander_card_def_round_trips_both_engines():
