@@ -55465,6 +55465,346 @@ def test_cross_engine_synthetic_etb_each_opp_loses_life_eq_artifact_count_bridge
     )
 
 
+def test_cross_engine_synthetic_etb_gain_life_equal_to_artifact_count_bridge_dict_round_trip_parity(
+    parity_smoke,
+):
+    """Round-45 BLOCKED-RUST-EFFECT slice -- drive the new
+    ``gain_life_equal_to_artifact_count`` Effect arm end-to-end on
+    BOTH engines via the cross-engine bridge dict (NOT direct Python
+    class instantiation). SIXTH apply substrate to pick up the
+    round-32 X-from-count plumbing established by damage (round-32) /
+    counters (round-33) / surveil (round-34) / mill (round-42) /
+    life-loss-each-opponent (round-44) -- this slice extends the
+    substrate axis to gain-life-controller-self on the artifact-count
+    workhorse denominator. Controller-self mirror of round-44 with
+    inverted recipient AND inverted sign.
+
+    **The substrate.** Rust's ``Effect::GainLifeEqualToArtifactCount``
+    (cards.rs unit variant added in this slice; resolve at
+    state_ops_resolve.rs immediately after the round-44
+    EachOpponentLosesLifeEqualToArtifactCount resolve arm) walks the
+    source-controller's bf to count "Artifact"-typed permanents
+    (mirrors round-32 / round-34 / round-44 sister artifact-count loop
+    BIT-FOR-BIT), then ADDS that count to the source-controller's life
+    via simple `+=`. Python's ``GainLifeEqualToArtifactCount.resolve``
+    (effects/generic/life.py -- shipped in this slice as the bridge's
+    other side) walks ``state.battlefield`` filtering on
+    ``o.controller_id == controller_id and o.printing.is_artifact``,
+    then routes through ``mtg_bot.game.gain_life`` with the count.
+    Both engines converge on the 2-player observable: the source-
+    controller's life total goes UP by ``artifact_count``.
+
+    **Why the bridge-dict round trip matters.** This slice ships a
+    brand-new Python class (no pre-existing parser route -- the
+    dynamic-X variant doesn't have an oracle-text recognizer in this
+    slice; that's a follow-up for whenever an EoE consumer surfaces).
+    The end-to-end probe drives a synthetic CardDef whose
+    ``triggered_abilities`` carries the bridge-dict shape
+    ``{"kind": "gain_life_equal_to_artifact_count"}``; Rust's
+    parse_effect arm dispatches to the new variant directly, Python's
+    ``_ta_dict_to_python_effect`` arm constructs the new class. This
+    pin verifies the round-trip on both engines through the inject +
+    ENTERS-dispatch + drain harness (mirrors the round-30 stun-counter
+    / round-32 damage-by-artifact / round-34 surveil-by-artifact /
+    round-44 life-loss-by-artifact bridge-dict round-trip-probe
+    pattern).
+
+    **Probe shape (synthetic same-controller inject-and-fire-ENTERS).**
+
+      1. **active_player=P0** (default).
+
+      2. **Inject 3 vanilla Trinkets onto P0's bf** -- the
+         denominator. Each Trinket is a no-effects ``Artifact`` carrier
+         (``card_types: ["Artifact"]``) with no triggers; the only
+         purpose is to count toward the artifact-count denominator on
+         P0's bf at resolve time.
+
+      3. **Inject Round-45 Lifegain Bear (the source) onto P0's bf**
+         with controller=0 via Rust's ``register_and_inject_object``
+         and Python's ``new_object`` + bf append + manual
+         ``_trigger_etb_abilities``. The source is a vanilla 2/2
+         Creature (NOT an Artifact -- so it does NOT count toward the
+         denominator itself; the 3 Trinkets are the whole denominator).
+         The ENTERS dispatch fires the SourceIsSelf trigger on both
+         engines; the trigger lands on the stack with controller=0.
+
+      4. **Drain both stacks** (untargeted). The trigger resolves:
+         Rust's intrinsic 5-zone walk finds the source on P0's bf,
+         derives source-controller=0, walks P0's bf and counts +1 per
+         "Artifact"-typed permanent (3 Trinkets -> count=3), then ADDS
+         3 to P0's life (the source-controller, NOT the opponent).
+         Python's resolve walks ``state.battlefield`` with
+         ``o.controller_id == 0 and o.printing.is_artifact`` (3 hits),
+         then routes through ``gain_life`` with count=3 to P0. Both
+         converge.
+
+      5. **Cross-engine assert (round-trip contract):**
+         - P0's life increased by 3 on both engines (20 -> 23).
+         - P1's life unchanged on both engines (recipient is
+           controller-self, not opponent).
+         - 4 permanents on P0's bf (3 Trinkets + the source); 0 on
+           P1's bf.
+         - No residual stack on either engine.
+         - No bf / hand / graveyard size deltas (only life moves).
+
+    **Out of scope:**
+
+      * Cross-controller routing -- the round-44 sister cross-
+        controller routing (recipient inversion documented in
+        ``test_resolve_gain_life_eq_artifact_count_opponent_source_targets_p1``,
+        tests_rust/test_resolve.py) covers the source-controller
+        derivation on this slice's apply substrate. Future cross-
+        controller variant of this probe can land in a follow-up.
+      * Zero-artifact silent no-op -- the Rust regression pin
+        ``test_resolve_gain_life_eq_artifact_count_zero_artifacts_no_op``
+        (tests_rust/test_resolve.py) covers the zero-artifact path
+        without the cross-engine harness.
+      * Source-self-counts-when-Artifact -- the Rust regression pin
+        ``test_resolve_gain_life_eq_artifact_count_self_counts_when_artifact``
+        (tests_rust/test_resolve.py) pins the no-source-exclusion
+        clause; this probe uses a non-Artifact Creature source so the
+        denominator is exactly the 3 Trinkets (clean observable).
+
+    Sister coverage: round-44 each-opponent life-loss probe (line
+    55129) pins the inverted-recipient apply substrate on the SAME
+    artifact-count denominator; this probe pins the controller-self
+    life-gain substrate on the SAME denominator -- the pair documents
+    that the X-from-count plumbing supports both recipient directions
+    on the life substrate.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Round-45 Lifegain Bear on P0's bf (controller=0; 1 entry).
+      * 3 Trinkets on P0's bf (controller=0; 3 entries).
+      * P0's bf size = 4; P1's bf size = 0.
+      * P0's life: 23 (was 20, gained 3 = artifact count on P0's bf).
+      * P1's life: 20 (unchanged; recipient is controller-self).
+      * P0 / P1 hand / graveyard / library: unchanged (life-only).
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+
+    ZONE_BATTLEFIELD = 2
+
+    # ---- Rust side: inject 3 Trinkets + the source onto P0's bf,
+    # then verify the trigger lands and the drain raises P0's life by
+    # 3. ----
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p0_hand_size_before = rust_state.hand_sizes[0]
+    rust_p1_hand_size_before = rust_state.hand_sizes[1]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+
+    rust_trinket_dict = {
+        "name": "Round-45 Probe Trinket",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 2},
+        "effects": [],
+    }
+    for _ in range(3):
+        rust_state.register_and_inject_object(
+            rust_trinket_dict, 0, ZONE_BATTLEFIELD,
+        )
+
+    rust_source_dict = {
+        "name": "Round-45 Lifegain Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "W": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "gain_life_equal_to_artifact_count"
+                },
+            }
+        ],
+    }
+    rust_state.register_and_inject_object(
+        rust_source_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Lifegain Bear's arrival on P0 should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "GainLifeEqualToArtifactCount on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: same shape via new_object +
+    # _trigger_etb_abilities. The Python class is constructed via the
+    # bridge translator on the ENTERS dispatch -- this is the round-trip
+    # leg that pins the bridge end-to-end. ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import (
+        GainLifeEqualToArtifactCount,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    trinket_printing = CardPrinting(
+        name="Round-45 Probe Trinket",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        produces=frozenset(),
+    )
+    source_printing = CardPrinting(
+        name="Round-45 Lifegain Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("W", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=GainLifeEqualToArtifactCount(),
+            ),
+        ),
+    )
+
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_p0_hand_size_before = len(py_state.players[0].hand)
+    py_p1_hand_size_before = len(py_state.players[1].hand)
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+
+    for _ in range(3):
+        trinket = py_state.new_object(
+            trinket_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+        )
+        trinket.summoning_sick = False
+        trinket.tapped = False
+        trinket.damage = 0
+        trinket.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(trinket)
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Lifegain Bear's arrival on P0 should fire the "
+        "IsSelf ENTERS trigger and land "
+        "GainLifeEqualToArtifactCount on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Post-drain: P0's life rose by 3 (= count of P0 artifacts);
+    # P1's life unchanged. The dynamic-X denominator is the load-
+    # bearing pin -- pre-fix Rust without the by-artifact-count arm
+    # would have raised "unknown effect kind" at register time, never
+    # reaching here.
+    assert rust_state.get_life(0) == rust_p0_life_before + 3, (
+        f"Rust: P0's life should rise by 3 (artifact count on P0's "
+        f"bf = 3 Trinkets, source is non-Artifact Creature) to "
+        f"{rust_p0_life_before + 3}; got {rust_state.get_life(0)}."
+    )
+    assert rust_state.get_life(1) == rust_p1_life_before, (
+        f"Rust: P1's life should be unchanged "
+        f"({rust_p1_life_before}); got {rust_state.get_life(1)}. "
+        f"Recipient is the source-controller (P0), NOT the opponent."
+    )
+    assert py_state.players[0].life == py_p0_life_before + 3, (
+        f"Python: P0's life should rise by 3 to "
+        f"{py_p0_life_before + 3}; got {py_state.players[0].life}"
+    )
+    assert py_state.players[1].life == py_p1_life_before, (
+        f"Python: P1's life should be unchanged "
+        f"({py_p1_life_before}); got {py_state.players[1].life}"
+    )
+
+    # Hand / graveyard sizes unchanged on both engines.
+    assert rust_state.hand_sizes[0] == rust_p0_hand_size_before
+    assert rust_state.hand_sizes[1] == rust_p1_hand_size_before
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_size_before
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_size_before
+    assert len(py_state.players[0].hand) == py_p0_hand_size_before
+    assert len(py_state.players[1].hand) == py_p1_hand_size_before
+    assert len(py_state.players[0].graveyard) == py_p0_gy_size_before
+    assert len(py_state.players[1].graveyard) == py_p1_gy_size_before
+
+    # Bf counts: 4 on P0 (3 Trinkets + source), 0 on P1.
+    rust_p0_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    rust_p1_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    py_p0_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert rust_p0_bf_after == 4, (
+        f"Rust: P0's bf should hold 4 permanents (3 Trinkets + "
+        f"source); got {rust_p0_bf_after}"
+    )
+    assert rust_p1_bf_after == 0
+    assert py_p0_bf_after == 4
+    assert py_p1_bf_after == 0
+
+    # Cross-engine: byte-equal lives + bf / hand / graveyard counts.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    assert rust_p0_bf_after == py_p0_bf_after
+    assert rust_p1_bf_after == py_p1_bf_after
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

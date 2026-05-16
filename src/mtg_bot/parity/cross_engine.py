@@ -4610,6 +4610,92 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             EachOpponentLosesLifeEqualToArtifactCount,
         )
         return EachOpponentLosesLifeEqualToArtifactCount()
+    if kind == "gain_life_equal_to_artifact_count":
+        # BLOCKED-RUST-EFFECT slice (round 45) -- the source's
+        # controller GAINS life equal to the source-controller's
+        # artifact count bridge arm. Rust's
+        # ``Effect::GainLifeEqualToArtifactCount`` (cards.rs unit
+        # variant added in this slice; parse arm immediately after the
+        # round-44 each_opponent_loses_life_equal_to_artifact_count arm,
+        # to_dict immediately after the round-44 to_dict arm, resolve
+        # at state_ops_resolve.rs immediately after the round-44 resolve
+        # arm following the same 5-zone scan + life-add dispatch shape)
+        # mirrors Python's ``GainLifeEqualToArtifactCount``
+        # (effects/generic/life.py -- shipped in this slice as the
+        # SIXTH apply substrate to pick up the round-32 X-from-count
+        # plumbing; 0 EoE consumers today, slice ships per
+        # round-27/31/37 round-trip-surface-coverage rule). Rust
+        # substrate landed end-to-end IN this slice; the bridge
+        # translator wires the cross-engine round trip.
+        #
+        # **Field-shape.** Unit variant on both sides; no fields beyond
+        # ``kind``. The Python class has no constructor args (no static
+        # ``amount`` field) -- the dynamic-X is the whole point of the
+        # class, the count is computed at resolve time, not stored on
+        # the variant. The bridge translator ignores every other key on
+        # the dict for round-trip dict-shape consistency (mirrors the
+        # round-32 deal_damage_to_opponent_creature_by_artifact_count /
+        # round-34 surveil_x_equal_to_artifact_count / round-37
+        # deal_damage_to_opponent_creature_by_creatures_you_control /
+        # round-44 each_opponent_loses_life_equal_to_artifact_count
+        # unit-variant precedents).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # walks the source-controller's bf, counts permanents whose
+        # printing's card_types contains "Artifact" (saturating to
+        # dodge i32 overflow), and adds that count to the source-
+        # controller's life via simple `+=`. Python's resolve at
+        # life.py walks ``state.battlefield``, sums
+        # ``o.controller_id == controller_id and o.printing.is_artifact``,
+        # then routes through ``mtg_bot.game.gain_life`` with the
+        # count. Both engines converge on the 2-player observable: the
+        # source-controller's life total goes UP by ``count``, where
+        # count = source-controller's artifact count at resolve time.
+        #
+        # **Source-controller resolution.** Rust uses the 5-zone walk
+        # + stack scan precedent set by EachOpponentLosesLife (cross-
+        # arm consistency on the dynamic-X arms; bare GainLife uses
+        # ``current_resolve_source_controller`` because its denominator
+        # is static, but this dynamic-X arm needs the walk so the count
+        # always reads from the source's actual controller's bf).
+        # Python uses the resolving controller_id passed by the
+        # standard effect-resolve harness. Both converge on the
+        # source's controller for the count denominator and the apply.
+        #
+        # **Fizzle parity.** Both engines silently no-op when the
+        # source-controller has zero artifacts on bf (Python:
+        # life.py ``if artifact_count <= 0: return``; Rust: the amount
+        # <= 0 guard in the resolve arm). Mirrors GainLife / DrawCards /
+        # Mill / EachOpponentLosesLife / DiscardSelf zero-amount
+        # conventions.
+        #
+        # **Distinct from sister arms.** Distinct from ``gain_life``
+        # (which carries a static `amount` field rather than the
+        # dynamic artifact-count denominator) and from
+        # ``each_opponent_loses_life_equal_to_artifact_count`` (which
+        # subtracts from each OPPONENT's life rather than adding to the
+        # CONTROLLER's life -- inverted recipient AND inverted sign on
+        # the same artifact-count denominator). Walks the apply-
+        # substrate axis to a SIXTH entry on the X-from-count plumbing
+        # (damage / counters / surveil / mill / life-loss-each-opponent
+        # / gain-life-controller-self), confirming the round-35
+        # bidirectionally-extensible plumbing generalizes across both
+        # axes.
+        #
+        # **No real-EoE end-to-end probe in this slice.** No EoE
+        # consumer for the gain-life-by-artifact-count shape today
+        # (sister of round-26 GainLife with dynamic-X denominator -- no
+        # current EoE printing pairs the controller-self life-gain
+        # recipient with the artifact-count denominator). Synthetic
+        # regression pin (per the round-17 Fight / round-30 stun-
+        # counter / round-31 double-power / round-32 damage-by-artifact
+        # / round-34 surveil-by-artifact / round-37 damage-by-creatures
+        # / round-44 life-loss-by-artifact precedent) documents the
+        # bridge plumbing.
+        from mtg_bot.effects.generic.life import (
+            GainLifeEqualToArtifactCount,
+        )
+        return GainLifeEqualToArtifactCount()
     if kind == "untap_target":
         # **Round-23 BLOCKED-BRIDGE-ARM slice -- "untap target
         # creature" (UntapTarget family).** Rust substrate

@@ -128,6 +128,7 @@ from mtg_bot.effects.generic import (
     SacrificeSelfPreservingExileLink,
     GainControlOfTargetSliverPermanently,
     GainLife,
+    GainLifeEqualToArtifactCount,
     GrantActivatedAbility,
     GrantKeywords,
     GrantLifeToEachOpponent,
