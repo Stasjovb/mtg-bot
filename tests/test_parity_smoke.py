@@ -58385,6 +58385,165 @@ def test_cross_engine_real_eoe_monoist_circuit_feeder_etb_two_subject_pump_debuf
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_r52_synthetic_lander_token_activated_ability_round_trip_byte_equal():
+    """Round-52 N1 — Phase-3 PRECURSOR synthetic cross-engine probe.
+
+    **Substrate-only (NO carrier admitted).** Per the round-37 DDDD /
+    round-43 / round-44 / round-47 / round-49 substrate-only-landing
+    precedent: this slice lands the ``token_activated_abilities``
+    CardDef field + its bridge plumbing, NOT any Lander-carrying real
+    card. ``_token_vanilla_card_def`` still declines every token with
+    an activated ability, so the production-deck loader admits ZERO
+    Lander carriers this round. A later Phase-3 slice flips that gate;
+    this probe pins that the substrate it stands on is bridge-correct.
+
+    **What it drives.** Builds matched Python+Rust states from a
+    ``DeckSpec`` whose ``card_defs`` carries a synthetic token CardDef
+    with the EXACT Lander activated ability —
+    ``{2}, Sac: SearchLibraryForBasicLandTapped`` — via the new
+    ``token_activated_abilities`` field. The Rust registry parses it
+    via ``register_printing`` -> ``parse_activated_ability`` (CE20
+    substrate, already on main — no Rust change); the Python side
+    materializes it via the new ``_aa_dict_to_python_activated_ability``
+    bridge. The token is injected on p0's battlefield on BOTH engines
+    from the SAME registered printing, then the post-injection field
+    views are compared byte-for-byte.
+
+    **Why byte-equal here is the right contract.** The field view's
+    battlefield zone signature is built from each engine's GameObject
+    + its registered printing. A Lander whose activated ability
+    silently vanished on ONE engine (the §2 class this substrate
+    exists to prevent) would still inject as a permanent — but the
+    point of this probe paired with the
+    ``test_r52_lander_token_activated_ability_*`` bridge pins is the
+    composite: the bridge pins prove the Python ``ActivatedAbility``
+    is byte-identical to the real authored ``TOKEN_PRINTINGS["Lander"]``
+    AND the Rust registry accepts the same dict; this probe proves the
+    full ``build_matched_states`` -> inject path round-trips that
+    shared dict into a byte-equal cross-engine permanent. Together they
+    close "the Lander ``{2},Sac:SearchLibraryForBasicLandTapped`` shape
+    can be REPRESENTED and round-trips bridge-correct" — the precursor
+    contract. The activation-resolution end-to-end (pay {2}, sac the
+    token, agentless library search, token ceases-to-exist SBA) is the
+    LATER Phase-3 carrier-admitting slice's probe, deferred here per
+    the rider-cascade synthetic-only precedent (round-17/43/47/49).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef,
+        build_matched_states,
+        build_python_field_view,
+        parity_smoke as ce_parity_smoke,
+        compare_fields,
+        clear_token_printings,
+        _card_def_to_python_printing,
+    )
+    from mtg_bot.parity.trajectory import DeckSpec
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+    from mtg_bot.game import Zone
+
+    clear_token_printings()
+    try:
+        lander_aa = {
+            "cost": {"mana": {"generic": 2}, "sacrifice_self": True},
+            "effect": {
+                "kind": "search_library_for_basic_land_tapped"
+            },
+        }
+        lander = CardDef(
+            name="Lander",
+            card_type="Artifact",
+            supertypes=("Token",),
+            subtypes=("Lander",),
+            token_activated_abilities=(lander_aa,),
+        )
+        forest = CardDef(
+            name="Forest", card_type="Land", mana_produced=("G",)
+        )
+        spec = DeckSpec(
+            card_defs=(lander, forest),
+            p0_library=("Forest", "Forest", "Forest"),
+            p1_library=("Forest", "Forest", "Forest"),
+        )
+        py_state, rust_state = build_matched_states(spec)
+        assert rust_state.registry_size == 2
+
+        # Python: materialize the Lander from the seated CardDef. Its
+        # single activated ability must be byte-identical to the REAL
+        # authored Lander token printing — the no-shape-drift contract.
+        py_lander = _card_def_to_python_printing(lander)
+        assert len(py_lander.activated_abilities) == 1
+        py_aa = py_lander.activated_abilities[0]
+        real_aa = TOKEN_PRINTINGS["Lander"].activated_abilities[0]
+        assert py_aa.cost.mana.generic == real_aa.cost.mana.generic == 2
+        assert (
+            py_aa.cost.sacrifice_self
+            == real_aa.cost.sacrifice_self
+            is True
+        )
+        assert isinstance(
+            py_aa.effect, SearchLibraryForBasicLandTapped
+        )
+        assert py_aa.effect.count == real_aa.effect.count == 1
+
+        po = py_state.new_object(
+            py_lander, owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        po.summoning_sick = False
+        po.tapped = False
+        po.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(po)
+
+        # Rust: register + inject the SAME Lander dict (same
+        # activated_abilities the Python bridge consumed). The Rust
+        # registry parses the {2}+sacrifice_self cost +
+        # search_library_for_basic_land_tapped effect via
+        # parse_activated_ability — proves both engines round-trip the
+        # identical dict.
+        ZONE_BATTLEFIELD = 2
+        rust_id = rust_state.register_and_inject_object(
+            {
+                "name": "Lander",
+                "card_types": ["Artifact"],
+                "supertypes": ["Token"],
+                "subtypes": ["Lander"],
+                "mana_cost": {},
+                "effects": [],
+                "activated_abilities": [lander_aa],
+            },
+            0,
+            ZONE_BATTLEFIELD,
+        )
+        assert rust_id >= 0
+
+        # No trigger / stack effect from merely seating the token.
+        assert rust_state.stack_size() == 0
+        assert len(py_state.stack) == 0
+
+        # Headline: the Lander (with its activated ability) is a
+        # byte-equal permanent on BOTH engines. A divergence in how the
+        # token's printing round-tripped would surface as a battlefield
+        # signature mismatch here.
+        py_view = build_python_field_view(py_state)
+        rust_view = ce_parity_smoke()._build_field_view(rust_state)
+        diffs = compare_fields(py_view, rust_view)
+        assert diffs == [], (
+            f"Lander-with-activated-ability not byte-equal across "
+            f"engines: {diffs}"
+        )
+
+        py_bf_names = sorted(t[0] for t in py_view["battlefield"])
+        rust_bf_names = sorted(t[0] for t in rust_view["battlefield"])
+        assert "Lander" in py_bf_names
+        assert "Lander" in rust_bf_names
+        assert py_bf_names == rust_bf_names
+    finally:
+        clear_token_printings()
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

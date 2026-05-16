@@ -16661,5 +16661,233 @@ def test_bridge_two_subject_pump_debuff_synthetic_end_to_end_byte_equal():
     assert py_art.printing.power is None
 
 
+def test_r52_lander_token_activated_ability_python_byte_identical():
+    """Round-52 N1 Phase-3 precursor: a CardDef carrying the Lander's
+    ``{2}, Sac: SearchLibraryForBasicLandTapped`` via
+    ``token_activated_abilities`` materializes a Python
+    ``ActivatedAbility`` BYTE-IDENTICAL to the real authored
+    ``TOKEN_PRINTINGS["Lander"]``. This is the substrate's core
+    correctness contract: the bridge-built ability == the production
+    Lander ability, so a later Phase-3 slice can admit a Lander
+    carrier with zero shape drift.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, _card_def_to_python_printing,
+    )
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+
+    lander_aa = {
+        "cost": {"mana": {"generic": 2}, "sacrifice_self": True},
+        "effect": {"kind": "search_library_for_basic_land_tapped"},
+    }
+    cd = CardDef(
+        name="Lander",
+        card_type="Artifact",
+        supertypes=("Token",),
+        subtypes=("Lander",),
+        token_activated_abilities=(lander_aa,),
+    )
+    pyp = _card_def_to_python_printing(cd)
+    assert pyp.card_types == ("Artifact",)
+    assert pyp.supertypes == ("Token",)
+    assert pyp.subtypes == ("Lander",)
+    assert len(pyp.activated_abilities) == 1
+    aa = pyp.activated_abilities[0]
+    real_aa = TOKEN_PRINTINGS["Lander"].activated_abilities[0]
+    # Cost: {2} + sacrifice_self, byte-equal to the real Lander.
+    assert aa.cost.mana.generic == 2
+    assert aa.cost.mana.generic == real_aa.cost.mana.generic
+    assert aa.cost.mana.colored == real_aa.cost.mana.colored
+    assert aa.cost.sacrifice_self is True
+    assert aa.cost.sacrifice_self == real_aa.cost.sacrifice_self
+    assert aa.cost.tap_self is False  # Lander has no tap in its cost
+    # Effect: SearchLibraryForBasicLandTapped(count=1), the round-21
+    # bridge arm — fully deterministic, no agent seating on either
+    # engine (first ``count`` basics in library order).
+    assert isinstance(aa.effect, SearchLibraryForBasicLandTapped)
+    assert isinstance(
+        real_aa.effect, SearchLibraryForBasicLandTapped
+    )
+    assert aa.effect.count == real_aa.effect.count == 1
+    assert aa.is_mana_ability is False
+    assert aa.is_mana_ability == real_aa.is_mana_ability
+
+
+def test_r52_lander_token_activated_ability_rust_registry_accepts():
+    """Round-52 N1: the SAME Lander ``token_activated_abilities`` dict
+    that the Python bridge consumes is accepted by the Rust registry
+    via ``build_rust_state`` (``register_printing`` ->
+    ``parse_activated_ability``). No Rust change needed — the CE20
+    ``activated_abilities`` substrate is already on main; this pin
+    proves the field round-trips Python<->Rust from ONE dict.
+    """
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity.cross_engine import CardDef, build_rust_state
+    from mtg_bot.parity.trajectory import DeckSpec
+
+    lander = CardDef(
+        name="Lander",
+        card_type="Artifact",
+        supertypes=("Token",),
+        subtypes=("Lander",),
+        token_activated_abilities=(
+            {
+                "cost": {
+                    "mana": {"generic": 2},
+                    "sacrifice_self": True,
+                },
+                "effect": {
+                    "kind": "search_library_for_basic_land_tapped"
+                },
+            },
+        ),
+    )
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",)
+    )
+    spec = DeckSpec(
+        card_defs=(lander, forest),
+        p0_library=("Forest",),
+        p1_library=("Forest",),
+    )
+    # Builds without raising == Rust's parse_activated_ability +
+    # parse_activation_cost (mana + sacrifice_self) +
+    # parse_effect(search_library_for_basic_land_tapped) all accepted
+    # the exact dict the Python bridge consumes.
+    rust_state = build_rust_state(spec)
+    assert rust_state.registry_size == 2
+
+
+def test_r52_activated_ability_cost_bridge_strict_on_unknown_key():
+    """§2 silent-mistranslation discipline: the cost bridge raises on
+    ANY cost key outside the bridge-correct set, exactly mirroring
+    Rust's ``unknown activation_cost key`` error — a cost component
+    one engine honors but the other can't surface MUST NOT land
+    silently.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        _aa_dict_to_python_activation_cost,
+    )
+
+    # ``exile_self`` is a real Python ActivationCost field but is NOT
+    # in Rust's parse_activation_cost accepted set, so it is NOT
+    # bridge-correct — the strict guard must reject it.
+    with pytest.raises(ValueError, match="unsupported activation_cost"):
+        _aa_dict_to_python_activation_cost(
+            {"mana": {"generic": 1}, "exile_self": True}
+        )
+    # A pure typo also raises (not silently dropped).
+    with pytest.raises(ValueError, match="unsupported activation_cost"):
+        _aa_dict_to_python_activation_cost({"sacrifice_slef": True})
+
+
+def test_r52_activated_ability_bridge_requires_cost_and_effect():
+    """The activated-ability bridge mirrors Rust's
+    ``parse_activated_ability`` ``require()`` — both ``cost`` and
+    ``effect`` are mandatory; a malformed dict raises rather than
+    silently building a degenerate ability.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        _aa_dict_to_python_activated_ability,
+    )
+
+    with pytest.raises(ValueError, match="missing required 'cost'"):
+        _aa_dict_to_python_activated_ability(
+            {"effect": {"kind": "search_library_for_basic_land_tapped"}}
+        )
+    with pytest.raises(ValueError, match="missing required 'effect'"):
+        _aa_dict_to_python_activated_ability(
+            {"cost": {"mana": {"generic": 2}, "sacrifice_self": True}}
+        )
+    # is_mana_ability must be a bool if present.
+    with pytest.raises(ValueError, match="is_mana_ability must be a bool"):
+        _aa_dict_to_python_activated_ability(
+            {
+                "cost": {"sacrifice_self": True},
+                "effect": {
+                    "kind": "search_library_for_basic_land_tapped"
+                },
+                "is_mana_ability": "yes",
+            }
+        )
+
+
+def test_r52_token_cache_key_distinguishes_lander_from_vanilla_robot():
+    """Round-52 N1: the round-51 identity-idempotent token-printing
+    cache key folds ``token_activated_abilities`` into the shape
+    signature, so a Lander (activated ability) and an otherwise
+    same-shaped vanilla token DO NOT collide on the cross-game cache —
+    each resolves to its own stable ``CardPrinting`` object. Without
+    this, a Lander seated after a same-named vanilla token would
+    silently reuse the vanilla printing (the §2 class).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, _token_printing_cache_key, cached_token_printing,
+        clear_token_printings,
+    )
+
+    clear_token_printings()
+    try:
+        lander = CardDef(
+            name="X",
+            card_type="Artifact",
+            supertypes=("Token",),
+            token_activated_abilities=(
+                {
+                    "cost": {
+                        "mana": {"generic": 2},
+                        "sacrifice_self": True,
+                    },
+                    "effect": {
+                        "kind": "search_library_for_basic_land_tapped"
+                    },
+                },
+            ),
+        )
+        vanilla = CardDef(
+            name="X", card_type="Artifact", supertypes=("Token",),
+        )
+        assert _token_printing_cache_key(
+            lander
+        ) != _token_printing_cache_key(vanilla)
+        # Distinct cache keys -> distinct cached printings.
+        assert cached_token_printing(lander) is not cached_token_printing(
+            vanilla
+        )
+        # And the cache is still identity-idempotent per shape (the
+        # round-51 contract is preserved for the ability-bearing token).
+        assert cached_token_printing(lander) is cached_token_printing(
+            CardDef(
+                name="X",
+                card_type="Artifact",
+                supertypes=("Token",),
+                token_activated_abilities=(
+                    {
+                        "cost": {
+                            "mana": {"generic": 2},
+                            "sacrifice_self": True,
+                        },
+                        "effect": {
+                            "kind": (
+                                "search_library_for_basic_land_tapped"
+                            )
+                        },
+                    },
+                ),
+            )
+        )
+    finally:
+        clear_token_printings()
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

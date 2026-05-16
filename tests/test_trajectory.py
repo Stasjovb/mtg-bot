@@ -4566,3 +4566,119 @@ def test_r51_real_gravpack_archetype_multi_game_no_registry_conflict():
             )
     finally:
         clear_token_printings()
+
+
+def test_r52_card_def_token_activated_abilities_back_compat_default():
+    """Round-52 N1 (Phase-3 precursor): the new
+    ``CardDef.token_activated_abilities`` field defaults to ``()`` so
+    every pre-round-52 fixture is bit-identical — ``build_rust_state``
+    omits the ``activated_abilities`` registry key and
+    ``_card_def_to_python_printing`` materializes no extra abilities
+    (modulo the orthogonal land mana-ability auto-wire, unchanged).
+    """
+    import dataclasses
+
+    from mtg_bot.parity.cross_engine import (
+        CardDef, _card_def_to_python_printing,
+    )
+
+    field_names = {f.name for f in dataclasses.fields(CardDef)}
+    assert "token_activated_abilities" in field_names
+    cd = CardDef(name="Bear", card_type="Creature", power=2, toughness=2)
+    assert cd.token_activated_abilities == ()
+    pyp = _card_def_to_python_printing(cd)
+    # No land mana-ability auto-wire (it's a Creature) + no token
+    # abilities -> empty activated_abilities tuple, exactly as before.
+    assert pyp.activated_abilities == ()
+    # Land auto-wire path is untouched by the new field.
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",)
+    )
+    fp = _card_def_to_python_printing(forest)
+    assert len(fp.activated_abilities) == 1
+    assert fp.activated_abilities[0].is_mana_ability is True
+    assert forest.token_activated_abilities == ()
+
+
+def test_r52_real_lander_token_still_declined_substrate_only():
+    """Round-52 N1 SUBSTRATE-ONLY pin: the real authored EoE
+    ``Lander`` token printing (``{2}, Sac:
+    SearchLibraryForBasicLandTapped``) is STILL declined by
+    ``_token_vanilla_card_def`` (returns ``None``) — this precursor
+    lands the ``token_activated_abilities`` substrate WITHOUT admitting
+    any Lander carrier. The vanilla-token gate's
+    ``if token_printing.activated_abilities: return None`` branch is
+    unchanged; a later Phase-3 slice flips it. This is the
+    round-37/43/44/47/49 substrate-only-landing contract (EoE-pool
+    delta = 0 this round).
+    """
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    from mtg_bot.parity.trajectory import _token_vanilla_card_def
+
+    real_lander = TOKEN_PRINTINGS["Lander"]
+    assert len(real_lander.activated_abilities) == 1, (
+        "real Lander must carry its {2},Sac ability (fixture sanity)"
+    )
+    assert _token_vanilla_card_def(real_lander) is None, (
+        "SUBSTRATE-ONLY: the real Lander token must STILL be declined "
+        "this slice — no Lander carrier is admitted by the production "
+        "loader until a later Phase-3 slice (TOKEN_PRINTING_SUBSTRATE "
+        "§6). The substrate makes the shape REPRESENTABLE; it does not "
+        "open the gate."
+    )
+
+
+def test_r52_synthetic_lander_card_def_round_trips_both_engines():
+    """Round-52 N1: a synthetic token CardDef carrying the Lander
+    ``{2},Sac:SearchLibraryForBasicLandTapped`` via
+    ``token_activated_abilities`` round-trips through BOTH engines from
+    ONE dict — Python ``_card_def_to_python_printing`` builds an
+    ``ActivatedAbility`` byte-identical to the real authored Lander,
+    and the Rust registry accepts the SAME dict via
+    ``build_rust_state``. No Rust change (CE20
+    ``activated_abilities`` substrate already on main).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        CardDef, _card_def_to_python_printing, build_rust_state,
+    )
+    from mtg_bot.parity.trajectory import DeckSpec
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+
+    lander_aa = {
+        "cost": {"mana": {"generic": 2}, "sacrifice_self": True},
+        "effect": {"kind": "search_library_for_basic_land_tapped"},
+    }
+    lander = CardDef(
+        name="Lander",
+        card_type="Artifact",
+        supertypes=("Token",),
+        subtypes=("Lander",),
+        token_activated_abilities=(lander_aa,),
+    )
+    pyp = _card_def_to_python_printing(lander)
+    py_aa = pyp.activated_abilities[0]
+    real_aa = TOKEN_PRINTINGS["Lander"].activated_abilities[0]
+    assert py_aa.cost.mana.generic == real_aa.cost.mana.generic == 2
+    assert (
+        py_aa.cost.sacrifice_self == real_aa.cost.sacrifice_self is True
+    )
+    assert isinstance(py_aa.effect, SearchLibraryForBasicLandTapped)
+    assert py_aa.effect.count == real_aa.effect.count == 1
+    assert py_aa.is_mana_ability is False
+
+    pytest.importorskip("mtg_bot_engine")
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",)
+    )
+    spec = DeckSpec(
+        card_defs=(lander, forest),
+        p0_library=("Forest",),
+        p1_library=("Forest",),
+    )
+    rust_state = build_rust_state(spec)
+    assert rust_state.registry_size == 2
