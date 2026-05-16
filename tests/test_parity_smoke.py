@@ -61822,6 +61822,359 @@ def test_cross_engine_real_eoe_dauntless_scrapbot_etb_exile_each_opponents_grave
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def _r57_ff_build_rust_state_with_victim(
+    draw_amount=2, victim_pre_damage=0, victim_indestructible=False,
+    seed_victim=True, lib_count=3,
+):
+    """Helper: Rust state with a Faller's-Faithful-shape ETB source
+    about to enter on p0's bf, an optional 2/2 victim on p1's bf, and
+    ``lib_count`` cards in p1's library (the draw source). Returns
+    ``(rust_state, source_id, victim_id_or_None)``. The source is NOT
+    yet injected — caller injects it to fire the ETB.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZB, ZL = 2, 1
+    for i in range(lib_count):
+        rust_state.register_and_inject_object(
+            {"name": f"R57Lib{i}", "card_types": ["Creature"],
+             "power": 1, "toughness": 1}, 1, ZL)
+    victim_id = None
+    if seed_victim:
+        vd = {"name": "R57 Victim", "card_types": ["Creature"],
+              "power": 2, "toughness": 2}
+        if victim_indestructible:
+            vd["keywords"] = ["indestructible"]
+        victim_id = rust_state.register_and_inject_object(vd, 1, ZB)
+        if victim_pre_damage:
+            rust_state.deal_damage(victim_id, victim_pre_damage)
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "R57 Faithful Source",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 1,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "destroy_target_creature_then_draw_if_undamaged",
+                        "draw_amount": draw_amount,
+                    },
+                }
+            ],
+        },
+        0,
+        ZB,
+    )
+    return rust_state, source_id, victim_id
+
+
+def test_r57_rust_ff_undamaged_destroys_and_draws():
+    """**BLOCKED-RUST-EFFECT slice — Faller's Faithful ETB.** Undamaged
+    p1 victim → destroyed + its controller (p1) draws ``draw_amount``.
+    Pins: ETB lands the trigger; the defender-bf[0] pick destroys the
+    victim into p1's graveyard; the undamaged snapshot fires the draw
+    to the VICTIM's controller (p1, not the spell controller p0)."""
+    rs, src_id, vic_id = _r57_ff_build_rust_state_with_victim(
+        draw_amount=2, victim_pre_damage=0)
+    assert rs.stack_size() == 1, (
+        "Rust: source ENTERS should fire the SourceIsSelf trigger and "
+        f"land the effect on the stack. Got {rs.stack_size()}"
+    )
+    p1_lib_before = rs.library_sizes[1]
+    p1_hand_before = rs.hand_sizes[1]
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    # Victim destroyed (off bf, in p1's graveyard).
+    assert not any(o["id"] == vic_id
+                   for o in rs.battlefield_snapshot()), (
+        "Rust: undamaged victim should be destroyed")
+    assert [e["printing_name"]
+            for e in rs.graveyard_snapshot(1)] == ["R57 Victim"]
+    # p1 (the victim's controller) drew 2 — NOT p0 (the spell ctrl).
+    assert rs.hand_sizes[1] == p1_hand_before + 2, (
+        f"Rust: victim's controller p1 should draw 2; hand "
+        f"{p1_hand_before}->{rs.hand_sizes[1]}")
+    assert rs.library_sizes[1] == p1_lib_before - 2
+    assert rs.hand_sizes[0] == 0, "Rust: spell controller p0 must NOT draw"
+
+
+def test_r57_rust_ff_predamaged_destroys_no_draw():
+    """Damaged victim (marked damage > 0) → destroyed but the
+    undamaged snapshot is False so NO draw fires (the realistic
+    no-heal corner where Rust's ``obj.damage`` read == Python's
+    ``damaged_this_turn``)."""
+    rs, src_id, vic_id = _r57_ff_build_rust_state_with_victim(
+        draw_amount=2, victim_pre_damage=1)
+    p1_lib_before = rs.library_sizes[1]
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    assert not any(o["id"] == vic_id
+                   for o in rs.battlefield_snapshot())
+    assert [e["printing_name"]
+            for e in rs.graveyard_snapshot(1)] == ["R57 Victim"]
+    assert rs.hand_sizes[1] == 0, "Rust: damaged victim → no draw"
+    assert rs.library_sizes[1] == p1_lib_before
+
+
+def test_r57_rust_ff_zero_draw_amount_destroys_only():
+    """``draw_amount=0`` → undamaged victim still destroyed, the
+    zero-amount rider is a silent no-op (X-from-count zero
+    short-circuit convention)."""
+    rs, src_id, vic_id = _r57_ff_build_rust_state_with_victim(
+        draw_amount=0, victim_pre_damage=0)
+    p1_lib_before = rs.library_sizes[1]
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    assert not any(o["id"] == vic_id
+                   for o in rs.battlefield_snapshot())
+    assert rs.hand_sizes[1] == 0
+    assert rs.library_sizes[1] == p1_lib_before
+
+
+def test_r57_rust_ff_empty_defender_bf_silent_fizzle_no_draw():
+    """No creature on p1's bf → the "up to one" optional shape
+    resolves as a silent no-op (CR 608.2c): no destroy, AND the draw
+    rider does NOT run even though the source is undamaged."""
+    rs, src_id, _ = _r57_ff_build_rust_state_with_victim(
+        draw_amount=2, victim_pre_damage=0, seed_victim=False)
+    p1_lib_before = rs.library_sizes[1]
+    assert rs.stack_size() == 1
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    # Nothing destroyed, no draw on either side.
+    assert rs.graveyard_snapshot(1) == []
+    assert rs.hand_sizes[0] == 0
+    assert rs.hand_sizes[1] == 0
+    assert rs.library_sizes[1] == p1_lib_before
+    # The source itself is untouched on p0's bf (it's NOT a legal
+    # defender-side target — "OTHER target", structurally enforced by
+    # the defender-bf scan never seeing p0's bf).
+    assert any(o["id"] == src_id
+               for o in rs.battlefield_snapshot())
+
+
+def test_r57_rust_ff_indestructible_victim_suppressed_no_draw():
+    """Indestructible victim (CR 702.12) → destroy suppressed
+    silently, and because no destruction occurred the draw rider does
+    NOT run (the rider only runs alongside an actual destruction —
+    matching Python's turn.destroy indestructible gate)."""
+    rs, src_id, vic_id = _r57_ff_build_rust_state_with_victim(
+        draw_amount=2, victim_pre_damage=0, victim_indestructible=True)
+    p1_lib_before = rs.library_sizes[1]
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    # Victim survives (still on p1's bf), no draw.
+    assert any(o["id"] == vic_id
+               for o in rs.battlefield_snapshot()), (
+        "Rust: indestructible victim should survive")
+    assert rs.graveyard_snapshot(1) == []
+    assert rs.hand_sizes[1] == 0
+    assert rs.library_sizes[1] == p1_lib_before
+
+
+def test_cross_engine_real_eoe_fallers_faithful_etb_destroy_then_draw_if_undamaged_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Faller's Faithful
+    (~14,108 17lands decks).**
+
+    Drives the **ACTUAL parsed Faller's Faithful printing** on the
+    Python side: ``get_active_source().get_printings()["Faller's
+    Faithful"]`` — which the live parser maps to a single
+    ``Event.ENTERS`` ``IsSelf`` trigger whose effect is
+    ``DestroyTargetCreature(draw_if_undamaged_amount=2,
+    optional=True, exclude_self=True)``
+    (``effects/generic/destroy.py:94``).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "When this creature enters, destroy up to one other target
+         creature. If that creature wasn't dealt damage this turn,
+         its controller draws two cards."
+
+    **Honest split (§2 — Effect-half closes byte-equal; full card
+    stays loader-gated).** The Effect arm under test —
+    ``DestroyTargetCreatureThenDrawIfUndamaged`` — is shipped this
+    round (Rust unit/payload variant + parse + to_dict + resolve),
+    bridged via ``cross_engine.py``
+    ``destroy_target_creature_then_draw_if_undamaged`` to the EXACT
+    class the genuine printing parses to. The full Faller's Faithful
+    card is **NOT** added to the production-deck loader ``_SAFE_*``
+    allowlist: Python keeps a per-object ``damaged_this_turn`` boolean
+    that survives a heal-to-0, while Rust carries only ``obj.damage``
+    (marked damage, cleared at cleanup). For the realistic Faller's
+    Faithful ETB (instant-speed destroy, no prior damage marked this
+    turn) the two reads are byte-equal — exercised here. The
+    damaged-then-healed-to-0 corner is the loader-gated subsystem
+    half (the full general damaged-this-turn ledger). Mirrors the r51
+    Monoist / r52 Extinguisher / r53 Mightform / r54 Famished / r56
+    Dauntless "Effect-half-closes / full-card-stays-gated" precedent —
+    see ``docs/SEARCH_LIMITATIONS.md`` round-57 entry.
+
+    **Deterministic, no RNG.** p1 (the opponent) has an undamaged 2/2
+    victim on the battlefield + a 3-card library; p0 (controller)
+    ETBs the genuine Faller's Faithful printing. Both engines pick
+    p1's first creature deterministically (Rust's defender-bf scan;
+    Python via ``_PickFirstOpponentTargetAgent`` over the legal pool).
+
+    Byte-equal observable: the victim is destroyed → p1 graveyard
+    (size 1) on BOTH; p1 (the victim's controller) draws 2 → p1 hand
+    2 / p1 library 3→1 on BOTH; p0 (spell controller) does NOT draw
+    on BOTH; lives unchanged on BOTH.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.game import Zone
+    from mtg_bot.effects.generic.destroy import DestroyTargetCreature
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+
+    real = get_active_source().get_printings().get("Faller's Faithful")
+    if real is None:
+        pytest.skip("Faller's Faithful absent from active CardSource")
+    # Sanity: the genuinely-parsed printing carries a SINGLE ENTERS
+    # trigger whose effect is the DestroyTargetCreature draw-rider
+    # shape this slice ships.
+    assert real.is_creature
+    assert len(real.triggered_abilities) == 1
+    real_eff = real.triggered_abilities[0].effect
+    assert isinstance(real_eff, DestroyTargetCreature), (
+        f"genuine Faller's Faithful ETB must be DestroyTargetCreature; "
+        f"got {type(real_eff).__name__}"
+    )
+    assert real_eff.draw_if_undamaged_amount == 2
+    assert real_eff.optional is True
+    assert real_eff.exclude_self is True
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZB, ZL = 2, 1
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+
+    def _gp(name):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=2, toughness=2, produces=frozenset(),
+        )
+
+    # ---- p1 library: 3 vanilla cards (the draw source) on BOTH.
+    for i in range(3):
+        nm = f"FF Real Lib{i}"
+        o = py_state.new_object(_gp(nm), owner_id=1,
+                                zone=Zone.LIBRARY)
+        py_state.players[1].library.append(o)
+        rust_state.register_and_inject_object(
+            {"name": nm, "card_types": ["Creature"],
+             "power": 2, "toughness": 2}, 1, ZL)
+
+    # ---- p1 undamaged 2/2 victim on BOTH bfs.
+    py_vic = py_state.new_object(_gp("FF Real Victim"), owner_id=1,
+                                 zone=Zone.BATTLEFIELD)
+    py_state.battlefield.append(py_vic)
+    rust_vic_id = rust_state.register_and_inject_object(
+        {"name": "FF Real Victim", "card_types": ["Creature"],
+         "power": 2, "toughness": 2}, 1, ZB)
+
+    # ---- Rust side: bridge-dict carrier carrying just the closeable
+    # Effect arm (the loader does NOT admit the real card — the
+    # damaged-this-turn ledger is the loader-gated half; the
+    # established Monoist/Extinguisher/Mightform/Famished/Dauntless
+    # cross-engine driving pattern).
+    rust_state.register_and_inject_object(
+        {
+            "name": "Faller's Faithful",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 1,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "destroy_target_creature_then_draw_if_undamaged",
+                        "draw_amount": 2,
+                    },
+                }
+            ],
+        },
+        0,
+        ZB,
+    )
+    assert rust_state.stack_size() == 1
+
+    # ---- Python side: the GENUINE parsed Faller's Faithful printing.
+    py_src = py_state.new_object(real, owner_id=0,
+                                 zone=Zone.BATTLEFIELD)
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    assert len(py_state.stack) == 1, (
+        "Python: the genuine Faller's Faithful printing's ENTERS "
+        f"trigger should land on the stack. Got {len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    for _ in range(16):
+        if not py_state.stack:
+            break
+        resolve_top_of_stack(py_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Byte-equal on the destroy-then-draw observable.
+    # Victim destroyed on BOTH (off bf, into p1's graveyard).
+    rust_vic_alive = any(o["id"] == rust_vic_id
+                         for o in rust_state.battlefield_snapshot())
+    py_vic_alive = any(o.id == py_vic.id
+                       for o in py_state.battlefield)
+    assert rust_vic_alive is False and py_vic_alive is False, (
+        f"victim must be destroyed on BOTH; rust_alive={rust_vic_alive} "
+        f"py_alive={py_vic_alive}"
+    )
+    rust_p1_gy = [e["printing_name"]
+                  for e in rust_state.graveyard_snapshot(1)]
+    py_p1_gy = [o.printing.name for o in py_state.players[1].graveyard]
+    assert rust_p1_gy == ["FF Real Victim"] == py_p1_gy, (
+        f"victim must be in p1's graveyard on BOTH; rust={rust_p1_gy} "
+        f"py={py_p1_gy}"
+    )
+    # p1 (victim's controller) drew 2 on BOTH; p0 did NOT draw.
+    assert rust_state.hand_sizes[1] == 2 == len(py_state.players[1].hand), (
+        f"p1 (victim's controller) must draw 2 on BOTH; "
+        f"rust={rust_state.hand_sizes[1]} "
+        f"py={len(py_state.players[1].hand)}"
+    )
+    assert rust_state.library_sizes[1] == 1 == len(
+        py_state.players[1].library), (
+        f"p1 library must be 3→1 on BOTH; "
+        f"rust={rust_state.library_sizes[1]} "
+        f"py={len(py_state.players[1].library)}"
+    )
+    assert rust_state.hand_sizes[0] == 0 == len(py_state.players[0].hand), (
+        "p0 (spell controller) must NOT draw on BOTH"
+    )
+    # Lives unchanged on both engines.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

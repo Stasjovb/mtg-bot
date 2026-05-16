@@ -18457,5 +18457,250 @@ def test_cross_engine_exile_each_opponents_graveyard_empty_gy_noop():
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def _r57_ff_vanilla_printing(name, power=2, toughness=2):
+    """Minimal vanilla creature CardPrinting for bf / library seeding
+    in the Faller's Faithful bridge pins."""
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    return CardPrinting(
+        name=name,
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=power,
+        toughness=toughness,
+        produces=frozenset(),
+    )
+
+
+def _r57_ff_source_card_def(draw_amount=2):
+    """Synthetic creature whose ETB carries the bare
+    ``destroy_target_creature_then_draw_if_undamaged`` arm.
+    ``build_python_state`` auto-translates the triggered-ability dict
+    through the genuine ``_ta_dict_to_python_effect`` bridge, so the
+    Python side exercises the REAL bridge arm (mapping to
+    ``DestroyTargetCreature(draw_if_undamaged_amount=draw_amount,
+    optional=True, exclude_self=True)`` — the exact class the genuine
+    Faller's Faithful printing parses to)."""
+    from mtg_bot.parity.cross_engine import CardDef
+
+    return CardDef(
+        name="Faithful Stand-In",
+        card_type="Creature",
+        power=2,
+        toughness=1,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "destroy_target_creature_then_draw_if_undamaged",
+                    "draw_amount": draw_amount,
+                },
+            },
+        ),
+    )
+
+
+def _r57_ff_rust_source_dict(draw_amount=2):
+    return {
+        "name": "Faithful Stand-In",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "destroy_target_creature_then_draw_if_undamaged",
+                    "draw_amount": draw_amount,
+                },
+            }
+        ],
+    }
+
+
+def test_bridge_destroy_target_creature_then_draw_if_undamaged_translates():
+    """**BLOCKED-RUST-EFFECT slice — Faller's Faithful ETB.** Rust's
+    ``{"kind": "destroy_target_creature_then_draw_if_undamaged",
+    "draw_amount": N}`` translates to the EXACT Python class the
+    genuine Faller's Faithful printing parses to:
+    ``DestroyTargetCreature(draw_if_undamaged_amount=N, optional=True,
+    exclude_self=True)``. Missing / negative ``draw_amount`` clamps to
+    0 (X-from-count zero-short-circuit convention).
+    """
+    from mtg_bot.effects.generic.destroy import DestroyTargetCreature
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_creature_then_draw_if_undamaged",
+         "draw_amount": 2}
+    )
+    assert isinstance(e, DestroyTargetCreature)
+    assert e.draw_if_undamaged_amount == 2
+    assert e.optional is True
+    assert e.exclude_self is True
+
+    # Missing draw_amount -> 0 (legal "destroy with no draw" shape).
+    e0 = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_creature_then_draw_if_undamaged"}
+    )
+    assert isinstance(e0, DestroyTargetCreature)
+    assert e0.draw_if_undamaged_amount == 0
+
+    # Negative draw_amount clamps to 0.
+    eneg = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_creature_then_draw_if_undamaged",
+         "draw_amount": -3}
+    )
+    assert eneg.draw_if_undamaged_amount == 0
+
+    # Byte-identical to the GENUINE parsed Faller's Faithful printing.
+    from mtg_bot.cards.source import get_active_source
+
+    real = get_active_source().get_printings().get("Faller's Faithful")
+    if real is not None:
+        real_eff = real.triggered_abilities[0].effect
+        assert isinstance(real_eff, DestroyTargetCreature)
+        assert real_eff.draw_if_undamaged_amount == e.draw_if_undamaged_amount
+        assert real_eff.optional == e.optional
+        assert real_eff.exclude_self == e.exclude_self
+
+
+def _r57_ff_cross_engine_run(draw_amount, victim_pre_damage):
+    """Drive the Faller's Faithful ETB cross-engine end-to-end.
+
+    p0 (controller) ETBs the source; p1 (opponent) has a 2/2 victim
+    creature + a 3-card library. Returns
+    ``(py_tuple, rust_tuple)`` where each tuple is
+    ``(victim_alive, p1_gy_size, p1_hand_size, p1_lib_size,
+    p0_life, p1_life)``. Both engines pick the opponent's first
+    creature deterministically (Rust's defender-bf scan; Python via
+    ``_PickFirstOpponentTargetAgent`` over the legal pool).
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        _card_def_to_python_printing,
+    )
+    from mtg_bot.game import Zone
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+
+    cd = _r57_ff_source_card_def(draw_amount)
+    spec = DeckSpec(card_defs=(cd,), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZB, ZL = 2, 1
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+
+    # p1 library: 3 vanilla cards on BOTH engines (draw-source).
+    for nm in ("FF Lib1", "FF Lib2", "FF Lib3"):
+        o = py_state.new_object(
+            _r57_ff_vanilla_printing(nm, 1, 1), owner_id=1,
+            zone=Zone.LIBRARY,
+        )
+        py_state.players[1].library.append(o)
+        rust_state.register_and_inject_object(
+            {"name": nm, "card_types": ["Creature"],
+             "power": 1, "toughness": 1}, 1, ZL)
+
+    # p1 victim creature on BOTH bfs.
+    py_vic = py_state.new_object(
+        _r57_ff_vanilla_printing("FF Victim", 2, 2), owner_id=1,
+        zone=Zone.BATTLEFIELD,
+    )
+    py_state.battlefield.append(py_vic)
+    rust_vic_id = rust_state.register_and_inject_object(
+        {"name": "FF Victim", "card_types": ["Creature"],
+         "power": 2, "toughness": 2}, 1, ZB)
+
+    if victim_pre_damage:
+        py_vic.damage = victim_pre_damage
+        py_vic.damaged_this_turn = True
+        rust_state.deal_damage(rust_vic_id, victim_pre_damage)
+
+    # p0 source ETB on BOTH engines.
+    py_src = py_state.new_object(
+        _card_def_to_python_printing(cd), owner_id=0,
+        zone=Zone.BATTLEFIELD,
+    )
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    rust_state.register_and_inject_object(
+        _r57_ff_rust_source_dict(draw_amount), 0, ZB)
+
+    for _ in range(16):
+        if not py_state.stack:
+            break
+        resolve_top_of_stack(py_state)
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+
+    py_tuple = (
+        any(o.id == py_vic.id for o in py_state.battlefield),
+        len(py_state.players[1].graveyard),
+        len(py_state.players[1].hand),
+        len(py_state.players[1].library),
+        py_state.players[0].life,
+        py_state.players[1].life,
+    )
+    rust_tuple = (
+        any(o["id"] == rust_vic_id
+            for o in rust_state.battlefield_snapshot()),
+        len(rust_state.graveyard_snapshot(1)),
+        rust_state.hand_sizes[1],
+        rust_state.library_sizes[1],
+        rust_state.get_life(0),
+        rust_state.get_life(1),
+    )
+    return py_tuple, rust_tuple
+
+
+def test_cross_engine_ff_destroy_then_draw_undamaged_parity():
+    """**BLOCKED-RUST-EFFECT slice — Faller's Faithful ETB, undamaged
+    case.** The victim carried NO marked damage → it is destroyed AND
+    its controller (p1) draws 2. Byte-equal on both engines."""
+    import mtg_bot_engine  # noqa: F401
+
+    py, rust = _r57_ff_cross_engine_run(draw_amount=2, victim_pre_damage=0)
+    assert py == rust, f"cross-engine divergence: py={py} rust={rust}"
+    # Concrete observable: victim destroyed, p1 gy=1, p1 drew 2
+    # (hand=2, lib 3→1), lives unchanged.
+    assert py == (False, 1, 2, 1, 20, 20), py
+
+
+def test_cross_engine_ff_destroy_then_draw_predamaged_no_draw_parity():
+    """**BLOCKED-RUST-EFFECT slice — Faller's Faithful ETB, damaged
+    case.** The victim was dealt damage this turn (marked damage > 0
+    on both engines) → it is still destroyed but NO draw fires. Byte-
+    equal on both engines (the realistic no-heal corner where Rust's
+    ``obj.damage`` read matches Python's ``damaged_this_turn``)."""
+    import mtg_bot_engine  # noqa: F401
+
+    py, rust = _r57_ff_cross_engine_run(draw_amount=2, victim_pre_damage=1)
+    assert py == rust, f"cross-engine divergence: py={py} rust={rust}"
+    # Victim destroyed, p1 gy=1, NO draw (hand=0, lib stays 3).
+    assert py == (False, 1, 0, 3, 20, 20), py
+
+
+def test_cross_engine_ff_destroy_then_draw_zero_amount_parity():
+    """**BLOCKED-RUST-EFFECT slice — Faller's Faithful ETB,
+    ``draw_amount=0``.** Legal "destroy with no draw" shape — the
+    undamaged victim is destroyed but the zero-amount rider is a
+    silent no-op (X-from-count zero short-circuit). Byte-equal."""
+    import mtg_bot_engine  # noqa: F401
+
+    py, rust = _r57_ff_cross_engine_run(draw_amount=0, victim_pre_damage=0)
+    assert py == rust, f"cross-engine divergence: py={py} rust={rust}"
+    assert py == (False, 1, 0, 3, 20, 20), py
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

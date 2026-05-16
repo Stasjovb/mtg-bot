@@ -2878,6 +2878,108 @@ intentionally NOT cross-asserted).
 
 ---
 
+## Faller's Faithful — `DestroyTargetCreatureThenDrawIfUndamaged` Effect half shipped byte-equal; full card stays loader-gated (damaged-this-turn ledger)
+
+**Location**: `rust/src/cards.rs`
+(`Effect::DestroyTargetCreatureThenDrawIfUndamaged { draw_amount: i32 }`
+variant + `parse_effect` arm `destroy_target_creature_then_draw_if_undamaged`
++ `effect_to_pydict` arm) + `rust/src/state_ops_resolve.rs`
+(module-private helper
+`destroy_first_defender_creature_then_draw_if_undamaged` + the resolve
+match arm). Bridge arm
+`src/mtg_bot/parity/cross_engine.py`
+(`destroy_target_creature_then_draw_if_undamaged`, immediately above
+the `PHASE5_BRIDGE_ARMS` sentinel). Python class (pre-existing, NOT
+new): `DestroyTargetCreature`
+(`src/mtg_bot/effects/generic/destroy.py:94`) — the exact class the
+genuine Faller's Faithful printing already parses to.
+
+**What the shortcut is**: Faller's Faithful (~14,108 17lands decks)
+prints "When this creature enters, destroy up to one other target
+creature. If that creature wasn't dealt damage this turn, its
+controller draws two cards." The genuine parsed printing's ETB is
+`DestroyTargetCreature(draw_if_undamaged_amount=2, optional=True,
+exclude_self=True)`. Round 57 shipped the destroy-then-conditional-draw
+Effect end-to-end: the Rust resolve helper is a structural sibling of
+the `DestroyTarget { AnyCreature }` arm (same `defender = 1 -
+controller` bf[0] first-slice deterministic target pick, same
+indestructible-suppress gate CR 702.12, same zone-change reset CR
+400.7, same Void LTB nonland flag, same LTB fan-out via
+`pending_leaves_dispatches` + `queue_token_cease`), plus a pre-destroy
+"was undamaged" snapshot and a post-destroy conditional draw to the
+**destroyed creature's controller** (CR 121.1 — the printed text gives
+the draw to the victim's controller, NOT the spell's controller). The
+**deliberate divergence**: the "wasn't dealt damage this turn" check
+reads **`obj.damage == 0`** on the Rust side — Rust's per-object
+marked-damage field — whereas Python maintains a dedicated per-object
+`damaged_this_turn` boolean (`effects/base.py:300`,
+`effects/generic/damage.py:1175`, cleared on zone moves). The two
+reads are **byte-equal for the realistic Faller's Faithful ETB**
+(instant-speed destroy with no prior damage marked on the target this
+turn: no marked damage ⇔ `not damaged_this_turn`). They **diverge in
+exactly one corner**: a creature damaged *then healed to 0* (or whose
+marked damage was otherwise cleared) within the same turn — Python's
+`damaged_this_turn` stays `True` (no draw) while Rust's `obj.damage`
+reads 0 (would draw). The full general damaged-this-turn ledger is NOT
+modeled on the Rust side; the **full Faller's Faithful card is NOT
+added to the production-deck loader `_SAFE_*` allowlist** (no loader
+admit) — only the bridge/probe-level Effect half closes.
+
+**Why it's OK / which scenarios make it not-OK / failure mode**: this
+is the honest Effect-half-closes / full-card-stays-gated split
+established by r51 (Monoist), r52 (Extinguisher), r53 (Mightform), r54
+(Famished Worldsire), r56 (Dauntless Scrapbot). The closed half
+round-trips byte-equal — the genuine real-EoE probe drives the ACTUAL
+parsed Faller's Faithful printing's ETB cross-engine and asserts
+byte-equality on the full destroy-then-draw observable (victim →
+opponent graveyard; the victim's controller draws 2; the spell
+controller does NOT draw; lives unchanged) in the realistic
+no-prior-damage scenario. The NOT-OK scenario is admitting the full
+card to the bench loader, which would silently mistranslate the
+damaged-then-healed-this-turn corner (a §2 silent-mistranslation:
+Rust would draw where Python would not) — explicitly declined. No
+real-card-exposed divergence (the card is not on any `_SAFE_*`
+allowlist; no production path drives it today). Note the round-53
+counter-fold lesson is honored: the destroy half reads the
+*effective* board state (defender bf[0], indestructible from the live
+printing keywords), and the undamaged snapshot is captured BEFORE the
+destroy mutates anything (leaving the battlefield resets
+`obj.damage` — mirrors Python's `was_undamaged` capture before
+`destroy()` in `DestroyTargetCreature.resolve`).
+
+**Fix scope estimate**: closing the remaining corner needs a
+general per-object damaged-this-turn ledger on the Rust side (a
+boolean set wherever damage is dealt, cleared on cleanup AND on
+zone change, surviving a heal-to-0 — distinct from the existing
+marked-damage `obj.damage` which clears at cleanup and on
+heal-to-0) plus its bridge — a multi-round subsystem, deferred. The
+Effect half (destroy + first-slice target + indestructible gate +
+LTB fan-out + conditional victim-controller draw) is complete.
+
+**Impact estimate**: zero production strength cost (Faller's Faithful
+not on the loader allowlist; no production exposure). The
+real-card-coverage progress is the honest closure of the closeable
+Effect half + honest pinning of the loader-gated damaged-this-turn
+remainder.
+
+**Pinned by**: 4 cross-engine bridge pins
+(`tests/test_cross_engine_etb_triggers.py::test_bridge_destroy_target_creature_then_draw_if_undamaged_translates`
++ `..._ff_destroy_then_draw_undamaged_parity` +
+`..._ff_destroy_then_draw_predamaged_no_draw_parity` +
+`..._ff_destroy_then_draw_zero_amount_parity`); 5 Rust regression pins
+(`tests/test_parity_smoke.py::test_r57_rust_ff_*` — undamaged
+destroys+draws-to-victim-controller; predamaged destroys-no-draw;
+zero-draw-amount destroys-only; empty-defender-bf silent-fizzle
+no-draw; indestructible-victim CR 702.12 suppressed no-draw); 1
+genuine real-EoE cross-engine probe
+(`tests/test_parity_smoke.py::test_cross_engine_real_eoe_fallers_faithful_etb_destroy_then_draw_if_undamaged_parity`
+— drives the actual parsed Faller's Faithful printing's ETB
+cross-engine; byte-equal on the destroy-then-draw observable in the
+realistic no-prior-damage scenario; the damaged-then-healed corner
+intentionally NOT cross-asserted).
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:

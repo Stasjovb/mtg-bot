@@ -8017,6 +8017,64 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             ExileEachOpponentsGraveyard,
         )
         return ExileEachOpponentsGraveyard()
+    if kind == "destroy_target_creature_then_draw_if_undamaged":
+        # **BLOCKED-RUST-EFFECT slice — Faller's Faithful ETB
+        # (~14,108 17lands decks).** "When this creature enters,
+        # destroy up to one OTHER target creature. If that creature
+        # wasn't dealt damage this turn, its controller draws two
+        # cards." Rust's
+        # ``Effect::DestroyTargetCreatureThenDrawIfUndamaged
+        # { draw_amount: i32 }`` is a payload variant: it picks the
+        # source-controller's opponent's ``bf[0]`` (the
+        # ``DestroyTarget { AnyCreature }`` first-slice deterministic
+        # pick — ``defender = 1 - controller``), snapshots
+        # ``obj.damage == 0`` BEFORE the destroy (the byte-equal Rust
+        # read of Python's ``not obj.damaged_this_turn`` for the
+        # realistic no-prior-damage ETB), runs the standard
+        # destroy (indestructible CR 702.12 gate, zone-change reset CR
+        # 400.7, Void LTB nonland flag, LTB fan-out via
+        # ``pending_leaves_dispatches`` + ``queue_token_cease``), then
+        # — iff undamaged — the destroyed creature's controller draws
+        # ``draw_amount`` cards (CR 121.1, the printed text gives the
+        # draw to the victim's controller).
+        #
+        # **Maps to the GENUINE parsed Faller's Faithful printing's
+        # class.** The live Python parser
+        # (``cards/parser/effects.py``) maps the printing's ETB to
+        # ``DestroyTargetCreature(draw_if_undamaged_amount=2,
+        # optional=True, exclude_self=True)``
+        # (``effects/generic/destroy.py:94``). ``draw_amount`` from
+        # the Rust dict feeds ``draw_if_undamaged_amount`` directly;
+        # the bridge fixes ``optional=True`` ("up to one") and
+        # ``exclude_self=True`` ("OTHER target") to mirror the parsed
+        # printing exactly. Both engines pick the opponent's first
+        # creature deterministically (Rust's defender-bf scan; Python
+        # via an opponent-target agent over the legal pool — the
+        # established campaign first-creature convention; the source
+        # entered on the controller's bf so the defender scan never
+        # sees it, satisfying "OTHER target" structurally).
+        #
+        # **Effect-half / damage-ledger split (§2 — see
+        # docs/SEARCH_LIMITATIONS.md round-57 entry).** Python keeps a
+        # per-object ``damaged_this_turn`` boolean that survives a
+        # heal-to-0; Rust carries only ``obj.damage`` (marked damage,
+        # cleared at cleanup). For the realistic Faller's Faithful ETB
+        # (instant-speed destroy, no prior damage marked this turn)
+        # the two reads are byte-equal. The damaged-then-healed-to-0
+        # corner is the loader-gated subsystem half; the full Faller's
+        # Faithful card is NOT added to the production-deck loader
+        # ``_SAFE_*`` allowlist (mirrors the r51 Monoist / r52
+        # Extinguisher / r53 Mightform / r54 Famished / r56 Dauntless
+        # Effect-half-closes-card-stays-gated precedent).
+        from mtg_bot.effects.generic.destroy import DestroyTargetCreature
+        draw_amount = eff_dict.get("draw_amount", 0)
+        if not isinstance(draw_amount, int) or draw_amount < 0:
+            draw_amount = 0
+        return DestroyTargetCreature(
+            draw_if_undamaged_amount=draw_amount,
+            optional=True,
+            exclude_self=True,
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
