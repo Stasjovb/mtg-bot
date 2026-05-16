@@ -60325,6 +60325,502 @@ def test_cross_engine_real_eoe_famished_worldsire_etb_look_top_x_by_power_put_la
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_real_eoe_pulsar_squadron_ace_etb_look_top_5_no_spacecraft_counter_on_miss_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Pulsar Squadron Ace
+    (~5,400 17lands decks), NO-REVEAL / counter-on-miss path.**
+
+    Drives the **ACTUAL parsed Pulsar Squadron Ace printing** on the
+    Python side: ``get_active_source().get_printings()["Pulsar
+    Squadron Ace"]`` — which the parser maps
+    (cards/parser/effects.py:5426-5452 ``_LOOK_TOP_N_REVEAL_OR_COUNTER``)
+    to ``LookAtTopNRevealOrCounter(n=5, filter_name="spacecraft",
+    max_power=0, counter_on_miss=True)`` on an ``Event.ENTERS``
+    SourceIsSelf trigger (verified: a single ENTERS trigger, exact
+    oracle-matching field shape).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "When this creature enters, look at the top five cards of your
+         library. You may reveal a Spacecraft card from among them and
+         put it into your hand. Put the rest on the bottom of your
+         library in a random order. If you didn't put a card into your
+         hand this way, put a +1/+1 counter on this creature."
+
+    **Scope of THIS probe — the no-reveal / counter-on-miss arm.**
+    This probe pins the path where NO Spacecraft is among the top
+    five: both engines correctly take the no-reveal branch → +1/+1
+    counter on Pulsar (``counter_on_miss=True``) → the examined
+    remainder goes to the library bottom. The library is staged with
+    exactly ONE non-Spacecraft card (Grizzly Bears) so the
+    "bottom the rest in a random order" rider is a no-op on a
+    1-element list (Python's ``state.rng.shuffle`` of a 1-element
+    list is identity; Rust's deterministic popped-order bottom of a
+    1-element list is identity). The post-resolve library is
+    therefore deterministic with NO rng threading — and the
+    look-N / counter-rider / library-order / lives behavior
+    round-trips **byte-equal** cross-engine on the real printing.
+
+    **§2 — why the REVEAL path is a SEPARATE divergence-pin probe.**
+    The reveal arm (look at top five → reveal a *real* Spacecraft
+    card → to hand) does NOT round-trip byte-equal: Rust's
+    ``card_matches_filter`` (state_ops_decisions.rs:674-680) checks
+    ``printing.card_types`` for ``"Spacecraft"`` while real EoE
+    Spacecraft cards are ``Artifact — Spacecraft``
+    (``card_types=["Artifact"]``, ``subtypes=["Spacecraft"]``) and
+    Python's ``_matches`` → ``printing.is_spacecraft`` →
+    ``"Spacecraft" in subtypes``. That genuine real-EoE divergence
+    is captured precisely (per §2 — NOT papered over) by the sibling
+    ``test_cross_engine_real_eoe_pulsar_squadron_ace_etb_reveal_real_spacecraft_card_types_vs_subtypes_divergence_pin``
+    below + the ``docs/SEARCH_LIMITATIONS.md`` round-55 entry. This
+    probe pins the half that IS byte-equal so a regression on the
+    no-reveal arm is still caught.
+
+    Rust drives the bridge-dict unit-variant carrier (the
+    established Monoist/Extinguisher/Mightform/Famished
+    cross-engine driving pattern); Python drives the GENUINE parsed
+    printing's ENTERS trigger. No agent is seated on either side: the
+    no-reveal path needs no decision (Python's
+    ``if options and p.agent is not None`` guard short-circuits when
+    ``options`` is empty; Rust's no-reveal is the ``"default"``
+    auto-resolve strategy).
+
+    Probe shape:
+      1. Stage p0 library = [Grizzly Bears] (one non-Spacecraft card)
+         on BOTH engines.
+      2. Materialize the source on p0's battlefield (Rust:
+         bridge-dict carrier; Python: the GENUINE parsed printing);
+         fire its ENTERS trigger.
+      3. Drain both stacks; Rust auto-resolves the
+         ``LookAtTopNRevealOrCounterChoice`` with the ``"default"``
+         (no-reveal) strategy.
+      4. Assert byte-equal: library == [Grizzly Bears] on both;
+         hand empty on both; Pulsar carries exactly one +1/+1
+         counter on both; both lives unchanged.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state, _FOREST, _BEARS,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.game import Zone
+    from mtg_bot.effects.generic.library_lookat import (
+        LookAtTopNRevealOrCounter,
+    )
+
+    real = get_active_source().get_printings().get("Pulsar Squadron Ace")
+    if real is None:
+        import pytest
+        pytest.skip("Pulsar Squadron Ace absent from active CardSource")
+    # Sanity: the genuinely-parsed printing carries the exact
+    # oracle-matching LookAtTopNRevealOrCounter on a single ENTERS
+    # trigger.
+    assert real.is_creature
+    assert real.power == 1 and real.toughness == 2
+    assert len(real.triggered_abilities) == 1
+    real_eff = real.triggered_abilities[0].effect
+    assert isinstance(real_eff, LookAtTopNRevealOrCounter), (
+        f"genuine Pulsar Squadron Ace must parse to "
+        f"LookAtTopNRevealOrCounter; got {type(real_eff).__name__}"
+    )
+    assert real_eff.n == 5
+    assert real_eff.filter_name == "spacecraft"
+    assert real_eff.counter_on_miss is True
+    assert real_eff.max_power == 0
+
+    spec = DeckSpec(
+        card_defs=(_FOREST, _BEARS),
+        p0_library=("Grizzly Bears",),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+
+    # ---- Rust side: bridge-dict unit-variant carrier (loader-drive
+    # pattern). Field shape mirrors the genuine printing's parsed
+    # LookAtTopNRevealOrCounter exactly.
+    rust_pulsar_id = rust_state.register_and_inject_object(
+        {
+            "name": "Pulsar Squadron Ace",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "look_at_top_n_reveal_or_counter",
+                        "n": 5,
+                        "filter_name": "spacecraft",
+                        "max_power": 0,
+                        "counter_on_miss": True,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+
+    # ---- Python side: GENUINE parsed Pulsar Squadron Ace printing.
+    py_src = py_state.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    assert len(py_state.stack) == 1, (
+        "Python: the genuine Pulsar Squadron Ace printing's ENTERS "
+        f"trigger should land on the stack. Got {len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks. Rust pushes a
+    # LookAtTopNRevealOrCounterChoice and short-circuits; the
+    # "default" auto-resolve strategy is the no-reveal path (matches
+    # Python's no-agent-seated / no-options fallback bit-for-bit).
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    rust_state.auto_resolve_pending_decisions("default")
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    assert rust_state.has_pending_decision() is False
+
+    # ---- GENUINE cross-engine byte-equal assertions.
+    rust_lib = [
+        e["printing_name"] for e in rust_state.library_snapshot(0)
+    ]
+    py_lib = [o.printing.name for o in py_state.players[0].library]
+    assert py_lib == ["Grizzly Bears"], (
+        f"Python p0 library should still hold the bottomed non-"
+        f"Spacecraft Grizzly Bears; got {py_lib}"
+    )
+    assert rust_lib == ["Grizzly Bears"], (
+        f"Rust p0 library should still hold the bottomed non-"
+        f"Spacecraft Grizzly Bears; got {rust_lib}"
+    )
+    assert rust_lib == py_lib
+
+    rust_hand = [
+        e["printing_name"] for e in rust_state.hand_snapshot(0)
+    ]
+    py_hand = [o.printing.name for o in py_state.players[0].hand]
+    assert py_hand == [], (
+        f"Python p0 hand should be empty (no reveal happened); "
+        f"got {py_hand}"
+    )
+    assert rust_hand == []
+    assert rust_hand == py_hand
+
+    # Counter-on-miss rider fired on BOTH engines: Pulsar carries
+    # exactly one +1/+1 counter.
+    assert py_src.plus_one_counters == 1, (
+        f"Python: Pulsar should have one +1/+1 counter (no reveal → "
+        f"counter_on_miss rider); got {py_src.plus_one_counters}"
+    )
+    rust_pulsars = [
+        e
+        for e in rust_state.battlefield_snapshot()
+        if e["printing_name"] == "Pulsar Squadron Ace"
+    ]
+    assert len(rust_pulsars) == 1
+    assert rust_pulsars[0]["counters"] == 1, (
+        f"Rust: Pulsar should have one +1/+1 counter (no reveal → "
+        f"counter_on_miss rider); got {rust_pulsars[0]['counters']}"
+    )
+    assert rust_pulsars[0]["counters"] == py_src.plus_one_counters
+
+    # Lives unchanged (the effect only moves cards / adds a counter).
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
+def test_cross_engine_real_eoe_pulsar_squadron_ace_etb_reveal_real_spacecraft_card_types_vs_subtypes_divergence_pin(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Pulsar Squadron Ace
+    REVEAL path on a REAL Spacecraft card. PINS a genuine, previously-
+    unprobed Rust-vs-Python divergence (round-55 high-value find).**
+
+    This is the FIRST genuine real-EoE cross-engine probe ever run on
+    Pulsar Squadron Ace's *reveal* arm. Every prior "closure" of the
+    ``LookAtTopNRevealOrCounter`` family used a SYNTHETIC Spacecraft
+    carrier typed ``card_types=["Spacecraft"]`` — which happens to
+    satisfy the stale Rust filter but does NOT match how real EoE
+    Spacecraft cards are typed. Driving the ACTUAL parsed printing
+    against a real-shaped Spacecraft surfaces the divergence.
+
+    **The divergence (Rust arm bug — round-56 Rust-lane fix).**
+
+    Pulsar's oracle: "look at the top five cards … you may reveal a
+    **Spacecraft card** from among them and put it into your hand …".
+    Real EoE Spacecraft cards (Lumen-Class Frigate, Rescue Skiff,
+    Wedgelight Rammer, …) are typed **``Artifact — Spacecraft``**:
+    ``card_types == ("Artifact",)`` and ``subtypes ==
+    ("Spacecraft",)`` (Spacecraft is an artifact SUBTYPE, not a card
+    type — verified against ``data/edge_of_eternities.json``).
+
+    * **Python (source of truth) — CORRECT.**
+      ``LookAtTopNRevealOrCounter._matches``
+      (effects/generic/library_lookat.py:62-65) → ``printing.is_
+      spacecraft`` → ``"Spacecraft" in printing.subtypes`` → **True**
+      for a real Spacecraft. The card is revealed to hand; because a
+      card WAS put into hand, the ``counter_on_miss`` rider does NOT
+      fire.
+
+    * **Rust — WRONG.** ``card_matches_filter``
+      (state_ops_decisions.rs:663-698), for ``filter_name ==
+      "spacecraft"``, checks ``printing.card_types.iter().any(|t| t
+      == "Spacecraft")``. A real Spacecraft has
+      ``card_types == ["Artifact"]`` → **no match**. The auto-resolve
+      ``"reveal_yes"`` strategy finds no filter-matching examined
+      card → falls through to the no-reveal branch → the Spacecraft
+      stays in the library AND a +1/+1 counter is wrongly placed on
+      Pulsar. An explicit ``submit_look_at_top_n_decision(True,
+      <spacecraft id>)`` is rejected transactionally with
+      ``ValueError: chosen card … does not match filter "spacecraft"``.
+
+    The Rust ``card_matches_filter`` docstring
+    (state_ops_decisions.rs:651-662) even self-documents the
+    ``card_types`` check as a first-slice approximation ("Rust
+    printings don't yet track subtypes") — that premise is now
+    **stale**: ``CardPrinting.subtypes`` exists on the Rust side and
+    the campaign's own ``or_spacecraft`` filter family already reads
+    ``printing.subtypes.iter().any(|s| s == "Spacecraft")`` correctly
+    (cards.rs:2014-2027). ``card_matches_filter``'s ``"spacecraft"``
+    arm is simply stale and out of step with the established
+    convention.
+
+    **Round-56 Rust-lane fix recommendation** (N2 / sole-Rust agent;
+    NO Rust changes in this round-55 Python/docs slice): change the
+    ``"spacecraft"`` arm of ``card_matches_filter``
+    (rust/src/state_ops_decisions.rs:674-680) from
+    ``printing.card_types.iter().any(|t| t == "Spacecraft")`` to
+    ``printing.subtypes.iter().any(|s| s == "Spacecraft")`` —
+    matching Python's ``is_spacecraft`` and the existing
+    ``or_spacecraft`` filter family. No new Effect / variant /
+    PendingDecision is needed; it is a one-line predicate swap inside
+    an existing private helper, regression-pinned by flipping THIS
+    probe to a byte-equal parity assertion once the fix lands. (The
+    bridge arm, the Python class, and the Effect/PendingDecision
+    substrate are all already correct — this is purely the Rust
+    filter helper.)
+
+    **Probe discipline (§2 — divergence-pin, NOT a weakened parity
+    probe).** Per the file's established divergence-pin convention
+    (``test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_
+    optional_empty_bf_divergence_pin``): this probe asserts the
+    EXPECTED-DIVERGENT behavior on each engine separately, so it is
+    GREEN today and would flag the moment EITHER engine's behavior
+    changes. There is intentionally NO cross-engine equivalence
+    assertion — the per-engine pair IS the documentation of the gap.
+    When the round-56 Rust fix lands, this probe should be FLIPPED to
+    a cross-engine parity assertion (both engines: Spacecraft to
+    hand; library empty; Pulsar carries ZERO counters).
+
+    Scenario is deterministic with NO rng: p0 library = exactly ONE
+    real-shaped Spacecraft. On the Python (correct) side the lone
+    card is revealed to hand → ``remaining_examined`` is empty → the
+    ``state.rng.shuffle([])`` bottom-the-rest is a no-op. On the Rust
+    (buggy) side the lone card is bottomed → deterministic 1-element
+    bottom, also no rng. So the divergence is purely on
+    {hand vs library placement of the Spacecraft, Pulsar's counter
+    count} — fully reproducible.
+
+    Engine-specific expected post-drain state:
+
+    * **Python (CORRECT):** Spacecraft in p0 HAND; p0 library EMPTY;
+      Pulsar carries 0 +1/+1 counters.
+    * **Rust (BUGGY, pending round-56 fix):** Spacecraft still in p0
+      LIBRARY; p0 hand EMPTY; Pulsar carries 1 +1/+1 counter.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state, CardDef, _FOREST,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.game import Zone
+    from mtg_bot.effects.generic.library_lookat import (
+        LookAtTopNRevealOrCounter,
+    )
+    from tests.parity._picker_shims import _PickFirstLibraryOptionAgent
+
+    real = get_active_source().get_printings().get("Pulsar Squadron Ace")
+    if real is None:
+        import pytest
+        pytest.skip("Pulsar Squadron Ace absent from active CardSource")
+    real_eff = real.triggered_abilities[0].effect
+    assert isinstance(real_eff, LookAtTopNRevealOrCounter)
+    assert real_eff.filter_name == "spacecraft"
+
+    # Real-shaped Spacecraft: an Artifact whose SUBTYPE is Spacecraft
+    # — the verified typing of every EoE Spacecraft card
+    # (``Artifact — Spacecraft``: card_types=("Artifact",),
+    # subtypes=("Spacecraft",)). This is the load-bearing shape: a
+    # synthetic ``card_type="Spacecraft"`` carrier would mask the
+    # bug.
+    SPACECRAFT = CardDef(
+        name="Test Spacecraft",
+        card_type="Artifact",
+        subtypes=("Spacecraft",),
+    )
+    # Sanity: the Python printing materialized from this CardDef
+    # registers as a Spacecraft via the subtype substrate (the side
+    # that is CORRECT and that Rust must match).
+    spec = DeckSpec(
+        card_defs=(_FOREST, SPACECRAFT),
+        p0_library=("Test Spacecraft",),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+
+    sc_printing = next(
+        (
+            o.printing
+            for o in py_state.players[0].library
+            if o.printing.name == "Test Spacecraft"
+        ),
+        None,
+    )
+    assert sc_printing is not None
+    assert sc_printing.is_spacecraft is True, (
+        "Test Spacecraft must register as a Spacecraft on the Python "
+        "(source-of-truth) side via the subtype substrate"
+    )
+    assert "Spacecraft" not in sc_printing.card_types, (
+        "Test Spacecraft must mirror the real EoE typing "
+        "(Spacecraft is a SUBTYPE, not a card type) — otherwise the "
+        "probe would not exercise the Rust card_types-vs-subtypes bug"
+    )
+
+    # ---- Rust side: bridge-dict unit-variant carrier.
+    rust_pulsar_id = rust_state.register_and_inject_object(
+        {
+            "name": "Pulsar Squadron Ace",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "generic": 1},
+            "power": 1,
+            "toughness": 2,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "look_at_top_n_reveal_or_counter",
+                        "n": 5,
+                        "filter_name": "spacecraft",
+                        "max_power": 0,
+                        "counter_on_miss": True,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1
+
+    # ---- Python side: GENUINE parsed printing + a seated agent that
+    # picks the first (only) filter-matching examined option, mirroring
+    # Rust's "reveal_yes" first-filter-match strategy. On the correct
+    # Python side this drives the reveal; the divergence is that Rust's
+    # filter never recognizes the real Spacecraft so its reveal_yes
+    # finds nothing to pick.
+    py_state.players[0].agent = _PickFirstLibraryOptionAgent()
+    py_src = py_state.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    assert len(py_state.stack) == 1
+
+    # ---- Drain both stacks. Rust: resolve the trigger, then drive
+    # the LookAtTopNRevealOrCounterChoice with "reveal_yes" (which on
+    # a correctly-recognized Spacecraft WOULD reveal it — but the
+    # stale card_types filter rejects the real Spacecraft, so this
+    # falls through to the no-reveal branch).
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    rust_state.auto_resolve_pending_decisions("reveal_yes")
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+    assert rust_state.has_pending_decision() is False
+
+    # ---- PER-ENGINE expected-divergent assertions (NO cross-engine
+    # equivalence assertion — this probe DOCUMENTS the gap).
+    py_hand = [o.printing.name for o in py_state.players[0].hand]
+    py_lib = [o.printing.name for o in py_state.players[0].library]
+    rust_hand = [
+        e["printing_name"] for e in rust_state.hand_snapshot(0)
+    ]
+    rust_lib = [
+        e["printing_name"] for e in rust_state.library_snapshot(0)
+    ]
+    rust_pulsars = [
+        e
+        for e in rust_state.battlefield_snapshot()
+        if e["printing_name"] == "Pulsar Squadron Ace"
+    ]
+    assert len(rust_pulsars) == 1
+
+    # Python (CORRECT): real Spacecraft revealed to hand; library
+    # empty; NO counter-on-miss (a card WAS put into hand).
+    assert py_hand == ["Test Spacecraft"], (
+        f"Python (source of truth) should reveal the real Spacecraft "
+        f"to hand; got hand={py_hand}, lib={py_lib}"
+    )
+    assert py_lib == [], (
+        f"Python p0 library should be empty after revealing the lone "
+        f"Spacecraft; got {py_lib}"
+    )
+    assert py_src.plus_one_counters == 0, (
+        f"Python: NO +1/+1 counter — a card WAS put into hand so the "
+        f"counter_on_miss rider must not fire; got "
+        f"{py_src.plus_one_counters}"
+    )
+
+    # Rust (BUGGY — round-56 fix target): the real Spacecraft is NOT
+    # recognized by card_matches_filter's stale card_types check, so
+    # reveal_yes finds nothing → no-reveal branch → Spacecraft stays
+    # in the library AND a +1/+1 counter is wrongly added to Pulsar.
+    assert rust_hand == [], (
+        f"Rust (buggy): hand should be EMPTY — the stale card_types "
+        f"filter rejected the real Spacecraft so no reveal happened; "
+        f"got {rust_hand}. If this assertion fails the round-56 Rust "
+        f"fix has landed — FLIP this probe to a cross-engine parity "
+        f"assertion (see docstring + SEARCH_LIMITATIONS round-55)."
+    )
+    assert rust_lib == ["Test Spacecraft"], (
+        f"Rust (buggy): the unrecognized Spacecraft should remain in "
+        f"the library (bottomed); got {rust_lib}. If this fails the "
+        f"round-56 Rust fix has landed — flip this probe to parity."
+    )
+    assert rust_pulsars[0]["counters"] == 1, (
+        f"Rust (buggy): a +1/+1 counter is WRONGLY placed on Pulsar "
+        f"(no reveal happened on the Rust side because the filter "
+        f"rejected the real Spacecraft); got "
+        f"{rust_pulsars[0]['counters']}. If this fails the round-56 "
+        f"Rust fix has landed — flip this probe to parity."
+    )
+
+    # Lives are unchanged on BOTH engines (this effect never touches
+    # life) — the one cross-engine equivalence that DOES hold and is
+    # safe to assert.
+    assert rust_state.get_life(0) == py_state.players[0].life == 20
+    assert rust_state.get_life(1) == py_state.players[1].life == 20
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

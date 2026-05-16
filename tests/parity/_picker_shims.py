@@ -209,6 +209,36 @@ class _PickFirstBattlefieldCreatureEitherSideAgent(Agent):
         return best if best is not None else legal_targets[0]
 
 
+class _PickFirstLibraryOptionAgent(Agent):
+    """Pick ``option_ids[0]`` for a ``choose_card_from_library`` hook.
+
+    Mirrors Rust's ``auto_resolve_pending_decisions("reveal_yes")``
+    strategy for ``PendingDecision::LookAtTopNRevealOrCounterChoice``
+    (state_ops_decisions.rs:425-442): it scans the examined ``cards``
+    in popped order and picks the FIRST one matching the filter. The
+    Python ``LookAtTopNRevealOrCounter.resolve``
+    (effects/generic/library_lookat.py:84-89) pre-filters
+    ``examined`` to ``options = [c for c in examined if
+    self._matches(c.printing)]`` (same popped order) and passes
+    ``[c.id for c in options]`` to ``choose_card_from_library``.
+    Returning ``option_ids[0]`` therefore selects the SAME first
+    filter-matching examined card Rust's reveal_yes strategy picks —
+    keeping the reveal path byte-equal on probes that stage the same
+    library prefix on both engines.
+
+    Used by: the genuine real-EoE Pulsar Squadron Ace reveal-path
+    divergence-pin probe (which drives the Spacecraft-reveal arm to
+    surface the Rust ``card_matches_filter`` ``card_types``-vs-
+    ``subtypes`` mismatch — see
+    ``docs/SEARCH_LIMITATIONS.md`` round-55 entry). Reusable by any
+    future LookAtTopNRevealOrCounter / tutor-style probe whose Rust
+    mirror is the first-filter-match auto-resolve.
+    """
+
+    def choose_card_from_library(self, state, player_id, option_ids):
+        return option_ids[0] if option_ids else None
+
+
 class _SacrificeFirstAgent(Agent):
     """Pick the first legal sacrifice id.
 

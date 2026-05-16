@@ -2541,6 +2541,102 @@ Mightform).
 
 ---
 
+## Rust port — `card_matches_filter` `"spacecraft"` arm checks `card_types` instead of `subtypes`; real Pulsar Squadron Ace reveal-path mistranslation (round-55 find, round-56 Rust-lane fix)
+
+**Location**: `rust/src/state_ops_decisions.rs:663-698`
+(`card_matches_filter`, the private helper consumed by
+`Effect::LookAtTopNRevealOrCounter`'s submit /
+`auto_resolve_pending_decisions` reveal paths). Specifically the
+`"spacecraft"` match arm at `state_ops_decisions.rs:674-680`:
+
+```rust
+"spacecraft" => {
+    printing.card_types.iter().any(|t| t == "Spacecraft")
+}
+```
+
+**What the shortcut is**: the `"spacecraft"` filter recognizes a
+card by checking its **`card_types`** for `"Spacecraft"`. Real EoE
+Spacecraft cards are typed **`Artifact — Spacecraft`**:
+`card_types == ("Artifact",)`, `subtypes == ("Spacecraft",)`
+(Spacecraft is an artifact SUBTYPE, not a card type — verified
+against `data/edge_of_eternities.json`: Lumen-Class Frigate, Rescue
+Skiff, Wedgelight Rammer, The Seriema, …). So `card_matches_filter`
+returns `false` for every real Spacecraft card. Python's source of
+truth — `LookAtTopNRevealOrCounter._matches`
+(`src/mtg_bot/effects/generic/library_lookat.py:62-65`) →
+`printing.is_spacecraft` → `"Spacecraft" in printing.subtypes` —
+returns `true`. The helper's own docstring
+(`state_ops_decisions.rs:651-662`) self-documents the `card_types`
+check as a first-slice approximation ("Rust printings don't yet
+track subtypes"); that premise is **stale** — `CardPrinting.subtypes`
+exists on the Rust side and the campaign's own `or_spacecraft`
+filter family already reads
+`printing.subtypes.iter().any(|s| s == "Spacecraft")` correctly
+(`rust/src/cards.rs:2014-2027`). `card_matches_filter`'s
+`"spacecraft"` arm is simply out of step with that convention.
+
+**Why it's not-OK / failure mode**: this is a genuine cross-engine
+**byte-divergence on the real Pulsar Squadron Ace printing's reveal
+arm** (Pulsar's whole purpose is to find a Spacecraft). On a real
+Spacecraft among the looked-at cards:
+
+- **Python (correct)**: reveals the Spacecraft to hand; because a
+  card WAS put into hand, the `counter_on_miss` rider does NOT fire.
+- **Rust (wrong)**: `card_matches_filter` rejects the real
+  Spacecraft → `reveal_yes` finds no match → falls to the no-reveal
+  branch → the Spacecraft stays in the library AND a +1/+1 counter
+  is wrongly placed on Pulsar. An explicit
+  `submit_look_at_top_n_decision(True, <spacecraft id>)` is rejected
+  transactionally with
+  `ValueError: chosen card … does not match filter "spacecraft"`.
+
+This was never caught because every prior "closure" of the
+`LookAtTopNRevealOrCounter` family used a SYNTHETIC Spacecraft
+carrier typed `card_types=["Spacecraft"]` (which coincidentally
+satisfies the stale check). Pulsar's `BLOCKED-PROBE` residual
+(residue_worklist.json) is therefore **NOT discharged** — the
+genuine real-EoE reveal path is mistranslated. The no-reveal /
+counter-on-miss half IS byte-equal (verified — see pin below).
+
+**Fix scope estimate**: a one-line predicate swap inside the
+existing private `card_matches_filter` helper —
+`printing.card_types.iter().any(|t| t == "Spacecraft")` →
+`printing.subtypes.iter().any(|s| s == "Spacecraft")` — matching
+Python's `is_spacecraft` and the existing `or_spacecraft` family.
+No new `Effect` / variant / `PendingDecision` / bridge arm needed
+(the Effect substrate, the Python class, and the bridge arm are all
+already correct). Round-56 Rust-lane (N2 / sole-Rust agent); a
+`.pyd` rebuild is required because it touches Rust. After the fix,
+flip the divergence-pin probe (below) to a cross-engine parity
+assertion (both engines: Spacecraft to hand; library empty; Pulsar
+0 counters).
+
+**Impact estimate**: zero production strength cost (Pulsar Squadron
+Ace is not on the production-deck loader's `_SAFE_*` allowlists
+today; no production exposure path). The real-card-coverage progress
+is the *honest pinning* of the gap so round-56 closes it cleanly
+instead of a synthetic-substrate false-closure. ~5,400 17lands EoE
+decks run Pulsar Squadron Ace.
+
+**Pinned by**:
+`tests/test_parity_smoke.py::test_cross_engine_real_eoe_pulsar_squadron_ace_etb_reveal_real_spacecraft_card_types_vs_subtypes_divergence_pin`
+(the GENUINE real-EoE divergence-pin — drives the actual parsed
+Pulsar printing's reveal arm against a real-shaped
+`Artifact — Spacecraft` card; per-engine expected-divergent
+assertions, GREEN today, flips to parity when round-56 lands) and
+the byte-equal half
+`tests/test_parity_smoke.py::test_cross_engine_real_eoe_pulsar_squadron_ace_etb_look_top_5_no_spacecraft_counter_on_miss_parity`
+(proves the look-N / no-reveal / counter-on-miss / library-order
+behavior round-trips byte-equal on the real printing — sized to a
+1-card library so the "bottom the rest in a random order" rider is
+a no-op on both engines, no rng). Picker shim
+`tests/parity/_picker_shims.py::_PickFirstLibraryOptionAgent`
+(mirrors Rust's `reveal_yes` first-filter-match strategy on the
+Python side).
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
