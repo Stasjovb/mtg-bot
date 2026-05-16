@@ -35,6 +35,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HISTORY_LOG = REPO_ROOT / ".perf_history.log"
 BENCH_SCRIPT = REPO_ROOT / "scripts" / "bench_clone.py"
+STALENESS_SCRIPT = (
+    REPO_ROOT / "scripts" / "check_audit_coverage_staleness.py"
+)
 
 
 def _git(*args: str) -> str:
@@ -51,11 +54,10 @@ def _find_venv_python() -> str | None:
     return None
 
 
-def main() -> None:
-    if _git("rev-parse", "--abbrev-ref", "HEAD") != "main":
-        return  # silently no-op on feature branches
-
-    python = _find_venv_python()
+def _run_perf_step(python: str | None) -> None:
+    """Append the clone-perf measurement to ``.perf_history.log`` and
+    print the delta. Purely informational; returns early (never
+    raises) if the venv/bench is missing or fails."""
     if python is None:
         print("[perf hook] no .venv python found; skipping bench",
               file=sys.stderr)
@@ -107,6 +109,63 @@ def main() -> None:
         )
     else:
         print("[perf hook] (first measurement; no previous to compare)")
+
+
+def _run_staleness_step(python: str | None) -> None:
+    """Run ``scripts/check_audit_coverage_staleness.py`` and surface
+    its report to stderr. This is the round-19 cron proposal: it
+    diffs the live Rust-Effect / bridge-arm / ``_SAFE_*`` inventory
+    against the audit + coverage-doc headline counts so the
+    round-34/49/51 staleness class is caught structurally on every
+    ``main`` merge instead of re-discovered by hand.
+
+    Purely informational, EXACTLY like the perf step: a non-zero
+    staleness exit code (drift detected) is reported but does NOT
+    propagate — this function always returns normally so the hook
+    exits 0 and the commit succeeds. Missing venv / script / any
+    exception is swallowed with a ``[staleness hook]`` stderr note.
+    """
+    try:
+        if python is None:
+            print("[staleness hook] no .venv python found; skipping "
+                  "staleness check", file=sys.stderr)
+            return
+        if not STALENESS_SCRIPT.exists():
+            print(f"[staleness hook] {STALENESS_SCRIPT} missing; "
+                  f"skipping", file=sys.stderr)
+            return
+        proc = subprocess.run(
+            [python, str(STALENESS_SCRIPT)],
+            capture_output=True, text=True, cwd=REPO_ROOT,
+        )
+        # Echo the report (stdout) + any error (stderr) to the
+        # committer's stderr. rc != 0 means drift; we report it but
+        # NEVER block the commit (mirrors the perf-hook contract).
+        out = (proc.stdout or "").strip()
+        err = (proc.stderr or "").strip()
+        if out:
+            print(out, file=sys.stderr)
+        if err:
+            print(f"[staleness hook] {err}", file=sys.stderr)
+        if proc.returncode != 0 and not out and not err:
+            print("[staleness hook] staleness check exited "
+                  f"{proc.returncode} with no output", file=sys.stderr)
+    except Exception as exc:  # never let the hook block a commit
+        print(f"[staleness hook] check raised, ignoring: {exc!r}",
+              file=sys.stderr)
+
+
+def main() -> None:
+    if _git("rev-parse", "--abbrev-ref", "HEAD") != "main":
+        return  # silently no-op on feature branches
+
+    python = _find_venv_python()
+    # Both steps are independent and informational; the staleness
+    # step must run even if the perf bench bailed (missing venv,
+    # bench failure, parse miss) — so it is NOT gated on the perf
+    # step's early returns.
+    _run_perf_step(python)
+    _run_staleness_step(python)
 
 
 if __name__ == "__main__":

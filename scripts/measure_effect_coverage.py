@@ -124,6 +124,46 @@ RUST_TO_PYTHON_OVERRIDES: dict[str, str] = {
         "ReturnCreatureFromYourGraveyardToHand",
     "ReturnCreatureOrSpacecraftFromYourGraveyardToHand":
         "ReturnCreatureFromYourGraveyardToHand",
+    # --- Round-52 refresh: rider-variant overrides for the
+    # token / surveil / mill matrix-saturation siblings.
+    #
+    # These four Rust variants are NOT new Python classes — they are
+    # rider-flag selections on an existing, high-frequency, in-pool
+    # Python class (same precedent as the ``ReturnArtifactOrCreature
+    # ...`` family directly above: one unified Python class, the
+    # binary choice rides a constructor flag, the closed-vocab Rust
+    # side spells each flag as its own variant). The bridge arms in
+    # ``cross_engine._ta_dict_to_python_effect`` are the authority for
+    # each mapping — each constructs the Python class shown here with
+    # the noted flag set:
+    #
+    #   * ``Effect::CreateTokenEachPlayer`` →
+    #     ``CreateToken(each_player=True)`` (cross_engine.py:1945;
+    #     ``tokens.py`` ``CreateToken``, in-pool freq 41).
+    #   * ``Effect::CreateTokenTapped`` →
+    #     ``CreateToken(tapped=True)`` (cross_engine.py:7636).
+    #   * ``Effect::SurveilXEqualToArtifactCount`` →
+    #     ``Surveil(use_artifact_count=True)`` (cross_engine.py:6882;
+    #     ``library_lookat.py`` ``Surveil``, in-pool freq 16).
+    #   * ``Effect::MillTargetPlayerEqualToYourLifeTotal`` →
+    #     ``MillTargetPlayer(use_controller_life=True)``
+    #     (cross_engine.py:2077; ``draw_mill.py`` ``MillTargetPlayer``,
+    #     in-pool freq 2).
+    #
+    # Each target Python class was verified to exist + be pool-walked
+    # at round-52 refresh time. Mapping to the real in-pool class (NOT
+    # suppressing the orphan check) is what clears the false WARNING
+    # for these four: the bridge genuinely round-trips them through
+    # the named class, so the override is the correct relationship,
+    # not a silencer. (The 8 ``DealDamage*``/``EachOpponent*``/
+    # ``GainLife*`` matrix siblings DO have same-named Python classes
+    # but 0 in-pool consumers — those are handled by the
+    # ``RUST_AHEAD_OF_POOL`` allowlist below, where an override would
+    # be *wrong* because the same-named class already exists.)
+    "CreateTokenEachPlayer": "CreateToken",
+    "CreateTokenTapped": "CreateToken",
+    "SurveilXEqualToArtifactCount": "Surveil",
+    "MillTargetPlayerEqualToYourLifeTotal": "MillTargetPlayer",
 }
 
 # Rust variants that have NO direct Python counterpart in the current
@@ -182,6 +222,52 @@ RUST_AHEAD_OF_POOL: set[str] = {
     # form takes a list of keywords and has no 1:N mapping that's
     # obviously correct; allowlist until a clean Python target emerges.
     "GrantKeywordsToTargetCreatureUntilEOT",
+    # --- Round-52 refresh: X-from-count matrix-saturation siblings
+    # with a same-named Python class but ZERO in-pool consumers.
+    #
+    # Rounds 44–49 shipped the X-from-count primitive matrix
+    # (6 apply-substrates × 6 count-denominators) per the
+    # round-27/31 round-trip-surface-coverage rule. Per the round-49
+    # audit refresh (``docs/EOE_PROBE_READINESS_AUDIT.md``), every
+    # one of these denominator-sweep variants landed with **0 EoE
+    # consumers** — they exist for bidirectional round-trip surface,
+    # not because a pool card uses them. Each has a real Python
+    # class with the EXACT same name (verified to exist at round-52
+    # refresh time — see ``effects/generic/damage.py`` /
+    # ``effects/generic/life.py``), but the parser never instantiates
+    # it because no pool card carries the shape, so the class is
+    # absent from the parsed-pool vocab.
+    #
+    # This is precisely the ``RUST_AHEAD_OF_POOL`` contract ("variants
+    # the bridge built before any pool card uses them") — NOT an
+    # override case: the same-named class already exists, so mapping
+    # it elsewhere via ``RUST_TO_PYTHON_OVERRIDES`` would be *wrong*.
+    # Allowlisting here is the correct, non-suppression fix that
+    # clears the false orphan WARNING; remove an entry + add a 1:1
+    # class when an EoE printing surfaces a consumer for that cell.
+    # (Sibling token/surveil/mill rider-variants — which DO map onto
+    # an in-pool class via a constructor flag — are handled by
+    # ``RUST_TO_PYTHON_OVERRIDES`` above instead.)
+    "DealDamageToOpponentCreatureByCardsInGraveyard",   # r46, damage row
+    "DealDamageToOpponentCreatureByCreaturesYouControl",  # r37, damage row
+    "DealDamageToOpponentCreatureByLandsControlled",    # r36, damage row
+    "DealDamageToOpponentCreatureByLifeTotal",          # r47, damage row 6/6
+    "EachOpponentLosesLifeEqualToArtifactCount",        # r44
+    "EachOpponentLosesLifeEqualToYourLifeTotal",        # r48
+    "GainLifeEqualToArtifactCount",                     # r45
+    "GainLifeEqualToYourLifeTotal",                     # r49
+    # Round-51 N2 Monoist Circuit-Feeder deterministic bridge sibling.
+    # Rust ``Effect::TwoSubjectPumpAndDebuffByArtifactCount`` →
+    # Python ``PumpYoursAndDebuffOpponentByArtifactCountUntilEOT``
+    # (cross_engine.py:7719). The real Monoist Circuit-Feeder printing
+    # parses to the AGENT-DRIVEN ``PairedTargetPumpDebuffUEOT`` class,
+    # not this deterministic-pick class — so the deterministic class
+    # exists (verified ``effects/generic/pump.py``) but is never
+    # pool-walked. Same FightTargetCreatureWithTargetCreature
+    # (deterministic, ahead-of-pool) vs agent-driven-real-card
+    # precedent already allowlisted above; ahead-of-pool, not an
+    # override, for the same reason.
+    "TwoSubjectPumpAndDebuffByArtifactCount",
 }
 
 
