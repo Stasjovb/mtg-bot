@@ -633,6 +633,12 @@ def create_app(
         # nests them under host{}.
         host = collect_host_metrics(state)
         payload = {
+            # Worker self-identifies on every heartbeat so the
+            # coordinator can map claim_id → worker_url without a
+            # static config-file mapping. Post-cutover the shards
+            # config is just a URL list; this is how worker_id is
+            # learned at the coordinator.
+            "worker_id": resolved_worker_id,
             "state": snap["state"],
             "current_stage_id": snap["current_stage_id"],
             "games_done": snap["games_done"],

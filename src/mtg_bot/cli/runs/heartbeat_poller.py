@@ -17,14 +17,15 @@ is empty, and abandoned claims get reclaimed via the claim-TTL sweep
 in :func:`queue_db.requeue_expired_claims`. The heartbeat-driven path
 is just the fast lane.
 
-Configuration shape: reads ``shards_config.json``. Two shapes are
-supported for backward compat:
+Configuration shape: reads ``shards_config.json``. Post-cutover the
+ONLY supported shape is::
 
-- New: ``{"workers": [{"worker_id": ..., "worker_url": ...,
-  "n_workers": ...}]}``
-- Legacy: ``{"shards": [{"host": ..., "user": ..., ...}]}``
-  — entries without a ``worker_url`` are silently skipped (no
-  network call, no panic). Lets the migration run side-by-side.
+    {"worker_urls": ["http://host1:5198", "http://host2:5198", ...]}
+
+The legacy shapes (``{"shards": [{host, user, repo_path, ...}]}`` from
+the SSH era, and the transitional ``{"workers": [{worker_id,
+worker_url, n_workers}]}`` shape used during the migration) are
+rejected loudly so an operator can't silently run with a stale config.
 """
 
 from __future__ import annotations
@@ -46,14 +47,30 @@ ALIVE_MAX_S = 30.0
 STALE_MAX_S = 90.0
 
 
+class LegacyShardsConfigError(ValueError):
+    """Raised when ``shards_config.json`` uses a pre-v2-cutover shape.
+
+    Carries a clear migration message so the operator knows exactly
+    what to change. The cutover was a hard cut — there is no
+    in-process fallback to the legacy ``{shards: [...]}`` /
+    ``{workers: [{worker_id, worker_url, n_workers}]}`` shapes.
+    """
+
+
 def load_shards_config(path: Path) -> list[dict[str, Any]]:
     """Read ``shards_config.json`` and return the worker list as
-    ``[{worker_id, worker_url, n_workers}, ...]``.
+    ``[{worker_url}, ...]``.
 
-    Supports both the new ``{"workers": [...]}`` shape and the legacy
-    ``{"shards": [...]}`` shape (the latter typically lacks
-    ``worker_url`` — those entries are returned with ``worker_url:
-    None`` and the poller skips them).
+    Post-cutover the ONLY accepted shape is::
+
+        {"worker_urls": ["http://host1:5198", "http://host2:5198"]}
+
+    The legacy ``{shards: [...]}`` (SSH-era) and the transitional
+    ``{workers: [{worker_id, worker_url, n_workers}]}`` shapes raise
+    :class:`LegacyShardsConfigError` with a clear migration message.
+    Per-worker operational config (n_workers, deck_pool_path,
+    weights_cache_root) lives on each worker daemon's CLI flags, NOT
+    in this file — see ``docs/DISTRIBUTED_API_v2.md``.
     """
     path = Path(path)
     if not path.is_file():
@@ -62,29 +79,32 @@ def load_shards_config(path: Path) -> list[dict[str, Any]]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return []
-    if isinstance(data, dict) and "workers" in data:
-        out = []
-        for w in data["workers"]:
-            if not isinstance(w, dict):
-                continue
-            out.append({
-                "worker_id": w.get("worker_id"),
-                "worker_url": w.get("worker_url"),
-                "n_workers": w.get("n_workers"),
-            })
-        return out
-    if isinstance(data, dict) and "shards" in data:
-        out = []
-        for s in data["shards"]:
-            if not isinstance(s, dict):
-                continue
-            out.append({
-                "worker_id": s.get("worker_id") or s.get("host"),
-                "worker_url": s.get("worker_url"),  # usually None
-                "n_workers": s.get("n_workers"),
-            })
-        return out
-    return []
+    if not isinstance(data, dict):
+        return []
+    if "shards" in data or "workers" in data:
+        raise LegacyShardsConfigError(
+            f"legacy shards_config.json detected at {path}; please "
+            "migrate to {'worker_urls': ['http://host:5198', ...]} "
+            "shape. The v2 cutover removed per-worker fields "
+            "(n_workers, host, user, repo_path, venv_python, "
+            "ssh_port, worker_id) — each daemon now owns those via "
+            "its own CLI flags (see deploy/README.md). See "
+            "docs/DISTRIBUTED_API_v2.md for the full migration."
+        )
+    if "worker_urls" not in data:
+        return []
+    urls = data["worker_urls"]
+    if not isinstance(urls, list):
+        raise ValueError(
+            f"shards_config.json {path}: 'worker_urls' must be a list, "
+            f"got {type(urls).__name__}"
+        )
+    out: list[dict[str, Any]] = []
+    for url in urls:
+        if not isinstance(url, str):
+            continue
+        out.append({"worker_url": url})
+    return out
 
 
 @dataclass
@@ -168,12 +188,9 @@ class HeartbeatPoller:
         entries = load_shards_config(self._shards_config_path)
         with self._lock:
             for e in entries:
-                worker_id = e.get("worker_id")
                 worker_url = e.get("worker_url")
                 if not worker_url:
-                    continue  # legacy SSH-only entry; no-op
-                if worker_id:
-                    self._id_to_url[worker_id] = worker_url
+                    continue
                 if worker_url not in self._workers:
                     self._workers[worker_url] = WorkerLiveness()
 
@@ -246,7 +263,14 @@ class HeartbeatPoller:
 
     def tick(self) -> None:
         """One poll cycle: hit every known worker_url, update liveness,
-        re-queue DEAD-worker claims. Public for tests."""
+        re-queue DEAD-worker claims. Public for tests.
+
+        Post-cutover, the worker_id → worker_url mapping is learned
+        from each heartbeat payload's ``worker_id`` field (the daemon
+        self-identifies on every heartbeat). This replaces the static
+        config-file mapping the legacy ``{workers: [{worker_id,
+        worker_url, ...}]}`` shape provided.
+        """
         with self._lock:
             urls = list(self._workers.keys())
         for url in urls:
@@ -256,6 +280,12 @@ class HeartbeatPoller:
                 if payload is not None:
                     state.last_heartbeat_at = self._clock()
                     state.last_heartbeat_payload = payload
+                    # Learn the worker_id → worker_url mapping from the
+                    # payload so track_claim() can find this worker by
+                    # its self-reported id.
+                    wid = payload.get("worker_id") if isinstance(payload, dict) else None
+                    if isinstance(wid, str) and wid:
+                        self._id_to_url[wid] = url
             self._refresh_liveness(url)
 
     def _refresh_liveness(self, url: str) -> None:
