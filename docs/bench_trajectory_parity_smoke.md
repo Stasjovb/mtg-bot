@@ -763,3 +763,137 @@ Round 47+ slice work to consider:
 3. **Re-run round-37 reproducer** (arch 4 seed 0 max-turns 15) one
    more time to keep the historic regression-test pin alive — the
    original landfall shapes were last confirmed dead in round 42.
+
+## Round 47 — stable-point re-verify + FAIL_TIMEOUT root-cause investigation
+
+Round 47 re-ran the round-46 Sweep A grid against current main
+(`22939a62`, post-handoff) as a comparable stable-point checkpoint, and
+ran a dedicated instrumentation pass to validate or refute the standing
+hypothesis (handoff "What to do next" / round-46 M3): *single-creature
+archetypes can't sustain `attack_all`, so games never end and hit
+max-turns → FAIL_TIMEOUT*.
+
+### Sweep configuration (round-46 Sweep A shape, for comparability)
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 0,1,4,5,10,11,12,13,14,15 --seeds 0-5 --max-turns 22 \
+    --json-out tmp/bench_r47.json --verbose
+```
+
+### Aggregate
+
+| Status            | Round 46 (Sweep A) | Round 47 |
+|-------------------|--------------------|----------|
+| Total games       | 60                 | 60       |
+| PASS              | 18                 | 18       |
+| FAIL_DIVERGENCE   | **0**              | **0**    |
+| FAIL_TIMEOUT      | 42                 | 42       |
+| ARCHETYPE_FILTERED | 0                 | 0        |
+| FAIL_EXCEPTION    | 0                  | 0        |
+| Wall time         | 75.47s             | 78.34s   |
+
+**Byte-identical to round 46** — same 18/0/42 split, same per-archetype
+breakdown (0:3P/3T, 1:3P/3T, 4:5P/1T, 5:1P/5T, 10/11/12:2P/4T,
+13/14/15:0P/6T). 0 FAIL_DIVERGENCE holds; the empirical pipeline is
+stable across the round-46→47 boundary. No new divergence shapes
+surfaced; the divergence histogram is empty.
+
+### FAIL_TIMEOUT root-cause investigation — hypothesis **VALIDATED** (with refinement)
+
+Instrumented the post-filter deck composition for the timeout-dominant
+archetypes and traced a sample of TIMEOUT games end-to-end (casts,
+attack-eligible turns, final life totals).
+
+**Finding 1 — the post-filter deck has almost no creatures.** Each raw
+40-card 17lands archetype carries 10–13 *distinct* creatures (12–14
+creature cards), but the CardDef bridge filter
+(`setup_matched_game_from_real_decks`) admits **only 1–2 of them** and
+then pads the remaining ~58 slots of the 60-card deck with basic lands:
+
+| Arch | Raw distinct creatures | Admitted creatures (name) | Lands in 60-card deck |
+|------|------------------------|---------------------------|------------------------|
+| 0    | 10                     | Thawbringer ×1            | 59                     |
+| 5    | 12                     | Icecave Crasher ×1        | 59                     |
+| 13   | 13                     | Hullcarver ×1, Eumidian Terrabotanist ×1 | 58 |
+| 14   | 11                     | Eumidian Terrabotanist ×1 | 59                     |
+
+**Finding 2 — two distinct timeout sub-mechanisms** (across all 42
+TIMEOUT games in this sweep, every one hit the turn-22 cap exactly,
+`turns_played=23`):
+
+- **26/42 (62%): ZERO creatures ever cast.** With 1 creature buried in
+  59 lands, the bench never draws it into a castable position before
+  turn 22. No creature on the battlefield → no attacker → `attack_all`
+  is a correct no-op → no damage → both players sit at 20/20 to the cap
+  (e.g. arch 0 seed 2, arch 5 seed 0: final life `[20, 20]`, 0 casts,
+  0 attack-eligible turns).
+- **16/42 (38%): 1–2 creatures cast and attacking, but too small/slow
+  to close 20 life in ≤22 turns.** Eumidian Terrabotanist is a 2/3;
+  Thawbringer 4/2; Icecave Crasher 4/4 — all vanilla bodies. A single
+  one cast around turn 6 and swinging every other turn deals ~14–18 by
+  turn 22. Representative finals: arch 14 seed 0 `[4, 20]` (lone
+  Terrabotanist attacked turns 8/10/.../22, ground p0 to 4 but ran out
+  of turns); arch 13 seed 4 `[14, 8]`.
+
+**Conclusion: the hypothesis is validated.** FAIL_TIMEOUT is *not* an
+`attack_all` strategy defect and *not* a parity bug — `attack_all` is
+correctly attacking with every eligible creature. The root cause is the
+**CardDef bridge filter collapsing each archetype to a 1–2-creature,
+~58-land deck**: most games have no creature to attack with, and the
+rare games that do have a single small vanilla body that can't deal 20
+before the cap. This is the same "zero creature coverage" pattern the
+round-37/41/42/45/46 entries flagged qualitatively — round 47 quantifies
+it (62% no-creature / 38% under-powered).
+
+### Forward recommendation (NOT implemented this slice — docs-only)
+
+The leverage path is **not** a different bench combat strategy
+(`attack_all` is already optimal here — there's nothing more to swing
+with) and **not** a max-turns bump (a lone 2/3 still can't close 20 in a
+reasonable cap, and 22→40 turns multiplies wall time past the agent
+budget). The binding constraint is the **filter admit set**. Concrete
+options, highest-leverage first:
+
+1. **CardDef bridge filter extension** (highest leverage, the standing
+   round-42+ recommendation): admit 2–3 more vanilla/simple-trigger
+   creatures per timeout-dominant archetype. Raising each deck from
+   1–2 to ~6–8 creature copies would (a) make the no-cast 62% draw a
+   creature in time and (b) give the cast games enough board to close
+   before the cap — converting both timeout sub-populations into real
+   trajectory probes. The raw-creature lists above (Biomechan Engineer,
+   Galactic Wayfarer, Frenzied Baloth, Germinating Wurm, etc.) are the
+   candidate vocabulary; vanilla/plain-ETB creatures are cheapest to
+   admit per the round-2 bridge-correctness discipline.
+2. **Optional bench-harness tweak (well-scoped, deferred):** add a
+   `--require-creatures N` precondition that marks an (archetype, seed)
+   game `ARCHETYPE_FILTERED` instead of `FAIL_TIMEOUT` when the
+   post-filter deck has `< N` creature cards. This wouldn't add
+   coverage, but it would *correctly classify* the 62% no-creature
+   population as "filtered, no signal possible" rather than conflating
+   it with genuine long-stall timeouts — making the FAIL_TIMEOUT count
+   a truer signal-coverage metric. Left to a future slice since the
+   brief scopes this round as investigation + docs only.
+3. **Mulligan-to-creature opener (rejected):** forcing a mulligan until
+   the opener contains the lone creature would distort the matched-state
+   determinism the bench depends on and still wouldn't fix the
+   under-powered-body sub-case. Not recommended.
+
+### Gate
+
+Docs-only slice (plus a `tmp/` JSON artifact and an ad-hoc instrumentation
+script under `scripts/`); no production or harness behavior changed, so the
+parity gate was not re-run. Round 46's gate (`1133 passed` on
+`480fc4b4`) remains the last recorded baseline; nothing in this slice
+touches code on the gate's path.
+
+### New divergence-shape candidates for round 48+
+
+**None surfaced.** 0 divergences across 60 games at the round-46 Sweep
+A shape — stable-point negative signal. The round-47 contribution is
+the **quantified FAIL_TIMEOUT root cause** (62% no-creature draw / 38%
+under-powered body, both downstream of the 1–2-creature filter admit
+set) and the prioritized forward recommendation: the CardDef filter
+extension is the single highest-leverage lever, exactly as the
+round-42/45/46 entries projected.
