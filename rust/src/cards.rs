@@ -968,6 +968,61 @@ pub enum Effect {
     /// class). Mirrors round-32 / round-33 / round-34 unit-variant
     /// schema convention.
     DealDamageToOpponentCreatureByCardsInHand,
+    /// **BLOCKED-RUST-EFFECT slice (round 36) — deal damage to target
+    /// creature an opponent controls equal to the number of LANDS the
+    /// source-controller controls.** Mirrors Python's
+    /// `DealDamageToOpponentCreatureByLandsControlled`
+    /// (`effects/generic/damage.py` — shipped in this slice; no
+    /// pre-existing class). Sister of round-32's
+    /// `DealDamageToOpponentCreatureByArtifactCount` and round-35's
+    /// `DealDamageToOpponentCreatureByCardsInHand` — same
+    /// apply-substrate (damage-to-opponent-creature, first-eligible
+    /// target, fizzle-on-empty-bf), NEW denominator (lands-controlled
+    /// in place of artifact-count / hand-size). Walks the
+    /// X-from-count denominator axis to a THIRD entry after round-35
+    /// established the bidirectionally-extensible plumbing across
+    /// BOTH axes (substrate × denominator).
+    ///
+    /// **Mechanism — count + apply.** At resolve time, count the
+    /// source-controller's lands on bf
+    /// (`printing.card_types.iter().any(|t| t == "Land")`) — matches
+    /// Python's `sum(1 for o in state.battlefield if o.controller_id ==
+    /// controller_id and o.printing.is_land)` shape (mirrors the
+    /// round-32 artifact-count denominator BIT-FOR-BIT, replacing
+    /// "Artifact" with "Land"). Scryfall's `card_types` convention
+    /// lists "Land" for any land (including non-basic lands; basic
+    /// lands also carry "Land" as their sole entry; dual-typed
+    /// artifact-lands carry both "Land" and "Artifact" -- they count
+    /// for BOTH the artifact-count and the lands-controlled
+    /// denominators, mirroring Scryfall's typeline conventions and
+    /// Python's `is_land` / `is_artifact` disjunction at the printing
+    /// level). If the lands count is ≤ 0 → silent fizzle. Otherwise
+    /// apply that damage amount to the FIRST creature on any opponent's
+    /// battlefield (mirrors `DealDamageToOpponentCreature` /
+    /// `DealDamageToOpponentCreatureByArtifactCount` /
+    /// `DealDamageToOpponentCreatureByCardsInHand` target shape).
+    ///
+    /// **Source-controller resolution.** 5-zone scan + stack scan
+    /// (mirrors round-32 / round-35 sister shape — needs to resolve
+    /// even if source has left bf, e.g. counterspelled trigger that
+    /// still drives the count from the original ETB snapshot). If
+    /// untrackable → silent fizzle.
+    ///
+    /// **Target semantics — first-slice deterministic.** Iterate
+    /// opponents in ascending player order; pick the FIRST creature
+    /// on each opponent's bf (smallest Vec index). 2-player engine =
+    /// exactly one opponent at `1 - controller`. No opponent
+    /// creature → silent fizzle. BIT-FOR-BIT identical to round-32's
+    /// / round-35's target shape (same apply substrate).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides —
+    /// the count is computed from state at resolve time, not stored
+    /// on the variant. Python's `@dataclass(frozen=True)` class has
+    /// only the inherited `targets` tuple; no static `amount` field
+    /// (the dynamic-X from lands count is the whole point of the
+    /// class). Mirrors round-32 / round-33 / round-34 / round-35
+    /// unit-variant schema convention.
+    DealDamageToOpponentCreatureByLandsControlled,
     /// **BLOCKED-RUST-EFFECT slice (round 33) — put a +1/+1 counter
     /// on this creature for each OTHER creature and/or artifact you
     /// control.** Mirrors Python's
@@ -3927,6 +3982,28 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // 1 EoE consumer).
             Ok(Effect::DealDamageToOpponentCreatureByCardsInHand)
         }
+        "deal_damage_to_opponent_creature_by_lands_controlled" => {
+            // BLOCKED-RUST-EFFECT slice (round 36) — deal damage to
+            // an opponent's creature equal to the source-controller's
+            // lands count. Unit variant; no fields beyond `kind` (the
+            // count is dynamic — read from state at resolve time).
+            // Extra dict fields silently ignored for round-trip
+            // dict-shape consistency (mirrors every other unit-
+            // variant parse arm; particularly the round-32 sister
+            // `deal_damage_to_opponent_creature_by_artifact_count`
+            // and the round-35 sister
+            // `deal_damage_to_opponent_creature_by_cards_in_hand`
+            // which share the apply substrate with this arm but use
+            // an artifact-count / hand-size denominator instead).
+            // Mirrors Python's
+            // `DealDamageToOpponentCreatureByLandsControlled`
+            // (`damage.py` -- shipped in this slice as a sister of
+            // the round-32/35 classes; 0 EoE consumers today, slice
+            // ships per round-27/31 round-trip-surface-coverage rule
+            // and to complete the THIRD orthogonal denominator on the
+            // round-32 damage-to-opponent-creature substrate).
+            Ok(Effect::DealDamageToOpponentCreatureByLandsControlled)
+        }
         "put_plus_one_counters_on_self_per_other_creature_or_artifact" => {
             // BLOCKED-RUST-EFFECT slice (round 33) — put a +1/+1
             // counter on this creature for each OTHER creature and/or
@@ -4914,7 +4991,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled"
         ))),
     }
 }
@@ -5882,6 +5959,21 @@ pub(crate) fn effect_to_pydict<'py>(
             // round-32 with the same target shape but a different
             // dynamic-X denominator.
             d.set_item("kind", "deal_damage_to_opponent_creature_by_cards_in_hand")?;
+        }
+        Effect::DealDamageToOpponentCreatureByLandsControlled => {
+            // BLOCKED-RUST-EFFECT slice (round 36). Unit variant; no
+            // payload fields beyond `kind` (count is dynamic —
+            // computed at resolve time from the source-controller's
+            // battlefield lands count). Mirrors Python's
+            // DealDamageToOpponentCreatureByLandsControlled dict shape
+            // (no static `amount` field on the @dataclass). Sister of
+            // round-32 / round-35 with the same target shape but a
+            // different dynamic-X denominator (lands-controlled in
+            // place of artifact-count / hand-size).
+            d.set_item(
+                "kind",
+                "deal_damage_to_opponent_creature_by_lands_controlled",
+            )?;
         }
         Effect::PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact => {
             // BLOCKED-RUST-EFFECT slice (round 33). Unit variant; no

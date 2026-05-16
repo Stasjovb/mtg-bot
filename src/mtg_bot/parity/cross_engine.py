@@ -6630,6 +6630,101 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DealDamageToOpponentCreatureByCardsInHand,
         )
         return DealDamageToOpponentCreatureByCardsInHand()
+    if kind == "deal_damage_to_opponent_creature_by_lands_controlled":
+        # BLOCKED-RUST-EFFECT slice (round 36) -- deal damage to an
+        # opponent's creature equal to the source-controller's lands
+        # count. Rust's
+        # ``Effect::DealDamageToOpponentCreatureByLandsControlled``
+        # (cards.rs unit variant added in this slice; parse arm
+        # immediately after the round-35
+        # deal_damage_to_opponent_creature_by_cards_in_hand arm,
+        # to_dict immediately after the round-35 arm, resolve at
+        # state_ops_resolve.rs immediately after the round-35 resolve
+        # arm with a renamed loop-label borrow split) mirrors Python's
+        # ``DealDamageToOpponentCreatureByLandsControlled``
+        # (effects/generic/damage.py -- shipped in this slice as a
+        # sister of the round-32/35 classes; 0 EoE consumers today).
+        # Rust substrate landed end-to-end IN this slice; the bridge
+        # translator wires the cross-engine round trip.
+        #
+        # **Sister-of-round-32/35 -- THIRD denominator on same apply
+        # substrate.** Round-32's
+        # DealDamageToOpponentCreatureByArtifactCount uses artifact
+        # count as the dynamic-X; round-35's
+        # DealDamageToOpponentCreatureByCardsInHand uses HAND SIZE as
+        # the dynamic-X; this slice uses LANDS-CONTROLLED count as the
+        # dynamic-X. All three arms share the apply substrate (damage
+        # to first eligible opponent creature, fizzle on empty bf,
+        # 5-zone + stack source-controller scan); the denominator is
+        # the only axis that differs. This completes a THIRD orthogonal
+        # X-from-count denominator on the same apply substrate, after
+        # round-35 established the bidirectionally-extensible plumbing
+        # across BOTH axes (substrate x denominator -- damage /
+        # counters / surveil x artifact-count / hand-size /
+        # lands-controlled).
+        #
+        # **Field-shape.** Unit variant on both sides; no fields
+        # beyond ``kind``. The Python class has no static ``amount``
+        # field (damage.py -- ``@dataclass(frozen=True)`` with only
+        # the inherited ``targets`` tuple, defaulted in __post_init__
+        # to a TargetSpec on IsCreature() & ControlledByOpponent()).
+        # The dynamic-X is the whole point of the class -- the count
+        # is computed at resolve time from the source-controller's
+        # lands count, not stored on the variant. The bridge
+        # translator ignores every other key on the dict for
+        # round-trip dict-shape consistency (mirrors round-32 /
+        # round-33 / round-34 / round-35 unit-variant precedent).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # walks the source-controller via the round-32 / round-35
+        # 5-zone+stack scan, counts ``state.players[cidx]
+        # .battlefield`` entries whose printing's ``card_types``
+        # contains "Land" via the round-32 walking pattern BIT-FOR-BIT
+        # (saturating_add overflow guard), and applies that damage
+        # amount via saturating_add (i16 ceiling matches sibling
+        # damage arms) to the FIRST creature on the opponent's bf.
+        # Python's resolve at damage.py reads the target from the
+        # targets tuple passed by the targeting pipeline (PUSH-time
+        # pick) and calls _apply_damage with
+        # ``lands_count = sum(1 for o in state.battlefield if
+        # o.controller_id == controller_id and o.printing.is_land)``
+        # as the same denominator. The chooser-driven pick converges
+        # with Rust's first-eligible-creature scan when the agent
+        # picks the first-eligible target on synthetic probes with
+        # one bait creature.
+        #
+        # **Dual-typed artifact-lands.** Both engines count
+        # artifact-lands toward BOTH the artifact-count and the
+        # lands-controlled denominators independently (Scryfall lists
+        # both "Land" and "Artifact" in card_types; Rust checks each
+        # type string independently in the relevant arm; Python's
+        # ``is_land`` and ``is_artifact`` properties are independent
+        # disjunctions over card_types). The round-32 sister and this
+        # slice produce DIFFERENT counts when both an artifact-land
+        # and a vanilla artifact are on the bf.
+        #
+        # **Fizzle parity.** Both engines silently no-op when the
+        # source-controller controls zero lands (Python:
+        # ``if lands_count <= 0: return``; Rust: the amount <= 0
+        # guard in the resolve arm). Both engines also silently no-op
+        # when no opponent creature is in play (mirrors round-32 /
+        # round-35 sisters exactly).
+        #
+        # **No real-EoE end-to-end probe in this slice.** Zero EoE
+        # consumers today for the damage-by-lands shape (Harmonious
+        # Grovestrider has power=lands but it's a CDA P/T-setter, not
+        # an ETB damage trigger; Focus Fire has an offset and a
+        # creatures+Spacecraft denominator, not vanilla lands).
+        # Synthetic regression pin (per the round-17 Fight + round-30
+        # stun-counter + round-31 double-power + round-32
+        # by-artifact-count + round-33 per-other-creature-or-artifact
+        # + round-34 surveil-X + round-35 by-cards-in-hand precedent)
+        # documents the bridge plumbing; the slice ships per round-27
+        # / round-31 round-trip-surface-coverage rule.
+        from mtg_bot.effects.generic.damage import (
+            DealDamageToOpponentCreatureByLandsControlled,
+        )
+        return DealDamageToOpponentCreatureByLandsControlled()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
