@@ -7158,8 +7158,24 @@ def build_rust_state(spec: DeckSpec):
         # engines. Pre-Round-30 fixtures default to an empty tuple —
         # Rust's parser maps a missing ``supertypes`` key to an empty
         # Vec, mirroring the ``subtypes`` parse shape.
+        #
+        # Round-37 supertypes-migration parity fix: when CardDef
+        # explicitly carries supertypes, pass them through verbatim;
+        # otherwise apply the SAME basic-land heuristic the Python
+        # builder below uses (Land card_type with no explicit
+        # supertypes -> ``("Basic",)``). Without this the Rust side
+        # would receive an empty supertypes Vec for the convenience-
+        # form Land CardDefs (e.g. `CardDef(name="Forest",
+        # card_type="Land", mana_produced=("G",))`), and the round-37
+        # supertypes-migrated `Effect::SearchLibraryForBasicLand-
+        # Tapped` predicate would fail to match those Forests —
+        # diverging from the Python side, which DOES auto-stamp
+        # `("Basic",)`. Cross-engine bridge contract is "both engines
+        # see the same supertype tuple"; this branch holds the line.
         if card.supertypes:
             printing_dict["supertypes"] = list(card.supertypes)
+        elif card.card_type == "Land":
+            printing_dict["supertypes"] = ["Basic"]
         # ETB-trigger Slice 3: pass triggered_abilities through to the
         # Rust registry so CE19-shape probes (predicate-path ENTERS
         # triggers) can drive both engines from the same DeckSpec.

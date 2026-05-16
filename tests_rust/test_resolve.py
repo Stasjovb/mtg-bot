@@ -4070,9 +4070,19 @@ def test_resolve_add_mana_to_pool_cow_clone_unaffected(synthetic_state):
 #   bottom-first in the Vec (lib[len-1] = top); scan via iter().rev()
 #   to grab the topmost matching object. Real MTG lets the player
 #   choose any matching card; deferred until decision callbacks exist.
-# - **Basic-land filter: card_types contains "Land".** Bridge has no
-#   supertypes today; proxy is faithful for the EoE pool. See
-#   SEARCH_LIMITATIONS entry for deferred supertypes work.
+# - **Basic-land filter: card_types contains "Land" AND supertypes
+#   contains "Basic"** (CR 205.4a — basic land = land with the Basic
+#   supertype). Round-37 supertypes-substrate migration consumes the
+#   round-30 `CardPrinting.supertypes` field, bit-equivalent to
+#   Python's `is_basic_land`. Pre-migration the predicate was a
+#   `card_types Land`-only proxy (faithful on the EoE pool, where every
+#   basic land carried `card_types=["Land"]` with no non-basic land
+#   sharing this dispatch path); the round-21 regression pins
+#   (`test_resolve_search_library_for_basic_land_tapped_*` above) all
+#   continued to pass on first run after the migration since the
+#   synthetic Forest seed already carried `supertypes=["Basic"]`. The
+#   three pins below directly exercise the supertypes half of the
+#   predicate.
 # - **No shuffle** in this first slice — deterministic first-match is
 #   reproducible without an RNG seed. SEARCH_LIMITATIONS entry tracks
 #   the deferred RNG-externalization work.
@@ -4355,6 +4365,225 @@ def test_resolve_search_library_for_basic_land_tapped_shuffle_is_deterministic(
         "G19 shuffle must be deterministic — same starting state "
         "must produce the same post-search library permutation"
     )
+
+
+# --- round-37 supertypes-substrate migration pins -------------------
+#
+# **Round-37 supertypes-substrate migration of
+# `Effect::SearchLibraryForBasicLandTapped`.** Round-22 introduced the
+# `CardPrinting.supertypes: Vec<String>` substrate and migrated the
+# sibling `Effect::SearchLibraryForCard` arm's `legendary_creature`
+# predicate to consume it. This arm was left on a `card_types Land`-
+# only proxy (PARTIAL-RESOLVED in SEARCH_LIMITATIONS entry #15) until
+# round 37, which flipped the predicate to
+# `card_types Land AND supertypes Basic` — bit-equivalent to Python's
+# `is_basic_land = is_land and "Basic" in supertypes` (CR 205.4a).
+# The three pins below exercise the supertypes half of the predicate
+# directly: a pure non-basic land (Land + no Basic supertype) MUST
+# NOT match; a pure non-land carrying the Basic supertype MUST NOT
+# match (defends against a hypothetical Basic Artifact); a printing
+# with "Basic Land" mis-typed as a single card_type entry MUST NOT
+# match (defends against hand-rolled fixture sloppiness).
+
+
+def _basic_forest_dict():
+    """A minimum Forest-shape printing carrying both halves of the
+    basic-land predicate: ``card_types=["Land"]`` AND
+    ``supertypes=["Basic"]``. No effects / mana_produced — the
+    bridge's basic-land detection only reads the type fields."""
+    return {
+        "name": "Pin Forest (Basic Land)",
+        "card_types": ["Land"],
+        "supertypes": ["Basic"],
+    }
+
+
+def _nonbasic_dual_land_dict():
+    """A non-basic dual-land-shape printing: ``card_types=["Land"]``
+    with NO Basic supertype (e.g. a shock land or fetch land). Pre-
+    migration the proxy predicate (card_types Land only) would have
+    matched this; post-migration it does NOT, since the supertypes
+    half rejects."""
+    return {
+        "name": "Pin Shock Land (Non-Basic)",
+        "card_types": ["Land"],
+        # supertypes deliberately omitted — bridge defaults to empty
+        # Vec when the key is absent (back-compat parse shape).
+    }
+
+
+def _basic_supertype_artifact_dict():
+    """A degenerate-shape printing that carries the Basic supertype
+    on a non-Land card_type (e.g. a hand-rolled fixture or a future
+    type-changing effect that grants Basic to a non-Land). The post-
+    migration predicate requires BOTH halves so this MUST NOT match."""
+    return {
+        "name": "Pin Basic Artifact",
+        "card_types": ["Artifact"],
+        "supertypes": ["Basic"],
+    }
+
+
+def _mistyped_basic_land_compound_dict():
+    """A hand-rolled fixture that mis-encodes "Basic Land" as a single
+    compound card_type entry instead of splitting into
+    ``card_types=["Land"]`` + ``supertypes=["Basic"]``. Defends
+    against the predicate matching on a literal-string "Basic Land"
+    card_type — the post-migration predicate is two AND-ed
+    contains-checks, not a substring match."""
+    return {
+        "name": "Pin Mis-typed Basic Land Compound",
+        "card_types": ["Basic Land"],
+        # supertypes empty — the only "Basic" hint is in card_types
+        # which is the wrong field.
+    }
+
+
+def test_resolve_search_library_for_basic_land_tapped_requires_basic_supertype(
+    engine,
+):
+    """Post-migration predicate rejects a Land that lacks the Basic
+    supertype. Build a state with a single non-basic dual-land in
+    p0's library; the search effect must NOT find it (silent partial
+    fill on early exhaust — count=1 finds zero matches, library
+    untouched)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=2, num_hand=1, num_library=0
+    )
+    # Inject the non-basic land onto p0's library (insert(0) puts it
+    # at lib[0] = TOP per the test-injection convention).
+    nonbasic_id = state.register_and_inject_object(
+        _nonbasic_dual_land_dict(), 0, ZONE_LIBRARY
+    )
+    bf_before = state.battlefield_sizes[0]
+    assert state.library_sizes[0] == 1
+
+    # Inject the spell onto p0's hand and resolve.
+    spell_obj_id = state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Stack popped (spell resolved + Sorcery moved to graveyard), but
+    # the non-basic land MUST still be in the library — predicate
+    # rejected the supertypes-Basic miss. Battlefield untouched on
+    # the search side (source moved hand → graveyard, no bf delta).
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(nonbasic_id) == ZONE_LIBRARY
+    assert state.library_sizes[0] == 1
+    assert state.battlefield_sizes[0] == bf_before
+
+
+def test_resolve_search_library_for_basic_land_tapped_requires_land_card_type(
+    engine,
+):
+    """Post-migration predicate rejects a non-Land that carries the
+    Basic supertype. Defends against a hypothetical Basic Artifact
+    (or any future type-changing effect that grants Basic to a non-
+    Land card). Both halves of the AND must hold — supertypes Basic
+    alone is not enough."""
+    state = engine.make_synthetic_state(
+        num_battlefield=2, num_hand=1, num_library=0
+    )
+    basic_artifact_id = state.register_and_inject_object(
+        _basic_supertype_artifact_dict(), 0, ZONE_LIBRARY
+    )
+    bf_before = state.battlefield_sizes[0]
+    assert state.library_sizes[0] == 1
+
+    spell_obj_id = state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(basic_artifact_id) == ZONE_LIBRARY
+    assert state.library_sizes[0] == 1
+    assert state.battlefield_sizes[0] == bf_before
+
+
+def test_resolve_search_library_for_basic_land_tapped_rejects_mistyped_basic_land_compound(
+    engine,
+):
+    """Post-migration predicate rejects a hand-rolled fixture that
+    mis-encodes "Basic Land" as a single compound card_type entry
+    instead of splitting into card_types=["Land"] + supertypes=
+    ["Basic"]. The predicate is two AND-ed contains-checks
+    (`card_types contains "Land"` AND `supertypes contains "Basic"`),
+    NOT a substring or compound-string match — so a printing with
+    `card_types=["Basic Land"]` and empty supertypes fails BOTH
+    halves and does not match.
+
+    Beyond regression-pinning the predicate's exact shape, this also
+    pins that fixtures must follow the established convention of
+    splitting type-line tokens into the right fields rather than
+    relying on free-form card_types strings."""
+    state = engine.make_synthetic_state(
+        num_battlefield=2, num_hand=1, num_library=0
+    )
+    mistyped_id = state.register_and_inject_object(
+        _mistyped_basic_land_compound_dict(), 0, ZONE_LIBRARY
+    )
+    bf_before = state.battlefield_sizes[0]
+    assert state.library_sizes[0] == 1
+
+    spell_obj_id = state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(mistyped_id) == ZONE_LIBRARY
+    assert state.library_sizes[0] == 1
+    assert state.battlefield_sizes[0] == bf_before
+
+
+def test_resolve_search_library_for_basic_land_tapped_picks_basic_over_nonbasic(
+    engine,
+):
+    """When the library contains BOTH a non-basic land (no Basic
+    supertype) at the top and a basic Forest beneath it, the search
+    skips the non-basic and lands on the Forest — the supertypes
+    half of the predicate filters out the top-of-library non-basic.
+    Pre-migration the proxy predicate would have grabbed the
+    non-basic at lib[0] (first card_types Land match); post-migration
+    it correctly walks past it to the Forest."""
+    state = engine.make_synthetic_state(
+        num_battlefield=2, num_hand=1, num_library=0
+    )
+    # Library injection inserts at lib[0] (top), so the LAST inject
+    # ends up at the top. Inject Forest first (it'll be pushed down
+    # by the next inject), then inject the non-basic land second
+    # (lands at lib[0] = top).
+    forest_id = state.register_and_inject_object(
+        _basic_forest_dict(), 0, ZONE_LIBRARY
+    )
+    nonbasic_id = state.register_and_inject_object(
+        _nonbasic_dual_land_dict(), 0, ZONE_LIBRARY
+    )
+    bf_before = state.battlefield_sizes[0]
+    assert state.library_sizes[0] == 2
+
+    spell_obj_id = state.register_and_inject_object(
+        _rampant_growth_dict(count=1), 0, ZONE_HAND
+    )
+    state.push_to_stack(spell_obj_id, 0)
+    state.resolve_top_of_stack()
+
+    # Forest moved to battlefield (tapped); the non-basic land stayed
+    # in the library — predicate skipped it on the supertypes-Basic
+    # miss and walked deeper to the Forest.
+    assert state.is_stack_empty() is True
+    assert state.find_object_zone(forest_id) == ZONE_BATTLEFIELD
+    assert state.is_tapped(forest_id) is True
+    assert state.find_object_zone(nonbasic_id) == ZONE_LIBRARY
+    # Library shrank by 1 (Forest pulled), bf grew by 1 (the searched
+    # land — source came from hand → graveyard, no bf delta on it).
+    assert state.library_sizes[0] == 1
+    assert state.battlefield_sizes[0] == bf_before + 1
 
 
 # --- Effect-rng-threading closure (G19 follow-up) -------------------
