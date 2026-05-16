@@ -493,6 +493,11 @@ def create_app(
         Runs in a daemon thread so the Flask handler can return 202
         without blocking on weights fetch / pool spin-up.
         """
+        # ``deck_pool_path`` is an optional field on the start_*
+        # request body. ``None`` makes the production runner fall
+        # back to the system-wide default
+        # (``data/17lands/eoe_decks.json.gz``). Stage-spec callers
+        # use it to point at tiny test pools for smoke runs.
         cfg = _claim_loop.ClaimLoopConfig(
             coordinator_url=body["coordinator_url"],
             stage_id=body["stage_id"],
@@ -501,6 +506,7 @@ def create_app(
             worker_id=resolved_worker_id,
             weights_root=effective_weights_root,
             shard_label=resolved_worker_id,
+            deck_pool_path=body.get("deck_pool_path"),
             retry_backoff_s=effective_backoff,
         )
         cbs = _state_callbacks()

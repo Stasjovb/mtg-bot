@@ -61,6 +61,7 @@ testpaths = ["tests", "tests_rust"]
 addopts = "--cov=mtg_bot --cov-report=term-missing --cov-fail-under=95 -m 'not isolated'"
 markers = [
     "isolated: test must run alone (e.g. perf benchmarks; full suite triggers C-level flakes)",
+    "slow: test takes >5s wall (skipped under MTG_BOT_FAST_TESTS=1)",
 ]
 
 [tool.coverage.run]

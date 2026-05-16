@@ -373,6 +373,15 @@ class ClaimLoopConfig:
     worker_id: str
     weights_root: Path
     shard_label: str
+    # Optional deck pool path. Phase 2c production runner uses this
+    # to load the deck pool once at setup time. ``None`` falls back to
+    # the system-wide default (currently
+    # ``data/17lands/eoe_decks.json.gz`` under the daemon's cwd).
+    # Plumbed through here rather than on the wire claim payload so
+    # the deck pool doesn't have to round-trip through every /v2/claim
+    # response — workers and coordinator already share the file at
+    # deploy time, this is just naming.
+    deck_pool_path: Optional[str] = None
     # Retry/backoff. Tests slam this to zero.
     retry_backoff_s: tuple[float, ...] = field(
         default_factory=lambda: RETRY_BACKOFF_S
@@ -624,59 +633,83 @@ class StateCallbacks:
 
 
 # ---------------------------------------------------------------------------
-# Production game-runner stub (the lift-and-shift from cli/shard.py).
+# Production game-runner builders.
+#
+# The real game-execution body — torch model load, deck pool sample,
+# NN-PIMC search, npz-bytes encode — lives in
+# :mod:`mtg_bot.worker_daemon_production_runner` so heavy torch / numpy
+# imports don't fire at worker_daemon import time. We re-export the
+# factories here as a back-compat surface (Phase 2b code calls them
+# under these names) and delegate via lazy import.
 # ---------------------------------------------------------------------------
 
 
-def build_production_self_play_runner() -> CallableGameRunner:  # pragma: no cover - deferred
-    """Construct the production self-play runner.
+def build_production_self_play_runner(
+    coordinator_url: str,
+    stage_id: str,
+    n_workers: int,
+    weights_cache_root: Path,
+    worker_id: str,
+    log_event: Optional[Callable[[str, dict], None]] = None,
+    *,
+    deck_pool_path: Optional[str] = None,
+    http_get: Callable[..., tuple[int, bytes, dict[str, str]]] = _http_get,
+) -> "GameRunner":
+    """Construct the production self-play GameRunner.
 
-    The real implementation spins up an NN evaluator + SHM server +
-    multiprocessing pool, mirroring ``cli/shard.py::_run_pull_shard``.
-    That body has heavy torch / multiprocessing imports that we don't
-    want to drag into the worker_daemon import path (it would break
-    daemon startup on a host that hasn't installed torch yet, e.g. a
-    fresh worker before the master pushes weights).
+    Heavy imports (torch, numpy, the data_gen game body) are deferred
+    to the first ``setup`` call by routing through
+    :func:`mtg_bot.worker_daemon_production_runner.build_self_play_runner`.
 
-    The lazy import inside the closures defers all of that to the
-    first :meth:`GameRunner.setup` call — exactly when the runner is
-    expected to bring up the pool. The integration test exercises a
-    test-only runner that returns synthetic results without touching
-    torch, which is fine for a wire-up check.
+    ``log_event`` is an optional ``(event_name, payload_dict)`` callback
+    the runner calls on per-game milestones (game_start, game_end,
+    weights_loaded, ...). When omitted, events are dropped.
     """
+    from mtg_bot.worker_daemon_production_runner import (  # noqa: PLC0415
+        build_self_play_runner,
+    )
 
-    state: dict[str, Any] = {}
-
-    def _setup(coordinator_url, weights_root, kind, n_workers):
-        # Production setup is deliberately deferred to the first
-        # iter_009-scale run; the unit + integration tests in this PR
-        # exercise the loop with a callable runner (see
-        # ``tests/test_worker_daemon_integration.py``). The full
-        # lift-and-shift of run_shard_pull's pool spin-up lives behind
-        # this hook so the production wiring lands in a follow-up
-        # commit without re-touching the worker daemon.
-        state["coordinator_url"] = coordinator_url
-        state["weights_root"] = weights_root
-        state["kind"] = kind
-        state["n_workers"] = n_workers
-
-    def _play_one(claim, shard_label):  # pragma: no cover - deferred
-        raise NotImplementedError(
-            "production self-play runner pool spin-up is deferred to a "
-            "follow-up commit; supply a CallableGameRunner directly to "
-            "ClaimLoopRunner for now."
-        )
-
-    def _teardown():
-        state.clear()
-
-    return CallableGameRunner(_play_one, _setup, _teardown)
+    return build_self_play_runner(
+        coordinator_url=coordinator_url,
+        stage_id=stage_id,
+        n_workers=n_workers,
+        weights_cache_root=weights_cache_root,
+        worker_id=worker_id,
+        log_event=log_event,
+        deck_pool_path=deck_pool_path,
+        http_get=http_get,
+    )
 
 
-def build_production_eval_runner() -> CallableGameRunner:  # pragma: no cover - deferred
-    """Same shape as :func:`build_production_self_play_runner` but for
-    the eval path. Eval claims carry ``weights: {new, old}`` and the
-    runner loads both into separate evaluators; the per-game result
-    populates ``wins_new`` / ``wins_old``.
+def build_production_eval_runner(
+    coordinator_url: str,
+    stage_id: str,
+    n_workers: int,
+    weights_cache_root: Path,
+    worker_id: str,
+    log_event: Optional[Callable[[str, dict], None]] = None,
+    *,
+    deck_pool_path: Optional[str] = None,
+    http_get: Callable[..., tuple[int, bytes, dict[str, str]]] = _http_get,
+) -> "GameRunner":
+    """Construct the production eval GameRunner.
+
+    Eval claims carry ``weights: {new, old}`` and the runner loads
+    both versions into separate evaluators; the per-game result
+    populates ``wins_new`` / ``wins_old`` (and ``draws``) instead of
+    ``n_samples``.
     """
-    return build_production_self_play_runner()
+    from mtg_bot.worker_daemon_production_runner import (  # noqa: PLC0415
+        build_eval_runner,
+    )
+
+    return build_eval_runner(
+        coordinator_url=coordinator_url,
+        stage_id=stage_id,
+        n_workers=n_workers,
+        weights_cache_root=weights_cache_root,
+        worker_id=worker_id,
+        log_event=log_event,
+        deck_pool_path=deck_pool_path,
+        http_get=http_get,
+    )
