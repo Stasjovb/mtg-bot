@@ -1865,6 +1865,38 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
         loyalty
       * Mana cost is parseable into (generic, colored) — no hybrid /
         phyrexian / X / snow.
+      * No ``dynamic_pt_formula`` (round-39 fix — Harmonious
+        Grovestrider, Cosmogoyf, Emissary Escort). The CardDef bridge
+        carries only the printing's PRINTED ``power`` / ``toughness``
+        fields; the parser encodes ``*``-based P/T as ``0`` placeholders
+        (see ``parser/printing_keywords.py:478-480``) and the engine
+        computes the actual P/T at query time via
+        ``game._dynamic_base_pt(formula)``. Without the formula on the
+        bridged printing, Python materializes the creature as a literal
+        0/0 (or 0/1 for Cosmogoyf, 0/4 for Emissary Escort) and CR
+        704.5f sends it straight to graveyard the moment SBAs check —
+        but Rust's bridged printing has the same 0/0 / 0/1 / 0/4 placeholder
+        and (per the smoke surfaced by round-38 E1) keeps Grovestrider on
+        the battlefield. The honest fix is to drop these creatures at
+        the filter instead of silently mistranslating them — adding the
+        full layer-7 CDA substrate to CardDef is a separate, larger
+        slice. (Two-engines-disagree-on-0/0-SBA is its own cross-engine
+        gap, but it doesn't affect any real card today because no real
+        CR-correct printing is actually 0/0 at ETB.)
+      * No ``ward_cost`` (round-39 fix — Harmonious Grovestrider,
+        Mouth of the Storm, Famished Worldsire, Lionheart Glimmer).
+        The CardDef bridge doesn't carry ``ward_cost``; the bridged
+        printing has ``ward_cost=None`` on both engines, so Ward never
+        fires on the harness side either, which is BIT-EQUAL in the
+        ``attack_all`` strategy used by the bench (the attacker never
+        targets the warded creature). Filtering these out anyway keeps
+        the substrate honest — if a future trajectory probe drives a
+        targeted spell at one of these creatures, the bridge's silent
+        Ward-drop would surface as another mystery divergence; better
+        to ship them blocked at the filter today than to ship a
+        targeting-strategy-conditional latent bug. Cards that ALSO
+        carry an unsafe keyword / triggered ability would already be
+        dropped above; this catches the bare-Ward case.
     """
     if "Creature" not in printing.card_types:
         return False
@@ -1897,6 +1929,15 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
     if printing.cost_reductions or printing.external_cost_reductions:
         return False
     if printing.station_threshold:
+        return False
+    # Round-39 dynamic-P/T-formula fix (Harmonious Grovestrider, Cosmogoyf,
+    # Emissary Escort): see docstring above for the cross-engine
+    # mistranslation this prevents.
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    # Round-39 ward-cost fix (Harmonious Grovestrider et al.): see
+    # docstring above for the substrate-honesty rationale.
+    if getattr(printing, "ward_cost", None) is not None:
         return False
     try:
         _parse_mana_cost_string(printing.mana_cost_str or "")

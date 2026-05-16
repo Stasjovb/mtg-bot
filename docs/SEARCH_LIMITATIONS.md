@@ -2204,6 +2204,59 @@ Production self-play does not run both engines simultaneously.
 
 ---
 
+## CardDef bridge filter drops creatures with `dynamic_pt_formula` / `ward_cost`
+
+**Where**: `src/mtg_bot/parity/trajectory.py:_printing_is_bridge_simple_creature`
+(the two `if getattr(printing, ...) is not None: return False` lines
+guarding `dynamic_pt_formula` and `ward_cost`).
+
+**What the shortcut is**: the trajectory-parity loader filters out
+every EoE creature that carries a `dynamic_pt_formula`
+(`*`-based P/T cards: Harmonious Grovestrider, Cosmogoyf, Emissary
+Escort) or a `ward_cost` (Harmonious Grovestrider, Mouth of the
+Storm, Famished Worldsire, Lionheart Glimmer). These creatures do
+NOT round-trip through the CardDef bridge today — the bridge's
+`CardDef` shape carries the printing's raw `power` / `toughness`
+ints (which the parser encodes as 0-placeholders for `*` cards —
+see `cards/parser/printing_keywords.py:478-480`) and has no field
+for either `dynamic_pt_formula` or `ward_cost`. Loading them
+across the bridge silently produces a 0/0 (or 0/1, 0/4) vanilla
+no-ward creature, which then disagrees cross-engine the moment
+SBAs check or a Ward trigger would have fired.
+
+**Why it's OK**: each card has a real engine-side implementation
+(Python's `game._dynamic_base_pt(formula)` + Python's full Ward
+substrate; Rust's matching shapes for the keyword side) — they
+play correctly in production. The only context where the
+mistranslation surfaced is the production-deck trajectory-parity
+bench, where both engines are driven off the same CardDef
+registry. Dropping these cards at filter time keeps the bench
+honest. Extending CardDef to carry `dynamic_pt_formula` and
+`ward_cost` is the proper fix; it's a CardDef-schema slice on its
+own (Rust's `parse_printing` would need matching arms, plus the
+layer-7 CDA computation on both sides has to read the formula at
+P/T-query time).
+
+**Failure mode (pre-fix)**: round-38 bench surfaced
+`cast_spell::graveyard_p0,battlefield` for Harmonious
+Grovestrider (2/5 of 18-game smoke failures). Python's SBA sent
+the 0/0 creature to graveyard on resolve; Rust kept it on the
+battlefield. The 0/0-SBA cross-engine asymmetry is its own
+latent bridge gap but doesn't affect any real CR-correct
+printing — no real card resolves as a literal 0/0 at ETB.
+
+**Fix-scope estimate**: ~4 hours for the proper fix (CardDef
+schema extension + Rust parser arm + bridge translators on
+both sides) + ~1 hour parity test for Grovestrider/Cosmogoyf/
+Emissary Escort actually playing cross-engine.
+
+**Impact estimate**: 3 EoE creatures + 4 EoE Ward-bearers
+unfilterable from the trajectory-parity coverage today. Reduces
+divergence noise from the bench (cast_spell::graveyard_p0,
+battlefield divergence count drops to 0 — verified round-39).
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,
