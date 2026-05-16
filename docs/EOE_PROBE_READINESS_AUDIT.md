@@ -275,11 +275,14 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 66a961d5 (round-52 HEAD, post N1+N2+N3),
-     resynced by the round-52 post-N2 coverage-resync slice. -->
+     Measured at main 30661a0a (round-53 HEAD, post N1+N2),
+     resynced by the round-53 post-merge resync slice
+     (_SAFE_TRIGGERS +1 from N1 Phase-3a Lander admit; Rust
+     variant + bridge-arm counts unchanged — N2 fixed the
+     round-31 arm rather than adding a variant). -->
 rust_effect_variants = 108
 bridge_arms = 110
-safe_triggers = 18
+safe_triggers = 19
 safe_keywords = 12
 safe_effect_keys = 8
 <!-- STALENESS-SENTINEL:END -->
@@ -595,7 +598,7 @@ These are not as cleanly reclassifiable, but the audit's
 | §2.6 entry | Status |
 | --- | --- |
 | `TapTargetAndPutStunCounter` (Mechanozoa, Cryogen Relic activated half — 2 cards) | ~~No StunCounter substrate in Rust. Confirmed BLOCKED-RUST-EFFECT.~~ **STALE — corrected round 51.** Round-30 shipped `Effect::TapTargetOpponentPermanentAndStunIt` (`cards.rs:2468`) + bridge arm (`cross_engine.py:3168` → `tap.py:217`). **Mechanozoa is NOT BLOCKED-RUST-EFFECT** — its exact ETB is fully substrated + bridged on both engines (round-51 N3 real-printing cross-engine probe is byte-equal). Mechanozoa's only residual blocker is `warp_cost` gating the production-deck loader admit (§2-declined cost-mechanic) → **BLOCKED-FILTER (warp_cost)**, not an Effect gap. (Cryogen Relic's *activated-half* stun shape `put_stun_counter_on_tapped_creature` also shipped round-30 + bridged; its remaining gap is the activated-ability cross-engine harness, not the Effect.) |
-| `DoubleTargetPowerUntilEOT` (Mightform Harmonizer — 1 card) | No Rust arm. Confirmed. |
+| `DoubleTargetPowerUntilEOT` (Mightform Harmonizer — 1 card) | ~~No Rust arm. Confirmed.~~ **STALE — corrected round 53 (3rd confirmed-stale entry after Mechanozoa/Warmaker r51).** The arm shipped round 31 as `Effect::DoubleTargetCreaturesPowerUEOT` (`cards.rs:886`, `90bc39ca`) + bridge arm `double_target_creatures_power_ueot` (`cross_engine.py:5951`) — there was never a separate `DoubleTargetPowerUntilEOT` ask; the plan-invented name conflated it. **Mightform Harmonizer is NOT BLOCKED-RUST-EFFECT.** Round-53 N2 additionally found + fixed a real latent §2 bug in the shipped round-31 arm (Rust doubled *base* power via `read_battlefield_creature_power`; Python doubles *effective* power incl. +1/+1 counters — disagreed on a countered creature) and added a genuine real-EoE landfall+counter cross-engine probe (byte-equal post-fix; see `SEARCH_LIMITATIONS.md` round-53 entry). Residual blockers are the landfall `Predicate::Subject(IsLand)` substrate + `warp_cost` loader gate → **BLOCKED-FILTER/substrate**, not an Effect gap. The §round-19 / §2.6 "needs new Rust" framing for Mightform Harmonizer is correspondingly stale (full residue re-walk pending — round-54). |
 | `CastFromExileWithCostHike` (Lightstall Inquisitor — 1 card) | No Rust arm. Confirmed. |
 | `SacUnlessYouTap` (Command Bridge — 1 card) | No Rust arm. Confirmed (first land-ETB in audit). |
 | `ReturnPermanentCardWithMVXorLessFromGY` (Astelli Reclaimer — 1 card) | No mana-value-condition GY-return arm in Rust. Confirmed. |
