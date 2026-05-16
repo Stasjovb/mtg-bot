@@ -261,6 +261,7 @@ def poll_stage(
     sleep: Callable[[float], None] = time.sleep,
     http_get: Callable[..., tuple[int, bytes]] = _http_get_json,
     stop_check: Optional[Callable[[], bool]] = None,
+    progress_writer: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> StageResult:
     """Poll ``GET /v2/stage/<stage_id>`` every ``poll_interval_s``
     until ``status == "complete"``.
@@ -268,6 +269,14 @@ def poll_stage(
     ``stop_check`` is invoked between polls; if it returns True the
     poller exits early with the LAST-seen counters. Used by the
     UI-driven abort path.
+
+    ``progress_writer`` is invoked with the parsed stage status dict
+    after every successful poll (including the final one). Pre-built
+    factory :func:`make_runs_db_progress_writer` produces a writer
+    that pushes the aggregate + per-shard ``run_progress`` rows the
+    training UI consumes. Pass ``None`` to skip live progress writes
+    (default — callers that only want the final ``StageResult`` need
+    nothing extra).
 
     The auto-close from ``feature/stage-auto-close`` handles the
     natural-drain transition to ``"complete"`` server-side, so this
@@ -287,6 +296,16 @@ def poll_stage(
                 last = json.loads(body.decode("utf-8"))
             except json.JSONDecodeError:
                 last = {}
+            if progress_writer is not None and last:
+                try:
+                    progress_writer(last)
+                except Exception:  # noqa: BLE001
+                    # Progress writes are advisory; a transient
+                    # runs.db lock or a serialization bug must not
+                    # bring down the orchestrator's poll loop.
+                    log.exception(
+                        "poll_stage: progress_writer raised; continuing",
+                    )
             if last.get("status") == "complete":
                 break
         elif status == 404:
@@ -327,6 +346,7 @@ def run_stage(
     poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
     timeout_s: Optional[float] = None,
     stop_check: Optional[Callable[[], bool]] = None,
+    progress_writer: Optional[Callable[[dict[str, Any]], None]] = None,
     http_post_json: Callable[..., tuple[int, bytes]] = _http_post_json,
     http_get_json: Callable[..., tuple[int, bytes]] = _http_get_json,
     sleep: Callable[[float], None] = time.sleep,
@@ -377,6 +397,7 @@ def run_stage(
         timeout_s=timeout_s,
         sleep=sleep,
         http_get=http_get_json,
+        progress_writer=progress_writer,
         stop_check=stop_check,
     )
 
@@ -485,3 +506,131 @@ def make_eval_stage_spec(
         claim_ttl_seconds=claim_ttl_seconds,
         games=games,
     )
+
+
+# --------------------------------------------------------------------------
+# runs.db progress writer (Training UI plumbing)
+# --------------------------------------------------------------------------
+
+
+def make_runs_db_progress_writer(
+    run_id: str,
+    *,
+    started_perf: Optional[float] = None,
+    client_module: Any = None,
+) -> Callable[[dict[str, Any]], None]:
+    """Build a :func:`run_stage` ``progress_writer`` callback that
+    streams the coordinator's stage status into ``run_progress`` rows
+    keyed under ``run_id``.
+
+    Writes two layers on each invocation:
+
+    - The **aggregate** row (``shard_label=None``) carries the totals
+      the training UI's headline stats read: ``n_games_done``,
+      ``n_games_total``, ``elapsed_seconds``, ``crashed``,
+      ``timed_out``, ``wins_new``/``wins_old``/``draws`` for eval, plus
+      ``n_samples`` and ``n_workers`` in ``extra_json`` (those two
+      surface the UI's "Samples" and "Workers" stat cards and feed the
+      derived "Games/hr", "Samples/hr", and "ETA" math in
+      ``training_ui/app.py``).
+    - One **per-shard** row per machine in ``stage_status["machines"]``,
+      carrying the same fields scoped to that worker — surfaces on
+      the UI's per-machine cards.
+
+    ``started_perf`` lets the caller pin an explicit
+    ``time.perf_counter()`` start so ``elapsed_seconds`` matches the
+    caller's notion of "stage runtime" (default: first writer
+    invocation). ``client_module`` is for tests — defaults to the
+    real ``mtg_bot.cli.runs.client``.
+
+    Exceptions are caught and logged by ``poll_stage``'s wrapper; this
+    writer doesn't try/except itself so a real bug surfaces in tests.
+    """
+    if client_module is None:
+        from mtg_bot.cli.runs import client as client_module  # noqa: PLW0127
+    # Lazy init so the first poll's elapsed_seconds is ~0 instead of
+    # whatever wall time the orchestrator spent in setup.
+    started: dict[str, float] = {}
+
+    def _push(status: dict[str, Any]) -> None:
+        if "perf" not in started:
+            started["perf"] = (
+                started_perf if started_perf is not None
+                else time.perf_counter()
+            )
+        elapsed = time.perf_counter() - started["perf"]
+        kind = status.get("kind", "self_play")
+        n_done = int(status.get("n_games_done", 0) or 0)
+        n_total = int(status.get("n_games_total", 0) or 0)
+        crashed = int(status.get("crashed", 0) or 0)
+        timed_out = int(status.get("timed_out", 0) or 0)
+        n_samples = int(status.get("n_samples", 0) or 0)
+        n_workers = int(status.get("n_workers", 0) or 0)
+        is_eval = kind == "eval"
+
+        # Aggregate row — ``shard_label=None`` upserts the
+        # stage-level totals row.
+        client_module.push_progress(
+            run_id,
+            n_games_done=n_done,
+            n_games_total=n_total,
+            elapsed_seconds=elapsed,
+            crashed=crashed,
+            timed_out=timed_out,
+            wins_new=(
+                int(status.get("wins_new") or 0) if is_eval else None
+            ),
+            wins_old=(
+                int(status.get("wins_old") or 0) if is_eval else None
+            ),
+            draws=int(status.get("draws", 0) or 0),
+            extra_json=json.dumps({
+                "n_samples": n_samples,
+                "n_workers": n_workers,
+            }),
+        )
+
+        # Per-shard rows — one per machine. ``n_games_total`` on each
+        # shard row mirrors the stage total so the UI's "X of N"
+        # rendering has the denominator either way.
+        for m in status.get("machines", []) or []:
+            label = m.get("label")
+            if not label:
+                continue
+            m_done = int(m.get("n_games_done", 0) or 0)
+            m_inflight = int(m.get("n_in_flight", 0) or 0)
+            m_total_dur = float(m.get("total_duration_s", 0.0) or 0.0)
+            client_module.push_progress(
+                run_id,
+                shard_label=label,
+                n_games_done=m_done,
+                n_games_total=n_total,
+                # Per-machine elapsed_seconds is the actual wall time
+                # the machine spent on completed games (sum of
+                # duration_s). Differs from the stage's elapsed
+                # wall clock — the UI prefers per-game-seconds-avg
+                # which is computed from this.
+                elapsed_seconds=m_total_dur if m_total_dur > 0 else None,
+                crashed=int(m.get("crashed", 0) or 0),
+                timed_out=int(m.get("timed_out", 0) or 0),
+                wins_new=(
+                    int(m.get("wins_new") or 0)
+                    if is_eval and m.get("wins_new") is not None
+                    else None
+                ),
+                wins_old=(
+                    int(m.get("wins_old") or 0)
+                    if is_eval and m.get("wins_old") is not None
+                    else None
+                ),
+                draws=int(m.get("draws", 0) or 0),
+                extra_json=json.dumps({
+                    "n_samples": int(m.get("n_samples", 0) or 0),
+                    "n_in_flight": m_inflight,
+                    # n_workers on a per-shard row = "this machine is
+                    # one worker"; sum across shards = total machines.
+                    "n_workers": 1,
+                }),
+            )
+
+    return _push

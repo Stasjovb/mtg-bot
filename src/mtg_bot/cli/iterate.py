@@ -700,12 +700,20 @@ def _self_play_distributed(  # pragma: no cover
         capture_every=capture_every,
         claim_ttl_seconds=claim_ttl_seconds,
     )
+    # Stream stage progress into runs.db so the training UI's per-
+    # machine cards + "Samples" / "Workers" / "Games/hr" / "ETA" stats
+    # populate live. The writer no-ops cleanly when neither
+    # MTG_BOT_RUN_DB_PATH nor MTG_BOT_RUN_DB_URL is set.
+    progress_writer = _rest_orch.make_runs_db_progress_writer(
+        run_id_prefix, started_perf=started,
+    )
     _rest_orch.run_stage(
         coordinator_url=coordinator_url,
         worker_urls=worker_urls,
         spec=spec,
         poll_interval_s=poll_interval_s,
         stop_check=stop_check,
+        progress_writer=progress_writer,
     )
     elapsed = time.perf_counter() - started
     n_samples, n_policy = _aggregate_self_play_npzs(
@@ -758,12 +766,16 @@ def _eval_match_distributed(  # pragma: no cover
         capture_every=capture_every,
         claim_ttl_seconds=claim_ttl_seconds,
     )
+    progress_writer = _rest_orch.make_runs_db_progress_writer(
+        run_id_prefix, started_perf=started,
+    )
     result = _rest_orch.run_stage(
         coordinator_url=coordinator_url,
         worker_urls=worker_urls,
         spec=spec,
         poll_interval_s=poll_interval_s,
         stop_check=stop_check,
+        progress_writer=progress_writer,
     )
     elapsed = time.perf_counter() - started
     return (

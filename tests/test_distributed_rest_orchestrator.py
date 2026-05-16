@@ -436,3 +436,224 @@ def test_stage_spec_to_dict_round_trips():
     assert d["kind"] == "self_play"
     assert d["nodes"] == 200
     assert len(d["games"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# progress_writer hook + make_runs_db_progress_writer factory
+# ---------------------------------------------------------------------------
+
+
+def test_poll_stage_invokes_progress_writer_per_poll():
+    """``progress_writer`` is invoked with the parsed stage status
+    after every successful 200 — including the final "complete"
+    response. Used by the runs.db bridge to stream per-machine
+    progress into the training UI."""
+    responses = [
+        {"status": "running", "n_games_done": 5},
+        {"status": "running", "n_games_done": 50},
+        {"status": "complete", "n_games_done": 100},
+    ]
+    seen = iter(responses)
+    writes: list[dict] = []
+
+    def fake_get(url, *, timeout=30.0):
+        return 200, json.dumps(next(seen)).encode("utf-8")
+
+    orch.poll_stage(
+        coordinator_url="http://coord:5099",
+        stage_id="s1",
+        poll_interval_s=0.001,
+        sleep=lambda _s: None,
+        http_get=fake_get,
+        progress_writer=lambda d: writes.append(d),
+    )
+    assert [w["n_games_done"] for w in writes] == [5, 50, 100]
+    # Even the final "complete" tick gets a write — important so the
+    # UI sees the final counters before the orchestrator moves on.
+    assert writes[-1]["status"] == "complete"
+
+
+def test_poll_stage_swallows_progress_writer_exceptions():
+    """A buggy writer must not crash the poll loop — runs.db locks /
+    network blips happen and the orchestrator's primary job is to
+    keep polling until drain."""
+    responses = [
+        {"status": "running", "n_games_done": 1},
+        {"status": "complete", "n_games_done": 2},
+    ]
+    seen = iter(responses)
+
+    def fake_get(url, *, timeout=30.0):
+        return 200, json.dumps(next(seen)).encode("utf-8")
+
+    def buggy_writer(_):
+        raise RuntimeError("simulated runs.db write failure")
+
+    result = orch.poll_stage(
+        coordinator_url="http://coord:5099",
+        stage_id="s1",
+        poll_interval_s=0.001,
+        sleep=lambda _s: None,
+        http_get=fake_get,
+        progress_writer=buggy_writer,
+    )
+    assert result.status == "complete"
+    assert result.n_games_done == 2
+
+
+class _FakeRunsClient:
+    """Records push_progress calls so tests can assert on shape
+    without booting a real runs.db."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def push_progress(self, run_id, **kwargs):
+        self.calls.append({"run_id": run_id, **kwargs})
+
+
+def test_make_runs_db_progress_writer_pushes_aggregate_and_per_shard():
+    """The writer factory expands one stage-status snapshot into:
+    - one aggregate row (``shard_label=None``)
+    - one row per machine in ``status['machines']`` (``shard_label=label``)
+    Both rows carry n_samples + n_workers in extra_json so the UI's
+    fan-out picks them up."""
+    fake = _FakeRunsClient()
+    writer = orch.make_runs_db_progress_writer(
+        "iter_009_self_play_v6",
+        started_perf=0.0,
+        client_module=fake,
+    )
+    status = {
+        "kind": "self_play",
+        "n_games_done": 27,
+        "n_games_total": 100,
+        "crashed": 1,
+        "timed_out": 2,
+        "n_samples": 540,
+        "n_workers": 3,
+        "draws": 0,
+        "machines": [
+            {
+                "label": "master",
+                "n_games_done": 15,
+                "n_samples": 300,
+                "n_in_flight": 16,
+                "crashed": 1,
+                "timed_out": 0,
+                "total_duration_s": 75.0,
+                "wins_new": None,
+                "wins_old": None,
+                "draws": 0,
+            },
+            {
+                "label": "mac",
+                "n_games_done": 12,
+                "n_samples": 240,
+                "n_in_flight": 6,
+                "crashed": 0,
+                "timed_out": 2,
+                "total_duration_s": 50.0,
+                "wins_new": None,
+                "wins_old": None,
+                "draws": 0,
+            },
+        ],
+    }
+    writer(status)
+    assert len(fake.calls) == 3  # 1 aggregate + 2 machines
+
+    agg = next(c for c in fake.calls if c.get("shard_label") is None)
+    assert agg["n_games_done"] == 27
+    assert agg["n_games_total"] == 100
+    assert agg["crashed"] == 1
+    assert agg["timed_out"] == 2
+    agg_extra = json.loads(agg["extra_json"])
+    assert agg_extra["n_samples"] == 540
+    assert agg_extra["n_workers"] == 3
+
+    master = next(c for c in fake.calls if c.get("shard_label") == "master")
+    assert master["n_games_done"] == 15
+    assert master["crashed"] == 1
+    master_extra = json.loads(master["extra_json"])
+    assert master_extra["n_samples"] == 300
+    assert master_extra["n_in_flight"] == 16
+    assert master_extra["n_workers"] == 1  # 1 machine per row
+
+    mac = next(c for c in fake.calls if c.get("shard_label") == "mac")
+    assert mac["n_games_done"] == 12
+    mac_extra = json.loads(mac["extra_json"])
+    assert mac_extra["n_samples"] == 240
+
+
+def test_make_runs_db_progress_writer_eval_carries_wins():
+    """For eval stages the writer threads wins_new/wins_old/draws
+    onto the aggregate row + per-shard rows."""
+    fake = _FakeRunsClient()
+    writer = orch.make_runs_db_progress_writer(
+        "eval_v6_vs_v5_smoke",
+        started_perf=0.0,
+        client_module=fake,
+    )
+    status = {
+        "kind": "eval",
+        "n_games_done": 10,
+        "n_games_total": 20,
+        "crashed": 0,
+        "timed_out": 0,
+        "n_samples": 0,
+        "n_workers": 1,
+        "wins_new": 6,
+        "wins_old": 4,
+        "draws": 0,
+        "machines": [
+            {
+                "label": "master",
+                "n_games_done": 10,
+                "n_samples": 0,
+                "n_in_flight": 0,
+                "crashed": 0,
+                "timed_out": 0,
+                "total_duration_s": 30.0,
+                "wins_new": 6,
+                "wins_old": 4,
+                "draws": 0,
+            },
+        ],
+    }
+    writer(status)
+
+    agg = next(c for c in fake.calls if c.get("shard_label") is None)
+    assert agg["wins_new"] == 6
+    assert agg["wins_old"] == 4
+    assert agg["draws"] == 0
+
+    master = next(c for c in fake.calls if c.get("shard_label") == "master")
+    assert master["wins_new"] == 6
+    assert master["wins_old"] == 4
+
+
+def test_make_runs_db_progress_writer_self_play_passes_none_for_eval_only_fields():
+    """Self-play stages don't have wins_new/wins_old — writer passes
+    None (NOT 0) so the runs.db schema's NULL semantics stay correct
+    and the UI knows to hide eval-only columns for these rows."""
+    fake = _FakeRunsClient()
+    writer = orch.make_runs_db_progress_writer(
+        "iter_005_self_play_v4",
+        started_perf=0.0,
+        client_module=fake,
+    )
+    status = {
+        "kind": "self_play",
+        "n_games_done": 1,
+        "n_games_total": 1,
+        "crashed": 0,
+        "timed_out": 0,
+        "n_samples": 50,
+        "n_workers": 1,
+        "machines": [],
+    }
+    writer(status)
+    agg = fake.calls[0]
+    assert agg["wins_new"] is None
+    assert agg["wins_old"] is None

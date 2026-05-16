@@ -689,11 +689,13 @@ def stage_counters(
     ).fetchone()["c"]
     agg = conn.execute(
         "SELECT COUNT(*) AS n_done, "
-        "       SUM(COALESCE(wins_new, 0)) AS wins_new, "
-        "       SUM(COALESCE(wins_old, 0)) AS wins_old, "
-        "       SUM(COALESCE(draws, 0))    AS draws, "
-        "       SUM(crashed)               AS crashed, "
-        "       SUM(timed_out)             AS timed_out "
+        "       SUM(COALESCE(wins_new, 0))    AS wins_new, "
+        "       SUM(COALESCE(wins_old, 0))    AS wins_old, "
+        "       SUM(COALESCE(draws, 0))       AS draws, "
+        "       SUM(crashed)                  AS crashed, "
+        "       SUM(timed_out)                AS timed_out, "
+        "       SUM(COALESCE(n_samples, 0))   AS n_samples, "
+        "       SUM(COALESCE(duration_s, 0))  AS total_duration_s "
         "FROM results WHERE stage_id = ?",
         (stage_id,),
     ).fetchone()
@@ -704,6 +706,70 @@ def stage_counters(
     else:
         wins_new = None
         wins_old = None
+
+    # ---- Per-worker breakdown -------------------------------------------
+    # Two sources to merge:
+    #   1. ``results.shard_label``: workers that have reported at least one
+    #      finished game (carries n_samples + duration + crashed/timed_out).
+    #   2. ``claims.worker_id``: workers that have claimed but not yet
+    #      reported any game (surfaces machines warming up before their
+    #      first report lands so the UI shows them immediately).
+    per_shard_done = conn.execute(
+        "SELECT shard_label,                                              "
+        "       COUNT(*)                            AS n_games_done,      "
+        "       SUM(COALESCE(n_samples, 0))         AS n_samples,         "
+        "       SUM(COALESCE(wins_new, 0))          AS wins_new,          "
+        "       SUM(COALESCE(wins_old, 0))          AS wins_old,          "
+        "       SUM(COALESCE(draws, 0))             AS draws,             "
+        "       SUM(crashed)                        AS crashed,           "
+        "       SUM(timed_out)                      AS timed_out,         "
+        "       SUM(COALESCE(duration_s, 0))        AS total_duration_s   "
+        "FROM results WHERE stage_id = ? AND shard_label IS NOT NULL      "
+        "GROUP BY shard_label",
+        (stage_id,),
+    ).fetchall()
+    per_shard_inflight = conn.execute(
+        "SELECT worker_id AS shard_label, COUNT(*) AS n_in_flight "
+        "FROM claims "
+        "WHERE stage_id = ? AND reported = 0 "
+        "GROUP BY worker_id",
+        (stage_id,),
+    ).fetchall()
+    machines: dict[str, dict[str, Any]] = {}
+    for r in per_shard_done:
+        label = r["shard_label"]
+        machines[label] = {
+            "label": label,
+            "n_games_done": int(r["n_games_done"] or 0),
+            "n_samples": int(r["n_samples"] or 0),
+            "n_in_flight": 0,
+            "wins_new": int(r["wins_new"] or 0) if stage["kind"] == "eval" else None,
+            "wins_old": int(r["wins_old"] or 0) if stage["kind"] == "eval" else None,
+            "draws": int(r["draws"] or 0),
+            "crashed": int(r["crashed"] or 0),
+            "timed_out": int(r["timed_out"] or 0),
+            "total_duration_s": float(r["total_duration_s"] or 0.0),
+        }
+    for r in per_shard_inflight:
+        label = r["shard_label"]
+        if label not in machines:
+            machines[label] = {
+                "label": label,
+                "n_games_done": 0,
+                "n_samples": 0,
+                "n_in_flight": 0,
+                "wins_new": 0 if stage["kind"] == "eval" else None,
+                "wins_old": 0 if stage["kind"] == "eval" else None,
+                "draws": 0,
+                "crashed": 0,
+                "timed_out": 0,
+                "total_duration_s": 0.0,
+            }
+        machines[label]["n_in_flight"] = int(r["n_in_flight"] or 0)
+    # Deterministic order so consumers (UI cards, run-DB rows) see a
+    # stable shape across polls.
+    machines_list = sorted(machines.values(), key=lambda m: m["label"])
+
     return {
         "stage_id": stage["stage_id"],
         "kind": stage["kind"],
@@ -712,6 +778,8 @@ def stage_counters(
         "n_games_queued": int(n_queued),
         "n_games_in_flight": int(n_in_flight),
         "n_games_done": n_done,
+        "n_samples": int(agg["n_samples"] or 0),
+        "total_duration_s": float(agg["total_duration_s"] or 0.0),
         "wins_new": wins_new,
         "wins_old": wins_old,
         "draws": int(agg["draws"] or 0),
@@ -720,6 +788,10 @@ def stage_counters(
         "started_at": stage["started_at"],
         "drained_at": stage["drained_at"],
         "complete_at": stage["complete_at"],
+        "machines": machines_list,
+        # Count of distinct machines with any activity (reported OR
+        # in-flight) — this is the "Workers" stat on the UI card.
+        "n_workers": len(machines_list),
     }
 
 
