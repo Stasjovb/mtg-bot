@@ -49406,21 +49406,18 @@ def test_cross_engine_cerebral_download_real_eoe_cast_xfails_on_sequence_surveil
     DrawCards(3))) cast end-to-end on both engines and assert the
     post-resolve hand contents.
 
-    **Currently xfails** because the two engines diverge on
-    Sequence(Surveil, DrawCards) ordering — see the module-level
-    comment block above for the bit-for-bit trace. Python's
-    no-agent Surveil never mutates the library, so DrawCards-3
-    pulls the top three deckspec cards. Rust's Surveil pops X cards
-    into a SurveilChoice PendingDecision, DrawCards-3 runs against
-    the post-pop top, then auto_resolve_pending re-inserts the
-    surveiled cards at lib[0] — Rust's hand gains DIFFERENT cards
-    than Python's hand.
-
-    The xfail pin lets the divergence surface visibly without
-    blocking the gate; landing the fix (move SurveilChoice auto-
-    resolve into the Sequence::apply_effect loop) flips this from
-    xfail to pass and closes the round-32 deferred-EoE probe.
-    Documented in ``docs/SEARCH_LIMITATIONS.md``.
+    **Round-36 fix (now PASSES)**: the prior cross-engine divergence
+    on ``Sequence(Surveil, DrawCards)`` was closed by moving the
+    PendingDecision drain INTO ``Effect::Sequence``'s inner loop —
+    after each leaf effect resolves, ``auto_resolve_pending(state,
+    "keep_all_on_top")`` runs BEFORE the next leaf effect. Rust now
+    matches Python's no-agent flow: Surveil pops X into
+    PendingDecision, the immediate auto-resolve re-inserts the cards
+    at ``lib[0]``, and DrawCards-3 then pulls the same deckspec top
+    three cards on both engines. Documented in
+    ``docs/SEARCH_LIMITATIONS.md`` (RESOLVED). Test name retains the
+    ``_xfails_on_`` token for git-blame continuity with the round-32
+    pin; the body is now a direct cross-engine equality assertion.
     """
     pytest.importorskip("mtg_bot_engine")
     from mtg_bot.parity.cross_engine import (
@@ -49463,26 +49460,12 @@ def test_cross_engine_cerebral_download_real_eoe_cast_xfails_on_sequence_surveil
     )
 
     # Real-EoE cross-engine assertion: both engines' p0 hand contents
-    # must agree byte-for-byte. With the Sequence(Surveil, DrawCards)
-    # divergence active, Python's hand contents (sorted) are
-    # ['Forest', 'Forest', 'Mountain'] (the deckspec top 3) and Rust's
-    # hand contents (sorted) are ['Forest', 'Grizzly Bears'] (the
-    # deckspec post-pop top, only 2 because library had 4 - 2 surveil
-    # = 2 left when DrawCards-3 ran, and the third draw fizzles via
-    # attempted_draw_on_empty). Pinned as xfail until the Rust-side
-    # SurveilChoice auto-resolve moves into the Sequence loop.
-    if py_hand_names != rust_hand_names:
-        pytest.xfail(
-            f"round-32 deferred-EoE divergence: Sequence(Surveil, "
-            f"DrawCards) ordering differs across engines. "
-            f"Python p0 hand = {py_hand_names}, "
-            f"Rust p0 hand = {rust_hand_names}. "
-            f"See SEARCH_LIMITATIONS.md 'Sequence(Surveil, DrawCards) "
-            f"PendingDecision-vs-inline ordering'."
-        )
-    # Should not reach here while the divergence is unfixed -- if it
-    # does, the divergence has been closed and the xfail above can be
-    # promoted to a real assert.
+    # must agree byte-for-byte. With the round-36 Sequence-loop
+    # auto-resolve drain in place, both engines see Surveil keep the
+    # library unchanged (Rust's PendingDecision drains immediately via
+    # "keep_all_on_top" before DrawCards-3 runs), so DrawCards-3 pulls
+    # the deckspec top 3 on both sides: sorted hand contents are
+    # ['Forest', 'Forest', 'Mountain'].
     assert py_hand_names == rust_hand_names
 
 
