@@ -15764,14 +15764,22 @@ def test_r49_recognizer_declines_non_vanilla_lander_token():
 
 
 def test_r49_recognizer_declines_unsupported_riders():
-    """§2 gate: tapped=True (Gravpack Monoist) and each_player=True
-    (Edge Rover) riders are DECLINED — Rust's
-    ``Effect::CreateToken { count, token_printing_id }`` has no field
-    for them, so the bridge would round-trip a token that enters
-    untapped / under one player only on Rust while Python honored the
-    rider (byte-divergent post-resolve token object). Synthetic
-    riders pinned directly so the gate is exercised independent of
-    the EoE pool's exact carriers.
+    """§2 gate (round-49 Phase-1 pin, UPDATED for Phase 4 round-50).
+
+    Phase 1 declined ALL riders (tapped / each_player / attacking)
+    because the bare Rust ``Effect::CreateToken { count,
+    token_printing_id }`` had no mirror for any of them. **Phase 4
+    (round 50)** adds the ``Effect::CreateTokenTapped`` sister variant
+    + the ``create_token_tapped`` bridge/recognizer arm, so the
+    ``tapped=True`` rider is now ADMITTED as the tapped sister kind
+    (this is the round-49-design-doc-anticipated reject→convert — see
+    ``docs/TOKEN_PRINTING_SUBSTRATE.md`` §4 Phase 4 / the EoE-pool
+    delta pin ``test_phase4_gravpack_monoist_flips_drop_to_admit``).
+    ``each_player=True`` (Edge Rover — Phase 5) and ``attacking=True``
+    (no Rust mirror) STAY declined; ``tapped`` COMBINED with another
+    rider also stays declined (Rust's tapped variant only mirrors the
+    lone-tapped profile). Synthetic riders pinned directly so the gate
+    is exercised independent of the EoE pool's exact carriers.
     """
     from mtg_bot.cards.base import make_token_creature
     from mtg_bot.effects.base import TriggeredAbility
@@ -15784,18 +15792,27 @@ def test_r49_recognizer_declines_unsupported_riders():
         subtypes=("Robot",), artifact=True,
     )
     base_kw = dict(event=Event.ENTERS, predicate=IsSelf())
-    # Bare rider -> admitted (sanity anchor for the decline cases).
+    # Bare rider -> admitted as the Phase-1 create_token kind.
     ok = TriggeredAbility(
         effect=CreateToken(token_printing=robot, count=1), **base_kw
     )
-    assert _python_ta_to_safe_dict(ok) is not None
-    # tapped=True -> declined.
+    ok_sd = _python_ta_to_safe_dict(ok)
+    assert ok_sd is not None
+    assert ok_sd["effect"]["kind"] == "create_token"
+    # Phase 4: tapped=True -> now ADMITTED as create_token_tapped
+    # (was declined under Phase 1; the round-49 design doc's
+    # anticipated reject→convert).
     tapped = TriggeredAbility(
         effect=CreateToken(token_printing=robot, count=1, tapped=True),
         **base_kw,
     )
-    assert _python_ta_to_safe_dict(tapped) is None
-    # each_player=True -> declined.
+    tapped_sd = _python_ta_to_safe_dict(tapped)
+    assert tapped_sd is not None, (
+        "Phase 4 admits the lone tapped=True rider as "
+        "create_token_tapped"
+    )
+    assert tapped_sd["effect"]["kind"] == "create_token_tapped"
+    # each_player=True -> STILL declined (Phase 5 / Edge Rover).
     eachp = TriggeredAbility(
         effect=CreateToken(
             token_printing=robot, count=1, each_player=True
@@ -15803,7 +15820,7 @@ def test_r49_recognizer_declines_unsupported_riders():
         **base_kw,
     )
     assert _python_ta_to_safe_dict(eachp) is None
-    # attacking=True -> declined.
+    # attacking=True -> STILL declined (no Rust mirror).
     atk = TriggeredAbility(
         effect=CreateToken(
             token_printing=robot, count=1, attacking=True
@@ -15811,6 +15828,16 @@ def test_r49_recognizer_declines_unsupported_riders():
         **base_kw,
     )
     assert _python_ta_to_safe_dict(atk) is None
+    # Phase 4 §2 gate: tapped COMBINED with another rider stays
+    # declined (Rust's CreateTokenTapped only mirrors lone-tapped).
+    tapped_eachp = TriggeredAbility(
+        effect=CreateToken(
+            token_printing=robot, count=1,
+            tapped=True, each_player=True,
+        ),
+        **base_kw,
+    )
+    assert _python_ta_to_safe_dict(tapped_eachp) is None
 
 
 def test_r49_token_vanilla_card_def_gate():

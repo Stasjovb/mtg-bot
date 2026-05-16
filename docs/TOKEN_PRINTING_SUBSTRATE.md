@@ -359,3 +359,88 @@ lowest leverage.
   Phase 3 work) OR **Phase 3** (Lander activated-ability sub-substrate
   — the largest cumulative delta but the biggest scope; one dedicated
   multi-round sub-campaign).
+
+## 6. Phase 4 landing record (round-50 N1)
+
+- Substrate (Rust): `Effect::CreateTokenTapped { count,
+  token_printing_id }` sister variant — enum decl + `create_token_tapped`
+  parse arm + to_dict arm + resolve arm (`rust/src/cards.rs` +
+  `rust/src/state_ops_resolve.rs`). The resolve arm is byte-identical
+  to the sister `CreateToken` arm (count validation, registry bounds,
+  I81 controller-of-effect resolution, fresh-id allocator, CE4
+  monotonic etb_timestamp, summoning_sick=true, pending ENTERS
+  dispatch) with the SINGLE difference that each pushed `GameObject`
+  carries `tapped: true`. Closed-vocab sister-variant convention (no
+  bool field — the tapped choice rides on the variant name / dict
+  `kind`), mirroring round-43 `CreateTokenEachPlayer`.
+- Substrate (Python/bridge): `create_token_tapped` arm in
+  `cross_engine._ta_dict_to_python_effect` (above the PHASE5 bridge
+  sentinel) → `CreateToken(token_printing=…, count=…, tapped=True)`.
+  Python's `CreateToken` class already carried `tapped: bool = False`
+  + the `tokens.py:286-287` post-ETB flip — NO Python class change.
+- Substrate (loader): `_SAFE_EFFECT_KEYS["create_token_tapped"]`;
+  `_SAFE_TRIGGERS += ("dies","source_is_self","create_token_tapped")`
+  (the real-card lever — Gravpack Monoist is a DIES trigger) +
+  `("enters","source_is_self","create_token_tapped")` (pre-position);
+  `_python_ta_to_safe_dict` CreateToken branch routes `tapped=True`
+  (+ all other riders default + vanilla token) to the
+  `create_token_tapped` symbolic kind, `each_player`/`attacking`/
+  `schedule`/tapped-combined stay declined; DIES + ENTERS
+  `safe_effect_kinds` widened; `_seat_token_printings` recognizes
+  BOTH `create_token` and `create_token_tapped` symbolic carriers and
+  preserves the `kind` through the deterministic-pid seating rewrite.
+- **EoE-pool delta: +1 real card / 25,252 of 129,996 17lands decks.**
+  Gravpack Monoist (Creature — Robot, flying; "When this creature
+  dies, create a tapped 2/2 Robot token.") flips drop→admit — it was
+  the SOLE Phase-1 §2.3 `tapped=True` decline (its Robot token is
+  already vanilla so no Phase-3 dependency). A full EoE walk confirms
+  Gravpack Monoist is the only bare-`tapped` create_token carrier (the
+  `CreateTokenPerMulticoloredPermanent tapped=True` shape is a
+  different Python class, out of scope). First real-card token-
+  substrate lever after Phase 1's substrate-only landing.
+- Tests (+15 net, gate **1215 → 1230**):
+  - 7 Rust regression / bridge pins
+    (`test_cross_engine_etb_triggers.py`): bridge produces
+    `CreateToken(tapped=True)`; count-default; distinct-from-static-
+    sister; missing-registration KeyError; Rust parser accepts
+    `create_token_tapped` in trigger + cast effects; rejects typo.
+  - 3 cross-engine recognizer/loader pins: recognizer routes tapped
+    vanilla → `create_token_tapped` (bare → `create_token`); declines
+    tapped+each_player / tapped+attacking (§2); `_seat_token_printings`
+    preserves the tapped kind through seating.
+  - 1 real-EoE byte-equal probe
+    (`test_parity_smoke.py::test_phase4_real_eoe_gravpack_monoist_tapped_token_byte_equal`):
+    real Gravpack Monoist via `production_deck_to_deckspec` →
+    `build_matched_states` → inject on bf → SBA death →
+    `create_token_tapped` resolve → tapped Robot spawns byte-equal on
+    BOTH engines (`compare_fields == []`; the battlefield zone
+    signature includes `tapped`, so the assertion genuinely exercises
+    Phase 4's contract).
+  - reject→admit conversion (`test_trajectory.py`): Gravpack Monoist
+    removed from `rejects_lander_cluster`; new
+    `test_phase4_gravpack_monoist_flips_drop_to_admit` admit pin. The
+    round-49 `test_r49_recognizer_declines_unsupported_riders` Phase-1
+    pin updated — `tapped=True` now admits as `create_token_tapped`
+    (the design-doc-anticipated reject→convert); each_player /
+    attacking / tapped-combined stay declined.
+- **Recommended round-51 next phase: Phase 3** (Lander-token-
+  activated-ability sub-substrate). It is now the single largest
+  remaining EoE-pool-delta lever: Galactic Wayfarer (33,469 decks),
+  Beamsaw Prospector (24,310), Edge Rover (15,271 — also needs Phase
+  5), Biomechan Engineer, Glacier Godmaw, Bioengineered Future — the
+  entire high-deck-count Lander cluster (~88k+ cumulative decks)
+  flips drop→admit once the token's `{2}, Sac:
+  SearchLibraryForBasicLandTapped` activated ability round-trips
+  cross-engine (CardDef gains `token_activated_abilities`; the
+  `SearchLibraryForBasicLandTapped` effect already has a bridge arm —
+  verify its library-search agent seating on the trajectory walk). It
+  is the biggest scope (one dedicated multi-round sub-campaign — the
+  token-activated-ability plumbing is a real substrate, not a sister
+  variant) but the deck-count-per-effort dwarfs every remaining phase.
+  Phase 2 (bridge-simple non-creature permanent filter) is lower
+  leverage (most non-creature carriers also make Lander, so the real
+  delta is still gated on Phase 3) and Phase 5/6 are tail. If a
+  smaller Phase-3-precursor slice is wanted first, the
+  `token_activated_abilities` CardDef-field + bridge plumbing (without
+  yet admitting any Lander card) is an independently-shippable
+  substrate-only landing.
