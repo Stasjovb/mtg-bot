@@ -15960,5 +15960,388 @@ def test_r49_loader_seating_assigns_deterministic_pid_and_registers():
         clear_token_printings()
 
 
+# ---------------------------------------------------------------------------
+# Phase 6 token-printing substrate — Phase 4 (round 50): the `tapped`
+# create-token rider sister variant. Rust regression pins + cross-engine
+# bridge pins. The real-EoE Gravpack-Monoist byte-equal trajectory probe
+# lives in test_trajectory_parity.py; the EoE-pool-delta admit pin lives
+# in test_trajectory.py (test_phase4_gravpack_monoist_flips_drop_to_admit).
+# ---------------------------------------------------------------------------
+
+
+def test_phase4_bridge_create_token_tapped_produces_tapped_createtoken():
+    """Bridge arm pin: ``{"kind": "create_token_tapped", ...}`` ->
+    ``CreateToken(token_printing=..., count=..., tapped=True)``.
+    Mirrors the round-12 static ``create_token`` arm shape with the
+    ``tapped=True`` flag set.
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect, clear_token_printings,
+        register_token_printing,
+    )
+
+    clear_token_printings()
+    try:
+        robot = make_token_creature(
+            name="Robot (phase4 tapped pin)", power=2, toughness=2,
+            subtypes=("Robot",), artifact=True,
+        )
+        register_token_printing(20, robot)
+        e = _ta_dict_to_python_effect(
+            {
+                "kind": "create_token_tapped",
+                "count": 1,
+                "token_printing_id": 20,
+            }
+        )
+        assert isinstance(e, CreateToken)
+        assert e.token_printing is robot
+        assert e.count == 1
+        assert e.tapped is True
+        # Other riders stay at dataclass defaults.
+        assert e.each_player is False
+        assert e.attacking is False
+        assert e.schedule_end_of_combat_sacrifice is False
+    finally:
+        clear_token_printings()
+
+
+def test_phase4_bridge_create_token_tapped_count_default_one():
+    """Missing ``count`` defaults to 1 (mirrors the sister
+    ``create_token`` / ``create_token_each_player`` lenient-default
+    convention). Gravpack Monoist's real shape is count=1.
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect, clear_token_printings,
+        register_token_printing,
+    )
+
+    clear_token_printings()
+    try:
+        robot = make_token_creature(
+            name="Robot (phase4 default-count pin)", power=2,
+            toughness=2, subtypes=("Robot",), artifact=True,
+        )
+        register_token_printing(21, robot)
+        e = _ta_dict_to_python_effect(
+            {"kind": "create_token_tapped", "token_printing_id": 21}
+        )
+        assert isinstance(e, CreateToken)
+        assert e.count == 1
+        assert e.tapped is True
+    finally:
+        clear_token_printings()
+
+
+def test_phase4_bridge_create_token_tapped_distinct_from_static_sister():
+    """Bridge pin: ``create_token_tapped`` and the round-12 static
+    ``create_token`` arm both produce ``CreateToken`` instances but
+    differ on the ``tapped`` flag (True vs False). Guards against
+    accidental cross-translation drift between the two sisters at the
+    bridge layer (mirrors the round-43 each-player distinct-from-sister
+    pin).
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect, clear_token_printings,
+        register_token_printing,
+    )
+
+    clear_token_printings()
+    try:
+        robot = make_token_creature(
+            name="Robot (phase4 tapped-vs-static pin)", power=2,
+            toughness=2, subtypes=("Robot",), artifact=True,
+        )
+        register_token_printing(22, robot)
+        e_tapped = _ta_dict_to_python_effect(
+            {
+                "kind": "create_token_tapped",
+                "count": 1,
+                "token_printing_id": 22,
+            }
+        )
+        e_static = _ta_dict_to_python_effect(
+            {"kind": "create_token", "count": 1, "token_printing_id": 22}
+        )
+        assert isinstance(e_tapped, CreateToken)
+        assert isinstance(e_static, CreateToken)
+        assert e_tapped.tapped is True
+        assert e_static.tapped is False
+        # Differ on a frozen dataclass field -> not equal.
+        assert e_tapped != e_static
+    finally:
+        clear_token_printings()
+
+
+def test_phase4_bridge_create_token_tapped_missing_registration_raises():
+    """``create_token_tapped`` with an unregistered ``token_printing_id``
+    raises ``KeyError`` with a clear hint (mirrors the sister
+    ``create_token`` / ``create_token_each_player`` missing-registration
+    shape — silent divergence from a forgotten setup step would be
+    much harder to debug than an immediate failure).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect, clear_token_printings,
+    )
+
+    clear_token_printings()
+    with pytest.raises(KeyError, match="token_printing_id=777"):
+        _ta_dict_to_python_effect(
+            {
+                "kind": "create_token_tapped",
+                "count": 1,
+                "token_printing_id": 777,
+            }
+        )
+
+
+def test_phase4_rust_parser_accepts_create_token_tapped_in_trigger():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "create_token_tapped", ...}`` on a triggered_
+    ability carrier. The EoE consumer (Gravpack Monoist) uses a
+    dies-trigger carrier; pinning here keeps the Python bridge from
+    drifting away from Rust's parse_effect coverage on this surface.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    robot_pid = reg.register_printing({
+        "name": "Phase4 Trigger Pin Robot",
+        "card_types": ["Artifact", "Creature"],
+        "power": 2, "toughness": 2,
+        "supertypes": ["Token"], "subtypes": ["Robot"],
+    })
+    assert robot_pid == 0
+    d = {
+        "name": "Phase4 Bridge Pin -- CreateTokenTapped (Gravpack-shape)",
+        "card_types": ["Creature"],
+        "power": 2, "toughness": 1,
+        "mana_cost": {"generic": 2, "U": 1},
+        "triggered_abilities": [
+            {
+                "event": "dies",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "create_token_tapped",
+                    "count": 1,
+                    "token_printing_id": robot_pid,
+                },
+            }
+        ],
+    }
+    carrier_pid = reg.register_printing(d)
+    assert carrier_pid == 1
+
+
+def test_phase4_rust_parser_rejects_create_token_tapped_typo():
+    """Negative lockstep pin: a misspelled kind
+    (``create_token_taped`` -- missing ``p``) surfaces as ValueError
+    on Rust's parse_effect arm because the new variant isn't
+    registered for that spelling. Pin against accidental schema drift
+    between the bridge dict shape and Rust's accepted-kinds set
+    (mirrors the round-43 each-player typo-rejection pin).
+    """
+    import pytest
+
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    inner_pid = reg.register_printing({
+        "name": "Phase4 Typo Pin Inner",
+        "card_types": ["Artifact"],
+    })
+    d = {
+        "name": "Phase4 Bridge Pin -- create_token_taped typo",
+        "card_types": ["Creature"],
+        "power": 1, "toughness": 1,
+        "mana_cost": {"U": 1},
+        "triggered_abilities": [
+            {
+                "event": "dies",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    # Misspelled -- missing the second ``p``.
+                    "kind": "create_token_taped",
+                    "count": 1,
+                    "token_printing_id": inner_pid,
+                },
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="unknown effect kind"):
+        reg.register_printing(d)
+
+
+def test_phase4_rust_parser_accepts_create_token_tapped_in_cast_effects():
+    """Lockstep pin: Rust's parse_effect arm accepts
+    ``{"kind": "create_token_tapped", ...}`` on a cast-spell
+    ``effects`` carrier too. Sister of the triggered-ability lockstep
+    pin -- the same parse_effect arm dispatches both carriers, so any
+    drift surfaces on either pin (round-25..43 cast-vs-trigger
+    lockstep convention).
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    robot_pid = reg.register_printing({
+        "name": "Phase4 Cast-effects Pin Robot",
+        "card_types": ["Artifact", "Creature"],
+        "power": 2, "toughness": 2,
+        "supertypes": ["Token"], "subtypes": ["Robot"],
+    })
+    d = {
+        "name": "Phase4 Bridge Pin -- CreateTokenTapped (Sorcery)",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"generic": 2, "U": 1},
+        "effects": [
+            {
+                "kind": "create_token_tapped",
+                "count": 1,
+                "token_printing_id": robot_pid,
+            }
+        ],
+    }
+    spell_pid = reg.register_printing(d)
+    assert spell_pid == 1
+
+
+def test_phase4_recognizer_routes_tapped_vanilla_to_tapped_kind():
+    """Cross-engine recognizer pin: a synthetic DIES+IsSelf carrier
+    whose parsed ``CreateToken`` has ``tapped=True`` + a vanilla token
+    + every other rider default recognizes as the
+    ``create_token_tapped`` symbolic dict (NOT the bare
+    ``create_token`` / NOT dropped). Mirrors Gravpack Monoist's exact
+    shape on a synthetic carrier so the routing logic is pinned
+    independent of the real-card pool.
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    robot = make_token_creature(
+        name="Phase4 Recognizer Robot", power=2, toughness=2,
+        subtypes=("Robot",), artifact=True,
+    )
+    ta = TriggeredAbility(
+        event=Event.DIES,
+        predicate=IsSelf(),
+        effect=CreateToken(token_printing=robot, count=1, tapped=True),
+    )
+    sd = _python_ta_to_safe_dict(ta)
+    assert sd is not None, "tapped vanilla-token DIES carrier must admit"
+    assert sd["event"] == "dies"
+    assert sd["predicate"] == {"kind": "source_is_self"}
+    assert sd["effect"]["kind"] == "create_token_tapped"
+    assert sd["effect"]["count"] == 1
+    assert "_token_card_def" in sd["effect"], "pre-seating symbolic ref"
+    assert "token_printing_id" not in sd["effect"]
+    # Bare (tapped=False) sister still routes to plain create_token
+    # under ENTERS (Phase-1 leaf) — same recognizer, different kind.
+    ta_bare = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=CreateToken(token_printing=robot, count=1, tapped=False),
+    )
+    sd_bare = _python_ta_to_safe_dict(ta_bare)
+    assert sd_bare is not None
+    assert sd_bare["effect"]["kind"] == "create_token"
+
+
+def test_phase4_recognizer_declines_tapped_combined_with_other_rider():
+    """§2 silent-mistranslation gate pin: ``tapped=True`` COMBINED
+    with another rider (each_player / attacking) is DECLINED —
+    Rust's ``Effect::CreateTokenTapped`` only mirrors the lone-tapped
+    profile; a tapped+each_player carrier would byte-diverge (Rust
+    can't express the combination). Keeps the recognizer honest.
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    robot = make_token_creature(
+        name="Phase4 Decline Robot", power=2, toughness=2,
+        subtypes=("Robot",), artifact=True,
+    )
+    for extra in ("each_player", "attacking"):
+        eff = CreateToken(
+            token_printing=robot, count=1, tapped=True, **{extra: True}
+        )
+        ta = TriggeredAbility(
+            event=Event.DIES, predicate=IsSelf(), effect=eff,
+        )
+        assert _python_ta_to_safe_dict(ta) is None, (
+            f"tapped + {extra} must be DECLINED (no Rust mirror — §2)"
+        )
+
+
+def test_phase4_seat_token_printings_preserves_tapped_kind():
+    """Loader pin: ``_seat_token_printings`` recognizes a symbolic
+    ``create_token_tapped`` carrier, appends the token CardDef at the
+    deterministic Rust-registry pid, registers the bridge map, and
+    PRESERVES the ``create_token_tapped`` kind through the rewrite
+    (the tapped-vs-untapped choice rides on the kind — it must survive
+    seating). Mirrors the round-49 ``create_token`` seating pin.
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.parity.cross_engine import (
+        CardDef, clear_token_printings, _TOKEN_PRINTING_BY_PID,
+    )
+    from mtg_bot.parity.trajectory import (
+        _token_vanilla_card_def, _seat_token_printings,
+    )
+
+    clear_token_printings()
+    try:
+        robot = make_token_creature(
+            name="Phase4 Seated Robot", power=2, toughness=2,
+            subtypes=("Robot",), artifact=True,
+        )
+        tcd = _token_vanilla_card_def(robot)
+        assert tcd is not None
+        carrier = CardDef(
+            name="Phase4 Tapped Maker", card_type="Creature",
+            mana_cost_generic=2, power=2, toughness=1,
+            triggered_abilities=(
+                {
+                    "event": "dies",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "create_token_tapped", "count": 1,
+                        "_token_card_def": tcd,
+                    },
+                },
+            ),
+        )
+        forest = CardDef(
+            name="Forest", card_type="Land", mana_produced=("G",)
+        )
+        seated = _seat_token_printings([carrier, forest])
+        names = [c.name for c in seated]
+        assert names.count("Phase4 Seated Robot") == 1
+        pid = names.index("Phase4 Seated Robot")
+        assert pid == len(names) - 1, "token appended after carriers"
+        c = next(x for x in seated if x.name == "Phase4 Tapped Maker")
+        eff = c.triggered_abilities[0]["effect"]
+        # Kind preserved -> tapped sister survives seating.
+        assert eff["kind"] == "create_token_tapped"
+        assert eff["token_printing_id"] == pid
+        assert "_token_card_def" not in eff
+        assert _TOKEN_PRINTING_BY_PID[pid].name == "Phase4 Seated Robot"
+    finally:
+        clear_token_printings()
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

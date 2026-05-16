@@ -4250,13 +4250,21 @@ def test_seat_token_printings_dedups_shared_token():
 
 
 def test_printing_is_bridge_simple_creature_rejects_lander_cluster():
-    """EoE-pool-delta reject pin (round-49 N1 substrate-only landing):
-    the high-deck-count Lander cluster STAYS DROPPED after Phase 1 —
-    the Lander token's activated ability is the §2 decline. This is
-    the reject-path pin the Phase-3 token-activated-ability slice will
-    later CONVERT to admit (round-37 DDDD / round-44 / round-48
-    sister-precedent). Gravpack Monoist (Robot vanilla token but
-    tapped=True rider) also stays dropped.
+    """EoE-pool-delta reject pin: the high-deck-count Lander cluster
+    STAYS DROPPED after Phase 1 + Phase 4 — the Lander token's
+    activated ability is the §2 decline. This is the reject-path pin
+    the Phase-3 token-activated-ability slice will later CONVERT to
+    admit (round-37 DDDD / round-44 / round-48 sister-precedent).
+
+    Phase 4 (round 50) note: Gravpack Monoist was in this reject list
+    under Phase 1 (its Robot token is vanilla but the ``tapped=True``
+    rider had no Rust mirror — §2.3). Phase 4's
+    ``Effect::CreateTokenTapped`` sister variant + the
+    ``create_token_tapped`` bridge/recognizer CONVERTED it to the
+    admit path — see
+    ``test_phase4_gravpack_monoist_flips_drop_to_admit`` below. The
+    Lander carriers below still produce the non-vanilla Lander token
+    so they stay DROPPED until Phase 3.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
@@ -4264,12 +4272,62 @@ def test_printing_is_bridge_simple_creature_rejects_lander_cluster():
     pr = get_active_source().get_printings()
     for name in (
         "Galactic Wayfarer", "Beamsaw Prospector", "Edge Rover",
-        "Biomechan Engineer", "Glacier Godmaw", "Gravpack Monoist",
+        "Biomechan Engineer", "Glacier Godmaw",
     ):
         c = pr.get(name)
         if c is None:
             continue
         assert _printing_is_bridge_simple_creature(c) is False, (
-            f"{name} must stay DROPPED under Phase 1 "
-            f"(Lander non-vanilla token / declined rider — §2)"
+            f"{name} must stay DROPPED under Phase 1/4 "
+            f"(Lander non-vanilla token — §2; Phase 3 will convert)"
         )
+
+
+def test_phase4_gravpack_monoist_flips_drop_to_admit():
+    """Phase 4 (round 50) EoE-pool-delta ADMIT pin — the reject→admit
+    conversion of the round-49 Gravpack-Monoist reject assertion.
+
+    Gravpack Monoist (Creature — Robot, flying; "When this creature
+    dies, create a tapped 2/2 Robot token.") was DROPPED under Phase 1
+    because its ``tapped=True`` create-token rider had no Rust mirror
+    (``docs/TOKEN_PRINTING_SUBSTRATE.md`` §2.3 — the only Phase-1
+    decline; its Robot token is already vanilla so there is no Phase-3
+    Lander dependency). Phase 4 adds ``Effect::CreateTokenTapped`` + the
+    ``create_token_tapped`` bridge/recognizer, flipping it drop→admit.
+    This is the headline real-card lever of Phase 4 (~25,252 of
+    129,996 17lands EoE decks run Gravpack Monoist).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+        _python_ta_to_safe_dict,
+    )
+
+    pr = get_active_source().get_printings()
+    gm = pr.get("Gravpack Monoist")
+    assert gm is not None, "Gravpack Monoist must be in the EoE pool"
+    # Carrier admits (flying ∈ _SAFE_KEYWORDS; single DIES+IsSelf
+    # trigger round-trips via the create_token_tapped recognizer).
+    assert _printing_is_bridge_simple_creature(gm) is True, (
+        "Gravpack Monoist must FLIP drop→admit under Phase 4 "
+        "(tapped vanilla Robot token — create_token_tapped sister "
+        "variant closes the round-49 §2.3 tapped decline)"
+    )
+    # The DIES+IsSelf trigger recognizes as the tapped sister kind.
+    (ta,) = gm.triggered_abilities
+    sd = _python_ta_to_safe_dict(ta)
+    assert sd is not None
+    assert sd["event"] == "dies"
+    assert sd["predicate"] == {"kind": "source_is_self"}
+    assert sd["effect"]["kind"] == "create_token_tapped", (
+        f"Gravpack Monoist's tapped Robot trigger must recognize as "
+        f"create_token_tapped, got {sd['effect']['kind']!r}"
+    )
+    assert sd["effect"]["count"] == 1
+    # Pre-seating symbolic form (numeric pid assigned by the loader's
+    # _seat_token_printings pass; the token is the vanilla Robot 2/2).
+    tcd = sd["effect"]["_token_card_def"]
+    assert tcd.name == "Robot"
+    assert (tcd.power, tcd.toughness) == (2, 2)
+    assert tcd.subtypes == ("Robot",)
+    assert "Artifact" in (tcd.card_type, *tcd.extra_card_types)
