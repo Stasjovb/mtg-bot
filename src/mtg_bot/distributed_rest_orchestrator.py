@@ -231,6 +231,13 @@ def start_workers(
     for url, status_body in zip(worker_urls, results):
         if status_body is None:
             failures.append(f"{url}: no response")
+            log.warning(
+                "[start_workers] %s did not respond to /v2/start_%s "
+                "within the join timeout (%ss). Worker may be hung "
+                "or unreachable; the daemon's status won't reflect "
+                "this stage even though we got no error response.",
+                url, kind, DEFAULT_HTTP_TIMEOUT_S + 5.0,
+            )
             continue
         status, body = status_body
         if status == 202:
@@ -238,13 +245,33 @@ def start_workers(
                 payloads.append(json.loads(body.decode("utf-8")))
             except json.JSONDecodeError:
                 payloads.append({})
+            log.info(
+                "[start_workers] %s accepted /v2/start_%s (202)",
+                url, kind,
+            )
             continue
         if status == 409:
             failures.append(
                 f"{url}: worker_busy (409); body={body[:200]!r}"
             )
+            log.warning(
+                "[start_workers] %s rejected /v2/start_%s with "
+                "worker_busy (409). The daemon's previous stage "
+                "didn't drain cleanly; the operator should /v2/stop "
+                "+ restart the daemon before retrying.",
+                url, kind,
+            )
             continue
+        # Anything else (5xx, 4xx other than 409, or the special
+        # status=0 the parallel-POST wrapper uses for caught exceptions)
+        # is a fatal config / connectivity error. Log loudly so future
+        # silent-failure debugging has the actual response body.
         failures.append(f"{url}: status={status} body={body[:200]!r}")
+        log.warning(
+            "[start_workers] %s rejected /v2/start_%s with status=%s; "
+            "body=%r",
+            url, kind, status, body[:200],
+        )
     if failures:
         raise StartWorkerError(
             f"start_workers ({kind}) failed: " + "; ".join(failures)

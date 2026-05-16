@@ -48,6 +48,16 @@ log = logging.getLogger(__name__)
 # tiny without paying for real network sleeps.
 RETRY_BACKOFF_S: tuple[float, ...] = (1.0, 3.0, 10.0)
 DEFAULT_HTTP_TIMEOUT_S = 30.0
+# Bounded-drain timeout. When the stage drains (claim returns 204) or
+# ``/v2/stop`` fires, ``ClaimLoopRunner.run`` joins its worker threads
+# with this timeout. If any thread is wedged in
+# ``pool.submit().result()`` (subprocess game hung) the daemon still
+# transitions to IDLE so the next stage can start; the hung thread
+# stays alive as a daemon thread and dies with the daemon process.
+# Without a bounded join, a single hung subprocess wedges the entire
+# daemon in STOPPING forever — repro'd on the 2026-05-15 smoke where
+# master+mac needed external ``Stop-ScheduledTask`` to recover.
+DEFAULT_DRAIN_JOIN_TIMEOUT_S = 60.0
 WEIGHTS_HTTP_TIMEOUT_S = 120.0
 
 
@@ -386,6 +396,10 @@ class ClaimLoopConfig:
     retry_backoff_s: tuple[float, ...] = field(
         default_factory=lambda: RETRY_BACKOFF_S
     )
+    # Bounded-drain timeout — see ``DEFAULT_DRAIN_JOIN_TIMEOUT_S``.
+    # Tests can shorten this to keep wall time tiny when simulating
+    # hung threads.
+    drain_join_timeout_s: float = DEFAULT_DRAIN_JOIN_TIMEOUT_S
     # HTTP transport hooks. Overridable for testing.
     http_get: Callable[..., tuple[int, bytes, dict[str, str]]] = field(
         default=_http_get
@@ -632,8 +646,28 @@ class ClaimLoopRunner:
         ]
         for t in threads:
             t.start()
+        # Bounded join — see ``DEFAULT_DRAIN_JOIN_TIMEOUT_S`` rationale.
+        # We compute a single deadline for the whole pool and pass each
+        # per-thread join the remaining budget; this caps total drain
+        # wall at ``timeout_s`` no matter how many threads need to
+        # finish, instead of timeout_s × n_threads in the worst case.
+        timeout_s = float(self.cfg.drain_join_timeout_s)
+        deadline = time.monotonic() + timeout_s
+        stuck_threads: list[str] = []
         for t in threads:
-            t.join()
+            remaining = max(0.0, deadline - time.monotonic())
+            t.join(timeout=remaining)
+            if t.is_alive():
+                stuck_threads.append(t.name)
+        if stuck_threads:
+            log.warning(
+                "[claim_loop] %d/%d threads still alive after "
+                "%.1fs drain timeout: %s. Abandoning them as daemon "
+                "threads and transitioning to IDLE so the next stage "
+                "can start; they'll die with the daemon process.",
+                len(stuck_threads), len(threads),
+                timeout_s, stuck_threads,
+            )
 
         try:
             self.runner.teardown()
@@ -643,7 +677,10 @@ class ClaimLoopRunner:
         # If any thread pushed the daemon into ERROR the state already
         # reflects that — stay there. Otherwise normal completion:
         # mark STOPPING (in case it was already, this is idempotent)
-        # then IDLE.
+        # then IDLE. Stuck threads are abandoned — the IDLE transition
+        # is correct from the operational standpoint (daemon ready for
+        # next stage); subprocess leaks (if any) are bounded by the
+        # number of stuck games per stage, which is rare.
         if not crashed_flag.is_set():
             self.state.mark_stopping()
             self.state.mark_idle()
