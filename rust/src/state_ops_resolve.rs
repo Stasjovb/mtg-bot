@@ -2307,16 +2307,25 @@ fn apply_effect(
         // MTG lets the player choose any matching card; deferred until
         // decision callbacks exist.
         //
-        // **Basic-land filter: `card_types contains "Land"`.** The Rust
-        // bridge has no `supertypes` field today (Python's
-        // `is_basic_land` is `is_land and "Basic" in supertypes`), so
-        // the basic half is approximated by the card_types Land check.
-        // For the EoE pool every basic land has card_types=["Land"]
-        // with no compound non-basic land carrying this dispatch path
-        // (non-basic-fetch dispatches go through SearchLibraryForCard /
-        // other variants), so the proxy is faithful for the current
-        // set. See SEARCH_LIMITATIONS entry for the deferred supertypes
-        // work.
+        // **Basic-land filter: `card_types contains "Land"` AND
+        // `supertypes contains "Basic"`.** Mirrors Python's
+        // `is_basic_land` = `is_land and "Basic" in supertypes` exactly
+        // (CR 205.4a — a basic land is a land with the Basic supertype).
+        // Round-30 supertypes substrate (`feature/rust-supertypes-
+        // registry` merge `ef8fa004`) added `CardPrinting.supertypes:
+        // Vec<String>` with JSON load + getter; the round-22 sibling
+        // `Effect::SearchLibraryForCard` arm flipped its
+        // `legendary_creature` predicate to consume it at the same
+        // time, but this arm was left on the card_types-only proxy
+        // (PARTIAL-RESOLVED in SEARCH_LIMITATIONS entry #15). This
+        // slice closes that residue: predicate now reads
+        // `card_types Land AND supertypes Basic`, matching Python's
+        // `is_basic_land` bit-for-bit. Pre-migration the proxy was
+        // faithful for the EoE pool (every basic land carried
+        // card_types=["Land"] with no non-basic land sharing this
+        // dispatch path), so the round-21 regression pins still pass —
+        // this is a code-cleanup migration that hardens the predicate
+        // against future non-basic-land entries on the bridge.
         //
         // **Post-search shuffle (CR 701.19 / 701.22 — G19 closure).**
         // After all `count` basic-land picks (or partial-fill on
@@ -2446,7 +2455,17 @@ fn apply_effect(
                             Some(p) => p,
                             None => continue,
                         };
-                        if printing.card_types.iter().any(|t| t == "Land") {
+                        // Round-37 supertypes-substrate migration:
+                        // basic-land predicate is `card_types Land AND
+                        // supertypes Basic` (CR 205.4a), bit-equivalent
+                        // to Python's `is_basic_land`. Sibling round-22
+                        // `Effect::SearchLibraryForCard` arm consumes
+                        // the same `printing.supertypes.iter().any(|s|
+                        // s == "Basic")` substrate for its
+                        // `legendary_creature` predicate.
+                        if printing.card_types.iter().any(|t| t == "Land")
+                            && printing.supertypes.iter().any(|s| s == "Basic")
+                        {
                             found = Some(i);
                             break;
                         }
