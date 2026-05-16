@@ -38,6 +38,7 @@ BENCH_SCRIPT = REPO_ROOT / "scripts" / "bench_clone.py"
 STALENESS_SCRIPT = (
     REPO_ROOT / "scripts" / "check_audit_coverage_staleness.py"
 )
+POOL_PARITY_SCRIPT = REPO_ROOT / "scripts" / "measure_pool_parity.py"
 
 
 def _git(*args: str) -> str:
@@ -155,17 +156,59 @@ def _run_staleness_step(python: str | None) -> None:
               file=sys.stderr)
 
 
+def _run_pool_parity_headline_step(python: str | None) -> None:
+    """Run ``scripts/measure_pool_parity.py --headline`` and surface
+    its one-line pool-parity headline to stderr (round-57). This is the
+    measured "how far from parity" number — the fraction of the EoE
+    pool byte-equal at the Effect+bridge level + the per-tier counts —
+    so the headline can't silently rot between refreshes.
+
+    Purely informational, EXACTLY like the perf + staleness steps: the
+    ``--headline`` mode does NOT rewrite ``docs/POOL_PARITY.md`` (no
+    on-disk side effect in the hook) and its non-zero exit (a
+    residue-consistency over-count) is reported but NEVER propagated —
+    this function always returns normally so the hook exits 0 and the
+    commit succeeds. Missing venv / script / any exception is swallowed
+    with a ``[pool-parity hook]`` stderr note. Independent of the perf
+    + staleness steps (runs even if either bailed)."""
+    try:
+        if python is None:
+            print("[pool-parity hook] no .venv python found; skipping",
+                  file=sys.stderr)
+            return
+        if not POOL_PARITY_SCRIPT.exists():
+            print(f"[pool-parity hook] {POOL_PARITY_SCRIPT} missing; "
+                  f"skipping", file=sys.stderr)
+            return
+        proc = subprocess.run(
+            [python, str(POOL_PARITY_SCRIPT), "--headline"],
+            capture_output=True, text=True, cwd=REPO_ROOT,
+        )
+        out = (proc.stdout or "").strip()
+        err = (proc.stderr or "").strip()
+        if out:
+            print(out, file=sys.stderr)
+        if err:
+            print(f"[pool-parity hook] {err}", file=sys.stderr)
+        if proc.returncode != 0 and not out and not err:
+            print("[pool-parity hook] headline exited "
+                  f"{proc.returncode} with no output", file=sys.stderr)
+    except Exception as exc:  # never let the hook block a commit
+        print(f"[pool-parity hook] step raised, ignoring: {exc!r}",
+              file=sys.stderr)
+
+
 def main() -> None:
     if _git("rev-parse", "--abbrev-ref", "HEAD") != "main":
         return  # silently no-op on feature branches
 
     python = _find_venv_python()
-    # Both steps are independent and informational; the staleness
-    # step must run even if the perf bench bailed (missing venv,
-    # bench failure, parse miss) — so it is NOT gated on the perf
-    # step's early returns.
+    # All steps are independent and informational; each must run even
+    # if an earlier one bailed (missing venv, bench failure, parse
+    # miss) — so none is gated on another's early returns.
     _run_perf_step(python)
     _run_staleness_step(python)
+    _run_pool_parity_headline_step(python)
 
 
 if __name__ == "__main__":

@@ -1343,32 +1343,39 @@ def _load_hook():
 
 def test_hook_loads_as_module():
     """The version-controlled hook is importable (valid Python) and
-    exposes the split perf/staleness steps + main."""
+    exposes the split perf/staleness/pool-parity steps + main."""
     hook = _load_hook()
     assert hasattr(hook, "_run_perf_step")
     assert hasattr(hook, "_run_staleness_step")
+    # Round-57: the never-blocking pool-parity headline step.
+    assert hasattr(hook, "_run_pool_parity_headline_step")
     assert hasattr(hook, "main")
 
 
 def test_hook_skips_on_feature_branch(monkeypatch):
-    """Feature-branch commits are silently skipped: neither step
+    """Feature-branch commits are silently skipped: no step
     runs, no output (mirrors the perf-hook feature-branch contract)."""
     hook = _load_hook()
     monkeypatch.setattr(hook, "_git", lambda *a: "feature/whatever")
-    perf_called, stale_called = [], []
+    perf_called, stale_called, pp_called = [], [], []
     monkeypatch.setattr(
         hook, "_run_perf_step", lambda p: perf_called.append(p)
     )
     monkeypatch.setattr(
         hook, "_run_staleness_step", lambda p: stale_called.append(p)
     )
+    monkeypatch.setattr(
+        hook,
+        "_run_pool_parity_headline_step",
+        lambda p: pp_called.append(p),
+    )
     hook.main()  # must not raise
-    assert perf_called == [] and stale_called == []
+    assert perf_called == [] and stale_called == [] and pp_called == []
 
 
-def test_hook_runs_both_steps_on_main(monkeypatch):
-    """On ``main`` both the perf and staleness steps run, and the
-    staleness step runs even though they are independent."""
+def test_hook_runs_all_steps_on_main(monkeypatch):
+    """On ``main`` the perf, staleness AND pool-parity-headline steps
+    all run (independently, in order)."""
     hook = _load_hook()
     monkeypatch.setattr(hook, "_git", lambda *a: "main")
     monkeypatch.setattr(hook, "_find_venv_python", lambda: "/fake/py")
@@ -1379,8 +1386,17 @@ def test_hook_runs_both_steps_on_main(monkeypatch):
     monkeypatch.setattr(
         hook, "_run_staleness_step", lambda p: calls.append(("stale", p))
     )
+    monkeypatch.setattr(
+        hook,
+        "_run_pool_parity_headline_step",
+        lambda p: calls.append(("pool", p)),
+    )
     hook.main()
-    assert calls == [("perf", "/fake/py"), ("stale", "/fake/py")]
+    assert calls == [
+        ("perf", "/fake/py"),
+        ("stale", "/fake/py"),
+        ("pool", "/fake/py"),
+    ]
 
 
 def test_hook_staleness_step_no_venv_is_silent_skip(monkeypatch, capsys):
@@ -1430,6 +1446,62 @@ def test_hook_staleness_step_swallows_exceptions(monkeypatch, capsys):
     hook._run_staleness_step("/fake/py")  # must not raise
     err = capsys.readouterr().err
     assert "[staleness hook] check raised, ignoring" in err
+
+
+def test_hook_pool_parity_step_no_venv_is_silent_skip(
+    monkeypatch, capsys
+):
+    """Round-57: no venv → the pool-parity headline step prints a
+    ``[pool-parity hook]`` skip note and returns (never raises, never
+    blocks — same contract as the perf + staleness steps)."""
+    hook = _load_hook()
+    hook._run_pool_parity_headline_step(None)
+    err = capsys.readouterr().err
+    assert "[pool-parity hook]" in err and "no .venv" in err
+
+
+def test_hook_pool_parity_step_reports_without_blocking(
+    monkeypatch, capsys
+):
+    """A non-zero pool-parity exit (a residue-consistency over-count)
+    is echoed to stderr but the step returns normally — the hook never
+    propagates it (the never-block contract, identical to the
+    round-54/55 staleness rows)."""
+    hook = _load_hook()
+
+    class _Proc:
+        returncode = 1
+        stdout = (
+            "[pool-parity] 295/475 EoE cards (62.1%) byte-equal "
+            "... ⚠ 2 residue-consistency violation(s)\n"
+        )
+        stderr = ""
+
+    monkeypatch.setattr(
+        hook.subprocess, "run", lambda *a, **k: _Proc()
+    )
+    assert hook.POOL_PARITY_SCRIPT.exists()
+    hook._run_pool_parity_headline_step("/fake/py")  # must not raise
+    err = capsys.readouterr().err
+    assert "[pool-parity]" in err and "byte-equal" in err
+
+
+def test_hook_pool_parity_step_swallows_exceptions(
+    monkeypatch, capsys
+):
+    """Belt-and-suspenders: if the subprocess call itself raises, the
+    pool-parity step swallows it with a ``[pool-parity hook]`` note so
+    the commit always succeeds (never-block contract)."""
+    hook = _load_hook()
+
+    def _boom(*a, **k):
+        raise OSError("kaboom")
+
+    monkeypatch.setattr(hook.subprocess, "run", _boom)
+    assert hook.POOL_PARITY_SCRIPT.exists()
+    hook._run_pool_parity_headline_step("/fake/py")  # must not raise
+    err = capsys.readouterr().err
+    assert "[pool-parity hook] step raised, ignoring" in err
 
 
 def test_hook_end_to_end_subprocess_never_blocks():
