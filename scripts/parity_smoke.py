@@ -81,11 +81,27 @@ def _zone_signature(zone: list[Any]) -> tuple:
     Sensitive to order (zones are lists in Python — battlefield order is
     insertion timestamp, hand/library order matters for top-of-deck and
     "first match" tie-breaking). Uses (printing_id, tapped, summoning_sick,
-    damage, counters, attached_to, controller_id) so per-permanent state
-    that affects gameplay is captured.
+    damage, counters, attached_to, controller_id, id) so per-permanent
+    state that affects gameplay is captured.
+
+    The 8th slot (``id``) is the GameObject's unique id for permanents
+    and the source-object id for stack items. ``StackItem`` doesn't
+    carry an ``id`` of its own — its identity is borrowed from
+    ``source.id`` (the spell / triggered-ability's source GameObject),
+    which is exactly what Rust's ``stack_snapshot`` emits as
+    ``source_obj_id``. Falling back to ``obj.source.id`` here keeps the
+    Python recipe symmetric with :func:`_rust_stack_obj_sig` so the
+    cross-engine field-view comparison agrees on stack-entry shape.
     """
     sig = []
     for obj in zone:
+        obj_id = getattr(obj, "id", None)
+        if obj_id is None:
+            # StackItem fallback: its identity rides on the source
+            # GameObject, matching Rust's stack_snapshot.source_obj_id.
+            source = getattr(obj, "source", None)
+            if source is not None:
+                obj_id = getattr(source, "id", None)
         sig.append(
             (
                 getattr(obj, "printing", None) and obj.printing.name,
@@ -95,7 +111,7 @@ def _zone_signature(zone: list[Any]) -> tuple:
                 getattr(obj, "counters", 0),
                 getattr(obj, "attached_to", None),
                 getattr(obj, "controller_id", None),
-                getattr(obj, "id", None),
+                obj_id,
             )
         )
     return tuple(sig)
