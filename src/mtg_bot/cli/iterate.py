@@ -61,6 +61,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable, Optional
 
 # Repo root, three levels up from ``src/mtg_bot/cli/iterate.py``. Used
 # to locate the ``scripts/train_nn.py`` shim that this loop spawns
@@ -91,17 +92,8 @@ from mtg_bot.training._iterate_helpers import (
 )
 from mtg_bot.training.data_gen import ReplayCaptureConfig
 from mtg_bot.training.gate import EVAL_GATE_THRESHOLD
-from mtg_bot.training.distributed import (
-    EvalJobSpec,
-    SelfPlayJobSpec,
-    ShardsConfig,
-    load_shards_config,
-    run_distributed_eval,
-    run_distributed_self_play,
-)
-from mtg_bot.training.orphan_sweep import (
-    sweep_local_orphans, sweep_remote_orphans,
-)
+from mtg_bot import distributed_rest_orchestrator as _rest_orch
+from mtg_bot.training.orphan_sweep import sweep_local_orphans
 from mtg_bot.training.self_play import run_match_parallel
 from mtg_bot.training.stop_signal import (
     cleanup_orphans, stop_requested, sentinel_path,
@@ -625,197 +617,159 @@ def _self_play(  # pragma: no cover
     return n_samples, n_policy, elapsed
 
 
+def _aggregate_self_play_npzs(
+    stage_id: str, iterate_data_dir: Path,
+) -> tuple[int, int]:
+    """Sum ``n_samples`` + ``n_policy_rows`` across every npz the
+    coordinator wrote for ``stage_id``.
+
+    The v2 coordinator's ``/v2/report_result`` handler writes per-game
+    npzs to ``iterate_data_dir/<stage_id>_<shard_label>_<safe_claim>.npz``
+    (see ``cli/runs/v2_endpoints.py``). We glob the prefix and
+    aggregate.
+    """
+    import numpy as np
+    n_samples = 0
+    n_policy = 0
+    pattern = f"{stage_id}_*.npz"
+    for p in sorted(iterate_data_dir.glob(pattern)):
+        try:
+            with np.load(p) as data:
+                if "features" in data.files:
+                    n_samples += int(data["features"].shape[0])
+                if "policy_targets" in data.files:
+                    n_policy += int(
+                        (data["policy_targets"].sum(axis=-1) > 0.5).sum()
+                    )
+        except (OSError, ValueError):
+            # Half-written or stale file — skip. The coordinator
+            # writes files atomically (NamedTemporaryFile + rename),
+            # so this is defensive only.
+            continue
+    return n_samples, n_policy
+
+
 def _self_play_distributed(  # pragma: no cover
     *,
-    shards_config: ShardsConfig,
-    weights_path: Path,
+    worker_urls: list[str],
+    coordinator_url: str,
+    nn_version_label: str,
     samples: int,
     nodes: int,
     seed: int,
     per_game_timeout_sec: float | None,
-    hidden_sizes: tuple[int, ...] | None,
-    architecture: str | None,
-    policy_hidden_sizes: tuple[int, ...] | None,
-    deck_pool_path: Path | None,
     capture_every: int,
-    nn_version_label: str | None,
-    replays_root: Path,
-    hang_dump_root: Path | None,
-    progress_dir: Path,
-    output_dir: Path,
-    run_id_prefix: str,
     total_games: int,
-    queue_url: str,
-    bundle_url: str | None = None,
-    slack_extra: int = 0,
-    shard_ssh_timeout_s: float | None = None,
-    use_ismcts: bool = False,
-    use_belief_weighted: bool = False,
-    heuristics: HeuristicsConfig | None = None,
-    action_encoding_version: str = "positional_v1",
-    use_shm_server: bool = False,
-    write_structured_tokens: bool = False,
+    deck_pool_size: int,
+    run_id_prefix: str,
+    iterate_data_dir: Path,
+    poll_interval_s: float = _rest_orch.DEFAULT_POLL_INTERVAL_S,
+    stop_check: Optional[Callable[[], bool]] = None,
+    claim_ttl_seconds: int = 1200,
 ) -> tuple[int, int, float]:
-    """Distributed self-play: dispatch the iter's games across the
-    shards in ``shards_config``, gather all per-shard npzs into the
-    master's ``output_dir``, return aggregate ``(n_samples,
-    n_policy_rows, elapsed_seconds)``.
+    """Distributed self-play via the v2 REST contract.
 
-    All ``Path`` fields the orchestrator threads to per-shard runs
-    are converted to strings up front (the spec must JSON-serialize
-    cleanly so SSH can ship it base64-encoded to remote shards).
+    Orchestration:
+    1. Build the per-game stage spec (1000 games with deck_indices +
+       seed).
+    2. POST ``/v2/stage/create`` on the coordinator.
+    3. POST ``/v2/start_self_play`` to every worker URL in parallel.
+    4. Poll ``GET /v2/stage/<id>`` every ``poll_interval_s`` until
+       ``status == "complete"``.
+    5. Glob the coordinator's ``iterate_data_dir`` for the npzs the
+       workers streamed back via ``/v2/report_result``.
 
-    Aggregate counts are computed by re-loading each shard's npz
-    (cheap — these files are 10-100 MB and we'd be loading them
-    from disk in the next training step anyway). ``elapsed`` is the
-    orchestrator's wall time, which under multi-machine load is the
-    SLOWEST shard's wall — that's the right number for the
-    iteration loop's ETA bookkeeping.
+    Returns ``(n_samples, n_policy_rows, elapsed_seconds)``.
+
+    Worker-owned config (deck_pool_path, n_workers, weights cache
+    root, NN architecture / heuristics / shm / structured-token
+    flags) is decided locally on each worker daemon via its CLI flags
+    — NOT threaded across the wire. The cluster's bootstrap doc
+    (deploy/README.md) covers per-machine setup.
     """
-    spec = SelfPlayJobSpec(
-        weights_path=str(weights_path),
-        samples=samples,
-        inner_nodes=nodes,
-        hidden_sizes=hidden_sizes,
-        base_seed=seed,
-        per_game_timeout_sec=per_game_timeout_sec,
-        deck_pool_path=str(deck_pool_path) if deck_pool_path else None,
-        with_policy=True,
-        capture_every=capture_every,
-        nn_version_label=nn_version_label,
-        replays_root=str(replays_root),
-        hang_dump_root=(
-            str(hang_dump_root) if hang_dump_root is not None else None
-        ),
-        use_ismcts=use_ismcts,
-        use_belief_weighted=use_belief_weighted,
-        heuristics=heuristics if heuristics is not None else HeuristicsConfig(),
-        architecture=architecture,
-        policy_hidden_sizes=policy_hidden_sizes,
-        action_encoding_version=action_encoding_version,
-        use_shm_server=use_shm_server,
-        write_structured_tokens=write_structured_tokens,
-    )
     started = time.perf_counter()
-    extra_kwargs: dict = {}
-    if shard_ssh_timeout_s is not None:
-        extra_kwargs["shard_ssh_timeout_s"] = shard_ssh_timeout_s
-    npz_paths = run_distributed_self_play(
-        shards_config, spec,
-        progress_dir=progress_dir,
-        output_dir=output_dir,
-        run_id_prefix=run_id_prefix,
-        total_games=total_games,
-        queue_url=queue_url,
-        bundle_url=bundle_url,
-        slack_extra=slack_extra,
-        **extra_kwargs,
+    spec = _rest_orch.make_self_play_stage_spec(
+        stage_id=run_id_prefix,
+        n_games=total_games,
+        base_seed=seed,
+        deck_pool_size=deck_pool_size,
+        weights_version=nn_version_label,
+        nodes=nodes,
+        samples=samples,
+        per_game_timeout_sec=per_game_timeout_sec or 600.0,
+        capture_every=capture_every,
+        claim_ttl_seconds=claim_ttl_seconds,
+    )
+    _rest_orch.run_stage(
+        coordinator_url=coordinator_url,
+        worker_urls=worker_urls,
+        spec=spec,
+        poll_interval_s=poll_interval_s,
+        stop_check=stop_check,
     )
     elapsed = time.perf_counter() - started
-
-    # Aggregate counts across shards. ``np.load`` only memory-maps
-    # the array headers by default, so this is fast even on big
-    # files.
-    import numpy as np
-    n_samples = 0
-    n_policy = 0
-    for p in npz_paths:
-        with np.load(p) as data:
-            n_samples += int(data["features"].shape[0])
-            if "policy_targets" in data.files:
-                n_policy += int(
-                    (data["policy_targets"].sum(axis=-1) > 0.5).sum()
-                )
+    n_samples, n_policy = _aggregate_self_play_npzs(
+        stage_id=run_id_prefix,
+        iterate_data_dir=iterate_data_dir,
+    )
     return n_samples, n_policy, elapsed
 
 
 def _eval_match_distributed(  # pragma: no cover
     *,
-    shards_config: ShardsConfig,
-    new_weights: Path,
-    old_weights: Path | None,
+    worker_urls: list[str],
+    coordinator_url: str,
+    new_version_label: str,
+    old_version_label: str,
     n_games: int,
     samples: int,
     nodes: int,
     seed: int,
     per_game_timeout_sec: float | None,
-    hidden_sizes: tuple[int, ...] | None,
-    new_architecture: str | None,
-    old_architecture: str | None,
-    policy_hidden_sizes: tuple[int, ...] | None,
-    deck_pool_path: Path | None,
     capture_every: int,
-    new_version_label: str | None,
-    old_version_label: str | None,
-    replays_root: Path,
-    hang_dump_root: Path | None,
-    progress_dir: Path,
+    deck_pool_size: int,
     run_id_prefix: str,
-    queue_url: str,
-    bundle_url: str | None,
-    opponent_label: str,
-    slack_extra: int = 0,
-    shard_ssh_timeout_s: float | None = None,
-    use_ismcts: bool = False,
-    use_belief_weighted: bool = False,
-    new_action_encoding_version: str = "positional_v1",
-    old_action_encoding_version: str = "positional_v1",
-    use_shm_server: bool = False,
+    poll_interval_s: float = _rest_orch.DEFAULT_POLL_INTERVAL_S,
+    stop_check: Optional[Callable[[], bool]] = None,
+    claim_ttl_seconds: int = 1200,
 ) -> tuple[int, int, int, float]:
-    """Distributed eval-gate match. Mirrors ``_eval_match``'s return
-    contract ``(new_wins, old_wins, draws, elapsed_seconds)`` so
-    iterate's caller doesn't change shape.
+    """Distributed eval-gate match via the v2 REST contract.
 
-    Each side's ``action_encoding_version`` is threaded separately
-    because cross-version evals (e.g. v17[canonical_v2] vs
-    v13[positional_v1]) genuinely need each NN to encode under its
-    own slot mapping for the PUCT priors to make sense.
+    Mirrors ``_eval_match``'s return contract
+    ``(new_wins, old_wins, draws, elapsed_seconds)`` so iterate's
+    caller doesn't change shape.
+
+    The eval watcher's ``POST /v2/stage/<id>/close`` mechanism stays
+    intact for Wilson-CI early-stop — this function just polls the
+    stage to ``complete`` and reads the final wins / draws counters
+    off ``GET /v2/stage/<id>``.
     """
-    spec = EvalJobSpec(
-        new_weights_path=str(new_weights),
-        old_weights_path=str(old_weights) if old_weights else None,
-        samples=samples,
-        inner_nodes=nodes,
-        hidden_sizes=hidden_sizes,
-        base_seed=seed,
-        per_game_timeout_sec=per_game_timeout_sec,
-        deck_pool_path=str(deck_pool_path) if deck_pool_path else None,
-        capture_every=capture_every,
-        nn_new_version_label=new_version_label,
-        nn_old_version_label=old_version_label,
-        replays_root=str(replays_root),
-        hang_dump_root=(
-            str(hang_dump_root) if hang_dump_root is not None else None
-        ),
-        opponent_label=opponent_label,
-        use_ismcts=use_ismcts,
-        use_belief_weighted=use_belief_weighted,
-        new_architecture=new_architecture,
-        old_architecture=old_architecture,
-        policy_hidden_sizes=policy_hidden_sizes,
-        new_action_encoding_version=new_action_encoding_version,
-        old_action_encoding_version=old_action_encoding_version,
-        use_shm_server=use_shm_server,
-    )
     started = time.perf_counter()
-    extra_kwargs: dict = {}
-    if shard_ssh_timeout_s is not None:
-        extra_kwargs["shard_ssh_timeout_s"] = shard_ssh_timeout_s
-    counts = run_distributed_eval(
-        shards_config, spec,
-        progress_dir=progress_dir,
-        run_id_prefix=run_id_prefix,
-        total_games=n_games,
-        queue_url=queue_url,
-        bundle_url=bundle_url,
-        slack_extra=slack_extra,
-        **extra_kwargs,
+    spec = _rest_orch.make_eval_stage_spec(
+        stage_id=run_id_prefix,
+        n_games=n_games,
+        base_seed=seed,
+        deck_pool_size=deck_pool_size,
+        new_version=new_version_label,
+        old_version=old_version_label,
+        nodes=nodes,
+        samples=samples,
+        per_game_timeout_sec=per_game_timeout_sec or 600.0,
+        capture_every=capture_every,
+        claim_ttl_seconds=claim_ttl_seconds,
+    )
+    result = _rest_orch.run_stage(
+        coordinator_url=coordinator_url,
+        worker_urls=worker_urls,
+        spec=spec,
+        poll_interval_s=poll_interval_s,
+        stop_check=stop_check,
     )
     elapsed = time.perf_counter() - started
     return (
-        int(counts["wins_new"]),
-        int(counts["wins_old"]),
-        int(counts["draws"]),
+        int(result.wins_new or 0),
+        int(result.wins_old or 0),
+        int(result.draws or 0),
         elapsed,
     )
 
@@ -1416,73 +1370,39 @@ def main(argv=None) -> None:  # pragma: no cover
     parser.add_argument(
         "--shards-config", type=Path, default=None,
         help=(
-            "Path to a JSON shards config (see "
-            "``mtg_bot.training.distributed`` docstring). When set, "
-            "each iter's self-play step runs in pull-mode: every "
-            "shard (local + remote, SSH/Tailscale-reachable) drains "
-            "the master's queue at ``/queue/take``. The total games "
-            "per iter is taken from --games-per-iteration; per-shard "
-            "``n_games`` in the JSON is ignored in pull mode (slow "
-            "machines do less work, fast ones do more, automatically). "
-            "Without this flag, self-play runs entirely on the master "
-            "via the existing single-process pool."
-        ),
-    )
-    parser.add_argument(
-        "--bundle-url", default=None,
-        help=(
-            "URL of the master's git-bundle endpoint (typically "
-            "``http://<master-tailnet-name>:5099/repo.bundle``, "
-            "served by ``scripts/serve_setup_scripts.py``). When "
-            "set, each remote shard fetches a fresh bundle before "
-            "running so master commits propagate without GitHub "
-            "auth on the remote (Tailscale-only). When omitted, "
-            "remote-side code-sync is skipped — make sure remotes "
-            "are already at the right commit before running."
+            "Path to ``shards_config.json``. Post-cutover shape is "
+            "``{'worker_urls': ['http://host:5198', ...]}`` — a URL "
+            "list only. Each worker URL is the daemon's tailnet "
+            "endpoint. When set, every iter's self-play + eval stage "
+            "runs via the v2 REST contract: the orchestrator POSTs "
+            "/v2/stage/create on the coordinator (--queue-url), POSTs "
+            "/v2/start_<kind> to each worker, then polls "
+            "/v2/stage/<id> until complete. See "
+            "docs/DISTRIBUTED_API_v2.md for the contract and "
+            "deploy/README.md for the per-machine setup."
         ),
     )
     parser.add_argument(
         "--queue-url", default=None,
         help=(
-            "Base URL of the master's pull-mode work queue (typically "
-            "``http://<master-tailnet-name>:5099``, served by "
-            "``scripts/serve_setup_scripts.py``). Required when "
-            "``--shards-config`` is set: every shard (local + remote) "
-            "POSTs ``/queue/take`` here for batches of game indices "
-            "until the iter's queue drains. Without this flag the "
-            "distributed orchestrator can't dispatch work."
+            "Base URL of the coordinator (master's ``mtg_bot serve`` "
+            "on :5099 with the v2 blueprint enabled — typically "
+            "``http://<master-tailnet-name>:5099``). Required when "
+            "``--shards-config`` is set: the orchestrator POSTs "
+            "/v2/stage/create + GETs /v2/stage/<id> here, and each "
+            "worker POSTs /v2/claim / /v2/report_result. Name kept as "
+            "``--queue-url`` for back-compat with existing scripts; "
+            "it's the v2 coordinator URL."
         ),
     )
     parser.add_argument(
         "--queue-slack-pct", type=float, default=0.1,
         help=(
-            "Over-queue ratio for distributed self-play and eval. "
-            "The queue is initialized at "
-            "``ceil(target_games * (1 + queue_slack_pct))``; an "
-            "early-stop poller closes the queue once "
-            "``target_games`` SUCCESSFUL completions are in (n_games_"
-            "done - crashed - timed_out across all shards). Slack "
-            "indices that haven't been taken are abandoned. Default "
-            "0.1 (10%%) trades ~10%% extra compute for elimination of "
-            "the long-tail straggler wait. Set to 0 for the legacy "
-            "drain-the-whole-queue behavior."
-        ),
-    )
-    parser.add_argument(
-        "--shard-ssh-timeout-min", type=float, default=360.0,
-        help=(
-            "Hard upper-bound timeout (in MINUTES) on a single "
-            "shard's SSH session. Defends against the post-shard "
-            "SSH-still-alive hang where Tailscale keeps the TCP "
-            "connection healthy after the remote python's explicit "
-            "exit, causing the SSH client never to see a "
-            "protocol-level close. On expiry, master's per-shard "
-            "try/except catches TimeoutExpired, the post-failure "
-            "rsync recovers any data on disk, and the orchestration "
-            "proceeds with surviving shards' data. Default 360 min "
-            "sized for 1000 games/shard at the structured trunk's "
-            "pace (Mac ~3h, master ~9h). Tune up for very-slow "
-            "hosts, down for faster failure recovery."
+            "DEPRECATED on the REST path — natural-drain + auto-close "
+            "handles stage completion without an over-queue+early-stop "
+            "tail; the flag is kept for argparse back-compat only and "
+            "is ignored. (Single-process local self-play still ignores "
+            "it too.)"
         ),
     )
     parser.add_argument(
@@ -1644,21 +1564,33 @@ def main(argv=None) -> None:  # pragma: no cover
             f"point --data-dir at a dedicated iterate dir) and retry."
         )
 
-    shards_cfg: ShardsConfig | None = None
+    # v2-cutover: shards_config.json is now a worker URL list only;
+    # the coordinator (master's `mtg_bot serve` on :5099) is the
+    # entity the orchestrator and workers all talk to. --queue-url
+    # is treated as the coordinator URL after the cutover.
+    worker_urls: list[str] | None = None
     if args.shards_config is not None:
         if not args.shards_config.is_file():
             sys.exit(f"--shards-config {args.shards_config} not found")
         if not args.queue_url:
             sys.exit(
                 "--shards-config requires --queue-url (the master's "
-                "pull-mode queue endpoint, e.g. "
+                "coordinator endpoint, e.g. "
                 "http://<master-tailnet>:5099)"
             )
-        shards_cfg = load_shards_config(args.shards_config)
+        try:
+            worker_urls = _rest_orch.load_worker_urls(args.shards_config)
+        except Exception as e:  # noqa: BLE001
+            sys.exit(f"--shards-config: {e}")
+        if not worker_urls:
+            sys.exit(
+                f"--shards-config {args.shards_config} parsed but "
+                "contains no worker_urls entries"
+            )
         print(
-            f"[iterate] pull-model distributed self-play across "
-            f"{len(shards_cfg.shards)} shards via {args.queue_url}; "
-            f"hosts: {[s.host for s in shards_cfg.shards]}"
+            f"[iterate] v2 REST distributed run across "
+            f"{len(worker_urls)} workers via coordinator {args.queue_url}; "
+            f"workers: {worker_urls}"
         )
 
     if not args.deck_pool.is_file():
@@ -1909,23 +1841,12 @@ def main(argv=None) -> None:  # pragma: no cover
             f"{type(e).__name__}: {e}; continuing.",
             file=sys.stderr,
         )
-    if shards_cfg is not None:
-        for shard in shards_cfg.shards:
-            if shard.is_local:
-                continue
-            print(
-                f"[iterate] orphan-sweep: sweeping remote shard "
-                f"{shard.display_label} ({shard.host})..."
-            )
-            try:
-                sweep_remote_orphans(shard)
-            except Exception as e:  # noqa: BLE001
-                print(
-                    f"[iterate] orphan-sweep: remote sweep on "
-                    f"{shard.display_label} raised "
-                    f"{type(e).__name__}: {e}; continuing.",
-                    file=sys.stderr,
-                )
+    # v2-cutover: remote-orphan SSH sweep is gone. Each worker is a
+    # long-lived daemon under its own native service supervisor
+    # (systemd / launchd / Task Scheduler); orphan workers (if any)
+    # are the daemon's own multiprocessing pool's problem to clean
+    # up, not the orchestrator's. The master-local sweep above stays
+    # (it scans the local processes for stale workers).
 
     from datetime import datetime, timezone
     user_stopped = False
@@ -2109,13 +2030,13 @@ def main(argv=None) -> None:  # pragma: no cover
             config=_self_play_config_dict(
                 args=args, best_version=best_version,
                 cycle_seed=cycle_seed,
-                distributed=shards_cfg is not None,
+                distributed=worker_urls is not None,
             ),
             progress_json_path=self_play_progress_path,
             parent_run_id=cycle_id,
             label=self_play_run_id,
         ):
-            if shards_cfg is None:
+            if worker_urls is None:
                 n_samples, n_policy, gen_elapsed = _self_play(
                     weights_path=best_weights,
                     n_games=args.games_per_iteration,
@@ -2142,49 +2063,25 @@ def main(argv=None) -> None:  # pragma: no cover
                     write_structured_tokens=iter_write_structured_tokens,
                 )
             else:
-                # Distributed: each shard writes its own npz to args.data_dir
-                # under ``iter_NNN_<bootstrap>_shard_<label>_<utc>.npz``.
-                # train_nn.py globs the dir, so the master sees all shards'
-                # data at training time without any further work here.
+                # v2 distributed: the coordinator's /v2/report_result
+                # handler streams each worker's per-game npz into
+                # iterate_data/ on the master. train_nn.py globs the
+                # dir at the next stage, so the same training mix is
+                # picked up automatically.
                 n_samples, n_policy, gen_elapsed = _self_play_distributed(
-                    shards_config=shards_cfg,
-                    weights_path=best_weights,
+                    worker_urls=worker_urls,
+                    coordinator_url=args.queue_url,
+                    nn_version_label=best_version,
                     samples=args.samples,
                     nodes=args.nodes,
                     seed=cycle_seed,
                     per_game_timeout_sec=args.per_game_timeout_self_play_sec,
-                    hidden_sizes=iter_hidden_sizes,
-                    architecture=best_architecture,
-                    policy_hidden_sizes=best_policy_hidden_sizes,
-                    deck_pool_path=args.deck_pool,
                     capture_every=args.capture_every_self_play,
-                    nn_version_label=best_version,
-                    replays_root=args.replays_dir,
-                    hang_dump_root=(
-                        args.hang_dump_dir if str(args.hang_dump_dir) else None
-                    ),
-                    progress_dir=progress_dir,
-                    output_dir=args.data_dir,
-                    run_id_prefix=f"{iter_label}_self_play_{best_version}",
                     total_games=args.games_per_iteration,
-                    queue_url=args.queue_url,
-                    bundle_url=args.bundle_url,
-                    slack_extra=_compute_slack_extra(
-                        args.games_per_iteration, args.queue_slack_pct,
-                    ),
-                    shard_ssh_timeout_s=args.shard_ssh_timeout_min * 60,
-                    use_ismcts=args.use_ismcts,
-                    use_belief_weighted=args.use_belief_weighted,
-                    heuristics=HeuristicsConfig(
-                        phase_prune_enabled=not args.no_phase_priority_prune,
-                    ),
-                    action_encoding_version=iter_action_encoding_version,
-                    # Self-play SHM: the new --use-shm-self-play flag, OR
-                    # the deprecated --use-shm-server (back-compat alias).
-                    use_shm_server=(
-                        args.use_shm_self_play or args.use_shm_server
-                    ),
-                    write_structured_tokens=iter_write_structured_tokens,
+                    deck_pool_size=len(deck_pool),
+                    run_id_prefix=f"{iter_label}_self_play_{best_version}",
+                    iterate_data_dir=args.data_dir,
+                    stop_check=_cycle_stop_check,
                 )
         # Self-play stage finished — register the produced npz as an
         # artifact on the self_play stage run and emit a stage_completed
@@ -2387,13 +2284,13 @@ def main(argv=None) -> None:  # pragma: no cover
                     args=args, new_version=new_version,
                     best_version=best_version,
                     cycle_seed=cycle_seed,
-                    distributed=shards_cfg is not None,
+                    distributed=worker_urls is not None,
                 ),
                 progress_json_path=eval_progress_path,
                 parent_run_id=cycle_id,
                 label=eval_run_id,
             ):
-                if shards_cfg is None:
+                if worker_urls is None:
                     wins_new, wins_old, draws, eval_elapsed = _eval_match(
                         new_weights=new_weights,
                         old_weights=best_weights,
@@ -2420,52 +2317,19 @@ def main(argv=None) -> None:  # pragma: no cover
                 else:
                     wins_new, wins_old, draws, eval_elapsed = (
                         _eval_match_distributed(
-                            shards_config=shards_cfg,
-                            new_weights=new_weights,
-                            old_weights=best_weights,
+                            worker_urls=worker_urls,
+                            coordinator_url=args.queue_url,
+                            new_version_label=new_version,
+                            old_version_label=best_version,
                             n_games=args.eval_games,
                             samples=args.samples,
                             nodes=args.nodes,
                             seed=cycle_seed + 7777,
                             per_game_timeout_sec=args.per_game_timeout_eval_sec,
-                            hidden_sizes=iter_hidden_sizes,
-                            new_architecture=iter_architecture,
-                            old_architecture=best_architecture,
-                            policy_hidden_sizes=iter_policy_hidden_sizes,
-                            deck_pool_path=args.deck_pool,
                             capture_every=args.capture_every_eval,
-                            new_version_label=new_version,
-                            old_version_label=best_version,
-                            replays_root=args.replays_dir,
-                            hang_dump_root=(
-                                args.hang_dump_dir
-                                if str(args.hang_dump_dir) else None
-                            ),
-                            progress_dir=progress_dir,
+                            deck_pool_size=len(deck_pool),
                             run_id_prefix=eval_run_id,
-                            queue_url=args.queue_url,
-                            bundle_url=args.bundle_url,
-                            opponent_label=best_version,
-                            slack_extra=_compute_slack_extra(
-                                args.eval_games, args.queue_slack_pct,
-                            ),
-                            shard_ssh_timeout_s=args.shard_ssh_timeout_min * 60,
-                            use_ismcts=args.use_ismcts,
-                            use_belief_weighted=args.use_belief_weighted,
-                            new_action_encoding_version=(
-                                iter_action_encoding_version
-                            ),
-                            old_action_encoding_version=(
-                                best_action_encoding_version
-                            ),
-                            # Eval SHM: the new --use-shm-eval flag, OR
-                            # the deprecated --use-shm-server back-compat
-                            # alias. Default off — see flag help for the
-                            # current perf-regression caveat (todo
-                            # a72f1c8e).
-                            use_shm_server=(
-                                args.use_shm_eval or args.use_shm_server
-                            ),
+                            stop_check=_cycle_stop_check,
                         )
                     )
             n_decided = wins_new + wins_old
