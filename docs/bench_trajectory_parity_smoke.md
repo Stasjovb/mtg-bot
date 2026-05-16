@@ -1596,7 +1596,7 @@ Rust → no `maturin`.
    token shape across games. Small, well-scoped, sister of round-51.
 
    **>> CLOSED — round-57 N1 (`feature/fix-token-pid-cross-shape-r57`,
-   merge `<MERGE_SHA>`).** Chosen approach: round-56 N3's option (b) —
+   merge `825e2106`).** Chosen approach: round-56 N3's option (b) —
    `_seat_token_printings` calls a new
    `cross_engine._reset_token_printing_pid_map_for_seating_pass()` at
    pass entry, clearing ONLY the per-game `_TOKEN_PRINTING_BY_PID` map
