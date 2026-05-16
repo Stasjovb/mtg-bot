@@ -318,6 +318,57 @@ intervenes; safe because self-update only runs from IDLE, so no game
 is in flight). `last_update.phase` progresses
 `fetching → resetting → building → reexec` (or `up_to_date` /
 `error`).
+### Worker-side spot-interruption watcher (`--spot-watch`)
+
+Not an endpoint — a worker-local poller, opt-in via the daemon's
+`--spot-watch` CLI flag (default OFF; on-prem workers and the test
+suite are unaffected). Enable it only on AWS EC2 **spot** workers
+(bake the flag into the EC2 service file / user-data).
+
+When enabled, a daemon thread polls the EC2 instance-metadata
+interruption endpoint via IMDSv2:
+
+1. `PUT http://169.254.169.254/latest/api/token` with header
+   `X-aws-ec2-metadata-token-ttl-seconds: 21600` → an opaque token.
+2. `GET http://169.254.169.254/latest/meta-data/spot/instance-action`
+   with header `X-aws-ec2-metadata-token: <token>`, every 5s
+   (configurable). Steady-state response is **HTTP 404** (no
+   interruption). A **401** means the token expired — the watcher
+   transparently re-fetches and retries.
+
+AWS publishes a ~2-minute reclaim warning as **HTTP 200** with body
+`{"action": "terminate"|"stop", "time": "<iso8601>"}`. On the first
+sighting the watcher fires its callback **exactly once** and stops
+polling. The daemon wires that callback to **the same graceful path
+`POST /v2/stop` triggers** (`mark_stopping` → the claim loop's
+`stop_requested` flag): the worker stops claiming new games and
+drains its in-flight game locally. No new worker state — `STOPPING`
+is reused.
+
+**Interruption == fast graceful drain.** Without `--spot-watch`, an
+AWS-reclaimed worker dies abruptly mid-game and its in-flight claims
+sit unreclaimed until the coordinator marks it `DEAD` (~90s of
+missed heartbeats — see "Abandonment detection" below) or the slower
+claim-TTL sweep fires. With `--spot-watch` the worker uses the
+~2-minute warning to stop claiming and finish/report (or release)
+its in-flight game within seconds, so the ~90s heartbeat-DEAD
+reclaim lag is removed from the common spot-reclaim case.
+
+**Scope: local drain only.** As of this feature the v2 coordinator
+has **no** proactive per-worker "reclaim my claims now" endpoint
+(the surface is `/v2/stage/*`, `/v2/claim`, `/v2/report_result`,
+`/v2/weights/<v>`, `/v2/healthz`). The watcher deliberately does NOT
+invent one — a game still running when the instance finally vanishes
+falls back to the existing heartbeat / claim-TTL reclaim, exactly as
+today, just with no *new* claims piled on. **Future work:** a
+coordinator-side endpoint the watcher could call on interruption to
+release this worker's claims instantly (turning the residual fallback
+into an immediate reclaim) is a possible follow-up; out of scope
+here.
+
+A flaky/erroring IMDS call is tolerated — it is logged and polling
+continues; it never kills the watcher or the daemon and never
+spuriously triggers a drain.
 
 ### `GET /v2/heartbeat`
 
@@ -445,7 +496,12 @@ Two layered mechanisms detect abandoned work:
 1. **Heartbeat-driven** (primary, fast): coordinator notices a
    worker is DEAD within ~90s and re-queues its in-flight claims
    immediately. Handles the common case of process crash / machine
-   reboot / network partition.
+   reboot / network partition. For AWS spot workers this ~90s lag
+   is the window `--spot-watch` shrinks to seconds — see
+   "Worker-side spot-interruption watcher" above: the worker stops
+   claiming + drains locally on the ~2-minute reclaim warning
+   instead of vanishing mid-game and waiting out the heartbeat-DEAD
+   timeout.
 2. **Claim TTL** (defense-in-depth, slow): every `/claim` carries
    an expiration deadline (default: 2× `per_game_timeout_sec`, so
    1200s for the current 600s/game cap). Even if heartbeat-driven

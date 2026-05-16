@@ -17,6 +17,18 @@ lives in :mod:`mtg_bot.worker_daemon_self_update`; this module owns the
 endpoint, the ``UPDATING`` state, and surfacing progress + the current
 ``git_commit`` on ``/v2/heartbeat``.
 
+An opt-in ``--spot-watch`` flag (default OFF — non-AWS workers and
+the existing test suite are unaffected) starts an AWS EC2
+spot-interruption poller on a daemon thread. On the ~2-minute
+interruption warning it drives the daemon's existing graceful-stop
+path (the same one ``/v2/stop`` triggers: ``mark_stopping`` →
+``stop_requested``), so the worker stops claiming and drains its
+in-flight game locally instead of being torn down mid-game and
+waiting ~90s for the coordinator's heartbeat-DEAD reclaim. The
+poller lives in :mod:`mtg_bot.worker_daemon_spot_watch`; this module
+owns only the flag + thread wiring and reuses the existing
+:class:`WorkerState` transitions (no new state).
+
 The claim-loop body is encapsulated in
 :class:`ClaimLoopRunner` so tests can swap the game runner for a stub
 and exercise the full lifecycle without spawning a torch model.
@@ -39,6 +51,7 @@ Contract patches folded into this revision:
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import threading
 import time
@@ -51,7 +64,10 @@ from flask import Flask, jsonify, request
 
 from mtg_bot import worker_daemon_claim_loop as _claim_loop
 from mtg_bot import worker_daemon_self_update as _self_update
+from mtg_bot import worker_daemon_spot_watch as _spot_watch
 from mtg_bot.worker_daemon_claim_loop import resolve_worker_id
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - imports just for type hints
     from mtg_bot.worker_daemon_claim_loop import (
@@ -465,6 +481,10 @@ def create_app(
     self_update_runner: "_self_update.Runner | None" = None,
     self_update_opener: "_self_update.Opener | None" = None,
     self_update_delay_s: float = 0.2,
+    spot_watch: bool = False,
+    spot_watch_config: "_spot_watch.SpotWatchConfig | None" = None,
+    spot_watch_transport: "_spot_watch.Transport | None" = None,
+    spot_watch_sleeper: "_spot_watch.Sleeper | None" = None,
 ) -> Flask:
     """Build the Flask app with the v2 endpoints wired.
 
@@ -527,6 +547,26 @@ def create_app(
     self_update_delay_s:
         Seconds the background self-update thread waits before doing
         work, so the 202 response flushes first. Tests pass 0.0.
+    spot_watch:
+        Opt-in (default ``False``). When ``True`` the app starts an
+        AWS EC2 spot-interruption poller on a daemon thread (see
+        :mod:`mtg_bot.worker_daemon_spot_watch`). On the ~2-minute
+        interruption warning it calls the daemon's existing graceful
+        stop (``state.mark_stopping`` — identical to ``/v2/stop``), so
+        the worker stops claiming and drains locally. Worker-owned
+        config: set via the daemon's ``--spot-watch`` CLI flag (baked
+        into the EC2 service file). Default OFF so non-AWS workers and
+        the existing test suite are unaffected.
+    spot_watch_config:
+        Override the :class:`SpotWatchConfig` (IMDS base URL, poll
+        interval, timeouts). Defaults to the production config
+        (link-local ``169.254.169.254``, 5s poll). Tests point
+        ``imds_base`` at a fake transport.
+    spot_watch_transport / spot_watch_sleeper:
+        Override the ``urllib.urlopen`` / ``time.sleep`` seams the
+        poller uses. Default to the real stdlib callables; tests
+        inject fakes so there is zero real network and zero real
+        sleeping.
     """
     app = Flask(__name__)
     state = WorkerState(start_delay_s=start_delay_s)
@@ -865,6 +905,51 @@ def create_app(
         }
         return jsonify(payload), 200
 
+    # --- spot-interruption watcher wiring -----------------------------
+    # Opt-in (default OFF). On the ~2-minute AWS spot-reclaim warning
+    # the poller drives the SAME graceful-stop path /v2/stop uses —
+    # ``mark_stopping`` flips the claim loop's ``stop_requested`` so it
+    # stops claiming new games and drains its in-flight game locally,
+    # then ``mark_idle`` runs when the runner finishes. No new state;
+    # the existing WorkerState transitions are reused verbatim. The
+    # watcher is exposed on ``app.config`` for tests / introspection;
+    # it is NOT part of the wire contract.
+    app.config["SPOT_WATCH_ENABLED"] = bool(spot_watch)
+    app.config["SPOT_WATCHER"] = None
+    if spot_watch:
+        sw_cfg = spot_watch_config or _spot_watch.SpotWatchConfig()
+
+        def _on_interruption(action: str, when: str | None) -> None:
+            # Identical to /v2/stop's effect: request a graceful
+            # drain. The coordinator then reclaims via the existing
+            # heartbeat/claim-TTL path once this node goes away — but
+            # because we stopped claiming + drained, the in-flight game
+            # is finished+reported (or released) in seconds rather than
+            # stranded for ~90s of heartbeat-DEAD.
+            state.mark_stopping()
+
+        def _on_error(detail: str) -> None:
+            # A flaky IMDS call must NOT kill the watcher or the
+            # daemon. Tolerate + keep polling; just record it.
+            log.warning("spot-watch: %s", detail)
+
+        sw_cbs = _spot_watch.SpotWatchCallbacks(
+            on_interruption=_on_interruption,
+            on_error=_on_error,
+        )
+        sw_extra: dict[str, Any] = {}
+        if spot_watch_transport is not None:
+            sw_extra["transport"] = spot_watch_transport
+        if spot_watch_sleeper is not None:
+            sw_extra["sleeper"] = spot_watch_sleeper
+        watcher = _spot_watch.SpotWatcher(sw_cfg, sw_cbs, **sw_extra)
+        app.config["SPOT_WATCHER"] = watcher
+        t = threading.Thread(
+            target=watcher.run, name="SpotWatcher", daemon=True
+        )
+        t.start()
+        app.config["SPOT_WATCH_THREAD"] = t
+
     return app
 
 
@@ -929,6 +1014,22 @@ def _build_parser() -> argparse.ArgumentParser:  # pragma: no cover - argparse
             "socket.gethostname()."
         ),
     )
+    parser.add_argument(
+        "--spot-watch",
+        action="store_true",
+        help=(
+            "Enable the AWS EC2 spot-interruption watcher. OFF by "
+            "default. When set, a daemon thread polls the EC2 "
+            "instance-metadata interruption endpoint (IMDSv2); on the "
+            "~2-minute reclaim warning it triggers the SAME graceful "
+            "drain as POST /v2/stop, so the worker stops claiming and "
+            "drains its in-flight game locally instead of being killed "
+            "mid-game and waiting ~90s for the coordinator's "
+            "heartbeat-DEAD reclaim. WORKER-OWNED config — enable only "
+            "on EC2 spot workers (bake into the EC2 service file / "
+            "user-data); leave OFF on on-prem workers and in tests."
+        ),
+    )
     return parser
 
 
@@ -978,6 +1079,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - argparse
         deck_pool_path=args.deck_pool_path,
         worker_id=args.worker_id,
         runner_factory=_runner_factory,
+        spot_watch=args.spot_watch,
     )
     app.run(host=args.host, port=args.port, threaded=True)
     return 0
