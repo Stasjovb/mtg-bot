@@ -4814,6 +4814,67 @@ fn apply_effect(
             state.pending_leaves_dispatches.push(leaving_obj_id);
             }
         }
+        // DestroyTargetNoncreaturePermanent (round 52). CR 701.7 with a
+        // NONCREATURE filter — Extinguisher Battleship ETB head. Walks
+        // BOTH players' battlefield in ETB-timestamp order via the
+        // shared `crate::bf_iter::bf_iter_etb_sorted` helper, picking
+        // the first non-Creature, non-indestructible permanent. Mirrors
+        // Python's
+        // `effects/generic/destroy.py:DestroyTargetNoncreaturePermanent`
+        // `TargetSpec(~IsCreature() & ~IsPlayer())` filter against the
+        // centralized `state.battlefield` walk (no controller
+        // restriction). Identical dispatch + LTB-fanout shape to the
+        // round-24 `DestroyTargetNonlandPermanent` arm above with the
+        // filter predicate swapped Land→Creature. Players are
+        // structurally excluded (the bf walk only iterates
+        // GameObjects). See invariant I39.
+        Effect::DestroyTargetNoncreaturePermanent => {
+            let target: Option<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        return None;
+                    }
+                    if printing.keywords.iter().any(|k| k == "indestructible") {
+                        return None;
+                    }
+                    Some((obj.controller as usize, obj.id))
+                });
+            if let Some((pidx, target_id)) = target {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id from scan but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                // CE13 closure: `summoning_sick` is NOT reset here.
+                // Python's `turn.move_off_battlefield` deliberately
+                // omits the clear (CR 302.1 — sickness is battlefield-
+                // only state). See I35.
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+                Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
+                // Round-29 Void LTB: helper re-checks via printing for
+                // defense-in-depth. (A noncreature destroy never moves
+                // a creature off bf, but the helper short-circuits on
+                // creature printings anyway — same call as the nonland
+                // arm for fan-out symmetry.)
+                mark_left_battlefield_if_nonland(state, printing_id);
+                // Slice 10: LTB fan-out at the Effect arm — same
+                // deferred-drain rationale as the nonland arm above
+                // (bf-exit bypasses move_object; queue the leaving id,
+                // the drain runs in `resolve_top_of_stack` after the
+                // resolving slot pops).
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+            }
+        }
         // DestroyTargetArtifact. CR 701.7 with Artifact filter — Drill
         // Too Deep / Scour for Scrap pattern. Walks BOTH players'
         // battlefield in ETB-timestamp order via the shared

@@ -1137,6 +1137,38 @@ pub enum Effect {
     /// `DestroyTargetLand(Destroy)` constructor sugar with
     /// `targets=(TargetSpec(IsLand()),)`.
     DestroyTargetLand,
+    /// **BLOCKED-RUST-EFFECT slice (round 52) — Extinguisher Battleship
+    /// ETB head.** Destroy target NONCREATURE permanent (CR 701.7 with
+    /// a `!IsCreature() & !IsPlayer()` filter). Unit variant — the
+    /// "noncreature permanent" target shape is intrinsic.
+    ///
+    /// **Distinct from `DestroyTargetNonlandPermanent` (round 24)** —
+    /// that arm filters `!card_types.contains("Land")` (picks
+    /// creatures, artifacts, enchantments, planeswalkers — anything
+    /// non-land; EXCLUDES lands). THIS arm filters
+    /// `!card_types.contains("Creature")` (picks artifacts,
+    /// enchantments, planeswalkers, LANDS — anything non-creature;
+    /// EXCLUDES creatures). The two filters are NOT interchangeable:
+    /// `nonland` admits creatures + excludes lands; `noncreature`
+    /// admits lands + excludes creatures. The real Extinguisher
+    /// Battleship printing parses (faithfully) to Python's
+    /// `DestroyTargetNoncreaturePermanent` whose `TargetSpec` filter
+    /// is exactly `~IsCreature() & ~IsPlayer()` — so this slice ships
+    /// the precise sibling rather than approximating via the
+    /// pre-existing nonland arm (no `nonland≈noncreature` shortcut).
+    ///
+    /// **First-slice deterministic choice**: scan BOTH players'
+    /// battlefield in ETB-timestamp order
+    /// (`bf_iter::bf_iter_etb_sorted`), pick the FIRST object whose
+    /// printing `card_types` does NOT contain "Creature" and which is
+    /// not indestructible (CR 702.12). Empty / no-noncreature /
+    /// only-indestructible-noncreature = silent fizzle. Players are
+    /// structurally excluded (the bf walk only iterates GameObjects).
+    /// Identical dispatch/LTB-fanout shape to the round-24
+    /// `DestroyTargetNonlandPermanent` arm with the filter predicate
+    /// swapped Land→Creature. Mirrors Python's
+    /// `effects/generic/destroy.py:DestroyTargetNoncreaturePermanent`.
+    DestroyTargetNoncreaturePermanent,
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -4728,6 +4760,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // intrinsic filter differs.
             Ok(Effect::DestroyTargetLand)
         }
+        "destroy_target_noncreature_permanent" => {
+            // Round-52 — Extinguisher Battleship ETB head. Unit
+            // variant — no required fields. Filter is intrinsic
+            // ("non-Creature, non-indestructible"). Extra keys
+            // ignored. Mirrors `destroy_target_nonland_permanent`
+            // parser arm shape (silent-drop convention for
+            // unrecognized keys); only the intrinsic filter differs
+            // (Creature-exclude vs Land-exclude).
+            Ok(Effect::DestroyTargetNoncreaturePermanent)
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -7022,6 +7064,9 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::DestroyTargetLand => {
             d.set_item("kind", "destroy_target_land")?;
+        }
+        Effect::DestroyTargetNoncreaturePermanent => {
+            d.set_item("kind", "destroy_target_noncreature_permanent")?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;

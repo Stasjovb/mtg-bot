@@ -7810,6 +7810,63 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             PumpYoursAndDebuffOpponentByArtifactCountUntilEOT,
         )
         return PumpYoursAndDebuffOpponentByArtifactCountUntilEOT()
+    if kind == "destroy_target_noncreature_permanent":
+        # **Round-52 BLOCKED-RUST-EFFECT slice — "destroy target
+        # NONCREATURE permanent" (Extinguisher Battleship ETB head).**
+        # Rust substrate ``Effect::DestroyTargetNoncreaturePermanent``
+        # (cards.rs unit variant; parse arm
+        # ``"destroy_target_noncreature_permanent" =>``; to_dict arm
+        # emitting the same kind; resolve arm in state_ops_resolve.rs
+        # — first non-Creature, non-indestructible permanent in
+        # ETB-timestamp order across BOTH battlefields).
+        #
+        # **Field shape (unit variant).** Rust's parse arm takes NO
+        # fields — bare ``{"kind":
+        # "destroy_target_noncreature_permanent"}``. Python's
+        # ``DestroyTargetNoncreaturePermanent`` is a frozen dataclass
+        # with no constructor parameters (``targets`` set in
+        # ``__post_init__`` to ``TargetSpec(~IsCreature() &
+        # ~IsPlayer())``). Bridge constructs the bare class. Extra
+        # dict keys are silently ignored (mirrors Rust's parse-arm
+        # silent-drop convention).
+        #
+        # **§2 precision — why NOT the pre-existing
+        # ``destroy_target_nonland_permanent`` arm.** The two filters
+        # are NOT interchangeable. ``DestroyTargetNonlandPermanent``
+        # is ``~IsLand() & ~IsPlayer()`` (admits creatures, excludes
+        # lands); ``DestroyTargetNoncreaturePermanent`` is
+        # ``~IsCreature() & ~IsPlayer()`` (admits lands, excludes
+        # creatures). The real Extinguisher Battleship printing parses
+        # (faithfully) to the NONCREATURE class — using the nonland
+        # arm would be a silent target-filter mistranslation (it would
+        # let the destroy hit a creature and skip a land, the exact
+        # opposite candidate set on a mixed board). This slice ships
+        # the precise sibling on Rust so the Sequence round-trips
+        # byte-equal to the genuine parsed card; no
+        # ``nonland≈noncreature`` shortcut is taken.
+        #
+        # **Resolve semantics (parity-relevant).** Rust scans BOTH
+        # players' battlefield in ETB-timestamp order via
+        # ``bf_iter::bf_iter_etb_sorted`` and picks the first
+        # non-Creature, non-indestructible permanent. Python's
+        # ``Destroy.resolve`` re-verifies the ``~IsCreature() &
+        # ~IsPlayer()`` filter at resolution per CR 608.2b.
+        # Indestructible permanents survive on both engines. Players
+        # are excluded by the ``~IsPlayer()`` arm (Rust's bf walk
+        # only iterates GameObjects).
+        #
+        # **Real EoE consumer:** Extinguisher Battleship (6,237
+        # 17lands decks) — the ETB ``Sequence`` head. Composes with
+        # the pre-existing ``damage_each_creature`` + ``sequence``
+        # bridge arms (the full ETB is
+        # ``Sequence{[destroy_target_noncreature_permanent,
+        # damage_each_creature{4}]}``). The full *card* stays
+        # Station-subsystem-gated for the production-deck loader (NOT
+        # admitted) — see ``docs/SEARCH_LIMITATIONS.md``.
+        from mtg_bot.effects.generic.destroy import (
+            DestroyTargetNoncreaturePermanent,
+        )
+        return DestroyTargetNoncreaturePermanent()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

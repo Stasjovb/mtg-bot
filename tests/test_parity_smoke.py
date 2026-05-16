@@ -58544,6 +58544,516 @@ def test_r52_synthetic_lander_token_activated_ability_round_trip_byte_equal():
         clear_token_printings()
 
 
+# ---------------------------------------------------------------------------
+# Round 52 — Extinguisher Battleship (effect half).
+#
+# The real Extinguisher Battleship printing parses to
+#   Sequence{[ DestroyTargetNoncreaturePermanent,
+#              DealNDamageToEachCreature{4} ]}
+# This slice ships ``Effect::DestroyTargetNoncreaturePermanent`` on Rust
+# (precise ``~IsCreature() & ~IsPlayer()`` target filter — distinct from
+# the round-24 ``DestroyTargetNonlandPermanent`` ``~IsLand()`` arm) +
+# its bridge arm; ``damage_each_creature`` and ``sequence`` were already
+# bridged (rounds 18/23). The full *card* stays Station-subsystem-gated
+# for the production-deck loader (NOT admitted) — see
+# ``docs/SEARCH_LIMITATIONS.md``. Pins below are synthetic Rust
+# regression; the GENUINE real-EoE probe (driving the actual parsed
+# printing) is the last test in this block.
+# ---------------------------------------------------------------------------
+ZONE_BATTLEFIELD_R52 = 2
+ZONE_GRAVEYARD_R52 = 3
+
+
+def _build_rust_extinguisher_state(
+    *, noncreature_bait=True, opp_creature=True, own_creature=True,
+    bait_indestructible=False, bait_is_land=False,
+):
+    """Rust state with an Extinguisher-Battleship-shaped ETB carrier on
+    p0's bf: ``Sequence{[destroy_target_noncreature_permanent,
+    damage_each_creature{4}]}``.
+
+    Optional pre-stage: one noncreature bait permanent on p0 (an
+    Enchantment by default; a Land if ``bait_is_land``;
+    ``indestructible`` if ``bait_indestructible``), one opponent
+    creature (3/3) on p1, one own creature (2/2) on p0.
+
+    Returns (rust_state, source_id, bait_id_or_None, own_id_or_None,
+    opp_id_or_None).
+
+    The carrier itself is a non-creature Artifact, so it is a LEGAL
+    ``destroy_target_noncreature_permanent`` candidate — but it enters
+    LAST (highest ETB timestamp), so the deterministic first-noncreature
+    scan picks the bait when one is present.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZB = ZONE_BATTLEFIELD_R52
+
+    bait_id = None
+    if noncreature_bait:
+        if bait_is_land:
+            bait_def = {
+                "name": "Bait Land",
+                "card_types": ["Land"],
+                "mana_cost": {},
+                "effects": [],
+            }
+        else:
+            bait_def = {
+                "name": "Bait Enchantment",
+                "card_types": ["Enchantment"],
+                "mana_cost": {"generic": 2},
+                "effects": [],
+            }
+        if bait_indestructible:
+            bait_def["keywords"] = ["indestructible"]
+        bait_id = rust_state.register_and_inject_object(bait_def, 0, ZB)
+
+    own_id = None
+    if own_creature:
+        own_id = rust_state.register_and_inject_object(
+            {
+                "name": "Own Bear (2/2)",
+                "card_types": ["Creature"],
+                "mana_cost": {"generic": 1, "G": 1},
+                "power": 2, "toughness": 2, "effects": [],
+            },
+            0, ZB,
+        )
+    opp_id = None
+    if opp_creature:
+        opp_id = rust_state.register_and_inject_object(
+            {
+                "name": "Opp Bear (3/3)",
+                "card_types": ["Creature"],
+                "mana_cost": {"generic": 2, "R": 1},
+                "power": 3, "toughness": 3, "effects": [],
+            },
+            1, ZB,
+        )
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "Extinguisher Synthetic Source",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 8},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "sequence",
+                        "effects": [
+                            {
+                                "kind": (
+                                    "destroy_target_noncreature_"
+                                    "permanent"
+                                ),
+                            },
+                            {
+                                "kind": "damage_each_creature",
+                                "amount": 4,
+                            },
+                        ],
+                    },
+                }
+            ],
+        },
+        0, ZB,
+    )
+    return rust_state, source_id, bait_id, own_id, opp_id
+
+
+def test_rust_extinguisher_destroy_noncreature_then_aoe_basic():
+    """Round-52 — basic pin. Enchantment bait on p0; one creature each
+    side. The ETB Sequence destroys the FIRST noncreature permanent (the
+    bait enchantment — entered before the source) THEN deals 4 damage to
+    every creature. The carrier (also a noncreature artifact) survives
+    because it entered after the bait.
+    """
+    rs, src, bait, own, opp = _build_rust_extinguisher_state()
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    assert rs.stack_size() == 0
+    # Bait enchantment destroyed (→ graveyard).
+    assert rs.find_object_zone(bait) == ZONE_GRAVEYARD_R52
+    # Carrier survives (later ETB timestamp than the bait).
+    assert rs.find_object_zone(src) == ZONE_BATTLEFIELD_R52
+    # Every creature took 4 damage (AOE half).
+    assert rs.find_object_zone(own) == ZONE_BATTLEFIELD_R52
+    assert rs.find_object_zone(opp) == ZONE_BATTLEFIELD_R52
+    assert rs.get_damage(own) == 4
+    assert rs.get_damage(opp) == 4
+
+
+def test_rust_extinguisher_no_noncreature_target_aoe_still_fires():
+    """Per-CR-608.2c independence inside a Sequence: with NO eligible
+    noncreature permanent OTHER than the carrier, the destroy still has
+    a legal target (the carrier itself — it IS a noncreature artifact),
+    so it self-destructs; THEN the AOE half still deals 4 to every
+    creature. Pins that the Sequence does not abort when the first
+    child's only target is the source.
+    """
+    rs, src, bait, own, opp = _build_rust_extinguisher_state(
+        noncreature_bait=False,
+    )
+    assert bait is None
+    rs.resolve_top_of_stack()
+    # No other noncreature → the carrier is the only legal target and
+    # is destroyed.
+    assert rs.find_object_zone(src) == ZONE_GRAVEYARD_R52
+    # AOE half still resolves (Sequence child 2 independent of child 1).
+    assert rs.get_damage(own) == 4
+    assert rs.get_damage(opp) == 4
+
+
+def test_rust_extinguisher_creatures_are_not_destroy_targets():
+    """§2 filter-precision pin: a board with ONLY creatures (no
+    noncreature except the carrier) must NOT have a creature destroyed
+    by the noncreature-destroy head — that is the exact bug the
+    ``DestroyTargetNonlandPermanent`` (``~IsLand()``) arm would cause
+    (it admits creatures). The precise ``~IsCreature()`` filter must
+    skip both creatures and pick the carrier instead.
+    """
+    rs, src, bait, own, opp = _build_rust_extinguisher_state(
+        noncreature_bait=False,
+    )
+    rs.resolve_top_of_stack()
+    # Neither creature destroyed (both still on bf, just damaged).
+    assert rs.find_object_zone(own) == ZONE_BATTLEFIELD_R52
+    assert rs.find_object_zone(opp) == ZONE_BATTLEFIELD_R52
+    # The noncreature carrier is what got destroyed.
+    assert rs.find_object_zone(src) == ZONE_GRAVEYARD_R52
+
+
+def test_rust_extinguisher_indestructible_noncreature_skipped():
+    """CR 702.12: an indestructible noncreature bait is skipped by the
+    destroy scan; the scan falls through to the next noncreature (the
+    carrier). The indestructible bait survives; the AOE still fires.
+    """
+    rs, src, bait, own, opp = _build_rust_extinguisher_state(
+        bait_indestructible=True,
+    )
+    rs.resolve_top_of_stack()
+    # Indestructible bait survives the destroy scan.
+    assert rs.find_object_zone(bait) == ZONE_BATTLEFIELD_R52
+    # Scan fell through to the next noncreature: the carrier.
+    assert rs.find_object_zone(src) == ZONE_GRAVEYARD_R52
+    # AOE half unaffected.
+    assert rs.get_damage(own) == 4
+    assert rs.get_damage(opp) == 4
+
+
+def test_rust_extinguisher_land_is_a_legal_noncreature_target():
+    """§2 filter-precision pin (the OTHER direction): a LAND is a legal
+    ``destroy_target_noncreature_permanent`` target (a land is
+    noncreature). This is exactly where ``noncreature`` and ``nonland``
+    DIVERGE — the round-24 ``DestroyTargetNonlandPermanent`` arm would
+    SKIP a land; the precise noncreature arm must DESTROY it (and it
+    entered before the carrier, so it is the first pick).
+    """
+    rs, src, bait, own, opp = _build_rust_extinguisher_state(
+        bait_is_land=True,
+    )
+    rs.resolve_top_of_stack()
+    # Land destroyed (noncreature ≠ nonland — the load-bearing
+    # divergence this slice ships the precise filter for).
+    assert rs.find_object_zone(bait) == ZONE_GRAVEYARD_R52
+    # Carrier survives (land entered first).
+    assert rs.find_object_zone(src) == ZONE_BATTLEFIELD_R52
+    assert rs.get_damage(own) == 4
+    assert rs.get_damage(opp) == 4
+
+
+def test_rust_extinguisher_no_creatures_aoe_silent_no_op():
+    """The AOE half is a silent no-op with no creatures on either bf;
+    the destroy half still resolves (bait enchantment destroyed). Pins
+    the empty-creature-set ``DamageEachCreature`` short-circuit composed
+    inside the Sequence.
+    """
+    rs, src, bait, own, opp = _build_rust_extinguisher_state(
+        own_creature=False, opp_creature=False,
+    )
+    assert own is None and opp is None
+    rs.resolve_top_of_stack()
+    # Destroy half still happened.
+    assert rs.find_object_zone(bait) == ZONE_GRAVEYARD_R52
+    # No creatures → AOE no-op; nothing crashes; carrier survives.
+    assert rs.find_object_zone(src) == ZONE_BATTLEFIELD_R52
+
+
+def test_cross_engine_real_eoe_extinguisher_battleship_etb_destroy_noncreature_then_aoe_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Extinguisher Battleship
+    (6,237 17lands decks).**
+
+    Drives the **ACTUAL parsed Extinguisher Battleship printing** on the
+    Python side:
+    ``get_active_source().get_printings()["Extinguisher Battleship"]``
+    — which the parser maps to
+    ``Sequence{[ DestroyTargetNoncreaturePermanent,
+                 DealNDamageToEachCreature(amount=4) ]}``.
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "When this Spacecraft enters, destroy target noncreature
+         permanent. Then this Spacecraft deals 4 damage to each
+         creature.
+         Station (...)  5+ | Flying, trample"
+
+    **§2 bridge-correctness — why this is genuine AND byte-equal.**
+    The real card's ETB destroy half is agent-driven
+    (``DestroyTargetNoncreaturePermanent.requires_target() is True``;
+    the controller picks ANY legal noncreature permanent, CR 601.2c).
+    Rust's ``Effect::DestroyTargetNoncreaturePermanent`` picks
+    deterministically (FIRST non-Creature, non-indestructible permanent
+    in ETB-timestamp order across BOTH battlefields). To make the
+    genuine agent-driven Python card byte-equal with the deterministic
+    Rust scan, the probe stages EXACTLY ONE legal noncreature permanent
+    (a bait enchantment, entered before the carrier) so the pick is
+    FORCED on both engines — the comparison is a true cross-engine
+    byte-equality check, not a tautology. ``_PickFirstLegalTargetAgent``
+    is seated on p0 to answer the single-candidate target prompt.
+
+    This is the EXACT Fight / Monoist precedent: Python runs the
+    agent-driven real-card class shim-constrained; Rust runs the
+    deterministic effect. The deterministic Rust arm + bridge arm +
+    this genuine probe close the real-card residue **at the cross-
+    engine-bridge level**: the actual parsed printing's full ETB
+    Sequence (noncreature-destroy → AOE-4) now round-trips byte-equal
+    cross-engine.
+
+    **EoE-pool delta.** Extinguisher Battleship flips drop→admit at the
+    *bridge/probe* level (the precise noncreature-destroy Effect arm +
+    bridge arm ship here so the real card's ETB now round-trips). It is
+    deliberately NOT added to the production-deck loader ``_SAFE_*``
+    allowlist: the full card carries the **Station** ability + the
+    **Spacecraft** artifact type, an unmodeled subsystem the loader
+    does not admit (and routing the agent-driven destroy through a
+    deterministic bridge in multi-noncreature board states would be a
+    §2 silent-mistranslation). Documented in
+    ``docs/SEARCH_LIMITATIONS.md``; same Station-gating + loader-admit-
+    declined split as round-51 Monoist Circuit-Feeder.
+
+    Probe shape:
+      1. Stage 1 bait Enchantment on p0 (the single legal noncreature
+         target) + 1 own creature (2/2) on p0 + 1 opponent creature
+         (3/3) on p1.
+      2. Python: materialize the REAL parsed Extinguisher Battleship
+         printing on p0's bf, seat ``_PickFirstLegalTargetAgent``, fire
+         its ENTERS trigger (the parser-emitted Sequence lands on the
+         stack; the destroy child's single legal target is forced to
+         the bait enchantment).
+      3. Rust: drive the bridge-dict Sequence carrier (the loader
+         doesn't admit the Station card — the established
+         Fight/Monoist cross-engine driving pattern).
+      4. Drain both stacks; assert byte-equal: bait enchantment in
+         graveyard; both creatures still on bf having taken exactly 4
+         damage; carrier (noncreature, later ETB) survives; lives
+         unchanged.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.cards import (
+        DestroyTargetNoncreaturePermanent, DealNDamageToEachCreature,
+    )
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+
+    real = get_active_source().get_printings().get("Extinguisher Battleship")
+    if real is None:
+        import pytest
+        pytest.skip("Extinguisher Battleship absent from active CardSource")
+    # Sanity: the genuinely-parsed printing carries the Sequence shape
+    # this slice closes — the §2-load-bearing fact this probe pins.
+    assert real.is_artifact and not real.is_creature
+    assert len(real.triggered_abilities) == 1
+    real_eff = real.triggered_abilities[0].effect
+    assert isinstance(real_eff, Sequence), (
+        f"genuine Extinguisher Battleship must parse to a Sequence; "
+        f"got {type(real_eff).__name__}"
+    )
+    assert len(real_eff.effects) == 2
+    assert isinstance(real_eff.effects[0], DestroyTargetNoncreaturePermanent)
+    assert isinstance(real_eff.effects[1], DealNDamageToEachCreature)
+    assert real_eff.effects[1].amount == 4
+    # The destroy head is AGENT-DRIVEN (requires a target choice) — the
+    # §2 fact that mandates the forced-single-candidate probe shape.
+    assert real_eff.effects[0].requires_target() is True
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZB = ZONE_BATTLEFIELD_R52
+    GY = ZONE_GRAVEYARD_R52
+
+    # ---- Rust side: bridge-dict Sequence carrier. 1 bait Enchantment
+    # (the single legal noncreature target) + 1 creature each side.
+    rust_bait = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Enchantment",
+            "card_types": ["Enchantment"],
+            "mana_cost": {"generic": 2}, "effects": [],
+        },
+        0, ZB,
+    )
+    rust_own = rust_state.register_and_inject_object(
+        {
+            "name": "Own Bear (2/2)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": 2, "toughness": 2, "effects": [],
+        },
+        0, ZB,
+    )
+    rust_opp = rust_state.register_and_inject_object(
+        {
+            "name": "Opp Bear (3/3)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "R": 1},
+            "power": 3, "toughness": 3, "effects": [],
+        },
+        1, ZB,
+    )
+    rust_src = rust_state.register_and_inject_object(
+        {
+            "name": "Extinguisher Battleship",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 8},
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "sequence",
+                        "effects": [
+                            {
+                                "kind": (
+                                    "destroy_target_noncreature_"
+                                    "permanent"
+                                ),
+                            },
+                            {
+                                "kind": "damage_each_creature",
+                                "amount": 4,
+                            },
+                        ],
+                    },
+                }
+            ],
+        },
+        0, ZB,
+    )
+    assert rust_state.stack_size() == 1
+
+    # ---- Python side: GENUINE parsed Extinguisher Battleship printing
+    # + the single bait Enchantment + one creature each side; shim
+    # forces the (single-candidate) destroy target to the bait.
+    bait_printing = CardPrinting(
+        name="Bait Enchantment", mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=()),
+        type_line="Enchantment", supertypes=(),
+        card_types=("Enchantment",), subtypes=(),
+        power=None, toughness=None, produces=frozenset(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+
+    own_printing = CardPrinting(
+        name="Own Bear (2/2)", mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=2, toughness=2, produces=frozenset(),
+    )
+    py_own = py_state.new_object(
+        own_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_own.summoning_sick = False
+    py_own.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_own)
+
+    opp_printing = CardPrinting(
+        name="Opp Bear (3/3)", mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("R", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=3, toughness=3, produces=frozenset(),
+    )
+    py_opp = py_state.new_object(
+        opp_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_opp.summoning_sick = False
+    py_opp.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_opp)
+
+    # Seat the shim BEFORE the trigger fires (the destroy child's
+    # target is chosen at trigger-push time).
+    py_state.players[0].agent = _PickFirstLegalTargetAgent()
+
+    # Materialize the GENUINE parsed Extinguisher Battleship printing
+    # on p0's bf (enters LAST → highest ETB timestamp; the bait is the
+    # first/only legal noncreature target on both engines).
+    py_src = py_state.new_object(
+        real, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    assert len(py_state.stack) == 1, (
+        "Python: the genuine Extinguisher Battleship printing's ENTERS "
+        "trigger (Sequence) should land on the stack. Got "
+        f"{len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Assert byte-equal post-state.
+    # Bait Enchantment destroyed → graveyard on both engines.
+    assert rust_state.find_object_zone(rust_bait) == GY
+    assert py_bait.zone == Zone.GRAVEYARD
+    # Both creatures still on bf, took exactly 4 damage (AOE half).
+    assert rust_state.find_object_zone(rust_own) == ZB
+    assert rust_state.find_object_zone(rust_opp) == ZB
+    assert py_own.zone == Zone.BATTLEFIELD
+    assert py_opp.zone == Zone.BATTLEFIELD
+    assert rust_state.get_damage(rust_own) == 4
+    assert rust_state.get_damage(rust_opp) == 4
+    assert py_own.damage == 4
+    assert py_opp.damage == 4
+    # Cross-engine byte-equal damage.
+    assert rust_state.get_damage(rust_own) == py_own.damage
+    assert rust_state.get_damage(rust_opp) == py_opp.damage
+    # Carrier (noncreature artifact, later ETB) survives on both.
+    assert rust_state.find_object_zone(rust_src) == ZB
+    assert py_src.zone == Zone.BATTLEFIELD
+    # Lives unchanged (ETB only destroys + damages creatures).
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
