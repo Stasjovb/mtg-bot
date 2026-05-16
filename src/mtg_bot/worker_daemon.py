@@ -1,19 +1,31 @@
-"""Worker daemon — Phase 2a skeleton.
+"""Worker daemon — Phase 2b.
 
 Implements the worker-side REST surface described in
 ``docs/DISTRIBUTED_API_v2.md`` and ``docs/DISTRIBUTED_RUN_FLOW.md``.
 
-Phase 2a scope (this module): the Flask app, the state machine, the
+Phase 2b scope (this module): the Flask app, the state machine, the
 ``/v2/start_self_play`` / ``/v2/start_eval`` / ``/v2/stop`` /
-``/v2/heartbeat`` endpoints, and a CLI entry point. **No real
-work runs yet** — ``/v2/start_*`` only transitions state; a stub
-background thread bumps STARTING → RUNNING after a brief delay so the
-tests can observe both. The actual ``/v2/claim`` loop, multiprocessing
-pool, weights fetch, etc. land in Phase 2b together with the lift-and-
-shift of ``cli/shard.py``'s body.
+``/v2/heartbeat`` endpoints, a CLI entry point, **and the real
+claim/play/report loop** that talks to the coordinator's v2 endpoints
+(``/v2/claim``, ``/v2/report_result``, ``/v2/weights/<v>``).
 
-The handlers exchange JSON shapes that match the contract verbatim so
-Phase 2b only has to fill in behavior, not re-negotiate the wire.
+The claim-loop body is encapsulated in
+:class:`ClaimLoopRunner` so tests can swap the game runner for a stub
+and exercise the full lifecycle without spawning a torch model.
+
+Contract patches folded into this revision:
+
+- ``/v2/healthz`` is the coordinator-side liveness endpoint; the
+  worker uses ``/v2/heartbeat`` (the rich snapshot).
+- The ``/v2/start_self_play`` / ``/v2/start_eval`` 202 response carries
+  ``stage_started_at`` (renamed from ``started_at`` to disambiguate
+  from the daemon process start time).
+- ``/v2/heartbeat`` payload carries ``process_started_at`` at the top
+  level alongside ``uptime_s``.
+- ``/v2/stop`` returns ``{state, previous_state, drain_in_flight_games,
+  stopped_at}`` and is idempotent on already-IDLE.
+- Windows ``load_avg_1m`` is the rolling 60s ``cpu_percent`` average
+  (best cross-platform analog; documented in ``collect_host_metrics``).
 """
 
 from __future__ import annotations
@@ -23,10 +35,36 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
 
 import psutil
 from flask import Flask, jsonify, request
+
+from mtg_bot import worker_daemon_claim_loop as _claim_loop
+from mtg_bot.worker_daemon_claim_loop import resolve_worker_id
+
+if TYPE_CHECKING:  # pragma: no cover - imports just for type hints
+    from mtg_bot.worker_daemon_claim_loop import (
+        ClaimLoopConfig,
+        ClaimLoopRunner,
+        GameRunner,
+        StateCallbacks,
+    )
+
+# How long /v2/stop waits for the runner thread to drain before
+# returning. Set short so the handler stays responsive; the runner
+# itself will continue to drain its in-flight game after the response
+# ships, eventually flipping the daemon to IDLE.
+_STOP_JOIN_TIMEOUT_S = 2.0
+
+
+# Type alias for the runner factory that ``create_app`` accepts. The
+# factory builds the per-stage ``GameRunner`` plus the loop runner;
+# tests pass a closure that owns the stub runner under test.
+RunnerFactory = Callable[
+    [str, "ClaimLoopConfig", "StateCallbacks"], "GameRunner"
+]
 
 # ---------------------------------------------------------------------------
 # Optional pynvml import — Mac / CPU-only hosts run without it. The
@@ -96,18 +134,23 @@ class WorkerState:
     - ``current_stage_id``: ``stage_id`` from the most recent ``start_*``.
     - ``pool_size``: requested ``n_workers`` (0 when IDLE).
     - ``active_workers``: pool members currently executing a game
-      (always 0 in the skeleton; populated in Phase 2b).
-    - ``games_done``, ``games_claimed_in_flight``: 0 in the skeleton.
+      (incremented when a worker checks out a claim, decremented at
+      report time).
+    - ``games_done``: completed-and-reported games for the active stage.
+    - ``games_claimed_in_flight``: claimed but not-yet-reported.
     - ``last_progress_at``: ISO timestamp of last meaningful progress
-      event (currently bumped on start transitions).
+      event (bumped on start transitions, claims, and reports).
     - ``error``: non-None only in the ``ERROR`` state.
-    - ``started_at``: when the daemon process started (constant per
-      process; used for the ``uptime_s`` calculation).
+    - ``process_started_at``: ISO-8601 timestamp of when the daemon
+      process started (constant per process; surfaced on
+      ``/v2/heartbeat``).
+    - ``stop_requested``: a graceful_stop flag the claim-loop polls
+      between games.
     """
 
     def __init__(self, start_delay_s: float = DEFAULT_START_DELAY_S):
         self._lock = threading.Lock()
-        self._process_started_at = time.monotonic()
+        self._process_started_at_monotonic = time.monotonic()
         self._start_delay_s = start_delay_s
         self.state = State.IDLE
         self.current_stage_id: str | None = None
@@ -117,7 +160,13 @@ class WorkerState:
         self.games_claimed_in_flight = 0
         self.last_progress_at: str | None = None
         self.error: str | None = None
-        self.started_at: str = _utcnow_iso()
+        self.process_started_at: str = _utcnow_iso()
+        # Drain coordination. ``stop_requested`` is the cooperative
+        # signal the claim loop polls between games; ``loop_thread``
+        # is whatever runner is currently executing /claim+/play+
+        # /report. None when IDLE.
+        self.stop_requested = False
+        self.loop_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
     # Transitions
@@ -134,20 +183,16 @@ class WorkerState:
         ``(accepted, current_state)``. When ``accepted`` is ``False``
         the caller should respond 409 with the returned current state.
 
-        Spawns a background thread that flips STARTING → RUNNING after
-        ``start_delay_s`` so tests can observe both transitions. Phase
-        2b replaces this stub with the real "fetch weights → spin up
-        pool → start claim loop" sequence; the STARTING → RUNNING
-        transition then happens once the pool is ready.
+        Does NOT spawn any background work — the caller wires the
+        :class:`ClaimLoopRunner` thread after a successful transition.
+        The ``mark_running`` / ``mark_idle`` / ``mark_error`` helpers
+        push the rest of the state machine forward.
         """
         with self._lock:
             if self.state != State.IDLE:
                 return False, self.state
             starting_state = (
                 State.SELF_PLAY_STARTING if kind == "self_play" else State.EVAL_STARTING
-            )
-            running_state = (
-                State.SELF_PLAY_RUNNING if kind == "self_play" else State.EVAL_RUNNING
             )
             self.state = starting_state
             self.current_stage_id = stage_id
@@ -156,35 +201,30 @@ class WorkerState:
             self.games_done = 0
             self.games_claimed_in_flight = 0
             self.error = None
+            self.stop_requested = False
             self.last_progress_at = _utcnow_iso()
-
-        # Stub: flip STARTING → RUNNING off-thread so a tight
-        # POST/GET sequence in tests can catch either side of the edge.
-        # The real implementation in Phase 2b replaces this with the
-        # pool-ready callback.
-        def _flip_to_running() -> None:
-            time.sleep(self._start_delay_s)
-            with self._lock:
-                # Guard against a /v2/stop arriving during the delay.
-                if self.state == starting_state:
-                    self.state = running_state
-                    self.last_progress_at = _utcnow_iso()
-
-        t = threading.Thread(target=_flip_to_running, daemon=True)
-        t.start()
         return True, starting_state
 
-    def stop(self) -> str:
-        """Drain in-flight work and return to IDLE.
+    def mark_running(self) -> None:
+        """Push STARTING → RUNNING once the pool / NN are ready.
 
-        Skeleton implementation: no real in-flight games exist yet, so
-        STOPPING is instantaneous. Phase 2b drains the pool here.
-
-        Returns the worker's state at the time the call was received
-        (per the API doc — the response reports the *receipt* state).
+        Idempotent. No-op if the state isn't currently ``*_STARTING``
+        (e.g. a /v2/stop arrived during the warmup).
         """
         with self._lock:
-            state_at_receipt = self.state
+            if self.state == State.SELF_PLAY_STARTING:
+                self.state = State.SELF_PLAY_RUNNING
+                self.last_progress_at = _utcnow_iso()
+            elif self.state == State.EVAL_STARTING:
+                self.state = State.EVAL_RUNNING
+                self.last_progress_at = _utcnow_iso()
+
+    def mark_stopping(self) -> None:
+        """Push RUNNING → STOPPING in response to ``/v2/stop`` or a
+        ``/claim`` that returned 204. Sets the cooperative drain flag
+        the runner polls between games. Idempotent.
+        """
+        with self._lock:
             if self.state in (
                 State.SELF_PLAY_RUNNING,
                 State.SELF_PLAY_STARTING,
@@ -192,14 +232,78 @@ class WorkerState:
                 State.EVAL_STARTING,
             ):
                 self.state = State.STOPPING
-            # Skeleton: no real in-flight games — drain is immediate.
+            self.stop_requested = True
+            self.last_progress_at = _utcnow_iso()
+
+    def mark_idle(self) -> None:
+        """Final transition back to IDLE once the runner drained."""
+        with self._lock:
             self.state = State.IDLE
             self.current_stage_id = None
             self.pool_size = 0
             self.active_workers = 0
             self.games_claimed_in_flight = 0
+            self.stop_requested = False
             self.last_progress_at = _utcnow_iso()
-        return state_at_receipt
+            self.loop_thread = None
+
+    def mark_error(self, err: str) -> None:
+        """Push the state machine into ERROR with a non-null ``error``."""
+        with self._lock:
+            self.state = State.ERROR
+            self.error = err
+            self.stop_requested = True
+            self.last_progress_at = _utcnow_iso()
+
+    def clear_error(self) -> None:
+        """Acknowledge ERROR by transitioning back to IDLE. Used by
+        operators / orchestrator to recover the daemon after a fatal
+        pool exception."""
+        with self._lock:
+            if self.state == State.ERROR:
+                self.state = State.IDLE
+                self.current_stage_id = None
+                self.pool_size = 0
+                self.active_workers = 0
+                self.games_done = 0
+                self.games_claimed_in_flight = 0
+                self.error = None
+                self.last_progress_at = _utcnow_iso()
+                self.loop_thread = None
+
+    def on_claim(self) -> None:
+        """Counter bump on a successful /claim — moves a slot into
+        in-flight and increments active_workers."""
+        with self._lock:
+            self.games_claimed_in_flight += 1
+            self.active_workers += 1
+            self.last_progress_at = _utcnow_iso()
+
+    def on_report(self) -> None:
+        """Counter bump on a successful /report_result — moves a slot
+        from in-flight to done."""
+        with self._lock:
+            if self.games_claimed_in_flight > 0:
+                self.games_claimed_in_flight -= 1
+            if self.active_workers > 0:
+                self.active_workers -= 1
+            self.games_done += 1
+            self.last_progress_at = _utcnow_iso()
+
+    def on_drop(self) -> None:
+        """Counter bump for a claim that was discarded (409 on report
+        or runner abandoned mid-game). Moves a slot out of in-flight
+        WITHOUT incrementing games_done."""
+        with self._lock:
+            if self.games_claimed_in_flight > 0:
+                self.games_claimed_in_flight -= 1
+            if self.active_workers > 0:
+                self.active_workers -= 1
+            self.last_progress_at = _utcnow_iso()
+
+    def is_stop_requested(self) -> bool:
+        with self._lock:
+            return self.stop_requested
 
     # ------------------------------------------------------------------
     # Snapshots
@@ -219,7 +323,8 @@ class WorkerState:
                 "games_claimed_in_flight": self.games_claimed_in_flight,
                 "last_progress_at": self.last_progress_at,
                 "error": self.error,
-                "uptime_s": time.monotonic() - self._process_started_at,
+                "uptime_s": time.monotonic() - self._process_started_at_monotonic,
+                "process_started_at": self.process_started_at,
                 "pool_size": self.pool_size,
                 "active_workers": self.active_workers,
             }
@@ -292,17 +397,120 @@ def collect_host_metrics(state: WorkerState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def create_app(start_delay_s: float = DEFAULT_START_DELAY_S) -> Flask:
+def create_app(
+    start_delay_s: float = DEFAULT_START_DELAY_S,
+    *,
+    weights_root: Path | None = None,
+    runner_factory: "RunnerFactory | None" = None,
+    retry_backoff_s: tuple[float, ...] | None = None,
+    worker_id: str | None = None,
+) -> Flask:
     """Build the Flask app with the v2 endpoints wired.
 
     Each app instance owns its own :class:`WorkerState`. Tests use
     Flask's ``app.test_client()`` to drive the handlers without binding
     a real socket.
+
+    Parameters
+    ----------
+    start_delay_s:
+        Back-compat parameter, retained so existing tests can keep
+        passing it. Phase 2b uses a real claim-loop runner whose
+        STARTING → RUNNING transition is driven by the runner.setup()
+        completion, so this only affects test-only stub fallback
+        behavior (the in-process runner does mark_running immediately
+        if no runner_factory is supplied).
+    weights_root:
+        Directory the daemon caches downloaded weights under. Defaults
+        to ``./trained_weights/`` relative to the daemon's cwd —
+        matches the existing ``cli/shard.py`` convention.
+    runner_factory:
+        Optional callable invoked with ``(kind, claim_loop_cfg, state_cbs)``
+        that returns a :class:`ClaimLoopRunner`. The default factory
+        builds a no-op stub runner that just flips STARTING → RUNNING
+        after ``start_delay_s`` (so existing tests behave identically
+        to the Phase 2a skeleton). Tests that want to exercise the
+        full loop supply a factory backed by a callable game runner.
+    retry_backoff_s:
+        Override the default (1, 3, 10) backoff schedule. Useful in
+        tests that hammer 5xx without paying for real sleeps.
+    worker_id:
+        Override the default :func:`resolve_worker_id` result. Set
+        from the CLI's ``--worker-id`` flag.
     """
     app = Flask(__name__)
     state = WorkerState(start_delay_s=start_delay_s)
     # Expose for tests / introspection. Not part of the wire contract.
     app.config["WORKER_STATE"] = state
+    resolved_worker_id = worker_id or resolve_worker_id()
+    app.config["WORKER_ID"] = resolved_worker_id
+    effective_weights_root = (
+        Path(weights_root) if weights_root is not None
+        else Path("trained_weights")
+    )
+    app.config["WEIGHTS_ROOT"] = effective_weights_root
+    effective_backoff = (
+        retry_backoff_s if retry_backoff_s is not None
+        else _claim_loop.RETRY_BACKOFF_S
+    )
+    app.config["RETRY_BACKOFF_S"] = effective_backoff
+    app.config["RUNNER_FACTORY"] = runner_factory
+
+    def _state_callbacks() -> _claim_loop.StateCallbacks:
+        return _claim_loop.StateCallbacks(
+            is_stop_requested=state.is_stop_requested,
+            on_claim=state.on_claim,
+            on_report=state.on_report,
+            on_drop=state.on_drop,
+            mark_running=state.mark_running,
+            mark_stopping=state.mark_stopping,
+            mark_idle=state.mark_idle,
+            mark_error=state.mark_error,
+        )
+
+    def _spawn_stub_runner(kind: str) -> None:
+        """Back-compat: the original Phase 2a skeleton flipped STARTING
+        → RUNNING off-thread after a tiny delay. The Phase 2b default
+        (no ``runner_factory`` supplied) keeps that behavior so the
+        existing test suite passes unchanged.
+        """
+
+        def _run() -> None:
+            time.sleep(start_delay_s)
+            state.mark_running()
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        with state._lock:  # noqa: SLF001
+            state.loop_thread = t
+
+    def _spawn_real_runner(
+        kind: str,
+        body: dict[str, Any],
+    ) -> None:
+        """Wire the real claim/play/report loop.
+
+        Runs in a daemon thread so the Flask handler can return 202
+        without blocking on weights fetch / pool spin-up.
+        """
+        cfg = _claim_loop.ClaimLoopConfig(
+            coordinator_url=body["coordinator_url"],
+            stage_id=body["stage_id"],
+            kind=kind,
+            n_workers=int(body.get("n_workers", 0)),
+            worker_id=resolved_worker_id,
+            weights_root=effective_weights_root,
+            shard_label=resolved_worker_id,
+            retry_backoff_s=effective_backoff,
+        )
+        cbs = _state_callbacks()
+        assert runner_factory is not None  # narrowed via caller
+        runner = runner_factory(kind, cfg, cbs)
+        loop_runner = _claim_loop.ClaimLoopRunner(cfg, cbs, runner)
+        t = threading.Thread(target=loop_runner.run, daemon=True)
+        t.start()
+        with state._lock:  # noqa: SLF001
+            state.loop_thread = t
 
     def _start(kind: str):
         body = request.get_json(silent=True) or {}
@@ -314,11 +522,16 @@ def create_app(start_delay_s: float = DEFAULT_START_DELAY_S) -> Flask:
                 jsonify({"error": "worker_busy", "current_state": current_state}),
                 409,
             )
+        stage_started_at = _utcnow_iso()
+        if runner_factory is not None and body.get("coordinator_url"):
+            _spawn_real_runner(kind, body)
+        else:
+            _spawn_stub_runner(kind)
         return (
             jsonify(
                 {
                     "stage_id": stage_id,
-                    "started_at": _utcnow_iso(),
+                    "stage_started_at": stage_started_at,
                 }
             ),
             202,
@@ -334,12 +547,47 @@ def create_app(start_delay_s: float = DEFAULT_START_DELAY_S) -> Flask:
 
     @app.route("/v2/stop", methods=["POST"])
     def stop():  # noqa: D401 - Flask handler
-        receipt_state = state.stop()
+        # Capture the previous state BEFORE flipping anything.
+        previous_state = state.snapshot()["state"]
+        # Snapshot the in-flight count so the response reports the
+        # number of games being drained at the moment /v2/stop landed.
+        with state._lock:  # noqa: SLF001
+            drain_in_flight = state.games_claimed_in_flight
+        stopped_at = _utcnow_iso()
+        if previous_state == State.IDLE:
+            # Idempotent. Nothing to do — no thread, no drain.
+            return (
+                jsonify(
+                    {
+                        "state": State.IDLE,
+                        "previous_state": State.IDLE,
+                        "drain_in_flight_games": 0,
+                        "stopped_at": stopped_at,
+                    }
+                ),
+                200,
+            )
+        state.mark_stopping()
+        # If a runner thread is running, wait briefly for it to drain.
+        # Real-world drain can take ~per_game_timeout_sec; here we cap
+        # the synchronous wait so the handler returns quickly. Phase 2c
+        # may expose an async "wait for drain" pattern.
+        runner_thread = state.loop_thread
+        if runner_thread is not None and runner_thread.is_alive():
+            runner_thread.join(timeout=_STOP_JOIN_TIMEOUT_S)
+        if runner_thread is None or not runner_thread.is_alive():
+            # Drained promptly — flip to IDLE here so the response
+            # reflects the final state. If the thread is still alive
+            # (slow drain), leave the state at STOPPING; the runner
+            # itself will flip to IDLE when it finishes.
+            state.mark_idle()
         return (
             jsonify(
                 {
                     "state": state.snapshot()["state"],
-                    "state_at_receipt": receipt_state,
+                    "previous_state": previous_state,
+                    "drain_in_flight_games": drain_in_flight,
+                    "stopped_at": stopped_at,
                 }
             ),
             200,
@@ -361,6 +609,7 @@ def create_app(start_delay_s: float = DEFAULT_START_DELAY_S) -> Flask:
             "last_progress_at": snap["last_progress_at"],
             "error": snap["error"],
             "uptime_s": snap["uptime_s"],
+            "process_started_at": snap["process_started_at"],
             "host": host,
         }
         return jsonify(payload), 200
