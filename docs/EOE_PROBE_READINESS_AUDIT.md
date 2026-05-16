@@ -304,13 +304,13 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 30661a0a (round-53 HEAD, post N1+N2),
-     resynced by the round-53 post-merge resync slice
-     (_SAFE_TRIGGERS +1 from N1 Phase-3a Lander admit; Rust
-     variant + bridge-arm counts unchanged — N2 fixed the
-     round-31 arm rather than adding a variant). -->
-rust_effect_variants = 108
-bridge_arms = 110
+     Measured at main 621a6e62 (round-54 HEAD, post N1+N2+N3),
+     resynced by the round-54 post-merge fold slice
+     (Rust variant + bridge-arm +1 each from N2 Famished
+     Worldsire; _SAFE_* unchanged — N1 shuffle fix + N2
+     loader-admit-declined). -->
+rust_effect_variants = 109
+bridge_arms = 111
 safe_triggers = 19
 safe_keywords = 12
 safe_effect_keys = 8
@@ -441,6 +441,40 @@ The re-walk found **0 false-flag entries** the other direction: every
 Rust variant — the remaining ~13 are genuinely Rust-blocked, not more
 hidden stale carry-overs. This is an accurate worklist, not a
 count-minimization.
+
+> **⚠️ SUPERSEDED — round-54 post-merge orchestrator fold (corrected
+> count: ~11, not ~13).** The "~13 / 0 false-flags" claim above was
+> itself slightly over-stated. The re-walk **deferred two entries**
+> (Famished Worldsire, Pulsar Squadron Ace) to "fold N2's live-verify
+> at rebase" — a cross-agent fold no agent performed (N2 was told not
+> to edit this file; N3 merged before N2). The orchestrator performed
+> the fold (code-verified):
+> - **Famished Worldsire → CLOSED** — N2 r54 shipped
+>   `Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped` + bridge
+>   arm (`cross_engine.py:7870`) + genuine real-EoE probe.
+> - **Pulsar Squadron Ace → STALE, reclassified out** — its Effect
+>   *is* shipped: `Effect::LookAtTopNRevealOrCounter`
+>   (`cards.rs:3302`, doc-comment names it) + `"spacecraft"` filter
+>   (= the alleged "sub-mode") + bridge arm (`cross_engine.py:3467`),
+>   round-28/29. **6th confirmed-stale entry.** It was NOT caught by
+>   the re-walk's "0 false-flags" pass NOR by Deliverable B's
+>   per-entry cron, because the plan-name
+>   `ChoiceTriggerSpacecraftRevealOrCounter` does not lexically
+>   alias-resolve to `LookAtTopNRevealOrCounter` — a **per-entry-cron
+>   resolver gap** (round-55 hardening: the resolver must not depend
+>   on lexical alias similarity; e.g. require a
+>   `verified_absent_at_commit` SHA the cron re-checks). Pulsar's
+>   only residual is verify-only (no genuine real-EoE Pulsar
+>   cross-engine probe yet), **not** a new Rust Effect.
+>
+> **Corrected honest residue: ~11 distinct genuinely-Rust-blocked
+> cards** (12 `genuinely_missing` rows, 8 `closed`). The
+> machine-readable `docs/residue_worklist.json` is the source of
+> truth and has been folded to match; the cron enforces it. The
+> scattered prose "~13" mentions elsewhere in this doc are superseded
+> by this note + the JSON (not individually re-edited, to avoid
+> multi-location transcription error — same rationale the doc uses
+> for its other staleness pointers).
 
 Per-location reconciliation done this round: the Mightform Harmonizer
 self-contradiction (round-19 §2.6 closure note vs the "no Rust arm"
