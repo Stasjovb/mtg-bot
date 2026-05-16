@@ -5333,3 +5333,236 @@ def test_carddef_safe_dies_gain_life_fires_on_sba_death_parity():
         f"post-drain field view (after DIES+GainLife(2)) diverges: "
         f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round-47 DIES+IsSelf+draw_cards carddef-triggers extension end-to-end
+# fire probe.
+#
+# Adds one new entry to :data:`_SAFE_TRIGGERS`:
+#   * ``("dies", "source_is_self", "draw_cards")``
+# Sister of the round-47 DIES+IsSelf+gain_life entry on the draw_cards
+# axis; widens the DIES arm of :func:`_python_ta_to_safe_dict`'s
+# ``IsSelf`` branch from ``{"surveil", "gain_life"}`` to
+# ``{"surveil", "gain_life", "draw_cards"}``, closing the
+# ENTERS/DIES/ATTACKS x {draw_cards, gain_life, surveil} matrix.
+#
+# **No real-EoE consumer admitted by this slice** (substrate-only,
+# confirmed by a fresh full-pool delta walk — the EoE death-triggers
+# cluster is CreateToken-heavy). The end-to-end fire probe below uses
+# a SYNTHETIC carrier — mirrors
+# ``_inject_dies_gain_life_carrier_on_p0_bf`` exactly with the leaf
+# effect swapped from ``GainLife(2)`` to ``DrawCards(1)``. The DIES
+# trigger fires on the SBA-induced bf->graveyard move on BOTH engines;
+# the DrawCards resolve moves one card library-top -> hand for the
+# carrier's controller (p0) in lockstep. Drawing is a pure mechanical
+# zone move with no PendingDecision interaction (identical to the
+# already-shipped DIES+gain_life resolve semantics).
+# ---------------------------------------------------------------------------
+
+
+def _inject_dies_draw_carrier_on_p0_bf(py_state, rust_state):
+    """Inject a synthetic DIES+IsSelf+DrawCards(1) carrier onto p0's bf
+    on BOTH engines.
+
+    Mirrors :func:`_inject_dies_gain_life_carrier_on_p0_bf` in shape
+    but uses the DrawCards leaf rather than the GainLife leaf. The
+    carrier is a vanilla 2/2 so a single-shot 2 damage drives lethal
+    SBA on the next pass.
+
+    Returns: ``(py_carrier_id, rust_carrier_id)``.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    carrier_printing = CardPrinting(
+        name="Synthetic Dies Draw Carrier",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.DIES,
+                predicate=IsSelf(),
+                effect=DrawCards(amount=1),
+            ),
+        ),
+    )
+    py_carrier = py_state.new_object(
+        carrier_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_carrier.summoning_sick = False
+    py_carrier.tapped = False
+    py_carrier.damage = 0
+    py_carrier.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_carrier)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_carrier_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Dies Draw Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "U": 1},
+            "effects": [],
+            "power": 2,
+            "toughness": 2,
+            "keywords": [],
+            "triggered_abilities": [
+                {
+                    "event": "dies",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "draw_cards",
+                        "count": 1,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return int(py_carrier.id), int(rust_carrier_id)
+
+
+def test_carddef_safe_dies_draw_cards_fires_on_sba_death_parity():
+    """End-to-end fire probe for the round-47 DIES+IsSelf+draw_cards
+    extension (sister of
+    ``test_carddef_safe_dies_gain_life_fires_on_sba_death_parity``).
+
+    Set up a vanilla 60-card mirror match, walk turn 1 phases to
+    PRECOMBAT_MAIN, side-channel inject a synthetic DIES+IsSelf+
+    DrawCards(1) carrier onto p0's bf, mark 2 damage on it (= lethal
+    for a 2/2), then run an SBA pass on both engines. The DIES trigger
+    should fire on BOTH engines as the carrier moves bf->gy, drain the
+    DrawCards(1) effect, and grow p0's hand by exactly 1 with p0's
+    library shrinking by 1, byte-equal across engines. No real-EoE
+    consumer carries the bare DIES+IsSelf+DrawCards shape today
+    (substrate-only slice; the EoE death-triggers cluster is
+    CreateToken-heavy), so the probe is synthetic-only — pre-positions
+    the substrate for any future printing carrying this very common
+    "When ~ dies, draw a card" shape.
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Walk to turn 1 PRECOMBAT_MAIN (3 phase advances).
+    _advance_n_phases(py_state, rust_state, 3)
+    assert py_state.step.name == "PRECOMBAT_MAIN"
+    assert py_state.active_player_idx == 0
+
+    # Pre-injection hand / library parity for p0.
+    py_hand_before = len(py_state.players[0].hand)
+    py_lib_before = len(py_state.players[0].library)
+    assert py_hand_before == rust_state.hand_sizes[0]
+    assert py_lib_before == rust_state.library_sizes[0]
+
+    # Inject the synthetic carrier on p0's bf.
+    py_carrier_id, rust_carrier_id = _inject_dies_draw_carrier_on_p0_bf(
+        py_state, rust_state,
+    )
+
+    # Pre-death parity (no triggers fired yet — DIES requires the
+    # bf->graveyard move; just sitting on bf doesn't dispatch).
+    assert rust_state.stack_size() == 0, (
+        "Rust: DIES trigger should NOT fire on bf entry"
+    )
+    assert len(py_state.stack) == 0, (
+        "Python: DIES trigger should NOT fire on bf entry"
+    )
+
+    # Mark lethal damage on the carrier on both engines (2 = lethal
+    # for a 2/2). Round-22 indestructible-SBA probe pattern.
+    py_carrier = next(
+        o for o in py_state.battlefield if int(o.id) == py_carrier_id
+    )
+    py_carrier.damage = 2
+    rust_state.deal_damage(rust_carrier_id, 2)
+    assert py_carrier.damage == 2
+    assert rust_state.get_damage(rust_carrier_id) == 2
+
+    # SBA pass on both engines. The carrier moves bf->graveyard
+    # (damage>=toughness; not indestructible) and the DIES trigger
+    # fires on BOTH engines, landing DrawCards(1) on the stack.
+    py_sba(py_state)
+    rust_state.apply_sbas()
+
+    assert rust_state.stack_size() == 1, (
+        "Rust: synthetic carrier's DIES trigger should be on the stack "
+        f"after the SBA-induced destroy; got {rust_state.stack_size()}"
+    )
+    assert len(py_state.stack) == 1, (
+        "Python: synthetic carrier's DIES trigger should be on the "
+        f"stack after the SBA-induced destroy; got {len(py_state.stack)}"
+    )
+
+    # Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        py_resolve(py_state)
+
+    # Post-drain: p0 hand grew by exactly 1 and library shrank by
+    # exactly 1 on BOTH engines (DIES+DrawCards(1)). The carrier left
+    # the battlefield (bf->gy) so it doesn't count toward hand.
+    assert len(py_state.players[0].hand) == py_hand_before + 1, (
+        f"Python p0 hand should be {py_hand_before + 1} after "
+        f"DIES+DrawCards(1); got {len(py_state.players[0].hand)}"
+    )
+    assert rust_state.hand_sizes[0] == py_hand_before + 1, (
+        f"Rust p0 hand should be {py_hand_before + 1} after "
+        f"DIES+DrawCards(1); got {rust_state.hand_sizes[0]}"
+    )
+    assert len(py_state.players[0].library) == py_lib_before - 1, (
+        f"Python p0 library should be {py_lib_before - 1}; got "
+        f"{len(py_state.players[0].library)}"
+    )
+    assert rust_state.library_sizes[0] == py_lib_before - 1, (
+        f"Rust p0 library should be {py_lib_before - 1}; got "
+        f"{rust_state.library_sizes[0]}"
+    )
+
+    # Cross-engine: same observable hand / library sizes.
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+
+    # The carrier landed in p0's graveyard on BOTH engines.
+    py_p0_gy_names = [
+        o.printing.name for o in py_state.players[0].graveyard
+    ]
+    assert "Synthetic Dies Draw Carrier" in py_p0_gy_names, (
+        f"expected synthetic carrier in Python p0 graveyard after "
+        f"SBA destroy; got {py_p0_gy_names}"
+    )
+    from mtg_bot.parity.cross_engine import parity_smoke
+    rust_view_post = parity_smoke()._build_field_view(rust_state)
+    rust_p0_gy_names = [t[0] for t in rust_view_post["graveyard_p0"]]
+    assert "Synthetic Dies Draw Carrier" in rust_p0_gy_names, (
+        f"expected synthetic carrier in Rust p0 graveyard after "
+        f"SBA destroy; got {rust_p0_gy_names}"
+    )
+
+    # Field-view compare on the post-drain state — both stacks empty.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"post-drain field view (after DIES+DrawCards(1)) diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )

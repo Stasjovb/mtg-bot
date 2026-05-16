@@ -1540,15 +1540,19 @@ def test_is_safe_trigger_dict_admits_starter_shapes():
 
 
 def test_is_safe_trigger_dict_rejects_unsafe_event():
-    """An ENTERS+IsSelf+DRAW shape with a different event (DIES) is
-    out of the starter set — rejected.
+    """A ``scry_n`` leaf under the DIES event is out of the safe set —
+    rejected. (DIES carries surveil/gain_life/draw_cards today; scry_n
+    is deliberately NOT in the DIES safe-effect-kinds tuple — no EoE
+    consumer carries DIES+IsSelf+Scry. Repointed from the earlier
+    DIES+draw_cards example, which the round-47 DIES+draw_cards slice
+    converted to admit.)
     """
     from mtg_bot.parity.trajectory import _is_safe_trigger_dict
 
     assert not _is_safe_trigger_dict({
         "event": "dies",
         "predicate": {"kind": "source_is_self"},
-        "effect": {"kind": "draw_cards", "count": 1},
+        "effect": {"kind": "scry_n", "count": 1},
     })
 
 
@@ -2941,23 +2945,25 @@ def test_python_ta_to_safe_dict_rejects_surveil_with_use_artifact_count():
 
 def test_python_ta_to_safe_dict_rejects_dies_event_with_non_surveil_or_gain_life_effect():
     """The DIES event gate is narrower than the ENTERS gate — only the
-    surveil leaf (round-42) and the gain_life leaf (round-47, this
-    slice) are in the safe set under DIES. ``draw_cards`` / ``scry_n``
-    / ``pump_self_until_eot`` remain outside today. A DIES+IsSelf+
-    DrawCards trigger must still be rejected because the corresponding
-    triple isn't in :data:`_SAFE_TRIGGERS`. Pins the per-event safe-
-    effect-kinds table so future DIES extensions remain single edits
-    at the safe-set source.
+    surveil leaf (round-42), the gain_life leaf (round-47), and the
+    draw_cards leaf (round-47 sister slice) are in the safe set under
+    DIES. ``scry_n`` / ``pump_self_until_eot`` remain outside today. A
+    DIES+IsSelf+Scry trigger must still be rejected because the
+    corresponding triple isn't in :data:`_SAFE_TRIGGERS`. Pins the
+    per-event safe-effect-kinds table so future DIES extensions remain
+    single edits at the safe-set source. (Repointed from the earlier
+    DIES+DrawCards example, which the round-47 DIES+draw_cards slice
+    converted to admit.)
     """
     from mtg_bot.effects.base import TriggeredAbility
     from mtg_bot.effects.predicates import IsSelf, Event
-    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.library_lookat import Scry
     from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
 
     ta = TriggeredAbility(
         event=Event.DIES,
         predicate=IsSelf(),
-        effect=DrawCards(amount=1),
+        effect=Scry(amount=1),
     )
     assert _python_ta_to_safe_dict(ta) is None
 
@@ -3644,17 +3650,18 @@ def test_python_ta_to_safe_dict_round_trips_dies_gain_life():
     assert _is_safe_trigger_dict(d)
 
 
-def test_is_safe_trigger_dict_rejects_dies_draw_cards_shape():
-    """``draw_cards`` is intentionally NOT in the DIES+source_is_self
-    safe set today (round-47 admits only ``gain_life`` under DIES, on
-    top of round-42's ``surveil``). Pin the negative case so a future
-    DIES+IsSelf+DrawCards consumer surfacing in the pool requires an
-    explicit allowlist edit. Mirrors the round-44 sister negative
-    pin for ATTACKS+scry_n.
+def test_is_safe_trigger_dict_admits_dies_draw_cards_shape():
+    """Converted from the round-47-gain_life slice's reject-path pin:
+    ``draw_cards`` IS now in the DIES+source_is_self safe set (this
+    slice — round-47 DIES+IsSelf+draw_cards, sister of the
+    DIES+gain_life entry on the draw_cards axis). The dict-side
+    recognizer admits the canonical DIES+source_is_self+draw_cards
+    dict shape with the bare ``count`` payload — the exact round-37
+    DDDD / round-44 reject->admit conversion pattern.
     """
     from mtg_bot.parity.trajectory import _is_safe_trigger_dict
 
-    assert not _is_safe_trigger_dict({
+    assert _is_safe_trigger_dict({
         "event": "dies",
         "predicate": {"kind": "source_is_self"},
         "effect": {"kind": "draw_cards", "count": 1},
@@ -3728,12 +3735,14 @@ def test_simple_creature_filter_admits_dies_gain_life_only_creature():
     assert _printing_is_bridge_simple_creature(printing) is True
 
 
-def test_simple_creature_filter_rejects_dies_draw_cards_only_creature():
-    """A bare-vanilla creature carrying only DIES+IsSelf+DrawCards is
-    STILL rejected post-round-47 (this slice admits ``gain_life`` under
-    DIES, not ``draw_cards``). Pins the per-event/per-effect product
-    gate: the recognizer rejects DIES+DrawCards even though both event
-    and effect are individually in the safe set under different shapes.
+def test_simple_creature_filter_admits_dies_draw_cards_only_creature():
+    """Converted from the round-47-gain_life slice's reject-path pin: a
+    bare-vanilla creature carrying only DIES+IsSelf+DrawCards now passes
+    the bridge-simple filter end-to-end (this slice — round-47
+    DIES+IsSelf+draw_cards). Sister of
+    ``test_simple_creature_filter_admits_dies_gain_life_only_creature``;
+    constructs the printing in-line so the test pins the filter
+    contract independent of any production-deck data churn.
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
     from mtg_bot.effects.base import TriggeredAbility
@@ -3760,4 +3769,85 @@ def test_simple_creature_filter_rejects_dies_draw_cards_only_creature():
             ),
         ),
     )
-    assert _printing_is_bridge_simple_creature(printing) is False
+    assert _printing_is_bridge_simple_creature(printing) is True
+
+
+def test_safe_triggers_set_carries_dies_draw_cards_shape():
+    """Pin the new DIES+source_is_self+draw_cards entry (this slice).
+    The THIRD DIES leaf in the safe set after round-42's surveil-DIES
+    and the round-47 gain_life-DIES — closing the DIES leaf set to
+    {surveil, gain_life, draw_cards}.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert ("dies", "source_is_self", "draw_cards") in _SAFE_TRIGGERS
+
+
+def test_python_ta_to_safe_dict_round_trips_dies_draw_cards():
+    """Python ``TriggeredAbility`` carrying DIES+IsSelf+DrawCards
+    converts back to the canonical dict shape; the result satisfies
+    :func:`_is_safe_trigger_dict`. Closes the round-47 DIES arm
+    extension that adds ``draw_cards`` to the per-event safe-effect-
+    kinds tuple alongside round-42's ``surveil`` + round-47's
+    ``gain_life``. Sister of
+    ``test_python_ta_to_safe_dict_round_trips_dies_gain_life``.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.DIES,
+        predicate=IsSelf(),
+        effect=DrawCards(amount=1),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "dies",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_preserves_dies_draw_cards_count():
+    """The DrawCards ``amount`` round-trips as the dict's ``count``
+    field (Rust's spelling) for a non-unit draw count — pins the
+    payload preservation, not just the shape. Mirrors the round-37
+    DDDD landfall-draw count-preservation pin.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.DIES,
+        predicate=IsSelf(),
+        effect=DrawCards(amount=3),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d is not None
+    assert d["effect"] == {"kind": "draw_cards", "count": 3}
+
+
+def test_python_ta_to_safe_dict_rejects_dies_draw_cards_with_extra_payload():
+    """The :data:`_SAFE_EFFECT_KEYS` whitelist for ``draw_cards`` is
+    ``{"kind", "count"}`` (round-1 starter, event-agnostic). Adding any
+    extra payload key must fall out of the safe set even now that
+    DIES+draw_cards is admitted — the bridge would silently drop the
+    extra field on round-trip. Pin the negative case at the dict-side
+    recognizer; sister of
+    ``test_python_ta_to_safe_dict_rejects_dies_gain_life_with_extra_payload``.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "dies",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1, "ghost_field": "x"},
+    })
