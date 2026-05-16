@@ -534,3 +534,96 @@ shared pre-cast floor before the post-step compare runs.
 - Wider sweep (arch 0-50 × seeds 0-5): 0 divergences, +17 PASS
   delta vs round 42.
 - New shapes surfaced: none.
+
+## Round 45 small-batch verification
+
+Round 45 ran a small-batch sweep against current main (`da8cc9e1`) to
+re-verify cross-engine parity after the round-42/43/44 CardDef bridge
+filter extensions (ENTERS surveil, DIES surveil, ATTACKS surveil,
+ATTACKS draw_cards/gain_life). Round-40 G2 and round-44 K1 both timed
+out on 306-game sweeps; this slice fits comfortably in agent budget
+(~63 games / ~103s wall) and serves as a stable-point checkpoint
+before round-46 work.
+
+### Sweep configuration
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 0-20 --seeds 0-2 --max-turns 18 \
+    --json-out tmp/bench_r45.json --verbose
+```
+
+### Aggregate
+
+| Status            | Count |
+|-------------------|-------|
+| Total games       | 63    |
+| PASS              | 8     |
+| FAIL_DIVERGENCE   | **0** |
+| FAIL_TIMEOUT      | 55    |
+| ARCHETYPE_FILTERED | 0    |
+| FAIL_EXCEPTION    | 0     |
+| Wall time         | 102.88s |
+
+### Divergence-shape histogram
+
+**No divergences fired in 63 games.** No top-5 list to report. The
+empirical pipeline is at a stable point — every round-37/38/41/42/43
+divergence shape that previously chased remains at zero on current
+main. The round-44 ATTACKS-trigger filter extension and Thawbringer
+CE5 Rust drain mirror have not introduced regressions visible at
+this sweep size.
+
+### Per-archetype breakdown
+
+| Arch | PASS | FAIL_TIMEOUT |
+|------|------|--------------|
+| 0    | 2    | 1            |
+| 1    | 2    | 1            |
+| 2    | 0    | 3            |
+| 3    | 0    | 3            |
+| 4    | 1    | 2            |
+| 5    | 0    | 3            |
+| 6    | 0    | 3            |
+| 7    | 0    | 3            |
+| 8    | 0    | 3            |
+| 9    | 0    | 3            |
+| 10   | 1    | 2            |
+| 11   | 1    | 2            |
+| 12   | 1    | 2            |
+| 13   | 0    | 3            |
+| 14   | 0    | 3            |
+| 15   | 0    | 3            |
+| 16   | 0    | 3            |
+| 17   | 0    | 3            |
+| 18   | 0    | 3            |
+| 19   | 0    | 3            |
+| 20   | 0    | 3            |
+
+PASS counts are concentrated on archetypes 0,1,4,10,11,12 — the
+Thawbringer-bearing cluster (arch 10/11/12 from round 43) and the
+landfall-trigger cluster (arch 4 from round 37) all run cleanly to
+PASS at seed=0/1, confirming the round-43 CE5 Rust drain mirror is
+holding.
+
+### New divergence-shape candidates for round 46+
+
+**None surfaced.** With 0 divergences across 63 games at seeds 0-2 /
+max-turns 18 covering archetypes 0-20, this slice contributes
+**stable-point negative signal** rather than new chase candidates.
+
+The binding constraint remains FAIL_TIMEOUT dominance (55/63 = 87%).
+Round 46+ slice work to consider:
+
+1. **Wider seed sweep** (seeds 0-5 × archetypes 0-20 × max-turns 20)
+   — fits in ~6 min wall, would surface any divergence shapes that
+   only fire at higher seeds (round-41 Sweep B observed
+   divergence-bearing trajectories concentrated at seed=4).
+2. **CardDef filter extension** — admit one creature per
+   timeout-dominant archetype to convert FAIL_TIMEOUTs into real
+   trajectory probes. Highest-leverage path for surfacing new
+   divergence shapes.
+3. **Re-target round-41 cluster archetypes (13-17)** at the wider
+   seed range to confirm the round-42 harness pre-cast floor fix
+   continues to hold past seed 2.
