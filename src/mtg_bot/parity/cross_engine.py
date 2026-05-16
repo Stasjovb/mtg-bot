@@ -8162,6 +8162,42 @@ def resolve_top_of_stack_python(py_state, *, floor: int = 0) -> int:
 _RUST_AUTO_RESOLVE_ACTION_KINDS: frozenset[str] = frozenset({"cast_spell"})
 
 
+def resolve_top_of_stack_rust(rust_state, *, floor: int = 0) -> int:
+    """Harness-side mirror of Python's priority-loop drain for Rust.
+
+    Sister of :func:`resolve_top_of_stack_python`. Drains Rust's stack
+    down to ``floor`` items via :meth:`GameState.resolve_top_of_stack`,
+    which fires the same effect-fan-out + auto-resolve-pending
+    sequence as Python's ``actions.resolve_top_of_stack``.
+
+    **Why this exists** — Rust's ``cast_creature`` is no-stack: it
+    moves the card directly hand → bf in one mutation. BUT the move
+    fires ``dispatch_event(Event::Enters, ...)`` from inside
+    ``move_from_hand_to_battlefield``, which can push a
+    ``StackItem::TriggeredAbility`` onto Rust's stack for every ETB
+    trigger the printing declares (e.g. Thawbringer's
+    "when this creature enters, surveil 1"). Rust's no-stack
+    ``cast_creature`` does NOT run a priority loop, so those ETB
+    triggers stay on the stack indefinitely.
+
+    Python's :func:`resolve_top_of_stack_python` mirror drains Python
+    all the way down to the pre-cast floor (the resolving spell pops
+    first, then the ETB trigger it pushes also pops, leaving the
+    stack at floor). Without a matching drain on Rust, Python's
+    drained-to-floor stack diverges from Rust's stack-with-ETB-
+    trigger observable on every cast of a card with an ETB trigger
+    that pushes onto the stack.
+
+    Returns the count of stack items drained (0 if Rust's stack was
+    already at or below ``floor``).
+    """
+    drained = 0
+    while rust_state.stack_size() > floor:
+        rust_state.resolve_top_of_stack()
+        drained += 1
+    return drained
+
+
 def step_both(py_state, rust_state, action_dict: dict) -> CrossEngineStep:
     """Apply ``action_dict`` to both engines and compare post-step views.
 
@@ -8172,11 +8208,21 @@ def step_both(py_state, rust_state, action_dict: dict) -> CrossEngineStep:
 
     **CE5 closure — cast-vs-resolve mirror.** When ``action_dict``'s
     kind is in :data:`_RUST_AUTO_RESOLVE_ACTION_KINDS` (today:
-    ``cast_spell``), the harness drains Python's stack via
-    :func:`resolve_top_of_stack_python` AFTER both engines apply the
+    ``cast_spell``), the harness drains BOTH engines' stacks via
+    :func:`resolve_top_of_stack_python` and
+    :func:`resolve_top_of_stack_rust` AFTER both engines apply the
     action and BEFORE the field-view compare runs. This parity-aligns
     the cross-engine view on Rust's no-stack ``cast_creature``
     semantics without modifying production Rust to grow a real stack.
+
+    **Why drain Rust too** — Rust's ``cast_creature`` is no-stack for
+    the cast itself but the ETB dispatch inside
+    ``move_from_hand_to_battlefield`` can push triggered abilities
+    (e.g. Thawbringer's "enters, surveil 1") onto Rust's stack that
+    no Rust primitive auto-resolves. Python's drain follows the
+    spell + its ETB trigger all the way down; for parity Rust must
+    drain the same scope. See :func:`resolve_top_of_stack_rust` for
+    the full rationale.
     """
     from mtg_bot.actions import apply_action as py_apply_action
 
@@ -8202,21 +8248,27 @@ def step_both(py_state, rust_state, action_dict: dict) -> CrossEngineStep:
     actor = py_state.priority_player_idx
     if action_dict.get("kind") == "declare_blockers":
         actor = 1 - py_state.active_player_idx
-    # Snapshot pre-apply stack depth BEFORE Python pushes the new
-    # StackItem so the CE5 closure's drain knows where to stop —
-    # pre-existing triggered-ability entries (e.g. accumulated
+    # Snapshot pre-apply stack depths on BOTH engines BEFORE the new
+    # StackItem is pushed so the CE5 closure's drain knows where to
+    # stop — pre-existing triggered-ability entries (e.g. accumulated
     # landfall triggers from earlier turns) must NOT be drained,
     # because Rust's no-stack ``cast_creature`` leaves them in
     # place. See :func:`resolve_top_of_stack_python` for full
     # rationale.
     py_stack_floor = len(getattr(py_state, "stack", ()))
+    rust_stack_floor = rust_state.stack_size()
     py_apply_action(py_state, actor, py_action)
     rust_state.apply_action(action_dict)
 
-    # CE5 closure: drain Python's stack for actions whose Rust analog
-    # auto-resolves. See :func:`resolve_top_of_stack_python` docstring.
+    # CE5 closure: drain BOTH engines' stacks for actions whose Rust
+    # analog auto-resolves the spell itself but may leave ETB-triggered
+    # abilities sitting on the stack (Rust's no-stack ``cast_creature``
+    # pushes ENTERS triggers from inside ``move_from_hand_to_battlefield``
+    # without running a priority loop). See :func:`resolve_top_of_stack_rust`
+    # docstring for the full rationale.
     if action_dict.get("kind") in _RUST_AUTO_RESOLVE_ACTION_KINDS:
         resolve_top_of_stack_python(py_state, floor=py_stack_floor)
+        resolve_top_of_stack_rust(rust_state, floor=rust_stack_floor)
 
     ps = parity_smoke()
     py_view = build_python_field_view(py_state)
