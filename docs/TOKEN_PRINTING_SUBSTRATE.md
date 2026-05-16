@@ -444,3 +444,116 @@ lowest leverage.
   `token_activated_abilities` CardDef-field + bridge plumbing (without
   yet admitting any Lander card) is an independently-shippable
   substrate-only landing.
+
+## 7. Phase-3 PRECURSOR landing record (round-52 N1)
+
+The independently-shippable substrate-only first step toward the
+Lander cluster (the round-50/51-flagged precursor). **No Lander
+carrier admitted — EoE-pool delta = 0 this round** (round-37/43/44/
+47/49 substrate-only-landing precedent).
+
+### What landed
+
+- **CardDef substrate.** `CardDef.token_activated_abilities:
+  tuple[dict, ...] = ()`. Each entry matches BOTH Rust's
+  `parse_activated_ability` schema (consumed via `register_printing`'s
+  `activated_abilities` key — the CE20 substrate, **already on main;
+  NO Rust change this round**) AND the Python `ActivatedAbility`
+  shape. Folded into `_token_printing_cache_key` (round-51 N1 shape
+  signature) so an ability-bearing token never collides with a
+  vanilla one.
+- **Bridge plumbing (`cross_engine.py`).**
+  `_aa_dict_to_python_activation_cost` + `_aa_dict_to_python_activated_
+  ability`: strict cost+effect dict → Python `ActivatedAbility`. The
+  `effect` recurses through the existing `_ta_dict_to_python_effect`
+  bridge (no new PHASE5 bridge arm needed — the Lander's
+  `search_library_for_basic_land_tapped` effect arm is round-21,
+  already on main). `_card_def_to_python_printing` appends the bridged
+  abilities AFTER the orthogonal land mana-ability auto-wire;
+  `build_rust_state` emits the `activated_abilities` registry key.
+  (These helpers are CardDef-printing-materialization plumbing, NOT a
+  `_ta_dict_to_python_effect` `kind`-arm, so they do not sit at the
+  PHASE5_BRIDGE_ARMS sentinel; the sentinels were untouched this
+  slice — nothing to insert there.)
+
+### The Lander shape round-trips BRIDGE-CORRECT — no §2 gap
+
+The Lander's `{2}, Sac: SearchLibraryForBasicLandTapped`:
+
+- **Cost** `{"mana": {"generic": 2}, "sacrifice_self": True}` — Rust's
+  `parse_activation_cost` accepts `mana`+`sacrifice_self`; Python's
+  `ActivationCost` carries identically-named fields with byte-equal
+  activation semantics. The bridge is **§2-strict**: it raises on ANY
+  cost key outside the `mana` + bridge-correct bool-key *intersection*
+  (the exact subset both engines pay identically), exactly mirroring
+  Rust's `unknown activation_cost key` error — a cost component one
+  engine honors but the other can't surface can NEVER land silently.
+- **Effect** `search_library_for_basic_land_tapped` — the round-21
+  bridge arm. **Crucially: `SearchLibraryForBasicLandTapped.resolve`
+  is FULLY DETERMINISTIC on BOTH engines** — it picks the first
+  `count` basic lands in library order, **no PendingDecision, no
+  agent**. The brief's "verify its library-search agent seating on
+  the trajectory walk" resolved to: *there is no library-search agent
+  seating to verify* — the effect has no agent path on either engine
+  (Stage-3 first-N-no-shuffle simplification, see
+  `effects/generic/search.py:SearchLibraryForBasicLandTapped` +
+  `state_ops_resolve.rs` arm). This is the cleanest possible §2
+  situation: nothing in the activation can mistranslate.
+
+Verified end-to-end: a CardDef carrying this shape materializes a
+Python `ActivatedAbility` **byte-identical** to the real authored
+`TOKEN_PRINTINGS["Lander"]`, the Rust registry accepts the same dict,
+and a `build_matched_states` + inject round-trips it into a byte-equal
+cross-engine permanent (`compare_fields == []`).
+
+### Tests (+9, gate 1230 → 1239)
+
+- 5 cross-engine bridge pins (`test_cross_engine_etb_triggers.py`):
+  Python byte-identical to real Lander; Rust registry accepts;
+  §2-strict cost-key guard; cost+effect required; cache-key
+  Lander≠vanilla-Robot.
+- 1 synthetic cross-engine probe (`test_parity_smoke.py`):
+  `build_matched_states` + inject Lander-with-activated-ability on
+  both engines → byte-equal field view. Substrate-only — no carrier
+  admitted; activation-resolution end-to-end (pay {2}, sac, agentless
+  search, token-ceases-to-exist SBA) deferred to the later Phase-3
+  carrier slice per the rider-cascade synthetic-only precedent.
+- 3 substrate/helper pins (`test_trajectory.py`): back-compat default
+  `()`; the REAL Lander token STILL declined by
+  `_token_vanilla_card_def` (substrate-only contract); synthetic
+  Lander CardDef round-trips both engines from one dict.
+
+### Remaining Phase-3 steps (recommended round-53+ ordering)
+
+The precursor makes the Lander shape **representable + bridge-correct**.
+The remaining Phase-3 slices, each independently shippable:
+
+1. **Phase 3a — Lander-token recognizer + loader admission**
+   (the real-card payoff). Widen `_token_vanilla_card_def` (or add a
+   sibling `_token_with_safe_activated_ability_card_def`) to ADMIT a
+   token whose ONLY activated ability is the exact bridge-correct
+   `{2},Sac:SearchLibraryForBasicLandTapped` shape, emitting
+   `token_activated_abilities` on the synthesized token CardDef;
+   `_seat_token_printings` already threads arbitrary token CardDefs
+   (no change expected — verify the symbolic-carrier seating carries
+   the new field through `dataclasses.replace`). Flip the Phase-1
+   §2.3 Lander decline → admit for the **fixed-single-token** carriers
+   whose token is the bare Lander: Galactic Wayfarer (33,469 decks),
+   Beamsaw Prospector (24,310), Biomechan Engineer, Glacier Godmaw,
+   Bioengineered Future. **~88k+ cumulative decks** — the single
+   largest remaining EoE-pool-delta lever. Pair with a GENUINE
+   real-EoE byte-equal probe that drives the activation end-to-end
+   (pay {2} from a seeded pool, sac the Lander, agentless basic-land
+   search, token-ceases-to-exist SBA) — the activation path this
+   precursor's synthetic probe deliberately deferred.
+2. **Phase 3b — `count`>1 / multi-Lander carriers** if any
+   fixed-single-token carrier makes >1 Lander (the `count` field
+   already round-trips; recognizer-widening only).
+3. **Edge Rover (15,271)** remains double-blocked: its Lander rides
+   the `each_player=True` arm → still needs **Phase 5** (each-player
+   recognizer + auto-registration) ON TOP of Phase 3a. Sequence Phase
+   3a first (unblocks the larger non-each-player cluster), then Phase 5.
+
+Phase 2 (bridge-simple non-creature permanent filter) stays lower
+leverage and independent — most non-creature carriers also make
+Lander, so their real delta is gated on Phase 3a, not Phase 2.
