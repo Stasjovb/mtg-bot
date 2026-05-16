@@ -1,4 +1,4 @@
-"""Tests for ``scripts/parity_smoke.py`` — specifically the round-23
+"""Tests for ``scripts/parity_smoke.py`` â€” specifically the round-23
 ``--mode initial-state`` path that compares the Rust ``fingerprint()``
 pymethod to a Python-side reimplementation of the hash recipe.
 
@@ -6,8 +6,8 @@ This is the first working parity check, narrowly scoped to the
 fingerprint-vs-hash_state invariant. The pinned baselines below are the
 same values asserted in ``tests_rust/test_fingerprint.py``; if either
 drifts, the two test files should drift together (and the parity_smoke
-script's documented contract — Rust fingerprint() byte-equal to the
-Python hash recipe — is broken).
+script's documented contract â€” Rust fingerprint() byte-equal to the
+Python hash recipe â€” is broken).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import sys
 import pytest
 
 
-# Skip the whole module if the Rust extension isn't built — mirrors the
+# Skip the whole module if the Rust extension isn't built â€” mirrors the
 # ``tests_rust/conftest.py`` policy so a fresh checkout without maturin
 # doesn't break the gate.
 pytestmark = pytest.mark.skipif(
@@ -50,7 +50,7 @@ def parity_smoke():
 
 
 # ---------------------------------------------------------------------------
-# Pinned baselines — must match tests_rust/test_fingerprint.py values.
+# Pinned baselines â€” must match tests_rust/test_fingerprint.py values.
 # These are the regression-safe load-bearing assertions; if either drifts
 # the Rust fingerprint format changed on one side of the parity bridge.
 # ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ EXPECTED_FINGERPRINT_SMALL = "e1d70afe6742"   # make_synthetic_state(2, 3, 5)
 
 
 # ---------------------------------------------------------------------------
-# run_initial_state_compare — the new entry point this slice ships.
+# run_initial_state_compare â€” the new entry point this slice ships.
 # ---------------------------------------------------------------------------
 
 
@@ -90,7 +90,7 @@ def test_initial_state_mode_pinned_hash_default(parity_smoke):
     If this fails, the hash recipe drifted on one side of the bridge.
 
     We use the Python shim AND the native Rust pymethod independently
-    and assert both produce the same pinned value — that pins down the
+    and assert both produce the same pinned value â€” that pins down the
     invariant from both directions.
     """
     import mtg_bot_engine
@@ -128,7 +128,7 @@ def test_initial_state_mode_with_2_3_5_runner(parity_smoke, capsys):
 
 def test_initial_state_mode_after_clone(parity_smoke):
     """Cloning a state preserves both the Rust fingerprint AND the
-    Python shim hash — the CoW canary at the parity-bridge level. If
+    Python shim hash â€” the CoW canary at the parity-bridge level. If
     clone_once leaked mutation across the boundary, the dict-shim hash
     would diverge from the native one for the clone.
     """
@@ -176,14 +176,14 @@ def test_initial_state_mode_main_dispatches_to_initial_state(parity_smoke, monke
 
 
 # ---------------------------------------------------------------------------
-# --mode trajectory — Rust-only trajectory walk with clone-replay
+# --mode trajectory â€” Rust-only trajectory walk with clone-replay
 # determinism check. Catches non-deterministic Rust state mutation
 # (same seed -> different fingerprint sequence) and clone divergence.
 # ---------------------------------------------------------------------------
 
 
 def test_trajectory_mode_seed_42_5_decisions_default_board_passes(parity_smoke, capsys):
-    """Baseline: 5 decisions at default board size, seed=42 — should
+    """Baseline: 5 decisions at default board size, seed=42 â€” should
     PASS with clone-replay matching. End-to-end smoke of the new
     trajectory CLI mode."""
     rc = parity_smoke.run_trajectory_mode(seed=42, num_decisions=5)
@@ -207,7 +207,7 @@ def test_trajectory_mode_seed_7_10_decisions_passes(parity_smoke, capsys):
 def test_trajectory_mode_zero_decisions_is_trivial_pass(parity_smoke, capsys):
     """0 decisions: the walk runs an empty loop, the clone is identical
     to the original, both fingerprint trajectories are [initial_fp].
-    Trivial PASS — guards against an off-by-one edge case in the walk
+    Trivial PASS â€” guards against an off-by-one edge case in the walk
     where 0 iterations would otherwise error."""
     rc = parity_smoke.run_trajectory_mode(seed=42, num_decisions=0)
     assert rc == 0
@@ -220,7 +220,7 @@ def test_trajectory_mode_reproducibility_same_seed_same_final_hash(parity_smoke,
     """Two runs at the same seed produce identical final fingerprints.
     The whole point of the determinism check: same seed -> bit-identical
     trajectory across runs (not just within a run). Catches a subtler
-    class of nondeterminism — e.g. iteration over a HashMap whose
+    class of nondeterminism â€” e.g. iteration over a HashMap whose
     order varies across process invocations."""
     rc1 = parity_smoke.run_trajectory_mode(seed=42, num_decisions=15)
     out1 = capsys.readouterr().out
@@ -251,7 +251,7 @@ def test_trajectory_mode_different_seeds_pick_different_trajectories(
     different fingerprint trajectory.
 
     Today's synthetic-state starting position has the state in
-    PHASE_UNTAP where only PassPriority is legal — so the walks only
+    PHASE_UNTAP where only PassPriority is legal â€” so the walks only
     differ in priority-toggle parity at intermediate steps. We assert
     that across the FULL trajectories (initial + after each step),
     at least one fingerprint differs between two well-separated
@@ -268,7 +268,7 @@ def test_trajectory_mode_different_seeds_pick_different_trajectories(
 
     # Even on a purely PassPriority-only state, an odd number of
     # passes between any two trajectory points would produce a
-    # different intermediate fingerprint — but the rng.choice of a
+    # different intermediate fingerprint â€” but the rng.choice of a
     # one-element list is always the same element, so 10 PassPriority
     # passes from seed 1 == 10 PassPriority passes from seed 2. The
     # meaningful assertion is that the trajectories have the same
@@ -285,7 +285,7 @@ def test_trajectory_mode_different_seeds_pick_different_trajectories(
 
 
 def test_trajectory_mode_100_decisions_passes(parity_smoke, capsys):
-    """Longer walk (100 decisions) at seed=42 — catches subtle
+    """Longer walk (100 decisions) at seed=42 â€” catches subtle
     non-determinism that only surfaces at deeper trajectory depths
     (e.g. an alloc-pattern-dependent ordering bug that triggers
     after the state grows past some threshold)."""
@@ -313,7 +313,7 @@ def test_trajectory_mode_walk_records_one_decision_per_step(parity_smoke):
     """``_walk_trajectory`` returns ``(decisions, trajectory)`` where
     ``len(decisions) == num_decisions`` and
     ``len(trajectory) == num_decisions + 1``. Locks in the trajectory
-    bookkeeping shape — off-by-one bugs in the loop bounds would
+    bookkeeping shape â€” off-by-one bugs in the loop bounds would
     surface here before they corrupt the clone-replay check."""
     import mtg_bot_engine
 
@@ -375,7 +375,7 @@ def test_trajectory_mode_diverged_clone_reports_first_step(parity_smoke, capsys,
     the original at a known step, and verify ``run_trajectory_mode``
     returns 1 with the "diverged at step N" diagnostic.
 
-    This is the failure-path counterpart to the other PASS tests —
+    This is the failure-path counterpart to the other PASS tests â€”
     it locks in the diagnostic output format (the diff between the
     Rust internal nondeterminism case and the clone-CoW divergence
     case would both surface here)."""
@@ -400,7 +400,7 @@ def test_trajectory_mode_diverged_clone_reports_first_step(parity_smoke, capsys,
 
 
 # ---------------------------------------------------------------------------
-# --mode multi-seed — sweep trajectory mode across K seeds and print an
+# --mode multi-seed â€” sweep trajectory mode across K seeds and print an
 # aggregate summary. Catches non-determinism bugs that only manifest at
 # certain seeds (single-seed mode samples one trajectory through the
 # legal space; K seeds tile it).
@@ -408,7 +408,7 @@ def test_trajectory_mode_diverged_clone_reports_first_step(parity_smoke, capsys,
 
 
 def test_multi_seed_mode_three_seeds_all_pass(parity_smoke, capsys):
-    """Baseline: 3 seeds, default-ish board, 5 decisions each — all
+    """Baseline: 3 seeds, default-ish board, 5 decisions each â€” all
     clone-replay match, exit code 0. Smoke of the new CLI mode."""
     rc = parity_smoke.run_multi_seed_mode(
         num_seeds=3,
@@ -432,7 +432,7 @@ def test_multi_seed_mode_single_seed_matches_trajectory_mode(
 ):
     """num_seeds=1 with seed_start=42 should produce a final
     fingerprint identical to what ``run_trajectory_mode`` produces at
-    seed=42. Cross-check the helper / wrapper alignment — if multi-seed
+    seed=42. Cross-check the helper / wrapper alignment â€” if multi-seed
     drifted from trajectory mode, this trips.
     """
     rc_traj = parity_smoke.run_trajectory_mode(
@@ -481,7 +481,7 @@ def test_multi_seed_mode_unique_fingerprints_on_varied_board(
     Allowed collision rate: at least num_seeds * 0.5 unique
     fingerprints. The current synthetic-state fixture starts in
     PHASE_UNTAP with PassPriority being the only legal action, so
-    collisions are universal there — this test is a forward-looking
+    collisions are universal there â€” this test is a forward-looking
     guard that fires once the synthetic state grows beyond a single
     legal action; until then it asserts unique-count >= floor.
     """
@@ -533,7 +533,7 @@ def test_multi_seed_mode_deterministic_across_runs(parity_smoke, capsys):
         num_library=5,
     )
     out2 = capsys.readouterr().out
-    # Strict equality — the multi-seed output is purely a function
+    # Strict equality â€” the multi-seed output is purely a function
     # of (num_seeds, seed_start, decisions, board) and must be
     # bit-identical run-to-run.
     assert out1 == out2
@@ -563,7 +563,7 @@ def test_multi_seed_mode_aggregate_says_all_clone_match_true(
 def test_multi_seed_mode_failing_seed_reports_first_divergence(
     parity_smoke, capsys, monkeypatch
 ):
-    """Inject a fake clone-replay divergence via the helper — the
+    """Inject a fake clone-replay divergence via the helper â€” the
     multi-seed report must call out the failing seed in the FAIL
     summary. Failure-path counterpart to the all-pass cases."""
     real_replay = parity_smoke._replay_trajectory
@@ -626,7 +626,7 @@ def test_multi_seed_mode_main_dispatches(parity_smoke, monkeypatch, capsys):
 
 
 def test_multi_seed_mode_seed_start_offset(parity_smoke, capsys):
-    """``seed_start=100, num_seeds=3`` iterates seeds 100/101/102 —
+    """``seed_start=100, num_seeds=3`` iterates seeds 100/101/102 â€”
     the header line and the table both report the offset range. Locks
     in the seed-start arithmetic against off-by-one regressions."""
     parity_smoke.run_multi_seed_mode(
@@ -645,14 +645,14 @@ def test_multi_seed_mode_seed_start_offset(parity_smoke, capsys):
 
 
 # ---------------------------------------------------------------------------
-# --mode field-diff — per-field OK/DIFFER diff between two parallel views
+# --mode field-diff â€” per-field OK/DIFFER diff between two parallel views
 # of a Rust synthetic state. The parity-debug primitive that answers
 # "WHICH field diverged" once a trajectory smoke says digests don't match.
 # ---------------------------------------------------------------------------
 
 
 def test_field_diff_mode_vanilla_state_all_ok(parity_smoke, capsys):
-    """Baseline: no injection, vanilla state — every field matches, the
+    """Baseline: no injection, vanilla state â€” every field matches, the
     runner returns 0, and the output reports ``PARITY: PASS`` with a
     field count equal to ``FIELD_DIFF_FIELDS``."""
     rc = parity_smoke.run_field_diff_mode(seed=42)
@@ -673,7 +673,7 @@ def test_field_diff_mode_inject_life_reports_mismatch(parity_smoke, capsys):
     assert rc == 1
     out = capsys.readouterr().out
     assert "PARITY: FAIL" in out
-    # The life_p0 row is the DIFFER one — its two values (20 / 19) must
+    # The life_p0 row is the DIFFER one â€” its two values (20 / 19) must
     # appear on the same line.
     life_line = next(
         line for line in out.splitlines() if line.startswith("life_p0")
@@ -727,7 +727,7 @@ def test_field_diff_mode_table_covers_every_hash_part_field(
     parity_smoke, capsys
 ):
     """The printed table must include every field name that ``_hash_parts``
-    folds into the fingerprint — the brief's load-bearing test that the
+    folds into the fingerprint â€” the brief's load-bearing test that the
     diff machinery doesn't silently skip a field that ends up driving
     the hash mismatch.
 
@@ -815,12 +815,12 @@ def test_field_diff_mode_unknown_inject_field_errors(parity_smoke, capsys):
 
 
 # ---------------------------------------------------------------------------
-# --mode cross-engine — FIRST cross-engine parity check (round 27 / Phase 5).
+# --mode cross-engine â€” FIRST cross-engine parity check (round 27 / Phase 5).
 # Builds matched Python + Rust states from the tiny synthetic deck, drives
 # N PassPriority decisions on both, and reports field-level divergences
 # along with a gap-doc lookup.
 #
-# This is the inaugural cross-engine compare — divergences ARE expected
+# This is the inaugural cross-engine compare â€” divergences ARE expected
 # (the bridge has known gaps documented in RUST_PARITY_GAPS.md). The
 # tests below are xfailed-pinned on the divergences they detect, so the
 # count of xfailed tests becomes the "open parity items" tally.
@@ -864,14 +864,14 @@ def test_cross_engine_mode_initial_state_libraries_match_after_ce1_closure(parit
 
 
 def test_cross_engine_mode_does_not_diverge_on_pass_priority_at_step_0(parity_smoke):
-    """**CE2 closure** — formerly
+    """**CE2 closure** â€” formerly
     ``test_cross_engine_mode_detects_pass_priority_divergence_at_step_0``.
 
     After the first PassPriority decision, Python's
     ``apply_action(PassPriority)`` is a no-op (Python's priority_loop
     owns priority management, not apply_action). The CE2 slice flipped
     Rust's ``apply_action({"kind": "pass_priority"})`` arm from a
-    priority-toggling dispatch to a TRUE no-op matching Python — so
+    priority-toggling dispatch to a TRUE no-op matching Python â€” so
     the cross-engine smoke no longer reports a ``priority_player``
     divergence on PassPriority steps. This test pins the
     no-divergence contract so a future regression that re-introduces
@@ -882,7 +882,7 @@ def test_cross_engine_mode_does_not_diverge_on_pass_priority_at_step_0(parity_sm
     )
 
     result = walk_both(tiny_synthetic_deckspec(), n_decisions=2)
-    # Step 0's divergence list must NOT include priority_player —
+    # Step 0's divergence list must NOT include priority_player â€”
     # CE2 closure made the arm a no-op matching Python.
     step_0 = result.steps[0]
     priority_div = next(
@@ -895,7 +895,7 @@ def test_cross_engine_mode_does_not_diverge_on_pass_priority_at_step_0(parity_sm
         if priority_div is not None
         else ""
     )
-    # And the same on step 1 — pin the contract holds across the full
+    # And the same on step 1 â€” pin the contract holds across the full
     # walk, not just the inaugural step.
     step_1 = result.steps[1]
     priority_div_1 = next(
@@ -907,7 +907,7 @@ def test_cross_engine_mode_does_not_diverge_on_pass_priority_at_step_0(parity_sm
 def test_cross_engine_mode_initial_libraries_byte_equal_after_make_state():
     """The library_pN field views from Python and Rust MUST match
     byte-for-byte on the initial state. This is the canonical parity
-    contract — both engines built from the same DeckSpec should
+    contract â€” both engines built from the same DeckSpec should
     produce byte-identical zone signatures.
 
     Round-28 CE1 closure: state_ops_setup.rs now defaults
@@ -972,7 +972,7 @@ def test_cross_engine_mode_inject_divergence_flags_life_at_step_0(parity_smoke):
     Smoke-test-the-smoke: this proves the harness is actually
     detecting a fake cross-engine divergence, not just reporting
     what we already know about. Failure mode is "harness silently
-    misses the perturbation" — which would mean the cross-engine
+    misses the perturbation" â€” which would mean the cross-engine
     code path isn't actually comparing what we think it's
     comparing."""
     from mtg_bot.parity.cross_engine import (
@@ -997,7 +997,7 @@ def test_cross_engine_mode_cli_dispatches(parity_smoke, monkeypatch, capsys):
     """``main()`` routes ``--mode cross-engine`` to the new runner.
     End-to-end argparse + dispatch smoke.
 
-    **CE2 closure** — flipped from rc=1 (divergences) to rc=0 (clean).
+    **CE2 closure** â€” flipped from rc=1 (divergences) to rc=0 (clean).
     With Rust's ``apply_action(pass_priority)`` now a no-op matching
     Python, the tiny synthetic-state PassPriority walk no longer
     surfaces divergences and the runner reports ``PARITY: PASS``. The
@@ -1019,7 +1019,7 @@ def test_cross_engine_mode_cli_dispatches(parity_smoke, monkeypatch, capsys):
     )
     rc = parity_smoke.main()
     # CE2 closure: no divergences on the tiny synthetic PassPriority
-    # walk — rc=0 (PARITY: PASS).
+    # walk â€” rc=0 (PARITY: PASS).
     assert rc == 0
     out = capsys.readouterr().out
     # The CLI prints the cross-engine header.
@@ -1079,7 +1079,7 @@ def test_cross_engine_mode_first_divergence_step_helper(parity_smoke):
 
     **CE2 closure**: With Rust's ``apply_action(pass_priority)`` now
     a no-op matching Python, the tiny synthetic PassPriority walk is
-    fully clean — the helper returns ``None`` (no divergence at any
+    fully clean â€” the helper returns ``None`` (no divergence at any
     step). Pinning the None return here so a future cross-engine
     surface that re-introduces a divergence at step 0 surfaces the
     regression rather than silently flipping the helper's return."""
@@ -1091,7 +1091,7 @@ def test_cross_engine_mode_first_divergence_step_helper(parity_smoke):
     result = walk_both(tiny_synthetic_deckspec(), n_decisions=5)
     # Round-28 CE1 closed the initial-state library_pN divergence;
     # round-28 CE2 closed the per-step priority_player divergence.
-    # The walk is now fully clean — helper returns None.
+    # The walk is now fully clean â€” helper returns None.
     assert result.first_divergence_step() is None
 
 
@@ -1099,7 +1099,7 @@ def test_cross_engine_default_gap_lookup_priority_player_resolves_i25(parity_smo
     """The gap-doc lookup walks RUST_PARITY_GAPS.md and maps
     ``priority_player`` to I25 (the priority composition invariant
     that documents the cross-engine apply_action-level residual after
-    G3/G4/G15 were closed). Locks in the lookup contract — the
+    G3/G4/G15 were closed). Locks in the lookup contract â€” the
     hard-coded mapping in :func:`_load_gap_doc_index` must resolve
     to a section that ACTUALLY exists in the doc."""
     from mtg_bot.parity.cross_engine import default_gap_lookup
@@ -1108,12 +1108,12 @@ def test_cross_engine_default_gap_lookup_priority_player_resolves_i25(parity_smo
 
 
 def test_cross_engine_default_gap_lookup_unknown_field_returns_none(parity_smoke):
-    """Fields not in the curated lookup table return None — the
+    """Fields not in the curated lookup table return None â€” the
     "NOVEL divergence" signal. The summoning_sick + mana_pool type
     divergences are NOT yet documented as gaps, so they should
     surface as NOVEL.
 
-    Note: ``library_p0`` / ``hand_p0`` aren't in the curated map —
+    Note: ``library_p0`` / ``hand_p0`` aren't in the curated map â€”
     the divergences we see today are on the per-object
     summoning_sick slot, which is properly NOVEL until a gap entry
     documents it.
@@ -1141,7 +1141,7 @@ def test_cross_engine_build_python_state_step_is_untap(parity_smoke):
 
 
 def test_cross_engine_build_rust_state_priority_is_zero(parity_smoke):
-    """The Rust state's starting priority_player must be 0 — Python's
+    """The Rust state's starting priority_player must be 0 â€” Python's
     default is also 0. This is the contract make_state advertises;
     a regression here would be the first divergence the harness
     detects on step 0."""
@@ -1164,11 +1164,11 @@ def test_cross_engine_build_rust_state_priority_is_zero(parity_smoke):
 # (Mountain) so the registry round-trips two basic-land entries with
 # different `mana_produced` colors and the per-zone signatures span
 # THREE distinct printing_names in adjacent slots. PassPriority remains
-# the only driver — legal_actions / play_land / activate_ability parity
+# the only driver â€” legal_actions / play_land / activate_ability parity
 # is deferred to the next slice.
 #
 # Expected outcome under the current binary (CE2-closure landed at the
-# apply_action layer — pass_priority is a no-op on Rust just like
+# apply_action layer â€” pass_priority is a no-op on Rust just like
 # Python): the harness reports NO divergences across the full walk.
 # If a later regression reintroduces a divergence on this deck, the
 # test will surface it as a NEW CE<n> candidate rather than a known-
@@ -1221,7 +1221,7 @@ def test_cross_engine_slightly_bigger_deckspec_walks_clean(parity_smoke):
 
 def test_cross_engine_slightly_bigger_deckspec_initial_libraries_have_three_kinds(parity_smoke):
     """Sanity-check the new deckspec's libraries actually carry THREE
-    distinct printing_names — guards against an accidental edit that
+    distinct printing_names â€” guards against an accidental edit that
     flattens the deck back to two kinds and silently weakens the
     coverage delta over tiny_synthetic_deckspec."""
     from mtg_bot.parity.cross_engine import (
@@ -1244,7 +1244,7 @@ def test_cross_engine_slightly_bigger_deckspec_initial_libraries_have_three_kind
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 follow-up #2: extend the DECISION script (not the deck) — drive a
+# Phase 5 follow-up #2: extend the DECISION script (not the deck) â€” drive a
 # draw + play_land via ``play_a_land_selector``. This is the first slice that
 # moves cards off the library on both engines. **CE3 closed** by the post-
 # r28 library-pop-orientation slice: Rust now uses ``lib.remove(0)`` (post-
@@ -1295,7 +1295,7 @@ def test_cross_engine_play_a_land_selector_emits_pass_priority_when_no_land(pari
     step 1 emits ``pass_priority``.
 
     Guards a regression where the selector's land-lookup loop falls
-    off the end without an else-branch — silently returning None
+    off the end without an else-branch â€” silently returning None
     would crash the harness rather than producing a clean fallback."""
     from mtg_bot.parity.cross_engine import (
         CardDef,
@@ -1305,7 +1305,7 @@ def test_cross_engine_play_a_land_selector_emits_pass_priority_when_no_land(pari
     )
 
     # Two-card creature-only deck. The step-0 draw puts a Bears in
-    # Python's hand (and a Bears in Rust's hand by tail-pop — both
+    # Python's hand (and a Bears in Rust's hand by tail-pop â€” both
     # happen to be Bears here since the deck is mono-Bears, dodging
     # CE3 for this particular guard test).
     bears = CardDef(
@@ -1335,14 +1335,14 @@ def test_cross_engine_play_a_land_selector_emits_pass_priority_when_no_land(pari
 # engines via a side-channel + emits ``play_land`` in MAIN phases. Walks
 # multiple full turns so the harness exercises:
 #
-#   * Turn 1 DRAW skip (CR 103.7c — first turn active player skips draw step).
+#   * Turn 1 DRAW skip (CR 103.7c â€” first turn active player skips draw step).
 #   * Turn 1 -> Turn 2 CLEANUP -> UNTAP wrap (turn_number bump + active swap).
 #   * Turn 2 UNTAP sweep + summoning-sick clear (CR 302.1).
 #   * Turn 2 DRAW step auto-draw (CR 504.1).
 #   * Turn 3+ MAIN phase land drop with both players' permanents on the
 #     battlefield.
 #
-# **Outcome (this slice)**: NOVEL divergence CE4 — ``battlefield`` order
+# **Outcome (this slice)**: NOVEL divergence CE4 â€” ``battlefield`` order
 # disagrees between Python (ETB-timestamp-ordered centralized list) and
 # Rust (per-controller-grouped split). Surfaces at step 28, turn 3
 # PRECOMBAT_MAIN, when p0 plays a Forest while p1's Mountain is already
@@ -1394,7 +1394,7 @@ def test_cross_engine_multi_turn_selector_walks_clean(parity_smoke):
 def test_cross_engine_multi_turn_selector_turn_1_skips_draw(parity_smoke):
     """CR 103.7c first-turn skip pin. Across the first 11 decisions
     (turn 1 UNTAP -> CLEANUP via the side-channel advance_phase), the
-    active player's hand stays empty — no draw fires on turn 1's DRAW
+    active player's hand stays empty â€” no draw fires on turn 1's DRAW
     step. The harness reads hand_p0 size at each step; on the
     UNTAP -> UPKEEP -> DRAW transition (steps 0 / 1) the hand stays at
     0 cards.
@@ -1426,9 +1426,9 @@ def test_cross_engine_multi_turn_selector_turn_1_skips_draw(parity_smoke):
         # Active player on turn 1 is 0; on the wrap-into-turn-2 step it's 1.
         if step.py_view["turn"] == 1:
             assert step.py_view["active_player"] == 0
-            # p0's hand stays empty — no draw on turn 1.
+            # p0's hand stays empty â€” no draw on turn 1.
             assert len(step.py_view["hand_p0"]) == 0
-        # No divergences during turn 1 + wrap — the first divergence
+        # No divergences during turn 1 + wrap â€” the first divergence
         # is at step 28, well into turn 3.
         assert step.divergences == []
 
@@ -1452,7 +1452,7 @@ def test_cross_engine_multi_turn_selector_turn_2_drawstep_fires(parity_smoke):
         decision_selector=multi_turn_selector,
     )
     assert result.error is None
-    # Step 11: turn 2 UNTAP — p1 is now active, p1 hand empty.
+    # Step 11: turn 2 UNTAP â€” p1 is now active, p1 hand empty.
     step_11 = result.steps[11]
     assert step_11.py_view["turn"] == 2
     assert step_11.py_view["step"] == "UNTAP"
@@ -1461,7 +1461,7 @@ def test_cross_engine_multi_turn_selector_turn_2_drawstep_fires(parity_smoke):
     # Step 12: UPKEEP.
     assert result.steps[12].py_view["step"] == "UPKEEP"
     assert len(result.steps[12].py_view["hand_p1"]) == 0
-    # Step 13: DRAW — p1 draws one card via the side-channel
+    # Step 13: DRAW â€” p1 draws one card via the side-channel
     # advance_phase composition on both engines (CR 504.1).
     step_13 = result.steps[13]
     assert step_13.py_view["step"] == "DRAW"
@@ -1478,7 +1478,7 @@ def test_cross_engine_multi_turn_selector_turn_2_drawstep_fires(parity_smoke):
 # Forests on the battlefield, activates each Forest in turn for {G}{G}, then
 # emits cast_spell(Bears).
 #
-# **Outcome (this slice)**: NEW divergence CE5 — Rust's ``cast_creature``
+# **Outcome (this slice)**: NEW divergence CE5 â€” Rust's ``cast_creature``
 # primitive fuses cast+resolve into one mutation (no-stack semantics:
 # state_ops_cast.rs:293-297 docstring), while Python's ``_cast_spell``
 # pushes the spell as a ``StackItem`` and defers the bf transition to
@@ -1488,7 +1488,7 @@ def test_cross_engine_multi_turn_selector_turn_2_drawstep_fires(parity_smoke):
 # strict-xfail below; closure plan in ``docs/RUST_PARITY_GAPS.md`` CE5
 # entry. The cleanly-walking ``activate_ability`` calls (steps 92, 106,
 # 107) before the cast also serve as the first cross-engine pin that
-# mana-ability parity holds — Python's stack-bypass for mana abilities
+# mana-ability parity holds â€” Python's stack-bypass for mana abilities
 # and Rust's direct-pool-credit produce the same observable mana pool
 # + tapped state.
 # ---------------------------------------------------------------------------
@@ -1499,7 +1499,7 @@ def test_cross_engine_cast_bears_selector_walks_clean(parity_smoke):
     cast_bears_selector and assert every step walks clean.
 
     The selector activates 2 Forests for {G}{G} then casts Grizzly Bears
-    at turn 9 PRECOMBAT_MAIN (p0 active). Pre-cast steps walk clean —
+    at turn 9 PRECOMBAT_MAIN (p0 active). Pre-cast steps walk clean â€”
     the activate-ability mana-credit flow is parity-equal across both
     engines. The cast step itself (step 108) used to be where CE5
     surfaced (Python pushes StackItem + defers, Rust ``cast_creature``
@@ -1508,14 +1508,14 @@ def test_cross_engine_cast_bears_selector_walks_clean(parity_smoke):
     Python's stack after every ``cast_spell`` action via
     :func:`resolve_top_of_stack_python`, parity-aligning Python's
     observable state with Rust's no-stack semantics. Every step in
-    this walk — including the cast at step 108 — produces an empty
+    this walk â€” including the cast at step 108 â€” produces an empty
     divergence list.
 
     Step 119's prior eager-``is_over`` divergence (Rust flipping on
     empty-library draw while Python deferred until SBAs) is also
     closed independently as CE10 (`feature/ce-pure-derivation-is-over`,
     landed before this slice). The 150-decision walk now traverses
-    that boundary cleanly — the surface accessors are SBA-gated on
+    that boundary cleanly â€” the surface accessors are SBA-gated on
     both sides, and neither engine fires SBAs between cross-engine
     decision steps, so both stay stale together until the next slice
     grows the harness an SBA hook.
@@ -1555,15 +1555,15 @@ def test_cross_engine_cast_bears_selector_cast_step_108_walks_clean_post_ce5(
     the battlefield, and both engines' observable state agrees.
 
     This is the post-closure counterpart of the pre-closure CE5
-    symptom-pin (deleted in this slice — the symptom no longer
+    symptom-pin (deleted in this slice â€” the symptom no longer
     surfaces). The pair-pin pattern matches the CE2/CE3/CE4 closures:
     a post-closure regression test pins the new equilibrium.
 
     Pinned fields after the closure:
 
-      * ``battlefield`` — both engines have 7 objects (the cast lands
+      * ``battlefield`` â€” both engines have 7 objects (the cast lands
         the Bears on Python's bf via the drained stack).
-      * ``stack`` — both engines have an empty stack.
+      * ``stack`` â€” both engines have an empty stack.
     """
     from mtg_bot.parity.cross_engine import (
         cast_bears_selector,
@@ -1582,7 +1582,7 @@ def test_cross_engine_cast_bears_selector_cast_step_108_walks_clean_post_ce5(
     assert step_108.action_dict["kind"] == "cast_spell"
     # The Bears was the active player's hand card 3 (per the
     # slightly_bigger_deckspec deck order: p0 lib =
-    # [Forest(id=0), Mountain(id=1), Forest(id=2), Bears(id=3)] —
+    # [Forest(id=0), Mountain(id=1), Forest(id=2), Bears(id=3)] â€”
     # by turn 9 p0 has drawn all four).
     assert step_108.action_dict["card_id"] == 3
 
@@ -1592,7 +1592,7 @@ def test_cross_engine_cast_bears_selector_cast_step_108_walks_clean_post_ce5(
         f"got {[(d.field, d.py_value, d.rust_value) for d in step_108.divergences]}"
     )
 
-    # Both views agree on the post-cast state — Bears on the
+    # Both views agree on the post-cast state â€” Bears on the
     # battlefield, stack empty.
     py_bf = step_108.py_view["battlefield"]
     rust_bf = step_108.rust_view["battlefield"]
@@ -1657,8 +1657,8 @@ def test_cross_engine_resolve_top_of_stack_python_respects_floor(parity_smoke):
 
     The pin checks two boundary cases:
 
-    * ``floor == len(stack)`` → the loop short-circuits without draining.
-    * ``floor == 0`` (default) → backward-compatible "drain everything".
+    * ``floor == len(stack)`` â†’ the loop short-circuits without draining.
+    * ``floor == 0`` (default) â†’ backward-compatible "drain everything".
     """
     from mtg_bot.parity.cross_engine import (
         build_python_state,
@@ -1669,7 +1669,7 @@ def test_cross_engine_resolve_top_of_stack_python_respects_floor(parity_smoke):
 
     py_state = build_python_state(slightly_bigger_deckspec())
 
-    # Case 1: floor equals current stack depth → no drain, no raise.
+    # Case 1: floor equals current stack depth â†’ no drain, no raise.
     sentinel_a = StackItem(source=None, controller_id=0)
     sentinel_b = StackItem(source=None, controller_id=0)
     py_state.stack.append(sentinel_a)
@@ -1682,7 +1682,7 @@ def test_cross_engine_resolve_top_of_stack_python_respects_floor(parity_smoke):
     assert py_state.stack[0] is sentinel_a
     assert py_state.stack[1] is sentinel_b
 
-    # Case 2: floor > current depth → still no drain (defensive
+    # Case 2: floor > current depth â†’ still no drain (defensive
     # short-circuit; the harness pre-cast snapshot should never exceed
     # the post-apply depth, but defending against the off-by-one keeps
     # the primitive robust).
@@ -1690,7 +1690,7 @@ def test_cross_engine_resolve_top_of_stack_python_respects_floor(parity_smoke):
     assert drained == 0
     assert len(py_state.stack) == 2
 
-    # Case 3: floor=0 keyword default — backward compat for the no-
+    # Case 3: floor=0 keyword default â€” backward compat for the no-
     # pre-existing-entries case. The cast_bears walk in
     # test_cross_engine_resolve_top_of_stack_python_drains_stack
     # exercises the actual non-zero drain on a real StackItem.
@@ -1741,7 +1741,7 @@ def test_cross_engine_resolve_top_of_stack_rust_drains_etb_triggers(parity_smoke
         _game_over,
     )
 
-    # Drive up to T8 p1 MAIN1 — the seed-deterministic point where
+    # Drive up to T8 p1 MAIN1 â€” the seed-deterministic point where
     # Thawbringer is castable.
     saw_thawbringer_cast = False
     while not _game_over(py_state):
@@ -1754,12 +1754,12 @@ def test_cross_engine_resolve_top_of_stack_rust_drains_etb_triggers(parity_smoke
                 if cast is None:
                     break
                 # If we just cast Thawbringer (card_id 77 on seed 0),
-                # the post-cast view should byte-match — step_both
+                # the post-cast view should byte-match â€” step_both
                 # asserts no divergences via the harness drain on both
                 # engines. We just need to reach here without raising.
                 if cast.get("card_id") == 77:
                     saw_thawbringer_cast = True
-                    return  # success — no divergence raised
+                    return  # success â€” no divergence raised
             _advance_phase_with_compare(py_state, rust_state)
             continue
         if py_state.step == Step.DECLARE_ATTACKERS:
@@ -1770,10 +1770,10 @@ def test_cross_engine_resolve_top_of_stack_rust_drains_etb_triggers(parity_smoke
 
     # If we exited the loop without seeing the Thawbringer cast, the
     # deck-shuffle seed has drifted and this regression pin no longer
-    # covers the intended scenario — fail loudly so the test gets
+    # covers the intended scenario â€” fail loudly so the test gets
     # re-pinned rather than going silently quiet.
     assert saw_thawbringer_cast, (
-        "Thawbringer (card_id 77) was never cast on arch=0 seed=0 — "
+        "Thawbringer (card_id 77) was never cast on arch=0 seed=0 â€” "
         "regression pin scenario has drifted; re-pin against a "
         "current Thawbringer-bearing game."
     )
@@ -1782,7 +1782,7 @@ def test_cross_engine_resolve_top_of_stack_rust_drains_etb_triggers(parity_smoke
 def test_cross_engine_resolve_top_of_stack_rust_respects_floor(parity_smoke):
     """**Round-42 floor contract pin (Rust mirror)**: the Rust drain
     primitive honors a non-zero floor exactly the way the Python
-    primitive does — items at or below ``floor`` are left in place.
+    primitive does â€” items at or below ``floor`` are left in place.
 
     Mirror of :func:`test_cross_engine_resolve_top_of_stack_python_respects_floor`
     on the Rust side; uses ``register_and_inject_object`` +
@@ -1814,17 +1814,17 @@ def test_cross_engine_resolve_top_of_stack_rust_respects_floor(parity_smoke):
     rust_state.push_to_stack(sorcery_id, 0)
     assert rust_state.stack_size() == 1
 
-    # floor == current depth → no drain.
+    # floor == current depth â†’ no drain.
     drained = resolve_top_of_stack_rust(rust_state, floor=1)
     assert drained == 0
     assert rust_state.stack_size() == 1
 
-    # floor > current depth → no drain (defensive short-circuit).
+    # floor > current depth â†’ no drain (defensive short-circuit).
     drained = resolve_top_of_stack_rust(rust_state, floor=5)
     assert drained == 0
     assert rust_state.stack_size() == 1
 
-    # floor == 0 (default) → drain the sentinel.
+    # floor == 0 (default) â†’ drain the sentinel.
     drained = resolve_top_of_stack_rust(rust_state)
     assert drained == 1
     assert rust_state.stack_size() == 0
@@ -1842,12 +1842,12 @@ def test_cross_engine_cast_bears_selector_activate_ability_pre_cast_walks_clean(
     parity-equal across engines.
 
     Step 92 (turn 8 PRECOMBAT_MAIN p1 active) is the first
-    activate_ability call — p1 has Bears + Forest in hand, plays the
+    activate_ability call â€” p1 has Bears + Forest in hand, plays the
     Forest at step 91, taps the older Mountain (id=4) at step 92...
     wait, the selector picks a Forest (G-producer), so step 92's
     source is the Forest p1 just played. Re-read the decision: at
     step 92 p1 has 1 untapped non-sick Forest (id=6, played turn 6
-    and cleared by turn 8's UNTAP) — that's the source the selector
+    and cleared by turn 8's UNTAP) â€” that's the source the selector
     picks. After the activate the pool has {G}:1; the selector wants
     {G}:2 to cast Bears, and p1 has no second Forest source, so the
     next selector call falls through to multi_turn_selector and
@@ -1942,7 +1942,7 @@ def test_cross_engine_cast_bears_selector_falls_back_to_multi_turn(parity_smoke)
     Bears in hand, the selector delegates to multi_turn_selector
     (play_land in MAIN if available, side-channel advance + pass
     otherwise). Step 0 (turn 1 ap=0 UPKEEP with empty hand) is the
-    canonical fall-through case — multi_turn_selector advances UPKEEP
+    canonical fall-through case â€” multi_turn_selector advances UPKEEP
     -> DRAW and emits pass_priority.
     """
     from mtg_bot.parity.cross_engine import (
@@ -1957,8 +1957,8 @@ def test_cross_engine_cast_bears_selector_falls_back_to_multi_turn(parity_smoke)
         decision_selector=cast_bears_selector,
     )
     assert result.error is None
-    # Step 0: turn 1 UPKEEP, hands empty, no Bears anywhere → fall
-    # through to multi_turn_selector → side-channel advance + pass.
+    # Step 0: turn 1 UPKEEP, hands empty, no Bears anywhere â†’ fall
+    # through to multi_turn_selector â†’ side-channel advance + pass.
     assert result.steps[0].action_dict == {"kind": "pass_priority"}
     assert result.steps[0].divergences == []
 
@@ -1988,7 +1988,7 @@ def test_cross_engine_dict_to_python_action_handles_activate_ability(parity_smok
 # / clear_combat. The probe surfaces (or fails to surface, depending on the
 # outcome) the audits' predicted CE6 / CE7 (combat damage assignment order).
 # A single-attacker / zero-blocker slice exercises the dispatch + advance
-# wiring without surfacing the multi-block ordering surface — that requires
+# wiring without surfacing the multi-block ordering surface â€” that requires
 # a richer deck (two attackers facing two blockers with non-trivial ETB
 # interleaving). This slice is the gate that unblocks the ordering probe.
 # ---------------------------------------------------------------------------
@@ -2008,7 +2008,7 @@ def test_cross_engine_combat_selector_walks_clean(parity_smoke):
     (side-channel clear_combat_both).
 
     By the end of the 200 decisions the walker has driven three full
-    combat cycles (Bears attacking unblocked on turns 11/13/15 — p0
+    combat cycles (Bears attacking unblocked on turns 11/13/15 â€” p0
     active, Bears unsick after turn 10's UNTAP). p1's life drops from
     20 -> 18 -> 16 -> 14 in 2-damage increments. Both engines apply
     damage simultaneously through the side-channel mirrors, and the
@@ -2016,15 +2016,15 @@ def test_cross_engine_combat_selector_walks_clean(parity_smoke):
     divergence list for every step.
 
     **Why no CE divergence surfaces on this slice.** The audits'
-    predicted CE6 / CE7 (combat damage assignment order — Python walks
+    predicted CE6 / CE7 (combat damage assignment order â€” Python walks
     ``state.battlefield`` filtered by ``attacker.blocked_by``, Rust
     walks ``self.blockers`` Vec) requires MULTIPLE blockers per
-    attacker to surface — the order question only matters when there
+    attacker to surface â€” the order question only matters when there
     are 2+ blockers facing the same attacker with interleaved ETB
     timestamps. On the current deck the defender has zero creatures
     so combat is always unblocked. The probe is therefore the GATE
     that unblocks the audits' true ordering probe rather than the
-    ordering probe itself — a richer deck (two Bears + a defender
+    ordering probe itself â€” a richer deck (two Bears + a defender
     with two blockers) is the natural next slice.
     """
     from mtg_bot.parity.cross_engine import (
@@ -2063,13 +2063,13 @@ def test_cross_engine_combat_selector_first_declare_attackers_at_step_136(
         ``cast_bears_selector`` script).
       * Bears enters with ``summoning_sick=True`` and stays sick
         through turn 9's combat (DECLARE_ATTACKERS at step 110-ish)
-        — selector falls through to pass_priority.
+        â€” selector falls through to pass_priority.
       * Turn 9 wraps to turn 10 (p1 active); turn 10 UNTAP clears p1's
         permanents but NOT Bears (Bears is on p0's side).
       * Turn 10 wraps to turn 11 (p0 active); turn 11 UNTAP fires on
         p0's permanents, clearing Bears' summoning_sick.
       * At turn 11 DECLARE_ATTACKERS, Bears is non-sick, non-tapped,
-        Creature, controller=0 — the selector emits
+        Creature, controller=0 â€” the selector emits
         ``declare_attackers([3])``.
 
     The exact step index (136) is sensitive to the upstream selector
@@ -2120,7 +2120,7 @@ def test_cross_engine_combat_selector_damage_drops_p1_life_in_2s(
     combat cycle. Both engines agree on the life_p1 trajectory
     step-by-step.
 
-    Three combat cycles fire on turns 11 / 13 / 15 (p0 active —
+    Three combat cycles fire on turns 11 / 13 / 15 (p0 active â€”
     p0 attacks with Bears on every other turn; p1's turns never
     declare attackers because p1 has no creatures). p1's life
     sequence: 20 -> 18 -> 16 -> 14. The cross-engine compare on
@@ -2175,7 +2175,7 @@ def test_cross_engine_combat_selector_falls_back_to_cast_bears(parity_smoke):
     if no cast/activate is appropriate).
 
     Step 0 (turn 1 UPKEEP, empty hand, no Bears) is the canonical
-    fall-through case — multi_turn_selector advances UPKEEP -> DRAW
+    fall-through case â€” multi_turn_selector advances UPKEEP -> DRAW
     and emits pass_priority.
     """
     from mtg_bot.parity.cross_engine import (
@@ -2197,14 +2197,14 @@ def test_cross_engine_combat_selector_falls_back_to_cast_bears(parity_smoke):
 def test_cross_engine_combat_selector_summoning_sick_bears_skips_attack(
     parity_smoke,
 ):
-    """At turn 9 DECLARE_ATTACKERS — the turn Bears was cast — Bears
+    """At turn 9 DECLARE_ATTACKERS â€” the turn Bears was cast â€” Bears
     is summoning-sick. The selector's eligibility filter requires
     ``not summoning_sick``, so Bears is skipped and the selector
     falls through to multi_turn_selector for a pass_priority +
     advance. No attack happens on turn 9 even though Bears is on
     the battlefield.
 
-    Pins CR 302.1's summoning-sickness restriction for attackers —
+    Pins CR 302.1's summoning-sickness restriction for attackers â€”
     the parallel land-side restriction (Rust's ActivateAbility
     rejects sick lands; documented as a CE candidate) is NOT in
     scope here.
@@ -2261,7 +2261,7 @@ def test_cross_engine_combat_selector_declare_blockers_empty_assignments(
     no-op dispatch.
 
     On the current slightly_bigger_deckspec, the defender (p1) has
-    no creatures at any point — p1's library / hand only contains
+    no creatures at any point â€” p1's library / hand only contains
     Forests / Mountains / Bears, but p1 never has enough mana to
     cast Bears in this script (only one Forest gets played per p1
     turn and p1's selector chain only fires the mana-cast script
@@ -2362,7 +2362,7 @@ def test_cross_engine_dict_to_python_action_handles_declare_blockers(
 # ---------------------------------------------------------------------------
 # Phase 6 gap #4 closure: canonical action-dict builder + dual-honor.
 #
-# The action-dict id-key vocabulary is per-kind asymmetric — `card_id` for
+# The action-dict id-key vocabulary is per-kind asymmetric â€” `card_id` for
 # `play_land`/`cast_spell`, `source_id` for `activate_ability`. This is
 # intentional and consistent on both Python's dataclasses AND Rust's enum
 # variants. Programmatic builders historically had to memorize the per-kind
@@ -2429,7 +2429,7 @@ def test_canonical_action_dict_no_id_kinds(parity_smoke):
 
 def test_canonical_action_dict_unknown_kind_raises(parity_smoke):
     """Unknown action kinds raise ValueError with a helpful message
-    listing the valid kinds — mirrors Rust's strict-parse contract.
+    listing the valid kinds â€” mirrors Rust's strict-parse contract.
     """
     import pytest
 
@@ -2441,7 +2441,7 @@ def test_canonical_action_dict_unknown_kind_raises(parity_smoke):
 
 def test_canonical_action_dict_no_id_kind_with_id_raises(parity_smoke):
     """Passing `id` to a kind that has no primary-id slot (e.g.,
-    `pass_priority`) is a programming error and raises ValueError —
+    `pass_priority`) is a programming error and raises ValueError â€”
     helps catch bugs where a builder accidentally passes `id` to the
     wrong kind.
     """
@@ -2457,7 +2457,7 @@ def test_canonical_action_dict_id_required_kind_without_id_raises(
     parity_smoke,
 ):
     """Omitting `id` for a kind that requires it (e.g., `play_land`)
-    raises ValueError — the canonical dict needs the primary id to
+    raises ValueError â€” the canonical dict needs the primary id to
     route to the canonical key.
     """
     import pytest
@@ -2575,7 +2575,7 @@ def test_cross_engine_resolve_combat_damage_python_no_attackers_noop(
     leaves life unchanged on both players.
 
     This pins the early-exit contract that the combat_selector relies
-    on at the COMBAT_DAMAGE branch — without the no-op return, calling
+    on at the COMBAT_DAMAGE branch â€” without the no-op return, calling
     Python's ``resolve_combat_damage`` against an empty-attackers
     state would raise on the ``defender.agent`` reference (the
     synthetic state has no agent attached).
@@ -2652,10 +2652,10 @@ def test_cross_engine_clear_combat_both_resets_rust_attackers_vec(
     py_state, rust_state = build_matched_states(slightly_bigger_deckspec())
     # Simulate a declared attack: directly mark a python bf object as
     # attacking + push a rust attacker entry. (The rust_state has no
-    # bf objects so we use it as a noop-target — clear_combat_both
+    # bf objects so we use it as a noop-target â€” clear_combat_both
     # should run without raising even on empty rust state.)
     # Build a minimal py-side bf object via the existing flow: draw
-    # then play_land won't yield a creature; skip — use the walk to
+    # then play_land won't yield a creature; skip â€” use the walk to
     # arrive at an attacking state instead.
     result_short = walk_both(
         slightly_bigger_deckspec(),
@@ -2684,7 +2684,7 @@ def test_cross_engine_clear_combat_both_resets_rust_attackers_vec(
 # closure for SBA victim collection), filtered by membership in
 # ``self.blockers``. This matches Python's ``combat.py:389,405`` walk
 # of ``[o for o in state.battlefield if o.id in attacker.blocked_by]``.
-# Per the playbook §3 Option A: parity with observable Python first;
+# Per the playbook Â§3 Option A: parity with observable Python first;
 # CR 510.1d "active player chooses damage assignment order" is a
 # separate long-term Python-side fix. See ``docs/RUST_PARITY_GAPS.md``
 # I31 for the closure invariant.
@@ -2741,12 +2741,12 @@ def test_cross_engine_multi_block_combat_selector_pre_combat_walks_clean(
     :func:`multi_blocker_deckspec` with
     :func:`multi_block_combat_selector` is parity-clean. Pins the
     contract that the multi-block CE9 surface is SPECIFICALLY a
-    damage-assignment-order finding — the cast, mana-ability, draw,
+    damage-assignment-order finding â€” the cast, mana-ability, draw,
     advance-phase, and declare-attackers paths all walk clean even
     on this fatter deck.
 
     Step 193 is the first declare_attackers emission; step 195 is
-    the declare_blockers emission. Both walk clean — the divergence
+    the declare_blockers emission. Both walk clean â€” the divergence
     only surfaces on step 196 when actual damage is applied (the
     COMBAT_DAMAGE branch fires resolve_combat_damage_python +
     deal_combat_damage_rust).
@@ -2799,7 +2799,7 @@ def test_cross_engine_multi_block_combat_selector_suppresses_p1_attacks(
     """**Multi-block selector contract**: p1 NEVER attacks. The selector's
     DECLARE_ATTACKERS branch gates on ``active_idx == 0`` to preserve
     p1's Bears as untapped blockers (a tapped creature can't block per
-    CR 509.1b — and combat tapping is the principal way Bears would
+    CR 509.1b â€” and combat tapping is the principal way Bears would
     end up tapped on this synthetic deck).
 
     Across the full 210-step walk, every ``declare_attackers`` action
@@ -2870,7 +2870,7 @@ def test_cross_engine_step_both_routes_declare_blockers_actor_to_defender(
     during DECLARE_BLOCKERS the priority player on a synthetic state
     is still the active player (the harness doesn't model the
     priority handoff to defender). The CE9 surface depends on
-    blockers actually being declared — without this routing the
+    blockers actually being declared â€” without this routing the
     multi-block probe would see empty blocked_by sets and the
     divergence wouldn't surface.
 
@@ -2892,7 +2892,7 @@ def test_cross_engine_step_both_routes_declare_blockers_actor_to_defender(
     )
     assert result.error is None
     # After step 195 (declare_blockers), Python's attacker (Bears
-    # id=5) should have blocked_by set to both blockers — populated
+    # id=5) should have blocked_by set to both blockers â€” populated
     # by the defender-routed apply_action.
     py_state, _ = build_matched_states(multi_blocker_deckspec())
     for i in range(196):
@@ -2913,22 +2913,22 @@ def test_cross_engine_step_both_routes_declare_blockers_actor_to_defender(
         "expected attacker (id=5) to still be on bf at end of step 195"
     )
     # blocked_by should contain both blocker ids (the order depends on
-    # the declare order — reversed bf order = [11, 9]).
+    # the declare order â€” reversed bf order = [11, 9]).
     assert set(attacker.blocked_by) == {9, 11}, (
         f"expected blocked_by={{9, 11}}, got {attacker.blocked_by}"
     )
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 follow-up #7: retaliation_selector — extend
+# Phase 5 follow-up #7: retaliation_selector â€” extend
 # multi_block_combat_selector to bilateral combat. Surfaces CE12.
 #
-# **CE12 — winner_id sticky-vs-derived divergence.** Bilateral combat
+# **CE12 â€” winner_id sticky-vs-derived divergence.** Bilateral combat
 # (both players attack on their respective turns) drives both players
 # to empty-library exhaustion + has_lost=True. Python's `winner_id`
-# is a SBA-WRITTEN sticky field (turn.py:1383-1393 — only written when
+# is a SBA-WRITTEN sticky field (turn.py:1383-1393 â€” only written when
 # `state.winner_id is None`, never cleared). Rust's `winner_id` is a
-# LIVE-DERIVED getter (state_ops_winloss.rs:225-235 — returns
+# LIVE-DERIVED getter (state_ops_winloss.rs:225-235 â€” returns
 # `Some(other_id)` only when exactly one player has has_lost; returns
 # None when both lost). When the state transitions from "exactly one
 # loser" to "both lost", Python keeps the prior winner sticky, Rust
@@ -2946,7 +2946,7 @@ def test_cross_engine_retaliation_selector_walks_clean(
 ):
     """**CE12 closure regression** (was: surface-pin). The
     retaliation_selector walk now walks parity-clean past the
-    former divergence point at step 226 — Rust's sticky winner_id
+    former divergence point at step 226 â€” Rust's sticky winner_id
     shadow field matches Python's SBA-write semantics through the
     BOTH-LOST transition.
 
@@ -2989,7 +2989,7 @@ def test_cross_engine_retaliation_selector_pre_ce12_walks_clean(
     """The pre-CE12 walk (steps 0-225) on
     :func:`multi_blocker_deckspec` with
     :func:`retaliation_selector` is parity-clean. Pins the contract
-    that CE12 is SPECIFICALLY a winner_id-sticky-vs-derived finding —
+    that CE12 is SPECIFICALLY a winner_id-sticky-vs-derived finding â€”
     not a broader divergence in active-player swap, summoning-sick
     clear, or symmetric combat.
 
@@ -3041,12 +3041,12 @@ def test_cross_engine_retaliation_selector_pre_ce12_walks_clean(
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 follow-up #8: mass_removal_selector — extend
+# Phase 5 follow-up #8: mass_removal_selector â€” extend
 # retaliation_selector with a Wrath-style ``DestroyAllCreatures``
 # side-channel fire at step 168 (after the multi-creature bf state
 # is set up by p0's turn-13 Bears cast). Originally surfaced CE13.
 #
-# **CE13 (CLOSED 2026-05-12) — summoning_sick-on-LTB Python-preserve
+# **CE13 (CLOSED 2026-05-12) â€” summoning_sick-on-LTB Python-preserve
 # vs Rust-clear.** Pre-closure: when a creature left the battlefield
 # (destroyed / exiled / sacrificed / bounced), Python's
 # ``turn.move_off_battlefield`` did NOT clear ``obj.summoning_sick``
@@ -3069,7 +3069,7 @@ def test_cross_engine_mass_removal_selector_walks_clean(
 ):
     """**CE13 closure regression** (was: surface-pin). The
     mass_removal_selector walk now walks parity-clean THROUGH the
-    former divergence point at step 168 — Rust's destroy / exile /
+    former divergence point at step 168 â€” Rust's destroy / exile /
     sacrifice / bounce arms preserve summoning_sick on LTB matching
     Python's ``turn.move_off_battlefield`` semantics.
 
@@ -3114,7 +3114,7 @@ def test_cross_engine_mass_removal_selector_post_wrath_bf_state(
     both engines agree that the battlefield is empty of creatures
     (only lands remain) and the graveyards have the expected counts.
 
-    This is a structural assertion — it doesn't inspect the
+    This is a structural assertion â€” it doesn't inspect the
     summoning_sick CE13 surface (that's the xfail-pinned test), it
     asserts the mass-destruction itself composed correctly on both
     engines. If a future closure of CE13 lands and the strict-xfail
@@ -3203,7 +3203,7 @@ def test_cross_engine_mass_removal_selector_post_wrath_bf_state(
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 follow-up #9: first_strike_selector — extend retaliation_selector
+# Phase 5 follow-up #9: first_strike_selector â€” extend retaliation_selector
 # with a side-channel-injected 2/2 first-strike creature on p0's
 # battlefield at step 168 (after the multi-creature bf state is set
 # up by p0's turn-13 Bears cast). Probes CR 510.5 (two damage substeps
@@ -3223,13 +3223,13 @@ def test_cross_engine_mass_removal_selector_post_wrath_bf_state(
 # The post-combat state on both engines:
 #   * p0 battlefield: Bears id 5 (sick), Forests, NO Bear Knight
 #   * p1 battlefield: Bears id 11 (untapped, untouched), Forests
-#   * p0 graveyard:   Bear Knight id 14 (the FS attacker — died in
+#   * p0 graveyard:   Bear Knight id 14 (the FS attacker â€” died in
 #                     regular damage step from blocker 11's strike-back)
 #   * p1 graveyard:   Bears id 9 (the first-strike-killed blocker)
 #
 # Which is the exact CR 510.5 expected outcome:
 #   1. First-strike damage step: Bear Knight (FS) assigns 2 damage to
-#      Bears id 9 (bf-ETB-first eligible blocker — both engines pick
+#      Bears id 9 (bf-ETB-first eligible blocker â€” both engines pick
 #      the same blocker via the post-CE9-closure bf-ETB-sorted walk).
 #   2. SBA between steps (Python side, combat.py:317-318): Bears id 9
 #      dies, moves to graveyard.
@@ -3261,24 +3261,24 @@ def test_cross_engine_mass_removal_selector_post_wrath_bf_state(
 #       mid-pass state divergence into a converged end state.
 #
 # Next-slice candidates to probe a different combat surface:
-#   * **Deathtouch + multi-block.** CR 702.2 — deathtouch lets a creature
+#   * **Deathtouch + multi-block.** CR 702.2 â€” deathtouch lets a creature
 #     assign 1 damage to each blocker as "lethal" for CR 510.1c damage
 #     assignment ordering. Both engines have deathtouch hooks but the
 #     interaction with multi-block + assignment splitting is a candidate
 #     divergence.
-#   * **Trample + multi-block.** CR 702.19 — trample lets a creature spill
+#   * **Trample + multi-block.** CR 702.19 â€” trample lets a creature spill
 #     unblocked excess damage to the defending player. Rust's combat
 #     plan already handles trample (state_ops_combat.rs:905-921 "lethal
 #     to blocker, excess to defender"). Python's combat.resolve walks a
 #     different assignment shape. Potential divergence.
-#   * **Lifelink.** CR 702.15 — lifelink grants life to the controller
+#   * **Lifelink.** CR 702.15 â€” lifelink grants life to the controller
 #     for damage dealt. Both engines have lifelink hooks; the
 #     cross-engine surface is the life-gain SBA composition.
 # ---------------------------------------------------------------------------
 
 
 def test_cross_engine_first_strike_selector_walks_clean(parity_smoke):
-    """Cross-engine first-strike combat walks parity-clean. **Outcome (a)** —
+    """Cross-engine first-strike combat walks parity-clean. **Outcome (a)** â€”
     no novel divergence surfaced on this probe; first-strike combat
     damage timing matches between Python and Rust.
 
@@ -3336,7 +3336,7 @@ def test_cross_engine_first_strike_selector_post_combat_state(parity_smoke):
 
     Reads both Python state and Rust battlefield/graveyard snapshots
     directly so the assertions are independent of the field-view
-    22-tuple shape. This is the structural assertion — if a future
+    22-tuple shape. This is the structural assertion â€” if a future
     engine change shifts the FS-combat outcome on either side, this
     test fires.
     """
@@ -3419,7 +3419,7 @@ def test_cross_engine_first_strike_selector_pre_injection_walks_clean(
     """The pre-injection walk (steps 0-167) on
     :func:`multi_blocker_deckspec` with :func:`first_strike_selector`
     is parity-clean. Pins the contract that the FS probe's
-    delegate-to-retaliation_selector backbone is unchanged — steps
+    delegate-to-retaliation_selector backbone is unchanged â€” steps
     0-167 are identical to retaliation_selector's walk shape and
     surface no divergences.
 
@@ -3429,7 +3429,7 @@ def test_cross_engine_first_strike_selector_pre_injection_walks_clean(
     asserted by ``test_cross_engine_first_strike_selector_walks_clean``.
 
     Validates the load-bearing pre-condition: at the end of step 167,
-    the bf has exactly 3 creatures — p0=1 (sick Bears id 5), p1=2
+    the bf has exactly 3 creatures â€” p0=1 (sick Bears id 5), p1=2
     (unsick Bears ids 9, 11). The FS injection at step 168 reads
     this state and triggers via the ``>=3 creatures, no Bear Knight
     yet`` gate.
@@ -3482,13 +3482,13 @@ def test_cross_engine_first_strike_selector_pre_injection_walks_clean(
         )
     )
     assert not bear_knight_anywhere, (
-        "Bear Knight should not yet exist at end of step 167 — FS "
+        "Bear Knight should not yet exist at end of step 167 â€” FS "
         "injection fires at step 168"
     )
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 follow-up #10: deathtouch_selector — extend retaliation_selector
+# Phase 5 follow-up #10: deathtouch_selector â€” extend retaliation_selector
 # with a side-channel-injected 2/2 deathtouch creature on p0's
 # battlefield at step 168, then drive multi-block combat (CR 702.2 +
 # CR 510.1c) at turn 13 PRECOMBAT. Mirrors :func:`first_strike_selector`
@@ -3561,7 +3561,7 @@ def test_cross_engine_deathtouch_selector_pre_injection_walks_clean(
     """Pre-injection walk (steps 0-167) on :func:`multi_blocker_deckspec`
     with :func:`deathtouch_selector` is parity-clean. Pins the
     contract that the deathtouch probe's delegate-to-
-    retaliation_selector backbone is unchanged — steps 0-167 are
+    retaliation_selector backbone is unchanged â€” steps 0-167 are
     identical to retaliation_selector's walk shape and surface no
     divergences. The CE14 divergence is SPECIFICALLY at the
     COMBAT_DAMAGE step (174), not the pre-injection casts /
@@ -3621,15 +3621,15 @@ def test_cross_engine_deathtouch_selector_pre_injection_walks_clean(
         )
     )
     assert not bear_assassin_anywhere, (
-        "Bear Assassin should not yet exist at end of step 167 — "
+        "Bear Assassin should not yet exist at end of step 167 â€” "
         "deathtouch injection fires at step 168"
     )
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 follow-up #11: lifelink_selector — extend retaliation_selector
+# Phase 5 follow-up #11: lifelink_selector â€” extend retaliation_selector
 # with a side-channel-injected 2/2 lifelink creature on p0's battlefield
-# at step 168, then drive multi-block combat (CR 702.15 — "Damage dealt by
+# at step 168, then drive multi-block combat (CR 702.15 â€” "Damage dealt by
 # a creature with lifelink causes its controller to gain that much life")
 # at turn 13 PRECOMBAT. Mirrors :func:`deathtouch_selector` exactly except
 # the injected creature carries ``lifelink`` instead of ``deathtouch`` and
@@ -3637,7 +3637,7 @@ def test_cross_engine_deathtouch_selector_pre_injection_walks_clean(
 # so the three keyword-combat probes (FS / DT / LL) stay independent on
 # the same multi_blocker_deckspec walk.
 #
-# **OUTCOME on this probe: CLEAN PASS — no novel cross-engine divergence
+# **OUTCOME on this probe: CLEAN PASS â€” no novel cross-engine divergence
 # surfaced.** Both engines wire lifelink at damage-apply time:
 #
 #   * **Python**: ``combat.py:533-541`` calls
@@ -3660,9 +3660,9 @@ def test_cross_engine_deathtouch_selector_pre_injection_walks_clean(
 #
 # Three pinning tests guard the contract:
 #
-#   1. ``test_cross_engine_lifelink_selector_walks_clean`` — full
+#   1. ``test_cross_engine_lifelink_selector_walks_clean`` â€” full
 #      200-decision walk parity-clean on every step.
-#   2. ``test_cross_engine_lifelink_selector_post_combat_state`` —
+#   2. ``test_cross_engine_lifelink_selector_post_combat_state`` â€”
 #      direct-read structural assertion on life totals + bf / gy
 #      contents post-COMBAT_DAMAGE. Pins the EXPECTED outcome shape so
 #      a future refactor that silently breaks lifelink composition
@@ -3670,17 +3670,17 @@ def test_cross_engine_deathtouch_selector_pre_injection_walks_clean(
 #      or moving the source-keyword lookup to AFTER apply when the
 #      attacker has died) fails loudly rather than silently passing
 #      the walk-clean test (which would also fail, but the direct-
-#      read pin makes the failure mode obvious — "p0 didn't gain 2
+#      read pin makes the failure mode obvious â€” "p0 didn't gain 2
 #      life" is faster to diagnose than "step 174 has field
 #      'life_p0'='12' vs '14'").
 #   3. ``test_cross_engine_lifelink_selector_pre_injection_walks_clean``
-#      — steps 0-167 are parity-clean. The injection fires at step 168;
+#      â€” steps 0-167 are parity-clean. The injection fires at step 168;
 #      pre-injection backbone is identical to retaliation_selector.
 # ---------------------------------------------------------------------------
 
 
 def test_cross_engine_lifelink_selector_walks_clean(parity_smoke):
-    """**Lifelink clean-walk pin** — 200-decision walk on
+    """**Lifelink clean-walk pin** â€” 200-decision walk on
     :func:`multi_blocker_deckspec` with :func:`lifelink_selector` is
     parity-clean every step. The lifelink injection at step 168 + the
     multi-block COMBAT_DAMAGE step at index 174 compose correctly on
@@ -3718,7 +3718,7 @@ def test_cross_engine_lifelink_selector_walks_clean(parity_smoke):
 
 
 def test_cross_engine_lifelink_selector_post_combat_state(parity_smoke):
-    """**Lifelink post-combat structural pin** — drives 180 selector
+    """**Lifelink post-combat structural pin** â€” drives 180 selector
     decisions to walk past the lifelink COMBAT_DAMAGE step and asserts
     the EXACT post-combat life totals + bf / gy contents on both
     engines. Pins the shape so a future refactor that silently breaks
@@ -3729,7 +3729,7 @@ def test_cross_engine_lifelink_selector_post_combat_state(parity_smoke):
 
       * p0 life = 14 (was 12 entering combat; +2 from lifelink on the
         single 2-damage event to the first blocker).
-      * p1 life = 20 (unchanged — Bears blockers have no lifelink and
+      * p1 life = 20 (unchanged â€” Bears blockers have no lifelink and
         deal back-damage to the attacker, not to p1).
       * p0 graveyard = [Bear Cleric id 14] (attacker died from 4
         back-damage from both blockers' 2 power each).
@@ -3829,7 +3829,7 @@ def test_cross_engine_lifelink_selector_pre_injection_walks_clean(
     """Pre-injection walk (steps 0-167) on :func:`multi_blocker_deckspec`
     with :func:`lifelink_selector` is parity-clean. Pins the contract
     that the lifelink probe's delegate-to-retaliation_selector
-    backbone is unchanged — steps 0-167 are identical to
+    backbone is unchanged â€” steps 0-167 are identical to
     retaliation_selector's walk shape and surface no divergences.
     The lifelink injection fires SPECIFICALLY at step 168, not before.
 
@@ -3887,15 +3887,15 @@ def test_cross_engine_lifelink_selector_pre_injection_walks_clean(
         )
     )
     assert not bear_cleric_anywhere, (
-        "Bear Cleric should not yet exist at end of step 167 — "
+        "Bear Cleric should not yet exist at end of step 167 â€” "
         "lifelink injection fires at step 168"
     )
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 follow-up #12: vigilance_selector — extend retaliation_selector
+# Phase 5 follow-up #12: vigilance_selector â€” extend retaliation_selector
 # with a side-channel-injected 2/2 vigilance creature on p0's battlefield
-# at step 168, then drive an attack (CR 702.20 — "Attacking doesn't cause
+# at step 168, then drive an attack (CR 702.20 â€” "Attacking doesn't cause
 # this creature to tap") at turn 13 PRECOMBAT. Mirrors
 # :func:`lifelink_selector` exactly except the injected creature carries
 # ``vigilance`` instead of ``lifelink`` and the trigger gate keys on
@@ -3903,7 +3903,7 @@ def test_cross_engine_lifelink_selector_pre_injection_walks_clean(
 # keyword-combat probes (FS / DT / LL / vigilance) stay independent on
 # the same multi_blocker_deckspec walk.
 #
-# **OUTCOME on this probe: CLEAN PASS — no novel cross-engine divergence
+# **OUTCOME on this probe: CLEAN PASS â€” no novel cross-engine divergence
 # surfaced.** Both engines wire vigilance at declare-attackers time:
 #
 #   * **Python**: ``combat.py:103-104`` inside
@@ -3920,17 +3920,17 @@ def test_cross_engine_lifelink_selector_pre_injection_walks_clean(
 # ``attacker.tapped == False`` on BOTH engines. The rest of combat
 # proceeds normally: two 2/2 Bears multi-block, deal 4 back-damage, the
 # vigilance attacker dies via SBA. Post-combat: p0 life = 12 (unchanged
-# — no lifelink → no life gain), p1 life = 20. p0 gy = [Bear Watcher],
+# â€” no lifelink â†’ no life gain), p1 life = 20. p0 gy = [Bear Watcher],
 # p1 gy = [Grizzly Bears id 9], p1 bf still has Grizzly Bears id 11.
 #
 # Three pinning tests guard the contract:
 #
-#   1. ``test_cross_engine_vigilance_selector_walks_clean`` — full
+#   1. ``test_cross_engine_vigilance_selector_walks_clean`` â€” full
 #      200-decision walk parity-clean on every step (which is where
 #      the DECLARE_ATTACKERS ``tapped`` field is compared
 #      cross-engine).
 #   2. ``test_cross_engine_vigilance_selector_post_declare_attacker_untapped``
-#      — direct-read structural assertion that AFTER the
+#      â€” direct-read structural assertion that AFTER the
 #      DECLARE_ATTACKERS step (step 171) the attacker on both engines
 #      reports ``tapped == False`` AND ``attacking == True`` (mirror).
 #      Pins the EXPECTED vigilance shape so a future refactor that
@@ -3939,13 +3939,13 @@ def test_cross_engine_lifelink_selector_pre_injection_walks_clean(
 #      the keyword lookup to AFTER tap_permanent) fails loudly with a
 #      specific diagnostic.
 #   3. ``test_cross_engine_vigilance_selector_pre_injection_walks_clean``
-#      — steps 0-167 are parity-clean. The injection fires at step 168;
+#      â€” steps 0-167 are parity-clean. The injection fires at step 168;
 #      pre-injection backbone is identical to retaliation_selector.
 # ---------------------------------------------------------------------------
 
 
 def test_cross_engine_vigilance_selector_walks_clean(parity_smoke):
-    """**Vigilance clean-walk pin** — 200-decision walk on
+    """**Vigilance clean-walk pin** â€” 200-decision walk on
     :func:`multi_blocker_deckspec` with :func:`vigilance_selector` is
     parity-clean every step. The vigilance injection at step 168 + the
     DECLARE_ATTACKERS step at index 171 compose correctly on both
@@ -3986,10 +3986,10 @@ def test_cross_engine_vigilance_selector_walks_clean(parity_smoke):
 def test_cross_engine_vigilance_selector_post_declare_attacker_untapped(
     parity_smoke,
 ):
-    """**Vigilance post-DECLARE_ATTACKERS structural pin** — drives 172
+    """**Vigilance post-DECLARE_ATTACKERS structural pin** â€” drives 172
     selector decisions to walk through the DECLARE_ATTACKERS step (171)
     and asserts the EXACT vigilance-honored state on both engines.
-    Pins the load-bearing surface — ``attacker.tapped`` AFTER declare —
+    Pins the load-bearing surface â€” ``attacker.tapped`` AFTER declare â€”
     so a future refactor that silently breaks the vigilance gate fails
     loudly with a specific diagnostic rather than a generic walk-clean
     divergence.
@@ -4001,7 +4001,7 @@ def test_cross_engine_vigilance_selector_post_declare_attacker_untapped(
         This is the CR 702.20 contract: attacking doesn't tap a
         vigilance creature.
 
-    Additionally pins the post-combat state (181 decisions) — the
+    Additionally pins the post-combat state (181 decisions) â€” the
     attacker dies via SBA from 4 back-damage from the two Bears
     blockers; vigilance doesn't gate damage so there's no life-gain or
     damage-distribution surface to assert beyond "matches lifelink
@@ -4057,16 +4057,16 @@ def test_cross_engine_vigilance_selector_post_declare_attacker_untapped(
         f"got {rust_att['tapped']}"
     )
 
-    # ---- Phase 2: post-combat state (drive 180 total decisions —
+    # ---- Phase 2: post-combat state (drive 180 total decisions â€”
     #      past COMBAT_DAMAGE and SBA cleanup) ----
     for i in range(172, 180):
         action = vigilance_selector(py_state, rust_state, i)
         step_both(py_state, rust_state, action)
 
-    # Life totals: no lifelink → no life gain → p0 unchanged at 12
+    # Life totals: no lifelink â†’ no life gain â†’ p0 unchanged at 12
     # (was 12 entering combat after turn-12 retaliation), p1 at 20.
     assert py_state.players[0].life == 12, (
-        f"expected Python p0 life = 12 (no lifelink → no life gain), "
+        f"expected Python p0 life = 12 (no lifelink â†’ no life gain), "
         f"got {py_state.players[0].life}"
     )
     assert py_state.players[1].life == 20, (
@@ -4084,7 +4084,7 @@ def test_cross_engine_vigilance_selector_post_declare_attacker_untapped(
     )
 
     # p0 graveyard: Bear Watcher (vigilance attacker died from 4
-    # back-damage — vigilance doesn't grant damage prevention).
+    # back-damage â€” vigilance doesn't grant damage prevention).
     py_p0_gy = [
         (o.id, o.printing.name) for o in py_state.players[0].graveyard
     ]
@@ -4100,7 +4100,7 @@ def test_cross_engine_vigilance_selector_post_declare_attacker_untapped(
     )
 
     # p1 graveyard: Grizzly Bears id 9 (first blocker took lethal 2;
-    # same shape as the lifelink probe — vigilance doesn't change the
+    # same shape as the lifelink probe â€” vigilance doesn't change the
     # damage-assignment branch).
     py_p1_gy = [
         (o.id, o.printing.name) for o in py_state.players[1].graveyard
@@ -4118,7 +4118,7 @@ def test_cross_engine_vigilance_selector_post_declare_attacker_untapped(
 
     # p1 battlefield still has Grizzly Bears id 11 (second blocker
     # survived because remaining was 0 after first blocker absorbed
-    # need=2 — post-CE14 ``if remaining <= 0: break`` guard).
+    # need=2 â€” post-CE14 ``if remaining <= 0: break`` guard).
     py_bf_bears = sorted(
         o.id for o in py_state.battlefield
         if o.printing.name == "Grizzly Bears"
@@ -4143,7 +4143,7 @@ def test_cross_engine_vigilance_selector_pre_injection_walks_clean(
     """Pre-injection walk (steps 0-167) on :func:`multi_blocker_deckspec`
     with :func:`vigilance_selector` is parity-clean. Pins the contract
     that the vigilance probe's delegate-to-retaliation_selector
-    backbone is unchanged — steps 0-167 are identical to
+    backbone is unchanged â€” steps 0-167 are identical to
     retaliation_selector's walk shape and surface no divergences.
     The vigilance injection fires SPECIFICALLY at step 168, not before.
 
@@ -4201,26 +4201,26 @@ def test_cross_engine_vigilance_selector_pre_injection_walks_clean(
         )
     )
     assert not bear_watcher_anywhere, (
-        "Bear Watcher should not yet exist at end of step 167 — "
+        "Bear Watcher should not yet exist at end of step 167 â€” "
         "vigilance injection fires at step 168"
     )
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 follow-up #13: haste_selector — extend retaliation_selector with
+# Phase 5 follow-up #13: haste_selector â€” extend retaliation_selector with
 # a side-channel-injected 2/2 SUMMONING-SICK haste creature on p0's
-# battlefield at step 168, then drive an attack (CR 702.10b — "A creature
+# battlefield at step 168, then drive an attack (CR 702.10b â€” "A creature
 # with haste can attack and {T} as soon as it comes under its controller's
 # control") at turn 13 PRECOMBAT. Mirrors :func:`vigilance_selector`
 # exactly except the injected creature carries ``haste`` instead of
 # ``vigilance``, is left in the ``summoning_sick=True`` state (load-
-# bearing — exercises the haste bypass of the CR 302.1 sickness gate),
+# bearing â€” exercises the haste bypass of the CR 302.1 sickness gate),
 # and the trigger gate keys on :data:`_HASTE_PRINTING_NAME`
 # ("Bear Sprinter") so the five keyword-combat probes (FS / DT / LL /
 # vigilance / haste) stay independent on the same multi_blocker_deckspec
 # walk.
 #
-# **OUTCOME on this probe: CLEAN PASS — no novel cross-engine divergence
+# **OUTCOME on this probe: CLEAN PASS â€” no novel cross-engine divergence
 # surfaced.** Both engines wire haste at declare-attackers eligibility:
 #
 #   * **Python** (``combat.py:21``): inside ``eligible_attackers``'s
@@ -4238,19 +4238,19 @@ def test_cross_engine_vigilance_selector_pre_injection_walks_clean(
 #     legal_decisions enumeration filter.
 #
 # Both engines mark the haste attacker ``attacking=True`` AND
-# ``tapped=True`` (no vigilance → standard CR 508.1c tap step runs)
+# ``tapped=True`` (no vigilance â†’ standard CR 508.1c tap step runs)
 # while LEAVING ``summoning_sick=True`` untouched (haste bypasses the
-# attack restriction but does not remove summoning sickness — that
+# attack restriction but does not remove summoning sickness â€” that
 # clears at the controller's next untap step per CR 302.1, not at
 # declare). The rest of combat proceeds normally: two 2/2 Bears
 # multi-block, deal 4 back-damage, the haste attacker dies via SBA.
-# Post-combat: p0 life = 12 (unchanged — no lifelink), p1 life = 20.
+# Post-combat: p0 life = 12 (unchanged â€” no lifelink), p1 life = 20.
 # p0 gy = [Bear Sprinter], p1 gy = [Grizzly Bears id 9], p1 bf still
 # has Grizzly Bears id 11.
 #
 # **DECLARE_ATTACKERS selector override.** The
 # :func:`retaliation_selector` delegate filters out ``summoning_sick``
-# creatures at its attacker enumeration site (line ~2125) — a
+# creatures at its attacker enumeration site (line ~2125) â€” a
 # search-side approximation of CR 302.1 that is NOT keyword-aware.
 # For this probe to actually drive the sick haste creature through
 # DECLARE_ATTACKERS, the :func:`haste_selector` overrides the
@@ -4262,12 +4262,12 @@ def test_cross_engine_vigilance_selector_pre_injection_walks_clean(
 #
 # Three pinning tests guard the contract:
 #
-#   1. ``test_cross_engine_haste_selector_walks_clean`` — full
+#   1. ``test_cross_engine_haste_selector_walks_clean`` â€” full
 #      200-decision walk parity-clean on every step (which is where
 #      the DECLARE_ATTACKERS ``attacking`` + ``tapped`` +
 #      ``summoning_sick`` fields are compared cross-engine).
 #   2. ``test_cross_engine_haste_selector_post_declare_attacker_state``
-#      — direct-read structural assertion that AFTER the
+#      â€” direct-read structural assertion that AFTER the
 #      DECLARE_ATTACKERS step (step 171) the attacker on both engines
 #      reports ``attacking == True``, ``tapped == True`` (haste does
 #      NOT grant vigilance), AND ``summoning_sick == True`` (haste
@@ -4277,14 +4277,14 @@ def test_cross_engine_vigilance_selector_pre_injection_walks_clean(
 #      Rust's declare_attacker, or clearing summoning_sick on declare)
 #      fails loudly with a specific diagnostic.
 #   3. ``test_cross_engine_haste_selector_pre_injection_walks_clean``
-#      — steps 0-167 are parity-clean. The injection fires at step
+#      â€” steps 0-167 are parity-clean. The injection fires at step
 #      168; pre-injection backbone is identical to
 #      retaliation_selector.
 # ---------------------------------------------------------------------------
 
 
 def test_cross_engine_haste_selector_walks_clean(parity_smoke):
-    """**Haste clean-walk pin** — 200-decision walk on
+    """**Haste clean-walk pin** â€” 200-decision walk on
     :func:`multi_blocker_deckspec` with :func:`haste_selector` is
     parity-clean every step. The haste injection at step 168
     (``summoning_sick=True`` Bear Sprinter on p0 bf) + the
@@ -4326,11 +4326,11 @@ def test_cross_engine_haste_selector_walks_clean(parity_smoke):
 def test_cross_engine_haste_selector_post_declare_attacker_state(
     parity_smoke,
 ):
-    """**Haste post-DECLARE_ATTACKERS structural pin** — drives 172
+    """**Haste post-DECLARE_ATTACKERS structural pin** â€” drives 172
     selector decisions to walk through the DECLARE_ATTACKERS step (171)
     and asserts the EXACT haste-honored state on both engines. Pins
-    the load-bearing surface — ``attacker.attacking`` + ``tapped`` +
-    ``summoning_sick`` AFTER declare — so a future refactor that
+    the load-bearing surface â€” ``attacker.attacking`` + ``tapped`` +
+    ``summoning_sick`` AFTER declare â€” so a future refactor that
     silently breaks the haste gate fails loudly with a specific
     diagnostic rather than a generic walk-clean divergence.
 
@@ -4339,12 +4339,12 @@ def test_cross_engine_haste_selector_post_declare_attacker_state(
       * Haste attacker (id 14, "Bear Sprinter") is on p0's
         battlefield with ``attacking == True`` (haste bypassed the
         sickness gate; CR 702.10b), ``tapped == True`` (no vigilance
-        → standard CR 508.1c tap step), AND ``summoning_sick == True``
-        (haste bypasses but does NOT clear summoning sickness — the
+        â†’ standard CR 508.1c tap step), AND ``summoning_sick == True``
+        (haste bypasses but does NOT clear summoning sickness â€” the
         flag clears at the next untap step per CR 302.1, not on
         declare).
 
-    Additionally pins the post-combat state (181 decisions) — the
+    Additionally pins the post-combat state (181 decisions) â€” the
     attacker dies via SBA from 4 back-damage from the two Bears
     blockers; haste doesn't gate damage so there's no life-gain or
     damage-distribution surface to assert beyond "matches vigilance
@@ -4382,12 +4382,12 @@ def test_cross_engine_haste_selector_post_declare_attacker_state(
     )
     assert py_att.tapped is True, (
         f"expected Python attacker.tapped = True (haste does NOT "
-        f"grant vigilance — standard CR 508.1c tap step ran), got "
+        f"grant vigilance â€” standard CR 508.1c tap step ran), got "
         f"{py_att.tapped}"
     )
     assert py_att.summoning_sick is True, (
         f"expected Python attacker.summoning_sick = True (haste "
-        f"bypasses but does NOT remove summoning sickness — flag "
+        f"bypasses but does NOT remove summoning sickness â€” flag "
         f"clears at the next untap step per CR 302.1), got "
         f"{py_att.summoning_sick}"
     )
@@ -4413,16 +4413,16 @@ def test_cross_engine_haste_selector_post_declare_attacker_state(
         f"{rust_att['summoning_sick']}"
     )
 
-    # ---- Phase 2: post-combat state (drive 180 total decisions —
+    # ---- Phase 2: post-combat state (drive 180 total decisions â€”
     #      past COMBAT_DAMAGE and SBA cleanup) ----
     for i in range(172, 180):
         action = haste_selector(py_state, rust_state, i)
         step_both(py_state, rust_state, action)
 
-    # Life totals: no lifelink → no life gain → p0 unchanged at 12
+    # Life totals: no lifelink â†’ no life gain â†’ p0 unchanged at 12
     # (was 12 entering combat after turn-12 retaliation), p1 at 20.
     assert py_state.players[0].life == 12, (
-        f"expected Python p0 life = 12 (no lifelink → no life gain), "
+        f"expected Python p0 life = 12 (no lifelink â†’ no life gain), "
         f"got {py_state.players[0].life}"
     )
     assert py_state.players[1].life == 20, (
@@ -4440,7 +4440,7 @@ def test_cross_engine_haste_selector_post_declare_attacker_state(
     )
 
     # p0 graveyard: Bear Sprinter (haste attacker died from 4
-    # back-damage — haste doesn't grant damage prevention).
+    # back-damage â€” haste doesn't grant damage prevention).
     py_p0_gy = [
         (o.id, o.printing.name) for o in py_state.players[0].graveyard
     ]
@@ -4456,7 +4456,7 @@ def test_cross_engine_haste_selector_post_declare_attacker_state(
     )
 
     # p1 graveyard: Grizzly Bears id 9 (first blocker took lethal 2;
-    # same shape as the vigilance probe — haste doesn't change the
+    # same shape as the vigilance probe â€” haste doesn't change the
     # damage-assignment branch).
     py_p1_gy = [
         (o.id, o.printing.name) for o in py_state.players[1].graveyard
@@ -4474,7 +4474,7 @@ def test_cross_engine_haste_selector_post_declare_attacker_state(
 
     # p1 battlefield still has Grizzly Bears id 11 (second blocker
     # survived because remaining was 0 after first blocker absorbed
-    # need=2 — post-CE14 ``if remaining <= 0: break`` guard).
+    # need=2 â€” post-CE14 ``if remaining <= 0: break`` guard).
     py_bf_bears = sorted(
         o.id for o in py_state.battlefield
         if o.printing.name == "Grizzly Bears"
@@ -4499,7 +4499,7 @@ def test_cross_engine_haste_selector_pre_injection_walks_clean(
     """Pre-injection walk (steps 0-167) on :func:`multi_blocker_deckspec`
     with :func:`haste_selector` is parity-clean. Pins the contract that
     the haste probe's delegate-to-retaliation_selector backbone is
-    unchanged — steps 0-167 are identical to retaliation_selector's
+    unchanged â€” steps 0-167 are identical to retaliation_selector's
     walk shape and surface no divergences. The haste injection fires
     SPECIFICALLY at step 168, not before.
 
@@ -4557,30 +4557,30 @@ def test_cross_engine_haste_selector_pre_injection_walks_clean(
         )
     )
     assert not bear_sprinter_anywhere, (
-        "Bear Sprinter should not yet exist at end of step 167 — "
+        "Bear Sprinter should not yet exist at end of step 167 â€” "
         "haste injection fires at step 168"
     )
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 follow-up #14: menace_selector — extend retaliation_selector with
+# Phase 5 follow-up #14: menace_selector â€” extend retaliation_selector with
 # a side-channel-injected 2/2 menace creature on p0's battlefield at step
 # 168, then drive a SINGLE-blocker DECLARE_BLOCKERS request (illegal per
-# CR 702.110b — "can't be blocked except by two or more creatures") at
+# CR 702.110b â€” "can't be blocked except by two or more creatures") at
 # turn 13 to surface the predicted CE16 divergence.
 #
 # Mirrors :func:`vigilance_selector` / :func:`haste_selector` exactly
 # except the injected creature carries ``menace`` and the
-# DECLARE_BLOCKERS branch is parameterized — three test scenarios
+# DECLARE_BLOCKERS branch is parameterized â€” three test scenarios
 # exercise three block decisions:
 #
-#   * **A** (``"none"``): zero blockers → legal, menace invisible.
-#   * **B** (``"both"``): two blockers → legal multi-block, menace
+#   * **A** (``"none"``): zero blockers â†’ legal, menace invisible.
+#   * **B** (``"both"``): two blockers â†’ legal multi-block, menace
 #     satisfied.
-#   * **C** (``"single"``): one blocker → ILLEGAL per CR 702.110b.
+#   * **C** (``"single"``): one blocker â†’ ILLEGAL per CR 702.110b.
 #
 # **OUTCOME on this probe: CE16 SURFACED then CLOSED by
-# ``feature/ce16-menace-validation``** — the Rust
+# ``feature/ce16-menace-validation``** â€” the Rust
 # ``Action::DeclareBlockers`` apply arm now post-validates each
 # unique attacker's block assignment via
 # ``is_legal_block_assignment`` (the predicate at
@@ -4594,37 +4594,37 @@ def test_cross_engine_haste_selector_pre_injection_walks_clean(
 # Three pinning tests guard the contract post-closure:
 #
 #   1. ``test_cross_engine_menace_selector_no_blockers_walks_clean``
-#      — scenario A (``"none"``): full 200-decision walk parity-clean.
+#      â€” scenario A (``"none"``): full 200-decision walk parity-clean.
 #      Menace invisible when defender declines to block.
 #   2. ``test_cross_engine_menace_selector_both_blockers_walks_clean``
-#      — scenario B (``"both"``): full 200-decision walk parity-clean.
+#      â€” scenario B (``"both"``): full 200-decision walk parity-clean.
 #      Multi-block satisfies the menace >=2 requirement.
 #   3. ``test_cross_engine_menace_selector_single_blocker_walks_clean``
-#      — scenario C (``"single"``): full 200-decision walk
+#      â€” scenario C (``"single"``): full 200-decision walk
 #      parity-clean post-CE16-closure. The companion symptom-pin
 #      (``..._surfaces_ce16_at_step_174``) was deleted at closure
 #      per the CE2-CE15 pair-pin convention.
 #   4. ``test_cross_engine_menace_selector_pre_injection_walks_clean``
-#      — pre-injection backbone steps 0-167 parity-clean. Shared
+#      â€” pre-injection backbone steps 0-167 parity-clean. Shared
 #      across all three scenarios (the injection + DECLARE_BLOCKERS
 #      override fire AFTER step 167).
 # ---------------------------------------------------------------------------
 
 
 def test_cross_engine_menace_selector_no_blockers_walks_clean(parity_smoke):
-    """**Menace no-blockers clean-walk pin** (scenario A) — 200-decision
+    """**Menace no-blockers clean-walk pin** (scenario A) â€” 200-decision
     walk on :func:`multi_blocker_deckspec` with the
     ``block_decision="none"`` menace_selector is parity-clean every
     step. With zero blockers declared the menace constraint is
     vacuously satisfied (CR 702.110b only restricts HOW the attacker
     is blocked, not whether it must be), so this scenario does NOT
-    exercise the apply-time menace gate — it pins the "menace is
+    exercise the apply-time menace gate â€” it pins the "menace is
     invisible when defender doesn't block" baseline contract.
 
     Both engines should:
       * Accept the empty ``declare_blockers`` assignment.
-      * Apply 2 combat damage from the menace attacker to p1 →
-        p1 life: 20 → 18 (matches the unblocked single-attacker
+      * Apply 2 combat damage from the menace attacker to p1 â†’
+        p1 life: 20 â†’ 18 (matches the unblocked single-attacker
         baseline; no menace-specific surface fires).
       * Leave Bear Bully on p0's battlefield post-combat (attacker
         took no back-damage).
@@ -4653,22 +4653,22 @@ def test_cross_engine_menace_selector_no_blockers_walks_clean(parity_smoke):
 
 
 def test_cross_engine_menace_selector_both_blockers_walks_clean(parity_smoke):
-    """**Menace multi-block clean-walk pin** (scenario B) — 200-decision
+    """**Menace multi-block clean-walk pin** (scenario B) â€” 200-decision
     walk on :func:`multi_blocker_deckspec` with the
     ``block_decision="both"`` menace_selector is parity-clean every
     step. With TWO blockers declared the menace >=2 requirement is
-    satisfied and menace is invisible — this scenario pins the
+    satisfied and menace is invisible â€” this scenario pins the
     "multi-block legality is unaffected by menace" baseline contract.
 
     Both engines should:
       * Accept the two-blocker ``declare_blockers`` assignment.
-      * Apply combat damage: attacker (2 power) → first blocker
-        (lethal, blocker dies). Blockers (2 + 2 = 4 power back) →
+      * Apply combat damage: attacker (2 power) â†’ first blocker
+        (lethal, blocker dies). Blockers (2 + 2 = 4 power back) â†’
         attacker (dies). Standard multi-block damage shape (matches
         vigilance / haste probes' post-multi-block state modulo the
         attacker's tapped flag).
       * Post-combat: p0 gy = [Bear Bully id 14], p1 gy = [Grizzly
-        Bears id 9 — first blocker took lethal 2], p1 bf still has
+        Bears id 9 â€” first blocker took lethal 2], p1 bf still has
         Grizzly Bears id 11 (post-CE14 ``if remaining <= 0: break``).
     """
     from mtg_bot.parity.cross_engine import (
@@ -4695,7 +4695,7 @@ def test_cross_engine_menace_selector_both_blockers_walks_clean(parity_smoke):
 
 
 def test_cross_engine_menace_selector_single_blocker_walks_clean(parity_smoke):
-    """**CE16 closure pin** (scenario C) — 200-decision walk on
+    """**CE16 closure pin** (scenario C) â€” 200-decision walk on
     :func:`multi_blocker_deckspec` with the ``block_decision="single"``
     menace_selector is parity-clean.
 
@@ -4743,12 +4743,12 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
     """Pre-injection walk (steps 0-167) on :func:`multi_blocker_deckspec`
     with any of the three menace_selector variants is parity-clean.
     Pins the contract that the menace probe's
-    delegate-to-retaliation_selector backbone is unchanged — steps
+    delegate-to-retaliation_selector backbone is unchanged â€” steps
     0-167 are identical to retaliation_selector's walk shape and
     surface no divergences. The menace injection + DECLARE_BLOCKERS
     override fire SPECIFICALLY at / after step 168, not before.
 
-    Tests with the ``"none"`` variant — all three variants share the
+    Tests with the ``"none"`` variant â€” all three variants share the
     same pre-167 backbone (they only diverge at the DECLARE_BLOCKERS
     branch around step 173, well past step 167).
 
@@ -4807,15 +4807,15 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
         )
     )
     assert not bear_bully_anywhere, (
-        "Bear Bully should not yet exist at end of step 167 — "
+        "Bear Bully should not yet exist at end of step 167 â€” "
         "menace injection fires at step 168"
     )
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 follow-up #15: defender_selector — extend retaliation_selector with
+# Phase 5 follow-up #15: defender_selector â€” extend retaliation_selector with
 # a side-channel-injected 2/2 defender creature on p0's battlefield, then
-# drive three attack-decision variants (CR 702.3 — "A creature with
+# drive three attack-decision variants (CR 702.3 â€” "A creature with
 # defender can't attack"). The REJECT branch symmetric to haste's ACCEPT
 # branch (probe 63eb245a): a creature with the ``defender`` keyword CANNOT
 # be declared as an attacker. Mirrors :func:`haste_selector` (and
@@ -4823,36 +4823,36 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
 #
 #   * Injected creature carries ``defender`` instead of ``haste`` /
 #     ``menace``, and is NOT summoning-sick (no haste-style fixture
-#     needed — defender is a printed restriction, not a battlefield-
+#     needed â€” defender is a printed restriction, not a battlefield-
 #     state restriction).
 #   * Trigger gate keys on :data:`_DEFENDER_PRINTING_NAME`
 #     ("Bear Wall") so the seven probes' trigger gates are mutually
 #     independent.
 #   * Three test variants via :func:`make_defender_selector`:
 #
-#       1. ``"defender_only"`` — try ``declare_attackers([defender_id])``
+#       1. ``"defender_only"`` â€” try ``declare_attackers([defender_id])``
 #          ALONE. Both engines should reject (Python via
 #          ``eligible_attackers`` filter at ``combat.py:22``; Rust via
 #          ``declare_attacker``'s defender gate at
 #          ``state_ops_combat.rs:639-641``). Net: empty attackers Vec
 #          on both engines.
-#       2. ``"both"`` — try ``declare_attackers([defender_id,
+#       2. ``"both"`` â€” try ``declare_attackers([defender_id,
 #          normal_id])``. Defender dropped, normal attacker goes
 #          through. Net: 1 attacker (normal) on both.
-#       3. ``"normal_only"`` — try ``declare_attackers([normal_id])``.
-#          Clean baseline — defender stays passively on bf untouched.
+#       3. ``"normal_only"`` â€” try ``declare_attackers([normal_id])``.
+#          Clean baseline â€” defender stays passively on bf untouched.
 #
-# **OUTCOME on this probe: NEW DIVERGENCE — CE17 SURFACED.**
+# **OUTCOME on this probe: NEW DIVERGENCE â€” CE17 SURFACED.**
 #
 # **CE17: legal_decisions emits defender as a candidate attacker.**
 # Rust's ``state_ops_legal.rs:556-608`` DeclareAttackers eligibility
-# loop filters on tapped + creature + sickness-vs-haste only —
+# loop filters on tapped + creature + sickness-vs-haste only â€”
 # **NO DEFENDER FILTER**. The module docstring (lines 167-180) flags
-# this as deferred: "*Defender keyword (CR 702.3) — Python's
+# this as deferred: "*Defender keyword (CR 702.3) â€” Python's
 # eligible_attackers filters this out at enumeration time; first
 # slice defers to the primitive's per-id gate at apply.*" The
 # apply-time gate at ``state_ops_combat.rs:639-641`` correctly
-# rejects defender, but the legal_decisions emitter doesn't — so
+# rejects defender, but the legal_decisions emitter doesn't â€” so
 # subsets containing the defender id are enumerated as if legal,
 # violating the contract that ``legal_decisions`` returns only
 # LEGAL decisions.
@@ -4867,14 +4867,14 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
 #   * Python's ``legal_actions(state, 0)`` does NOT emit
 #     ``DeclareAttackers`` at all (Python uses a search-side
 #     combat-decisions factoring rather than enumerating
-#     declare-attackers subsets in legal_actions — see
+#     declare-attackers subsets in legal_actions â€” see
 #     state_ops_legal.rs:541-548 module docstring on "DeclareAttackers
 #     emission (Rust-only)"). The cross-engine compare on the
 #     enumeration shape is therefore Rust-only at present; the
 #     **per-engine** assertion is that Rust's emitted subsets should
 #     NOT include the defender id.
 #
-# **NOT FIXING per brief** — xfail-pin CE17. The fix shape (out of
+# **NOT FIXING per brief** â€” xfail-pin CE17. The fix shape (out of
 # scope for this probe) is to add a ``battlefield_has_keyword(...,
 # "defender")`` short-circuit to the eligibility filter in
 # ``state_ops_legal.rs`` around line 575, mirroring the apply-time
@@ -4883,7 +4883,7 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
 # apply-time semantics.
 #
 # **Apply-time gates are CLEAN.** All three variants' walk_both
-# produces zero per-step divergences — Python and Rust each silently
+# produces zero per-step divergences â€” Python and Rust each silently
 # drop the defender from their respective declare_attackers apply
 # paths, leaving the defender at ``attacking=False`` / ``tapped=
 # False`` / on its controller's bf. The per-step field-view compare
@@ -4893,20 +4893,20 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
 # Five pinning tests:
 #
 #   1. ``test_cross_engine_defender_selector_defender_only_walks_clean``
-#      — scenario A (``"defender_only"``): full 200-decision walk
+#      â€” scenario A (``"defender_only"``): full 200-decision walk
 #      parity-clean. Apply-time defender rejection works on both
-#      engines (Test B from the brief — apply_action divergence-free).
+#      engines (Test B from the brief â€” apply_action divergence-free).
 #   2. ``test_cross_engine_defender_selector_both_walks_clean``
-#      — scenario B (``"both"``): full 200-decision walk parity-clean.
-#      Mixed defender + normal request — defender dropped, normal
+#      â€” scenario B (``"both"``): full 200-decision walk parity-clean.
+#      Mixed defender + normal request â€” defender dropped, normal
 #      attacker proceeds.
 #   3. ``test_cross_engine_defender_selector_normal_only_walks_clean``
-#      — scenario C (``"normal_only"``): full 200-decision walk
+#      â€” scenario C (``"normal_only"``): full 200-decision walk
 #      parity-clean. Defender stays passively on bf untapped /
 #      not-attacking while the normal attacker drives combat
-#      (Test C from the brief — defender invisible when not asked).
+#      (Test C from the brief â€” defender invisible when not asked).
 #   4. ``test_cross_engine_defender_selector_legal_decisions_surfaces_ce17``
-#      — STRICT-XFAIL Test A from the brief. Drives 168 selector
+#      â€” STRICT-XFAIL Test A from the brief. Drives 168 selector
 #      decisions to land at the post-injection DECLARE_ATTACKERS
 #      step with both Bear Wall (id 14) and Bears id 5 on p0 bf,
 #      then asserts that Rust's ``legal_decisions(0)`` does NOT
@@ -4915,9 +4915,9 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
 #      behavior; when CE17 is closed the xfail flips to a strict
 #      pass.
 #   5. ``test_cross_engine_defender_selector_pre_injection_walks_clean``
-#      — pre-injection backbone steps 0-163 parity-clean. Shared
+#      â€” pre-injection backbone steps 0-163 parity-clean. Shared
 #      across all three scenarios. (The injection fires at step
-#      164 in the defender_selector walk — earlier than the
+#      164 in the defender_selector walk â€” earlier than the
 #      vigilance/haste/menace probes' step 168 because the
 #      side-channel clearing of Bears id 5's summoning sickness
 #      means the cast-and-pass loop is shorter.)
@@ -4925,8 +4925,8 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
 
 
 def test_cross_engine_defender_selector_defender_only_walks_clean(parity_smoke):
-    """**Defender apply-time reject clean-walk pin** (scenario A —
-    ``"defender_only"``) — 200-decision walk on
+    """**Defender apply-time reject clean-walk pin** (scenario A â€”
+    ``"defender_only"``) â€” 200-decision walk on
     :func:`multi_blocker_deckspec` with
     ``make_defender_selector("defender_only")`` is parity-clean every
     step. With ``declare_attackers([defender_id])`` requested ALONE,
@@ -4960,8 +4960,8 @@ def test_cross_engine_defender_selector_defender_only_walks_clean(parity_smoke):
 
 
 def test_cross_engine_defender_selector_both_walks_clean(parity_smoke):
-    """**Defender + normal mixed clean-walk pin** (scenario B —
-    ``"both"``) — 200-decision walk on :func:`multi_blocker_deckspec`
+    """**Defender + normal mixed clean-walk pin** (scenario B â€”
+    ``"both"``) â€” 200-decision walk on :func:`multi_blocker_deckspec`
     with ``make_defender_selector("both")`` is parity-clean every step.
     With ``declare_attackers([defender_id, normal_id])`` requested,
     both engines drop the defender and accept the normal attacker.
@@ -4993,8 +4993,8 @@ def test_cross_engine_defender_selector_both_walks_clean(parity_smoke):
 
 
 def test_cross_engine_defender_selector_normal_only_walks_clean(parity_smoke):
-    """**Defender baseline clean-walk pin** (scenario C —
-    ``"normal_only"``) — 200-decision walk on
+    """**Defender baseline clean-walk pin** (scenario C â€”
+    ``"normal_only"``) â€” 200-decision walk on
     :func:`multi_blocker_deckspec` with
     ``make_defender_selector("normal_only")`` is parity-clean every
     step. With ``declare_attackers([normal_id])`` requested (defender
@@ -5004,9 +5004,9 @@ def test_cross_engine_defender_selector_normal_only_walks_clean(parity_smoke):
 
     Additionally pins the post-walk state: the defender (Bear Wall,
     id 14) is on p0's battlefield with ``attacking=False``,
-    ``tapped=False``, ``summoning_sick=False`` — defender is
+    ``tapped=False``, ``summoning_sick=False`` â€” defender is
     invisible when not asked to attack. This is the brief's Test C
-    contract — "combat proceeds without the defender; defender stays
+    contract â€” "combat proceeds without the defender; defender stays
     untapped (no combat tap)".
     """
     from mtg_bot.parity.cross_engine import (
@@ -5053,12 +5053,12 @@ def test_cross_engine_defender_selector_normal_only_walks_clean(parity_smoke):
     )
     assert py_defender.controller_id == 0
     assert getattr(py_defender, "attacking", False) is False, (
-        "defender should not be attacking — CR 702.3 forbids it, "
+        "defender should not be attacking â€” CR 702.3 forbids it, "
         "and the selector never requested it to attack in the "
         "normal_only scenario"
     )
     assert py_defender.tapped is False, (
-        "defender should not be tapped — never attacked, never "
+        "defender should not be tapped â€” never attacked, never "
         "blocked, never activated; should stay untapped (Test C "
         "from the brief)"
     )
@@ -5085,7 +5085,7 @@ def test_cross_engine_defender_selector_normal_only_walks_clean(parity_smoke):
 def test_cross_engine_defender_selector_legal_decisions_excludes_defender(
     parity_smoke,
 ):
-    """**CE17 / I40 closure regression** — flipped from strict-xfail
+    """**CE17 / I40 closure regression** â€” flipped from strict-xfail
     to expected-pass by ``feature/ce17-defender-legal``. Test A from
     the original CE17 probe brief.
 
@@ -5101,7 +5101,7 @@ def test_cross_engine_defender_selector_legal_decisions_excludes_defender(
     (state_ops_legal.rs eligibility loop now short-circuits on
     ``battlefield_has_keyword(self, obj.id, "defender")``, mirroring
     the apply-time gate at ``state_ops_combat.rs:639-641``) the
-    assertion passes — defender ids are filtered out of the eligibility
+    assertion passes â€” defender ids are filtered out of the eligibility
     set at enumeration time, matching Python's
     ``combat.py:eligible_attackers`` (line 22).
 
@@ -5109,18 +5109,18 @@ def test_cross_engine_defender_selector_legal_decisions_excludes_defender(
     DECLARE_ATTACKERS step (with bf={p0: Forests + Bears id 5 +
     Bear Wall id 14; p1: Forests + Bears ids 9, 11}):
 
-      * ``declare_attackers([])`` — LEGAL (decline to attack).
-      * ``declare_attackers([5])`` — LEGAL (Bears id 5 untapped,
-        not sick, no defender → eligible).
+      * ``declare_attackers([])`` â€” LEGAL (decline to attack).
+      * ``declare_attackers([5])`` â€” LEGAL (Bears id 5 untapped,
+        not sick, no defender â†’ eligible).
 
     The two pre-CE17 illegal subsets (``([14])`` and ``([5, 14])``)
-    are no longer emitted — the defender filter at
+    are no longer emitted â€” the defender filter at
     ``state_ops_legal.rs:~588`` (per CE17 closure) drops Bear Wall
     id 14 from the eligible set before powerset enumeration.
 
     Python's ``legal_actions(state, 0)`` does not emit
     DeclareAttackers at all (it uses a search-side combat-decisions
-    factoring rather than enumerating subsets — see the divergence
+    factoring rather than enumerating subsets â€” see the divergence
     rationale in ``state_ops_legal.rs`` module docstring), so the
     cross-engine "shape" compare remains Rust-only. The assertion
     is "Rust's emitted subsets do not include the defender id".
@@ -5138,7 +5138,7 @@ def test_cross_engine_defender_selector_legal_decisions_excludes_defender(
     # DECLARE_ATTACKERS step. The injection fires on selector call
     # 165; the next DA step at active=p0 with defender on bf lands
     # at decision 167 (post-apply step name = DECLARE_ATTACKERS).
-    # We stop at decision 167 (167 selector calls applied) — the
+    # We stop at decision 167 (167 selector calls applied) â€” the
     # next selector call WOULD fire the defender_only-style DA
     # emission that pre-advances the phase, but we want to probe
     # legal_decisions BEFORE the emission so we cap the loop here.
@@ -5180,16 +5180,16 @@ def test_cross_engine_defender_selector_legal_decisions_excludes_defender(
     defender_id = int(defender[0].id)
 
     # Python's eligible_attackers correctly filters the defender out
-    # (combat.py:22) — pin this as the source of truth for "what the
+    # (combat.py:22) â€” pin this as the source of truth for "what the
     # CR 702.3-correct emission should be".
     py_elig_ids = {o.id for o in eligible_attackers(py_state, 0)}
     assert defender_id not in py_elig_ids, (
         f"Python's eligible_attackers should filter the defender out "
-        f"per CR 702.3 — defender id {defender_id} unexpectedly in "
+        f"per CR 702.3 â€” defender id {defender_id} unexpectedly in "
         f"eligible set {py_elig_ids}"
     )
 
-    # Rust's legal_decisions: CE17 / I40 contract — no emitted
+    # Rust's legal_decisions: CE17 / I40 contract â€” no emitted
     # declare_attackers subset contains the defender id (the
     # eligibility loop short-circuits on
     # battlefield_has_keyword(..., "defender"), mirroring the
@@ -5201,7 +5201,7 @@ def test_cross_engine_defender_selector_legal_decisions_excludes_defender(
     ]
     illegal_subsets = [s for s in da_subsets if defender_id in s]
     assert not illegal_subsets, (
-        f"CE17 regression — Rust legal_decisions emits "
+        f"CE17 regression â€” Rust legal_decisions emits "
         f"{len(illegal_subsets)} declare_attackers subset(s) "
         f"containing the defender id {defender_id} (CR 702.3 "
         f"violation): {illegal_subsets}. All emitted subsets: "
@@ -5216,15 +5216,15 @@ def test_cross_engine_defender_selector_pre_injection_walks_clean(parity_smoke):
     """Pre-injection walk (steps 0-164) on :func:`multi_blocker_deckspec`
     with any of the three defender_selector variants is parity-clean.
     Pins the contract that the defender probe's
-    delegate-to-retaliation_selector backbone is unchanged — steps
+    delegate-to-retaliation_selector backbone is unchanged â€” steps
     0-164 are identical to retaliation_selector's walk shape and
     surface no divergences. The defender injection fires SPECIFICALLY
     at selector call 165 (the 166th decision, 0-indexed 165), not
-    before — the trigger gate ``creature_count >= 3`` becomes true
+    before â€” the trigger gate ``creature_count >= 3`` becomes true
     only after Bears id 5 has resolved onto the battlefield at
     decision 164.
 
-    Tests with the ``"normal_only"`` variant — all three variants
+    Tests with the ``"normal_only"`` variant â€” all three variants
     share the same pre-injection backbone (they only diverge at the
     DECLARE_ATTACKERS branch around step 168, well past the
     injection point).
@@ -5269,12 +5269,12 @@ def test_cross_engine_defender_selector_pre_injection_walks_clean(parity_smoke):
     ]
     assert len(creatures) == 3, (
         f"expected 3 creatures on bf at end of decision 164 (Bears "
-        f"ids 5/9/11 — Bears 5 just cast this turn, Bears 9/11 on "
+        f"ids 5/9/11 â€” Bears 5 just cast this turn, Bears 9/11 on "
         f"p1 bf from earlier), got {len(creatures)}: "
         f"{[(o.id, o.controller_id, o.summoning_sick) for o in creatures]}"
     )
     # No Bear Wall in any zone yet (the defender injection hasn't
-    # fired — it fires on the NEXT selector call, decision 165).
+    # fired â€” it fires on the NEXT selector call, decision 165).
     bear_wall_anywhere = (
         any(o.printing.name == "Bear Wall" for o in py_state.battlefield)
         or any(
@@ -5285,7 +5285,7 @@ def test_cross_engine_defender_selector_pre_injection_walks_clean(parity_smoke):
         )
     )
     assert not bear_wall_anywhere, (
-        "Bear Wall should not yet exist after decision 164 — "
+        "Bear Wall should not yet exist after decision 164 â€” "
         "defender injection fires on selector call 165 (the 166th "
         "decision, 0-indexed 165)"
     )
@@ -5296,34 +5296,34 @@ def test_cross_engine_defender_selector_pre_injection_walks_clean(parity_smoke):
 #
 # Three scenarios from the brief:
 #
-#   * **Test A** — indestructible blocker takes lethal damage (damage ==
+#   * **Test A** â€” indestructible blocker takes lethal damage (damage ==
 #     toughness) via real combat. Both engines: blocker on bf, damage=2,
 #     tapped=True. Exercises the SBA lethal-damage filter (CR 704.5g +
-#     702.12a) — `state_ops_sba::collect_sba_victims` skips creatures
+#     702.12a) â€” `state_ops_sba::collect_sba_victims` skips creatures
 #     with the indestructible keyword; Python's `turn.state_based_actions`
 #     `elif "indestructible" in kws: continue` does the same.
 #
-#   * **Test B** — indestructible takes EXCESS damage (damage > toughness)
+#   * **Test B** â€” indestructible takes EXCESS damage (damage > toughness)
 #     via side-channel damage marking. Both engines: still on bf,
 #     damage=5. Exercises the SAME SBA filter but with the damage axis
 #     pushed past the equality boundary; a sloppy port that special-
 #     cases damage==toughness would diverge.
 #
-#   * **Test C** — indestructible targeted by a direct `destroy_target`
+#   * **Test C** â€” indestructible targeted by a direct `destroy_target`
 #     effect. Both engines: still on bf. Exercises a DISTINCT call site
-#     from the SBA filter — `Effect::DestroyTarget`
+#     from the SBA filter â€” `Effect::DestroyTarget`
 #     (state_ops_resolve.rs:1023-1078) on Rust and `turn.destroy(state,
 #     obj)` (turn.py:532-537) on Python; both gate on the keyword
 #     before mutating.
 #
-# Outcome prediction: **clean pass on all three** — both engines' code
+# Outcome prediction: **clean pass on all three** â€” both engines' code
 # paths read `keywords` in lockstep. No CE divergence expected. If one
 # surfaces, it's CE18.
 # ---------------------------------------------------------------------------
 
 
 def test_cross_engine_indestructible_selector_walks_clean(parity_smoke):
-    """**Indestructible clean-walk pin (Test A)** — 200-decision walk
+    """**Indestructible clean-walk pin (Test A)** â€” 200-decision walk
     on :func:`multi_blocker_deckspec` with
     :func:`indestructible_selector` is parity-clean every step.
 
@@ -5337,8 +5337,8 @@ def test_cross_engine_indestructible_selector_walks_clean(parity_smoke):
         eligible blocker because Bears 9/11 still tapped from turn-12
         attack).
       * COMBAT_DAMAGE: each takes 2 damage.
-      * SBA: Bears id 5 (damage=2 >= toughness=2) → graveyard.
-        Bear Idol (damage=2, indestructible) STAYS on bf — both
+      * SBA: Bears id 5 (damage=2 >= toughness=2) â†’ graveyard.
+        Bear Idol (damage=2, indestructible) STAYS on bf â€” both
         engines.
 
     The SBA indestructible-filter parity is exercised at the per-step
@@ -5369,8 +5369,8 @@ def test_cross_engine_indestructible_selector_walks_clean(parity_smoke):
 
 
 def test_cross_engine_indestructible_post_combat_state(parity_smoke):
-    """**Indestructible post-combat structural pin (Test A)** — drives
-    enough decisions for combat damage + SBA to fire (175 steps —
+    """**Indestructible post-combat structural pin (Test A)** â€” drives
+    enough decisions for combat damage + SBA to fire (175 steps â€”
     just past COMBAT_DAMAGE at step 173, before CLEANUP at step 177
     which zeroes damage marks per CR 514.2), then asserts the Bear
     Idol is STILL on p1's bf with ``damage=2, summoning_sick=False``
@@ -5380,7 +5380,7 @@ def test_cross_engine_indestructible_post_combat_state(parity_smoke):
     p1's Bear Idol is STILL ON THE BATTLEFIELD with damage=2".
 
     Note on tapped state: the Bear Idol stays ``tapped=False`` because
-    blocking does NOT tap a creature in MTG (CR 509 — only attacking
+    blocking does NOT tap a creature in MTG (CR 509 â€” only attacking
     taps per CR 508.1c). Both engines agree.
 
     Also pins the attacker's death: Bears id 5 should be in p0's
@@ -5397,7 +5397,7 @@ def test_cross_engine_indestructible_post_combat_state(parity_smoke):
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     # 175 steps: past COMBAT_DAMAGE (step 173) where damage applied
     # and SBA ran, but before CLEANUP (step 177) which zeroes damage
-    # marks (CR 514.2 — damage clears at end of turn).
+    # marks (CR 514.2 â€” damage clears at end of turn).
     for i in range(175):
         action = indestructible_selector(py_state, rust_state, i)
         step_both(py_state, rust_state, action)
@@ -5409,7 +5409,7 @@ def test_cross_engine_indestructible_post_combat_state(parity_smoke):
         None,
     )
     assert py_idol is not None, (
-        "expected Bear Idol on Python p1 bf post-combat — "
+        "expected Bear Idol on Python p1 bf post-combat â€” "
         "indestructible should have protected it from SBA "
         "destruction. bf names = "
         f"{[(o.id, o.printing.name) for o in py_state.battlefield]}"
@@ -5427,7 +5427,7 @@ def test_cross_engine_indestructible_post_combat_state(parity_smoke):
         None,
     )
     assert rust_idol is not None, (
-        "expected Bear Idol on Rust p1 bf post-combat — "
+        "expected Bear Idol on Rust p1 bf post-combat â€” "
         "indestructible should have protected it from SBA destruction"
     )
     assert rust_idol["controller_id"] == 1
@@ -5436,7 +5436,7 @@ def test_cross_engine_indestructible_post_combat_state(parity_smoke):
     )
     assert rust_idol["summoning_sick"] is False
 
-    # Bears id 5 (the attacker) should be DEAD — 2 damage from Bear
+    # Bears id 5 (the attacker) should be DEAD â€” 2 damage from Bear
     # Idol >= toughness 2 = lethal, no indestructible on the attacker.
     py_p0_gy_ids = {o.id for o in py_state.players[0].graveyard}
     assert 5 in py_p0_gy_ids, (
@@ -5452,7 +5452,7 @@ def test_cross_engine_indestructible_post_combat_state(parity_smoke):
 
 
 def test_cross_engine_indestructible_excess_damage_sba(parity_smoke):
-    """**Indestructible excess-damage SBA pin (Test B)** — drives the
+    """**Indestructible excess-damage SBA pin (Test B)** â€” drives the
     walk to post-combat state where Bear Idol has damage=2, then
     side-channel-marks ADDITIONAL damage so total = 5 (well past
     toughness=2). Calls ``apply_sbas`` and asserts Bear Idol is STILL
@@ -5474,7 +5474,7 @@ def test_cross_engine_indestructible_excess_damage_sba(parity_smoke):
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     # 175 decisions: just past COMBAT_DAMAGE (step 173) where damage
     # applied and SBA ran. Stop BEFORE CLEANUP (step 177) which
-    # zeroes damage marks (CR 514.2) — we want the existing damage=2
+    # zeroes damage marks (CR 514.2) â€” we want the existing damage=2
     # on the Bear Idol to persist so we can layer additional damage
     # on top.
     for i in range(175):
@@ -5521,7 +5521,7 @@ def test_cross_engine_indestructible_excess_damage_sba(parity_smoke):
     )
     assert py_idol_after is not None, (
         "expected Bear Idol still on Python p1 bf after excess-damage "
-        "SBA pass — indestructible gates before damage>=toughness "
+        "SBA pass â€” indestructible gates before damage>=toughness "
         "compare. bf names = "
         f"{[(o.id, o.printing.name) for o in py_state.battlefield]}"
     )
@@ -5534,19 +5534,19 @@ def test_cross_engine_indestructible_excess_damage_sba(parity_smoke):
     )
     assert rust_idol_after is not None, (
         "expected Bear Idol still on Rust p1 bf after excess-damage "
-        "SBA pass — indestructible gates before damage>=toughness "
+        "SBA pass â€” indestructible gates before damage>=toughness "
         "compare"
     )
     assert rust_idol_after["damage"] == 5
 
 
 def test_cross_engine_indestructible_direct_destroy_effect(parity_smoke):
-    """**Indestructible destroy-effect pin (Test C)** — exercises the
+    """**Indestructible destroy-effect pin (Test C)** â€” exercises the
     DISTINCT call site from the SBA filter: a direct
     ``Effect::DestroyTarget``-style resolution on an indestructible
     target.
 
-    Uses a FRESH matched state (no walk) — injects Bear Idol on p1's
+    Uses a FRESH matched state (no walk) â€” injects Bear Idol on p1's
     bf as the sole bf object (so Rust's
     ``TargetFilter::AnyCreature`` picks it as ``bf[0]``), then:
 
@@ -5562,7 +5562,7 @@ def test_cross_engine_indestructible_direct_destroy_effect(parity_smoke):
         returns Ok(()) without mutating.
 
     Both engines: Bear Idol still on p1's bf post-resolve. No CE
-    divergence expected — both code paths gate on the keyword on the
+    divergence expected â€” both code paths gate on the keyword on the
     printing.
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
@@ -5621,7 +5621,7 @@ def test_cross_engine_indestructible_direct_destroy_effect(parity_smoke):
     py_destroy_result = py_destroy(py_state, py_idol)
     assert py_destroy_result is False, (
         "expected Python destroy() to return False for indestructible "
-        "target (CR 702.12 — destroy fizzles)"
+        "target (CR 702.12 â€” destroy fizzles)"
     )
 
     # ---- Rust side: cast a synthetic destroy_target sorcery ----
@@ -5655,7 +5655,7 @@ def test_cross_engine_indestructible_direct_destroy_effect(parity_smoke):
         None,
     )
     assert py_idol_after is not None, (
-        "expected Bear Idol still on Python p1 bf after destroy() — "
+        "expected Bear Idol still on Python p1 bf after destroy() â€” "
         "indestructible should have suppressed the destroy. bf = "
         f"{[(o.id, o.printing.name, o.controller_id) for o in py_state.battlefield]}"
     )
@@ -5668,7 +5668,7 @@ def test_cross_engine_indestructible_direct_destroy_effect(parity_smoke):
         ]
         assert "Bear Idol" not in gy_names, (
             f"Bear Idol unexpectedly in Python p{player_idx} graveyard"
-            f" — indestructible filter failed: {gy_names}"
+            f" â€” indestructible filter failed: {gy_names}"
         )
 
     rust_idol_after = next(
@@ -5678,7 +5678,7 @@ def test_cross_engine_indestructible_direct_destroy_effect(parity_smoke):
     )
     assert rust_idol_after is not None, (
         "expected Bear Idol still on Rust p1 bf after destroy_target "
-        "resolve — indestructible should have suppressed the destroy"
+        "resolve â€” indestructible should have suppressed the destroy"
     )
     assert rust_idol_after["controller_id"] == 1
     for player_idx in (0, 1):
@@ -5688,7 +5688,7 @@ def test_cross_engine_indestructible_direct_destroy_effect(parity_smoke):
         ]
         assert "Bear Idol" not in rust_gy_names, (
             f"Bear Idol unexpectedly in Rust p{player_idx} graveyard "
-            f"— indestructible filter failed: {rust_gy_names}"
+            f"â€” indestructible filter failed: {rust_gy_names}"
         )
 
 
@@ -5697,42 +5697,42 @@ def test_cross_engine_indestructible_direct_destroy_effect(parity_smoke):
 #
 # Three scenarios from the brief:
 #
-#   * **Test A** — p0's opponent has a hexproof creature (controller=1,
+#   * **Test A** â€” p0's opponent has a hexproof creature (controller=1,
 #     "Bear Sage", 2/2). p0 casts a single-target destroy spell
 #     (Effect::DestroyTarget { target: AnyCreature } / Python's
 #     turn.destroy). Per CR 702.11a the creature SHOULD be untargetable
 #     by opponent-controlled spells. Both engines today DON'T enforce
-#     this — hexproof is unenforced metadata on both sides (Python's
+#     this â€” hexproof is unenforced metadata on both sides (Python's
 #     `_enumerate_for_filter` walks bf with no hexproof gate; Rust's
 #     `Effect::DestroyTarget` docstring at state_ops_resolve.rs:40-46
 #     explicitly notes "no protection / hexproof / shroud, no per-spell
 #     target-selection"). The probe pins this SHARED bug: both engines
 #     destroy the Bear Sage identically. Parity is preserved.
 #
-#   * **Test B** — p0's OWN hexproof creature on p0's bf (controller=0).
+#   * **Test B** â€” p0's OWN hexproof creature on p0's bf (controller=0).
 #     p0 casts a destroy spell. Per CR 702.11a hexproof only protects
 #     from OPPONENTS' spells, so self-targeting MUST succeed even on a
 #     hexproof creature. Both engines (which don't enforce hexproof at
-#     all) destroy the creature — parity-clean, AND happens to be
+#     all) destroy the creature â€” parity-clean, AND happens to be
 #     CR-correct because the bug-axis (over-permissive targeting) is
 #     CR-correct for the same-controller scenario.
 #
-#   * **Test C** — `legal_decisions` for a target-requiring spell:
+#   * **Test C** â€” `legal_decisions` for a target-requiring spell:
 #     confirm the hexproof creature behaves the SAME way on both
 #     engines when emitted as a target option. Since neither engine
 #     emits cast-spell-with-target decisions in `legal_decisions`
 #     today, this test exercises the **target-enumeration paths
 #     directly**: Python's `Effect.legal_targets` (called from
 #     effects/base.py:78), and Rust's `Effect::DestroyTarget` apply
-#     path's target picker (state_ops_resolve.rs:1030-1035 — picks
+#     path's target picker (state_ops_resolve.rs:1030-1035 â€” picks
 #     `bf[0]` of the defender). Both should produce IDENTICAL
 #     target-selection answers (both include the hexproof creature)
 #     since neither enforces hexproof.
 #
-# Outcome: **(c) old known gap** — neither engine enforces hexproof.
+# Outcome: **(c) old known gap** â€” neither engine enforces hexproof.
 # Parity-clean (both engines exhibit the SAME CR-divergent behavior).
 # Tests pin the shared-bug parity so a future one-sided fix surfaces
-# as CE18. No xfail decoration needed — the tests assert the
+# as CE18. No xfail decoration needed â€” the tests assert the
 # **current** state, not the CR-correct one.
 #
 # Cross-doc pointers:
@@ -5742,13 +5742,13 @@ def test_cross_engine_indestructible_direct_destroy_effect(parity_smoke):
 #   * Rust state_ops_resolve.rs:40-46 explicitly documents
 #     "no protection / hexproof / shroud".
 #   * docs/SEARCH_LIMITATIONS.md:389 notes hexproof as a heuristic-
-#     abort blocker (which only matters if the heuristic could fire —
+#     abort blocker (which only matters if the heuristic could fire â€”
 #     orthogonal to engine enforcement).
 # ---------------------------------------------------------------------------
 
 
 def test_cross_engine_hexproof_selector_walks_clean(parity_smoke):
-    """**Hexproof clean-walk pin** — 200-decision walk on
+    """**Hexproof clean-walk pin** â€” 200-decision walk on
     :func:`multi_blocker_deckspec` with :func:`hexproof_selector`
     is parity-clean every step.
 
@@ -5765,7 +5765,7 @@ def test_cross_engine_hexproof_selector_walks_clean(parity_smoke):
 
     The hexproof injection's most useful per-step compare lives at
     the post-injection step where Bear Sage first appears on both
-    engines' bf — confirms both register the same shape (id,
+    engines' bf â€” confirms both register the same shape (id,
     keywords carry, controller_id=1, power/toughness 2/2).
     """
     from mtg_bot.parity.cross_engine import (
@@ -5791,14 +5791,14 @@ def test_cross_engine_hexproof_selector_walks_clean(parity_smoke):
 
 
 def test_cross_engine_hexproof_opponent_destroy_unenforced(parity_smoke):
-    """**Test A — opponent's hexproof creature is destroyed (shared bug
+    """**Test A â€” opponent's hexproof creature is destroyed (shared bug
     parity pin).** Drives the walk past the side-channel injection
-    (step ~170 — enough for the Bear Sage to land on both engines'
+    (step ~170 â€” enough for the Bear Sage to land on both engines'
     p1 bf), then exercises a direct destroy-target effect from p0
     (whose opponent is p1, so CR 702.11a SHOULD prevent the destroy).
 
-    Per CR 702.11a — a permanent with hexproof "can't be the target
-    of spells or abilities your opponents control" — both engines
+    Per CR 702.11a â€” a permanent with hexproof "can't be the target
+    of spells or abilities your opponents control" â€” both engines
     SHOULD refuse to target the Bear Sage. Neither engine enforces
     this today:
 
@@ -5808,7 +5808,7 @@ def test_cross_engine_hexproof_opponent_destroy_unenforced(parity_smoke):
         (state_ops_resolve.rs:1040-1048); the module docstring at
         lines 40-46 explicitly flags hexproof as out-of-scope.
 
-    This test pins the **current shared behavior** — both engines
+    This test pins the **current shared behavior** â€” both engines
     destroy the Bear Sage and put it in p1's graveyard. The cross-
     engine parity is preserved; the CR divergence is shared. If a
     future fix on either side starts enforcing hexproof, this test
@@ -5861,7 +5861,7 @@ def test_cross_engine_hexproof_opponent_destroy_unenforced(parity_smoke):
     # The destroy() primitive is what every "destroy target X" effect
     # routes through; it gates on indestructible but NOT hexproof.
     # We bypass the targeting-pipeline layer (which also doesn't
-    # enforce hexproof — see _enumerate_for_filter in
+    # enforce hexproof â€” see _enumerate_for_filter in
     # effects/base.py:103) and call the primitive directly to pin
     # the lowest-level engine behavior.
     from mtg_bot.turn import destroy as py_destroy
@@ -5878,7 +5878,7 @@ def test_cross_engine_hexproof_opponent_destroy_unenforced(parity_smoke):
     # destroy() returning False without moving the object, but the
     # gate doesn't exist on the engine today.
     assert py_destroy_result is True, (
-        "Python destroy() unexpectedly returned False — has hexproof "
+        "Python destroy() unexpectedly returned False â€” has hexproof "
         "enforcement landed on the Python side? If so, the cross-engine "
         "parity now diverges (Rust still destroys; Python now refuses). "
         "This test pins the current shared-bug behavior; flip to the "
@@ -5918,7 +5918,7 @@ def test_cross_engine_hexproof_opponent_destroy_unenforced(parity_smoke):
     # primitive `destroy_object_by_id`-style entry. Per the rust
     # PyState surface, there's no public destroy-by-id; the best
     # available proxy is `deal_damage` to lethal which routes
-    # through SBA (and SBA also doesn't enforce hexproof — only
+    # through SBA (and SBA also doesn't enforce hexproof â€” only
     # indestructible). That confirms the symmetry from a DIFFERENT
     # entry point.
     #
@@ -5937,18 +5937,18 @@ def test_cross_engine_hexproof_opponent_destroy_unenforced(parity_smoke):
     # Both engines: Bear Sage should be DEAD (in p1's graveyard).
     # Hexproof has no SBA gate on either side; only indestructible
     # does (and Bear Sage isn't indestructible). This is the shared
-    # behavior — both engines treat hexproof as unenforced metadata.
+    # behavior â€” both engines treat hexproof as unenforced metadata.
     py_sage_after = next(
         (o for o in py_state.battlefield
          if o.printing.name == "Bear Sage"),
         None,
     )
     assert py_sage_after is None, (
-        "expected Bear Sage REMOVED from Python p1 bf — SBA should "
+        "expected Bear Sage REMOVED from Python p1 bf â€” SBA should "
         "have moved it to p1 graveyard (damage=2 >= toughness=2; "
         "hexproof is unenforced metadata, NOT a SBA gate). If this "
         "fails Python may have started enforcing hexproof somewhere "
-        "unexpected — flip the test's expectation and file CE18."
+        "unexpected â€” flip the test's expectation and file CE18."
     )
     py_p1_gy_names = [
         o.printing.name for o in py_state.players[1].graveyard
@@ -5963,9 +5963,9 @@ def test_cross_engine_hexproof_opponent_destroy_unenforced(parity_smoke):
         None,
     )
     assert rust_sage_after is None, (
-        "expected Bear Sage REMOVED from Rust p1 bf — SBA should "
+        "expected Bear Sage REMOVED from Rust p1 bf â€” SBA should "
         "have moved it to p1 graveyard. If this fails Rust may have "
-        "started enforcing hexproof somewhere unexpected — flip the "
+        "started enforcing hexproof somewhere unexpected â€” flip the "
         "test's expectation and file CE18."
     )
     rust_p1_gy_names = [
@@ -5978,18 +5978,18 @@ def test_cross_engine_hexproof_opponent_destroy_unenforced(parity_smoke):
 
 
 def test_cross_engine_hexproof_self_target_destroyed(parity_smoke):
-    """**Test B — own hexproof creature can be self-targeted (CR-
+    """**Test B â€” own hexproof creature can be self-targeted (CR-
     correct AND shared-bug parity).** Inject Bear Sage on p0's bf
     (not p1's) so when p0 destroys it, the hexproof gate per
     CR 702.11a does NOT fire (hexproof only blocks OPPONENTS).
 
     Setup: fresh state (no walk), manually inject Bear Sage on p0's
-    bf (controller=0). Both engines should destroy it — and this
+    bf (controller=0). Both engines should destroy it â€” and this
     happens to also be CR-correct because hexproof only protects
     from opponents.
 
     This test is the converse of Test A: same destroy primitive,
-    same hexproof keyword, but different controller — and the
+    same hexproof keyword, but different controller â€” and the
     expected outcome (destruction) is the same because the gate
     that would differentiate them (controller != caster) isn't
     implemented on either engine. If a future enforcement landed
@@ -6052,7 +6052,7 @@ def test_cross_engine_hexproof_self_target_destroyed(parity_smoke):
     py_destroy_result = py_destroy(py_state, py_sage)
     assert py_destroy_result is True, (
         "Python destroy() unexpectedly returned False on own hexproof "
-        "creature — hexproof should ONLY protect from opponents "
+        "creature â€” hexproof should ONLY protect from opponents "
         "(CR 702.11a). If this fails the future enforcement was "
         "over-eager."
     )
@@ -6095,7 +6095,7 @@ def test_cross_engine_hexproof_self_target_destroyed(parity_smoke):
 
 
 def test_cross_engine_hexproof_unenforced_at_target_enumeration(parity_smoke):
-    """**Test C — target enumeration includes the hexproof creature
+    """**Test C â€” target enumeration includes the hexproof creature
     on BOTH engines (shared bug at the enumeration layer).** The
     brief's Test C asks "legal_decisions for a target-requiring
     spell: confirm the hexproof creature is NOT in the emitted
@@ -6106,16 +6106,16 @@ def test_cross_engine_hexproof_unenforced_at_target_enumeration(parity_smoke):
     ENUMERATION paths directly:
 
       * Python: `Effect._enumerate_for_filter` (effects/base.py:103)
-        — walks bf with the target filter, returns
+        â€” walks bf with the target filter, returns
         ``("creature", id)`` tuples.
       * Rust: `Effect::DestroyTarget`'s target picker
-        (state_ops_resolve.rs:1029-1035) — picks `bf[0]` of the
+        (state_ops_resolve.rs:1029-1035) â€” picks `bf[0]` of the
         defender; the broader "list of legal targets" surface
         isn't exposed via PyState, but `battlefield_snapshot` of
         the defender's side is the closest analog.
 
     Both engines should INCLUDE the Bear Sage in their target-
-    enumeration output because neither enforces hexproof — confirms
+    enumeration output because neither enforces hexproof â€” confirms
     the shared-bug parity at the enumeration layer. If either side
     starts filtering out hexproof creatures from target enumeration,
     that's CE18.
@@ -6218,17 +6218,17 @@ def test_cross_engine_hexproof_unenforced_at_target_enumeration(parity_smoke):
     py_target_ids = {tid for (kind, tid) in py_targets if kind == "creature"}
     # Bear Sage MUST appear (hexproof unenforced).
     assert int(py_sage.id) in py_target_ids, (
-        "Bear Sage missing from Python target enumeration — has "
+        "Bear Sage missing from Python target enumeration â€” has "
         "hexproof enforcement landed at the enumeration layer? "
         "If so, this test pins the pre-fix shared-bug state; flip "
         "expectation and file CE18 against Rust which still emits it. "
         f"Enumerated ids: {sorted(py_target_ids)}"
     )
-    # Plain Bears MUST also appear — control assertion confirming
+    # Plain Bears MUST also appear â€” control assertion confirming
     # the enumeration surface is being exercised.
     assert int(py_plain.id) in py_target_ids, (
         "Plain Bears (control) missing from Python target enumeration "
-        "— test setup broken; the IsCreature filter should match. "
+        "â€” test setup broken; the IsCreature filter should match. "
         f"Enumerated ids: {sorted(py_target_ids)}"
     )
 
@@ -6240,7 +6240,7 @@ def test_cross_engine_hexproof_unenforced_at_target_enumeration(parity_smoke):
     # battlefield_snapshot dicts do NOT include `card_types`
     # (object_to_pydict at rust/src/state_ops_snapshot.rs:68 emits id,
     # printing_id, printing_name, tapped, summoning_sick, damage,
-    # counters, controller_id, zone, attached_to — no card_types).
+    # counters, controller_id, zone, attached_to â€” no card_types).
     # Filter by controller only; all entries we care about are creatures
     # because the test only injects creature printings on p1 and the
     # walk creates only creatures + (after step 168) the injected ones.
@@ -6251,12 +6251,12 @@ def test_cross_engine_hexproof_unenforced_at_target_enumeration(parity_smoke):
         if e.get("controller_id") == 1
     }
     assert rust_sage_id in rust_p1_creature_ids, (
-        "Bear Sage missing from Rust p1 bf snapshot — has hexproof "
+        "Bear Sage missing from Rust p1 bf snapshot â€” has hexproof "
         "filtering landed at the bf-snapshot layer? Unexpected. "
         f"p1 creature ids: {sorted(rust_p1_creature_ids)}"
     )
     assert rust_plain_id in rust_p1_creature_ids, (
-        "Plain Bears (control) missing from Rust p1 bf snapshot — "
+        "Plain Bears (control) missing from Rust p1 bf snapshot â€” "
         f"test setup broken. p1 creature ids: {sorted(rust_p1_creature_ids)}"
     )
 
@@ -6272,7 +6272,7 @@ def test_cross_engine_hexproof_unenforced_at_target_enumeration(parity_smoke):
     rust_sage_plain_subset = {rust_sage_id, rust_plain_id}
     assert py_sage_plain_subset == rust_sage_plain_subset, (
         f"Python and Rust enumerated different ids for the injected "
-        f"hexproof + plain creatures — id-allocation drift "
+        f"hexproof + plain creatures â€” id-allocation drift "
         f"(unrelated to hexproof). Python: {py_sage_plain_subset}, "
         f"Rust: {rust_sage_plain_subset}"
     )
@@ -6291,47 +6291,47 @@ def test_cross_engine_hexproof_unenforced_at_target_enumeration(parity_smoke):
 #
 # Three scenarios from the brief:
 #
-#   * **Test A** — DS attacker (2/2 Bear Champion, p0 bf) + single
+#   * **Test A** â€” DS attacker (2/2 Bear Champion, p0 bf) + single
 #     vanilla blocker (Bears id 9, p1 bf, force-untapped by the
 #     side-channel). FS substep: DS deals 2 to blocker; blocker
 #     (damage=2 >= toughness=2) dies in mid-combat SBA. Regular
-#     substep: DS attacker is still alive — Python rebuilds its
+#     substep: DS attacker is still alive â€” Python rebuilds its
 #     blockers list freshly and finds it empty (blocker is in
 #     graveyard), then routes its 2 damage to the defender. Rust
 #     uses an in-function alive-predicate filter that drops the
-#     regular-pass entry because the target died in FS pass — no
+#     regular-pass entry because the target died in FS pass â€” no
 #     spillover to defender.
 #
 #     **CE18 SURFACED**: Python p1 life = 18 (took 2 from
 #     redirected DS damage); Rust p1 life = 20 (the entry was
 #     filtered out). Single-axis divergence on `life_p1` only.
 #
-#   * **Test B** — DS attacker + 4/4 vanilla blocker (Bear Behemoth,
+#   * **Test B** â€” DS attacker + 4/4 vanilla blocker (Bear Behemoth,
 #     injected post-walk on p1 bf). FS substep: DS deals 2 to 4/4
-#     blocker (NOT lethal — blocker damage=2, toughness=4). Regular
-#     substep: DS deals ANOTHER 2 (total blocker damage = 4 ≥
+#     blocker (NOT lethal â€” blocker damage=2, toughness=4). Regular
+#     substep: DS deals ANOTHER 2 (total blocker damage = 4 â‰¥
 #     toughness 4 = lethal); 4/4 blocker deals 4 to DS attacker
 #     (lethal). End state: BOTH creatures in graveyard. Parity-clean.
 #
-#   * **Test C** — DS attacker + no blocker. Defender takes 4 damage
+#   * **Test C** â€” DS attacker + no blocker. Defender takes 4 damage
 #     total (2 first-strike + 2 regular). Parity-clean.
 #
 # Tests pin the contract:
 #
-#   * test_cross_engine_double_strike_selector_walks_clean —
+#   * test_cross_engine_double_strike_selector_walks_clean â€”
 #     **CE18 CLOSED**: full 200-decision walk is parity-clean,
 #     including step 174 (post-COMBAT_DAMAGE) which pre-closure
 #     diverged on life_p1. Companion symptom-pin
 #     test_cross_engine_double_strike_selector_surfaces_ce18_at_step_174
 #     deleted at closure per the CE2-CE17 pair-pin convention.
 #   * test_cross_engine_double_strike_post_combat_structural_state
-#     — direct-read structural pin on the post-combat bf + gy state.
+#     â€” direct-read structural pin on the post-combat bf + gy state.
 #   * test_cross_engine_double_strike_larger_blocker_mutual_death
-#     — Test B: 4/4 blocker case, parity-clean.
+#     â€” Test B: 4/4 blocker case, parity-clean.
 #   * test_cross_engine_double_strike_unblocked_full_damage_to_defender
-#     — Test C: no blocker case, parity-clean.
+#     â€” Test C: no blocker case, parity-clean.
 #   * test_cross_engine_double_strike_selector_pre_injection_walks_clean
-#     — pre-injection backbone steps 0-167 parity-clean.
+#     â€” pre-injection backbone steps 0-167 parity-clean.
 # ---------------------------------------------------------------------------
 
 
@@ -6347,7 +6347,7 @@ def test_cross_engine_double_strike_selector_walks_clean(parity_smoke):
     target died in the FS substep, the entry is REDIRECTED to
     `DamageTarget::Player(defending_player)` IF the source attacker
     has no remaining alive blockers (matches Python's "rebuild
-    blockers per-substep yields empty → route to defender" shape).
+    blockers per-substep yields empty â†’ route to defender" shape).
     Companion symptom pin
     ``test_cross_engine_double_strike_selector_surfaces_ce18_at_step_174``
     deleted at closure per the CE2-CE17 pair-pin convention.
@@ -6375,7 +6375,7 @@ def test_cross_engine_double_strike_selector_walks_clean(parity_smoke):
 
 
 def test_cross_engine_double_strike_post_combat_structural_state(parity_smoke):
-    """**Double-strike post-combat structural pin (Test A — non-life
+    """**Double-strike post-combat structural pin (Test A â€” non-life
     state).** Drives the walk past combat (180 steps, well past
     COMBAT_DAMAGE at step 174), then asserts the structural bf + gy
     state both engines DO agree on. Only ``life_p1`` diverges
@@ -6383,7 +6383,7 @@ def test_cross_engine_double_strike_post_combat_structural_state(parity_smoke):
 
     Pins the brief's Test A expectations:
       * Bear Champion (DS attacker, id 14) ALIVE on p0 bf with
-        damage=0 (attacker untouched — blocker is vanilla, no
+        damage=0 (attacker untouched â€” blocker is vanilla, no
         damage back; alternatively, damage marks were zeroed at
         CLEANUP step 177).
       * Bears id 9 (FS-killed blocker) in p1 graveyard.
@@ -6430,7 +6430,7 @@ def test_cross_engine_double_strike_post_combat_structural_state(parity_smoke):
         f"got {py_p1_gy_names}"
     )
 
-    # DS attacker damage=0 at end-of-turn (CR 514.2 — damage clears at cleanup).
+    # DS attacker damage=0 at end-of-turn (CR 514.2 â€” damage clears at cleanup).
     py_ds = next(
         o for o in py_state.battlefield
         if o.printing.name == "Bear Champion"
@@ -6469,7 +6469,7 @@ def test_cross_engine_double_strike_post_combat_structural_state(parity_smoke):
 
 
 def test_cross_engine_double_strike_larger_blocker_mutual_death(parity_smoke):
-    """**Test B — DS + 4/4 vanilla blocker** — fresh-state, direct
+    """**Test B â€” DS + 4/4 vanilla blocker** â€” fresh-state, direct
     combat invocation on both engines. Expected outcome: BOTH die.
 
     Setup:
@@ -6489,7 +6489,7 @@ def test_cross_engine_double_strike_larger_blocker_mutual_death(parity_smoke):
         lethal).
       * Final SBA: BOTH die.
 
-    Parity-clean — no CE18 divergence here because the regular-pass
+    Parity-clean â€” no CE18 divergence here because the regular-pass
     target is still alive after the FS pass (the alive-predicate
     filter doesn't fire on a target with damage=2 < toughness=4).
     """
@@ -6645,12 +6645,12 @@ def test_cross_engine_double_strike_larger_blocker_mutual_death(parity_smoke):
 def test_cross_engine_double_strike_unblocked_full_damage_to_defender(
     parity_smoke,
 ):
-    """**Test C — DS + no blocker** — fresh-state, direct combat
+    """**Test C â€” DS + no blocker** â€” fresh-state, direct combat
     invocation. Expected outcome: defender takes 4 damage total
     (2 first-strike + 2 regular). Both substeps' damage routes to
     defender because the attacker is unblocked from the start.
 
-    Parity-clean — both engines route both substeps' damage to the
+    Parity-clean â€” both engines route both substeps' damage to the
     defender for an unblocked attacker; no CE18 divergence here
     because the "blocker died mid-combat" axis doesn't apply when
     there was no blocker to begin with.
@@ -6692,7 +6692,7 @@ def test_cross_engine_double_strike_unblocked_full_damage_to_defender(
 
     py_p1_before = py_state.players[1].life
     resolve_combat_damage(py_state, defending_player_id=1)
-    # No SBA needed — no creatures took damage. Defender took 4
+    # No SBA needed â€” no creatures took damage. Defender took 4
     # life loss.
     assert py_state.players[1].life == py_p1_before - 4, (
         f"expected Python p1 life {py_p1_before - 4} (2 FS + 2 regular "
@@ -6719,7 +6719,7 @@ def test_cross_engine_double_strike_unblocked_full_damage_to_defender(
     )
 
     # Cross-engine: both engines applied 4 damage to defender. Parity-
-    # clean — this is the "outcome both engines agree on" pin for the
+    # clean â€” this is the "outcome both engines agree on" pin for the
     # unblocked-DS case.
     assert (py_p1_before - py_state.players[1].life) == (
         rust_p1_before - rust_state.get_life(1)
@@ -6729,7 +6729,7 @@ def test_cross_engine_double_strike_unblocked_full_damage_to_defender(
 def test_cross_engine_double_strike_selector_pre_injection_walks_clean(
     parity_smoke,
 ):
-    """**Double-strike pre-injection backbone pin** — steps 0-167 on
+    """**Double-strike pre-injection backbone pin** â€” steps 0-167 on
     :func:`multi_blocker_deckspec` with
     :func:`double_strike_selector` are parity-clean. The DS injection
     fires at step 168; the pre-injection backbone is identical to
@@ -6785,7 +6785,7 @@ def test_cross_engine_double_strike_selector_pre_injection_walks_clean(
         )
     )
     assert not bear_champion_anywhere, (
-        "Bear Champion should not yet exist at end of step 167 — DS "
+        "Bear Champion should not yet exist at end of step 167 â€” DS "
         "injection fires at step 168"
     )
 
@@ -6796,19 +6796,19 @@ def test_cross_engine_double_strike_selector_pre_injection_walks_clean(
 # Three scenarios from the brief, all at the DECLARE_BLOCKERS apply
 # gate (CR 702.9 + CR 702.17):
 #
-#   * **Test A** — flying attacker + vanilla blocker attempts to
+#   * **Test A** â€” flying attacker + vanilla blocker attempts to
 #     block. Both engines reject the pair at can_block /
 #     declare_blocker. Attacker goes through unblocked; defender
 #     takes 2 damage.
 #
-#   * **Test B** — flying attacker + reach blocker. Both engines
+#   * **Test B** â€” flying attacker + reach blocker. Both engines
 #     accept (reach is the gate-opener per CR 702.17). Combat
 #     damage: both 2/2s take 2 damage, both die.
 #
-#   * **Test C** — flying attacker + flying blocker. Both engines
+#   * **Test C** â€” flying attacker + flying blocker. Both engines
 #     accept. Combat damage: both die.
 #
-# Outcome prediction: **clean pass on all three** — Python's
+# Outcome prediction: **clean pass on all three** â€” Python's
 # `combat.can_block` (combat.py:70-73) and Rust's
 # `state.declare_blocker` (state_ops_combat.rs:713-719) gate on the
 # same printing.keywords carry symmetrically. No CE divergence
@@ -6817,7 +6817,7 @@ def test_cross_engine_double_strike_selector_pre_injection_walks_clean(
 
 
 def test_cross_engine_flying_selector_walks_clean(parity_smoke):
-    """**Flying clean-walk pin (Test A)** — 200-decision walk on
+    """**Flying clean-walk pin (Test A)** â€” 200-decision walk on
     :func:`multi_blocker_deckspec` with :func:`flying_selector` is
     parity-clean every step.
 
@@ -6830,7 +6830,7 @@ def test_cross_engine_flying_selector_walks_clean(parity_smoke):
       * DECLARE_BLOCKERS p1: emit [[9, bear_soarer_id]]. BOTH
         engines reject the (vanilla blocker, flying attacker) pair
         at their respective flying gates. Net blockers empty.
-      * COMBAT_DAMAGE: 2 damage to p1 (life 20 → 18).
+      * COMBAT_DAMAGE: 2 damage to p1 (life 20 â†’ 18).
 
     Parity-load-bearing field at the post-DECLARE_BLOCKERS step:
     the rejected pair must NOT leave a stale entry in either
@@ -6860,8 +6860,8 @@ def test_cross_engine_flying_selector_walks_clean(parity_smoke):
 
 
 def test_cross_engine_flying_post_combat_state(parity_smoke):
-    """**Flying post-combat structural pin (Test A)** — drives enough
-    decisions for combat damage to fire (175 steps — past
+    """**Flying post-combat structural pin (Test A)** â€” drives enough
+    decisions for combat damage to fire (175 steps â€” past
     COMBAT_DAMAGE), then asserts:
 
       * Bear Soarer still on p0's bf with damage=0 (unblocked, took
@@ -6901,7 +6901,7 @@ def test_cross_engine_flying_post_combat_state(parity_smoke):
     )
     assert py_soarer is not None, (
         "expected Bear Soarer still on Python p0 bf post-combat "
-        "(unblocked — no damage taken). bf = "
+        "(unblocked â€” no damage taken). bf = "
         f"{[(o.id, o.printing.name) for o in py_state.battlefield]}"
     )
     assert py_soarer.controller_id == 0
@@ -6923,14 +6923,14 @@ def test_cross_engine_flying_post_combat_state(parity_smoke):
         f"expected Rust Bear Soarer damage=0, got {rust_soarer['damage']}"
     )
 
-    # Bears id 9 should still be on p1's bf with damage=0 — its
+    # Bears id 9 should still be on p1's bf with damage=0 â€” its
     # block was rejected by the flying gate, so it didn't engage.
     py_bears9 = next(
         (o for o in py_state.battlefield if int(o.id) == 9),
         None,
     )
     assert py_bears9 is not None, (
-        "expected Bears id 9 still on Python p1 bf — its block "
+        "expected Bears id 9 still on Python p1 bf â€” its block "
         "was rejected at the flying gate, so it didn't engage. "
         f"bf = {[(o.id, o.printing.name) for o in py_state.battlefield]}"
     )
@@ -6949,7 +6949,7 @@ def test_cross_engine_flying_post_combat_state(parity_smoke):
         f"expected Rust Bears id 9 damage=0, got {rust_bears9['damage']}"
     )
 
-    # p1 life: 20 → 18 (2 damage from unblocked Bear Soarer).
+    # p1 life: 20 â†’ 18 (2 damage from unblocked Bear Soarer).
     assert py_state.players[1].life == py_p1_before - 2, (
         f"expected Python p1 life={py_p1_before - 2} (2 unblocked "
         f"damage); got {py_state.players[1].life}"
@@ -6961,15 +6961,15 @@ def test_cross_engine_flying_post_combat_state(parity_smoke):
 
 
 def test_cross_engine_flying_vs_reach_blocker(parity_smoke):
-    """**Test B — flying attacker + reach blocker** — fresh-state
+    """**Test B â€” flying attacker + reach blocker** â€” fresh-state
     direct combat. Expected outcome: both engines accept the reach
     blocker (CR 702.17), combat damage: both 2/2s die.
 
     Pins that BOTH engines treat reach as a gate-opener for
     flying-attacker blocks. A buggy port that only honored flying on
     the BLOCKER side (skipping the reach branch) would surface as a
-    divergence: Rust rejects → Bear Soarer dies / Bear Reacher
-    alive; Python accepts → mutual KO.
+    divergence: Rust rejects â†’ Bear Soarer dies / Bear Reacher
+    alive; Python accepts â†’ mutual KO.
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
     from mtg_bot.combat import resolve_combat_damage
@@ -7129,9 +7129,9 @@ def test_cross_engine_flying_vs_reach_blocker(parity_smoke):
 
 
 def test_cross_engine_flying_vs_flying_blocker(parity_smoke):
-    """**Test C — flying attacker + flying blocker** — fresh-state
+    """**Test C â€” flying attacker + flying blocker** â€” fresh-state
     direct combat. Expected outcome: both engines accept the flying
-    blocker (CR 702.9 + 702.17 — flying on the blocker passes the
+    blocker (CR 702.9 + 702.17 â€” flying on the blocker passes the
     gate too), combat damage: both 2/2s die.
 
     Pins the symmetric block-eligibility shape: flying-vs-flying is
@@ -7265,17 +7265,17 @@ def test_cross_engine_flying_vs_flying_blocker(parity_smoke):
 
 
 def test_cross_engine_flying_vanilla_blocker_rejected_direct(parity_smoke):
-    """**Test A direct-call pin** — fresh-state direct
+    """**Test A direct-call pin** â€” fresh-state direct
     ``declare_blocker`` call with vanilla blocker against flying
     attacker. Pins the per-engine rejection shape at the primitive
     layer (separate from the selector-walk path):
 
       * Python: ``actions._declare_blockers`` consults
-        ``combat.can_block`` per pair → returns False for
-        (vanilla, flying) → assignment silently dropped → final
+        ``combat.can_block`` per pair â†’ returns False for
+        (vanilla, flying) â†’ assignment silently dropped â†’ final
         ``state.blockers`` is empty for the flying attacker.
       * Rust: ``state.declare_blocker`` returns ``False`` for the
-        pair → ``state.blockers`` is empty.
+        pair â†’ ``state.blockers`` is empty.
 
     Both engines reach the same final shape; this test pins it at
     the primitive level. If a future regression makes either engine
@@ -7315,7 +7315,7 @@ def test_cross_engine_flying_vanilla_blocker_rejected_direct(parity_smoke):
         power=2,
         toughness=2,
         produces=frozenset(),
-        keywords=frozenset(),  # NO flying, NO reach — vanilla.
+        keywords=frozenset(),  # NO flying, NO reach â€” vanilla.
     )
 
     py_soarer = py_state.new_object(
@@ -7387,7 +7387,7 @@ def test_cross_engine_flying_vanilla_blocker_rejected_direct(parity_smoke):
     )
     assert rust_block_ok is False, (
         f"expected Rust declare_blocker to REJECT vanilla blocker "
-        f"vs flying attacker (CR 702.9 — flying can only be blocked "
+        f"vs flying attacker (CR 702.9 â€” flying can only be blocked "
         f"by flying or reach); got {rust_block_ok}"
     )
 
@@ -7395,7 +7395,7 @@ def test_cross_engine_flying_vanilla_blocker_rejected_direct(parity_smoke):
 def test_cross_engine_flying_selector_pre_injection_walks_clean(
     parity_smoke,
 ):
-    """**Flying pre-injection backbone pin** — steps 0-167 on
+    """**Flying pre-injection backbone pin** â€” steps 0-167 on
     :func:`multi_blocker_deckspec` with :func:`flying_selector` are
     parity-clean. The flying injection fires at step 168.
 
@@ -7447,7 +7447,7 @@ def test_cross_engine_flying_selector_pre_injection_walks_clean(
         )
     )
     assert not bear_soarer_anywhere, (
-        "Bear Soarer should not yet exist at end of step 167 — "
+        "Bear Soarer should not yet exist at end of step 167 â€” "
         "flying injection fires at step 168"
     )
 
@@ -7465,9 +7465,9 @@ def test_cross_engine_flying_selector_pre_injection_walks_clean(
 def test_cross_engine_counterspell_selector_walks_clean(parity_smoke):
     """Cross-engine counterspell resolution walks parity-clean.
 
-    **Outcome (a) — clean pass**: no novel CE divergence surfaced on
+    **Outcome (a) â€” clean pass**: no novel CE divergence surfaced on
     this probe. Both engines compose a Counterspell-on-Bait-Bears
-    stack-of-2 the same observable end-state — bait Bears in p0's
+    stack-of-2 the same observable end-state â€” bait Bears in p0's
     graveyard (countered, no ETB), Counterspell in p1's graveyard,
     both stacks empty, the 3 pre-existing creatures untouched on
     their respective battlefields.
@@ -7512,7 +7512,7 @@ def test_cross_engine_counterspell_post_resolve_structural_state(parity_smoke):
 
     * Both engines: stack is empty after the counter resolves.
     * Both engines: bait Bears in p0's graveyard (NOT on the
-      battlefield — the countered spell never resolved as a creature).
+      battlefield â€” the countered spell never resolved as a creature).
     * Both engines: Counterspell in p1's graveyard.
     * Both engines: the 3 pre-existing creatures (Bears ids 5, 9, 11)
       are still on their respective battlefields, untouched by the
@@ -7559,10 +7559,10 @@ def test_cross_engine_counterspell_post_resolve_structural_state(parity_smoke):
         f"expected Counterspell in Python p1 graveyard "
         f"(post-resolve Instant -> controller gy); got {py_p1_gy_names}"
     )
-    # The bait Bears was countered — it should NEVER have hit the bf.
+    # The bait Bears was countered â€” it should NEVER have hit the bf.
     py_bf_names = [o.printing.name for o in py_state.battlefield]
     assert "Bait Bears" not in py_bf_names, (
-        f"Bait Bears should NOT be on Python bf — the spell was "
+        f"Bait Bears should NOT be on Python bf â€” the spell was "
         f"countered, no ETB / put_into_battlefield should have fired. "
         f"bf={py_bf_names}"
     )
@@ -7583,7 +7583,7 @@ def test_cross_engine_counterspell_post_resolve_structural_state(parity_smoke):
     )
     rust_bf_names = tuple(e[0] for e in rust_view["battlefield"])
     assert "Bait Bears" not in rust_bf_names, (
-        f"Bait Bears should NOT be on Rust bf — countered spell "
+        f"Bait Bears should NOT be on Rust bf â€” countered spell "
         f"routes to gy inline. bf={rust_bf_names}"
     )
 
@@ -7605,7 +7605,7 @@ def test_cross_engine_counterspell_pre_injection_walks_clean(parity_smoke):
     """Pre-injection backbone steps 0-167 are parity-clean.
 
     Same shape as the corresponding pre-injection test for every
-    prior probe — confirms the retaliation_selector backbone the
+    prior probe â€” confirms the retaliation_selector backbone the
     counterspell injection rides on stays divergence-free up to
     the injection step. Distinguishes between "the counterspell
     side-channel itself introduces a divergence" and "something
@@ -7618,7 +7618,7 @@ def test_cross_engine_counterspell_pre_injection_walks_clean(parity_smoke):
         walk_both,
     )
 
-    # Walk 168 steps — the counter injection fires at step 168
+    # Walk 168 steps â€” the counter injection fires at step 168
     # itself, so steps 0..167 (168 steps total) are the
     # backbone-only window.
     result = walk_both(
@@ -7661,12 +7661,12 @@ def test_cross_engine_counterspell_pre_injection_walks_clean(parity_smoke):
     )
     assert not in_any_zone, (
         "Counterspell / Bait Bears should not yet exist at end of "
-        "step 167 — counter injection fires at step 168"
+        "step 167 â€” counter injection fires at step 168"
     )
 
 
 def test_cross_engine_counterspell_empty_stack_fizzle(parity_smoke):
-    """**Test C — counter target with EMPTY stack.** Direct-call
+    """**Test C â€” counter target with EMPTY stack.** Direct-call
     fresh-state pin of the empty-stack fizzle parity.
 
     Inject a Counterspell into p1's hand, push it onto an otherwise-
@@ -7675,7 +7675,7 @@ def test_cross_engine_counterspell_empty_stack_fizzle(parity_smoke):
     `None => return Ok(())`), the counter source moves to p1's
     graveyard, the stack ends empty.
 
-    Pins the parity of the no-legal-target fizzle path — narrows the
+    Pins the parity of the no-legal-target fizzle path â€” narrows the
     "counterspell pushed without a target on stack" case which the
     selector walk doesn't directly exercise (the walk always has the
     bait Bears in front of the Counterspell on the stack).
@@ -7710,7 +7710,7 @@ def test_cross_engine_counterspell_empty_stack_fizzle(parity_smoke):
         counter_printing, owner_id=1, zone=Zone.STACK,
     )
     py_counter.summoning_sick = False
-    # Push counter on an empty stack with empty targets — the
+    # Push counter on an empty stack with empty targets â€” the
     # CounterTargetSpell.resolve `if not targets: return` short-circuit
     # is the load-bearing path here.
     py_state.stack.append(
@@ -7801,7 +7801,7 @@ def _legal_actions_to_dicts(actions):
 
 
 def test_cross_engine_flash_test_a_closes_ce19(parity_smoke):
-    """**Test A — CE19 CLOSED**: legal_decisions for a flash creature
+    """**Test A â€” CE19 CLOSED**: legal_decisions for a flash creature
     on p1's turn (active=p1) with p0 holding priority emits CastSpell
     on BOTH engines.
 
@@ -7824,7 +7824,7 @@ def test_cross_engine_flash_test_a_closes_ce19(parity_smoke):
       now lives ABOVE the sorcery-timing short-circuit and gates
       per-card on ``is_instant || keywords.contains("flash") ||
       is_sorcery_timing``. The flash keyword triggers the
-      instant-speed pass — Rust emits ``CastSpell`` for the flash
+      instant-speed pass â€” Rust emits ``CastSpell`` for the flash
       card at the off-active priority window, matching Python.
 
     The assertion shape is flipped from the pre-closure shape-pin
@@ -7943,7 +7943,7 @@ def test_cross_engine_flash_test_a_closes_ce19(parity_smoke):
 
 
 def test_cross_engine_flash_test_b_own_turn_main_phase_parity(parity_smoke):
-    """**Test B — parity-clean sanity**: legal_decisions for a flash
+    """**Test B â€” parity-clean sanity**: legal_decisions for a flash
     creature on p0's OWN turn (active=p0) at PRECOMBAT_MAIN, priority=p0.
 
     Both engines should emit CastSpell for the flash creature:
@@ -8021,7 +8021,7 @@ def test_cross_engine_flash_test_b_own_turn_main_phase_parity(parity_smoke):
 
 
 def test_cross_engine_flash_test_c_vanilla_off_turn_negative_parity(parity_smoke):
-    """**Test C — parity-clean NEGATIVE**: legal_decisions for a
+    """**Test C â€” parity-clean NEGATIVE**: legal_decisions for a
     VANILLA creature (NO flash) on p1's turn with p0 priority.
 
     Setup mirrors Test A's priority window (turn 14 PRECOMBAT_MAIN
@@ -8682,7 +8682,7 @@ def test_cross_engine_activated_mid_combat_selector_pre_injection_walks_clean(pa
 
 
 def test_cross_engine_activated_cost_test_a_emission_parity_post_ce20_closure(parity_smoke):
-    """**CE20 CLOSURE — flipped from pre-closure shape-pin.**
+    """**CE20 CLOSURE â€” flipped from pre-closure shape-pin.**
 
     Post-CE20-substrate, Rust's CardPrinting carries an
     ``activated_abilities`` Vec and ``legal_decisions`` walks it to
@@ -8748,14 +8748,14 @@ def test_cross_engine_activated_cost_test_a_emission_parity_post_ce20_closure(pa
         f"(id {py_bear_id}); got {py_activate_source_ids}"
     )
 
-    # ---- Rust (CE20 CLOSED — post-substrate Rust now emits) ----
+    # ---- Rust (CE20 CLOSED â€” post-substrate Rust now emits) ----
     rust_actions = rust_state.legal_decisions(0)
     rust_activate_source_ids = [
         a.get("source_id") for a in rust_actions
         if a.get("kind") == "activate_ability"
     ]
     assert rust_bear_id in rust_activate_source_ids, (
-        f"CE20 CLOSED — Rust SHOULD now emit ActivateAbility for the "
+        f"CE20 CLOSED â€” Rust SHOULD now emit ActivateAbility for the "
         f"Bear Caster (id {rust_bear_id}). The new activated_abilities "
         f"substrate walks the per-ability list and emits when the cost "
         f"is affordable from the pool. Got Rust ActivateAbility source "
@@ -8868,7 +8868,7 @@ def test_cross_engine_activated_cost_test_b_no_emission_when_unaffordable(parity
 
 
 def test_cross_engine_activated_cost_test_c_apply_dispatch_parity_post_ce20_closure(parity_smoke):
-    """**CE20 CLOSURE — flipped from pre-closure shape-pin.**
+    """**CE20 CLOSURE â€” flipped from pre-closure shape-pin.**
 
     Post-CE20-substrate, Rust's ActivateAbility apply arm dispatches
     into ``printing.activated_abilities[ability_index]``, pays the
@@ -8930,7 +8930,7 @@ def test_cross_engine_activated_cost_test_c_apply_dispatch_parity_post_ce20_clos
     )
     assert len(py_state.players[0].hand) == pre_hand
 
-    # ---- Rust apply: CE20 CLOSED — should now succeed ----
+    # ---- Rust apply: CE20 CLOSED â€” should now succeed ----
     rust_activate_dict = {
         "kind": "activate_ability",
         "source_id": rust_bear_id,
@@ -8968,7 +8968,7 @@ def test_cross_engine_activated_cost_test_d_python_underpays_silently(parity_smo
         draw on the stack.
       * Rust: the dispatch arm self-gates on
         ``pool_can_cover(pool, ability.cost.mana)`` via
-        ``state_ops_cast::pay_mana_cost_pub`` — an unaffordable
+        ``state_ops_cast::pay_mana_cost_pub`` â€” an unaffordable
         cost raises ValueError("unaffordable from controller's
         mana pool").
 
@@ -9046,7 +9046,7 @@ def test_cross_engine_activated_cost_test_e_auto_tap_headroom_emission_parity(pa
 
     Pre-I50 the cross-engine smoke pre-populated p0's pool with
     `{1}{G}` before driving the ActivateAbility emission probe
-    because Rust's affordability was POOL-ONLY — Python's
+    because Rust's affordability was POOL-ONLY â€” Python's
     auto-tap-from-lands accounting wasn't mirrored on the Rust
     side. Test A documents this gap explicitly: "the side-channel
     pre-populates the pool via Python's auto-tap-from-lands
@@ -9058,7 +9058,7 @@ def test_cross_engine_activated_cost_test_e_auto_tap_headroom_emission_parity(pa
     sums pool + headroom from untapped non-sick mana sources on bf.
     With the side-channel's 3 untapped Forests on p0's bf, an empty
     pool composes to `{G}{G}{G}` of headroom, which covers
-    `{1}{G}` directly — and the emission appears on BOTH engines
+    `{1}{G}` directly â€” and the emission appears on BOTH engines
     WITHOUT priming the pool.
 
     Pins the converged emission-side affordability axis.
@@ -9095,7 +9095,7 @@ def test_cross_engine_activated_cost_test_e_auto_tap_headroom_emission_parity(pa
     # backbone leaves a couple of G coins in Python's pool from
     # tap-for-mana actions during the walk; without this clear, the
     # post-emission assertion would pass via floating mana, not via
-    # the auto-tap composer — defeating the whole point of Test E.
+    # the auto-tap composer â€” defeating the whole point of Test E.
     py_state.players[0].mana_pool.clear()
     rust_state.empty_mana_pool(0)
     rust_pool = rust_state.get_mana_pool(0)
@@ -9125,7 +9125,7 @@ def test_cross_engine_activated_cost_test_e_auto_tap_headroom_emission_parity(pa
         if a.get("kind") == "activate_ability"
     ]
     assert rust_bear_id in rust_activate_source_ids, (
-        f"I50 CLOSED — Rust SHOULD now emit ActivateAbility for Bear "
+        f"I50 CLOSED â€” Rust SHOULD now emit ActivateAbility for Bear "
         f"Caster (id {rust_bear_id}) with 0 pool + 3 untapped Forests, "
         f"matching Python's auto-tap-from-lands accounting. Got Rust "
         f"ActivateAbility source ids: {rust_activate_source_ids}"
@@ -9184,16 +9184,16 @@ def test_cross_engine_activated_cost_selector_pre_injection_walks_clean(parity_s
 
 
 # ---------------------------------------------------------------------------
-# Phase 5 follow-up #21: multi_keyword_selector tests — MULTI-KEYWORD
-# COMPOSITION combat (the eleven single-keyword surfaces — FS / DT /
+# Phase 5 follow-up #21: multi_keyword_selector tests â€” MULTI-KEYWORD
+# COMPOSITION combat (the eleven single-keyword surfaces â€” FS / DT /
 # trample / lifelink / vigilance / haste / menace / defender /
-# indestructible / double-strike / flying — are now well-covered, all
+# indestructible / double-strike / flying â€” are now well-covered, all
 # clean or closed; this probe asks whether the keywords COMPOSE
 # correctly on the same creature).
 #
 # Three scenarios:
 #
-#   * **Test A — Lifelink + Deathtouch (LL+DT).** A 2/2 LL+DT
+#   * **Test A â€” Lifelink + Deathtouch (LL+DT).** A 2/2 LL+DT
 #     attacker vs a 4/4 vanilla blocker. Per CR 702.2b + 702.15b:
 #     attacker deals 2 to blocker; deathtouch upgrades mark to >= 4
 #     (lethal); blocker dies. Blocker deals 4 back to attacker;
@@ -9201,7 +9201,7 @@ def test_cross_engine_activated_cost_selector_pre_injection_walks_clean(parity_s
 #     literal 2 damage dealt -> p0 gains 2 life. Expected outcome on
 #     both engines: both creatures dead, p0 life +2.
 #
-#   * **Test B — First-strike + Deathtouch (FS+DT).** A 2/2 FS+DT
+#   * **Test B â€” First-strike + Deathtouch (FS+DT).** A 2/2 FS+DT
 #     attacker vs a 4/4 vanilla blocker. Per CR 702.7c + 702.2b:
 #     first-strike pass deals 2 to blocker; deathtouch upgrades the
 #     mark to >= 4 (lethal); blocker dies in the pass-1-alive-filter
@@ -9209,14 +9209,14 @@ def test_cross_engine_activated_cost_selector_pre_injection_walks_clean(parity_s
 #     blocker's back-damage entry (source is dead). Expected:
 #     attacker survives with 0 marked damage, blocker dead.
 #
-#   * **Test C — Trample + Lifelink (T+LL).** A 4/4 T+LL attacker
+#   * **Test C â€” Trample + Lifelink (T+LL).** A 4/4 T+LL attacker
 #     vs a 2/2 vanilla blocker. Per CR 702.19b + 702.15b: trample
 #     assigns lethal (= 2) to blocker, spills remaining 2 to
 #     defender. Lifelink fires on BOTH entries (the blocker hit AND
 #     the defender hit). Expected: blocker dead, attacker alive,
 #     defender takes 2, p0 gains 4 life.
 #
-# **OUTCOME: (a) CLEAN PASS — no novel cross-engine divergence
+# **OUTCOME: (a) CLEAN PASS â€” no novel cross-engine divergence
 # surfaced.** Both engines compose the keywords correctly per CR.
 # Specifically:
 #
@@ -9224,7 +9224,7 @@ def test_cross_engine_activated_cost_selector_pre_injection_walks_clean(parity_s
 #     per plan entry (Rust's state_ops_combat.rs:1357-1364) at the
 #     LITERAL `amount` value, not the deathtouch-upgraded mark. This
 #     is correct (CR 702.15b: "Damage dealt by a creature with
-#     lifelink causes its controller to gain that much life" — the
+#     lifelink causes its controller to gain that much life" â€” the
 #     "that much" refers to the damage dealt, not the marked damage
 #     after deathtouch upgrade).
 #
@@ -9248,24 +9248,24 @@ def test_cross_engine_activated_cost_selector_pre_injection_walks_clean(parity_s
 #
 # Pinned by five new tests:
 #
-#   * test_cross_engine_multi_keyword_selector_walks_clean — full
+#   * test_cross_engine_multi_keyword_selector_walks_clean â€” full
 #     200-decision walk on multi_blocker_deckspec with the LL+DT
 #     injection, parity-clean every step.
-#   * test_cross_engine_multi_keyword_lifelink_deathtouch — direct-
+#   * test_cross_engine_multi_keyword_lifelink_deathtouch â€” direct-
 #     combat structural pin (Test A: LL+DT 2/2 vs vanilla 4/4).
-#   * test_cross_engine_multi_keyword_first_strike_deathtouch —
+#   * test_cross_engine_multi_keyword_first_strike_deathtouch â€”
 #     direct-combat structural pin (Test B: FS+DT 2/2 vs vanilla 4/4).
-#   * test_cross_engine_multi_keyword_trample_lifelink — direct-
+#   * test_cross_engine_multi_keyword_trample_lifelink â€” direct-
 #     combat structural pin (Test C: T+LL 4/4 vs vanilla 2/2).
 #   * test_cross_engine_multi_keyword_selector_pre_injection_walks_clean
-#     — steps 0-167 parity-clean (the selector's delegate-to-
+#     â€” steps 0-167 parity-clean (the selector's delegate-to-
 #     retaliation_selector backbone is unchanged before step-168
 #     injection).
 # ---------------------------------------------------------------------------
 
 
 def test_cross_engine_multi_keyword_selector_walks_clean(parity_smoke):
-    """**Multi-keyword (LL+DT) clean-walk pin** — 200-decision walk on
+    """**Multi-keyword (LL+DT) clean-walk pin** â€” 200-decision walk on
     :func:`multi_blocker_deckspec` with :func:`multi_keyword_selector`
     is parity-clean every step. The LL+DT injection at step 168 +
     the single-blocker COMBAT_DAMAGE step around index 175 compose
@@ -9273,7 +9273,7 @@ def test_cross_engine_multi_keyword_selector_walks_clean(parity_smoke):
     BOTH deathtouch mark-upgrade (mark >= 2 = toughness, blocker
     dies) AND lifelink (+2 life on p0).
 
-    No CE21 surfaced on this slice. Outcome (a) — keywords compose
+    No CE21 surfaced on this slice. Outcome (a) â€” keywords compose
     correctly.
     """
     from mtg_bot.parity.cross_engine import (
@@ -9299,7 +9299,7 @@ def test_cross_engine_multi_keyword_selector_walks_clean(parity_smoke):
 
 
 def test_cross_engine_multi_keyword_lifelink_deathtouch(parity_smoke):
-    """**Test A — LL+DT composition pin** — fresh-state, direct
+    """**Test A â€” LL+DT composition pin** â€” fresh-state, direct
     combat invocation on both engines.
 
     Setup: 2/2 lifelink+deathtouch Bear Inquisitor on p0 bf; 4/4
@@ -9458,7 +9458,7 @@ def test_cross_engine_multi_keyword_lifelink_deathtouch(parity_smoke):
 
 
 def test_cross_engine_multi_keyword_first_strike_deathtouch(parity_smoke):
-    """**Test B — FS+DT composition pin** — fresh-state, direct
+    """**Test B â€” FS+DT composition pin** â€” fresh-state, direct
     combat invocation on both engines.
 
     Setup: 2/2 first-strike+deathtouch Bear Slayer on p0 bf; 4/4
@@ -9470,7 +9470,7 @@ def test_cross_engine_multi_keyword_first_strike_deathtouch(parity_smoke):
         mark to >= toughness 4 (lethal). Blocker dies via mid-combat
         SBA (Python) or pass-2 alive-predicate filter (Rust).
       * Regular substep: blocker is dead; its back-damage entry is
-        dropped (source is dead — Rust's `battlefield_creature_alive`
+        dropped (source is dead â€” Rust's `battlefield_creature_alive`
         filter at state_ops_combat.rs:1211 / Python's per-substep
         blockers-list rebuild at combat.py:_resolve_damage_step).
         Attacker takes no back-damage.
@@ -9566,7 +9566,7 @@ def test_cross_engine_multi_keyword_first_strike_deathtouch(parity_smoke):
         "Python FS+DT: blocker should be DEAD (FS substep + deathtouch "
         "upgrades mark to lethal)"
     )
-    # Attacker's marked damage cleared by mid-combat SBA's apply pass —
+    # Attacker's marked damage cleared by mid-combat SBA's apply pass â€”
     # actually, marked damage persists through end-of-turn cleanup
     # (CR 514.2). Within the resolve_combat_damage call + immediate SBA,
     # the attacker's damage stays whatever the regular substep would
@@ -9644,7 +9644,7 @@ def test_cross_engine_multi_keyword_first_strike_deathtouch(parity_smoke):
 
 
 def test_cross_engine_multi_keyword_trample_lifelink(parity_smoke):
-    """**Test C — T+LL composition pin** — fresh-state, direct combat
+    """**Test C â€” T+LL composition pin** â€” fresh-state, direct combat
     invocation on both engines.
 
     Setup: 4/4 trample+lifelink Bear Crusher on p0 bf; 2/2 vanilla
@@ -9659,14 +9659,14 @@ def test_cross_engine_multi_keyword_trample_lifelink(parity_smoke):
       * Attacker ALIVE (took 2 back-damage from 2/2 blocker; 2 <
         toughness 4 = non-lethal).
       * Attacker damage = 2 (marked).
-      * p0 life = 24 (was 20; +4 from lifelink — TWO entries fire:
+      * p0 life = 24 (was 20; +4 from lifelink â€” TWO entries fire:
         +2 from the blocker hit AND +2 from the defender hit. Pins
         the contract that lifelink fires on the trample-spillover
         entry too, not just the blocker entry.)
       * p1 life = 18 (was 20; -2 from trample excess).
       * Bear Cub in p1 graveyard.
 
-    This is the load-bearing T+LL composition pin — surfaces the
+    This is the load-bearing T+LL composition pin â€” surfaces the
     "lifelink + trample double-counts or misses spillover" axis the
     brief flagged as a potential CE21 candidate.
     """
@@ -10864,7 +10864,7 @@ def test_cross_engine_real_eoe_mechan_assembler_another_artifact_parity(
 def test_cross_engine_real_eoe_mechan_assembler_once_per_turn_parity(
     parity_smoke,
 ):
-    """Probe E: Mechan Assembler (EoE) `once_per_turn` flag pin —
+    """Probe E: Mechan Assembler (EoE) `once_per_turn` flag pin â€”
     trigger fires once on the first qualifying ENTERS and is
     suppressed on the second within the same turn.
 
@@ -10886,7 +10886,7 @@ def test_cross_engine_real_eoe_mechan_assembler_once_per_turn_parity(
       * Python: ``TriggeredAbility.once_per_turn: bool`` consumed at
         ``turn.py:should_fire_trigger`` (``state.once_per_turn_fired``
         ledger; same eager-record semantics). Both eagerly record at
-        the moment the event happens (MTG semantics — the ability has
+        the moment the event happens (MTG semantics â€” the ability has
         "triggered" the moment its event fires, even if it later
         fails to find legal targets and fizzles).
 
@@ -10912,7 +10912,7 @@ def test_cross_engine_real_eoe_mechan_assembler_once_per_turn_parity(
          p0 life: 20 -> 21 (not 22). Stacks empty post-drain.
 
     This is the **first** Phase 5 probe to exercise the
-    ``once_per_turn`` flag through the cross-engine bridge — the
+    ``once_per_turn`` flag through the cross-engine bridge â€” the
     Rust parser at ``cards.rs:4419`` reads ``once_per_turn`` from the
     triggered-ability dict; the Python bridge at
     ``cross_engine.py:275`` mirrors the same field into the Python
@@ -10920,7 +10920,7 @@ def test_cross_engine_real_eoe_mechan_assembler_once_per_turn_parity(
     semantics agree under this probe.
 
     The third-arrival recovery (cleanup -> ledger cleared -> trigger
-    fires again on the same turn after) is OUT of scope — the cleanup
+    fires again on the same turn after) is OUT of scope â€” the cleanup
     step's reset path (Rust ``state_ops_cleanup.rs:272`` clears
     ``state.triggered_this_turn``; Python ``turn.py:1120``
     ``state.once_per_turn_fired.clear()``) is exercised by existing
@@ -11156,7 +11156,7 @@ def test_cross_engine_real_eoe_mechan_assembler_once_per_turn_parity(
     assert py_state.players[0].life == 21
 
     # ---- Cross-engine parity ----
-    # Drain (no-op — both stacks already empty), then compare:
+    # Drain (no-op â€” both stacks already empty), then compare:
     _drain_stack_both(py_state, rust_state)
     # BOTH engines: net +1 life on p0 across two qualifying ENTERS
     # events in the same turn, not +2. p1 unchanged.
@@ -11285,7 +11285,7 @@ def test_cross_engine_real_eoe_tannuk_memorial_ensign_landfall_burn_parity(
     )
     spec = DeckSpec(
         card_defs=(tannuk, forest),
-        # Forest in p0's library — _play_land path moves it to bf.
+        # Forest in p0's library â€” _play_land path moves it to bf.
         # p1 library has Forest too so the deckspec is symmetric; we
         # don't touch p1's resources in this probe.
         p0_library=("Forest", "Forest"),
@@ -11446,7 +11446,7 @@ def test_cross_engine_real_eoe_tannuk_memorial_ensign_landfall_burn_parity(
 def test_cross_engine_real_eoe_weftstalker_ardent_or_predicate_burn_parity(
     parity_smoke,
 ):
-    """Probe G: Weftstalker Ardent (EoE) — first real-card consumer of
+    """Probe G: Weftstalker Ardent (EoE) â€” first real-card consumer of
     the new ``Predicate::Or`` substrate. The deferred unblock from
     Probe F's forward notes lands here.
 
@@ -11508,10 +11508,10 @@ def test_cross_engine_real_eoe_weftstalker_ardent_or_predicate_burn_parity(
 
     Out of scope:
 
-      * Warp cost ({R}) — cast-from-exile alt path is irrelevant to
+      * Warp cost ({R}) â€” cast-from-exile alt path is irrelevant to
         the ETB-trigger contract; pre-place skips the cast pipeline.
       * Cross-controller controller-of-effect for
-        ``DamageEachOpponent`` — same gap as Probe F's note;
+        ``DamageEachOpponent`` â€” same gap as Probe F's note;
         follow-up I-slice mirrors I60's shape.
     """
     from mtg_bot.parity.cross_engine import (
@@ -11811,7 +11811,7 @@ def test_cross_engine_real_eoe_weftstalker_ardent_or_predicate_burn_parity(
         resolve_top_of_stack(py_state)
     assert py_state.players[1].life == 18
 
-    # Arrival 3: vanilla land — neither Or arm matches.
+    # Arrival 3: vanilla land â€” neither Or arm matches.
     py_land = py_state.new_object(
         land_printing, owner_id=0, zone=Zone.BATTLEFIELD,
     )
@@ -11846,7 +11846,7 @@ def test_cross_engine_real_eoe_kav_landseeker_has_subtype_kavu_probe_parity(
     ``Predicate::SubjectHasSubtype`` end-to-end on a real EoE-printed
     subtype-carrying subject.
 
-    Kav Landseeker (EoE 138) — a real EoE creature whose printed
+    Kav Landseeker (EoE 138) â€” a real EoE creature whose printed
     type_line is "Creature -- Kavu Soldier". Its own oracle text
     ("When this creature enters, create a Lander token...") is OUT
     of scope: the bridge doesn't carry ``create_token`` and EoE has
@@ -11920,7 +11920,7 @@ def test_cross_engine_real_eoe_kav_landseeker_has_subtype_kavu_probe_parity(
         mana_cost_generic=2,
         power=1,
         toughness=1,
-        # Empty subtypes — observer's own arrival doesn't match its
+        # Empty subtypes â€” observer's own arrival doesn't match its
         # own predicate (HasSubtype("Kavu") false).
         subtypes=(),
         triggered_abilities=(
@@ -11931,7 +11931,7 @@ def test_cross_engine_real_eoe_kav_landseeker_has_subtype_kavu_probe_parity(
             },
         ),
     )
-    # Kav Landseeker — real EoE 138; type_line "Creature -- Kavu
+    # Kav Landseeker â€” real EoE 138; type_line "Creature -- Kavu
     # Soldier", so subtypes = ("Kavu", "Soldier"). Strip the printed
     # ETB ability (create-Lander-token is out of bridge scope) but
     # KEEP the printed name + subtypes so the parity contract reads
@@ -12093,7 +12093,7 @@ def test_cross_engine_real_eoe_kav_landseeker_has_subtype_kavu_probe_parity(
         name="Kav Landseeker",
         mana_cost_str="",
         mana_cost=ManaCost(generic=3, colored=(("R", 1),)),
-        type_line="Creature — Kavu Soldier",
+        type_line="Creature â€” Kavu Soldier",
         supertypes=(),
         card_types=("Creature",),
         subtypes=("Kavu", "Soldier"),
@@ -12161,7 +12161,7 @@ def test_cross_engine_real_eoe_kav_landseeker_has_subtype_kavu_probe_parity(
 def test_cross_engine_real_eoe_haliya_guided_by_light_or_predicate_self_inclusive_parity(
     parity_smoke,
 ):
-    """Probe I: Haliya, Guided by Light (EoE 19) — second real-card
+    """Probe I: Haliya, Guided by Light (EoE 19) â€” second real-card
     consumer of the new ``Predicate::Or`` substrate, this time
     exercising the SELF-INCLUSIVE Or-shape (no outer ``Not(IsSelf)``)
     and adding ``ControlledByYou``'s negative-arm coverage (an
@@ -12223,7 +12223,7 @@ def test_cross_engine_real_eoe_haliya_guided_by_light_or_predicate_self_inclusiv
 
     Out of scope:
 
-      * Warp cost ({W}) — cast-from-exile alt path is irrelevant to
+      * Warp cost ({W}) â€” cast-from-exile alt path is irrelevant to
         the ETB-trigger contract; pre-place skips the cast pipeline.
       * Haliya's second clause ("At the beginning of your end step,
         draw a card if you've gained 3 or more life this turn") --
@@ -13467,7 +13467,7 @@ def test_cross_engine_real_eoe_debris_field_crusher_etb_damage_any_target_parity
     parity_smoke,
 ):
     """Probe: Debris Field Crusher (EoE) ETB ``deal 3 damage to any
-    target`` parity -- adds the Artifact-typed-carrier × targeted-
+    target`` parity -- adds the Artifact-typed-carrier Ã— targeted-
     damage cross-product axis to the bridge.
 
     Oracle text in ``data/edge_of_eternities.json``:
@@ -13480,14 +13480,14 @@ def test_cross_engine_real_eoe_debris_field_crusher_etb_damage_any_target_parity
     Same predicate / effect shape as the Nebula Dragon probe (Slice 2
     on this branch's history): ``SourceIsSelf`` ENTERS predicate +
     ``DealDamageAnyTarget(3)`` effect. The DISTINCT axis this probe
-    adds is the trigger-carrier's card type — Debris Field Crusher
+    adds is the trigger-carrier's card type â€” Debris Field Crusher
     registers as ``card_types=["Artifact"]`` (a Spacecraft is a
     structural subtype of Artifact, not a separate top-level card
     type). Every prior cross-engine ANY-TARGET probe in this
     branch's history (Nebula Dragon) used a Creature-typed carrier;
     every prior Artifact-typed carrier (Cryogen Relic) used an
     UNTARGETED effect (DrawCards). This probe is the first to
-    register the Artifact × DealDamageAnyTarget combination on
+    register the Artifact Ã— DealDamageAnyTarget combination on
     the cross-engine bridge.
 
     Predicate decomposition (identical to Nebula Dragon / Cryogen
@@ -14426,7 +14426,7 @@ def test_cross_engine_real_eoe_starbreach_whale_etb_surveil_2_parity(
         dispatch-ENTERS path bypasses the mana pipeline entirely
         (every prior real-EoE probe uses the same shortcut for the
         same reason).
-      * The mill path (``choose_surveil → True``) -- the no-agent
+      * The mill path (``choose_surveil â†’ True``) -- the no-agent
         keep_all_on_top default is the trivially-parity-safe leg of
         the surveil substrate. Driving the mill path explicitly
         would need both:
@@ -14670,7 +14670,7 @@ def test_cross_engine_real_eoe_wurmwall_sweeper_etb_surveil_2_parity(
     parity_smoke,
 ):
     """Probe: Wurmwall Sweeper (EoE) ETB ``surveil 2`` parity --
-    adds the Artifact-Spacecraft-typed-carrier × surveil-2 cross-
+    adds the Artifact-Spacecraft-typed-carrier Ã— surveil-2 cross-
     product axis to the bridge.
 
     Oracle text in ``data/edge_of_eternities.json``:
@@ -14729,7 +14729,7 @@ def test_cross_engine_real_eoe_wurmwall_sweeper_etb_surveil_2_parity(
         object identity, not its types. The Starbreach Whale
         probe's docstring documents the same Creature-carrier-
         only shape coverage.
-      * The mill path (``choose_surveil → True``) -- same out-
+      * The mill path (``choose_surveil â†’ True``) -- same out-
         of-scope reasoning as the Starbreach Whale probe.
 
     Expected post-dispatch + post-drain state on BOTH engines:
@@ -17751,7 +17751,7 @@ def test_cross_engine_real_eoe_uthros_scanship_etb_sequence_draw_discard_parity(
          Flying"
 
     The Station activated ability, the Flying static, and the
-    "+8 charge counters → artifact creature" mode are OUT OF SCOPE
+    "+8 charge counters â†’ artifact creature" mode are OUT OF SCOPE
     for this probe -- only the ETB sequence trigger is exercised.
     Rust and Python both see the same minimal trigger surface.
 
@@ -18002,7 +18002,7 @@ def test_cross_engine_real_eoe_uthros_scanship_etb_sequence_draw_discard_parity(
     assert len(py_state.players[0].graveyard) == py_p0_gy_before + 1
 
     # Strongest pin: discarded card name. With hand[0]-pick agents on
-    # both engines, Alpha (drawn first → landed at hand[0]) is the
+    # both engines, Alpha (drawn first â†’ landed at hand[0]) is the
     # discard target; Beta survives in hand.
     rust_p0_gy_names = [
         e["printing_name"] for e in rust_state.graveyard_snapshot(0)
@@ -18098,7 +18098,7 @@ def test_cross_engine_real_eoe_melded_moxite_etb_if_you_do_discard_draw_parity(
       ``apply_effect``, observes its "did something" signal, and
       conditionally fires ``then_action`` under ``apply_effect``.
     - Python's ``IfYouDo.resolve`` calls ``do_action.resolve``,
-      checks the boolean signal (False → skip), and runs
+      checks the boolean signal (False â†’ skip), and runs
       ``then_action.resolve``.
 
     **Cross-engine signal contract.** ``DiscardSelf`` on a non-empty
@@ -18123,9 +18123,9 @@ def test_cross_engine_real_eoe_melded_moxite_etb_if_you_do_discard_draw_parity(
          hand[0] (Discard Bait), then draws 2 (Draw Bait Alpha,
          Draw Bait Beta).
       6. Cross-engine assert:
-         * p0 hand: 1 → 1 - 1 + 2 = 2 (the two draws).
-         * p0 graveyard: 0 → 1 (the discarded bait).
-         * p0 library: 2 → 0 (drained by the draws).
+         * p0 hand: 1 â†’ 1 - 1 + 2 = 2 (the two draws).
+         * p0 graveyard: 0 â†’ 1 (the discarded bait).
+         * p0 library: 2 â†’ 0 (drained by the draws).
 
     Out of scope: empty-hand fork (would skip the draw -- a future
     probe slice can pin that branch separately), Sacrifice ability,
@@ -18135,7 +18135,7 @@ def test_cross_engine_real_eoe_melded_moxite_etb_if_you_do_discard_draw_parity(
 
       * Melded Moxite on p0's battlefield.
       * p0 hand: ["Draw Bait Alpha", "Draw Bait Beta"] (in some
-        order — the comparison is set-ish via sorted()).
+        order â€” the comparison is set-ish via sorted()).
       * p0 graveyard: ["Discard Bait"] (the just-discarded).
       * p0 library empty.
       * p1 untouched.
@@ -18341,11 +18341,11 @@ def test_cross_engine_real_eoe_melded_moxite_etb_if_you_do_discard_draw_parity(
         f"{rust_state.hand_sizes[0]}"
     )
     assert rust_state.library_sizes[0] == 0, (
-        f"Rust p0 library should be drained (2 → 0); got "
+        f"Rust p0 library should be drained (2 â†’ 0); got "
         f"{rust_state.library_sizes[0]}"
     )
     assert rust_state.graveyard_sizes[0] == 1, (
-        f"Rust p0 graveyard should hold the discarded bait (0 → 1); "
+        f"Rust p0 graveyard should hold the discarded bait (0 â†’ 1); "
         f"got {rust_state.graveyard_sizes[0]}"
     )
 
@@ -18457,16 +18457,16 @@ def test_cross_engine_real_eoe_fell_gravship_etb_sequence_mill_return_parity(
          fires; Sequence trigger lands on the stack with target
          picked at push time = Recur Bait.
       4. Drain both stacks. Both engines:
-         * Mill 3 from p0 library → p0 gy now has [Recur Bait,
+         * Mill 3 from p0 library â†’ p0 gy now has [Recur Bait,
            Mill Land 1, Mill Land 2, Mill Land 3] (insertion
            order).
-         * Return-to-hand resolves on Recur Bait → moves it
+         * Return-to-hand resolves on Recur Bait â†’ moves it
            from p0 gy to p0 hand.
       5. Cross-engine assert:
-         * p0 hand: 0 → 1 (Recur Bait).
-         * p0 graveyard: 1 → 3 (the 3 milled lands; Recur Bait
+         * p0 hand: 0 â†’ 1 (Recur Bait).
+         * p0 graveyard: 1 â†’ 3 (the 3 milled lands; Recur Bait
            gone to hand).
-         * p0 library: 3 → 0 (drained by mill).
+         * p0 library: 3 â†’ 0 (drained by mill).
 
     Out of scope: Station / Flying / lifelink / cast cost /
     empty-graveyard fizzle on the return.
@@ -18688,15 +18688,15 @@ def test_cross_engine_real_eoe_fell_gravship_etb_sequence_mill_return_parity(
     # ---- Drain both stacks, then compare ----
     _drain_stack_both(py_state, rust_state)
 
-    # p0 hand: 0 → 1 (Recur Bait).
-    # p0 graveyard: 1 → 3 (3 mill lands; Recur Bait promoted out).
-    # p0 library: 3 → 0 (drained by mill).
+    # p0 hand: 0 â†’ 1 (Recur Bait).
+    # p0 graveyard: 1 â†’ 3 (3 mill lands; Recur Bait promoted out).
+    # p0 library: 3 â†’ 0 (drained by mill).
     assert rust_state.hand_sizes[0] == 1, (
         f"Rust p0 hand should hold the recurred Fell Recur Bait; "
         f"got hand_size={rust_state.hand_sizes[0]}"
     )
     assert rust_state.library_sizes[0] == 0, (
-        f"Rust p0 library should be drained (3 → 0); got "
+        f"Rust p0 library should be drained (3 â†’ 0); got "
         f"{rust_state.library_sizes[0]}"
     )
     assert rust_state.graveyard_sizes[0] == 3, (
@@ -19970,7 +19970,7 @@ def test_cross_engine_real_eoe_atmospheric_greenhouse_etb_mass_plus_one_counter_
 
     Both engines agree on the recipient set (every p0-controlled
     Creature on the bf at resolve time) and skip non-creature
-    permanents — Atmospheric Greenhouse itself is an Artifact
+    permanents â€” Atmospheric Greenhouse itself is an Artifact
     Spacecraft, not a Creature, so it doesn't self-counter even
     though it's on p0's bf.
 
@@ -24601,7 +24601,7 @@ def test_cross_engine_synthetic_etb_surveil_cross_controller_routes_to_source_co
 
     Out of scope:
 
-      * The mill path (``choose_surveil → True``) -- the no-agent
+      * The mill path (``choose_surveil â†’ True``) -- the no-agent
         keep_all_on_top default is the trivially-parity-safe leg of
         the surveil substrate and matches the same-controller
         probes' contract. Driving the mill path explicitly across a
@@ -38462,7 +38462,7 @@ def test_cross_engine_real_eoe_blooming_stinger_etb_grant_deathtouch_to_another_
 
     Carrier card-type:
         Creature (Plant Scorpion). Distinct from the Seam Rip /
-        Banishing Light Enchantment carriers — the load-bearing
+        Banishing Light Enchantment carriers â€” the load-bearing
         difference is that the source itself is on the
         battlefield at ETB-resolve time, so the
         ``exclude_source=true`` flag is the load-bearing axis
@@ -38580,7 +38580,7 @@ def test_cross_engine_real_eoe_blooming_stinger_etb_grant_deathtouch_to_another_
         "power": 2,
         "toughness": 2,
         # NB: omit the printed inherent ``deathtouch`` keyword on the
-        # synthetic printing — the load-bearing observable here is the
+        # synthetic printing â€” the load-bearing observable here is the
         # GRANTED keyword on the bait. If we put deathtouch on Stinger's
         # printing, the bait would still get the GRANT but Stinger
         # would also have deathtouch (from the printing) and the
@@ -38650,7 +38650,7 @@ def test_cross_engine_real_eoe_blooming_stinger_etb_grant_deathtouch_to_another_
     # Source: Blooming Stinger Creature carrier on P0's bf, with the
     # grant-deathtouch ETB. Python-side carries the rider directly via
     # the ``granted_keywords`` + ``exclude_self`` fields on the unified
-    # Pump dataclass (P/T zero — the keyword-grant-only sub-shape).
+    # Pump dataclass (P/T zero â€” the keyword-grant-only sub-shape).
     source_printing = CardPrinting(
         name="Blooming Stinger",
         mana_cost_str="",
@@ -39105,7 +39105,7 @@ def test_cross_engine_real_eoe_mouth_of_the_storm_etb_extended_duration_debuff_a
 
 
 # =====================================================================
-# BLOCKED-RUST-EFFECT slice — Fight effect arm regression pins.
+# BLOCKED-RUST-EFFECT slice â€” Fight effect arm regression pins.
 #
 # Synthetic Rust + cross-engine probes for the new
 # `Effect::FightTargetCreatureWithTargetCreature` (Rust) +
@@ -39113,7 +39113,7 @@ def test_cross_engine_real_eoe_mouth_of_the_storm_etb_extended_duration_debuff_a
 # in this slice. No real-EoE consumer exercises the bare bilateral
 # generic-fight shape (Meltstrider's Resolve uses the Aura-shape
 # `EnchantedCreatureFightsTargetEffect` sibling, which is the deferred
-# follow-up — see docs/EOE_PROBE_READINESS_AUDIT.md). Probes here run
+# follow-up â€” see docs/EOE_PROBE_READINESS_AUDIT.md). Probes here run
 # entirely on synthetic printings.
 # =====================================================================
 
@@ -39163,7 +39163,7 @@ def _build_rust_fight_state():
     # damage on both fighters is 0; the source itself isn't a target
     # of the fight (the resolve scan picks the FIRST same-side and
     # FIRST opponent-side creature, but the source enters AFTER both
-    # bait Bears so it's at index 1 on p0's bf — not the picked
+    # bait Bears so it's at index 1 on p0's bf â€” not the picked
     # caster-side fighter).
     source_id = rust_state.register_and_inject_object(
         {
@@ -39190,9 +39190,9 @@ def _build_rust_fight_state():
 
 
 def test_rust_fight_target_creature_basic_resolves_both_sides_simultaneously():
-    """BLOCKED-RUST-EFFECT slice — basic fight pin. Both vanilla 2/2
+    """BLOCKED-RUST-EFFECT slice â€” basic fight pin. Both vanilla 2/2
     Bears deal 2 damage to each other simultaneously; both end with
-    damage=2 (= toughness, lethal but no SBA fired in this probe —
+    damage=2 (= toughness, lethal but no SBA fired in this probe â€”
     the marker is the load-bearing observable).
 
     Pins:
@@ -39237,16 +39237,16 @@ def test_rust_fight_target_creature_basic_resolves_both_sides_simultaneously():
 
 
 def test_rust_fight_target_creature_missing_caster_side_silently_fizzles():
-    """BLOCKED-RUST-EFFECT slice — caster-side missing-fighter pin.
+    """BLOCKED-RUST-EFFECT slice â€” caster-side missing-fighter pin.
     If the source-controller has NO creatures on bf (the source
     itself is the only object, and we'll skip the source by injecting
-    it into hand instead), the arm silently fizzles — no damage on
+    it into hand instead), the arm silently fizzles â€” no damage on
     either side.
 
     Probe shape: inject a Fight ETB carrier into p0's HAND (not bf),
     push it onto the stack, resolve. The resolve walks the stack item;
     its source is in p0's hand (not bf). The caster-side scan finds
-    no creature on p0's bf → silent fizzle.
+    no creature on p0's bf â†’ silent fizzle.
     """
     from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
 
@@ -39269,16 +39269,16 @@ def test_rust_fight_target_creature_missing_caster_side_silently_fizzles():
         1,
         ZONE_BATTLEFIELD,
     )
-    # Inject a "synthetic Fight source" object into p0's hand — its
+    # Inject a "synthetic Fight source" object into p0's hand â€” its
     # ETB trigger does NOT fire from hand (ENTERS event needs bf
     # arrival), so we manually push the trigger via apply_effect_pub
     # path. Easier route: cast a creature whose ENTERS triggers a
-    # fight, and verify resolution from hand → bf has the fight on
-    # the stack with the SOURCE on bf… BUT then the source itself
+    # fight, and verify resolution from hand â†’ bf has the fight on
+    # the stack with the SOURCE on bfâ€¦ BUT then the source itself
     # (now on bf) becomes the caster-side fighter, and the test
     # collapses to "source fights opponent". To get the no-caster-
     # creature scenario, inject a non-creature carrier whose ETB
-    # carries the fight effect — e.g. an Artifact.
+    # carries the fight effect â€” e.g. an Artifact.
     artifact_source_id = rust_state.register_and_inject_object(
         {
             "name": "Fight-Trigger Artifact",
@@ -39303,13 +39303,13 @@ def test_rust_fight_target_creature_missing_caster_side_silently_fizzles():
     # Pre-state: opponent Bears at 0 damage.
     assert rust_state.get_damage(p1_id) == 0
     # Resolve. Caster-side scan finds NO creature (the artifact source
-    # isn't a creature; nothing else on p0's bf). Silent fizzle —
+    # isn't a creature; nothing else on p0's bf). Silent fizzle â€”
     # opponent Bears untouched.
     rust_state.resolve_top_of_stack()
     assert rust_state.stack_size() == 0
     assert rust_state.get_damage(p1_id) == 0, (
         "Rust: caster-side missing-fighter case should silently "
-        "fizzle (CR 701.12c — no fighter, no damage). Opponent "
+        "fizzle (CR 701.12c â€” no fighter, no damage). Opponent "
         "Bears must remain at 0 damage. "
         f"Got damage={rust_state.get_damage(p1_id)}"
     )
@@ -39318,9 +39318,9 @@ def test_rust_fight_target_creature_missing_caster_side_silently_fizzles():
 
 
 def test_rust_fight_target_creature_missing_opponent_side_silently_fizzles():
-    """BLOCKED-RUST-EFFECT slice — opponent-side missing-fighter pin.
+    """BLOCKED-RUST-EFFECT slice â€” opponent-side missing-fighter pin.
     If the source-controller's opponent has NO creatures on bf, the
-    arm silently fizzles — caster-side fighter takes no damage either.
+    arm silently fizzles â€” caster-side fighter takes no damage either.
 
     Mirrors the caster-side fizzle case in direction.
     """
@@ -39381,10 +39381,10 @@ def test_rust_fight_target_creature_missing_opponent_side_silently_fizzles():
 
 
 def test_rust_fight_target_creature_larger_creature_survives_smaller():
-    """BLOCKED-RUST-EFFECT slice — asymmetric power pin. A 5/5 fights
+    """BLOCKED-RUST-EFFECT slice â€” asymmetric power pin. A 5/5 fights
     a 2/2: the 5/5 takes 2 damage (non-lethal at 5 toughness); the
     2/2 takes 5 damage (lethal at 2 toughness, but SBA hasn't run yet
-    in this probe — observable via the marker only).
+    in this probe â€” observable via the marker only).
     """
     from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
 
@@ -39455,13 +39455,13 @@ def test_rust_fight_target_creature_larger_creature_survives_smaller():
 
 
 def test_rust_fight_target_creature_cross_controller_routing_p1_source_on_p0_turn():
-    """BLOCKED-RUST-EFFECT slice — cross-controller routing pin.
+    """BLOCKED-RUST-EFFECT slice â€” cross-controller routing pin.
     Source-controller is resolved by SCANNING ZONES for the source
     object (mirrors PumpTargetCreatureUntilEOT's source-side scan),
     NOT by reading active_player. So a fight effect whose source is
     on p1's bf (e.g. a flicker re-ETB on p1's creature firing while
     p0 has priority on p0's turn) routes the caster-side scan to
-    p1's bf and the opponent-side scan to p0's bf — the OPPOSITE of
+    p1's bf and the opponent-side scan to p0's bf â€” the OPPOSITE of
     what active_player would suggest.
 
     Probe: build state with p1 as the source-side, p0 as the opponent-
@@ -39527,7 +39527,7 @@ def test_rust_fight_target_creature_cross_controller_routing_p1_source_on_p0_tur
     # The trigger lands on the stack with controller=1.
     assert rust_state.stack_size() == 1
     # active_player default is 0 (p0); we DELIBERATELY don't change it
-    # to make the cross-controller routing observable — pre-fix
+    # to make the cross-controller routing observable â€” pre-fix
     # behavior would scan p0's bf as caster (wrong); post-fix scans
     # p1's bf (the source's actual controller).
     rust_state.resolve_top_of_stack()
@@ -39535,14 +39535,14 @@ def test_rust_fight_target_creature_cross_controller_routing_p1_source_on_p0_tur
     # p1's 2/2 (caster-side) took 4 damage from p0's 4/4 (opponent-
     # side from p1's perspective).
     assert rust_state.get_damage(p1_id) == 4, (
-        "Rust: cross-controller routing — p1's source means p1's "
+        "Rust: cross-controller routing â€” p1's source means p1's "
         "2/2 is the caster-side fighter; it should take p0's 4/4's "
         "4 damage. "
         f"Got damage={rust_state.get_damage(p1_id)}"
     )
     # p0's 4/4 (opponent-side from p1's perspective) took 2 damage.
     assert rust_state.get_damage(p0_id) == 2, (
-        "Rust: cross-controller routing — p0's 4/4 is the opponent-"
+        "Rust: cross-controller routing â€” p0's 4/4 is the opponent-"
         "side fighter; it should take p1's 2/2's 2 damage. "
         f"Got damage={rust_state.get_damage(p0_id)}"
     )
@@ -39551,7 +39551,7 @@ def test_rust_fight_target_creature_cross_controller_routing_p1_source_on_p0_tur
 def test_cross_engine_fight_target_creature_synthetic_etb_parity(
     parity_smoke,
 ):
-    """BLOCKED-RUST-EFFECT slice — cross-engine end-to-end synthetic
+    """BLOCKED-RUST-EFFECT slice â€” cross-engine end-to-end synthetic
     probe. Drives the new
     `Effect::FightTargetCreatureWithTargetCreature` arm + the
     `FightTargetCreatureWithTargetCreature` Python class through both
@@ -39561,7 +39561,7 @@ def test_cross_engine_fight_target_creature_synthetic_etb_parity(
     No real-EoE consumer of the bare bilateral generic-fight shape
     today. Meltstrider's Resolve uses the Aura-shape sibling
     (`EnchantedCreatureFightsTargetEffect`) which is the deferred
-    follow-up — see `docs/EOE_PROBE_READINESS_AUDIT.md` and
+    follow-up â€” see `docs/EOE_PROBE_READINESS_AUDIT.md` and
     `docs/SEARCH_LIMITATIONS.md`.
 
     Probe shape (mirrors the Dubious-Delicacy / Mouth-of-the-Storm
@@ -39578,15 +39578,15 @@ def test_cross_engine_fight_target_creature_synthetic_etb_parity(
 
     Out of scope (documented):
 
-      * SBA-driven destroy of lethal-damaged creatures — both engines
+      * SBA-driven destroy of lethal-damaged creatures â€” both engines
         record the marker; SBA pass not driven here. The marker is
         the load-bearing observable.
-      * Real-EoE Aura-shape (Meltstrider's Resolve) — needs the
+      * Real-EoE Aura-shape (Meltstrider's Resolve) â€” needs the
         Aura-attachment ETB substrate routed through `attached_to`
         end-to-end on Rust before the cross-engine bridge can drive
         it. Tracked as deferred follow-up.
       * "Up to one target" optional shape, with-trample / with-
-        deathtouch composers — separate Effect arms once a real
+        deathtouch composers â€” separate Effect arms once a real
         consumer demands them.
     """
     from mtg_bot.parity.cross_engine import (
@@ -39773,7 +39773,7 @@ def test_cross_engine_fight_target_creature_synthetic_etb_parity(
     # Cross-engine agreement.
     assert rust_p0_damage_after == py_p0_creature.damage
     assert rust_p1_damage_after == py_p1_creature.damage
-    # Lives unchanged — the fight only marks creature damage.
+    # Lives unchanged â€” the fight only marks creature damage.
     assert list(rust_state.life_totals) == [20, 20]
     assert py_state.players[0].life == 20
     assert py_state.players[1].life == 20
@@ -43649,7 +43649,7 @@ def test_rust_search_library_for_card_legendary_creature_filter_picks_legendary_
         mana_cost_colored=(("G", 1),),
         power=3,
         toughness=3,
-        # Round-30 substrate — explicit supertype gives the bridge
+        # Round-30 substrate â€” explicit supertype gives the bridge
         # the registry-dict ``supertypes: ["Legendary"]`` field.
         supertypes=("Legendary",),
         subtypes=("Bear",),
@@ -43700,7 +43700,7 @@ def test_rust_search_library_for_card_legendary_creature_filter_skips_legendary_
     """Round-30 negative pin -- the ``legendary_creature`` filter
     requires BOTH the Legendary supertype AND the Creature card type.
     A Legendary Artifact (e.g. Sol Ring shape) must NOT match. Pins
-    the conjunctive shape of the new dispatch arm — supertype-only
+    the conjunctive shape of the new dispatch arm â€” supertype-only
     is insufficient.
     """
     from mtg_bot.parity.cross_engine import CardDef, DeckSpec, build_rust_state
@@ -43783,7 +43783,7 @@ def test_rust_search_library_for_card_spacecraft_filter_picks_spacecraft_subtype
         name="Test Spacecraft (Round-30 fixture)",
         card_type="Artifact",
         mana_cost_generic=3,
-        # Round-30 substrate — explicit subtype "Spacecraft" makes
+        # Round-30 substrate â€” explicit subtype "Spacecraft" makes
         # the printing match the spacecraft filter.
         subtypes=("Spacecraft",),
     )
@@ -43995,7 +43995,7 @@ def test_rust_search_library_for_card_supertypes_parse_round_trip_via_getter():
         }
     )
     assert reg.get_printing_supertypes(pid_with) == ["Legendary"]
-    # Missing key → empty Vec.
+    # Missing key â†’ empty Vec.
     assert reg.get_printing_supertypes(pid_without) == []
 
 
@@ -44222,7 +44222,7 @@ def test_cross_engine_search_library_for_card_synthetic_etb_legendary_creature_p
          size delta (+1).
 
     Real-EoE consumer of this filter shape: The Seriema (the EoE
-    Spacecraft tutor — "When The Seriema enters, search your library
+    Spacecraft tutor â€” "When The Seriema enters, search your library
     for a legendary creature card, reveal it, put it into your hand,
     then shuffle"). The synthetic probe pins the cross-engine contract
     on the bare filter dispatch; the real-EoE Seriema probe layers in
@@ -44235,7 +44235,7 @@ def test_cross_engine_search_library_for_card_synthetic_etb_legendary_creature_p
         (parser-built bespoke spec + station + tier-gated indestructible
         rider). The tutor *trigger* is what this probe pins; the
         rest of Seriema's printing is orthogonal substrate.
-      * Post-search shuffle parity (G19 — Rust skips shuffle on this
+      * Post-search shuffle parity (G19 â€” Rust skips shuffle on this
         arm; Python calls shuffle_library). Pin compares deltas, not
         full library order, side-stepping the gap.
     """
@@ -44258,7 +44258,7 @@ def test_cross_engine_search_library_for_card_synthetic_etb_legendary_creature_p
         mana_cost_colored=(("G", 1),),
         power=3,
         toughness=3,
-        # Round-30 substrate — propagates to Rust's
+        # Round-30 substrate â€” propagates to Rust's
         # CardPrinting.supertypes via the registry-dict builder, and
         # to Python's CardPrinting.supertypes via build_python_state's
         # explicit-override branch.
@@ -48987,7 +48987,7 @@ def test_rust_scry_n_count_exceeds_library_silent_clamp():
     """Rust regression pin: count > library size silently clamps to
     library length per CR 701.18d ("if there aren't enough cards in
     your library, look at all the cards"). With keep-on-top, the
-    clamp is a no-op — the library stays in its pre-resolve order
+    clamp is a no-op â€” the library stays in its pre-resolve order
     and no error is raised.
     """
     p0_lib = ("Scry Bait Alpha",)  # only 1 card; scry 5 overshoots
@@ -49008,7 +49008,7 @@ def test_rust_scry_n_count_exceeds_library_silent_clamp():
 
 
 def test_rust_scry_n_cross_controller_routing_p1_source():
-    """Rust regression pin: source owned by p1 — keep-on-top still
+    """Rust regression pin: source owned by p1 â€” keep-on-top still
     no-ops on libraries, lives, and graveyards. Mirrors the
     cross-controller routing pattern (state_ops_resolve.rs uses
     ``current_resolve_source_controller`` with active_player fallback
@@ -49392,7 +49392,7 @@ def test_cross_engine_synthetic_etb_target_opponent_loses_life_cross_controller_
 
 
 # ---------------------------------------------------------------------------
-# Round-32 BLOCKED-RUST-EFFECT deferred-EoE-probe closeout —
+# Round-32 BLOCKED-RUST-EFFECT deferred-EoE-probe closeout â€”
 # Cerebral Download (Instant: ``Surveil X, where X is the number of
 # artifacts you control. Then draw three cards.``).
 #
@@ -49413,7 +49413,7 @@ def test_cross_engine_synthetic_etb_target_opponent_loses_life_cross_controller_
 # on Sequence(Surveil, DrawCards) ordering:
 #
 #   * **Python.** Surveil with no agent short-circuits to "keep all on
-#     top" via ``if p.agent is None`` (library_lookat.py:605) — the
+#     top" via ``if p.agent is None`` (library_lookat.py:605) â€” the
 #     library is NEVER mutated during Surveil; cards stay in place.
 #     Then DrawCards draws the top N (the same cards that were
 #     "examined").
@@ -49423,7 +49423,7 @@ def test_cross_engine_synthetic_etb_target_opponent_loses_life_cross_controller_
 #     (state_ops_resolve.rs:4965-4979). Library is now SHORTER by N.
 #     Inside the same Sequence::apply_effect for-loop, DrawCards 3
 #     runs IMMEDIATELY (state_ops_resolve.rs:5111-5114) and draws
-#     from the post-pop top — i.e. DIFFERENT CARDS than Python sees.
+#     from the post-pop top â€” i.e. DIFFERENT CARDS than Python sees.
 #     Only AFTER the spell's full effect-fan-out loop completes does
 #     ``auto_resolve_pending(self, "keep_all_on_top")`` fire (line
 #     8514) and re-insert the surveiled cards at lib[0].
@@ -49445,7 +49445,7 @@ def test_cross_engine_synthetic_etb_target_opponent_loses_life_cross_controller_
 #     in original order.
 #
 # This is a Sequence-composer-vs-PendingDecision-shape divergence,
-# NOT a Surveil-or-DrawCards-arm bug — both arms are individually
+# NOT a Surveil-or-DrawCards-arm bug â€” both arms are individually
 # bit-for-bit. The fix scope is moving Rust's SurveilChoice
 # auto-resolve to fire INSIDE the Sequence loop (after each effect
 # pushes a decision) rather than at the end of resolve_top_of_stack.
@@ -49472,7 +49472,7 @@ def _cerebral_download_side_channel(py_state, rust_state):
     :func:`build_python_state` / :func:`build_rust_state`).
 
     Same side-channel-a-method-neither-engine-reaches-via-apply_action
-    pattern as :func:`counterspell_side_channel` — Rust's CastSpell
+    pattern as :func:`counterspell_side_channel` â€” Rust's CastSpell
     action arm only routes to ``cast_creature``; Instant casts are
     still side-channel-only on the cross-engine harness.
     """
@@ -49514,7 +49514,7 @@ def _cerebral_download_side_channel(py_state, rust_state):
         )),
     )
 
-    # Seat two artifacts on p0's bf — drive dynamic X = 2.
+    # Seat two artifacts on p0's bf â€” drive dynamic X = 2.
     for _ in range(2):
         artifact_obj = py_state.new_object(
             bait_artifact_printing, owner_id=0, zone=Zone.BATTLEFIELD,
@@ -49536,7 +49536,7 @@ def _cerebral_download_side_channel(py_state, rust_state):
         StackItem(source=cd_obj, controller_id=0)
     )
 
-    # Drain the spell — runs Sequence(Surveil(use_artifact_count=True),
+    # Drain the spell â€” runs Sequence(Surveil(use_artifact_count=True),
     # DrawCards(3)). Python's Surveil with no agent short-circuits to
     # keep-all-on-top (the library is unmodified); DrawCards(3) then
     # draws lib[0..3] into the hand.
@@ -49561,7 +49561,7 @@ def _cerebral_download_side_channel(py_state, rust_state):
     # [Sequence{[SurveilXEqualToArtifactCount, DrawCards{count: 3}]}])
     # into p0's hand. Rust's resolve_top_of_stack walks
     # printing.effects in order via apply_effect, and Sequence
-    # iterates its children in lockstep — so the round-34 bridge arm's
+    # iterates its children in lockstep â€” so the round-34 bridge arm's
     # surveil_x_equal_to_artifact_count + the draw_cards arm fire in
     # composed order off the same StackItem.
     cd_rust_id = rust_state.register_and_inject_object(
@@ -49596,7 +49596,7 @@ def test_cross_engine_cerebral_download_real_eoe_cast_xfails_on_sequence_surveil
 
     **Round-36 fix (now PASSES)**: the prior cross-engine divergence
     on ``Sequence(Surveil, DrawCards)`` was closed by moving the
-    PendingDecision drain INTO ``Effect::Sequence``'s inner loop —
+    PendingDecision drain INTO ``Effect::Sequence``'s inner loop â€”
     after each leaf effect resolves, ``auto_resolve_pending(state,
     "keep_all_on_top")`` runs BEFORE the next leaf effect. Rust now
     matches Python's no-agent flow: Surveil pops X into
@@ -49618,7 +49618,7 @@ def test_cross_engine_cerebral_download_real_eoe_cast_xfails_on_sequence_surveil
     py_state = build_python_state(spec)
     rust_state = build_rust_state(spec)
 
-    # Snapshot p0's library on both engines BEFORE the cast — both
+    # Snapshot p0's library on both engines BEFORE the cast â€” both
     # should be the same deckspec sequence.
     py_lib_names_before = [
         card.printing.name for card in py_state.players[0].library
@@ -49638,7 +49638,7 @@ def test_cross_engine_cerebral_download_real_eoe_cast_xfails_on_sequence_surveil
     _cerebral_download_side_channel(py_state, rust_state)
 
     # Post-resolve hand contents (we only care about cards that landed
-    # in p0's hand from the deckspec library — filter out the Cerebral
+    # in p0's hand from the deckspec library â€” filter out the Cerebral
     # Download itself, which is in the graveyard now).
     py_hand_names = sorted(
         card.printing.name for card in py_state.players[0].hand
@@ -50392,7 +50392,7 @@ def test_cross_engine_synthetic_etb_each_opponent_loses_life_cross_controller_ro
 def test_cross_engine_synthetic_etb_tap_target_opponent_permanent_and_stun_it_bridge_dict_round_trip_parity(
     parity_smoke,
 ):
-    """Round-28 BLOCKED-RUST-EFFECT deferred-EoE-probe close — drive
+    """Round-28 BLOCKED-RUST-EFFECT deferred-EoE-probe close â€” drive
     Mechanozoa's ETB shape end-to-end on both engines via the
     cross-engine bridge-dict round trip (NOT direct Python class
     instantiation). Closes the round-30 stun-counter substrate's
@@ -53096,7 +53096,7 @@ def test_cross_engine_synthetic_etb_equip_to_target_creature_you_control_cross_c
 def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity(
     parity_smoke,
 ):
-    """Round-31 BLOCKED-RUST-EFFECT deferred-EoE-probe close — drive
+    """Round-31 BLOCKED-RUST-EFFECT deferred-EoE-probe close â€” drive
     Mightform Harmonizer's landfall+double-power clause end-to-end on
     BOTH engines via the bridge dict.
 
@@ -53116,18 +53116,18 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity
     bypass of the production-deck filter), as shown by the round-19
     Eumidian Terrabotanist landfall+gain_life probe (this file at
     line 10098) and the round-20 Tannuk Memorial Ensign landfall+
-    damage_each_opponent probe (line 10983) — both drive the same
+    damage_each_opponent probe (line 10983) â€” both drive the same
     landfall predicate shape on a synthetic CardDef without going
     through the production-deck filter. This probe is the missing
     third leg: the SAME landfall predicate paired with the round-31
     DoubleTargetCreaturesPowerUEOT effect.
 
-    Path chosen — side-channel inject via free-form CardDef + bridge
+    Path chosen â€” side-channel inject via free-form CardDef + bridge
     dict (NOT ``_SAFE_TRIGGERS`` extension). The carddef-triggers
     bridge filter would need a fourth predicate-effect product entry
     (``(enters, "land_enters_controlled_by_you",
     "double_target_creatures_power_ueot")``) to ship Mightform onto
-    the production-deck loader. That's deferred — this slice closes
+    the production-deck loader. That's deferred â€” this slice closes
     the deferred end-to-end probe via the existing free-form CardDef
     path (the same shape the Eumidian + Tannuk probes use), which
     skips ``_SAFE_TRIGGERS`` entirely; the production-deck loader
@@ -53141,24 +53141,24 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity
     picks the first creature); inject Mightform Harmonizer SECOND
     onto P0's bf carrying the canonical landfall predicate compound +
     ``double_target_creatures_power_ueot`` effect (Mightform's own
-    arrival doesn't fire the trigger — subject_is_land filter rejects
+    arrival doesn't fire the trigger â€” subject_is_land filter rejects
     Mightform-the-Creature, same Tannuk short-circuit at line 11137);
     seat ``_PickFirstControlledCreatureAgent`` on P0 BEFORE the
     trigger fires (push_triggered_ability calls
-    ``controller.agent.choose_target`` at trigger-push time —
+    ``controller.agent.choose_target`` at trigger-push time â€”
     actions.py:3249); inject Forest into P0's hand and play_land it;
     drain both stacks.
 
     Cross-engine assert (post-resolve contract):
 
       * Bait Bear effective_power = **6** on both engines (printed 3
-        + UEOT +3 from the snapshot-pump doubling — the load-bearing
+        + UEOT +3 from the snapshot-pump doubling â€” the load-bearing
         observable; pump.py:234 ``snapshot = effective_power(state,
         obj)``; Rust state_ops_resolve.rs:4482 mirror).
       * Bait Bear effective_toughness unchanged at **3** (the
-        doubling is power-only — pump.py:240 ``toughness=0``).
+        doubling is power-only â€” pump.py:240 ``toughness=0``).
       * Mightform's own effective P/T unchanged at **4/4** (source
-        not picked — pump landed on Bait Bear, not Mightform).
+        not picked â€” pump landed on Bait Bear, not Mightform).
       * P0/P1 lives unchanged at 20.
       * No residual stack on either engine.
 
@@ -53230,7 +53230,7 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity
     # ---- Rust side ----
     ZONE_HAND = 0
     ZONE_BATTLEFIELD = 2
-    # Inject Bait Bear FIRST so it's index 0 on P0's bf — Rust's
+    # Inject Bait Bear FIRST so it's index 0 on P0's bf â€” Rust's
     # DoubleTargetCreaturesPowerUEOT resolve arm walks bf in
     # insertion order and picks the first creature.
     rust_bait_dict = {
@@ -53269,7 +53269,7 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity
         rust_mightform_dict, 0, ZONE_BATTLEFIELD,
     )
     # Mightform's own arrival does NOT fire the landfall trigger
-    # (Mightform is a Creature, not a Land — subject_is_land filter
+    # (Mightform is a Creature, not a Land â€” subject_is_land filter
     # short-circuits, same as Tannuk's probe at line 11137).
     assert rust_state.stack_size() == 0, (
         "Rust: Mightform's own arrival should NOT fire its landfall "
@@ -53353,7 +53353,7 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity
         ),
     )
 
-    # Inject Bait Bear FIRST so it's index 0 on P0's bf — same order
+    # Inject Bait Bear FIRST so it's index 0 on P0's bf â€” same order
     # as Rust so both engines' first-creature pick lands on the same
     # target.
     py_bait = py_state.new_object(
@@ -53370,7 +53370,7 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity
 
     # Seat the picker BEFORE Mightform's trigger fires (push_triggered_
     # ability calls controller.agent.choose_target at trigger-push
-    # time — actions.py:3249). The shim mirrors Rust's source-
+    # time â€” actions.py:3249). The shim mirrors Rust's source-
     # controller's-bf-first-creature pick (state_ops_resolve.rs:4459
     # iterates bf in insertion order). With Bait Bear injected first,
     # both engines pick the Bear.
@@ -53386,7 +53386,7 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity
     py_state.next_timestamp += 1
     py_state.battlefield.append(py_mightform)
     # Mightform wasn't fanned through _trigger_etb_abilities (we
-    # materialized it on bf directly) — stack remains empty as we
+    # materialized it on bf directly) â€” stack remains empty as we
     # never dispatched ENTERS for Mightform's own arrival.
     assert len(py_state.stack) == 0
     assert effective_power(py_state, py_mightform) == 4
@@ -53446,7 +53446,7 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity
     )
 
     # Mightform's own effective P/T unchanged at 4/4 (it was not the
-    # picked target — the pump landed on Bait Bear, not Mightform).
+    # picked target â€” the pump landed on Bait Bear, not Mightform).
     rust_mightform_power_after = rust_state.effective_power(
         rust_mightform_id
     )
@@ -53472,7 +53472,7 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity
     assert rust_mightform_power_after == py_mightform_power_after
     assert rust_mightform_tough_after == py_mightform_tough_after
 
-    # Lives unchanged on both seats — the landfall double-power clause
+    # Lives unchanged on both seats â€” the landfall double-power clause
     # doesn't touch life totals.
     assert rust_state.get_life(0) == rust_p0_life_before
     assert rust_state.get_life(1) == rust_p1_life_before
@@ -53486,7 +53486,7 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity
 def test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_parity(
     parity_smoke,
 ):
-    """Round-32 BLOCKED-RUST-EFFECT deferred-EoE-probe close — drive
+    """Round-32 BLOCKED-RUST-EFFECT deferred-EoE-probe close â€” drive
     Warmaker Gunship's ETB damage-by-artifact-count clause end-to-end
     on BOTH engines via the bridge dict.
 
@@ -53503,15 +53503,15 @@ def test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_par
     Harmonizer (this file at line 52908): inject the carrier directly
     onto bf via ``register_and_inject_object`` (Rust) /
     ``new_object`` + ``_trigger_etb_abilities`` (Python), bypassing
-    the cast pipeline AND the Station/Spacecraft state machinery —
+    the cast pipeline AND the Station/Spacecraft state machinery â€”
     only the bare ETB triggered ability fires.
 
-    Path chosen — side-channel inject via free-form CardDef + bridge
-    dict (NOT production-deck loader). Warmaker is "Artifact —
+    Path chosen â€” side-channel inject via free-form CardDef + bridge
+    dict (NOT production-deck loader). Warmaker is "Artifact â€”
     Spacecraft" with Station; the inject pattern bypasses both the
     Station activated ability and the 6+ flip semantics by leaving
     Warmaker as a bare Artifact at probe time. The Station / 6+ /
-    Flying riders are deferred — this slice closes the deferred end-
+    Flying riders are deferred â€” this slice closes the deferred end-
     to-end probe via the bare ETB damage-by-artifact-count clause.
 
     Probe shape (mirrors Nova Hellkite at line 13508 + Uthros Scanship
@@ -53519,10 +53519,10 @@ def test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_par
 
       1. Inject 1 Bait Artifact ("Junk Artifact") onto P0's bf so
          artifact_count BEFORE Warmaker enters = 1.
-      2. Inject Bait Bear (2/3 — toughness above the expected 2 damage
+      2. Inject Bait Bear (2/3 â€” toughness above the expected 2 damage
          so SBA doesn't flip it to graveyard) onto P1's bf as the
          opponent-controlled creature target.
-      3. Seat ``_PickFirstOpponentTargetAgent`` on P0 — its
+      3. Seat ``_PickFirstOpponentTargetAgent`` on P0 â€” its
          IsCreature() & ControlledByOpponent() filter has already
          restricted legal_targets to opponent-side creatures, so the
          agent picks the only legal target (the Bait Bear).
@@ -53537,14 +53537,14 @@ def test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_par
     Cross-engine assert (post-resolve contract):
 
       * Bait Bear damage = **2** on both engines (Junk Artifact +
-        Warmaker = 2 artifacts on P0's bf at resolve time —
+        Warmaker = 2 artifacts on P0's bf at resolve time â€”
         damage.py:445-448 ``sum(1 for o in state.battlefield if
         o.controller_id == controller_id and o.printing.is_artifact)``;
         Rust state_ops_resolve.rs:4571-4579 mirror).
-      * Bait Bear NOT in graveyard (toughness 3 > damage 2 — no SBA
+      * Bait Bear NOT in graveyard (toughness 3 > damage 2 â€” no SBA
         flip; the probe pins the damage delta, not lethal handling).
       * P0/P1 lives unchanged at 20 (effect targets a creature, never
-        a player — same as the Nova Hellkite contract).
+        a player â€” same as the Nova Hellkite contract).
       * No residual stack on either engine.
 
     Substrate confirmed via round-32 (commits visible in cross_engine.py
@@ -53554,7 +53554,7 @@ def test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_par
     (damage.py:405-459).
 
     Out of scope: Station activated ability (Spacecraft state
-    machinery — separate substrate); 6+ Flying static (kicks in only
+    machinery â€” separate substrate); 6+ Flying static (kicks in only
     after Station counters reach 6, irrelevant to the bare ETB
     trigger); cast-from-hand mana cost (the inject-and-dispatch-
     ENTERS pattern bypasses the mana pipeline); production-deck
@@ -53567,7 +53567,7 @@ def test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_par
     )
     from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
 
-    # CardDef placeholders — each engine needs the printing registered
+    # CardDef placeholders â€” each engine needs the printing registered
     # so build_*_state succeeds, but with empty libraries the deck path
     # never instantiates them. The inject calls below use raw printing
     # dicts directly.
@@ -53746,7 +53746,7 @@ def test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_par
     )
     # Seat the picker BEFORE Warmaker's trigger fires
     # (push_triggered_ability calls choose_target at trigger-push
-    # time — actions.py:3249). The slot's
+    # time â€” actions.py:3249). The slot's
     # IsCreature() & ControlledByOpponent() filter restricts
     # legal_targets to opponent-side creatures, so the agent picks
     # the only legal target (the Bait Bear).
@@ -53778,7 +53778,7 @@ def test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_par
 
     # Per-engine post-state: Bait Bear takes 2 damage (Junk + Warmaker
     # = 2 artifacts on P0's bf at resolve time). Toughness 3 > damage 2,
-    # so no SBA flip — Bait Bear stays on bf.
+    # so no SBA flip â€” Bait Bear stays on bf.
     rust_bait_damage_after = rust_state.get_damage(rust_bait_id)
     assert rust_bait_damage_after == 2, (
         "Rust: Bait Bear should carry 2 damage after the ETB burn "
@@ -53790,7 +53790,7 @@ def test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_par
         f"(2 artifacts on P0's bf: Junk + Warmaker); got {py_bait.damage}"
     )
 
-    # Lives unchanged on both seats — the effect targets a creature,
+    # Lives unchanged on both seats â€” the effect targets a creature,
     # never a player.
     assert rust_state.get_life(0) == rust_p0_life_before
     assert rust_state.get_life(1) == rust_p1_life_before
@@ -56726,6 +56726,255 @@ def test_cross_engine_synthetic_etb_each_opp_loses_life_eq_your_life_total_bridg
     assert py_p1_bf_after == 0
     assert rust_p0_bf_after == py_p0_bf_after
     assert rust_p1_bf_after == py_p1_bf_after
+
+
+def test_cross_engine_real_eoe_icetill_explorer_landfall_mill_parity(
+    parity_smoke,
+):
+    """Probe: Icetill Explorer (EoE) Landfall+mill trigger fires +
+    parity-matches end-to-end. The real EoE card the round-48
+    bench-admit-set slice admits.
+
+    Oracle text in `data/edge_of_eternities.json`:
+
+        "Landfall - Whenever a land you control enters, mill a card."
+
+    Same SUBJECT-vs-SOURCE landfall predicate path as the
+    Eumidian-Terrabotanist gain_life probe, but on the ``mill`` leaf
+    effect (the round-48 extension):
+
+      * TRIGGER SOURCE: Icetill Explorer (pre-placed on p0's bf).
+      * TRIGGER SUBJECT: a LAND that enters under p0's control
+        (a Forest played by p0).
+      * Predicate: ``subject_is_land AND controlled_by_you``.
+      * Effect: ``mill`` count=1 â€” the SOURCE's controller (p0) mills
+        the top card of THEIR OWN library into THEIR OWN graveyard
+        (CR 701.13b). Pure deterministic zone move; no PendingDecision
+        / agent / target. Both engines resolve in lockstep.
+
+    Expected post-cast + post-drain state on BOTH engines:
+
+      * Icetill Explorer still on p0's bf (pre-placed; doesn't move).
+      * Forest now on p0's bf (just played).
+      * p0 library: -1 card; p0 graveyard: +1 card (the milled card).
+      * p1 library / graveyard: unchanged.
+      * Life totals unchanged at 20/20 (mill never touches life).
+      * No residual stack.
+
+    A clean pass pins the landfall+mill product end-to-end on a real
+    draft-pool printing â€” sister of the round-36
+    ``..._eumidian_terrabotanist_landfall_parity`` probe on the mill
+    leaf.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    icetill = CardDef(
+        name="Icetill Explorer",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("G", 2),),
+        power=2,
+        toughness=4,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "and",
+                    "left": {"kind": "subject_is_land"},
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "mill", "count": 1},
+            },
+        ),
+    )
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",),
+    )
+    spec = DeckSpec(
+        card_defs=(icetill, forest),
+        p0_library=("Forest", "Forest", "Forest"),
+        p1_library=("Forest", "Forest", "Forest"),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    rust_icetill_dict = {
+        "name": "Icetill Explorer",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "G": 2},
+        "effects": [],
+        "power": 2,
+        "toughness": 4,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {
+                    "kind": "and",
+                    "left": {"kind": "subject_is_land"},
+                    "right": {"kind": "controlled_by_you"},
+                },
+                "effect": {"kind": "mill", "count": 1},
+            }
+        ],
+    }
+    rust_state.register_and_inject_object(
+        rust_icetill_dict, 0, ZONE_BATTLEFIELD
+    )
+    rust_forest_dict = {
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+        "effects": [],
+    }
+    rust_forest_id = rust_state.register_and_inject_object(
+        rust_forest_dict, 0, ZONE_HAND
+    )
+    rust_p0_lib_before = rust_state.library_sizes[0]
+    rust_p1_lib_before = rust_state.library_sizes[1]
+    rust_p0_gy_before = rust_state.graveyard_sizes[0]
+    rust_p1_gy_before = rust_state.graveyard_sizes[1]
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_state.play_land(rust_forest_id, 0)
+    assert rust_state.find_object_zone(rust_forest_id) == ZONE_BATTLEFIELD, (
+        "Rust: Forest should be on bf after play_land"
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Icetill Explorer's landfall trigger should be on the "
+        "stack after the Forest enters"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _play_land
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.library_lookat import SelfMill
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Subject, YOU,
+    )
+    from mtg_bot.game import Zone
+
+    icetill_predicate = And(
+        left=Subject(slot=None, inner=IsLand()),
+        right=Controlled(by=YOU, subject=None),
+    )
+    icetill_printing = CardPrinting(
+        name="Icetill Explorer",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("G", 2),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=4,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=icetill_predicate,
+                effect=SelfMill(amount=1),
+            ),
+        ),
+    )
+    py_icetill = py_state.new_object(
+        icetill_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_icetill.summoning_sick = False
+    py_icetill.tapped = False
+    py_icetill.damage = 0
+    py_icetill.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_icetill)
+
+    py_forest = py_state.players[0].library[0]
+    assert py_forest.printing.name == "Forest"
+    py_state.players[0].library.remove(py_forest)
+    py_forest.zone = Zone.HAND
+    py_state.players[0].hand.append(py_forest)
+
+    py_p0_lib_before = len(py_state.players[0].library)
+    py_p1_lib_before = len(py_state.players[1].library)
+    py_p0_gy_before = len(py_state.players[0].graveyard)
+    py_p1_gy_before = len(py_state.players[1].graveyard)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+
+    py_state.players[0].lands_played_this_turn = 0
+    _play_land(py_state, 0, py_forest.id)
+
+    assert any(
+        o.printing.name == "Forest" and o.controller_id == 0
+        for o in py_state.battlefield
+    ), "Python: Forest should be on bf after _play_land"
+    assert len(py_state.stack) == 1, (
+        "Python: Icetill Explorer's landfall trigger should be on the "
+        "stack after the Forest enters"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Post-drain: p0 milled exactly 1 card (library -1, graveyard +1);
+    # p1 untouched.
+    assert rust_state.library_sizes[0] == rust_p0_lib_before - 1, (
+        f"Rust p0 library should be {rust_p0_lib_before - 1} after "
+        f"milling 1; got {rust_state.library_sizes[0]}"
+    )
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_before + 1, (
+        f"Rust p0 graveyard should be {rust_p0_gy_before + 1} after "
+        f"milling 1; got {rust_state.graveyard_sizes[0]}"
+    )
+    assert rust_state.library_sizes[1] == rust_p1_lib_before
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_before
+    assert len(py_state.players[0].library) == py_p0_lib_before - 1, (
+        f"Python p0 library should be {py_p0_lib_before - 1} after "
+        f"milling 1; got {len(py_state.players[0].library)}"
+    )
+    assert len(py_state.players[0].graveyard) == py_p0_gy_before + 1, (
+        f"Python p0 graveyard should be {py_p0_gy_before + 1} after "
+        f"milling 1; got {len(py_state.players[0].graveyard)}"
+    )
+    assert len(py_state.players[1].library) == py_p1_lib_before
+    assert len(py_state.players[1].graveyard) == py_p1_gy_before
+
+    # Mill never touches life.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # Cross-engine: byte-equal mill DELTAS on both seats. (Absolute
+    # library sizes differ by construction between the two harness
+    # setups â€” the Python side moves a Forest out of its library into
+    # hand for `_play_land` while the Rust side injects a fresh Forest
+    # straight into hand without touching its library; the parity
+    # signal is that BOTH engines milled the SAME amount relative to
+    # their own pre-trigger baseline.)
+    rust_p0_lib_delta = rust_state.library_sizes[0] - rust_p0_lib_before
+    rust_p0_gy_delta = rust_state.graveyard_sizes[0] - rust_p0_gy_before
+    py_p0_lib_delta = len(py_state.players[0].library) - py_p0_lib_before
+    py_p0_gy_delta = len(py_state.players[0].graveyard) - py_p0_gy_before
+    assert rust_p0_lib_delta == py_p0_lib_delta == -1
+    assert rust_p0_gy_delta == py_p0_gy_delta == 1
+    # p1 untouched on both engines (delta 0).
+    assert (
+        rust_state.library_sizes[1] - rust_p1_lib_before
+        == len(py_state.players[1].library) - py_p1_lib_before
+        == 0
+    )
+    assert (
+        rust_state.graveyard_sizes[1] - rust_p1_gy_before
+        == len(py_state.players[1].graveyard) - py_p1_gy_before
+        == 0
+    )
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
 
 
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===

@@ -3851,3 +3851,269 @@ def test_python_ta_to_safe_dict_rejects_dies_draw_cards_with_extra_payload():
         "predicate": {"kind": "source_is_self"},
         "effect": {"kind": "draw_cards", "count": 1, "ghost_field": "x"},
     })
+
+
+# ---------------------------------------------------------------------------
+# Round-48 bench-admit-set slice: landfall+mill (admits real EoE card
+# Icetill Explorer) + source_is_self+mill substrate (Seedship
+# Broodtender stays dropped on its activated ability — reject-path pin).
+# Mirrors the round-36 landfall+gain_life / round-37 landfall+pump_self
+# test cluster pattern exactly; ``mill`` is a pure deterministic zone
+# move with the cross-engine bridge arm already shipped round-16.
+# ---------------------------------------------------------------------------
+
+
+def test_safe_triggers_set_carries_landfall_mill_shape():
+    """Pin the landfall+mill extension entry — a future shrink would
+    silently regress production-deck coverage of Icetill Explorer (the
+    real EoE consumer this slice admits). Sister of
+    ``test_safe_triggers_set_carries_landfall_pump_self_shape``.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert (
+        ("enters", "land_enters_controlled_by_you", "mill")
+        in _SAFE_TRIGGERS
+    )
+
+
+def test_safe_triggers_set_carries_enters_self_mill_substrate_shape():
+    """Pin the ENTERS+source_is_self+mill substrate entry. No real-EoE
+    consumer admitted today (Seedship Broodtender is dropped on its
+    activated ability); pre-positioned for any future bare
+    "When ~ enters, mill N" creature.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert ("enters", "source_is_self", "mill") in _SAFE_TRIGGERS
+
+
+def test_safe_effect_keys_carries_mill():
+    """The effect-payload key whitelist gains the ``mill`` arm with the
+    single ``count`` key (mirrors Rust's bare
+    ``Effect::Mill { count: i32 }`` — no rider the bridge would
+    silently drop). Sister of ``test_safe_effect_keys_carries_pump_self_until_eot``.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_EFFECT_KEYS
+
+    assert "mill" in _SAFE_EFFECT_KEYS
+    assert _SAFE_EFFECT_KEYS["mill"] == frozenset({"kind", "count"})
+
+
+def test_is_safe_trigger_dict_admits_landfall_mill():
+    """The full trigger-dict checker accepts a landfall+mill trigger
+    built from the canonical compound predicate shape and the bare
+    ``count`` payload — Icetill Explorer's parser-emitted shape
+    (mill 1).
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "mill", "count": 1},
+    })
+
+
+def test_is_safe_trigger_dict_admits_enters_self_mill():
+    """ENTERS+source_is_self+mill substrate entry — the dict-side gate
+    admits the shape (the production-deck filter still drops the only
+    EoE carrier, Seedship Broodtender, on its activated ability;
+    asserted separately below).
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "mill", "count": 3},
+    })
+
+
+def test_is_safe_trigger_dict_rejects_mill_under_dies():
+    """Mill under DIES is NOT in the safe set today — no EoE consumer
+    carries it and no slice has shipped it. Pins the predicate-effect /
+    event product gate from the negative direction (admitting ``mill``
+    under ENTERS doesn't admit it under DIES). Sister of
+    ``test_is_safe_trigger_dict_rejects_pump_self_under_source_is_self``.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "dies",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "mill", "count": 1},
+    })
+
+
+def test_is_safe_trigger_dict_rejects_mill_with_extra_payload_key():
+    """Schema-strict on the mill payload — an extra key beyond
+    {kind, count} is rejected so a future schema extension riding the
+    same effect kind doesn't silently slip through with the rider
+    dropped on the cross-engine round trip. Sister of
+    ``test_is_safe_trigger_dict_rejects_pump_self_with_extra_payload_key``.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "mill", "count": 1, "ghost_field": "x"},
+    })
+
+
+def test_python_ta_to_safe_dict_round_trips_landfall_mill():
+    """A Python ``TriggeredAbility`` carrying the parser-emitted
+    landfall predicate (``And(Subject(IsLand), Controlled(YOU))``) +
+    bare ``SelfMill`` round-trips to the canonical compound dict shape
+    with a ``count`` payload (Python's ``amount`` -> Rust's ``count``
+    spelling, same as the established surveil/draw arms). The result
+    satisfies :func:`_is_safe_trigger_dict`.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import (
+        And,
+        Controlled,
+        Event,
+        Subject,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.library_lookat import SelfMill
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=And(
+            left=Subject(slot=None, inner=IsLand()),
+            right=Controlled(by=YOU, subject=None),
+        ),
+        effect=SelfMill(amount=1),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d is not None
+    assert d == {
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "mill", "count": 1},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_round_trips_enters_self_mill():
+    """A Python ``TriggeredAbility`` carrying ENTERS+IsSelf+SelfMill(N)
+    round-trips to the bare ``{"kind": "mill", "count": N}`` dict and
+    preserves the count. Substrate-only — pins the recognizer arm
+    independent of any EoE consumer.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.library_lookat import SelfMill
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=SelfMill(amount=3),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d is not None
+    assert d["effect"] == {"kind": "mill", "count": 3}
+    assert d["predicate"] == {"kind": "source_is_self"}
+
+
+def test_simple_creature_filter_admits_real_eoe_icetill_explorer():
+    """End-to-end gate: the parser-emitted Icetill Explorer printing
+    (2/4 {2}{G}{G}, "Landfall — Whenever a land you control enters,
+    mill a card") now passes :func:`_printing_is_bridge_simple_creature`.
+    Pre-extension this returned False (landfall+mill cross was unsafe);
+    post-extension Icetill Explorer threads into the production-deck
+    loader. Sister of ``test_simple_creature_filter_admits_icecave_crasher``.
+    The real EoE card this slice admits.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+        _python_ta_to_safe_dict,
+    )
+
+    src = OracleParserCardSource()
+    icetill = src.get_printings().get("Icetill Explorer")
+    assert icetill is not None, (
+        "Icetill Explorer not in OracleParserCardSource — the parser "
+        "dropped it; landfall+mill extension test cannot verify the "
+        "production-deck unblock."
+    )
+    assert len(icetill.triggered_abilities) == 1
+    assert _python_ta_to_safe_dict(icetill.triggered_abilities[0]) is not None
+    assert _printing_is_bridge_simple_creature(icetill) is True
+
+
+def test_simple_creature_filter_still_rejects_seedship_broodtender():
+    """Reject-path pin: Seedship Broodtender is the only OTHER EoE
+    SelfMill carrier (ENTERS+IsSelf+SelfMill(3)) but ALSO carries an
+    activated ability — a declined silent-mistranslation class the
+    production-deck loader doesn't seat. The source_is_self+mill
+    substrate entry must NOT admit it: it stays correctly dropped at
+    the ``activated_abilities`` gate. Pins the bridge-correctness
+    discipline (handoff §2) — admitting the mill leaf doesn't relax
+    the activated-abilities filter.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_creature
+
+    src = OracleParserCardSource()
+    seedship = src.get_printings().get("Seedship Broodtender")
+    if seedship is None:
+        # Parser hasn't claimed it yet — reject rationale still
+        # applies, but there's nothing to assert against.
+        return
+    assert len(seedship.activated_abilities) >= 1, (
+        "Seedship Broodtender expected to carry an activated ability; "
+        "if the parser shape changed, re-derive the reject rationale."
+    )
+    assert _printing_is_bridge_simple_creature(seedship) is False
+
+
+def test_printing_to_card_def_carries_landfall_mill_through():
+    """Icetill Explorer's parsed printing converts to a CardDef whose
+    ``triggered_abilities`` carries the canonical compound landfall
+    dict shape with the bare ``mill`` payload — the same dict both
+    engines' bridge arms consume. Sister of
+    ``test_printing_to_card_def_carries_landfall_pump_self_through``.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    src = OracleParserCardSource()
+    icetill = src.get_printings().get("Icetill Explorer")
+    if icetill is None:
+        return
+    cd = _printing_to_card_def(icetill)
+    assert cd.card_type == "Creature"
+    assert cd.triggered_abilities == (
+        {
+            "event": "enters",
+            "predicate": {
+                "kind": "and",
+                "left": {"kind": "subject_is_land"},
+                "right": {"kind": "controlled_by_you"},
+            },
+            "effect": {"kind": "mill", "count": 1},
+        },
+    )
