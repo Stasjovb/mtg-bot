@@ -2127,7 +2127,36 @@ affected printings.
 
 ---
 
-## Sequence(Surveil, DrawCards) PendingDecision-vs-inline ordering (Rust vs Python)
+## Sequence(Surveil, DrawCards) PendingDecision-vs-inline ordering (Rust vs Python) — RESOLVED (round-36)
+
+**Status**: RESOLVED in round-36 by commit `fed30c5e` on
+`feature/rust-fix-sequence-pending-decision-ordering`. The fix moves
+the PendingDecision drain INTO `Effect::Sequence`'s inner loop:
+after each leaf effect resolves, `auto_resolve_pending(state,
+"keep_all_on_top")` runs BEFORE the next leaf effect. Rust now
+matches Python's no-agent Surveil flow, so `Sequence(Surveil(X=...),
+DrawCards(N))` reads from the same library top on both engines.
+The historical-context body below is preserved for git-blame
+continuity.
+
+**Pinned by (now PASSES)**:
+`tests/test_parity_smoke.py::test_cross_engine_cerebral_download_real_eoe_cast_xfails_on_sequence_surveil_then_draw`
+— flipped from xfail to direct cross-engine equality assertion in
+the round-36 fix commit.
+
+**Follow-up (sister composers, not yet exercised)**: the same
+"drain pending after each child" treatment may be needed for sister
+composers that recursively dispatch leaf effects and could observe
+post-pop state mid-flight — namely `ChooseOneMode`, `ChooseModes`,
+`IfYouDo`, `MayDo`, and `OptionalManaCost` when their selected /
+yes branch contains a PendingDecision-emitting leaf followed by a
+zone-reading leaf. Today no EoE printing exercises any of these
+shapes. Land the analogous in-loop drain when the first cross-engine
+divergence surfaces; the round-36 Sequence fix is the template.
+
+---
+
+### Historical context (pre-round-36 divergence trace)
 
 **Location**: `rust/src/state_ops_resolve.rs:8434-8514`
 (`resolve_top_of_stack`'s effect-fan-out loop) + the
@@ -2139,70 +2168,27 @@ affected printings.
 `src/mtg_bot/effects/generic/library_lookat.py:591-614`
 (`Surveil.resolve` no-agent shortcut).
 
-**What we do today**: when a single spell's effects compose
-`Sequence([Surveil(...), DrawCards(...)])`, the two engines diverge
+**What we did pre-fix**: when a single spell's effects composed
+`Sequence([Surveil(...), DrawCards(...)])`, the two engines diverged
 on observable post-resolve hand + library contents. Python's
 `Surveil.resolve` short-circuits to keep-all-on-top via the
 `p.agent is None` branch — the library is NEVER mutated, and the
 following `DrawCards` draws the same cards Surveil "examined". Rust's
-`Effect::SurveilXEqualToArtifactCount` instead pops X cards off the
+`Effect::SurveilXEqualToArtifactCount` instead popped X cards off the
 library top into a `PendingDecision::SurveilChoice`; the Sequence's
-inner `for child in effects` loop then runs `DrawCards` IMMEDIATELY,
+inner `for child in effects` loop then ran `DrawCards` IMMEDIATELY,
 drawing from the post-pop top (i.e. DIFFERENT cards). Only AFTER the
-spell's full effect-fan-out loop completes does
+spell's full effect-fan-out loop completed did
 `auto_resolve_pending(state, "keep_all_on_top")` re-insert the
 surveiled cards at `lib[0]`.
 
-**Why it's OK today**: Cerebral Download is the only EoE consumer
-of `Sequence(Surveil(use_artifact_count=True), DrawCards(3))`. Both
-engines' invariants stay self-consistent (each engine's draw + library
-contents agree with its own surveil semantics); the divergence only
-surfaces when the SAME spell is driven through both engines and the
-hand contents are compared. Production self-play does not run both
-engines simultaneously — the cross-engine comparison only fires from
-the parity probe gate (`tests/test_parity_smoke.py`'s
-`test_cross_engine_cerebral_download_real_eoe_cast_xfails_on_sequence_surveil_then_draw`),
-which is xfail-pinned so the divergence stays visible without
-blocking the gate. Either engine alone shipping a Cerebral Download
-cast lands 3 cards in hand drawn from the controller's library —
-which CR 701.42 (Surveil) + CR 121.1 (Draw) compositionally permit
-(CR 121.1 reads "the top card" at the time the draw resolves; the
-Rust path's auto-resolve of the SurveilChoice firing AFTER DrawCards
-is a serialization choice, not a CR violation per se).
-
-**Failure mode**: any time the cross-engine harness drives a spell
-whose effects compose `Sequence([effect-that-pushes-PendingDecision,
-effect-that-reads-the-affected-zone, ...])`, the two engines emit
-divergent post-resolve state. Today the only printed shape that
-exercises this is Cerebral Download. Future EoE printings of the
-form `Sequence([Surveil-N, DrawCards-M])` or sister shapes that
-nest `Surveil` inside another effect that reads the library would
-inherit the same divergence.
-
-**Fix scope estimate**: medium. Move Rust's auto-resolve hook from
-the `resolve_top_of_stack` terminal to fire INSIDE
-`Effect::Sequence`'s inner for-loop after each child effect that
-pushes a PendingDecision (or, equivalently, eagerly call
-`auto_resolve_pending` whenever `apply_effect` returns and
-`state.pending_decisions` is non-empty). The PendingDecision queue
-shape itself stays the same — only the timing of the auto-resolve
-sweep changes. Single-arm change with cascade across every Effect
-arm that pushes a PendingDecision (Surveil, Scry, ScryChoice,
-SurveilXEqualToArtifactCount, LookAtTopNRevealOrCounterChoice, ...).
-Existing per-arm probes that drive ONE PendingDecision per spell
-stay green; only Sequence-of-two-pending-arms and Sequence-of-pending-
-then-zone-reading shapes move from xfail to pass.
-
-**Impact estimate**: today, zero strength cost — production self-play
-runs one engine per game. Once both engines ship into a single
-cross-validation pipeline (e.g. dual-engine determinization for
-PIMC), the divergence forces a "which engine wins" choice on every
-Cerebral Download cast. Sister consumers (Sequence-with-pending) will
-inherit the same forced choice as they land. Documented here so a
-future cross-engine PIMC slice doesn't rediscover the divergence.
-
-**Pinned by**: `tests/test_parity_smoke.py::test_cross_engine_cerebral_download_real_eoe_cast_xfails_on_sequence_surveil_then_draw`
-(xfail). Closing the divergence flips the test from xfail to pass.
+**Why it was OK pre-fix**: Cerebral Download was the only EoE
+consumer of `Sequence(Surveil(use_artifact_count=True),
+DrawCards(3))`. Both engines' invariants stayed self-consistent (each
+engine's draw + library contents agreed with its own surveil
+semantics); the divergence only surfaced when the SAME spell was
+driven through both engines and the hand contents were compared.
+Production self-play does not run both engines simultaneously.
 
 ---
 
