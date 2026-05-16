@@ -100,6 +100,7 @@ from mtg_bot.effects.generic import (
     EachOpponentExilesCardFromHandWithCastPermission,
     EachOpponentExilesOwnCreature,
     EachOpponentLosesLife,
+    EachOpponentLosesLifeEqualToArtifactCount,
     EachOpponentMillsCards,
     EachOpponentSacrificesCreature,
     EachOpponentSacsOrDiscardsOrTakesSourcePowerDamage,

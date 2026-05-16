@@ -6203,6 +6203,240 @@ def test_resolve_each_opponent_loses_life_clone_isolation(synthetic_state):
     assert synthetic_state.stack_size() == 1
 
 
+# --- round-44 EachOpponentLosesLifeEqualToArtifactCount dispatch ---
+#
+# **EachOpponentLosesLifeEqualToArtifactCount scope** (mirrored in the
+# Rust variant docstring on `cards.rs::Effect`):
+#
+# - **Sister of round-26 EachOpponentLosesLife.** Same recipient set
+#   (each opponent of the source-controller) + same apply step (direct
+#   life subtraction CR 118.4, NOT damage; not reducible by damage-
+#   prevention). NEW dynamic-X denominator (artifact count instead of
+#   static `amount`). FIFTH apply substrate to pick up the round-32
+#   X-from-count plumbing established by damage / counters / surveil /
+#   mill -- this slice extends the substrate axis to life-loss-each-
+#   opponent.
+# - **Artifact denominator.** Walk the source-controller's bf; sum +1
+#   for each printing whose `card_types` contains "Artifact". Lands
+#   that are also artifacts count, tokens like Lander count. Dual-typed
+#   artifact-creatures count for BOTH the artifact-count and any
+#   creatures-controlled denominators independently. The source itself
+#   counts toward the denominator if it is an Artifact still on the bf
+#   at resolve time (mirrors round-32 / round-34 sister convention).
+# - **Source-finder dispatch (round-26 / round-32 sister pattern).**
+#   5-zone walk + stack scan. Source not found anywhere = silent fizzle
+#   (lost-track-of-source tolerance, mirrors EachOpponentLosesLife /
+#   DiscardSelf shape).
+# - **Two-player "each opponent" reduces to "the one opponent".**
+#   Direct life subtraction via `saturating_sub`. Negative life handled
+#   by SBA loop; no clamp here.
+# - **Zero-artifact = silent no-op** (matches Python's `if
+#   artifact_count <= 0: return` short-circuit before the per-opponent
+#   loop, also mirrors GainLife / DrawCards / Mill / EachOpponentLosesLife
+#   / DiscardSelf zero-amount conventions).
+
+
+def _eollac_punisher_dict():
+    """A round-44 punisher creature whose ETB-style trigger fires
+    EachOpponentLosesLifeEqualToArtifactCount. Vanilla 2/2 Creature
+    on color cost {1}{B}; effect is the unit-variant dynamic-X arm
+    (no fields). Sister-shaped to `_balemurk_leech_dict` (round-26
+    EachOpponentLosesLife) but with the dynamic-X denominator.
+    """
+    return {
+        "name": "Test Round-44 Punisher",
+        "card_types": ["Creature"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [
+            {"kind": "each_opponent_loses_life_equal_to_artifact_count"}
+        ],
+    }
+
+
+def _eollac_artifact_punisher_dict():
+    """A round-44 punisher whose card_types ALSO includes Artifact
+    (an Artifact Creature). Pinning that the source itself counts
+    toward the artifact denominator when it is on the bf at resolve
+    time -- mirrors round-32 / round-34 sister "no source-exclusion
+    clause" convention."""
+    return {
+        "name": "Test Round-44 Punisher (Artifact Creature)",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"B": 1, "generic": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [
+            {"kind": "each_opponent_loses_life_equal_to_artifact_count"}
+        ],
+    }
+
+
+def test_resolve_each_opp_loses_life_eq_artifact_count_zero_artifacts_no_op(
+    synthetic_state,
+):
+    """Zero artifacts on source-controller's bf -> silent no-op.
+    Source is a non-Artifact Creature so it doesn't count toward the
+    denominator either. Mirrors Python's `if artifact_count <= 0:
+    return` short-circuit. Stack still pops; both players' life totals
+    untouched."""
+    src_id = synthetic_state.register_and_inject_object(
+        _eollac_punisher_dict(), 0, ZONE_BATTLEFIELD
+    )
+    life_before = list(synthetic_state.life_totals)
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # No artifacts on p0's bf -> silent no-op. Both lives untouched.
+    assert list(synthetic_state.life_totals) == life_before
+
+
+def test_resolve_each_opp_loses_life_eq_artifact_count_counts_p0_artifacts(
+    synthetic_state,
+):
+    """Three artifacts on p0's bf -> p1 (the one opponent) loses 3
+    life. p0 (controller) untouched. Mirrors the round-32 artifact
+    count walking pattern: bf scan with `card_types contains
+    "Artifact"`. The source is a non-Artifact Creature so it does NOT
+    count toward the denominator (denominator = 3 trinkets, not 4)."""
+    # Three trinkets on p0's bf.
+    for _ in range(3):
+        synthetic_state.register_and_inject_object(
+            _artifact_dict(), 0, ZONE_BATTLEFIELD
+        )
+    src_id = synthetic_state.register_and_inject_object(
+        _eollac_punisher_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 untouched; p1 -3 (count of artifacts on p0's bf).
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 3
+
+
+def test_resolve_each_opp_loses_life_eq_artifact_count_excludes_opponent_artifacts(
+    synthetic_state,
+):
+    """The denominator counts SOURCE-CONTROLLER's artifacts only --
+    artifacts on the OPPONENT's bf do NOT count. Pin: 2 trinkets on
+    p1's bf and 1 on p0's bf, source on p0 -> p1 loses 1 life
+    (only p0's 1 trinket counts), NOT 3 (would be 1+2)."""
+    # Decoy: 2 trinkets on p1's bf — these MUST NOT count.
+    for _ in range(2):
+        synthetic_state.register_and_inject_object(
+            _artifact_dict(), 1, ZONE_BATTLEFIELD
+        )
+    # Real: 1 trinket on p0's bf -> denominator = 1.
+    synthetic_state.register_and_inject_object(
+        _artifact_dict(), 0, ZONE_BATTLEFIELD
+    )
+    src_id = synthetic_state.register_and_inject_object(
+        _eollac_punisher_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Only p0's 1 trinket counts -> p1 loses 1.
+    assert synthetic_state.life_totals[1] == p1_life_before - 1
+
+
+def test_resolve_each_opp_loses_life_eq_artifact_count_self_counts_when_artifact(
+    synthetic_state,
+):
+    """When the source IS an Artifact still on the source-controller's
+    bf at resolve time, it counts toward the denominator (no source-
+    exclusion clause -- mirrors round-32 / round-34 sister convention).
+    Pin: 1 standalone trinket on p0's bf + the source (Artifact
+    Creature) on p0's bf -> denominator = 2 (trinket + self). p1 loses
+    2 life."""
+    synthetic_state.register_and_inject_object(
+        _artifact_dict(), 0, ZONE_BATTLEFIELD
+    )
+    src_id = synthetic_state.register_and_inject_object(
+        _eollac_artifact_punisher_dict(), 0, ZONE_BATTLEFIELD
+    )
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # 1 standalone trinket + the source (Artifact Creature) = 2.
+    assert synthetic_state.life_totals[1] == p1_life_before - 2
+
+
+def test_resolve_each_opp_loses_life_eq_artifact_count_opponent_source_targets_p0(
+    synthetic_state,
+):
+    """The recipient set is OPPONENTS-OF-CONTROLLER, NOT defender-of-
+    active-player. Source on p1's bf (controller=1) while
+    active_player stays p0; 4 trinkets on p1's bf -> p0 (the one
+    opponent of p1) loses 4 life, p1 untouched. Mirrors round-26
+    EachOpponentLosesLife sister behavior."""
+    # 4 trinkets on p1's bf — the source-controller's denominator.
+    for _ in range(4):
+        synthetic_state.register_and_inject_object(
+            _artifact_dict(), 1, ZONE_BATTLEFIELD
+        )
+    src_id = synthetic_state.register_and_inject_object(
+        _eollac_punisher_dict(), 1, ZONE_BATTLEFIELD
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+    assert synthetic_state.active_player == 0
+
+    # Push with controller=1 (p1's source resolving on the stack).
+    synthetic_state.push_to_stack(src_id, 1)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # p0 (the one opponent of p1) -4; p1 (controller) untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before - 4
+    assert synthetic_state.life_totals[1] == p1_life_before
+
+
+def test_resolve_each_opp_loses_life_eq_artifact_count_source_in_graveyard_uses_controller(
+    synthetic_state,
+):
+    """Source-finder walks five zones — wider than the battlefield-
+    only scan PutPlusOneCounterOnSelf uses. Inject a source-shaped
+    object into p0's graveyard: the zone-scan picks up p0 as the
+    controller and resolves the life-loss on p1 with the artifact
+    count read from p0's CURRENT bf (2 trinkets). Documents the
+    "source has left the battlefield by resolve time" tolerance --
+    mirrors round-26 EachOpponentLosesLife sister shape exactly."""
+    # 2 trinkets on p0's bf — the live denominator.
+    for _ in range(2):
+        synthetic_state.register_and_inject_object(
+            _artifact_dict(), 0, ZONE_BATTLEFIELD
+        )
+    # Source in p0's graveyard (not bf).
+    src_id = synthetic_state.register_and_inject_object(
+        _eollac_punisher_dict(), 0, ZONE_GRAVEYARD,
+    )
+    p0_life_before = synthetic_state.life_totals[0]
+    p1_life_before = synthetic_state.life_totals[1]
+
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    # p1 -2 (denominator from p0's bf, which still has 2 trinkets);
+    # p0 untouched.
+    assert synthetic_state.life_totals[0] == p0_life_before
+    assert synthetic_state.life_totals[1] == p1_life_before - 2
+
+
 # --- round-24 DestroyAllCreatures dispatch -------------------------
 #
 # **DestroyAllCreatures scope** (mirrored in the Rust module docstring
