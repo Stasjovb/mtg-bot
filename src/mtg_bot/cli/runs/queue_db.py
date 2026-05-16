@@ -181,6 +181,14 @@ def insert_stage(
 
     ``games`` is the list of ``{game_idx, deck_indices, seed}`` dicts
     from the orchestrator's POST body.
+
+    Empty stages (``games == []``) are inserted and IMMEDIATELY
+    transitioned to ``complete`` via :func:`_maybe_auto_close_stage` —
+    a stage with zero work is "naturally drained" the instant it's
+    created, so the orchestrator's polling loop sees ``complete`` on
+    the very next ``GET /v2/stage/<id>``. (Empty stages are a
+    degenerate but legal corner of the contract — see the doc note
+    on ``POST /v2/stage/create``.)
     """
     started_at = now_iso()
     with transaction(conn):
@@ -204,6 +212,10 @@ def insert_stage(
                 for g in games
             ],
         )
+    # n_games_total == 0 is auto-complete on creation; the check is
+    # cheap for the populated case (one COUNT(*) on an empty results
+    # table) so we run it unconditionally.
+    _maybe_auto_close_stage(conn, stage_id)
 
 
 def get_stage(
@@ -243,21 +255,61 @@ def mark_drained(conn: sqlite3.Connection, stage_id: str) -> bool:
             "DELETE FROM queued_games WHERE stage_id = ?",
             (stage_id,),
         )
-    _maybe_mark_complete(conn, stage_id)
+    _maybe_auto_close_stage(conn, stage_id)
     return True
 
 
-def _maybe_mark_complete(
+def _maybe_auto_close_stage(
     conn: sqlite3.Connection, stage_id: str,
 ) -> None:
-    """When stage is drained AND no in-flight claims remain, flip to
-    ``complete``. Called after every report_result and after every
-    drain. Idempotent."""
+    """Auto-transition the stage to ``complete`` if the work is done.
+
+    Two ways a stage can be "done":
+
+    1. **Natural drain** (status == ``running``): every ``game_idx``
+       in the spec has a row in ``results`` AND no claims are still
+       in-flight (unreported but not yet TTL-expired). This is the
+       primary auto-close path; it fires the moment the last
+       in-flight game's result lands in ``/v2/report_result``.
+    2. **Explicit close** (status == ``drained``): the orchestrator
+       already called ``/v2/stage/<id>/close``, which DELETEs the
+       residual queued games. Once the in-flight claims drain to 0,
+       the stage transitions to ``complete`` regardless of whether
+       ``n_done`` reached ``n_total`` — the dropped queued work was
+       intentionally abandoned. (This preserves the pre-auto-close
+       behavior of :func:`mark_drained` + the eval-watcher
+       early-stop path.)
+
+    "Done" in the natural-drain accounting is purely table-driven —
+    abandoned tombstones (``reported=1`` with
+    ``report_json={"abandoned":true}``) do NOT contribute to
+    ``n_done``. They mark *claims* that were re-queued; the game
+    itself was either re-claimed and successfully reported by
+    another worker (in which case there IS a results row) or is
+    still queued / in-flight (no results row yet, and the stage
+    isn't done). Counting per-results-row makes this precise:
+    "every ``game_idx`` has at least one result row." Matches the
+    :func:`stage_counters` ``n_games_done`` semantic, so auto-close
+    fires at exactly the moment the stage view would already show
+    "all done."
+
+    Called after every operation that could move a stage toward
+    done: :func:`insert_stage` (handles the degenerate
+    ``n_games_total == 0`` case), :func:`mark_drained` (path #2
+    above; the existing explicit-close path), and
+    :func:`record_report` (path #1; the natural-drain path that
+    this module's auto-close exists for).
+
+    Idempotent — if status is already ``complete`` (or no such
+    stage), returns without touching the row. Safe to call from
+    inside or outside an outer transaction; the UPDATE runs as its
+    own auto-commit statement.
+    """
     row = conn.execute(
-        "SELECT status FROM stages WHERE stage_id = ?",
+        "SELECT status, spec_json FROM stages WHERE stage_id = ?",
         (stage_id,),
     ).fetchone()
-    if row is None or row["status"] != "drained":
+    if row is None or row["status"] == "complete":
         return
     in_flight = conn.execute(
         "SELECT COUNT(*) AS c FROM claims "
@@ -266,11 +318,36 @@ def _maybe_mark_complete(
     ).fetchone()["c"]
     if in_flight > 0:
         return
+    if row["status"] == "drained":
+        # Explicit-close path: queued work was intentionally
+        # abandoned by ``mark_drained``; once in-flight clears, the
+        # stage is done regardless of ``n_done`` vs ``n_total``.
+        pass
+    else:
+        # Natural-drain path: only flip when EVERY game has a result.
+        # Total games come from the persisted spec (cheaper than a
+        # COUNT over queued+claimed+done, and matches the
+        # stage_counters ``n_games_total`` semantic).
+        spec = json.loads(row["spec_json"])
+        n_total = len(spec.get("games", []))
+        n_done = conn.execute(
+            "SELECT COUNT(*) AS c FROM results WHERE stage_id = ?",
+            (stage_id,),
+        ).fetchone()["c"]
+        if n_done < n_total:
+            return
     conn.execute(
         "UPDATE stages SET status='complete', complete_at=? "
         "WHERE stage_id = ?",
         (now_iso(), stage_id),
     )
+
+
+# Back-compat alias for the narrow "only-flip-when-drained" name used
+# pre-stage-auto-close. New code should call ``_maybe_auto_close_stage``
+# directly; this thunk exists so any in-flight import paths keep
+# resolving during the transition.
+_maybe_mark_complete = _maybe_auto_close_stage
 
 
 # ---- claims ----------------------------------------------------------------
@@ -462,7 +539,11 @@ def record_report(
             "WHERE claim_id = ?",
             (json.dumps(report_meta), claim_id),
         )
-    _maybe_mark_complete(conn, stage_id)
+    # Auto-close fires the moment the last in-flight game reports,
+    # whether or not the orchestrator ever called /v2/stage/<id>/close.
+    # The check is fast (two COUNT(*)s on stage-indexed tables) and
+    # idempotent, so we run it after every result write.
+    _maybe_auto_close_stage(conn, stage_id)
     return "accepted"
 
 
