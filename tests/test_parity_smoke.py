@@ -59547,32 +59547,54 @@ def test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation():
        token *entering* byte-equal is the load-bearing cross-engine
        guarantee for the admit; this probe pins it explicitly.
 
-    2. **The Lander ACTIVATION has a documented residual cross-engine
-       gap — pinned as a KNOWN-GAP probe (round-39 latent-SBA
-       precedent).** The round-52 N1 precursor §7 claimed
-       ``SearchLibraryForBasicLandTapped`` is "FULLY DETERMINISTIC on
-       BOTH engines ... no library-search agent seating to verify."
-       That is **incorrect**: Rust's resolve arm
-       (``state_ops_resolve.rs`` — "G19 closure: CR 701.19/701.22 —
-       always shuffle the library after a search") post-search-shuffles
-       the library; Python's ``SearchLibraryForBasicLandTapped.resolve``
-       is the Stage-3 simplification that does NOT shuffle
-       (``SEARCH_LIMITATIONS.md`` #15 residual Python-side gap). So
-       AFTER the activation resolves the two engines' libraries hold
-       the SAME multiset of cards but in DIFFERENT order, and the
-       searched-land identity + the sacrificed-Lander token-SBA timing
-       diverge as downstream consequences. This probe drives the
-       activation and asserts EXACTLY that gap shape: the
-       game-relevant invariants that DO hold cross-engine
-       (library multiset equal, length equal, Lander sacrificed off
-       bf, a basic land searched onto bf) PLUS the precise documented
-       divergence set (``{library_p0, battlefield, graveyard_p0}``).
-       This keeps the gap VISIBLE and makes it auto-convert to a
-       clean byte-equal assertion the moment the Python-side
-       post-search shuffle is restored (the SEARCH_LIMITATIONS #15
-       tail). Per the brief's §2 discipline this slice ships ONLY the
-       bridge-correct subset (the admit) and does NOT force the
-       activation byte-equal coverage.
+    2. **The Lander ACTIVATION is now BYTE-EQUAL cross-engine
+       (round-54 — SEARCH_LIMITATIONS #15 CLOSED).** The round-52 N1
+       precursor §7 claimed ``SearchLibraryForBasicLandTapped`` is
+       "FULLY DETERMINISTIC on BOTH engines"; round-53 N1 proved that
+       wrong — Rust's resolve arm (``state_ops_resolve.rs`` — "G19
+       closure: CR 701.19/701.22 — always shuffle the library after a
+       search") post-search-shuffled the library while Python's
+       ``SearchLibraryForBasicLandTapped.resolve`` (Stage-3
+       simplification) did NOT, so AFTER the activation the libraries
+       held the SAME multiset in DIFFERENT order and the round-53 pin
+       asserted the documented divergence set ``{battlefield,
+       graveyard_p0, library_p0}`` as a KNOWN-GAP (round-39 latent-SBA
+       precedent), structured to AUTO-CONVERT once Python's shuffle was
+       restored. **Round-54 closed the Python-lane parts of #15:**
+       Python's ``SearchLibraryForBasicLandTapped.resolve`` now calls
+       ``shuffle_library(state, controller_id)`` post-search (CR
+       701.19 / 701.22, matching every sibling search Effect and the
+       Rust arm), and this probe threads ONE shared ``random.Random``
+       into both engines (Python ``state.rng``; Rust
+       ``set_external_rng`` -> ``_randbelow`` Fisher-Yates per #16) so
+       both consume the IDENTICAL draw sequence. The genuine
+       end-to-end repro showed the round-53 "all three auto-convert"
+       hypothesis was only PARTLY right — CONTRACT 2 now asserts:
+
+         * ``library_p0`` BYTE-EQUAL (the genuine #15 shuffle gap —
+           CLOSED).
+         * ``battlefield`` BYTE-EQUAL — this was NOT a shuffle
+           consequence but a SECOND Python bug in the same resolve
+           method (searched land entered stale ``summoning_sick=True``;
+           Rust correctly clears it per CR 302.1). Also CLOSED
+           round-54 (``land.summoning_sick = False``).
+         * ``graveyard_p0`` is the PRECISELY-NARROWED remaining
+           known-gap — the sacrificed Lander token. Python (CR 111.7,
+           source of truth) removes it via the token-ceases-to-exist
+           SBA; Rust leaves the dead token in graveyard (the Rust
+           runtime has no ``is_token`` field — same root cause as the
+           ``EachOpponentSacrificesCreature`` Rust-port entry). This
+           is a RUST-lane gap, ORTHOGONAL to #15, NOT closable from
+           the Python lane, and AUTO-CONVERTS to a clean
+           ``compare_fields == []`` once the Rust token-cease-to-exist
+           SBA lands (Rust-agent / Phase-3 follow-up).
+
+       So the 57,779-deck Galactic Wayfarer / Beamsaw Prospector
+       Lander cluster's ``{2},Sac:SearchLibraryForBasicLandTapped``
+       activation is byte-equal cross-engine for the SEARCH effect's
+       full output (searched-land identity + post-shuffle library
+       order); only the orthogonal Rust token-SBA graveyard view
+       remains pinned.
     """
     import pytest
 
@@ -59675,6 +59697,29 @@ def test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation():
         rust_lib_before = len(rust_view0["library_p0"])
         assert py_lib_before == rust_lib_before
 
+        # ---- Round-54 (SEARCH_LIMITATIONS #15 closure): thread ONE
+        # shared ``random.Random`` into BOTH engines for the post-search
+        # shuffle. The opening-library shuffles already ran
+        # deterministically on both sides (``shared_rng_seed=7`` via
+        # ``setup_matched_game`` -> ``build_python_state`` /
+        # ``build_rust_state``), so the pre-activation libraries are
+        # byte-equal (CONTRACT 1 above asserts this). We now install a
+        # FRESH shared stream that feeds ONLY the search shuffle:
+        #   * Python: ``py_state.rng`` is what
+        #     ``shuffle_library(state, controller_id)`` consumes via
+        #     ``state.rng.shuffle(p.library)`` (round-54 resolve fix).
+        #   * Rust: ``set_external_rng`` makes
+        #     ``Effect::SearchLibraryForBasicLandTapped``'s post-search
+        #     Fisher-Yates read draws via ``_randbelow`` (#16) instead
+        #     of the xorshift64 fallback.
+        # Two ``random.Random(seed)`` instances at the SAME (fresh) MT
+        # position consume the identical ``_randbelow`` sequence in the
+        # identical order -> byte-identical post-search library order.
+        import random as _r54_random
+        _r54_shared_seed = 0x5EED54
+        py_state.rng = _r54_random.Random(_r54_shared_seed)
+        rust_state.set_external_rng(_r54_random.Random(_r54_shared_seed))
+
         # ---- Drive the Lander activation: seed {2}, BOTH engines.
         py_state.players[0].mana_pool.clear()
         py_state.players[0].mana_pool.append(ManaCoin(color="C"))
@@ -59741,41 +59786,319 @@ def test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation():
             f"py={py_lib_ms} rust={rust_lib_ms}"
         )
 
-        # ---- CONTRACT 2b: the DOCUMENTED residual cross-engine gap.
-        # Rust post-search-shuffles the library (G19 closure),
-        # Python's Stage-3 simplification does NOT
-        # (SEARCH_LIMITATIONS.md #15 residual Python-side gap;
-        # TOKEN_PRINTING_SUBSTRATE.md §7). The library order therefore
-        # diverges, dragging the searched-land identity (battlefield)
-        # and the sacrificed-Lander token-SBA view (graveyard_p0) with
-        # it. We PIN this exact gap shape so it stays visible and
-        # auto-converts the moment the Python-side shuffle is
-        # restored.
+        # ---- CONTRACT 2b: SEARCH_LIMITATIONS #15 CLOSED (round-54,
+        # Python-lane) — ``library_p0`` AND ``battlefield`` are now
+        # BYTE-EQUAL; the remaining ``graveyard_p0`` divergence is a
+        # SEPARATE, precisely-narrowed Rust-side known-gap (NOT #15).
+        #
+        # The round-53 N1 pin asserted the divergence set
+        # ``{battlefield, graveyard_p0, library_p0}``, hypothesizing
+        # ALL THREE were downstream of the Python-no-shuffle gap and
+        # would auto-convert together once Python shuffled. Round-54's
+        # genuine end-to-end repro proved that hypothesis only PARTLY
+        # correct — two of the three were closable from the Python
+        # lane, one is an orthogonal Rust gap:
+        #
+        #  * ``library_p0`` — the genuine SEARCH_LIMITATIONS #15
+        #    post-search-shuffle gap. CLOSED: Python's
+        #    ``SearchLibraryForBasicLandTapped.resolve`` now calls
+        #    ``shuffle_library`` (CR 701.19/701.22), and this probe
+        #    threads ONE shared ``random.Random`` into both engines
+        #    (Python ``state.rng``; Rust ``set_external_rng`` ->
+        #    ``_randbelow`` Fisher-Yates per #16) so the post-search
+        #    library order is byte-identical.
+        #  * ``battlefield`` — NOT a shuffle consequence. It was a
+        #    SECOND Python bug in the SAME resolve method: the searched
+        #    land entered with stale ``summoning_sick=True`` (library
+        #    GameObject default) while Rust correctly clears it
+        #    (CR 302.1 — lands have no summoning sickness). CLOSED
+        #    round-54 (``land.summoning_sick = False`` in resolve).
+        #    Once library order matched, both engines search the SAME
+        #    object id; with summoning_sick fixed the bf tuple is
+        #    byte-equal.
+        #  * ``graveyard_p0`` — the sacrificed-Lander token. Python
+        #    (source of truth, CR 111.7) correctly applies the
+        #    token-ceases-to-exist SBA -> graveyard empty. Rust leaves
+        #    the dead token in the graveyard (the Rust runtime carries
+        #    no ``is_token`` field — same root cause as the
+        #    ``EachOpponentSacrificesCreature`` Rust-port entry in
+        #    SEARCH_LIMITATIONS). This is a RUST-lane token-SBA gap,
+        #    independent of the search shuffle and NOT closable from
+        #    the Python lane (Python is already correct). It is pinned
+        #    here as the precisely-narrowed residual; it AUTO-CONVERTS
+        #    to a clean ``compare_fields == []`` the moment the Rust
+        #    token-cease-to-exist SBA lands (Rust-agent / Phase-3
+        #    follow-up — TOKEN_PRINTING_SUBSTRATE §7).
+        #
+        # The 57,779-deck Galactic Wayfarer / Beamsaw Prospector Lander
+        # cluster's ``{2},Sac:SearchLibraryForBasicLandTapped``
+        # activation is now byte-equal cross-engine for the
+        # SEARCH-effect's full output (searched-land identity +
+        # post-shuffle library order); only the orthogonal
+        # token-SBA graveyard view remains.
         py_lib_order = [t[0] for t in py_view["library_p0"]]
         rust_lib_order = [t[0] for t in rust_view["library_p0"]]
-        assert py_lib_order != rust_lib_order, (
-            "EXPECTED known gap: the library ORDER must differ "
-            "cross-engine (Rust post-search-shuffles, Python does "
-            "not — SEARCH_LIMITATIONS #15). If this assertion ever "
-            "FAILS, the Python-side post-search shuffle has been "
-            "restored — convert CONTRACT 2 to a clean "
-            "`compare_fields == []` byte-equal assertion and close "
-            "the SEARCH_LIMITATIONS #15 residual + the "
-            "TOKEN_PRINTING_SUBSTRATE §7 gap note."
+        assert py_lib_order == rust_lib_order, (
+            "SEARCH_LIMITATIONS #15 CLOSED — the post-search library "
+            "ORDER must now be byte-equal cross-engine (Python's "
+            "restored shuffle_library + Rust's _randbelow Fisher-Yates "
+            "consume the same shared random.Random). If this FAILS the "
+            "shared-rng threading or the resolve fix regressed: "
+            f"py={py_lib_order[:8]}... rust={rust_lib_order[:8]}..."
         )
         post_divs = compare_fields(py_view, rust_view)
         diverged_fields = sorted(set(d.field for d in post_divs))
-        assert diverged_fields == [
-            "battlefield", "graveyard_p0", "library_p0"
-        ], (
-            "EXPECTED known-gap divergence set is exactly "
-            "{battlefield, graveyard_p0, library_p0} (all downstream "
-            "of the SEARCH_LIMITATIONS #15 post-search-shuffle gap). "
-            f"Got {diverged_fields}. A NEW field here is a real "
-            "regression — investigate before re-baselining."
+        # library_p0 + battlefield CLOSED (Python-lane round-54).
+        # graveyard_p0 is the precisely-narrowed remaining Rust
+        # token-cease-to-exist SBA gap (orthogonal to #15).
+        assert "library_p0" not in diverged_fields, (
+            "SEARCH_LIMITATIONS #15 CLOSED — library_p0 must be "
+            "byte-equal post-shuffle. Regression in the resolve "
+            f"shuffle fix or shared-rng threading. Got {diverged_fields}"
+        )
+        assert "battlefield" not in diverged_fields, (
+            "Round-54 summoning_sick fix — battlefield must be "
+            "byte-equal (searched land enters non-summoning-sick on "
+            f"both engines, CR 302.1). Got {diverged_fields}: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in post_divs]}"
+        )
+        assert diverged_fields == ["graveyard_p0"], (
+            "EXPECTED narrowed residual is EXACTLY {graveyard_p0} — "
+            "the Rust token-ceases-to-exist SBA gap (CR 111.7; Rust "
+            "leaves the sacrificed Lander token in graveyard, Python "
+            "correctly removes it). This is a Rust-lane gap, NOT "
+            "SEARCH_LIMITATIONS #15 (CLOSED round-54). A NEW field "
+            "here is a real regression — investigate before "
+            f"re-baselining. Got {diverged_fields}: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in post_divs]}"
+        )
+        # Sanity: the residual is specifically the sacrificed Lander
+        # token sitting in Rust's graveyard while Python's is empty
+        # (token ceased to exist). Pin the exact shape so a different
+        # graveyard divergence can't masquerade as the known gap.
+        gv = next(d for d in post_divs if d.field == "graveyard_p0")
+        assert gv.py_value == (), (
+            "Python graveyard_p0 must be empty — the sacrificed Lander "
+            f"token ceased to exist (CR 111.7). Got {gv.py_value!r}"
+        )
+        assert any(t[0] == "Lander" for t in gv.rust_value), (
+            "Rust graveyard_p0 must hold the sacrificed Lander token "
+            f"(the documented Rust token-SBA gap). Got {gv.rust_value!r}"
         )
     finally:
         clear_token_printings()
+
+
+def test_r54_python_search_library_basic_land_post_search_shuffle_deterministic():
+    """Round-54 (SEARCH_LIMITATIONS #15 closure) — Python-side
+    regression pin: the RESTORED post-search shuffle in
+    ``SearchLibraryForBasicLandTapped.resolve`` is deterministic per
+    ``state.rng`` seed and seed-SENSITIVE.
+
+    Before round 54 Python's resolve did NOT shuffle (Stage-3
+    simplification). Round 54 restored ``shuffle_library(state,
+    controller_id)`` (CR 701.19 / 701.22). This pins:
+      * same ``state.rng`` seed -> identical post-search library order
+        (determinism — required for the cross-engine byte-equal
+        contract and for reproducible self-play);
+      * different seed -> different order (the shuffle actually
+        consumes ``state.rng``, it's not a no-op / identity).
+    """
+    import random
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+
+    def _run(seed: int) -> list[int]:
+        state = GameState()
+        state.players.append(Player(id=0))
+        # 1 searched land + 12 distinct library cards so the post-
+        # search order is a meaningful permutation (>1 element).
+        state.players[0].library.append(
+            state.new_object(
+                BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+            )
+        )
+        for _ in range(12):
+            state.players[0].library.append(
+                state.new_object(
+                    BASIC_LANDS["Forest"], owner_id=0, zone=Zone.LIBRARY
+                )
+            )
+        state.rng = random.Random(seed)
+        SearchLibraryForBasicLandTapped().resolve(state, controller_id=0)
+        # Plains searched onto bf; 12 Forests remain, shuffled.
+        return [o.id for o in state.players[0].library]
+
+    a1 = _run(2026)
+    a2 = _run(2026)
+    b = _run(99)
+    assert a1 == a2, (
+        "Python post-search shuffle must be deterministic for a fixed "
+        f"state.rng seed (CR-correct + reproducibility). {a1} != {a2}"
+    )
+    assert len(a1) == 12, "the 12 non-searched cards must remain"
+    assert a1 != b, (
+        "Python post-search shuffle must be seed-SENSITIVE — a "
+        "different state.rng seed must (almost surely) yield a "
+        "different order. If equal, shuffle_library isn't consuming "
+        f"state.rng. seed2026={a1} seed99={b}"
+    )
+
+
+def test_r54_python_search_library_basic_land_shuffles_on_no_match():
+    """Round-54 — Python-side regression pin: the post-search shuffle
+    fires EVEN when no basic land is found (CR 701.19 / 701.22 — a
+    search shuffles the library whether or not a card was found, and
+    the Rust arm always shuffles via its break-then-shuffle path).
+    """
+    import random
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.cards import BASIC_LANDS, SYNTHETIC_CREATURES
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+
+    def _run(seed: int) -> list[int]:
+        state = GameState()
+        state.players.append(Player(id=0))
+        # No basic land — only creatures — so the search finds nothing
+        # and takes the early-return path, which must STILL shuffle.
+        for _ in range(10):
+            state.players[0].library.append(
+                state.new_object(
+                    SYNTHETIC_CREATURES["Wild Bear"], owner_id=0,
+                    zone=Zone.LIBRARY,
+                )
+            )
+        state.rng = random.Random(seed)
+        SearchLibraryForBasicLandTapped().resolve(state, controller_id=0)
+        assert len(state.players[0].library) == 10, (
+            "no basic land found — library size unchanged"
+        )
+        assert not any(
+            o.printing.is_basic_land for o in state.battlefield
+        ), "nothing entered the battlefield on a failed search"
+        return [o.id for o in state.players[0].library]
+
+    no_match_a = _run(7)
+    no_match_b = _run(7)
+    no_match_c = _run(123)
+    assert no_match_a == no_match_b, (
+        "no-match-path shuffle must be deterministic per seed"
+    )
+    assert no_match_a != no_match_c, (
+        "no-match-path shuffle must consume state.rng (CR 701.19 / "
+        "701.22 — search shuffles even on a failed search). If equal "
+        "across seeds the early-return path skipped shuffle_library."
+    )
+
+
+def test_r54_cross_engine_search_library_basic_land_byte_equal_shared_rng():
+    """Round-54 (SEARCH_LIMITATIONS #15 CLOSED) — the CORE cross-engine
+    contract: with the SAME ``random.Random`` threaded into both
+    engines, the FULL ``SearchLibraryForBasicLandTapped`` output
+    (searched-land identity + post-search library order) is
+    byte-identical cross-engine.
+
+    Python: ``SearchLibraryForBasicLandTapped.resolve`` ->
+    ``shuffle_library`` -> ``state.rng.shuffle`` (round-54 fix).
+    Rust: ``Effect::SearchLibraryForBasicLandTapped`` resolve arm,
+    ``set_external_rng`` -> ``_randbelow`` Fisher-Yates (#16).
+    Two ``random.Random(seed)`` at the same MT position consume the
+    identical ``_randbelow`` draw sequence -> identical permutation.
+
+    Pinned across multiple seeds so it's not lucky on one. Exercises
+    the Python resolve path (the round-54 fix) end-to-end against the
+    Rust arm — the existing entry-#16 edge-case pins only compared
+    Rust against a Python-MT *reference*; this pins the actual Python
+    *engine* resolve byte-equal to the Rust engine.
+    """
+    import random
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    import mtg_bot_engine
+    from mtg_bot.game import GameState, Player, Zone
+    from mtg_bot.cards import BASIC_LANDS
+    from mtg_bot.effects.generic.search import (
+        SearchLibraryForBasicLandTapped,
+    )
+
+    for seed in (1, 7, 42, 2026):
+        # ---- Python engine: 1 Plains (searched) + 15 Islands.
+        py_state = GameState()
+        py_state.players.append(Player(id=0))
+        py_state.players[0].library.append(
+            py_state.new_object(
+                BASIC_LANDS["Plains"], owner_id=0, zone=Zone.LIBRARY
+            )
+        )
+        for _ in range(15):
+            py_state.players[0].library.append(
+                py_state.new_object(
+                    BASIC_LANDS["Island"], owner_id=0, zone=Zone.LIBRARY
+                )
+            )
+        py_state.rng = random.Random(seed)
+        SearchLibraryForBasicLandTapped().resolve(py_state, controller_id=0)
+        py_lib_names = [
+            o.printing.name for o in py_state.players[0].library
+        ]
+        py_bf_land = [
+            o.printing.name for o in py_state.battlefield
+            if o.printing.is_basic_land
+        ]
+
+        # ---- Rust engine: same library shape, same fresh shared rng.
+        reg = mtg_bot_engine.Registry()
+        plains_pid = reg.register_printing({
+            "name": "Plains", "card_types": ["Land"],
+            "supertypes": ["Basic"], "mana_cost": {},
+            "effects": [], "mana_produced": ["W"],
+        })
+        island_pid = reg.register_printing({
+            "name": "Island", "card_types": ["Land"],
+            "supertypes": ["Basic"], "mana_cost": {},
+            "effects": [], "mana_produced": ["U"],
+        })
+        lib_pids = [plains_pid] + [island_pid] * 15
+        rust_state = mtg_bot_engine.make_state(
+            reg, list(lib_pids), list(lib_pids)
+        )
+        rust_state.set_external_rng(random.Random(seed))
+        spell_obj_id = rust_state.register_and_inject_object(
+            {
+                "name": "Test Rampant Growth",
+                "card_types": ["Sorcery"],
+                "effects": [
+                    {
+                        "kind": "search_library_for_basic_land_tapped",
+                        "count": 1,
+                    }
+                ],
+            },
+            0,  # controller
+            0,  # ZONE_HAND
+        )
+        rust_state.push_to_stack(spell_obj_id, 0)
+        rust_state.resolve_top_of_stack()
+        rust_lib_names = [
+            d["printing_name"] for d in rust_state.library_snapshot(0)
+        ]
+
+        assert py_bf_land == ["Plains"], (
+            f"seed={seed}: Python must search the Plains onto bf"
+        )
+        assert py_lib_names == rust_lib_names, (
+            f"seed={seed}: SEARCH_LIMITATIONS #15 CLOSED — Python's "
+            "restored post-search shuffle must produce a library order "
+            "byte-identical to Rust's _randbelow Fisher-Yates under "
+            f"the SAME shared random.Random. py={py_lib_names!r} "
+            f"rust={rust_lib_names!r}"
+        )
 
 
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===

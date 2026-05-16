@@ -131,9 +131,30 @@ class SearchLibraryForBasicLandTapped(Effect):
     """Search the controller's library for up to ``count`` basic land
     cards, put them onto the battlefield tapped, then shuffle.
 
-    Stage 3 simplification: picks the FIRST ``count`` basic lands in
-    library order (no extra shuffle). If fewer basic lands exist,
+    Picks the FIRST ``count`` basic lands in library order (a
+    deterministic stand-in for the player's free choice of which basic
+    to fetch — the chosen card is hidden information, so picking the
+    topmost match is strength-neutral). If fewer basic lands exist,
     puts what it finds.
+
+    **Round-54 post-search shuffle restoration (SEARCH_LIMITATIONS
+    #15 closure).** CR 701.19 / 701.22 require the library to be
+    shuffled after a search, whether or not a card was found. Every
+    sibling library-search Effect in this module
+    (``SearchLibraryForCard`` / ``SearchLibraryForEquipmentToBattlefield``
+    / ``SearchLibraryForGreenCreatureWithMVAtMostX``) already calls
+    ``shuffle_library(state, controller_id)`` at the end of its
+    ``resolve``; this Effect's prior omission was a Stage-3
+    simplification (the now-removed "no extra shuffle" note). The Rust
+    ``Effect::SearchLibraryForBasicLandTapped`` resolve arm has always
+    shuffled post-search (SEARCH_LIMITATIONS #16). ``shuffle_library``
+    calls ``state.rng.shuffle(p.library)``; when the cross-engine
+    parity harness installs the SAME ``random.Random`` instance on
+    ``state.rng`` (Python) and via ``GameState.set_external_rng`` (Rust
+    — which Fisher-Yates over the identical ``_randbelow`` draw
+    sequence per #16), the two engines' post-search library orders are
+    byte-identical. In production (no shared rng installed) the shuffle
+    is the CR-correct behavior with ``state.rng``'s own stream.
     """
 
     count: int = 1
@@ -142,7 +163,7 @@ class SearchLibraryForBasicLandTapped(Effect):
         self, state: "GameState", controller_id: int,
         targets: tuple[Target, ...] = (),
     ) -> None:
-        from mtg_bot.game import Zone
+        from mtg_bot.game import Zone, shuffle_library
         from mtg_bot.turn import fire_landfall_triggers
 
         p = state.player_by_id(controller_id)
@@ -154,10 +175,26 @@ class SearchLibraryForBasicLandTapped(Effect):
                 state.log.append(
                     f"P{controller_id} searches but finds no more basic lands"
                 )
+                # CR 701.19 / 701.22: shuffle even when the search
+                # finds nothing (matches the sibling search Effects'
+                # no-match early-return shuffle, and the Rust arm which
+                # always shuffles post-search). Mirrors #16.
+                shuffle_library(state, controller_id)
                 return
             p.library.remove(land)
             land.zone = Zone.BATTLEFIELD
             land.tapped = True
+            # CR 302.1 — summoning sickness applies only to creatures;
+            # a land entering via a search effect has no summoning
+            # sickness. A library GameObject defaults
+            # ``summoning_sick=True`` (game.py), so it must be cleared
+            # explicitly here — the prior code left it stale, making
+            # the searched land enter summoning-sick on Python while
+            # the Rust ``Effect::SearchLibraryForBasicLandTapped`` arm
+            # explicitly sets ``summoning_sick = false``. Round-54
+            # cross-engine byte-equality fix (same resolve path as the
+            # SEARCH_LIMITATIONS #15 shuffle restoration).
+            land.summoning_sick = False
             land.controller_id = controller_id
             state.battlefield.append(land)
             state.log.append(
@@ -167,6 +204,10 @@ class SearchLibraryForBasicLandTapped(Effect):
             # ``fire_landfall_triggers`` covers both the legacy
             # string-key path and the predicate-style ENTERS dispatch.
             fire_landfall_triggers(state, land)
+        # CR 701.19 / 701.22 post-search shuffle (SEARCH_LIMITATIONS
+        # #15 closure, round 54). Byte-equal to the Rust arm's
+        # post-search Fisher-Yates when a shared rng is threaded (#16).
+        shuffle_library(state, controller_id)
 
     def describe(self) -> str:
         if self.count == 1:

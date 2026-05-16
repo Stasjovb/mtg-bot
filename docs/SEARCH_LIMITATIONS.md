@@ -842,14 +842,24 @@ by the rarity of "proliferating my opponent makes me lose".
 
 ---
 
-## ~~15.~~ CLOSED: SearchLibraryForBasicLandTapped supertypes-proxy filter + xorshift64-only post-search shuffle
+## ~~15.~~ CLOSED: SearchLibraryForBasicLandTapped supertypes-proxy filter + xorshift64-only post-search shuffle + Python-side no-shuffle residual + Python summoning_sick
 
 **Closed by** `feature/rust-search-basic-land-tapped-supertypes-migration`
 (round 37, 2026-05-15) — the supertypes-proxy half — and
 `feature/effect-rng-threading` (entry #16, G19 follow-up) — the
-xorshift64-only-shuffle half. Both halves of the original divergence
+xorshift64-only-shuffle half — and
+`feature/fix-search-library-python-shuffle-r54` (round 54) — the
+Python-side no-shuffle residual + a second Python `summoning_sick`
+bug in the same resolve method. All parts of the original divergence
 are now bit-equivalent to Python's `is_basic_land` /
-`random.Random.shuffle` shapes.
+`random.Random.shuffle` shapes; the searched land enters
+non-summoning-sick on both engines (CR 302.1). **The ONLY remaining
+cross-engine divergence on the Lander-activation path is the
+orthogonal Rust token-ceases-to-exist SBA gap (`graveyard_p0` — the
+sacrificed token), which is NOT a #15 concern (it is a Rust-lane
+token-SBA gap, same root cause as the
+`Effect::EachOpponentSacrificesCreature` Rust-port entry) and #15 is
+fully closed regardless of it.**
 
 **Round-37 closure (supertypes half):** the round-30 supertypes
 substrate (`feature/rust-supertypes-registry` merge `ef8fa004` —
@@ -912,65 +922,107 @@ substrate when one is installed via
 permutations to `random.Random.shuffle(list)`. See entry #16
 (below) for the full closure shape.
 
-**Residual Python-side gap:** the original entry flagged that
-Python's `SearchLibraryForBasicLandTapped.resolve` does NOT call
-`shuffle_library` (Stage-3 simplification documented on the class).
-That Python-side gap is unchanged by this round; the cross-engine
-divergence it produced was masked by the round-30 introduction of
-external-rng threading on the Rust side (Python's no-shuffle path
-stays the canonical reference for parity probes that install the
-shared rng). The Python-side shuffle restoration is tracked under
-the broader Python-Scry-cleanup tail entries below; not in scope of
-this entry's closure.
+**Residual Python-side gap — CLOSED round 54 (Python-lane).** The
+original entry flagged that Python's
+`SearchLibraryForBasicLandTapped.resolve` did NOT call
+`shuffle_library` (Stage-3 simplification). Round-53 N1's genuine
+Phase-3a probe real-card-exposed it (the Lander activation became
+drivable when the fixed-single-Lander carriers — Galactic Wayfarer
+33,469 decks, Beamsaw Prospector 24,310 — were admitted), pinning the
+divergence set `{battlefield, graveyard_p0, library_p0}` as a
+known-gap (round-39 latent-SBA precedent) hypothesizing all three were
+downstream of the Python-no-shuffle gap and would auto-convert
+together once Python shuffled.
 
-**Round-53 N1 escalation — the residual Python-side gap is now
-REAL-CARD-EXPOSED (Phase 3a).** Before round 53 the Python-no-shuffle
-vs Rust-post-search-shuffle divergence was *latent*: no production
-path drove a `SearchLibraryForBasicLandTapped` whose post-search
-library order was observable cross-engine, because every Lander-token
-carrier was dropped by the production-deck loader (§2.3 — the
-non-vanilla Lander). Round-53 N1's **Phase 3a** admits the
-fixed-single-Lander-token carriers (Galactic Wayfarer 33,469 decks,
-Beamsaw Prospector 24,310 decks — `TOKEN_PRINTING_SUBSTRATE.md` §8),
-so an explicit Lander `{2},Sac:SearchLibraryForBasicLandTapped`
-activation can now reach this divergence on a real EoE card. The gap
-is **pinned explicitly** by
-`tests/test_parity_smoke.py::test_phase3a_genuine_real_eoe_galactic_
-wayfarer_lander_activation` (CONTRACT 2 — round-39 latent-SBA
-known-gap precedent): the probe drives the activation and asserts the
-invariants that DO hold cross-engine (library multiset equal, length
-equal, Lander sacrificed off bf, basic land searched onto bf) PLUS
-the exact documented divergence set
-`{battlefield, graveyard_p0, library_p0}`. The probe **auto-converts**
-to a clean `compare_fields == []` byte-equal assertion the moment the
-Python-side shuffle is restored.
+**Round-54 closure (this round).** Python's
+`SearchLibraryForBasicLandTapped.resolve`
+(`src/mtg_bot/effects/generic/search.py:130`) now calls
+`shuffle_library(state, controller_id)` post-search — on BOTH the
+success path AND the no-basic-land early-return path (CR 701.19 /
+701.22 — a library search shuffles whether or not a card was found),
+matching every sibling library-search Effect in the module and the
+Rust arm's always-shuffle behavior. `shuffle_library` calls
+`state.rng.shuffle(p.library)`; when the parity harness threads the
+SAME `random.Random` instance into `state.rng` (Python) AND via
+`GameState.set_external_rng` (Rust — whose post-search Fisher-Yates
+reads `_randbelow` draws, **bit-identical to `random.Random.shuffle`**
+per entry #16), both engines consume the IDENTICAL `_randbelow` draw
+sequence in the identical order, so the post-search library order is
+**byte-identical cross-engine**.
 
-**Why the Phase-3a admit stays §2-safe despite the real-card
-exposure.** The bench / trajectory walk
-(`scripts/bench_trajectory_parity.py`) drives carrier ETBs but
-**never sac-activates the Lander** (it only emits `activate_ability`
-for tapping lands for mana). Under the bench's strategy set the
-divergent activation is never driven, and the load-bearing
-cross-engine guarantee for the admit is the token *entering*
-byte-equal (proven `compare_fields == []` pre-activation — CONTRACT
-1 of the probe + the headline bridge pin). Same shape as the
-round-39 `ward_cost` filter decision ("BIT-EQUAL in the attack_all
-strategy used by the bench").
+**Before/after.** Before: Python skipped the shuffle entirely; after a
+Lander search the libraries held the same multiset in *different*
+order cross-engine. After: with a shared rng threaded, `library_p0`
+is `compare_fields`-clean. Verified by the new pins
+`test_r54_cross_engine_search_library_basic_land_byte_equal_shared_rng`
+(Python engine resolve byte-equal to Rust engine arm, seeds 1/7/42/
+2026), `test_r54_python_search_library_basic_land_post_search_shuffle_
+deterministic` (per-seed determinism + seed-sensitivity) and
+`test_r54_python_search_library_basic_land_shuffles_on_no_match`
+(early-return path also shuffles).
 
-**Fix-scope estimate (round-54 highest-leverage next step):** restore
-the Python-side post-search Fisher-Yates shuffle on
-`effects/generic/search.py:SearchLibraryForBasicLandTapped.resolve`,
-consuming the shared `random.Random` the parity harness installs
-(the Rust side already consumes it — entry #16) so the two engines'
-post-search permutations are byte-identical. Python-lane, ~1 slice;
-closes this residual + auto-converts the genuine probe's CONTRACT 2.
+**RNG contract (cross-reference #16).** The byte-equality is NOT
+merely "Python shuffles too" — it requires the SAME shared
+`random.Random` consumed in the SAME order. Rust's external-rng
+Fisher-Yates (`for i in (1..n).rev(): j = rng._randbelow(i+1);
+swap(i,j)`) is exactly CPython's `random.shuffle` algorithm; Python's
+`shuffle_library` IS `random.Random.shuffle`. They match iff (a)
+both engines hold the same rng instance / an instance at the same MT
+position, and (b) no intervening RNG draw desyncs the streams between
+setup and the search. The parity harness must install the shared rng
+on both engines (`py_state.rng = r` + `rust_state.set_external_rng(r)`)
+for cross-engine byte-equality — see the round-53 genuine probe's
+round-54 threading block. In production (no shared rng installed) the
+restored shuffle is simply the CR-correct behavior on `state.rng`'s
+own stream.
+
+**The round-53 `{battlefield, graveyard_p0, library_p0}` set was only
+PARTLY a #15 consequence — narrowed precisely.** The genuine
+end-to-end repro showed:
+
+- `library_p0` — the genuine #15 post-search-shuffle gap. **CLOSED**
+  (the shuffle restoration above).
+- `battlefield` — **NOT** a shuffle consequence. It was a *second*
+  Python bug in the SAME resolve method: the searched land entered
+  with stale `summoning_sick=True` (a library `GameObject` defaults
+  `summoning_sick=True`; the resolve never cleared it) while the Rust
+  arm correctly sets `summoning_sick = false` (CR 302.1 — summoning
+  sickness applies only to creatures; a land entering via a search
+  has none). **CLOSED round 54** (`land.summoning_sick = False` added
+  to the resolve, same slice — once library order matched, both
+  engines search the SAME object id so the bf tuple is byte-equal).
+- `graveyard_p0` — the sacrificed Lander token. Python (source of
+  truth, CR 111.7) correctly applies the token-ceases-to-exist SBA so
+  its graveyard is empty; Rust leaves the dead token in the graveyard
+  (the Rust runtime carries no `is_token` field — **same root cause
+  as the `Effect::EachOpponentSacrificesCreature` Rust-port entry**
+  below). This is a **RUST-lane token-SBA gap, ORTHOGONAL to #15**,
+  NOT closable from the Python lane (Python is already correct). It is
+  pinned as the precisely-narrowed residual in the genuine probe's
+  CONTRACT 2 (`diverged_fields == ["graveyard_p0"]` with the exact
+  shape: Python graveyard empty, Rust holds the Lander) and
+  **auto-converts** to a clean `compare_fields == []` the moment the
+  Rust token-cease-to-exist SBA lands (Rust-agent / Phase-3
+  follow-up — `TOKEN_PRINTING_SUBSTRATE.md` §7). **This is NOT a #15
+  concern and #15 is fully closed regardless of it.**
+
+**Why the Phase-3a admit stays §2-safe.** Unchanged from round 53:
+the bench / trajectory walk (`scripts/bench_trajectory_parity.py`)
+drives carrier ETBs but **never sac-activates the Lander** (it only
+emits `activate_ability` for tapping lands for mana), so the
+activation is never driven under the bench's strategy set; the
+load-bearing guarantee for the admit is the token *entering*
+byte-equal (CONTRACT 1, still passing). Round 54 additionally makes
+the *activation* byte-equal for the SEARCH effect's full output
+(searched-land identity + post-shuffle library order), leaving only
+the orthogonal Rust token-SBA graveyard view.
 
 **Impact estimate:** strength-neutral (the library is hidden
 information; the search picks the topmost basic on both engines
-regardless of post-search order). The cost is purely the cross-engine
-parity gap — it blocks a byte-equal Lander *activation* in the bench
-the day a strategy that sac-activates the Lander is added. Until then
-the gap is latent-under-the-current-bench-strategy + pinned.
+regardless of post-search order). The value is pure cross-engine
+parity: the 57,779-deck Galactic Wayfarer / Beamsaw Prospector Lander
+cluster's `{2},Sac:SearchLibraryForBasicLandTapped` activation is now
+byte-equal cross-engine for the search effect's full output.
 
 **Location of the now-CR-compliant code**:
 `rust/src/state_ops_resolve.rs::apply_effect` — the
@@ -979,7 +1031,14 @@ coverage slice; G19 closure post-shuffle; round-37 supertypes
 migration). Variant declared in `rust/src/cards.rs`. Cross-engine
 bridge supertypes default at
 `src/mtg_bot/parity/cross_engine.py::build_rust_state` (round-37
-parity follow-up).
+parity follow-up). Python side:
+`src/mtg_bot/effects/generic/search.py:130`
+`SearchLibraryForBasicLandTapped.resolve` — round-54 post-search
+`shuffle_library(state, controller_id)` (success + no-match paths)
+and `land.summoning_sick = False`. Cross-engine shared-rng threading
+demonstrated in
+`tests/test_parity_smoke.py::test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation`
+(`py_state.rng = r` + `rust_state.set_external_rng(r)`).
 
 ---
 
@@ -1032,12 +1091,18 @@ through every intervening call site (`apply_effect` /
 consumed by `Effect::SearchLibraryForBasicLandTapped`, not serialized
 into fingerprint, clone-preserved via the manual `Clone` impl).
 
-**Python-side follow-up still open.** Python's
-`SearchLibraryForBasicLandTapped.resolve` does NOT shuffle today
-(Stage-3 simplification documented in #15 above). Closing #15 will
-restore full cross-engine library parity end-to-end when the Python
-side calls `shuffle_library(state, controller_id)` at the end of
-the arm under the same shared rng.
+**Python-side follow-up — CLOSED round 54.** Python's
+`SearchLibraryForBasicLandTapped.resolve` now calls
+`shuffle_library(state, controller_id)` post-search (success +
+no-match paths — CR 701.19 / 701.22), and a second Python bug in the
+same method (searched land entering with stale `summoning_sick=True`)
+was fixed (`land.summoning_sick = False`, CR 302.1). With the same
+shared `random.Random` threaded into both engines (`state.rng` on
+Python, `set_external_rng` on Rust), the post-search library order
+AND the searched-land battlefield tuple are byte-identical
+cross-engine — see #15 above for the full closure narration. The
+only remaining Lander-activation divergence is the orthogonal Rust
+token-ceases-to-exist SBA gap (`graveyard_p0`), tracked separately.
 
 ---
 
