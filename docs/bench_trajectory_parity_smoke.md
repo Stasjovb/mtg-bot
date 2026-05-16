@@ -1060,3 +1060,219 @@ campaign's center of gravity shifts back toward the Rust-substrate lane
 (CreateToken / target-pick) for the next bulk-conversion step. No new
 divergence-shape candidates surfaced — the `landfall+mill` path is
 clean, so there is no round-49 fix slice from this measurement.
+
+## Round 50 — Phase-4 real-game validation (Gravpack Monoist) + a round-49 substrate bug surfaced
+
+Round 50 validates round-50 N1's token-substrate **Phase 4** (merge
+`39f5f343` — `Effect::CreateTokenTapped` sister variant + loader
+recognizer widen, flipping the real EoE card **Gravpack Monoist**
+drop→admit, 25,252 of 129,996 17lands decks). N1's in-test probe
+(`test_phase4_real_eoe_gravpack_monoist_tapped_token_byte_equal`)
+already pins byte-equal tapped-token spawn in a single synthetic-
+injection harness; this slice exercises the path in **real full-game
+production-deck trajectories** for the first time. N2's `8695e6f0`
+(docs-only residue plans) has no bench-visible effect.
+
+Main HEAD at run: `39f5f343` (N1 + N2 both merged this round).
+
+### Which archetypes carry Gravpack Monoist
+
+`scripts/scout_r50_gravpack_archetypes.py` confirms the Phase-4 filter
+now **ADMITS** Gravpack Monoist (`_printing_is_bridge_simple_creature
+= True`; its DIES/IsSelf trigger recognizes as `create_token_tapped,
+count=1`). Of the first 200 archetypes in the bench's
+`load_production_deck` pool, **33 carry Gravpack Monoist** (~16.5%,
+consistent with the 19%-of-decks figure). **ZERO of those 33 overlap
+the standard Sweep-A grid (0,1,4,5,10–15)** — the standard grid never
+exercises the path, so a targeted Gravpack-bearing sweep is mandatory.
+(Note: Gravpack Monoist's *carrier* is a 2/1 flier "Human Scout"; the
+2/2 Robot is its *token*. The task brief's "Creature — Robot, flying"
+described the wrong half — immaterial to the result.)
+
+### Sweep A — targeted Gravpack-Monoist grid
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 9,37,49,73,122,123,152,153,169,198 --seeds 0-5 \
+    --max-turns 24 --json-out tmp/bench_r50_gravpack.json --verbose
+```
+
+(10 Gravpack-bearing archetypes — chosen for high copy counts
+[37×3, 22/73/137/152/153/170/179×2] and multi-creature boards
+[122/123/49/198 carry Icecave Crasher / Thawbringer / Eumidian
+Terrabotanist alongside] so creatures can trade.)
+
+| Status            | Count |
+|-------------------|-------|
+| Total games       | 60    |
+| PASS              | 2     |
+| FAIL_DIVERGENCE   | **0** |
+| FAIL_TIMEOUT      | 2     |
+| ARCHETYPE_FILTERED | 0    |
+| **FAIL_EXCEPTION** | **56** |
+| Wall time         | 73.4s |
+
+### Sweep B — standard Sweep-A grid (round-48→50 comparability)
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 0,1,4,5,10,11,12,13,14,15 --seeds 0-5 \
+    --max-turns 22 --json-out tmp/bench_r50_sweepA.json --verbose
+```
+
+| Status            | Round 48 | Round 50 |
+|-------------------|----------|----------|
+| Total games       | 60       | 60       |
+| PASS              | 21       | **21**   |
+| FAIL_DIVERGENCE   | **0**    | **0**    |
+| FAIL_TIMEOUT      | 39       | **39**   |
+| FAIL_EXCEPTION    | 0        | 0        |
+| Wall time         | 76.3s    | 76.6s    |
+
+**Byte-identical to round 48** — same 21/0/39 split, same per-archetype
+breakdown (0:3P/3T, 1:3P/3T, 4:5P/1T, 5:1P/5T, 10/11/12:3P/3T,
+13/14/15:0P/6T). The N1+N2 round-50 merges introduce **zero regression**
+on the standard grid; timeout→PASS delta vs r48 is **0** (the Phase-4
+lever doesn't touch any Sweep-A archetype, as the scout predicted).
+
+### Central finding 1 — a real round-49 substrate bug, surfaced by Phase 4
+
+The 56/60 `FAIL_EXCEPTION` on the Gravpack sweep is **one
+deterministic error** repeated:
+
+```
+ValueError: cross_engine.register_token_printing: pid=N is already
+registered to a DIFFERENT CardPrinting ('Robot'); refusing to
+overwrite with 'Robot'. ... clear the registry via
+clear_token_printings().
+```
+
+**Root cause** (pre-existing in round-49 N1's Phase-1 substrate, first
+*exercised* by Phase 4's real-card admit):
+`trajectory._seat_token_printings` (src/mtg_bot/parity/trajectory.py
+~L3277-3279) calls `cross_engine.register_token_printing(pid,
+py_printing)` once per `setup_matched_game_from_real_decks`
+invocation but **never calls `clear_token_printings()` first**.
+`_TOKEN_PRINTING_BY_PID` is a module-global in `cross_engine.py` that
+persists across games. `_card_def_to_python_printing` builds a **fresh**
+Robot `CardPrinting` per game, and the token's pid = its index in the
+per-game `card_defs` union, which **varies by seed** (different opening
+hands → different filtered libraries → different union ordering). So
+game 2+ of any Gravpack-bearing archetype builds a new Robot printing,
+collides with game 1's leftover registration, and the conflicting-
+registration guard (`existing is not py_printing`, identity-based)
+raises. The bench runs all games in one process → only the **first
+game per archetype** registers cleanly (the 2 PASS + 2 TIMEOUT are
+seed-0/first-seed games); every subsequent seed throws.
+
+Minimal reproduction (same archetype 37, two seeds):
+- seed 0: OK, registers `pid=5 → Robot`.
+- seed 1, no clear: `ValueError` (pid=5, different Robot instance).
+- seed 1, `clear_token_printings()` first: OK.
+
+N1's in-test probe passes because it drives a **single** game in
+isolation — exactly the gap the round-50 brief flagged ("the in-test
+probe does not exercise real full-game production-deck trajectories").
+This is **the round-51 fix slice**: make `_seat_token_printings`
+cross-game-safe — either `clear_token_printings()` at pass entry, or
+reuse a per-`(name, shape)` cached Python printing so repeat
+registrations are identity-idempotent (the latter also keeps any
+concurrently-seated tokens from other carriers intact). Small,
+well-scoped, owned by the substrate (N1) lane.
+
+### Central finding 2 — Phase-4 path stays byte-equal in real games (registry bug worked around), but the DIES→tapped-token resolve never *fires* in real bench games
+
+To separate the substrate bug from the Phase-4 byte-equality question,
+a follow-up drove the same 10 Gravpack archetypes with
+`clear_token_printings()` between games (in-process, via
+`bench_trajectory_parity.drive_one_game`):
+
+| Sweep (per-game clear)         | Games | PASS | FAIL_DIV | FAIL_TIMEOUT | EXC |
+|--------------------------------|-------|------|----------|--------------|-----|
+| 10 arch × seeds 0-2            | 30    | 12   | **0**    | 18           | 0   |
+
+**0 divergence** — once the round-49 registry bug is worked around,
+every Gravpack-bearing real game runs byte-equal across both engines.
+Gravpack Monoist is admitted and reaches the battlefield in **33 of 60**
+games (a real drop→admit flip: pre-Phase-4 it was filtered out, those
+decks collapsing to lands-only).
+
+**However, an instrumented lifecycle scan (60 games, seeds 0-5) shows
+Gravpack Monoist died in 0 of 60 games** (reached battlefield in 33,
+in graveyard in 0), and **a Robot token spawned in 0 games**. Gravpack
+Monoist is a 2/1 **flier**; the bridge-filtered mirror opponent is a
+near-creatureless lands-padded deck with no fliers/reach to block it,
+so under `attack_all` it attacks unblocked every turn and never dies.
+No death → no DIES trigger → the `create_token_tapped` resolve arm is
+never reached in a real production-deck trajectory.
+
+**Verdict on the Phase-4 real-game validation:** the *admit* half of
+Phase 4 is validated in real games (Gravpack Monoist enters the bench
+decks, reaches the battlefield, and the rest of the trajectory stays
+byte-equal across engines, 0 divergence). The *byte-equality of the
+tapped-token spawn itself* is **NOT yet exercised by a real full-game
+trajectory** — it remains pinned only by N1's synthetic-injection
+in-test probe — because the deterministic `attack_all` bench can't
+make an evasive 2/1 flier die in a creatureless mirror. This is the
+same FAIL_TIMEOUT root cause round 47 quantified (1–2-creature decks
+padded with ~58 lands) wearing a different hat: the lever admits the
+card but the bench's combat model never produces the death that would
+fire the trigger.
+
+### Divergence-shape histogram
+
+**No divergences across any sweep** (60 raw Gravpack [56 blocked by the
+substrate bug before any trajectory ran, 4 ran clean], 60 Sweep-A, 30
+per-game-clear Gravpack, 60 lifecycle-scan). Every previously-tracked
+shape (round-37 `play_land::stack`, `cast_spell::graveyard_p0,
+battlefield`; round-41 `cast_spell::stack`, `…life_p0,stack`,
+`…life_p1,stack`; round-43 Thawbringer `cast_spell::stack`) remains
+at zero. The Phase-4 `create_token_tapped` path produced **0 byte
+divergences** everywhere it could be exercised.
+
+### Gate
+
+Docs + scout + `tmp/` JSON artifacts only; no production, harness, or
+bench-script code changed (the `_seat_token_printings` bug is
+*reported*, not fixed, here — round-51 N1 substrate slice). The
+parity gate was **not** re-run; round-50's pre-slice baseline
+(`39f5f343`, **1216 passed**, orchestrator-verified with the .pyd
+rebuilt after N1+N2 merged) remains the recorded gate; nothing in this
+slice touches code on the gate's path.
+
+### Forward picture for round 51
+
+1. **Round-51 fix slice (substrate lane / N1): cross-game-safe
+   `_seat_token_printings`.** This is now a hard blocker on *any*
+   real-game bench coverage of *any* token carrier (Phase 1's
+   pre-positioned cluster + Phase 4's Gravpack), not just Gravpack —
+   the bug is in the shared Phase-1 seating pass. Small fix
+   (`clear_token_printings()` at pass entry, or identity-idempotent
+   per-shape printing cache). Until it lands, every multi-game bench
+   sweep that admits a token carrier is 1-clean-game-per-archetype
+   then all-exception.
+2. **The round-49 forward picture (Phase 3 Lander cluster is the next
+   big lever) still holds** — Phase 3 (Galactic Wayfarer 33,469 /
+   Beamsaw Prospector 24,310 / Edge Rover 15,271 / Biomechan Engineer
+   / Glacier Godmaw, ~88k+ cumulative decks) remains the single
+   largest remaining EoE-pool-delta lever and N1's recommended
+   round-51 phase per `TOKEN_PRINTING_SUBSTRATE.md` §6. Round 50 adds
+   one caveat: the Phase-3 admit will hit the **same**
+   `_seat_token_printings` cross-game bug the moment a Lander carrier
+   is admitted into a multi-game sweep, so the finding-1 fix should
+   land **before or with** Phase 3 or its bench validation will be
+   blocked identically.
+3. **Bench combat-model limitation (documented, not new):** even with
+   the substrate fix, the `attack_all` deterministic bench will not
+   produce a Gravpack Monoist death in the creatureless filtered
+   mirror, so real-game byte-equality of the *tapped-token spawn*
+   stays unexercised until either (a) the filter admits enough
+   blockers to trade (the round-42+ standing recommendation), or
+   (b) a combat strategy / forced-removal harness path is added that
+   can kill an evasive attacker. N1's synthetic in-test probe remains
+   the byte-equality source of truth for the spawn itself; round 50
+   confirms there is **no divergence** anywhere the path *can* be
+   reached, so there is **no round-51 divergence-fix** from this
+   measurement — only the substrate-blocker fix.
