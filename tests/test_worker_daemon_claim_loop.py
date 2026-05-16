@@ -802,14 +802,22 @@ def test_claim_loop_threads_share_runner_setup():
     )
 
 
-def test_claim_loop_bounded_join_recovers_from_hung_thread(caplog):
+def test_claim_loop_bounded_join_fires_only_after_stop_requested(caplog):
     """A thread wedged inside ``play_one_game`` (e.g. subprocess game
-    that never returns) must NOT pin the daemon in STOPPING forever.
-    The bounded join in ``ClaimLoopRunner.run`` abandons it after
-    ``cfg.drain_join_timeout_s`` and transitions to IDLE so the next
-    stage can start. Repro of the 2026-05-15 production incident
-    where master+mac needed external ``Stop-ScheduledTask`` to
-    unstick from STOPPING after the smoke-stage drain.
+    that never returns) must NOT pin the daemon in STOPPING forever
+    once an operator-driven stop fires. After ``stop_requested`` is
+    set the bounded-drain deadline starts; threads still alive at
+    the deadline are abandoned (daemon threads, die with the daemon
+    process) and the daemon transitions IDLE so the next stage can
+    start.
+
+    Critically, the timeout is gated on stop being requested —
+    natural drain (queue empty) lets threads finish their current
+    game first, even if it takes longer than
+    ``drain_join_timeout_s``. The 2026-05-15 post-bounded-drain
+    smoke regressed by abandoning in-progress games during natural
+    drain (cluster ended with 8 ghost claims in coordinator's
+    queue.db); this test pins the correct stop-only semantics.
     """
     import logging as _logging
     import threading as _threading
@@ -823,7 +831,6 @@ def test_claim_loop_bounded_join_recovers_from_hung_thread(caplog):
     hang = _threading.Event()  # never set — game thread blocks forever
 
     def play_one_hangs(claim, shard_label):
-        # Block until the test releases the event (post-assertions).
         hang.wait()
         return cl.GameResult(outcome="completed")
 
@@ -835,7 +842,7 @@ def test_claim_loop_bounded_join_recovers_from_hung_thread(caplog):
         worker_id="test", weights_root=Path("trained_weights_test"),
         shard_label="test",
         retry_backoff_s=(0.0, 0.0, 0.0),
-        # Short timeout so the test wall stays ~quarter-second.
+        # Short timeout so the test wall stays brief once stop fires.
         drain_join_timeout_s=0.25,
         http_get=fake.http_get,
         http_post_json=fake.http_post_json,
@@ -844,20 +851,40 @@ def test_claim_loop_bounded_join_recovers_from_hung_thread(caplog):
     cbs = _state_callbacks_for(state)
     state.try_start("self_play", "stage_X", n_workers=n_workers)
     loop = cl.ClaimLoopRunner(cfg, cbs, runner)
-    with caplog.at_level(_logging.WARNING):
-        loop.run()
 
-    # Daemon recovered to IDLE despite hung worker threads.
+    # Run the loop in a background thread so the test can fire
+    # ``mark_stopping`` while worker threads are mid-game.
+    run_thread = _threading.Thread(target=loop.run, daemon=True)
+    with caplog.at_level(_logging.WARNING):
+        run_thread.start()
+        # Wait briefly for worker threads to claim + enter hang.
+        time.sleep(0.4)
+        # Sanity: without a stop request, run() must still be
+        # alive — the bounded timeout shouldn't fire on its own
+        # despite the threads being wedged.
+        assert run_thread.is_alive(), (
+            "loop.run() exited before stop was requested — bounded "
+            "drain is wrongly firing on natural-drain code path"
+        )
+        # Now fire the stop. Bounded-drain deadline starts ticking.
+        state.mark_stopping()
+        # Poll cadence in run() is 2s, so allow up to ~2s before
+        # stop is observed + 0.25s drain timeout + slack.
+        run_thread.join(timeout=5.0)
+        assert not run_thread.is_alive(), (
+            "loop.run() did not return after stop+drain-timeout; "
+            "the bounded-drain mechanism is broken"
+        )
+
     snap = state.snapshot()
     assert snap["state"] == worker_daemon.State.IDLE
-    # Bounded-drain warning fired and named the abandoned threads.
     abandon_warns = [
         r.message for r in caplog.records
-        if "still alive after" in r.message
+        if "still alive" in r.message and "stop was requested" in r.message
     ]
     assert abandon_warns, (
-        "expected a 'still alive after' warning when threads hang past "
-        "the drain timeout"
+        "expected a 'still alive ... after stop was requested' "
+        "warning when threads hang past the drain timeout"
     )
     # Unblock the abandoned daemon threads so they exit cleanly during
     # pytest teardown.

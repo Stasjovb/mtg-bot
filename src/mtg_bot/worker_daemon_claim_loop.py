@@ -646,23 +646,44 @@ class ClaimLoopRunner:
         ]
         for t in threads:
             t.start()
-        # Bounded join — see ``DEFAULT_DRAIN_JOIN_TIMEOUT_S`` rationale.
-        # We compute a single deadline for the whole pool and pass each
-        # per-thread join the remaining budget; this caps total drain
-        # wall at ``timeout_s`` no matter how many threads need to
-        # finish, instead of timeout_s × n_threads in the worst case.
+        # Bounded join — but ONLY enforce the timeout once stop has
+        # been requested. Natural drain (claim returns 204 because the
+        # queue is empty) lets a thread finish its current game first,
+        # and that wait can legitimately reach ``per_game_timeout_sec``
+        # (~600s in production). If we time-bound the natural-drain
+        # path, in-progress games get abandoned, their claims rot in
+        # the coordinator's queue.db until claim_ttl_seconds expires,
+        # and the stage's done counter undercounts. Repro'd on the
+        # 2026-05-15 post-bounded-drain smoke: master claimed 14
+        # games, completed 4 in the 60s window, abandoned the other
+        # 10 mid-game → coordinator stuck with 8 in_flight forever.
+        # The timeout still kicks in once ``stop_requested`` fires
+        # (e.g. /v2/stop arrived or a peer thread crashed), which is
+        # the only scenario where the daemon has been told to abort
+        # rather than to finish what it has.
         timeout_s = float(self.cfg.drain_join_timeout_s)
-        deadline = time.monotonic() + timeout_s
+        stop_deadline: Optional[float] = None
         stuck_threads: list[str] = []
         for t in threads:
-            remaining = max(0.0, deadline - time.monotonic())
-            t.join(timeout=remaining)
-            if t.is_alive():
-                stuck_threads.append(t.name)
+            while t.is_alive():
+                if stop_deadline is not None:
+                    remaining = max(0.0, stop_deadline - time.monotonic())
+                    if remaining <= 0:
+                        stuck_threads.append(t.name)
+                        break
+                    t.join(timeout=min(remaining, 2.0))
+                else:
+                    # No stop observed yet: poll briefly and re-check
+                    # ``is_stop_requested`` between waits so a /v2/stop
+                    # mid-drain transitions us into bounded mode within
+                    # ~2s.
+                    t.join(timeout=2.0)
+                    if t.is_alive() and self.state.is_stop_requested():
+                        stop_deadline = time.monotonic() + timeout_s
         if stuck_threads:
             log.warning(
-                "[claim_loop] %d/%d threads still alive after "
-                "%.1fs drain timeout: %s. Abandoning them as daemon "
+                "[claim_loop] %d/%d threads still alive %.1fs after "
+                "stop was requested: %s. Abandoning them as daemon "
                 "threads and transitioning to IDLE so the next stage "
                 "can start; they'll die with the daemon process.",
                 len(stuck_threads), len(threads),
