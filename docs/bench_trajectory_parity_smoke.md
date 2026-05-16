@@ -1350,3 +1350,263 @@ dying in the creatureless filtered mirror, so the tapped-token spawn's
 real-game byte-equality stays synthetic-pinned) is unchanged and
 remains the round-42+ standing recommendation, independent of this
 fix.
+
+## Round 56 — token-cease-to-exist SBA + Lander-cluster real-game validation (round-55/53 sister of round-50 Gravpack)
+
+Round 56 N3 validates **in real full production-deck games** the two
+in-test-only closures behind the round-55/53/54 work:
+
+- Round-55 N2 closed the **Rust token-cease-to-exist SBA (CR 111.7)**:
+  a sacrificed/bounced/exiled token now ceases to exist on Rust
+  byte-matching Python. Combined with round-54's Python-side
+  post-search-shuffle + summoning_sick fixes, the round-53 genuine
+  Galactic-Wayfarer Lander-activation probe's CONTRACT 2 flipped from
+  a precisely-narrowed `graveyard_p0` known-gap to
+  `compare_fields() == []` — **the WHOLE Lander sac-activation is now
+  byte-equal cross-engine *in-test***.
+- Round-53 N1 Phase 3a admitted the **57,779-deck Lander cluster**
+  (Galactic Wayfarer 33,469 ENTERS+Lander; Beamsaw Prospector 24,310
+  DIES+Lander) and round-50 N1 Phase 4 admitted **Gravpack Monoist**
+  (25,252 DIES+tapped-Robot).
+
+**None of this had been validated in real full-game trajectories** —
+only in-test single-game probes. This is the sister of round-50's
+Gravpack real-game validation (which surfaced a latent registry bug
+the in-test probe missed). **It surfaced the analogous bug.**
+
+`.pyd` provenance: the installed `mtg_bot_engine.cp313` is the
+orchestrator's post-round-55 build (mtime 14:37, after the round-55
+Rust token-SBA merge `5bd56d4a` at 14:35); the round-53/55 genuine
+`test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation`
+probe + 3 round-55 token-cease bridge pins PASS against it (they would
+FAIL with a stale-r53 `.pyd` on `graveyard_p0`), so these sweeps
+exercise the real round-55 Rust code. No Rust change / no rebuild this
+slice (pure scout + bench + docs).
+
+### Scout — all three carriers ADMITTED; 22 double-DIES archetypes
+
+`scripts/scout_r56_token_sba_lander_archetypes.py` (loads the gz pool
+ONCE — `load_production_deck` reloads it per call, fine for the bench's
+one-deck-per-game use but catastrophic for a 220-archetype scan):
+
+| Carrier | Trigger → token | admit | of 220 |
+|---|---|---|---|
+| Galactic Wayfarer (3/3) | ENTERS+IsSelf → Lander (w/ `{2},Sac:SearchLibraryForBasicLandTapped`) | **ADMITTED** | 62 |
+| Beamsaw Prospector (2/1) | **DIES**+IsSelf → Lander | **ADMITTED** | 43 |
+| Gravpack Monoist (2/1 flying) | **DIES**+IsSelf → tapped 2/2 Robot | **ADMITTED** | 37 |
+
+All three already admitted by round-53 Phase-3a `_SAFE_TRIGGERS`
+(`("dies","source_is_self","create_token")`,
+`("enters",…,"create_token")`) + round-50 Phase-4
+(`("dies",…,"create_token_tapped")`) + the recognizer DIES
+`safe_effect_kinds = (surveil, gain_life, draw_cards, create_token,
+create_token_tapped)`. **22 archetypes carry ≥2 distinct DIES
+carriers** (37,73,122,123,152,153,169,174,197,201,…) — the prime
+token-SBA exercisers.
+
+### Sweep A — double-DIES exercisers (raw bench, NO per-game clear)
+
+```
+scripts/bench_trajectory_parity.py --archetypes \
+  37,73,122,123,152,153,169,174,197,201 --seeds 0-5 --max-turns 24 \
+  --json-out tmp/bench_r56_sweepA.json --verbose
+```
+
+| Status | Count |
+|---|---|
+| Total games | 60 |
+| PASS | 19 |
+| **FAIL_DIVERGENCE** | **0** |
+| FAIL_TIMEOUT | 29 |
+| ARCHETYPE_FILTERED | 0 |
+| **FAIL_EXCEPTION** | **12** |
+| Wall | 77.4s |
+
+**0 FAIL_DIVERGENCE**, empty divergence-shape histogram. All 12
+`FAIL_EXCEPTION` are **one deterministic `ValueError`**, confined to
+archetypes 73 & 197 — exactly the only Sweep-A archetypes carrying
+**BOTH** a Lander carrier **AND** the Robot carrier (Gravpack Monoist).
+
+### CENTRAL FINDING — a NEW latent registry bug, real-card-exposed (round-50 pattern, distinct root cause)
+
+```
+ValueError: cross_engine.register_token_printing: pid=7 is already
+registered to a DIFFERENT CardPrinting ('Robot'); refusing to
+overwrite with 'Lander'. ...
+```
+
+Reproduced + isolated to a 12-line repro (exact bench order:
+`[(37,s) for s in 0..5] + [(73,s) for s in 0..5]`, one process, no
+clear):
+
+- arch 37: card_defs union size 6 → `_seat_token_printings` assigns
+  **Lander=pid 6, Robot=pid 7**; `register_token_printing` writes both
+  into the module-global `_TOKEN_PRINTING_BY_PID`.
+- arch 73: union size 7 → token base pid = 7 → seating wants
+  **Lander=pid 7, Robot=pid 8**. But `_TOKEN_PRINTING_BY_PID[7]` still
+  holds **Robot** from arch 37 (the map persists process-wide;
+  `clear_token_printings()` is never called by the bench).
+  `register_token_printing(7, Lander)` finds `existing=Robot` (a
+  different `CardPrinting` object) → the identity-conflict guard
+  (`existing is not py_printing`, `cross_engine.py:258`) raises.
+
+**This is NOT the round-50/51 bug** (that was the **same** Robot token
+re-registered at a shifting pid across seeds of **one** archetype;
+round-51's shape-keyed `cached_token_printing` closed it — same Robot
+object → identity-idempotent). The round-56 bug is **two DIFFERENT
+token shapes (Lander vs Robot) colliding on the SAME pid across
+DIFFERENT archetypes** in one bench process: the pid is a per-game
+`card_defs`-union index that varies by archetype, while
+`_TOKEN_PRINTING_BY_PID` is keyed by **pid** (not shape) and persists
+process-wide. Round-51's cache (keyed by token *shape*) cannot help —
+Lander and Robot are different shapes / different cached objects; the
+collision is at the **pid key**, not object identity. Round-51's own
+docstring scoped its fix to "two carriers printing the **same-named**
+token" — the multi-distinct-token cross-archetype pid clash was out of
+scope and is **real-card-exposed for the first time** here by round-53
+Phase-3a (Lander admit) + round-50 Phase-4 (Robot admit) **co-occurring
+in a real multi-archetype sweep**. In-test probes never expose it
+(single archetype, single token shape, `clear_token_printings()`
+fixture teardown) — **exactly the round-50 in-test-probe blind spot
+the brief flagged**. This is the high-value find and the **round-57
+fix slice** (substrate / N1 lane, sister of round-51 N1's fix).
+
+Recommended round-57 fix: make `register_token_printing` / the
+`_seat_token_printings` pid-assignment cross-game-safe for *multiple
+distinct* tokens. Round-51's shape-keyed cache made same-shape repeats
+idempotent; the round-57 sister fix must make the pid→printing map
+tolerate the same pid being reused by a *different* token shape across
+games (the conflicting-registration guard should key on the
+(pid, current-game) tuple, OR `_seat_token_printings` should
+`clear_token_printings()` at pass entry — the round-50-N3-considered
+clear-at-entry option, now justified because round-51's
+concurrently-seated-tokens-from-other-carriers concern is satisfied
+within a single game's seating pass; OR overwrite-allow when the new
+printing is itself a cached_token_printing for a different shape).
+Small, well-scoped, owned by the substrate lane.
+
+### Sweep A′ + B — byte-equality validation (per-game `clear_token_printings()`, the round-50-N3 workaround)
+
+To separate the round-56 registry bug from the byte-equality question,
+the same grids were driven via `bench.drive_one_game` with
+`clear_token_printings()` between games:
+
+| Sweep | Grid | Games | PASS | FAIL_DIV | TIMEOUT | EXC |
+|---|---|---|---|---|---|---|
+| A′ double-DIES | 37,73,122,123,152,153,169,174,197,201 ×s0-2 | 30 | 12 | **0** | 18 | **0** |
+| A′ double-DIES | …same ×s0-5 (lifecycle) | 60 | 26 | **0** | 34 | **0** |
+| B GW-heavy | 0,1,2,3,4,7,8,13,16,35 ×s0-5 | 60 | 35 | **0** | 25 | **0** |
+
+**0 FAIL_DIVERGENCE / 0 FAIL_EXCEPTION** across all 150 per-game-clear
+games. Once the round-56 registry bug is worked around, **every
+Lander/Robot-carrier real production-deck game runs byte-equal across
+both engines** — the round-53 Phase-3a admit + CONTRACT-1
+token-entering guarantee holds in real games at scale (same pattern as
+round-50/51's Gravpack per-game-clear validation).
+
+### Lifecycle scan — does the round-55 token-SBA path actually FIRE in real games?
+
+`scripts/scout_r56_token_lifecycle_scan.py` instruments the Python
+state's battlefield + `state.log` (`turn.move_off_battlefield` appends
+`"<name> token ceases to exist"` for **every** token bf-exit — the
+exact event that triggers the round-55 Rust SBA on the other engine):
+
+| Lifecycle (per-game-clear) | Sweep A′ 60 | Sweep B 60 |
+|---|---|---|
+| carrier reached battlefield | 42/60 | 44/60 |
+| **token created** (Lander/Robot reached bf) | 3/60 | **44/60** |
+| **token LEFT bf** (round-55 SBA fires) | **0/60** | **0/60** |
+| token-SBA fired & DIVERGED | **0** | **0** |
+
+Sweep B is decisive: the **Galactic Wayfarer Lander spawns on ETB in
+every game where the carrier reaches the battlefield (44/44)** — the
+token-*entering* path (round-53 CONTRACT 1) is exercised in real
+production-deck games at high rate and stays **byte-equal
+cross-engine, 0 divergence**. But the **token LEFT the battlefield in
+0/120 games**: the bench never sac-activates the Lander (it only emits
+`activate_ability` for tapping lands for mana — the SEARCH_LIMITATIONS
+round-55 §2 note), and the DIES carriers (Beamsaw Prospector /
+Gravpack Monoist) never die because the bridge-filtered creatureless
+mirror can't kill them under `attack_all` (the round-50/51 finding-2
+combat-model limitation). The 3 Sweep-A′ token-created games (arch 73
+Galactic Wayfarer) ended PASS with the Lander **still on the
+battlefield**.
+
+### Validation verdict
+
+| Claim | Verdict |
+|---|---|
+| Round-53 Phase-3a Lander carriers + round-50 Phase-4 Gravpack admitted & reach bf in real games | **VALIDATED** (carrier on bf 42–44/60; Galactic Wayfarer Lander spawns 44/44 where it ETBs) |
+| Admit + **token-entering** byte-equal cross-engine in real games (round-53 CONTRACT 1) | **VALIDATED** — 0 FAIL_DIVERGENCE across 150 per-game-clear games incl. 44 real Lander-entering games; round-55-built `.pyd` |
+| Round-55 **token-cease-to-exist SBA** byte-equal *fired* in a real full-game trajectory | **NOT EXERCISED** by the bench (token created but **never leaves bf** in 0/120 — bench never sac-activates the Lander; DIES carriers never die in the creatureless mirror). Remains pinned ONLY by round-53's synthetic-injection genuine in-test probe (which is GREEN against this `.pyd`). Same root cause as round-50 finding-2, one tier deeper. |
+| New cross-engine divergence | **NONE** — 0 FAIL_DIVERGENCE everywhere the path can be reached |
+| Latent bug surfaced | **YES — a NEW multi-distinct-token cross-archetype pid-collision in `register_token_printing` (round-57 fix)** — the round-50 sister-validation pattern, distinct root cause from round-50/51 |
+
+Net: the **admit + token-entering** half of the round-53/50 Lander +
+Gravpack work is now real-game-validated byte-equal at scale; the
+**token-cease-to-exist SBA** byte-equality stays synthetic-pinned
+(unreachable under the bench's strategy set, the round-42+ standing
+combat-model limitation), and the validation surfaced one **new latent
+registry bug** that is real-card-exposed and is the round-57 fix.
+
+### §2-correct admit widen — NOT NEEDED this round (decided, not deferred)
+
+N2-r55 recommended "widen the bench filter to admit token-bearing
+DIES+IsSelf+CreateToken carriers now that token cease-to-exist is
+byte-equal." **Investigation shows this widen is already in place** —
+round-53 N1 Phase 3a (`("dies","source_is_self","create_token")` +
+the `_token_with_safe_activated_ability_card_def` Lander recognizer)
+and round-50 N1 Phase 4 (`("dies","source_is_self",
+"create_token_tapped")`) already admit every DIES+IsSelf+CreateToken
+carrier the §2 discipline allows (Beamsaw Prospector, Gravpack
+Monoist); the recognizer's DIES `safe_effect_kinds` already carries
+both `create_token` and `create_token_tapped` (trajectory.py:2702).
+The scout confirms all three carriers ADMITTED on the round-53/55
+worktree code with **no `_SAFE_*` change**. The round-53 §2 decline
+ledger (Edge Rover `each_player`→Phase 5, Seedship Agrarian
+`BECOMES_TAPPED`, Biomechan Engineer carrier-activated-ability,
+Glacier Godmaw sibling-trigger, Sunstar Expansionist And-StateBound,
+Biotech Specialist sibling, Bioengineered Future non-creature→Phase 2)
+is unchanged — every one is still §2-correctly declined; admitting any
+would be a silent mistranslation. **No widen made, none deferred — the
+admit set is already §2-maximal.** No harness/`_SAFE_*` code touched →
+no gate run needed (pure scout + bench + docs; baseline 1293 untouched).
+
+### Gate
+
+Docs + 2 `scripts/scout_*.py` diagnostics + `tmp/` JSON artifacts
+only; no production / harness / `_SAFE_*` / bench-script code changed
+(the `register_token_printing` cross-archetype bug is **reported**, not
+fixed — round-57 substrate slice). Parity gate **not** re-run; nothing
+in this slice is on the gate's path (baseline **1293** unchanged). No
+Rust → no `maturin`.
+
+### Forward picture for round 57
+
+1. **Round-57 fix slice (substrate / N1 lane): multi-distinct-token
+   cross-archetype-safe `register_token_printing` /
+   `_seat_token_printings`.** This is now a HARD blocker on raw
+   multi-archetype bench coverage of *any* deck carrying ≥2 distinct
+   token shapes (Lander + Robot) — not just the 73/197 pair; the bug
+   triggers whenever a Lander-carrier archetype and a Robot-carrier
+   archetype are swept in one process and their per-game union sizes
+   differ by the right amount. Round-51's shape-keyed cache made
+   same-shape repeats idempotent; the round-57 sister fix must make
+   the pid→printing map tolerate the same pid reused by a *different*
+   token shape across games (see the recommended-fix paragraph above).
+   Small, well-scoped, sister of round-51. The per-game-clear
+   workaround keeps the byte-equality lane unblocked in the meantime.
+2. **The token-cease-to-exist SBA real-game byte-equality stays
+   synthetic-pinned** (round-53 genuine in-test probe) until either
+   (a) the filter admits enough blockers for DIES carriers to trade in
+   real combat (the round-42+ standing recommendation), or (b) a
+   forced-removal / sac-activation harness path is added that can kill
+   an evasive attacker OR drive the Lander's `{2},Sac` activation. The
+   bench's strategy set structurally cannot reach it (round-50
+   finding-2, one tier deeper — now confirmed for the Lander cluster
+   too). No round-57 divergence-fix from this measurement — only the
+   substrate-blocker fix.
+3. **Phase 5** (`each_player` recognizer → Edge Rover, 15,271 decks)
+   and **Phase 2** (non-creature Lander carriers → Bioengineered
+   Future) remain the next §2-honest pool-delta levers, both unchanged
+   by this validation.
