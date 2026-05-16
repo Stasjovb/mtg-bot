@@ -157,6 +157,58 @@ class _PickFirstLegalTargetAgent(Agent):
         return legal_targets[0]
 
 
+class _PickFirstBattlefieldCreatureEitherSideAgent(Agent):
+    """Pick the creature with the SMALLEST ``state.battlefield`` index
+    from whatever (already slot-kind-filtered) pool it is offered.
+
+    Mirrors Rust's
+    ``Effect::TwoSubjectPumpAndDebuffByArtifactCount`` deterministic
+    per-side scan (state_ops_resolve.rs): source side = FIRST creature
+    on the source-controller's bf (smallest Vec index); opponent side
+    = FIRST creature on the opponent's bf (smallest Vec index).
+
+    The agent-driven real Monoist Circuit-Feeder card parses to
+    ``PairedTargetPumpDebuffUEOT`` whose two-slot push (actions.py:
+    3233-3255) calls ``choose_target`` ONCE PER SLOT with the pool
+    already restricted to that slot's declared kind
+    (``my_creature`` then ``creature``). So this shim only needs to
+    return, from the offered pool, the candidate whose battlefield
+    object has the lowest insertion index — which is exactly Rust's
+    first-creature-on-that-side pick. Picking by battlefield index
+    (not pool order) makes the choice independent of however
+    ``legal_targets`` happens to order the pool, keeping the
+    cross-engine probe byte-equal regardless of legal-target
+    enumeration order.
+
+    Used by: the genuine real-EoE Monoist Circuit-Feeder probe (the
+    deterministic bridge sibling
+    ``PumpYoursAndDebuffOpponentByArtifactCountUntilEOT`` on the Rust
+    side; the agent-driven ``PairedTargetPumpDebuffUEOT`` on the
+    Python side, shim-constrained to the same first-creature picks).
+    """
+
+    def choose_target(self, state, player_id, legal_targets):
+        if not legal_targets:
+            return None
+        # Index every battlefield object by its insertion position so
+        # we can pick the lowest-index candidate (= Rust's FIRST
+        # creature on that side).
+        bf_index = {o.id: i for i, o in enumerate(state.battlefield)}
+        best = None
+        best_idx = None
+        for kind, target_id in legal_targets:
+            idx = bf_index.get(target_id)
+            if idx is None:
+                continue
+            if best_idx is None or idx < best_idx:
+                best_idx = idx
+                best = (kind, target_id)
+        # Defensive fallback: if no candidate maps to a bf object
+        # (should not happen for the creature-target pools this shim
+        # serves), keep the offered order's first entry.
+        return best if best is not None else legal_targets[0]
+
+
 class _SacrificeFirstAgent(Agent):
     """Pick the first legal sacrifice id.
 
