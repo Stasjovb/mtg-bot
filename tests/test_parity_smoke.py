@@ -53622,6 +53622,492 @@ def test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_par
     assert py_junk.damage == 0
 
 
+def test_cross_engine_synthetic_etb_create_token_copy_of_target_creature_you_control_cross_controller_routes_to_source_controller_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB
+    ``create_token_copy_of_target_creature_you_control`` trigger fired
+    by a permanent CONTROLLED BY P1 while ACTIVE_PLAYER=P0 -- the
+    cross-controller leg of the round-23 bridge arm at
+    cross_engine.py:4807. Both engines must derive the clone scope from
+    the SOURCE's controller (P1) so the cloned token's printing_id
+    equals the P1 bait Bear's printing_id AND the new token lands on
+    P1's bf (not the P0 bait Bear's printing_id, not P0's bf).
+
+    **The substrate.** Per the bridge arm at cross_engine.py:4807 + the
+    Rust regression pin
+    ``test_rust_create_token_copy_cross_controller_token_lands_on_source_controller_bf``
+    (tests/test_parity_smoke.py:48591): Rust's
+    ``Effect::CreateTokenCopyOfTargetCreatureYouControl`` resolve arm
+    (state_ops_resolve.rs:6141-6234) performs an INTRINSIC 5-zone walk
+    via ``source_obj_id`` to locate the source, capture its controller
+    (cidx), then scan ``state.players[cidx].battlefield`` for the FIRST
+    Creature, allocate a fresh obj_id (max+1 across both players'
+    all-zones), and push a new GameObject with the SAME printing_id
+    onto controller's bf with summoning_sick=true and a fresh ETB
+    timestamp. The 5-zone walk is the I-fix family for this arm: the
+    cross-controller case works correctly without any caller plumbing
+    because the resolve walks zones directly to find the source. If
+    the source-walk fails, Rust falls back to active_player as cidx --
+    the pre-fix observable a faulty substrate would land on. Python's
+    ``CreateTokenCopyOfTargetCreatureYouControl.resolve``
+    (effects/generic/tokens.py:316-389) is target-driven via the
+    ``targets[0]`` ``("creature", target_id)`` pick that the targeting
+    Decision pipeline sets up at PUSH time -- the agent on the
+    trigger's controller_id (=P1) picks via ``choose_target`` over
+    ``legal_targets`` which restricts to ``controller_id == P1``'s bf
+    creatures. Then it delegates to ``CreateToken().resolve`` which
+    routes the new token to ``controller_id``'s bf.
+
+    **Same-controller sister coverage.** The Rust regression pins at
+    lines 48488 (basic resolve on p0 source/p0 bait), 48527 (no
+    eligible target silent fizzle), and 48591 (cross-controller
+    routing pin on p1 source + p0 decoy + p1 target) cover the Rust
+    side of cross-controller routing already. This probe ships the
+    missing CROSS-ENGINE leg AND drives a real ETB trigger end-to-end
+    with Python's targeting Decision pipeline alongside the Rust
+    intrinsic walk -- the bridge arm docstring at
+    cross_engine.py:4869-4875 explicitly defers cross-engine end-to-
+    end probes per the round-17/18/19 synthetic-only-when-riders-
+    cascade precedent (clone substrate cascades token-printing-
+    registry semantics + potential additional copy-substrate for the
+    additional_subtype rider; Rust's deferred-subtype design makes a
+    SUBTYPE-snapshot probe shape-mismatched at the substrate level
+    today). The bare additional_subtype=None shape DOES round-trip
+    cleanly: both engines emit a token with the SAME printing_id as
+    the picked target, on the SAME controller's bf -- those are the
+    load-bearing observables this probe pins.
+
+    **Why synthetic, not a real EoE card.** Per the bridge arm
+    docstring (cross_engine.py:4858-4868), there are 0 EoE oracle hits
+    for the bare-shape today (Mirrorpool-shape; the closest EoE card
+    Daring Salt-Lord uses the artifact-or-enchantment shape which is
+    a different Effect variant). A synthetic ETB-trigger on a vanilla
+    Creature carrier keeps this probe self-contained without
+    cascading the cast-from-hand mana pipeline.
+
+    **Source carrier choice load-bears.** The source IS a Creature
+    (vanilla 2/2 Cleric carrier) on P1's bf. With ONE bait Bear also
+    on P1's bf at a LOWER ETB-timestamp than the source, both
+    engines' deterministic first-bf-creature pick will select the
+    bait Bear (NOT the source itself), so the token clones the bait's
+    printing (NOT the source's printing) -- and the new token lands
+    on P1's bf with the bait's printing_id. With a DIFFERENT decoy on
+    P0's bf (vanilla 1/1 Goblin -- distinct printing), the cross-
+    controller routing pin is sharp on BOTH the printing_id and the
+    landing-controller axes: post-fix P1 bf grows by 1 with bait-Bear
+    printing_id; pre-fix would have walked P0's bf and either landed
+    a Goblin-printing token (if cidx fallback fired to active_player)
+    or routed the picker to P0's bf but stamped on P1's bf -- either
+    way the printing_id observable diverges.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``).
+
+      2. **Inject a vanilla 1/1 Goblin onto P0's bf** (the decoy --
+         must NOT have its printing cloned). Owner/controller=0.
+
+      3. **Inject a vanilla 2/2 Bear onto P1's bf** (the target the
+         source-controller-routed pick should select). Owner/
+         controller=1. Lower ETB-timestamp than the source.
+
+      4. **Inject Cross-Controller Cloner Cleric (the source) onto
+         P1's bf** with controller=1. The carrier is a Creature; the
+         ENTERS dispatch fires the SourceIsSelf trigger and lands
+         CreateTokenCopyOfTargetCreatureYouControl on the stack with
+         controller=1 (the SOURCE's controller).
+
+      5. **Seat ``_PickFirstControlledCreatureAgent`` on P1** (the
+         SOURCE's controller, which is whose agent gets called for
+         choose_target on the trigger's controller_id=1 path). The
+         agent's same-controller filter restricts legal_targets to
+         P1's own creatures -- the P1 Bear comes first in ETB-order
+         (the source Cleric is also a Creature on P1's bf but its
+         ETB-timestamp is higher).
+
+      6. **Drain both stacks.** Rust's resolve: intrinsic 5-zone walk
+         finds the Cleric on P1's bf, captures cidx=1, walks
+         state.players[1].battlefield for the first Creature (the
+         Bear), allocates max+1 obj_id, pushes a new GameObject onto
+         P1's bf with the BEAR's printing_id and summoning_sick=true.
+         Python's resolve: ``CreateTokenCopyOfTargetCreatureYouControl
+         .resolve(state, 1, (("creature", bear_id),))`` delegates to
+         CreateToken which routes to controller_id=1's bf with the
+         Bear's printing.
+
+      7. **Cross-engine assert (post-fix contract):**
+         - P1 bf grows by exactly 2 vs pre-source-inject (source +
+           cloned token).
+         - The new token's printing_id equals the P1 Bear's
+           printing_id (NOT the P0 Goblin's; NOT the Cleric source's).
+         - P0 bf size unchanged at 1 (just the Goblin decoy).
+         - Lives unchanged on both seats.
+         - No residual stack on either engine.
+
+    **Pre-fix vs post-fix observable.**
+    Pre-fix Rust (cidx fallback to active_player=0) would have walked
+    state.players[0].battlefield, found the P0 Goblin at bf[0], and:
+      - Allocated a fresh token with GOBLIN's printing_id.
+      - Pushed it onto state.players[0].battlefield (P0's bf).
+    Post-fix Rust correctly captures cidx=1 from the 5-zone walk over
+    source_obj_id, walks state.players[1].battlefield, picks the P1
+    Bear, and pushes the BEAR-printing token onto state.players[1]
+    .battlefield (P1's bf). Two-slot diverging observable on BOTH the
+    printing_id AND the landing-bf -- the cross-engine pin lands
+    sharply.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline.
+      * The ``additional_subtype`` rider (Mirror Room-shape) -- per
+        the bridge arm note at cross_engine.py:4830-4836, Rust defers
+        this field; the bare default-None shape is what the bridge
+        arm constructs, which is what this probe exercises.
+      * No-eligible-target silent fizzle on source-controller's bf --
+        the same-controller Rust pin at line 48527 exercises this
+        path; this probe seats one bait on each side so the picker
+        resolves cleanly.
+      * The cloned token's ETB-trigger fan-out -- the cloned token is
+        a vanilla Bear with NO triggered abilities, so its arrival
+        does NOT push anything onto the stack.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller Cloner Cleric on P1's bf (controller=1).
+      * Bait Bear on P1's bf (controller=1).
+      * NEW Bear token on P1's bf (controller=1; same printing as the
+        bait Bear).
+      * Decoy Goblin on P0's bf (controller=0; distinct printing
+        from the Bear).
+      * P0 bf size = 1; P1 bf size = 3.
+      * Lives unchanged at 20 on both seats.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstControlledCreatureAgent
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_goblin_dict = {
+        "name": "Cross-Controller Clone Decoy Goblin (P0 decoy)",
+        "card_types": ["Creature"],
+        "mana_cost": {"R": 1},
+        "effects": [],
+        "power": 1,
+        "toughness": 1,
+    }
+    rust_bear_dict = {
+        "name": "Cross-Controller Clone Bait Bear (P1 target)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    # P0 decoy Goblin (different printing from the bait Bear).
+    rust_p0_goblin_id = rust_state.register_and_inject_object(
+        rust_goblin_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # P1 bait Bear (the target the source-controller-routed pick
+    # should select).
+    rust_p1_bear_id = rust_state.register_and_inject_object(
+        rust_bear_dict, 1, ZONE_BATTLEFIELD,
+    )
+    # Capture the bait Bear's and decoy Goblin's printing_ids for the
+    # post-resolve clone-target assertion.
+    rust_bear_printing_id = next(
+        d["printing_id"]
+        for d in rust_state.battlefield_snapshot()
+        if d["id"] == rust_p1_bear_id
+    )
+    rust_goblin_printing_id = next(
+        d["printing_id"]
+        for d in rust_state.battlefield_snapshot()
+        if d["id"] == rust_p0_goblin_id
+    )
+    assert rust_bear_printing_id != rust_goblin_printing_id, (
+        "Probe pre-condition: bait Bear and decoy Goblin must have "
+        "DISTINCT printing_ids so the cross-controller routing pin "
+        "is sharp on the printing_id axis."
+    )
+    assert rust_state.stack_size() == 0
+
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p0_bf_before = rust_state.battlefield_sizes[0]
+    rust_p1_bf_before = rust_state.battlefield_sizes[1]
+    assert rust_p0_bf_before == 1
+    assert rust_p1_bf_before == 1
+
+    rust_source_dict = {
+        "name": "Cross-Controller Cloner Cleric",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "U": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "create_token_copy_of_target_creature_you_control",
+                },
+            }
+        ],
+    }
+    rust_source_id = rust_state.register_and_inject_object(
+        rust_source_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller Cloner Cleric's arrival on P1 should "
+        "fire the SourceIsSelf ENTERS trigger and land "
+        "CreateTokenCopyOfTargetCreatureYouControl on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.tokens import (
+        CreateTokenCopyOfTargetCreatureYouControl,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    goblin_printing = CardPrinting(
+        name="Cross-Controller Clone Decoy Goblin (P0 decoy)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=(("R", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=1,
+        toughness=1,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    bear_printing = CardPrinting(
+        name="Cross-Controller Clone Bait Bear (P1 target)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    source_printing = CardPrinting(
+        name="Cross-Controller Cloner Cleric",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("U", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=CreateTokenCopyOfTargetCreatureYouControl(),
+            ),
+        ),
+    )
+
+    def _inject_bf(printing, owner_id):
+        obj = py_state.new_object(
+            printing, owner_id=owner_id, zone=Zone.BATTLEFIELD,
+        )
+        obj.summoning_sick = False
+        obj.tapped = False
+        obj.damage = 0
+        obj.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(obj)
+        return obj
+
+    py_p0_goblin = _inject_bf(goblin_printing, owner_id=0)
+    py_p1_bear = _inject_bf(bear_printing, owner_id=1)
+    py_p0_bf_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    assert py_p0_bf_before == 1
+    assert py_p1_bf_before == 1
+
+    # Trigger controller is P1; choose_target gets called against P1's
+    # agent. Seat _PickFirstControlledCreatureAgent on P1.
+    py_state.players[1].agent = _PickFirstControlledCreatureAgent()
+
+    py_source = _inject_bf(source_printing, owner_id=1)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller Cloner Cleric's arrival on P1 "
+        "should fire the IsSelf ENTERS trigger and land "
+        "CreateTokenCopyOfTargetCreatureYouControl on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Rust post-state assertions ----
+    rust_p0_bf_after = rust_state.battlefield_sizes[0]
+    rust_p1_bf_after = rust_state.battlefield_sizes[1]
+    assert rust_p0_bf_after == rust_p0_bf_before, (
+        f"Rust cross-controller routing contract: P0's bf should NOT "
+        f"grow (the token must land on the SOURCE'S controller P1's "
+        f"bf, not P0's bf even though P0 is active_player). "
+        f"before={rust_p0_bf_before} after={rust_p0_bf_after}. A pre-"
+        f"fix Rust with cidx fallback to active_player=0 would have "
+        f"grown P0's bf by 1 with the Goblin's printing_id."
+    )
+    assert rust_p1_bf_after == rust_p1_bf_before + 2, (
+        f"Rust cross-controller routing contract: P1's bf should grow "
+        f"by 2 (the source Cleric inject + the cloned token landing "
+        f"on the SOURCE'S controller P1's bf). "
+        f"before={rust_p1_bf_before} after={rust_p1_bf_after}"
+    )
+    # Find the newly-spawned token on P1's bf.
+    rust_p1_bf_entries = [
+        d for d in rust_state.battlefield_snapshot()
+        if d["controller_id"] == 1
+    ]
+    rust_new_token_entries = [
+        d for d in rust_p1_bf_entries
+        if d["id"] != rust_source_id and d["id"] != rust_p1_bear_id
+    ]
+    assert len(rust_new_token_entries) == 1, (
+        f"Rust: exactly one new token should be on P1's bf; got "
+        f"{len(rust_new_token_entries)} entries. "
+        f"entries={rust_new_token_entries}"
+    )
+    rust_new_token = rust_new_token_entries[0]
+    assert rust_new_token["printing_id"] == rust_bear_printing_id, (
+        f"Rust cross-controller routing contract: cloned token's "
+        f"printing_id should match the P1 bait Bear's "
+        f"(printing_id={rust_bear_printing_id}); got "
+        f"token.printing_id={rust_new_token['printing_id']}. A pre-"
+        f"fix Rust that walked P0's bf would have cloned the GOBLIN's "
+        f"printing_id ({rust_goblin_printing_id}) instead."
+    )
+    assert rust_new_token["controller_id"] == 1, (
+        f"Rust: cloned token must land on the SOURCE'S controller "
+        f"P1's bf (controller_id=1); got "
+        f"token.controller_id={rust_new_token['controller_id']}"
+    )
+    # P0's bf still has the Goblin at its pre-resolve printing.
+    rust_p0_bf_entries = [
+        d for d in rust_state.battlefield_snapshot()
+        if d["controller_id"] == 0
+    ]
+    assert len(rust_p0_bf_entries) == 1
+    assert rust_p0_bf_entries[0]["id"] == rust_p0_goblin_id
+    assert (
+        rust_p0_bf_entries[0]["printing_id"] == rust_goblin_printing_id
+    )
+    # Lives unchanged on both seats (clone is bf-only).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+
+    # ---- Python post-state assertions ----
+    py_p0_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert py_p0_bf_after == py_p0_bf_before, (
+        f"Python cross-controller routing contract: P0's bf should "
+        f"NOT grow. before={py_p0_bf_before} after={py_p0_bf_after}"
+    )
+    assert py_p1_bf_after == py_p1_bf_before + 2, (
+        f"Python cross-controller routing contract: P1's bf should "
+        f"grow by 2 (source + cloned token). "
+        f"before={py_p1_bf_before} after={py_p1_bf_after}"
+    )
+    # Find the new Python token on P1's bf.
+    py_new_tokens = [
+        o for o in py_state.battlefield
+        if o.controller_id == 1
+        and o.id != py_source.id
+        and o.id != py_p1_bear.id
+    ]
+    assert len(py_new_tokens) == 1, (
+        f"Python: exactly one new token should be on P1's bf; got "
+        f"{len(py_new_tokens)}"
+    )
+    py_new_token = py_new_tokens[0]
+    # Cloned token's printing name should match the bait Bear's
+    # (Token supertype injected on top of the bait's printed name).
+    assert py_new_token.printing.name == bear_printing.name, (
+        f"Python cross-controller routing contract: cloned token's "
+        f"printing.name should match the P1 bait Bear's name "
+        f"({bear_printing.name!r}); got "
+        f"token.printing.name={py_new_token.printing.name!r}. A pre-"
+        f"fix Python that picked P0's Goblin would have cloned the "
+        f"GOBLIN's name ({goblin_printing.name!r}) instead."
+    )
+    # Token's controller must be P1 (the SOURCE's controller).
+    assert py_new_token.controller_id == 1
+    assert py_p0_goblin.controller_id == 0
+    assert py_p0_goblin in py_state.battlefield
+    assert py_p1_bear.controller_id == 1
+    assert py_p1_bear in py_state.battlefield
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # ---- Cross-engine: per-zone parity ----
+    assert rust_state.battlefield_sizes[0] == py_p0_bf_after
+    assert rust_state.battlefield_sizes[1] == py_p1_bf_after
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    # Both engines' new token carries the bait Bear's printing
+    # identity (NOT the decoy Goblin's). printing_id is Rust's
+    # identity; name is Python's.
+    assert rust_new_token["printing_id"] == rust_bear_printing_id
+    assert py_new_token.printing.name == bear_printing.name
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
