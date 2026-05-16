@@ -5127,9 +5127,31 @@ fn apply_effect(
         // then discard" (a looting effect). Empty Vec is a legal
         // no-op. Recursion is safe: Effect is heap-allocated via
         // Vec<Effect>, and apply_effect is a regular function.
+        //
+        // **Round-36 fix (Sequence(Surveil, DrawCards) ordering)**:
+        // After each leaf effect resolves, drain any PendingDecisions
+        // it pushed via the default "keep_all_on_top" auto-resolve
+        // strategy BEFORE running the next leaf effect. This matches
+        // Python's no-agent flow where Surveil's resolve never mutates
+        // the library, so a following DrawCards-N draws from the
+        // pre-Surveil top. Without this drain, Rust's
+        // SurveilXEqualToArtifactCount (and any sister arm that pushes
+        // a PendingDecision) leaves cards popped off the library top;
+        // the next leaf (e.g. DrawCards-3 in Cerebral Download) then
+        // reads the post-pop top and draws DIFFERENT cards than Python.
+        // The terminal `auto_resolve_pending` call at
+        // `resolve_top_of_stack` (line ~8533) re-inserts the surveiled
+        // cards AFTER the entire spell loop, which is too late for the
+        // intra-Sequence ordering. Driving the drain inside the loop
+        // restores cross-engine parity for Cerebral Download
+        // (Sequence(Surveil(use_artifact_count=True), DrawCards(3)))
+        // and any future Sequence-of-pending-then-zone-reading shape.
+        // See `docs/SEARCH_LIMITATIONS.md` "Sequence(Surveil,
+        // DrawCards) PendingDecision-vs-inline ordering".
         Effect::Sequence { effects } => {
             for child in effects {
                 apply_effect(state, child, source_obj_id)?;
+                auto_resolve_pending(state, "keep_all_on_top")?;
             }
         }
         // Round-28 anthem-shape UEOT effect. Iterates every creature
