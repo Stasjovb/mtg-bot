@@ -1340,6 +1340,190 @@ _SAFE_KEYWORDS: frozenset[str] = frozenset({
 })
 
 
+# Phase 6 carddef-triggers slice: triggered-ability shapes that BOTH
+# engines model byte-for-byte today via the existing
+# ``cross_engine._ta_dict_to_python_predicate`` /
+# ``_ta_dict_to_python_effect`` bridge plus Rust's
+# ``parse_triggered_ability`` arm. Restricting CardDef.triggered_
+# abilities to this set at filter time keeps the production-deck
+# loader honest — a card carrying any triggered ability OUTSIDE this
+# set falls through to the filter drop path, the same as the keywords
+# check above.
+#
+# Each entry is a ``(event, predicate_kind, effect_kind)`` triple. A
+# triggered_ability dict matches a safe-trigger entry when:
+#   * ``ta["event"] == event``
+#   * Either the safe-trigger entry's ``predicate_kind`` is None and
+#     the dict's ``predicate`` is None / absent, OR the dict's
+#     ``predicate["kind"]`` equals the safe-trigger's ``predicate_kind``.
+#   * ``ta["effect"]["kind"] == effect_kind``.
+#   * ``ta.get("once_per_turn", False) is False`` (once-per-turn
+#     bookkeeping isn't probed yet on the trajectory shape; restrict to
+#     the simpler default to keep the safe set tight).
+#   * The effect dict carries no fields beyond a single payload key
+#     matching its arm (``count`` for draw_cards/scry_n/surveil,
+#     ``amount`` for gain_life — see ``_is_safe_trigger_dict`` for the
+#     exact whitelist).
+#
+# The starter set is the SOURCE-IS-SELF predicate plus three leaf
+# effects with the heaviest cross-engine probe coverage in Phase 5 /
+# rounds 1-19 of Phase 6:
+#
+#   * ``draw_cards`` — exercised by every ETB-trigger slice since
+#     Slice 3 (test_cross_engine_etb_triggers.py:_etb_draw_bear,
+#     CE19 substrate, the very first ETB probe to land cross-engine).
+#     Bridge arm: ``cross_engine._ta_dict_to_python_effect`` "draw_cards".
+#   * ``gain_life`` — exercised by the gain_life bridge arm
+#     (cross_engine._ta_dict_to_python_effect "gain_life") and the
+#     cross-controller / cross-event probes (Phase 5).
+#   * ``scry_n`` — exercised by round-16's scry_n bridge arm; the
+#     cross-engine default-strategy contract is "keep all on top" on
+#     both engines, so the no-op trajectory walk is bit-equal without
+#     any agent setup (no PendingDecision pipeline to drain on the
+#     post-resolve state).
+#
+# Triggers explicitly NOT in this set (and therefore disqualifying):
+# ``deal_damage`` / ``deal_damage_any_target`` (target-pick at PUSH
+# time requires an agent shim — the production-deck loader doesn't
+# seat one); ``create_token`` (needs token-printing pre-registration
+# via ``register_token_printing``); ``surveil`` (PendingDecision
+# substrate requires an explicit auto-resolve drain on the Rust side
+# to mirror Python's no-agent default — a follow-up slice once the
+# trajectory walk drains pending decisions consistently);
+# ``discard_self`` / ``each_opponent_discards`` (requires an agent on
+# the discarding player to mirror Rust's hand[0] pick); modal /
+# sequence / if_you_do composers (composer bridge arms exist but
+# nesting them under ETB triggers compounds the bridge-arm surface
+# beyond the leaf-effect floor this slice ships).
+#
+# Extending this set is a lockstep operation — each new entry needs
+# (a) the matching cross-engine bridge arm to already exist on both
+# engines, and (b) a trajectory probe that demonstrates the
+# end-to-end firing parity. See ``test_carddef_safe_etb_trigger_*``
+# in tests/test_trajectory.py and the synthetic real-game probe in
+# test_trajectory_parity.py for the Phase 6 ENTERS+IsSelf+DrawCards
+# probe shape.
+_SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
+    ("enters", "source_is_self", "draw_cards"),
+    ("enters", "source_is_self", "gain_life"),
+    ("enters", "source_is_self", "scry_n"),
+})
+
+
+# Effect arms in the safe set — each arm's allowed keys (other than
+# ``"kind"``). Used by ``_is_safe_trigger_dict`` to reject any
+# trigger carrying an unrecognized effect-payload field that the
+# bridge would silently drop.
+_SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
+    "draw_cards": frozenset({"kind", "count"}),
+    "gain_life": frozenset({"kind", "amount"}),
+    "scry_n": frozenset({"kind", "count"}),
+}
+
+
+def _is_safe_trigger_dict(ta_dict: dict) -> bool:
+    """True iff ``ta_dict`` matches one of the :data:`_SAFE_TRIGGERS`
+    shapes.
+
+    Validates the four-tuple (event, predicate-kind, effect-kind,
+    once_per_turn) as well as the effect-payload key whitelist (see
+    :data:`_SAFE_EFFECT_KEYS`). Refuses any ``ta_dict`` carrying
+    extra top-level keys beyond ``event`` / ``predicate`` / ``effect``
+    / ``once_per_turn`` so a future schema extension doesn't silently
+    pass through the loader and produce cross-engine drift.
+    """
+    if not isinstance(ta_dict, dict):
+        return False
+    allowed_top = {"event", "predicate", "effect", "once_per_turn"}
+    if any(k not in allowed_top for k in ta_dict):
+        return False
+    if ta_dict.get("once_per_turn", False):
+        return False
+    event = ta_dict.get("event")
+    if not isinstance(event, str):
+        return False
+    pred = ta_dict.get("predicate")
+    if pred is None:
+        pred_kind: Optional[str] = None
+    elif isinstance(pred, dict) and tuple(pred.keys()) == ("kind",):
+        pred_kind = pred.get("kind")
+    else:
+        # Any predicate carrying nested fields (subject, inner, left,
+        # right, ...) is NOT in the starter safe set.
+        return False
+    eff = ta_dict.get("effect")
+    if not isinstance(eff, dict):
+        return False
+    eff_kind = eff.get("kind")
+    if not isinstance(eff_kind, str):
+        return False
+    triple = (event, pred_kind, eff_kind)
+    if triple not in _SAFE_TRIGGERS:
+        return False
+    allowed_eff_keys = _SAFE_EFFECT_KEYS.get(eff_kind)
+    if allowed_eff_keys is None:
+        return False
+    if any(k not in allowed_eff_keys for k in eff):
+        return False
+    return True
+
+
+def _python_ta_to_safe_dict(ta) -> Optional[dict]:
+    """Convert a Python ``TriggeredAbility`` back to the Rust-shape
+    dict iff it matches one of the :data:`_SAFE_TRIGGERS` shapes.
+
+    Returns ``None`` for triggers whose shape isn't on the safe list.
+    The production-deck loader uses this as the gate: a creature
+    every one of whose Python-parsed triggered abilities round-trips
+    through this helper passes the bridge-simple filter and lands in
+    the cross-engine harness with its triggered abilities intact.
+
+    Round-trip invariant: the dict this returns satisfies
+    :func:`_is_safe_trigger_dict` AND the Rust + Python bridge arms
+    consume it without raising. The dict shape mirrors what a CardDef
+    written by a probe author would carry directly — same field
+    spellings as :func:`cross_engine._ta_dict_to_python_triggered_ability`
+    consumes.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.generic.library_lookat import Scry
+
+    if not isinstance(ta, TriggeredAbility):
+        return None
+    if ta.once_per_turn:
+        return None
+    # Event must be ENTERS for the starter safe set.
+    if ta.event is not Event.ENTERS:
+        return None
+    # Predicate must be IsSelf (the round-trip dict-kind is
+    # "source_is_self"). ``IsSelf`` carries an optional ``subject``
+    # slot field — accept only the default-slot form.
+    if not isinstance(ta.predicate, IsSelf):
+        return None
+    if ta.predicate.subject is not None:
+        return None
+    # Effect must be one of the three safe leaves.
+    eff = ta.effect
+    if isinstance(eff, DrawCards):
+        eff_dict: dict = {"kind": "draw_cards", "count": int(eff.amount)}
+    elif isinstance(eff, GainLife):
+        eff_dict = {"kind": "gain_life", "amount": int(eff.amount)}
+    elif isinstance(eff, Scry):
+        # Python's ``Scry`` exposes the count as ``amount``; the dict
+        # shape uses Rust's spelling ``count``.
+        eff_dict = {"kind": "scry_n", "count": int(eff.amount)}
+    else:
+        return None
+    return {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": eff_dict,
+    }
+
+
 def _printing_is_bridge_simple_creature(printing) -> bool:
     """True if a CardPrinting is a vanilla bridge-supported creature.
 
@@ -1349,7 +1533,10 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
       * Either no keywords, OR every keyword in :data:`_SAFE_KEYWORDS`
         (Phase 6 carddef-substrate slice — see the constant's docstring
         for the per-keyword parity provenance).
-      * No triggered_abilities
+      * Either no triggered_abilities, OR every triggered_ability
+        round-trips through :func:`_python_ta_to_safe_dict` (Phase 6
+        carddef-triggers slice — see :data:`_SAFE_TRIGGERS` for the
+        per-shape parity provenance).
       * No activated_abilities (other than the empty default)
       * No static_abilities
       * No spell_effect (creatures don't have one anyway, but be
@@ -1366,7 +1553,15 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
     if printing.keywords and not printing.keywords.issubset(_SAFE_KEYWORDS):
         return False
     if printing.triggered_abilities:
-        return False
+        # Phase 6 carddef-triggers slice: a creature with one or more
+        # triggered abilities passes the filter only if EVERY ability
+        # round-trips cleanly through the safe-trigger gate. Any single
+        # unsafe ability disqualifies the whole printing — there's no
+        # "partial admit" semantic since the bridge has to thread the
+        # full triggered-abilities tuple to both engines.
+        for ta in printing.triggered_abilities:
+            if _python_ta_to_safe_dict(ta) is None:
+                return False
     if printing.activated_abilities:
         return False
     if printing.static_abilities:
@@ -1448,6 +1643,23 @@ def _printing_to_card_def(printing) -> CardDef:
         # ``cross_engine.build_rust_state`` re-materializes the same
         # set on each engine, with the underscore-vs-space convention
         # translation handled on the Rust side.
+        #
+        # Phase 6 carddef-triggers slice: thread the printing's
+        # triggered abilities through to the CardDef in their dict
+        # round-trip shape. The filter (above) already guarantees
+        # every entry round-trips cleanly via
+        # :func:`_python_ta_to_safe_dict`; the bridge in
+        # ``cross_engine.build_python_state`` re-materializes them
+        # via the existing
+        # ``_ta_dict_to_python_triggered_ability`` translator and
+        # ``cross_engine.build_rust_state`` passes the same dict
+        # tuple to Rust's ``register_printing(triggered_abilities=)``
+        # parser. Empty tuple is a no-op (every pre-triggers fixture
+        # path ends up here unchanged).
+        triggered_abilities = tuple(
+            _python_ta_to_safe_dict(ta)
+            for ta in printing.triggered_abilities
+        )
         return CardDef(
             name=printing.name,
             card_type="Creature",
@@ -1456,6 +1668,7 @@ def _printing_to_card_def(printing) -> CardDef:
             power=printing.power,
             toughness=printing.toughness,
             keywords=tuple(sorted(printing.keywords)),
+            triggered_abilities=triggered_abilities,
         )
     raise ValueError(
         f"printing {printing.name!r} is not bridge-supported; "

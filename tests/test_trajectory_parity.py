@@ -3577,3 +3577,274 @@ def test_multi_blocker_bilateral_asymmetric_selector_parity():
         f"largest-selector → bear (4/4) survives atk_A's 3 dmg; "
         f"got p1_gy={p1_gy}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-triggers slice: synthetic trajectory probe that
+# drives a CardDef-with-safe-ETB-trigger creature through the full
+# real-game cast -> ETB-fire -> drain flow on BOTH engines, asserting
+# byte-equal field views at every phase boundary.
+#
+# Why synthetic and not a real-EoE consumer:
+# A scan of the EoE pool (`data/edge_of_eternities.json`) for creatures
+# with a single ENTERS+IsSelf+(draw_cards|gain_life|scry_n) trigger and
+# NO other complications (no warp / static abilities / activated
+# abilities / room halves / kicker / impending / loyalty / cost
+# reductions / station threshold / hybrid mana) returns ZERO printings
+# at this slice's filter strictness. The leading candidates each fail
+# one disqualifying check:
+#
+#   * Germinating Wurm (5/5 for {4}{G} with ENTERS+IsSelf+GainLife(2))
+#     — has Warp {1}{G} — `warp_cost` blocks the bridge-simple filter.
+#   * Quantum Riddler (4/6 for {3}{U}{U} with ENTERS+IsSelf+DrawCards(1))
+#     — has a static replacement effect (HandSizeAtMost(1) → +1 draw)
+#     and Warp {1}{U} — both `static_abilities` and `warp_cost` block.
+#   * Eumidian Terrabotanist / Tannuk, Memorial Ensign — landfall
+#     triggers (event=ENTERS but predicate is `controlled_by_you` +
+#     `subject_is_land`, NOT `source_is_self`) — out of starter set.
+#
+# Per the round-34 carddef-substrate slice's "ship the substrate +
+# synthetic" precedent (commit eec1ff57), this slice ships the
+# substrate end-to-end on a synthetic CardDef and documents the
+# unblock path in PHASE6_TRAJECTORY_PARITY.md. Real-EoE consumers
+# unblock once the bridge-simple filter relaxes its `warp_cost` /
+# `static_abilities` guards (each a separate substrate slice).
+# ---------------------------------------------------------------------------
+
+
+def _carddef_etb_drawer_deckspec(seed: int = 42):
+    """Build a 60-card mirror DeckSpec carrying a CardDef with a
+    safe ETB trigger (ENTERS+IsSelf+DrawCards(1)).
+
+    Library shape: 50 Forests + 10 ETB Drawer per side. The drawer
+    costs {1}{G} so it's castable as soon as p0 has two unsick
+    Forests on bf — the same cast-cadence as the existing
+    `_vanilla_60_deckspec`'s Grizzly Bears.
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec
+
+    drawer = CardDef(
+        name="Carddef ETB Drawer",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            },
+        ),
+    )
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",),
+    )
+    return DeckSpec(
+        card_defs=(drawer, forest),
+        p0_library=("Forest",) * 50 + ("Carddef ETB Drawer",) * 10,
+        p1_library=("Forest",) * 50 + ("Carddef ETB Drawer",) * 10,
+        shared_rng_seed=seed,
+    )
+
+
+def test_carddef_safe_etb_trigger_setup_parity():
+    """Setup-time parity check on a DeckSpec whose CardDef carries a
+    safe ETB trigger. Pins that the substrate change wires both
+    engines' registries with matching `triggered_abilities` shape.
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+
+    spec = _carddef_etb_drawer_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Sanity: every drawer in p0's library/hand carries the safe
+    # trigger via the bridge translator.
+    py_lib = py_state.players[0].library + py_state.players[0].hand
+    drawers = [
+        o for o in py_lib if o.printing.name == "Carddef ETB Drawer"
+    ]
+    assert drawers, (
+        "no Carddef ETB Drawer in p0's lib/hand — DeckSpec wiring "
+        "regressed"
+    )
+    for o in drawers:
+        assert len(o.printing.triggered_abilities) == 1
+        ta = o.printing.triggered_abilities[0]
+        assert ta.event.value == "enters"
+        # Predicate is IsSelf (round-tripped via the safe-trigger gate).
+        from mtg_bot.effects.predicates import IsSelf
+        from mtg_bot.effects.generic.draw_mill import DrawCards
+        assert isinstance(ta.predicate, IsSelf)
+        assert isinstance(ta.effect, DrawCards)
+        assert ta.effect.amount == 1
+
+    # Field-view compare: registries built byte-equal across engines.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"safe-ETB-trigger DeckSpec setup diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
+    # Opening-hand sanity.
+    assert len(py_view["hand_p0"]) == 7
+    assert len(py_view["hand_p1"]) == 7
+
+
+def test_carddef_safe_etb_trigger_no_op_first_turn_parity():
+    """Walk turn-1 no-op + turn-1 wrap on the safe-ETB-trigger
+    DeckSpec; assert byte-equal field views at every phase
+    boundary.
+
+    The trigger does NOT fire on this no-op walk (the drawer stays
+    in the library/hand all 12 advances). Value: pins that
+    registering a trigger-bearing printing on both engines doesn't
+    drift the printing bookkeeping anywhere downstream — the
+    weakest possible smoke that must hold before we drive a real
+    cast.
+    """
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python,
+        compare_fields,
+    )
+    from mtg_bot.parity import trajectory
+
+    spec = _carddef_etb_drawer_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Walk 12 phase advances.
+    for advance_idx in range(12):
+        advance_phase_python(py_state)
+        rust_state.advance_phase()
+        py_view, rust_view = _step_views(py_state, rust_state)
+        divs = compare_fields(py_view, rust_view)
+        assert divs == [], (
+            f"advance #{advance_idx} ({py_view['step']!r}, turn "
+            f"{py_view['turn']}) on safe-ETB-trigger deck surfaced "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+        )
+    py_view, _rust_view = _step_views(py_state, rust_state)
+    assert py_view["turn"] == 2
+    assert py_view["step"] == "UNTAP"
+
+
+def test_carddef_safe_etb_trigger_fires_on_cast_parity():
+    """Cast a Carddef ETB Drawer that has the ENTERS+IsSelf+DrawCards
+    trigger; assert the trigger fires + p0's hand grows by 1 + the
+    library shrinks by 1, on BOTH engines.
+
+    This is the headline cross-engine probe for the carddef-triggers
+    substrate: the same end-to-end shape the
+    `test_cross_engine_real_eoe_germinating_wurm_etb_gain_life_parity`
+    probe drives in test_parity_smoke.py, but driven from a
+    DeckSpec-built matched state through the trajectory module rather
+    than via a parity-smoke ad-hoc inject. Pins that the substrate's
+    CardDef.triggered_abilities thread through `setup_matched_game`
+    -> `build_matched_states` -> on-stack ETB fire on both engines.
+
+    Drawer cards are pre-seated in BOTH engines' opening hands by
+    construction (`shared_rng_seed=42` lands a drawer at hand index 2
+    on both sides — verified by the setup-parity test above), so no
+    side-channel injection is needed: the drawer with matching
+    object id is already in both hands and we drive the cast on
+    that pre-existing object.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view,
+        compare_fields,
+        parity_smoke,
+    )
+    from mtg_bot.parity import trajectory
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.game import StackItem, Zone
+
+    spec = _carddef_etb_drawer_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Find the first drawer in p0's opening hand (matches across
+    # engines because shared_rng_seed makes both hands byte-identical).
+    py_p0 = py_state.players[0]
+    py_drawer = next(
+        o for o in py_p0.hand
+        if o.printing.name == "Carddef ETB Drawer"
+    )
+    rust_p0_hand = rust_state.hand_snapshot(0)
+    rust_drawer_entry = next(
+        e for e in rust_p0_hand
+        if e["printing_name"] == "Carddef ETB Drawer"
+    )
+    rust_drawer_id = rust_drawer_entry["id"]
+    # Sanity: same id on both engines (shared id-allocation order
+    # guaranteed by `build_matched_states`).
+    assert int(py_drawer.id) == int(rust_drawer_id), (
+        f"object-id mismatch: py={py_drawer.id} rust={rust_drawer_id}"
+    )
+
+    # Snapshot pre-state on both engines.
+    py_p0_hand_before = len(py_p0.hand)
+    py_p0_lib_before = len(py_p0.library)
+    rust_p0_hand_before = rust_state.hand_sizes[0]
+    rust_p0_lib_before = rust_state.library_sizes[0]
+
+    # Drive the cast: push to stack on both engines, then drain.
+    # Mirrors the cast-then-drain pattern from
+    # `test_cross_engine_real_eoe_germinating_wurm_etb_gain_life_parity`.
+    rust_state.push_to_stack(rust_drawer_id, 0)
+    rust_state.resolve_top_of_stack()  # spell -> bf, ETB on stack
+
+    py_p0.hand.remove(py_drawer)
+    py_drawer.zone = Zone.STACK
+    py_state.stack.append(StackItem(source=py_drawer, controller_id=0))
+    py_resolve(py_state)  # spell -> bf, ETB on stack
+
+    # ETB trigger should be on both stacks now.
+    assert rust_state.stack_size() == 1, (
+        "Rust: ETB DrawCards(1) trigger missing from stack after cast"
+    )
+    assert len(py_state.stack) == 1, (
+        "Python: ETB DrawCards(1) trigger missing from stack after cast"
+    )
+
+    # Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        py_resolve(py_state)
+
+    # Post-drain: drawer is on bf, hand size unchanged net (-1 cast +1
+    # drawn), library shrank by 1.
+    assert rust_state.hand_sizes[0] == rust_p0_hand_before, (
+        f"Rust p0 hand: expected {rust_p0_hand_before} (cast -1 + "
+        f"draw +1 = net 0); got {rust_state.hand_sizes[0]}"
+    )
+    assert rust_state.library_sizes[0] == rust_p0_lib_before - 1, (
+        f"Rust p0 lib: expected {rust_p0_lib_before - 1} (drew 1); "
+        f"got {rust_state.library_sizes[0]}"
+    )
+    assert len(py_p0.hand) == py_p0_hand_before, (
+        f"Python p0 hand: expected {py_p0_hand_before}; "
+        f"got {len(py_p0.hand)}"
+    )
+    assert len(py_p0.library) == py_p0_lib_before - 1, (
+        f"Python p0 lib: expected {py_p0_lib_before - 1}; "
+        f"got {len(py_p0.library)}"
+    )
+    # Cross-engine: same observable hand/library sizes.
+    assert rust_state.hand_sizes[0] == len(py_p0.hand)
+    assert rust_state.library_sizes[0] == len(py_p0.library)
+    # Drawer landed on the battlefield on both engines.
+    py_view = build_python_field_view(py_state)
+    rust_view = parity_smoke()._build_field_view(rust_state)
+    py_bf_names = sorted(t[0] for t in py_view["battlefield"])
+    rust_bf_names = sorted(t[0] for t in rust_view["battlefield"])
+    assert "Carddef ETB Drawer" in py_bf_names
+    assert "Carddef ETB Drawer" in rust_bf_names
+    # Field-view compare on the post-drain state.
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"post-drain field view diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )

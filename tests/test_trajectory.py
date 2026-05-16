@@ -1385,3 +1385,476 @@ def test_carddef_keywords_with_space_translate_for_rust():
     # behavior parity for first strike is exercised by the existing
     # round-17 first-strike trajectory probe.
     assert rust_state.turn_number == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-triggers slice — unit tests for the safe-trigger
+# allowlist + the CardDef.triggered_abilities plumbing through the
+# bridge filter and the production-deck loader.
+# ---------------------------------------------------------------------------
+
+
+def test_safe_triggers_set_carries_starter_etb_self_shapes():
+    """Pin that the starter safe-trigger set carries the three
+    ENTERS+SourceIsSelf shapes (draw_cards / gain_life / scry_n).
+    A future shrink would silently regress production-deck coverage.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    expected = {
+        ("enters", "source_is_self", "draw_cards"),
+        ("enters", "source_is_self", "gain_life"),
+        ("enters", "source_is_self", "scry_n"),
+    }
+    missing = expected - _SAFE_TRIGGERS
+    assert not missing, (
+        f"_SAFE_TRIGGERS regressed; missing safe shapes: "
+        f"{sorted(missing)}"
+    )
+
+
+def test_is_safe_trigger_dict_admits_starter_shapes():
+    """The dict-shape gate accepts each starter triple."""
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    })
+    assert _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "gain_life", "amount": 2},
+    })
+    assert _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "scry_n", "count": 1},
+    })
+
+
+def test_is_safe_trigger_dict_rejects_unsafe_event():
+    """An ENTERS+IsSelf+DRAW shape with a different event (DIES) is
+    out of the starter set — rejected.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "dies",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    })
+
+
+def test_is_safe_trigger_dict_rejects_unsafe_predicate():
+    """A predicate kind outside the starter set (e.g. controlled_by_you)
+    is rejected.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "controlled_by_you"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    })
+
+
+def test_is_safe_trigger_dict_rejects_unsafe_effect():
+    """An effect kind outside the starter set (e.g. deal_damage_each_
+    opponent) is rejected even when event/predicate are safe.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "damage_each_opponent", "amount": 1},
+    })
+
+
+def test_is_safe_trigger_dict_rejects_once_per_turn():
+    """``once_per_turn=True`` flips an otherwise-safe trigger to
+    unsafe — once-per-turn bookkeeping isn't probed yet on the
+    trajectory shape.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+        "once_per_turn": True,
+    })
+
+
+def test_is_safe_trigger_dict_rejects_extra_top_level_key():
+    """A trigger dict carrying a key outside the four-key whitelist
+    (event/predicate/effect/once_per_turn) is rejected so a future
+    schema extension doesn't silently slip through the loader.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+        "tier_threshold": 3,
+    })
+
+
+def test_is_safe_trigger_dict_rejects_extra_effect_key():
+    """An effect dict carrying a payload key beyond the per-arm
+    whitelist is rejected — the safe-effect-keys map is the
+    canonical bridge contract for each arm.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1, "target": {}},
+    })
+
+
+def test_is_safe_trigger_dict_rejects_predicate_with_nested_fields():
+    """A predicate dict carrying nested fields (subject/inner/left/...)
+    is NOT in the starter safe set — that's a future slice's
+    extension surface.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    # "Not(IsSelf)" predicate shape — out of the starter set.
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "not", "inner": {"kind": "source_is_self"}},
+        "effect": {"kind": "draw_cards", "count": 1},
+    })
+
+
+def test_python_ta_to_safe_dict_round_trips_draw_cards():
+    """A Python ``TriggeredAbility`` carrying ENTERS+IsSelf+DrawCards
+    converts back to the safe dict shape; the result satisfies
+    :func:`_is_safe_trigger_dict`.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=DrawCards(amount=1),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_round_trips_gain_life():
+    """ENTERS+IsSelf+GainLife round-trips. Translated effect carries
+    ``amount`` (the safe-effect key for gain_life).
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=GainLife(amount=3),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "gain_life", "amount": 3},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_round_trips_scry():
+    """ENTERS+IsSelf+Scry round-trips. Python's ``Scry.amount``
+    becomes the dict's ``count`` field per the bridge convention.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.library_lookat import Scry
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=Scry(amount=2),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "scry_n", "count": 2},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_returns_none_on_unsafe_effect():
+    """Python ``TriggeredAbility`` with an effect outside the starter
+    safe set returns None — disqualifies the parent printing.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.damage import DealDamageEachOpponent
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=DealDamageEachOpponent(amount=1),
+    )
+    assert _python_ta_to_safe_dict(ta) is None
+
+
+def test_python_ta_to_safe_dict_returns_none_on_once_per_turn():
+    """Once-per-turn flag flips an otherwise-safe Python trigger to
+    unsafe (mirrors :func:`_is_safe_trigger_dict`'s rejection).
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=IsSelf(),
+        effect=DrawCards(amount=1),
+        once_per_turn=True,
+    )
+    assert _python_ta_to_safe_dict(ta) is None
+
+
+def test_simple_creature_filter_admits_safe_etb_trigger_creature():
+    """A creature whose only triggered ability is one of the safe
+    ENTERS+IsSelf shapes passes the bridge-simple filter — the
+    pre-triggers gate (``if printing.triggered_abilities: return
+    False``) would have dropped it.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+    )
+
+    bear = CardPrinting(
+        name="Synthetic ETB Drawer",
+        mana_cost_str="{1}{G}",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DrawCards(amount=1),
+            ),
+        ),
+    )
+    assert _printing_is_bridge_simple_creature(bear) is True
+
+
+def test_simple_creature_filter_rejects_unsafe_etb_trigger_creature():
+    """A creature carrying a triggered ability OUTSIDE the safe set
+    fails the bridge-simple filter even when every other field is
+    vanilla. Pins that the gate is restrictive on the unsafe
+    direction — admitting an unmodeled trigger would silently produce
+    cross-engine drift at probe time.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.damage import DealDamageEachOpponent
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+    )
+
+    burner = CardPrinting(
+        name="Synthetic ETB Burner",
+        mana_cost_str="{2}{R}",
+        mana_cost=ManaCost(generic=2, colored=(("R", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DealDamageEachOpponent(amount=1),
+            ),
+        ),
+    )
+    assert _printing_is_bridge_simple_creature(burner) is False
+
+
+def test_simple_creature_filter_rejects_mixed_safe_and_unsafe_triggers():
+    """A creature carrying TWO triggered abilities — one safe, one
+    unsafe — is rejected. The filter requires EVERY trigger to round-
+    trip cleanly; partial admit would split the trigger surface
+    asymmetrically across engines.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.damage import DealDamageEachOpponent
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+    )
+
+    mixed = CardPrinting(
+        name="Synthetic Mixed",
+        mana_cost_str="{1}{B}",
+        mana_cost=ManaCost(generic=1, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DrawCards(amount=1),
+            ),
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DealDamageEachOpponent(amount=1),
+            ),
+        ),
+    )
+    assert _printing_is_bridge_simple_creature(mixed) is False
+
+
+def test_printing_to_card_def_carries_safe_trigger_through():
+    """``_printing_to_card_def`` populates ``CardDef.triggered_abilities``
+    from the source printing's safe Python triggered abilities,
+    converted back to the dict round-trip shape. Pins the bridge-side
+    triggered-ability propagation invariant.
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import IsSelf, Event
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    bear = CardPrinting(
+        name="Synthetic Lifegainer",
+        mana_cost_str="{1}{W}",
+        mana_cost=ManaCost(generic=1, colored=(("W", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=GainLife(amount=2),
+            ),
+        ),
+    )
+    cd = _printing_to_card_def(bear)
+    assert cd.card_type == "Creature"
+    assert cd.triggered_abilities == ({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "gain_life", "amount": 2},
+    },)
+
+
+def test_carddef_triggered_abilities_thread_through_both_engines():
+    """Building a matched state from a DeckSpec with a trigger-bearing
+    CardDef registers the trigger on BOTH engines' printing
+    registries. End-to-end sanity check that the substrate change
+    wires both engines.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec
+    from mtg_bot.parity.trajectory import setup_matched_game
+
+    bear = CardDef(
+        name="Carddef ETB Drawer",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2, toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            },
+        ),
+    )
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",),
+    )
+    spec = DeckSpec(
+        card_defs=(bear, forest),
+        p0_library=("Forest",) * 30 + ("Carddef ETB Drawer",) * 30,
+        p1_library=("Forest",) * 60,
+        shared_rng_seed=42,
+    )
+    py_state, rust_state = setup_matched_game(spec)
+    # Python side: every Carddef ETB Drawer in the registry carries
+    # the IsSelf-ENTERS DrawCards trigger.
+    py_lib = py_state.players[0].library + py_state.players[0].hand
+    bears = [
+        o for o in py_lib if o.printing.name == "Carddef ETB Drawer"
+    ]
+    assert bears, "no Carddef ETB Drawer in p0's library/hand"
+    for o in bears:
+        assert len(o.printing.triggered_abilities) == 1
+        ta = o.printing.triggered_abilities[0]
+        assert isinstance(ta, TriggeredAbility)
+        assert ta.event is Event.ENTERS
+        assert isinstance(ta.predicate, IsSelf)
+        assert isinstance(ta.effect, DrawCards)
+        assert ta.effect.amount == 1
+    # Rust side: matched-state setup completed without raising,
+    # which is the load-bearing assertion — the dict-shape pass-
+    # through to Rust's ``register_printing(triggered_abilities=)``
+    # arm is exercised here. The end-to-end firing parity is
+    # exercised by the trajectory probe in test_trajectory_parity.py.
+    assert rust_state.turn_number == 1

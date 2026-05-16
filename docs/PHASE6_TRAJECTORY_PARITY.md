@@ -620,3 +620,86 @@ The Rust API gaps documented under gap #2's residuals
 (non-positional bottom, state-conditional mulligan agents) are
 candidate Rust slices for future rounds when production-shape
 mulligan probes are needed.
+
+## CardDef triggers substrate (this slice)
+
+Extends the round-34 CardDef.keywords substrate with a parallel
+`CardDef.triggered_abilities` propagation path so creatures with
+**simple ETB triggers** that BOTH engines model byte-for-byte can
+survive the bridge-simple filter.
+
+- `_SAFE_TRIGGERS: frozenset[tuple[str, str|None, str]]` — starter
+  allowlist of `(event, predicate_kind, effect_kind)` triples:
+  `(enters, source_is_self, draw_cards)`,
+  `(enters, source_is_self, gain_life)`,
+  `(enters, source_is_self, scry_n)`. Each triple has an existing
+  `cross_engine._ta_dict_to_python_effect` arm + a Rust
+  `parse_effect` arm pinned by years of cross-engine probes
+  (Slice 3 ETB substrate, Round 16 scry, Germinating Wurm probe).
+- `_is_safe_trigger_dict(ta_dict)` — dict-shape gate. Validates
+  the four-tuple plus an effect-payload key whitelist
+  (`_SAFE_EFFECT_KEYS`) so a future schema extension can't slip
+  through silently.
+- `_python_ta_to_safe_dict(ta)` — Python-side round-trip converter.
+  Returns the dict shape the bridge translator consumes, or `None`
+  for triggers outside the safe set. The production-deck loader
+  uses this as the gate.
+- `_printing_is_bridge_simple_creature` admits a creature with
+  triggered_abilities whose every entry round-trips cleanly. All
+  other guards stay strict.
+- `_printing_to_card_def` carries the dict-tuple through to the
+  CardDef; the Slice-3 `cross_engine.build_*_state` arms then
+  translate them onto each engine.
+
+### Real-EoE consumers (descope)
+
+ZERO at this slice's filter strictness — every candidate fails
+on OTHER bridge-simple guards:
+
+- **Germinating Wurm** (5/5 {4}{G}, ENTERS+IsSelf+GainLife(2))
+  — Warp {1}{G} blocks via `warp_cost`.
+- **Quantum Riddler** (4/6 {3}{U}{U}, ENTERS+IsSelf+DrawCards(1))
+  — has a HandSizeAtMost replacement-effect AND Warp {1}{U};
+  blocked by `static_abilities` and `warp_cost`.
+- **Eumidian Terrabotanist / Tannuk, Memorial Ensign** — landfall
+  triggers (predicate is `controlled_by_you` + `subject_is_land`,
+  not `source_is_self`) — out of starter set.
+- **Selfcraft Mechan** — Sequence-shape effect (sacrifice + counter
+  + draw); above the leaf-effect floor.
+
+Per round-34 carddef-substrate's "ship substrate + synthetic"
+precedent (commit eec1ff57), this slice ships end-to-end on a
+synthetic CardDef (`Carddef ETB Drawer`). Real-EoE consumers
+unlock once **either**:
+
+1. The `warp_cost` guard relaxes (would unblock Germinating Wurm
+   on a no-warp-cast trajectory shape).
+2. A `_SAFE_STATICS` allowlist covers HandSizeAtMost shape
+   (would unblock Quantum Riddler).
+3. `_SAFE_TRIGGERS` extends to the landfall predicate shape
+   `(enters, controlled_by_you + subject_is_land, draw_cards)`
+   plus a play-land trigger driver in the trajectory probe
+   (would unblock Eumidian Terrabotanist + Tannuk).
+
+### Test surface
+
+- 15 unit tests in `tests/test_trajectory.py` cover the
+  `_SAFE_TRIGGERS` allowlist contract, `_is_safe_trigger_dict`
+  admit/reject paths (unsafe event/predicate/effect/once_per_turn/
+  extra-key), `_python_ta_to_safe_dict` round-trip on all three
+  starter effects + rejection paths,
+  `_printing_is_bridge_simple_creature` admit/reject on safe vs
+  unsafe trigger + mixed-trigger rejection,
+  `_printing_to_card_def` propagation, and end-to-end CardDef-
+  to-both-engines wiring via `setup_matched_game`.
+- 3 trajectory probes in `tests/test_trajectory_parity.py`:
+  setup-time field-view compare; 12-phase no-op walk on the same
+  DeckSpec; cast-and-fire probe driving the cast on the pre-
+  existing drawer in p0's opening hand (shared_rng_seed makes
+  it land at hand index 2 on both engines), draining both
+  stacks, and asserting hand size unchanged net (-1 cast +1
+  drawn) + library shrank by 1 + drawer on bf + post-drain
+  field-view byte-equal.
+
+No divergences surfaced — all new tests pass byte-equal across
+both engines on first run.
