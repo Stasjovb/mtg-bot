@@ -1180,3 +1180,92 @@ cast); discovering it is exactly the round-41 H1 mandate.
 
 Gate: 1077 passed (1060 baseline + 17 new tests this slice).
 
+## CardDef triggers — DIES+IsSelf+draw_cards extension (round-47 slice)
+
+Sister of the round-47 DIES+IsSelf+gain_life slice on the
+`draw_cards` axis. Adds exactly one entry to `_SAFE_TRIGGERS`:
+
+```
+("dies", "source_is_self", "draw_cards")
+```
+
+and widens the DIES arm of `_python_ta_to_safe_dict`'s `IsSelf`
+branch from `{surveil, gain_life}` (round-42 + round-47-gain_life)
+to `{surveil, gain_life, draw_cards}`. This **closes the
+ENTERS / DIES / ATTACKS × {draw_cards, gain_life, surveil} matrix**:
+
+| event   | draw_cards | gain_life | surveil | scry_n |
+| ------- | ---------- | --------- | ------- | ------ |
+| ENTERS  | r1         | r1        | r42     | r1     |
+| ATTACKS | r44        | r44       | r43     | —      |
+| DIES    | **r47**    | r47       | r42     | —      |
+
+`scry_n` is deliberately left out under DIES/ATTACKS — no EoE
+consumer carries those crosses; a future slice landing one ships it
+as a single-line edit at the safe-set source.
+
+### Cross-engine bridge contract
+
+Pre-existed; **no bridge-arm work in this slice** (pure substrate):
+
+* **DIES event dispatch** — Rust `dispatch_event(Event::Dies, ...)`
+  (Slice 5 of carddef-triggers, cards.rs:6035 parser arm) verified
+  bit-equal vs Python's `effects.dispatch.fire_dies_triggers` by the
+  round-42 ENTERS+DIES surveil pair and the round-47 DIES+gain_life
+  entry.
+* **`draw_cards` leaf** — `cross_engine._ta_dict_to_python_effect`
+  "draw_cards" arm at cross_engine.py:242 (round 1 of Phase 6
+  carddef-triggers; the most-exercised leaf in the campaign,
+  pinned by every ETB-trigger slice since Slice 3). Rust
+  `Effect::DrawCards { count: i32 }` resolves deterministically:
+  drawing is a pure mechanical zone move (library top → hand) with
+  no PendingDecision / agent interaction — identical resolve
+  semantics to the already-shipped DIES+gain_life leaf.
+
+### Real-EoE consumer admitted
+
+**None — substrate-only.** A FRESH full-pool delta walk at slice
+time (`scripts/scout_r47_dies_draw_delta.py`, 475-printing EoE pool
++ 318-name 17lands deck pool) confirms ZERO creatures flip
+drop→admit on this extension (and the four sibling matrix-completion
+candidates also showed 0 — DIES/ATTACKS+scry_n, landfall+surveil,
+landfall+scry_n). The EoE death-triggers cluster is
+CreateToken-heavy: Edge Rover / Gravpack Monoist / Beamsaw
+Prospector carry DIES+IsSelf+CreateToken, which needs the
+token-printing pre-registration substrate the production-deck loader
+doesn't seat — a separate, larger slice. **Edge Rover specifically
+was investigated as the round-47 N1 primary candidate and declined
+on this gate** (`Reach` + `When this creature dies, each player
+creates a Lander token` = DIES + `CreateTokenEachPlayer`; the Rust
+substrate exists since round-43 but the bridge arm requires
+`register_token_printing` seeding + a Lander-token subtype/card_type
+substrate). Same substrate-only precedent as round-31 / round-32 /
+round-37 DDDD / round-43 / round-44 / round-47-gain_life. The bare
+"When ~ dies, draw a card" shape (Doomed-Dissenter-adjacent /
+sac-payoff draws) is one of the most common death-trigger shapes in
+the broader MTG pool, so the substrate is broadly pre-positioned.
+
+### Test surface
+
+- Unit (tests/test_trajectory.py): converted the round-47-gain_life
+  slice's two reject-path pins to admit-path
+  (`test_is_safe_trigger_dict_admits_dies_draw_cards_shape`,
+  `test_simple_creature_filter_admits_dies_draw_cards_only_creature`);
+  added `test_safe_triggers_set_carries_dies_draw_cards_shape`,
+  `test_python_ta_to_safe_dict_round_trips_dies_draw_cards`,
+  `test_python_ta_to_safe_dict_preserves_dies_draw_cards_count`,
+  `test_python_ta_to_safe_dict_rejects_dies_draw_cards_with_extra_payload`;
+  repointed two now-stale negative pins from DIES+draw_cards to
+  DIES+scry_n (still genuinely unsafe).
+- Trajectory (tests/test_trajectory_parity.py):
+  `test_carddef_safe_dies_draw_cards_fires_on_sba_death_parity` +
+  `_inject_dies_draw_carrier_on_p0_bf` — synthetic DIES+IsSelf+
+  DrawCards(1) carrier killed via lethal-damage SBA; DIES trigger
+  fires on BOTH engines, drains DrawCards(1), asserts p0 hand +1 /
+  library −1 byte-equal cross-engine + carrier in p0 gy + post-drain
+  field-view byte-equal. Mirrors the round-47 gain_life probe.
+
+No divergences surfaced — all new tests pass byte-equal across both
+engines on first run. Gate: 1156 passed (1151 baseline + 5 new tests
+this slice).
+
