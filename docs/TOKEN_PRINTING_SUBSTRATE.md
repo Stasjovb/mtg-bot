@@ -557,3 +557,160 @@ The remaining Phase-3 slices, each independently shippable:
 Phase 2 (bridge-simple non-creature permanent filter) stays lower
 leverage and independent — most non-creature carriers also make
 Lander, so their real delta is gated on Phase 3a, not Phase 2.
+
+## 8. Phase 3a landing record (round-53 N1)
+
+The real-card payoff slice. **Real-EoE delta: +2 carriers / 57,779
+of 129,996 17lands decks** (the §2-honest subset — coverage NOT
+forced; see the decline ledger below).
+
+### What landed
+
+- **`_token_with_safe_activated_ability_card_def`** (sibling of
+  `_token_vanilla_card_def`, `parity/trajectory.py`). §2-strictly
+  admits the EoE `Lander` token: a NON-creature artifact (no P/T)
+  whose ONLY activated ability is **exactly** the bridge-correct
+  `{2}, Sac: SearchLibraryForBasicLandTapped` shape
+  (`_LANDER_SAFE_ACTIVATED_ABILITY` constant), and which is otherwise
+  clean (no keywords / static / triggered / nested abilities). ANY
+  deviation (different cost mana, colored mana, extra cost component,
+  non-deterministic / different effect, `count != 1`, ≥2 abilities,
+  any keyword) returns `None` → DECLINED. Emits a token CardDef
+  carrying `token_activated_abilities=(_LANDER_SAFE_ACTIVATED_ABILITY,)`
+  (the round-52 precursor substrate).
+- **Recognizer widen** (`_python_ta_to_safe_dict` CreateToken arm):
+  falls back from `_token_vanilla_card_def` to the new sibling.
+  Bare `create_token` added to the **DIES** `safe_effect_kinds` row +
+  the `("dies","source_is_self","create_token")` `_SAFE_TRIGGERS`
+  entry (round-49 left bare create_token out of DIES because every
+  DIES Lander carrier was non-vanilla-declined; Phase 3a makes
+  **Beamsaw Prospector** the real DIES consumer). `_seat_token_printings`
+  needed NO change — it already threads arbitrary token CardDefs
+  through `dataclasses.replace` + `cached_token_printing`, and the
+  round-52 cache key folds `token_activated_abilities` in (a Lander
+  never collides with a same-named vanilla token — verified by the
+  round-52 cache-key pin).
+- **No Rust change, no `.pyd` rebuild** — pure Python-lane on the
+  round-52 substrate (the CE20 `activated_abilities` registry key +
+  `parse_activated_ability` were already on main).
+
+### Carriers flipped drop→admit (the §2-honest subset)
+
+| Carrier | Trigger | 17lands decks |
+|---|---|---|
+| **Galactic Wayfarer** (Creature — Human Scout) | ENTERS+IsSelf+bare-Lander | **33,469** |
+| **Beamsaw Prospector** (Creature — Human Artificer) | DIES+IsSelf+bare-Lander | **24,310** |
+| | **Cumulative** | **57,779** |
+
+This is BELOW the round-52-§7-flagged "~88k+" estimate. That
+estimate summed the naive high-deck-count list
+(Galactic Wayfarer + Beamsaw Prospector + Biomechan Engineer +
+Glacier Godmaw + Bioengineered Future) BEFORE applying §2
+per-carrier. The §2-honest admit set is exactly these two. **Coverage
+is not forced** (brief §2 discipline) — the decline ledger:
+
+| Carrier | decks | §2 decline reason |
+|---|---|---|
+| Edge Rover | 15,271 | Lander rider `each_player=True` — no loader recognizer / auto-registration arm. **→ Phase 5** |
+| Seedship Agrarian | 14,078 | Lander trigger event `BECOMES_TAPPED` — no bridge arm (campaign landmine; would silently mistranslate) |
+| Biomechan Engineer | 15,038 | CARRIER has an activated ability — CardDef has no carrier-activated-ability field (campaign-wide §2 decline) |
+| Glacier Godmaw | 16,323 | sibling trigger `ENTERS+landfall-And+PumpCreaturesYouControlUntilEOT(granted_keywords)` does not round-trip; filter requires EVERY trigger to |
+| Sunstar Expansionist | 12,252 | CreateToken predicate `And(IsSelf, StateBound(OpponentControlsMoreLandsThanYou))` — no recognizer arm |
+| Biotech Specialist | 5,058 | sibling trigger `IS_SACRIFICED+And+DealDamageToTargetOpponent` does not round-trip |
+| Bioengineered Future | 1,560 | non-creature (Enchantment) — loader creature-filter declines. **→ Phase 2** |
+
+Every decline is ORTHOGONAL to the Lander token now round-tripping
+(the Lander shape itself is bridge-correct for all of them).
+
+### CRITICAL §2 finding — the round-52 §7 "fully deterministic" claim was WRONG
+
+The round-52 N1 precursor §7 stated
+`SearchLibraryForBasicLandTapped.resolve` is "**FULLY DETERMINISTIC
+on BOTH engines** … there is no library-search agent seating to
+verify." **This is incorrect.** The genuine real-EoE end-to-end probe
+(this slice — `test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_
+activation`) drove the activation and surfaced a real residual
+cross-engine divergence:
+
+- **Rust** `Effect::SearchLibraryForBasicLandTapped`
+  (`state_ops_resolve.rs`) **post-search-shuffles the library**
+  ("G19 closure: CR 701.19/701.22 — always shuffle the library after
+  a search"), via the external rng when one is installed.
+- **Python** `SearchLibraryForBasicLandTapped.resolve`
+  (`effects/generic/search.py:130`) is the **Stage-3 simplification**
+  that picks the first basic land in library order and does **NOT
+  shuffle**.
+
+So AFTER a Lander activation resolves the two engines' libraries hold
+the **same multiset** of cards but in **different order**; the
+searched-land identity (battlefield) and the sacrificed-Lander
+token-SBA view (graveyard_p0) diverge as downstream consequences.
+This is the **`SEARCH_LIMITATIONS.md` #15 residual Python-side gap**,
+unchanged since round-30 — NOT a Phase-3a regression — but Phase 3a
+**real-card-exposes** it (it was latent before; admitting Lander
+carriers means an explicit Lander activation can now reach it).
+SEARCH_LIMITATIONS #15 escalated accordingly this slice.
+
+**Why the admit is still §2-safe (and the activation byte-equal is
+NOT forced).** The bench / trajectory walk
+(`scripts/bench_trajectory_parity.py`) drives carrier ETBs (cast /
+enters) but **never sac-activates the Lander** — it only emits
+`activate_ability` for tapping lands for mana. So under the bench's
+strategy set the Lander activation is **never driven**, the divergence
+is **never reached**, and the load-bearing cross-engine guarantee for
+the admit is the **token *entering* byte-equal** — which the headline
+bridge pin + the genuine probe's CONTRACT 1 prove
+(`compare_fields == []` pre-activation). This is the round-39
+`ward_cost` precedent ("BIT-EQUAL in the attack_all strategy used by
+the bench"). The activation divergence is pinned explicitly as a
+**known-gap probe** (round-39 latent-SBA precedent — CONTRACT 2):
+the probe asserts the invariants that DO hold (library multiset
+equal, length equal, Lander sacrificed off bf, basic land searched)
+PLUS the exact documented divergence set
+`{battlefield, graveyard_p0, library_p0}`, so the gap stays VISIBLE
+and **auto-converts** to a clean byte-equal assertion the moment the
+Python-side post-search shuffle is restored (the SEARCH_LIMITATIONS
+#15 tail).
+
+### Tests (+11, gate 1251 → 1262)
+
+- `test_trajectory.py` (+5): reject→admit conversion + the §2
+  decline ledger (`test_printing_is_bridge_simple_creature_rejects_
+  lander_cluster` rewritten); `test_phase3a_lander_carriers_flip_
+  drop_to_admit` (the headline admit pin); `test_phase3a_lander_
+  cluster_residue_stays_declined`; `test_phase3a_token_with_safe_
+  activated_ability_card_def_gate` (§2-strict per-disqualifier);
+  `test_r52_real_lander_token_still_declined_substrate_only` rewritten
+  to the §2-honest vanilla-declines / sibling-admits split.
+- `test_cross_engine_etb_triggers.py` (+4, above the bridge-pin
+  sentinel): real Galactic Wayfarer seated bridge-correct; real
+  Beamsaw Prospector (DIES) seated; seated Lander Python
+  byte-identical to the real authored token; HEADLINE — real
+  Galactic Wayfarer ETB → Lander spawn byte-equal cross-engine.
+- `test_parity_smoke.py` (+1, above the probes sentinel): the
+  GENUINE real-EoE end-to-end probe driving the Lander **activation
+  resolution** (CONTRACT 1 byte-equal admit + CONTRACT 2 known-gap).
+
+### Remaining Phase-3/5 steps (recommended round-54+ ordering)
+
+1. **Restore the Python-side post-search shuffle** (close the
+   SEARCH_LIMITATIONS #15 residual). This is now **real-card-exposed**
+   (Phase 3a admitted Lander carriers) and is the prerequisite for a
+   byte-equal Lander *activation* (today only the token *entering* is
+   byte-equal). It auto-converts CONTRACT 2 of the genuine probe to a
+   clean `compare_fields == []`. Python-lane; needs the shared-rng
+   threading on the Python `SearchLibraryForBasicLandTapped.resolve`
+   side to match Rust's external-rng Fisher-Yates (the Rust side
+   already consumes the shared rng — SEARCH_LIMITATIONS #16). Highest
+   leverage next step for this cluster.
+2. **Phase 5 — `each_player` recognizer + auto-registration** →
+   unblocks **Edge Rover** (15,271 decks). Its Lander rides
+   `each_player=True`; the Rust variant + bridge arm exist (round-43),
+   only the loader recognizer/auto-registration arm is missing. NOW
+   single-blocked (Phase 3a closed the Lander-token half).
+3. **Phase 2 — bridge-simple non-creature permanent filter** →
+   unblocks **Bioengineered Future** (1,560) + any non-creature
+   Lander carrier. Lower leverage.
+4. **Phase 3b — `count`>1 / multi-Lander** — no fixed-single-token
+   carrier makes >1 Lander in the EoE pool today; recognizer-widening
+   only if one appears. Lowest leverage.
