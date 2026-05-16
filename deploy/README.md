@@ -11,7 +11,8 @@ through).
 |---|---|---|
 | `systemd/mtg-bot-worker.service` | Linux | systemd unit |
 | `launchd/com.mtg-bot.worker.plist` | macOS | launchd plist |
-| `windows/install-mtg-bot-worker.ps1` | Windows | Task Scheduler installer |
+| `windows/install-mtg-bot-worker.ps1` | Windows | Worker daemon Task Scheduler installer |
+| `windows/install-mtg-bot-coordinator.ps1` | Windows (master only) | Coordinator Task Scheduler installer |
 
 Each file is a template with placeholders. Fill them in for the
 machine you're deploying on, install via the OS's native service
@@ -83,7 +84,9 @@ curl http://<tailnet-ip>:5198/v2/heartbeat
 ## Windows (Task Scheduler)
 
 Run from **elevated** PowerShell (Task Scheduler with SYSTEM principal
-needs admin):
+needs admin).
+
+### Worker daemon (every Windows machine)
 
 ```powershell
 cd <repo-root>
@@ -102,6 +105,41 @@ Start-ScheduledTask -TaskName MTGBotWorker
 
 # Heartbeat smoke check
 Invoke-RestMethod -Uri "http://<tailnet-ip>:5198/v2/heartbeat"
+```
+
+### Coordinator (master only — one per cluster)
+
+The coordinator runs ONLY on the master. It's the existing
+`mtg_bot serve` process extended with the v2 endpoints + heartbeat
+poller + queue.db; the install script just wraps it in a
+Task-Scheduler-as-SYSTEM entry.
+
+```powershell
+cd <repo-root>
+.\deploy\windows\install-mtg-bot-coordinator.ps1 `
+  -RepoRoot "C:\Users\gregg\projects\mtg-bot" `
+  -VenvPython "C:\Users\gregg\projects\mtg-bot\.venv-py313\Scripts\python.exe"
+
+# Verify
+Get-ScheduledTask -TaskName MTGBotCoordinator
+Get-ScheduledTaskInfo -TaskName MTGBotCoordinator
+
+# Start now
+Start-ScheduledTask -TaskName MTGBotCoordinator
+
+# Health check
+Invoke-RestMethod -Uri "http://127.0.0.1:5099/v2/healthz"
+```
+
+### Cleanup of the cutover-day one-shot smoke task
+
+The cutover-day smoke registered an `MTGBotWorkerSmoke` one-shot
+task on Win10 (and possibly the master) to get a daemon running
+without elevation. After installing the proper persistent
+`MTGBotWorker` task, remove the one-shot:
+
+```powershell
+Unregister-ScheduledTask -TaskName MTGBotWorkerSmoke -Confirm:$false
 ```
 
 ## Verify the daemon is up (any OS)
