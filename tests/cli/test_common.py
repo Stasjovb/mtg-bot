@@ -157,13 +157,16 @@ def test_parents_compose_in_a_single_parser():
     assert args.deck_pool == _common.DEFAULT_DECK_POOL
 
 
-def test_load_shards_config_delegates_to_distributed_module():
-    """``_common.load_shards_config`` is a thin re-export so
-    subcommands don't have to reach into ``mtg_bot.training.distributed``
-    themselves. Verifies the wiring."""
+def test_load_shards_config_delegates_to_heartbeat_poller():
+    """``_common.load_shards_config`` is a thin re-export of the v2
+    URL-only loader in ``mtg_bot.cli.runs.heartbeat_poller``. Post
+    v2-cutover the legacy SSH-shape loader (in
+    ``mtg_bot.training.distributed``) is gone; this re-export lets
+    older callers keep their import unchanged while pointing at the
+    new implementation."""
     sentinel = object()
     with patch(
-        "mtg_bot.training.distributed.load_shards_config",
+        "mtg_bot.cli.runs.heartbeat_poller.load_shards_config",
         return_value=sentinel,
     ) as mock_impl:
         result = _common.load_shards_config(Path("any.json"))
