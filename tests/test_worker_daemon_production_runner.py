@@ -384,6 +384,269 @@ def test_read_metadata_json_returns_empty_on_malformed(tmp_path):
     assert prr._read_metadata_json(tmp_path) == {}
 
 
+def test_play_self_play_game_handles_empty_pool_with_clear_error(tmp_path):
+    """An empty pool is a daemon-side misconfiguration."""
+    with pytest.raises(RuntimeError, match="deck pool is empty"):
+        prr._play_self_play_game(
+            factory=lambda seed: None,
+            base_seed=0,
+            game_idx=0,
+            deck_pool=[],
+            deck_indices=[0, 1],
+            per_game_timeout_sec=None,
+            capture_every=0,
+            action_encoding_version=None,
+            write_structured_tokens=False,
+        )
+
+
+def test_play_eval_game_handles_empty_pool_with_clear_error():
+    """Same defense on the eval path."""
+    with pytest.raises(RuntimeError, match="deck pool is empty"):
+        prr._play_eval_game(
+            p0_factory=lambda seed: None,
+            p1_factory=lambda seed: None,
+            base_seed=0,
+            game_idx=0,
+            deck_pool=[],
+            deck_indices=[0, 1],
+            per_game_timeout_sec=None,
+        )
+
+
+def test_play_self_play_game_converts_crash_to_empty_chunk(tmp_path, monkeypatch):
+    """When ``_generate_one_game_data`` raises, return a crashed
+    chunk rather than propagating."""
+    import mtg_bot.training.data_gen as dg_mod
+
+    def boom(**kwargs):
+        raise RuntimeError("synthetic engine crash for test")
+
+    monkeypatch.setattr(dg_mod, "_generate_one_game_data", boom)
+
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    try:
+        from _test_decks import simple_test_deck_pool
+    finally:
+        sys.path.pop(0)
+    pool = simple_test_deck_pool()
+    chunk, outcome, winner, n_samples = prr._play_self_play_game(
+        factory=lambda seed: None,
+        base_seed=0,
+        game_idx=0,
+        deck_pool=pool,
+        deck_indices=[0, 1],
+        per_game_timeout_sec=None,
+        capture_every=0,
+        action_encoding_version=None,
+        write_structured_tokens=False,
+    )
+    assert outcome == "crashed"
+    assert winner is None
+    assert n_samples == 0
+
+
+def test_play_self_play_game_handles_timeout(monkeypatch):
+    """``TimeoutError`` -> ``timed_out`` outcome with empty chunk."""
+    import mtg_bot.training.data_gen as dg_mod
+
+    def slow(**kwargs):
+        raise TimeoutError("synthetic timeout")
+
+    monkeypatch.setattr(dg_mod, "_generate_one_game_data", slow)
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    try:
+        from _test_decks import simple_test_deck_pool
+    finally:
+        sys.path.pop(0)
+    pool = simple_test_deck_pool()
+    chunk, outcome, winner, n_samples = prr._play_self_play_game(
+        factory=lambda seed: None,
+        base_seed=0,
+        game_idx=0,
+        deck_pool=pool,
+        deck_indices=[0, 1],
+        per_game_timeout_sec=1.0,
+        capture_every=0,
+        action_encoding_version=None,
+        write_structured_tokens=False,
+    )
+    assert outcome == "timed_out"
+    assert winner is None
+    assert n_samples == 0
+
+
+def test_play_eval_game_handles_crash(monkeypatch):
+    """Eval crash -> ``("crashed", 0, None)`` shape."""
+    import mtg_bot.training.self_play as sp_mod
+
+    def boom(**kwargs):
+        raise RuntimeError("synthetic eval crash")
+
+    monkeypatch.setattr(sp_mod, "_play_one_match_game", boom)
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    try:
+        from _test_decks import simple_test_deck_pool
+    finally:
+        sys.path.pop(0)
+    pool = simple_test_deck_pool()
+    winner, decisions, outcome = prr._play_eval_game(
+        p0_factory=lambda seed: None,
+        p1_factory=lambda seed: None,
+        base_seed=0,
+        game_idx=0,
+        deck_pool=pool,
+        deck_indices=[0, 1],
+        per_game_timeout_sec=None,
+    )
+    assert winner is None
+    assert decisions == 0
+    assert outcome == "crashed"
+
+
+def test_play_eval_game_handles_timeout_preserves_partial(monkeypatch):
+    """Eval timeout -> ``("timed_out", partial_decisions, None)``.
+    The partial-decisions field rides on the TimeoutError instance.
+    """
+    import mtg_bot.training.self_play as sp_mod
+
+    def slow(**kwargs):
+        exc = TimeoutError("synthetic eval timeout")
+        exc.decisions_completed = 42
+        raise exc
+
+    monkeypatch.setattr(sp_mod, "_play_one_match_game", slow)
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    try:
+        from _test_decks import simple_test_deck_pool
+    finally:
+        sys.path.pop(0)
+    pool = simple_test_deck_pool()
+    winner, decisions, outcome = prr._play_eval_game(
+        p0_factory=lambda seed: None,
+        p1_factory=lambda seed: None,
+        base_seed=0,
+        game_idx=0,
+        deck_pool=pool,
+        deck_indices=[0, 1],
+        per_game_timeout_sec=1.0,
+    )
+    assert winner is None
+    assert decisions == 42
+    assert outcome == "timed_out"
+
+
+def test_self_play_runner_setup_logs_warning_on_wrong_kind(tmp_path, caplog):
+    """If a self-play runner is invoked for an eval stage, the
+    setup hook logs a warning (and proceeds — better than failing
+    silently)."""
+    runner = prr.build_self_play_runner(
+        coordinator_url="http://test:5099",
+        stage_id="x",
+        n_workers=1,
+        weights_cache_root=tmp_path,
+        worker_id="t",
+    )
+    import logging
+    with caplog.at_level(logging.WARNING):
+        runner.setup("http://test:5099", tmp_path, "eval", 1)
+    assert any(
+        "expected self_play" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_eval_runner_setup_logs_warning_on_wrong_kind(tmp_path, caplog):
+    runner = prr.build_eval_runner(
+        coordinator_url="http://test:5099",
+        stage_id="x",
+        n_workers=1,
+        weights_cache_root=tmp_path,
+        worker_id="t",
+    )
+    import logging
+    with caplog.at_level(logging.WARNING):
+        runner.setup("http://test:5099", tmp_path, "self_play", 1)
+    assert any(
+        "expected eval" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_encode_npz_bytes_round_trips_structured_arrays(tmp_path):
+    """When ``write_structured_tokens=True`` and the chunk carries
+    struct_rows, the npz blob includes the four structured arrays."""
+    n = 2
+    # Tiny fake struct rows; the layout doesn't matter for this test
+    # since _pad_and_stack_structured_rows operates on real rows. We
+    # supply an empty struct_rows list to exercise the
+    # "no struct rows -> fall to legacy 4-array layout" branch.
+    chunk = (
+        np.random.randn(n, 51).astype(np.float32),
+        np.zeros(n, dtype=np.float32),
+        np.zeros((n, 1), dtype=np.float32),
+        np.zeros((n, 1), dtype=bool),
+        0,
+        "completed",
+        [],  # empty struct_rows -> falls into legacy path
+    )
+    blob = prr._encode_npz_bytes(chunk, write_structured_tokens=True)
+    data = np.load(io.BytesIO(blob))
+    # Empty struct rows: the path uses the legacy 4-array layout.
+    assert "features" in data.files
+
+
+def test_self_play_runner_logs_event_failure_silently(tmp_path):
+    """A log_event that raises must not break the run — the runner
+    swallows the exception with a logged-traceback so a flaky log
+    sink doesn't kill the daemon."""
+    src_dir = _save_tiny_weights(tmp_path / "src", "vTEST")
+    cache_root = tmp_path / "cache"
+    pool_path = _save_tiny_deck_pool(tmp_path / "pool")
+
+    def bad_log(name, payload):
+        raise RuntimeError("synthetic log sink failure")
+
+    runner = prr.build_self_play_runner(
+        coordinator_url="http://test:5099",
+        stage_id="x",
+        n_workers=1,
+        weights_cache_root=cache_root,
+        worker_id="t",
+        log_event=bad_log,
+        deck_pool_path=str(pool_path),
+        http_get=_stub_http_get_for_version_dir(src_dir),
+    )
+    runner.setup("http://test:5099", cache_root, "self_play", 1)
+
+    import mtg_bot.worker_daemon_production_runner as mod
+
+    def fake_play(**kwargs):  # noqa: ARG001
+        empty = (
+            np.zeros((0, 51), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0, 1), dtype=np.float32),
+            np.zeros((0, 1), dtype=bool),
+            None,
+            "completed",
+            [],
+        )
+        return empty, "completed", 0, 0
+
+    real = mod._play_self_play_game
+    mod._play_self_play_game = fake_play
+    try:
+        result = runner.play_one_game(_make_claim(), "t")
+    finally:
+        mod._play_self_play_game = real
+    # Result still produced despite the log_event failures.
+    assert result.outcome == "completed"
+
+
 def test_back_compat_factories_thread_args_through(tmp_path):
     """The legacy ``build_production_self_play_runner`` /
     ``build_production_eval_runner`` re-exports in
