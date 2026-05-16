@@ -7425,6 +7425,99 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             EachOpponentLosesLifeEqualToYourLifeTotal,
         )
         return EachOpponentLosesLifeEqualToYourLifeTotal()
+    if kind == "gain_life_equal_to_your_life_total":
+        # BLOCKED-RUST-EFFECT slice (round 49) -- the source's
+        # controller GAINS life equal to the source-controller's
+        # CURRENT LIFE TOTAL bridge arm. Rust's
+        # ``Effect::GainLifeEqualToYourLifeTotal`` (cards.rs unit
+        # variant added in this slice; parse arm immediately after the
+        # round-45 gain_life_equal_to_artifact_count arm, to_dict
+        # immediately after the round-45
+        # GainLifeEqualToArtifactCount arm, resolve at
+        # state_ops_resolve.rs immediately after the round-45
+        # GainLifeEqualToArtifactCount resolve arm following the same
+        # 5-zone scan + life-add dispatch shape) mirrors Python's
+        # ``GainLifeEqualToYourLifeTotal`` (effects/generic/life.py --
+        # shipped in this slice as the SECOND denominator on the
+        # gain-life-controller-self apply substrate; 0 EoE consumers
+        # today, slice ships per round-27/31/37 round-trip-surface-
+        # coverage rule). Rust substrate landed end-to-end IN this
+        # slice; the bridge translator wires the cross-engine round
+        # trip.
+        #
+        # **Field-shape.** Unit variant on both sides; no fields beyond
+        # ``kind``. The Python class has no constructor args (no static
+        # ``amount`` field) -- the dynamic-X is the whole point of the
+        # class, the count is computed at resolve time from the
+        # source-controller's life total (clamped to >= 0), not stored
+        # on the variant. The bridge translator ignores every other key
+        # on the dict for round-trip dict-shape consistency (mirrors the
+        # round-45 gain_life_equal_to_artifact_count / round-48
+        # each_opponent_loses_life_equal_to_your_life_total / round-42
+        # mill_target_player_equal_to_your_life_total / round-47
+        # deal_damage_to_opponent_creature_by_life_total unit-variant
+        # precedents).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # resolves the source-controller via the 5-zone walk + stack
+        # scan, reads ``state.players[controller].life`` clamped to
+        # ``max(0, life)``, and adds that amount to the source-
+        # controller's life via simple ``+=``. Python's resolve at
+        # life.py reads ``max(0, state.player_by_id(controller_id).life)``
+        # and routes through ``mtg_bot.game.gain_life`` with that
+        # amount. Both engines converge on the 2-player observable: the
+        # source-controller's life total goes UP by
+        # ``max(0, controller_life)`` (life doubling when life > 0).
+        #
+        # **Source-controller resolution.** Rust uses the 5-zone walk +
+        # stack scan precedent set by the round-45 sister
+        # GainLifeEqualToArtifactCount / round-48
+        # EachOpponentLosesLifeEqualToYourLifeTotal (cross-arm
+        # consistency on the dynamic-X arms). Python uses the resolving
+        # controller_id passed by the standard effect-resolve harness.
+        # Both converge on the source's controller for the life-total
+        # denominator and the apply.
+        #
+        # **Fizzle parity.** Both engines silently no-op when the
+        # source-controller's clamped life is 0 (Python: life.py ``if
+        # amount <= 0: return``; Rust: the ``amount <= 0`` guard in the
+        # resolve arm after the ``life.max(0)`` clamp). Mirrors
+        # GainLife / DrawCards / Mill / EachOpponentLosesLife /
+        # GainLifeEqualToArtifactCount / DiscardSelf zero-amount
+        # conventions.
+        #
+        # **Distinct from sister arms.** Distinct from ``gain_life``
+        # (static `amount` field) and from
+        # ``gain_life_equal_to_artifact_count`` (round-45 -- SAME apply
+        # substrate, artifact-count denominator vs this arm's life-total
+        # denominator; the ONLY mechanical difference is the denominator
+        # read) and from
+        # ``each_opponent_loses_life_equal_to_your_life_total`` (round-48
+        # -- SAME life-total denominator but each-opponent-life-loss
+        # substrate vs this arm's gain-life-controller-self substrate;
+        # inverted recipient AND inverted sign) and
+        # ``mill_target_player_equal_to_your_life_total`` (round-42 --
+        # SAME life-total denominator but mill substrate) and
+        # ``deal_damage_to_opponent_creature_by_life_total`` (round-47 --
+        # SAME life-total denominator but damage substrate). Walks the
+        # X-from-count matrix to a FOURTH (substrate, life-total) cell
+        # and the SECOND denominator on the gain-life-controller-self
+        # apply substrate, confirming the round-35 bidirectionally-
+        # extensible plumbing generalizes across both axes.
+        #
+        # **No real-EoE end-to-end probe in this slice.** No EoE
+        # consumer for the gain-life-by-life-total shape today (sister
+        # of round-45 with a life-total denominator -- no current EoE
+        # printing pairs the controller-self life-gain recipient with
+        # the life-total denominator). Synthetic regression pin (per the
+        # round-17 Fight / round-30 stun-counter / round-42
+        # mill-by-life-total / round-45 gain-life-by-artifact / round-47
+        # damage-by-life-total / round-48 life-loss-by-life-total
+        # precedent) documents the bridge plumbing.
+        from mtg_bot.effects.generic.life import (
+            GainLifeEqualToYourLifeTotal,
+        )
+        return GainLifeEqualToYourLifeTotal()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

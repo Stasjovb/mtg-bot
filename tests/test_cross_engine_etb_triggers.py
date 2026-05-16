@@ -15454,5 +15454,230 @@ def test_rust_parser_rejects_each_opponent_loses_life_equal_to_your_life_total_w
         reg.register_printing(d)
 
 
+def test_bridge_gain_life_equal_to_your_life_total_basic_translation():
+    """BLOCKED-RUST-EFFECT slice (round 49) -- the source's controller
+    GAINS life equal to the source-controller's CURRENT LIFE TOTAL.
+    Rust ``{"kind": "gain_life_equal_to_your_life_total"}`` translates
+    to Python ``GainLifeEqualToYourLifeTotal()``.
+
+    Mirrors Rust's parse_effect arm (added in this slice immediately
+    after the round-45 gain_life_equal_to_artifact_count arm; unit
+    variant; no fields). Pin verifies the bare-shape translation for
+    the round-49 dynamic-X-from-life-total Effect arm. SECOND
+    denominator on the gain-life-controller-self apply substrate
+    (sister of round-45 gain-life-by-artifact -- same apply, only the
+    denominator read differs; the life-total denominator was
+    established by round-42 mill / round-47 damage / round-48
+    each-opponent-loses on other substrates).
+    """
+    from mtg_bot.effects.generic.life import (
+        GainLifeEqualToYourLifeTotal,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "gain_life_equal_to_your_life_total"}
+    )
+    assert isinstance(e, GainLifeEqualToYourLifeTotal)
+
+
+def test_bridge_gain_life_equal_to_your_life_total_extra_keys_ignored():
+    """Bridge arm pin: unit-variant tolerance for extra keys. Mirrors
+    the unit-variant precedent (round-42 / round-45 / round-47 /
+    round-48 X-from-count sister arms) -- unrecognized fields in the
+    dict are ignored, not raised. Notably, an ``amount`` key (which the
+    sister static GainLife arm DOES consume as a required field) is
+    silently dropped here -- the dynamic-X is the whole point of this
+    variant, not a static amount.
+    """
+    from mtg_bot.effects.generic.life import (
+        GainLifeEqualToYourLifeTotal,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "gain_life_equal_to_your_life_total",
+            "spurious_field": "ignored",
+            # ``amount`` would be consumed by sister ``gain_life``
+            # arm; here it's silently dropped -- the count is dynamic
+            # (life total).
+            "amount": 99,
+        }
+    )
+    assert isinstance(e, GainLifeEqualToYourLifeTotal)
+
+
+def test_bridge_gain_life_equal_to_your_life_total_equality_default_constructor():
+    """Bridge arm pin: two ``GainLifeEqualToYourLifeTotal()`` instances
+    are equal under dataclass(frozen=True) default __eq__ semantics.
+    The class has no constructor args so any two instances are
+    trivially equal. Pins the frozen-dataclass equality contract for
+    downstream hash-based keying (e.g. de-dup in Sequence composers).
+    """
+    from mtg_bot.effects.generic.life import (
+        GainLifeEqualToYourLifeTotal,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {"kind": "gain_life_equal_to_your_life_total"}
+    )
+    e2 = GainLifeEqualToYourLifeTotal()
+    assert e1 == e2
+
+
+def test_bridge_gain_life_equal_to_your_life_total_distinct_from_sisters():
+    """Bridge arm pin: the round-49 gain-life-by-life-total variant,
+    the round-45 gain-life-by-artifact-count variant, the round-26
+    static ``gain_life``, and the round-48 each-opponent-loses-by-life-
+    total variant are FOUR DIFFERENT Python classes -- they translate
+    to structurally distinct types. Pins against accidental class merge
+    or silent type-coercion in the bridge translator (round-44 /
+    round-48 distinct-from-sister precedent). The round-48 sister has
+    the SAME life-total denominator but the opposite recipient
+    (each-opponent vs controller-self) AND opposite sign (loss vs
+    gain); the round-45 sister has the SAME apply substrate but the
+    artifact-count denominator instead of life-total.
+    """
+    from mtg_bot.effects.generic.life import (
+        EachOpponentLosesLifeEqualToYourLifeTotal,
+        GainLife,
+        GainLifeEqualToArtifactCount,
+        GainLifeEqualToYourLifeTotal,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    by_life = _ta_dict_to_python_effect(
+        {"kind": "gain_life_equal_to_your_life_total"}
+    )
+    by_artifact = _ta_dict_to_python_effect(
+        {"kind": "gain_life_equal_to_artifact_count"}
+    )
+    static = _ta_dict_to_python_effect(
+        {"kind": "gain_life", "amount": 4}
+    )
+    each_opp_by_life = _ta_dict_to_python_effect(
+        {"kind": "each_opponent_loses_life_equal_to_your_life_total"}
+    )
+    assert isinstance(by_life, GainLifeEqualToYourLifeTotal)
+    assert isinstance(by_artifact, GainLifeEqualToArtifactCount)
+    assert isinstance(static, GainLife)
+    assert isinstance(
+        each_opp_by_life, EachOpponentLosesLifeEqualToYourLifeTotal
+    )
+    # Four distinct types -- no accidental class merge.
+    assert type(by_life) is not type(by_artifact)
+    assert type(by_life) is not type(static)
+    assert type(by_life) is not type(each_opp_by_life)
+    assert type(by_artifact) is not type(static)
+    # The dynamic ones carry no static amount field; the static one
+    # carries amount=4.
+    assert getattr(static, "amount", None) == 4
+    assert not hasattr(by_life, "amount")
+
+
+def test_bridge_gain_life_equal_to_your_life_total_composable_in_sequence():
+    """Round-trip in a Sequence composer to pin nesting end-to-end:
+    ``Sequence([GainLifeEqualToYourLifeTotal(), DrawCards(1)])``
+    translates correctly via the recursive Sequence translator. Pins
+    the round-49 arm against accidental dispatch loss inside Sequence
+    (mirrors round-30 / round-31 / round-32 / round-33 / round-34 /
+    round-37 / round-42 / round-44 / round-45 / round-48 unit-variant
+    Sequence-composability pins).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.effects.generic.life import (
+        GainLifeEqualToYourLifeTotal,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "gain_life_equal_to_your_life_total"},
+                {"kind": "draw_cards", "count": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], GainLifeEqualToYourLifeTotal)
+    assert isinstance(e.effects[1], DrawCards)
+
+
+def test_rust_parser_accepts_gain_life_equal_to_your_life_total_in_triggered_ability():
+    """Lockstep pin: Rust's parse_effect arm accepts the bridge dict
+    shape ``{"kind": "gain_life_equal_to_your_life_total"}`` on a
+    triggered_ability carrier. No EoE consumer for this shape today --
+    this slice ships per round-27/31/37 round-trip-surface-coverage
+    rule; the lockstep gate doesn't depend on a real consumer,
+    registering through any abilities carrier exercises the
+    parse_effect arm. Pinning here keeps the Python bridge from
+    drifting away from Rust's parse_effect coverage.
+
+    Mirrors Rust's parse_effect arm added in this slice immediately
+    after the round-45 gain_life_equal_to_artifact_count arm.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- GainLifeEqualToYourLifeTotal",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"W": 1, "generic": 2},
+        "power": 2,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "gain_life_equal_to_your_life_total"
+                },
+            }
+        ],
+    }
+    pid = reg.register_printing(d)
+    assert pid == 0
+
+
+def test_rust_parser_rejects_gain_life_equal_to_your_life_total_with_typo():
+    """Negative lockstep pin: a misspelled kind (e.g.
+    ``gain_life_equal_to_your_life_totals`` -- spurious trailing "s")
+    surfaces as ValueError on Rust's parse_effect arm because the new
+    variant isn't registered for that spelling. Pin against accidental
+    schema drift between bridge dict shape and Rust parser's
+    accepted-kinds set. Sister of the round-45 / round-48 typo-
+    rejection pins.
+    """
+    import mtg_bot_engine
+
+    reg = mtg_bot_engine.Registry()
+    d = {
+        "name": "BLOCKED-RUST-EFFECT Bridge Pin -- typo lockstep r49",
+        "card_types": ["Artifact", "Creature"],
+        "mana_cost": {"W": 1},
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    # Misspelled -- spurious trailing "s".
+                    "kind": "gain_life_equal_to_your_life_totals"
+                },
+            }
+        ],
+    }
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown effect kind"):
+        reg.register_printing(d)
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
