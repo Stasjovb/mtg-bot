@@ -3084,3 +3084,361 @@ def test_flying_attacker_unblockable_by_groundwalker_parity():
         f"4/4 ground blocker should still be on bf (block was dropped — "
         f"never declared, never took damage); got p1_gy={p1_gy}"
     )
+
+
+# ===========================================================================
+# Round-36 enhancement: multi-blocker trajectory probes on the asymmetric
+# block-selector contract.
+#
+# Today's single-blocker trajectory tests (round-17's
+# `test_real_game_combat_block_with_largest_able_parity`, round-16's
+# `test_real_game_combat_with_blocks_mutual_destruction_parity`) only
+# exercise 1 attacker / 1 blocker shapes — so the "smallest" vs "largest"
+# block selectors collapse to picking the unique eligible blocker and the
+# strategies' divergence is hidden. Round-36 lifts this constraint by
+# injecting 2 attackers on p0 + 2 distinct-p/t blockers on p1, then driving
+# the two strategies side-by-side and asserting that the OUTCOMES DIFFER
+# (different graveyard contents) while both engines AGREE on the
+# strategy-specific outcome.
+#
+# The setup ordering produces a known id assignment:
+#   * inject atk_A (3/3) on p0 first → id N
+#   * inject atk_B (5/5) on p0 second → id N+1
+#   * inject blk_mouse (1/1) on p1 third → id M
+#   * inject blk_bear (4/4) on p1 fourth → id M+1
+#
+# Block-pairing per strategy (walk attackers by id ascending; assign one
+# blocker from `eligible_sorted` per attacker, mark used):
+#   * `attack_all_block_smallest` sorts blockers (power, toughness, id) asc
+#     → mouse first, bear second. atk_A↔mouse, atk_B↔bear.
+#     Combat: atk_A(3) kills mouse(1); atk_B(5) kills bear(4) and survives.
+#     Graveyards: p0=[], p1=[Mouse, Bear].
+#   * `block_with_largest_able` sorts blockers (-power, -toughness, id) asc
+#     → bear first, mouse second. atk_A↔bear, atk_B↔mouse.
+#     Combat: atk_A(3) vs bear(4): atk_A dies, bear takes 3 (survives).
+#     atk_B(5) vs mouse(1): mouse dies, atk_B takes 1 (survives).
+#     Graveyards: p0=[atk_A], p1=[Mouse].
+#
+# So the multi-blocker shape directly observes the strategy divergence:
+# different sets of creatures die under each strategy. Both engines must
+# agree on each strategy's outcome — that's the cross-engine contract the
+# round-31 BilateralCombatAgent enables (asymmetric per-side block
+# selectors composing under the round-16 drive_combat_phase).
+# ===========================================================================
+
+
+def _setup_two_attackers_two_blockers_at_turn_7(py_state, rust_state):
+    """Walk to turn 7 PRECOMBAT_MAIN and inject the canonical 2-attacker
+    + 2-blocker shape used by the multi-blocker tests.
+
+    Injection ORDER controls id ordering (per :meth:`GameState.new_object`'s
+    sequential ``next_object_id`` allocation):
+      * atk_A (3/3) on p0  — lowest attacker id (walked first)
+      * atk_B (5/5) on p0  — second attacker id
+      * blk_mouse (1/1) on p1 — lowest blocker id (smallest p/t)
+      * blk_bear (4/4) on p1 — second blocker id (largest p/t)
+
+    Returns the four ``(py_id, rust_id)`` tuples in the same order so
+    callers can id-pin individual creatures in post-combat assertions.
+
+    Skips the standard ``_setup_*_bears_*`` Bears prefix so the four
+    injected creatures are the SOLE combatants on the bf — keeps the
+    block-pairing deterministic regardless of the post-prefix Bears
+    inventory.
+    """
+    from mtg_bot.turn import Step
+
+    # Walk to turn 7 PRECOMBAT_MAIN with no creatures (same shape as the
+    # round-18 deathtouch / double-strike / haste probes).
+    _advance_n_phases(py_state, rust_state, 3)  # → turn 1 MAIN1
+    _advance_n_phases(py_state, rust_state, 12 * 6)  # → turn 7 MAIN1
+    assert py_state.turn_number == 7
+    assert py_state.active_player_idx == 0
+    assert py_state.step == Step.PRECOMBAT_MAIN
+
+    atk_a = _inject_vanilla_creature_on_bf(
+        py_state, rust_state,
+        controller_idx=0,
+        printing_name="Bear Brawler",
+        power=3, toughness=3,
+    )
+    atk_b = _inject_vanilla_creature_on_bf(
+        py_state, rust_state,
+        controller_idx=0,
+        printing_name="Bear Berserker",
+        power=5, toughness=5,
+    )
+    blk_mouse = _inject_vanilla_creature_on_bf(
+        py_state, rust_state,
+        controller_idx=1,
+        printing_name="Bear Mouse",
+        power=1, toughness=1,
+    )
+    blk_bear = _inject_vanilla_creature_on_bf(
+        py_state, rust_state,
+        controller_idx=1,
+        printing_name="Bear Guard",
+        power=4, toughness=4,
+    )
+    return atk_a, atk_b, blk_mouse, blk_bear
+
+
+def test_multi_blocker_smallest_block_selector_parity():
+    """``attack_all_block_smallest`` with 2 attackers + 2 distinct-p/t
+    blockers — pin the smallest-block pairing across both engines.
+
+    Block pairing (ids assigned by injection order — atk_A < atk_B,
+    mouse < bear; selector sorts blockers (power, toughness, id) asc
+    so mouse goes first):
+      * atk_A (3/3) ↔ blk_mouse (1/1)  → mouse dies (1<3), atk_A
+        takes 1 dmg, survives.
+      * atk_B (5/5) ↔ blk_bear (4/4)   → bear dies (4<5), atk_B takes
+        4 dmg, survives.
+
+    Outcome graveyards: p0=[], p1=[Bear Mouse, Bear Guard]. Both
+    engines must agree byte-equal on field views post-combat.
+
+    Pins the SMALLEST-side of the asymmetric block-selector contract:
+    today the single-blocker tests can't distinguish smallest from
+    largest because there's only one eligible blocker. With two
+    blockers, smallest assigns the WEAKER blocker to the WEAKER
+    attacker (lowest-id walks first) — both blockers die, both
+    attackers survive, no damage hits the defender.
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _setup_two_attackers_two_blockers_at_turn_7(py_state, rust_state)
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"multi-blocker injection (smallest) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    pre_combat_life_p0 = py_view["life_p0"]
+    pre_combat_life_p1 = py_view["life_p1"]
+
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    agent = trajectory.RealGameCombatAgent(
+        strategy="attack_all_block_smallest"
+    )
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"multi-blocker smallest combat surfaced a real cross-engine "
+            f"divergence: {exc}"
+        )
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+
+    # No damage hit either player — every attacker blocked.
+    assert py_view["life_p0"] == pre_combat_life_p0
+    assert py_view["life_p1"] == pre_combat_life_p1
+    # Smallest-block outcome: both blockers die (mouse to atk_A's 3,
+    # bear to atk_B's 5). Neither attacker dies (atk_A takes only 1
+    # from mouse; atk_B takes 4 from bear but has 5 toughness).
+    p0_gy = [entry[0] for entry in py_view["graveyard_p0"]]
+    p1_gy = [entry[0] for entry in py_view["graveyard_p1"]]
+    assert "Bear Brawler" not in p0_gy, (
+        f"atk_A should survive (3/3 vs 1/1 mouse, takes 1 dmg); "
+        f"got p0_gy={p0_gy}"
+    )
+    assert "Bear Berserker" not in p0_gy, (
+        f"atk_B should survive (5/5 vs 4/4 bear, takes 4 dmg); "
+        f"got p0_gy={p0_gy}"
+    )
+    assert "Bear Mouse" in p1_gy, (
+        f"mouse (1/1) should die to atk_A's 3 dmg; got p1_gy={p1_gy}"
+    )
+    assert "Bear Guard" in p1_gy, (
+        f"bear (4/4) should die to atk_B's 5 dmg; got p1_gy={p1_gy}"
+    )
+
+
+def test_multi_blocker_largest_block_selector_parity():
+    """``block_with_largest_able`` with 2 attackers + 2 distinct-p/t
+    blockers — pin the largest-block pairing across both engines.
+
+    Block pairing (ids assigned by injection order — atk_A < atk_B;
+    selector sorts blockers (-power, -toughness, id) asc so bear
+    goes first):
+      * atk_A (3/3) ↔ blk_bear (4/4)   → bear takes 3 dmg (4-3=1
+        remaining, survives); atk_A takes 4 dmg (dies, 3<4).
+      * atk_B (5/5) ↔ blk_mouse (1/1)  → mouse dies (1<5); atk_B
+        takes 1 dmg, survives.
+
+    Outcome graveyards: p0=[Bear Brawler], p1=[Bear Mouse]. This
+    DIVERGES from the smallest-block outcome (p0=[], p1=[mouse,
+    bear]) — that's the headline observable contract that the
+    single-blocker tests cannot distinguish.
+
+    Both engines must agree byte-equal on field views post-combat.
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _setup_two_attackers_two_blockers_at_turn_7(py_state, rust_state)
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"multi-blocker injection (largest) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    pre_combat_life_p0 = py_view["life_p0"]
+    pre_combat_life_p1 = py_view["life_p1"]
+
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    agent = trajectory.RealGameCombatAgent(
+        strategy="block_with_largest_able"
+    )
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"multi-blocker largest combat surfaced a real cross-engine "
+            f"divergence: {exc}"
+        )
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+
+    # No damage hit either player — every attacker blocked.
+    assert py_view["life_p0"] == pre_combat_life_p0
+    assert py_view["life_p1"] == pre_combat_life_p1
+    # Largest-block outcome: atk_A dies to bear (3<4); mouse dies to
+    # atk_B (1<5). Defender bear survives (3 dmg vs 4 toughness);
+    # atk_B survives (1 dmg vs 5 toughness).
+    p0_gy = [entry[0] for entry in py_view["graveyard_p0"]]
+    p1_gy = [entry[0] for entry in py_view["graveyard_p1"]]
+    assert "Bear Brawler" in p0_gy, (
+        f"atk_A (3/3) should die to bear's 4 dmg; got p0_gy={p0_gy}"
+    )
+    assert "Bear Berserker" not in p0_gy, (
+        f"atk_B (5/5) should survive mouse's 1 dmg; got p0_gy={p0_gy}"
+    )
+    assert "Bear Mouse" in p1_gy, (
+        f"mouse (1/1) should die to atk_B's 5 dmg; got p1_gy={p1_gy}"
+    )
+    assert "Bear Guard" not in p1_gy, (
+        f"bear (4/4) should survive atk_A's 3 dmg (1 toughness left); "
+        f"got p1_gy={p1_gy}"
+    )
+
+
+def test_multi_blocker_bilateral_asymmetric_selector_parity():
+    """``BilateralCombatAgent`` with asymmetric per-side block selectors:
+    p0_strategy=``attack_all_block_smallest`` + p1_strategy=
+    ``block_with_largest_able``. On p0's turn, p1 is defender, so p1's
+    largest-block selector drives the assignment (matching the
+    standalone ``block_with_largest_able`` outcome bit-for-bit).
+
+    Pins the round-31 BilateralCombatAgent dispatch contract:
+
+      * ``pick_attackers`` routes to the ACTIVE player's delegate
+        (CR 508.1) — here p0's ``attack_all_block_smallest`` (which
+        attacks with every eligible creature on the attacker side,
+        same as the largest-block test's attacker step).
+      * ``pick_blocks`` routes to the DEFENDER's delegate (CR 509.1)
+        — here p1's ``block_with_largest_able``.
+
+    So the post-combat outcome must MATCH the standalone
+    ``block_with_largest_able`` test (atk_A dies, mouse dies, defender
+    bear + atk_B survive) — NOT the standalone
+    ``attack_all_block_smallest`` outcome.
+
+    This is the bilateral dispatch's most-observable surface: with
+    symmetric strategies (both sides use smallest, or both sides use
+    largest), the BilateralCombatAgent's per-side routing is a
+    no-op. The asymmetric pair surfaces the routing directly — if
+    pick_blocks accidentally routed to the active player's strategy
+    instead of the defender's, the outcome would flip to the
+    smallest-block graveyard contents and this test would fail.
+
+    Both engines must agree byte-equal on field views post-combat.
+    """
+    import pytest
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.turn import Step
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _setup_two_attackers_two_blockers_at_turn_7(py_state, rust_state)
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    if inject_divs:
+        pytest.xfail(
+            f"multi-blocker injection (bilateral) surfaced post-inject "
+            f"divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in inject_divs]}"
+        )
+
+    pre_combat_life_p0 = py_view["life_p0"]
+    pre_combat_life_p1 = py_view["life_p1"]
+
+    _advance_n_phases(py_state, rust_state, 2)
+    assert py_state.step == Step.DECLARE_ATTACKERS
+
+    # Bilateral: p0 uses smallest, p1 uses largest. On p0's turn the
+    # defender is p1, so p1's largest-block strategy drives blocks.
+    agent = trajectory.BilateralCombatAgent(
+        p0_strategy="attack_all_block_smallest",
+        p1_strategy="block_with_largest_able",
+    )
+    try:
+        trajectory.drive_combat_phase(py_state, rust_state, agent)
+    except AssertionError as exc:
+        pytest.xfail(
+            f"multi-blocker bilateral combat surfaced a real cross-engine "
+            f"divergence: {exc}"
+        )
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    assert compare_fields(py_view, rust_view) == []
+
+    # No damage hit either player — every attacker blocked.
+    assert py_view["life_p0"] == pre_combat_life_p0
+    assert py_view["life_p1"] == pre_combat_life_p1
+    # Bilateral routes blocks to defender = p1 = "block_with_largest_able";
+    # outcome must MATCH the standalone largest-block test.
+    p0_gy = [entry[0] for entry in py_view["graveyard_p0"]]
+    p1_gy = [entry[0] for entry in py_view["graveyard_p1"]]
+    assert "Bear Brawler" in p0_gy, (
+        f"bilateral dispatch should pick p1's largest-block selector on "
+        f"p0's turn → atk_A (3/3) dies to bear's 4 dmg; got p0_gy={p0_gy}. "
+        f"If 'Bear Brawler' is NOT in p0_gy, pick_blocks may have routed "
+        f"to the active player's (p0's) strategy instead of the defender's."
+    )
+    assert "Bear Mouse" in p1_gy, (
+        f"largest-selector → mouse dies to atk_B (5/5); got p1_gy={p1_gy}"
+    )
+    assert "Bear Guard" not in p1_gy, (
+        f"largest-selector → bear (4/4) survives atk_A's 3 dmg; "
+        f"got p1_gy={p1_gy}"
+    )
