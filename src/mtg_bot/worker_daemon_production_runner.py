@@ -103,11 +103,22 @@ def _build_nn_pimc_config(weights_path: Path, metadata: dict[str, Any]):
     from mtg_bot.training import NNPimcConfig
 
     training = metadata.get("training") or {}
-    hs = training.get("hidden_sizes")
-    phs = training.get("policy_hidden_sizes")
-    architecture = training.get("architecture")
+    # Schema reminder: `architecture`, `hidden_sizes`,
+    # `policy_hidden_sizes`, `with_policy`, and `action_encoding_version`
+    # are at the TOP LEVEL of metadata.json (where every registered
+    # version v5+ writes them). Fall back to `training.*` for forward-
+    # compat with any future trainer that nests them.
+    hs = metadata.get("hidden_sizes") or training.get("hidden_sizes")
+    phs = metadata.get("policy_hidden_sizes") or training.get(
+        "policy_hidden_sizes"
+    )
+    architecture = (
+        metadata.get("architecture") or training.get("architecture")
+    )
     action_encoding_version = metadata.get("action_encoding_version")
-    with_policy = bool(training.get("with_policy", True))
+    with_policy = bool(
+        metadata.get("with_policy", training.get("with_policy", True))
+    )
 
     return NNPimcConfig(
         weights_path=str(weights_path),
