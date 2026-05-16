@@ -53093,6 +53093,234 @@ def test_cross_engine_synthetic_etb_equip_to_target_creature_you_control_cross_c
     assert rust_p1_bear_entry["controller_id"] == 1
 
 
+# ---------------------------------------------------------------------
+# Round-53 §2 fix — round-31 Effect::DoubleTargetCreaturesPowerUEOT
+# (Mightform Harmonizer landfall effect-half) counter-inclusive
+# effective-power regression pins. The arm shipped round 31; round 53
+# fixed its +1/+1-counter silent mistranslation (was base power, now
+# effective power, matching Python's source-of-truth snapshot).
+# ---------------------------------------------------------------------
+
+def _build_rust_mightform31_state(own_power=3, own_toughness=3):
+    """Own creature on p0 (injected FIRST so it's the deterministic
+    first-creature target) + a carrier whose ETB fires the round-31
+    ``double_target_creatures_power_ueot`` effect.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    own_id = rust_state.register_and_inject_object(
+        {
+            "name": "Own Bear",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "power": own_power, "toughness": own_toughness,
+            "effects": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    src_id = rust_state.register_and_inject_object(
+        {
+            "name": "Mightform Harmonizer (carrier)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 2},
+            "power": 4, "toughness": 4, "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "double_target_creatures_power_ueot",
+                    },
+                }
+            ],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    return rust_state, src_id, own_id
+
+
+def test_rust_mightform31_doubles_first_own_creature_power():
+    """Baseline (counter-free) — unchanged by the round-53 fix. Own
+    Bear 3/3 -> 6/3 (power doubled UEOT; toughness unchanged). Carrier
+    untouched (entered after Own Bear).
+    """
+    rust_state, src, own = _build_rust_mightform31_state(3, 3)
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.effective_power(own) == 6
+    assert rust_state.effective_toughness(own) == 3
+    assert rust_state.effective_power(src) == 4
+
+
+def test_rust_mightform31_zero_power_silent_no_op():
+    """P <= 0 silent no-op (unchanged by the fix). A 0/4 creature is
+    not pumped.
+    """
+    rust_state, src, own = _build_rust_mightform31_state(0, 4)
+    rust_state.resolve_top_of_stack()
+    assert rust_state.effective_power(own) == 0
+    assert rust_state.effective_toughness(own) == 4
+
+
+def test_rust_mightform31_higher_power_scales():
+    """Doubling scales with the snapshot. A 7/2 -> +7/+0 -> 14/2."""
+    rust_state, src, own = _build_rust_mightform31_state(7, 2)
+    rust_state.resolve_top_of_stack()
+    assert rust_state.effective_power(own) == 14
+    assert rust_state.effective_toughness(own) == 2
+
+
+def test_rust_mightform31_cross_controller_reads_source_controller():
+    """Cross-controller: carrier controlled by p1; the doubling picks
+    a creature on p1's bf, not p0's. p0 9/9 decoy untouched; p1 3/3 ->
+    6/3.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    p0_decoy = rust_state.register_and_inject_object(
+        {
+            "name": "p0 Decoy (9/9)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 8}, "power": 9, "toughness": 9,
+            "effects": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    p1_own = rust_state.register_and_inject_object(
+        {
+            "name": "p1 Own (3/3)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 1},
+            "power": 3, "toughness": 3, "effects": [],
+        },
+        1, ZONE_BATTLEFIELD,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "Mightform Harmonizer (carrier)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 2},
+            "power": 4, "toughness": 4, "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "double_target_creatures_power_ueot",
+                    },
+                }
+            ],
+        },
+        1, ZONE_BATTLEFIELD,
+    )
+    rust_state.resolve_top_of_stack()
+    assert rust_state.effective_power(p1_own) == 6
+    assert rust_state.effective_toughness(p1_own) == 3
+    assert rust_state.effective_power(p0_decoy) == 9  # NOT doubled
+
+
+def test_rust_mightform31_doubles_effective_power_including_plus_one_counters():
+    """**§2 REGRESSION PIN — round-53 fix. "double reads EFFECTIVE
+    power (post-counters), not base power".**
+
+    The round-31 arm shipped reading via the counter-OMITTING
+    ``read_battlefield_creature_power``. Python's source-of-truth
+    ``DoubleTargetCreaturesPowerUEOT.resolve`` (pump.py:234) snapshots
+    ``effective_power`` = ``_compute_effective_pt`` which folds in
+    +1/+1 counters (game.py:2251). On a 3/3 with +2/+2 counters the
+    pre-fix Rust arm doubled 3 (base) while Python doubled 5
+    (effective) — a real §2 silent mistranslation, real-card-exposed
+    (Mightform Harmonizer; ~5,759 17lands decks) but latent because
+    the round-31/36 genuine probe staged a counter-free creature.
+
+    The round-53 fix repointed the arm to ``read_doubling_power``
+    (base + ueot_power_bonus + obj.counters). This pin asserts the
+    doubling DELTA = ``effective_power_after - effective_power_before``
+    is 5 (effective power 3+2), NOT 3 (base). A delta of 3 means the
+    fix regressed back to base-power.
+
+    (Rust's public ``effective_power`` getter has a SEPARATE,
+    pre-existing, separately-documented combat-side asymmetry — it
+    omits ``obj.counters`` from the displayed value — so the absolute
+    numbers are 3-before / 8-after on Rust vs 5-before / 10-after on
+    Python. That is NOT the doubling mistranslation; the DELTA is +5
+    on both, which is the §2 guarantee. Documented in
+    docs/SEARCH_LIMITATIONS.md.)
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    own = rust_state.register_and_inject_object(
+        {
+            "name": "Counter Bear (3/3)", "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 1},
+            "power": 3, "toughness": 3, "effects": [],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    rust_state.register_and_inject_object(
+        {
+            "name": "Counter Granter",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1}, "power": 1, "toughness": 1,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": (
+                            "put_plus_one_counter_on_each_"
+                            "creature_you_control"
+                        ),
+                        "amount": 2,
+                    },
+                }
+            ],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    rust_state.resolve_top_of_stack()  # apply +2/+2 counters
+    snap = {
+        int(e["id"]): e for e in rust_state.battlefield_snapshot()
+    }
+    assert snap[own]["counters"] == 2
+    power_before = rust_state.effective_power(own)
+    rust_state.register_and_inject_object(
+        {
+            "name": "Mightform Harmonizer (carrier)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "G": 2},
+            "power": 4, "toughness": 4, "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "double_target_creatures_power_ueot",
+                    },
+                }
+            ],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    rust_state.resolve_top_of_stack()
+    power_after = rust_state.effective_power(own)
+    doubling_delta = power_after - power_before
+    assert doubling_delta == 5, (
+        f"round-53 §2 fix regressed: Mightform doubling must read "
+        f"EFFECTIVE power (3 base + 2 counters = 5), not base power "
+        f"(3). Got delta={doubling_delta} (before={power_before}, "
+        f"after={power_after})."
+    )
+
+
 def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity(
     parity_smoke,
 ):
