@@ -267,6 +267,32 @@ pub(crate) fn auto_resolve_pending(
                         source_obj_id,
                         controller,
                     )?;
+                    // Round-37 sister-composer ordering fix
+                    // (mirrors round-36 Effect::Sequence drain at
+                    // state_ops_resolve.rs:5151). If do_action itself
+                    // pushes a PendingDecision (e.g. the first-slice
+                    // shape IfYouDo(MayDo(X), Y) — MayDo's resolve
+                    // arm queues a MayDoChoice and short-circuits),
+                    // then_action would otherwise run BEFORE X has
+                    // actually applied: the queued MayDoChoice would
+                    // sit on the queue while DrawCards / GainLife /
+                    // etc. fired, then drain late and observe state
+                    // already mutated by then_action. Python's
+                    // no-agent IfYouDo.resolve runs do_action.resolve()
+                    // synchronously (the no-agent shortcut inside the
+                    // child applies X inline), so then_action.resolve()
+                    // sees a fully-applied do_action. Drain inside the
+                    // arm to restore that ordering. Strategy
+                    // "keep_all_on_top" matches the round-36 Sequence
+                    // fix — equivalent to "default" for every current
+                    // decision variant: Surveil routes to keep_all_on_top
+                    // (line 177), MayDo says yes (line 192-195),
+                    // ChooseMode picks modes[0] (line 226), nested
+                    // IfYouDo applies both (line 257), etc. See
+                    // docs/SEARCH_LIMITATIONS.md "Sequence(Surveil,
+                    // DrawCards) PendingDecision-vs-inline ordering"
+                    // follow-up note.
+                    auto_resolve_pending(state, "keep_all_on_top")?;
                     crate::state_ops_resolve::apply_effect_pub_with_controller(
                         state,
                         &then_action,

@@ -2144,15 +2144,27 @@ continuity.
 — flipped from xfail to direct cross-engine equality assertion in
 the round-36 fix commit.
 
-**Follow-up (sister composers, not yet exercised)**: the same
-"drain pending after each child" treatment may be needed for sister
-composers that recursively dispatch leaf effects and could observe
-post-pop state mid-flight — namely `ChooseOneMode`, `ChooseModes`,
-`IfYouDo`, `MayDo`, and `OptionalManaCost` when their selected /
-yes branch contains a PendingDecision-emitting leaf followed by a
-zone-reading leaf. Today no EoE printing exercises any of these
-shapes. Land the analogous in-loop drain when the first cross-engine
-divergence surfaces; the round-36 Sequence fix is the template.
+**Follow-up (sister composers)** — round-37 status:
+
+- **`IfYouDoChoice` — RESOLVED.** Same "drain pending between
+  child resolutions" treatment landed in
+  `rust/src/state_ops_decisions.rs` (the IfYouDoChoice arm —
+  `auto_resolve_pending(state, "keep_all_on_top")` between
+  `do_action` and `then_action`). Round-37 commit on
+  `feature/rust-fix-ifyoudo-pending-decision-ordering`.
+  Preventative — no real-EoE printing exercises the
+  IfYouDo(MayDo(pending-emitting-leaf), zone-reading-leaf) shape
+  today, but the fix removes the latent gap so future probes and
+  any future printing in that shape can't re-surface it.
+- **`MayDoChoice` / `ChooseModeChoice` / `OptionalManaCostChoice`
+  — NO FIX NEEDED.** Each applies a SINGLE inner effect in its
+  resolution arm, so there is no intra-resolve ordering window to
+  mis-order — the outer `auto_resolve_pending` drain loop handles
+  the tail correctly.
+- **`ChooseModes`** — does not exist as an Effect arm in Rust today
+  (only the single-mode `ChooseOneMode` is wired). When a multi-mode
+  variant lands, apply the same drain-between-children treatment if
+  it sequentially applies more than one mode's effect.
 
 ---
 
