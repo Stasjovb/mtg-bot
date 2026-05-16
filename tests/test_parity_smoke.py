@@ -60600,18 +60600,21 @@ def test_cross_engine_real_eoe_pulsar_squadron_ace_etb_reveal_real_spacecraft_ca
     parity_smoke,
 ):
     """**GENUINE real-EoE cross-engine probe — Pulsar Squadron Ace
-    REVEAL path on a REAL Spacecraft card. PINS a genuine, previously-
-    unprobed Rust-vs-Python divergence (round-55 high-value find).**
+    REVEAL path on a REAL Spacecraft card. FLIPPED round-56 from a
+    divergence-pin to a byte-equal cross-engine PARITY assertion (the
+    round-55 N3 high-value find is now FIXED).**
 
-    This is the FIRST genuine real-EoE cross-engine probe ever run on
-    Pulsar Squadron Ace's *reveal* arm. Every prior "closure" of the
+    This is the genuine real-EoE cross-engine probe on Pulsar Squadron
+    Ace's *reveal* arm. Every prior "closure" of the
     ``LookAtTopNRevealOrCounter`` family used a SYNTHETIC Spacecraft
-    carrier typed ``card_types=["Spacecraft"]`` — which happens to
-    satisfy the stale Rust filter but does NOT match how real EoE
-    Spacecraft cards are typed. Driving the ACTUAL parsed printing
-    against a real-shaped Spacecraft surfaces the divergence.
+    carrier typed ``card_types=["Spacecraft"]`` — which happened to
+    satisfy the (then-stale) Rust filter but did NOT match how real
+    EoE Spacecraft cards are typed. Driving the ACTUAL parsed printing
+    against a real-shaped Spacecraft (``Artifact — Spacecraft``:
+    ``card_types=("Artifact",)``, ``subtypes=("Spacecraft",)``)
+    surfaced the divergence in round 55; round 56 fixed it.
 
-    **The divergence (Rust arm bug — round-56 Rust-lane fix).**
+    **The bug (round-55 N3 find) and the round-56 fix.**
 
     Pulsar's oracle: "look at the top five cards … you may reveal a
     **Spacecraft card** from among them and put it into your hand …".
@@ -60621,7 +60624,7 @@ def test_cross_engine_real_eoe_pulsar_squadron_ace_etb_reveal_real_spacecraft_ca
     ("Spacecraft",)`` (Spacecraft is an artifact SUBTYPE, not a card
     type — verified against ``data/edge_of_eternities.json``).
 
-    * **Python (source of truth) — CORRECT.**
+    * **Python (source of truth) — was always CORRECT.**
       ``LookAtTopNRevealOrCounter._matches``
       (effects/generic/library_lookat.py:62-65) → ``printing.is_
       spacecraft`` → ``"Spacecraft" in printing.subtypes`` → **True**
@@ -60629,71 +60632,67 @@ def test_cross_engine_real_eoe_pulsar_squadron_ace_etb_reveal_real_spacecraft_ca
       card WAS put into hand, the ``counter_on_miss`` rider does NOT
       fire.
 
-    * **Rust — WRONG.** ``card_matches_filter``
-      (state_ops_decisions.rs:663-698), for ``filter_name ==
-      "spacecraft"``, checks ``printing.card_types.iter().any(|t| t
-      == "Spacecraft")``. A real Spacecraft has
-      ``card_types == ["Artifact"]`` → **no match**. The auto-resolve
-      ``"reveal_yes"`` strategy finds no filter-matching examined
-      card → falls through to the no-reveal branch → the Spacecraft
-      stays in the library AND a +1/+1 counter is wrongly placed on
-      Pulsar. An explicit ``submit_look_at_top_n_decision(True,
-      <spacecraft id>)`` is rejected transactionally with
-      ``ValueError: chosen card … does not match filter "spacecraft"``.
+    * **Rust — was WRONG (round-55), now FIXED (round-56).**
+      ``card_matches_filter`` (state_ops_decisions.rs), for
+      ``filter_name == "spacecraft"``, USED to check
+      ``printing.card_types.iter().any(|t| t == "Spacecraft")``. A
+      real Spacecraft has ``card_types == ["Artifact"]`` → no match →
+      the auto-resolve ``"reveal_yes"`` strategy fell through to the
+      no-reveal branch (Spacecraft stayed in the library + a wrong
+      +1/+1 counter on Pulsar). Round-56 swapped the predicate to
+      ``printing.subtypes.iter().any(|s| s == "Spacecraft")`` —
+      mirroring Python's ``is_spacecraft`` and the existing
+      ``or_spacecraft`` filter family (cards.rs:2014-2027). The
+      ``card_matches_filter`` arm is the ONLY consumer (private
+      helper, two call sites both inside the
+      ``LookAtTopNRevealOrCounter`` submit / auto-resolve path); no
+      other code path depended on the buggy ``card_types`` behavior
+      (§2 verified — the independent ``or_spacecraft`` family already
+      read ``subtypes`` correctly).
 
-    The Rust ``card_matches_filter`` docstring
-    (state_ops_decisions.rs:651-662) even self-documents the
-    ``card_types`` check as a first-slice approximation ("Rust
-    printings don't yet track subtypes") — that premise is now
-    **stale**: ``CardPrinting.subtypes`` exists on the Rust side and
-    the campaign's own ``or_spacecraft`` filter family already reads
-    ``printing.subtypes.iter().any(|s| s == "Spacecraft")`` correctly
-    (cards.rs:2014-2027). ``card_matches_filter``'s ``"spacecraft"``
-    arm is simply stale and out of step with the established
-    convention.
+    **Round-56 fix** (N1 / sole-Rust agent): one-line predicate swap
+    inside the existing private ``card_matches_filter`` helper
+    (rust/src/state_ops_decisions.rs ``"spacecraft"`` arm):
+    ``card_types`` → ``subtypes``. No new Effect / variant /
+    PendingDecision needed (the bridge arm, the Python class, and the
+    Effect/PendingDecision substrate were all already correct).
 
-    **Round-56 Rust-lane fix recommendation** (N2 / sole-Rust agent;
-    NO Rust changes in this round-55 Python/docs slice): change the
-    ``"spacecraft"`` arm of ``card_matches_filter``
-    (rust/src/state_ops_decisions.rs:674-680) from
-    ``printing.card_types.iter().any(|t| t == "Spacecraft")`` to
-    ``printing.subtypes.iter().any(|s| s == "Spacecraft")`` —
-    matching Python's ``is_spacecraft`` and the existing
-    ``or_spacecraft`` filter family. No new Effect / variant /
-    PendingDecision is needed; it is a one-line predicate swap inside
-    an existing private helper, regression-pinned by flipping THIS
-    probe to a byte-equal parity assertion once the fix lands. (The
-    bridge arm, the Python class, and the Effect/PendingDecision
-    substrate are all already correct — this is purely the Rust
-    filter helper.)
+    **Probe discipline (§2 — FLIPPED to a parity assertion).** Round
+    55 landed this as a divergence-pin (per-engine expected-divergent
+    assertions, no cross-engine equivalence — GREEN while the bug was
+    live, structured to flip on fix). Round 56 lands the fix and
+    flips it: both engines now reveal the real Spacecraft to hand,
+    leave the library empty, and place ZERO counters on Pulsar — a
+    full byte-equal cross-engine parity assertion (the established
+    Monoist/Extinguisher/Mightform/Famished genuine-probe pattern).
 
-    **Probe discipline (§2 — divergence-pin, NOT a weakened parity
-    probe).** Per the file's established divergence-pin convention
-    (``test_cross_engine_real_eoe_pinnacle_kill_ship_etb_damage_
-    optional_empty_bf_divergence_pin``): this probe asserts the
-    EXPECTED-DIVERGENT behavior on each engine separately, so it is
-    GREEN today and would flag the moment EITHER engine's behavior
-    changes. There is intentionally NO cross-engine equivalence
-    assertion — the per-engine pair IS the documentation of the gap.
-    When the round-56 Rust fix lands, this probe should be FLIPPED to
-    a cross-engine parity assertion (both engines: Spacecraft to
-    hand; library empty; Pulsar carries ZERO counters).
+    **Round-56 driver note.** The Rust side now drains the stack via
+    ``resolve_top_of_stack_pause`` (not ``resolve_top_of_stack``).
+    The non-pause variant auto-resolves any decision the trigger
+    queued *inline* with the ``"keep_all_on_top"`` strategy
+    (state_ops_resolve.rs ETB-trigger branch) — which is NOT
+    ``"reveal_yes"``, so a Pulsar reveal choice pushed by an
+    ETB-trigger would ALWAYS take the no-reveal arm there regardless
+    of the filter. That inline auto-drain is precisely why the
+    round-55 divergence-pin could only ever observe Rust's no-reveal
+    behavior (its Rust assertions were no-reveal-shaped). With
+    ``_pause`` the ``LookAtTopNRevealOrCounterChoice`` survives onto
+    the queue and the explicit ``auto_resolve_pending_decisions(
+    "reveal_yes")`` drives the genuine reveal path — the path the
+    round-56 ``card_types`` → ``subtypes`` fix actually repairs.
 
     Scenario is deterministic with NO rng: p0 library = exactly ONE
-    real-shaped Spacecraft. On the Python (correct) side the lone
-    card is revealed to hand → ``remaining_examined`` is empty → the
-    ``state.rng.shuffle([])`` bottom-the-rest is a no-op. On the Rust
-    (buggy) side the lone card is bottomed → deterministic 1-element
-    bottom, also no rng. So the divergence is purely on
-    {hand vs library placement of the Spacecraft, Pulsar's counter
-    count} — fully reproducible.
+    real-shaped Spacecraft. The lone card is revealed to hand on BOTH
+    engines → ``remaining_examined`` is empty → the bottom-the-rest
+    rider is a no-op (empty list). So the post-drain state is fully
+    reproducible and identical cross-engine.
 
-    Engine-specific expected post-drain state:
+    Post-drain byte-equal state (BOTH engines):
 
-    * **Python (CORRECT):** Spacecraft in p0 HAND; p0 library EMPTY;
-      Pulsar carries 0 +1/+1 counters.
-    * **Rust (BUGGY, pending round-56 fix):** Spacecraft still in p0
-      LIBRARY; p0 hand EMPTY; Pulsar carries 1 +1/+1 counter.
+    * Spacecraft in p0 HAND; p0 library EMPTY;
+    * Pulsar carries 0 +1/+1 counters (a card WAS put into hand → the
+      ``counter_on_miss`` rider does NOT fire);
+    * both lives unchanged at 20.
     """
     from mtg_bot.parity.cross_engine import (
         DeckSpec, build_python_state, build_rust_state, CardDef, _FOREST,
@@ -60798,13 +60797,21 @@ def test_cross_engine_real_eoe_pulsar_squadron_ace_etb_reveal_real_spacecraft_ca
     _trigger_etb_abilities(py_state, py_src)
     assert len(py_state.stack) == 1
 
-    # ---- Drain both stacks. Rust: resolve the trigger, then drive
-    # the LookAtTopNRevealOrCounterChoice with "reveal_yes" (which on
-    # a correctly-recognized Spacecraft WOULD reveal it — but the
-    # stale card_types filter rejects the real Spacecraft, so this
-    # falls through to the no-reveal branch).
+    # ---- Drain both stacks. Rust: resolve the trigger via the
+    # ``_pause`` variant so the LookAtTopNRevealOrCounterChoice is
+    # LEFT on the pending-decision queue (the non-pause
+    # ``resolve_top_of_stack`` auto-drains queued decisions inline
+    # with the ``"keep_all_on_top"`` strategy — which is NOT
+    # ``"reveal_yes"`` so the reveal would never be attempted; that
+    # inline auto-drain is exactly why the round-55 divergence-pin
+    # could only ever observe Rust's no-reveal arm). With ``_pause``
+    # the decision survives, and ``auto_resolve_pending_decisions(
+    # "reveal_yes")`` drives the real reveal path — which, with the
+    # round-56 card_matches_filter ``subtypes`` fix, now correctly
+    # recognizes the real ``Artifact — Spacecraft`` card and reveals
+    # it to hand (byte-equal with Python's source-of-truth reveal).
     while rust_state.stack_size() > 0:
-        rust_state.resolve_top_of_stack()
+        rust_state.resolve_top_of_stack_pause()
     rust_state.auto_resolve_pending_decisions("reveal_yes")
     while py_state.stack:
         resolve_top_of_stack(py_state)
@@ -60812,8 +60819,9 @@ def test_cross_engine_real_eoe_pulsar_squadron_ace_etb_reveal_real_spacecraft_ca
     assert len(py_state.stack) == 0
     assert rust_state.has_pending_decision() is False
 
-    # ---- PER-ENGINE expected-divergent assertions (NO cross-engine
-    # equivalence assertion — this probe DOCUMENTS the gap).
+    # ---- CROSS-ENGINE BYTE-EQUAL PARITY assertions (round-56 fix
+    # landed — this probe is FLIPPED from a divergence-pin to a parity
+    # assertion). Both engines now reveal the real Spacecraft to hand.
     py_hand = [o.printing.name for o in py_state.players[0].hand]
     py_lib = [o.printing.name for o in py_state.players[0].library]
     rust_hand = [
@@ -60829,49 +60837,45 @@ def test_cross_engine_real_eoe_pulsar_squadron_ace_etb_reveal_real_spacecraft_ca
     ]
     assert len(rust_pulsars) == 1
 
-    # Python (CORRECT): real Spacecraft revealed to hand; library
-    # empty; NO counter-on-miss (a card WAS put into hand).
+    # The real Spacecraft is revealed to HAND on BOTH engines (Rust's
+    # card_matches_filter now reads `subtypes`, matching Python's
+    # is_spacecraft). Library empties; counter_on_miss does NOT fire
+    # because a card WAS put into hand.
     assert py_hand == ["Test Spacecraft"], (
         f"Python (source of truth) should reveal the real Spacecraft "
         f"to hand; got hand={py_hand}, lib={py_lib}"
     )
+    assert rust_hand == ["Test Spacecraft"], (
+        f"Rust should now reveal the real Spacecraft to hand "
+        f"(card_matches_filter fixed to read subtypes); got "
+        f"hand={rust_hand}, lib={rust_lib}"
+    )
+    assert rust_hand == py_hand
+
     assert py_lib == [], (
         f"Python p0 library should be empty after revealing the lone "
         f"Spacecraft; got {py_lib}"
     )
+    assert rust_lib == [], (
+        f"Rust p0 library should be empty after revealing the lone "
+        f"Spacecraft; got {rust_lib}"
+    )
+    assert rust_lib == py_lib
+
     assert py_src.plus_one_counters == 0, (
         f"Python: NO +1/+1 counter — a card WAS put into hand so the "
         f"counter_on_miss rider must not fire; got "
         f"{py_src.plus_one_counters}"
     )
-
-    # Rust (BUGGY — round-56 fix target): the real Spacecraft is NOT
-    # recognized by card_matches_filter's stale card_types check, so
-    # reveal_yes finds nothing → no-reveal branch → Spacecraft stays
-    # in the library AND a +1/+1 counter is wrongly added to Pulsar.
-    assert rust_hand == [], (
-        f"Rust (buggy): hand should be EMPTY — the stale card_types "
-        f"filter rejected the real Spacecraft so no reveal happened; "
-        f"got {rust_hand}. If this assertion fails the round-56 Rust "
-        f"fix has landed — FLIP this probe to a cross-engine parity "
-        f"assertion (see docstring + SEARCH_LIMITATIONS round-55)."
+    assert rust_pulsars[0]["counters"] == 0, (
+        f"Rust: NO +1/+1 counter — a card WAS put into hand so the "
+        f"counter_on_miss rider must not fire; got "
+        f"{rust_pulsars[0]['counters']}"
     )
-    assert rust_lib == ["Test Spacecraft"], (
-        f"Rust (buggy): the unrecognized Spacecraft should remain in "
-        f"the library (bottomed); got {rust_lib}. If this fails the "
-        f"round-56 Rust fix has landed — flip this probe to parity."
-    )
-    assert rust_pulsars[0]["counters"] == 1, (
-        f"Rust (buggy): a +1/+1 counter is WRONGLY placed on Pulsar "
-        f"(no reveal happened on the Rust side because the filter "
-        f"rejected the real Spacecraft); got "
-        f"{rust_pulsars[0]['counters']}. If this fails the round-56 "
-        f"Rust fix has landed — flip this probe to parity."
-    )
+    assert rust_pulsars[0]["counters"] == py_src.plus_one_counters
 
     # Lives are unchanged on BOTH engines (this effect never touches
-    # life) — the one cross-engine equivalence that DOES hold and is
-    # safe to assert.
+    # life).
     assert rust_state.get_life(0) == py_state.players[0].life == 20
     assert rust_state.get_life(1) == py_state.players[1].life == 20
 # ---------------------------------------------------------------------------

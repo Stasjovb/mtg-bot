@@ -9773,6 +9773,65 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[opponent_idx].graveyard).push(obj);
             }
         }
+        Effect::ExileEachOpponentsGraveyard => {
+            // Structural twin of EachOpponentMillsCards: same
+            // source-controller finder (battlefield/hand/library/
+            // graveyard/exile sweep, then stack fallback), then a
+            // per-opponent loop. Mirrors Python's
+            // `ExileEachOpponentsGraveyard.resolve` (exile.py:260):
+            // every card in each opponent's graveyard moves to that
+            // player's OWN exile zone (CR 406 — exile is a public
+            // zone; the card stays owned by its owner; 400.7
+            // zone-change reset). 2-player simplification:
+            // opponent_idx = 1 - controller.
+            let mut source_controller: Option<u8> = None;
+            'outer_eeg: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_eeg;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            let opponent_idx = (1 - controller) as usize;
+            // Drain the opponent's whole graveyard into their own
+            // exile zone. `mem::take` mirrors Python's
+            // `list(p.graveyard)` snapshot-then-clear (the per-card
+            // remove/append loop in Python is observationally
+            // identical to a bulk move — both empty the graveyard and
+            // append in graveyard order to exile).
+            let drained: Vec<GameObject> = std::mem::take(
+                Arc::make_mut(&mut state.players[opponent_idx].graveyard),
+            );
+            if !drained.is_empty() {
+                let exile_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[opponent_idx].exile);
+                for mut obj in drained {
+                    obj.zone = ZONE_EXILE;
+                    exile_mut.push(obj);
+                }
+            }
+        }
         // Round-29 intervening-if keyed on EoE "Void" condition.
         // Mirrors Python's `ConditionalIfVoid.resolve` (combinators.py:
         // 1446): read `is_void_active(state)`; if true, apply

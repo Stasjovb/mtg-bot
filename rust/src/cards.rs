@@ -2815,6 +2815,31 @@ pub enum Effect {
     /// **Negative `count` raises.** `count=0` is a legal no-op.
     /// Missing `count` defaults to 1 (Python parity).
     EachOpponentMillsCards { count: i32 },
+    /// Move every card in each opponent's graveyard to that player's
+    /// exile zone (untargeted graveyard wipe). Mirrors Python's
+    /// `ExileEachOpponentsGraveyard`
+    /// (`effects/generic/exile.py:260`) — the ETB-compound first half
+    /// of Dauntless Scrapbot ("When this creature enters, exile each
+    /// opponent's graveyard. Create a Lander token."). Structural twin
+    /// of `EachOpponentMillsCards` (same source-controller finder +
+    /// per-opponent loop), differing only in the inner op:
+    /// graveyard → exile (the opponent's own exile zone, CR 406 /
+    /// 400.7 zone-change reset) instead of library → graveyard.
+    ///
+    /// **Two-player simplification.** opponent_id = 1 - controller.
+    /// Python iterates `state.players` skipping the controller AND
+    /// any `has_lost` player; the Rust 2-player mirror exiles the
+    /// single opponent's whole graveyard. (`has_lost` parity: in the
+    /// 2-player engine a lost player ends the game, so the gate is a
+    /// no-op in practice; the loop short-circuits an empty graveyard
+    /// silently either way.)
+    ///
+    /// **Source not found = silent fizzle** (lost-track-of-source
+    /// tolerance, mirrors `EachOpponentMillsCards` /
+    /// `EachOpponentDiscards`).
+    ///
+    /// Unit variant — no parameters (Python class is field-free).
+    ExileEachOpponentsGraveyard,
     /// **Round 28 UEOT coverage extension (broader pump filter).**
     /// Target artifact OR creature gets `+power/+toughness` until end
     /// of turn. Mirrors Python's
@@ -5626,6 +5651,11 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::EachOpponentMillsCards { count })
         }
+        "exile_each_opponents_graveyard" => {
+            // Python's `ExileEachOpponentsGraveyard` dataclass —
+            // field-free unit effect (exile.py:260). No keys to read.
+            Ok(Effect::ExileEachOpponentsGraveyard)
+        }
         "if_you_do" => {
             // Round-28 IfYouDo first-slice: do_action implicitly
             // success-on-yes (i.e. IfYouDo(MayDo(X), Y) form). Both
@@ -6121,7 +6151,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard"
         ))),
     }
 }
@@ -7488,6 +7518,9 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::EachOpponentMillsCards { count } => {
             d.set_item("kind", "each_opponent_mills_cards")?;
             d.set_item("count", *count)?;
+        }
+        Effect::ExileEachOpponentsGraveyard => {
+            d.set_item("kind", "exile_each_opponents_graveyard")?;
         }
         Effect::PumpTargetArtifactOrCreatureUntilEOT { power_bonus, toughness_bonus } => {
             d.set_item("kind", "pump_target_artifact_or_creature_until_eot")?;

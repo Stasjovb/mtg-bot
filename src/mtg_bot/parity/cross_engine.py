@@ -7921,6 +7921,39 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             FamishedWorldsireETBEffect,
         )
         return FamishedWorldsireETBEffect()
+    if kind == "exile_each_opponents_graveyard":
+        # "Exile each opponent's graveyard." — untargeted, every card
+        # in each opponent's graveyard moves to that player's own
+        # exile zone. Structural twin of ``each_opponent_mills_cards``
+        # (untargeted, source-controller-of-effect resolution,
+        # per-opponent loop) — differs only in the inner op
+        # (graveyard→exile vs library→graveyard). Rust's
+        # ``Effect::ExileEachOpponentsGraveyard`` is a unit variant
+        # (field-free, matching the Python dataclass); the
+        # parse_effect arm reads no keys and the resolve arm runs the
+        # same source-controller finder + 2-player opponent loop as
+        # ``EachOpponentMillsCards``.
+        #
+        # **No field translation needed** — both sides are
+        # parameter-free.
+        #
+        # **EoE consumer note (substrate-side).** This is the ETB
+        # *compound first half* of Dauntless Scrapbot (~18,378
+        # 17lands decks): "When this creature enters, exile each
+        # opponent's graveyard. Create a Lander token." The Effect
+        # half closes byte-equal here; the FULL card stays
+        # loader-gated (the Lander token-registration / Sequence
+        # rider is not on the production-deck loader's ``_SAFE_*``
+        # allowlists) — see ``docs/SEARCH_LIMITATIONS.md`` round-56
+        # entry (mirrors the r51 Monoist / r52 Extinguisher / r53
+        # Mightform / r54 Famished Effect-half-closes-card-stays-
+        # gated precedent). The bare-arm end-to-end exercise is the
+        # genuine real-EoE probe in test_parity_smoke.py driving the
+        # actual Dauntless Scrapbot printing's ETB exile arm.
+        from mtg_bot.effects.generic.exile import (
+            ExileEachOpponentsGraveyard,
+        )
+        return ExileEachOpponentsGraveyard()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
