@@ -59498,6 +59498,263 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_with_c
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation():
+    """Phase 3a (round-53 N1) — the GENUINE real-EoE end-to-end probe
+    that drives the Lander **activation resolution** (the path the
+    round-52 N1 precursor's synthetic probe deliberately deferred).
+
+    **What it drives, on the REAL card, through the real loader.**
+    Galactic Wayfarer (33,469-deck Lander carrier) via
+    ``production_deck_to_deckspec`` -> ``setup_matched_game`` -> inject
+    on p0 bf BOTH engines -> ETB fires -> a ``Lander`` token spawns ->
+    seed ``{2}`` -> ``step_both(activate_ability)`` drives the Lander's
+    ``{2}, Sac: SearchLibraryForBasicLandTapped`` activation on BOTH
+    engines -> drain -> compare.
+
+    **Two contracts, both pinned:**
+
+    1. **Pre-activation byte-equal (the §2-safe admit contract — what
+       the bench actually relies on).** The carrier + the spawned
+       Lander token are ``compare_fields == []`` across engines. This
+       is the contract that makes admitting Galactic Wayfarer /
+       Beamsaw Prospector §2-safe under the bench's strategy set: the
+       bench drives the ETB (cast / enters) but NEVER sac-activates the
+       Lander (``scripts/bench_trajectory_parity.py`` only emits
+       ``activate_ability`` for tapping lands for mana). So the
+       token *entering* byte-equal is the load-bearing cross-engine
+       guarantee for the admit; this probe pins it explicitly.
+
+    2. **The Lander ACTIVATION has a documented residual cross-engine
+       gap — pinned as a KNOWN-GAP probe (round-39 latent-SBA
+       precedent).** The round-52 N1 precursor §7 claimed
+       ``SearchLibraryForBasicLandTapped`` is "FULLY DETERMINISTIC on
+       BOTH engines ... no library-search agent seating to verify."
+       That is **incorrect**: Rust's resolve arm
+       (``state_ops_resolve.rs`` — "G19 closure: CR 701.19/701.22 —
+       always shuffle the library after a search") post-search-shuffles
+       the library; Python's ``SearchLibraryForBasicLandTapped.resolve``
+       is the Stage-3 simplification that does NOT shuffle
+       (``SEARCH_LIMITATIONS.md`` #15 residual Python-side gap). So
+       AFTER the activation resolves the two engines' libraries hold
+       the SAME multiset of cards but in DIFFERENT order, and the
+       searched-land identity + the sacrificed-Lander token-SBA timing
+       diverge as downstream consequences. This probe drives the
+       activation and asserts EXACTLY that gap shape: the
+       game-relevant invariants that DO hold cross-engine
+       (library multiset equal, length equal, Lander sacrificed off
+       bf, a basic land searched onto bf) PLUS the precise documented
+       divergence set (``{library_p0, battlefield, graveyard_p0}``).
+       This keeps the gap VISIBLE and makes it auto-convert to a
+       clean byte-equal assertion the moment the Python-side
+       post-search shuffle is restored (the SEARCH_LIMITATIONS #15
+       tail). Per the brief's §2 discipline this slice ships ONLY the
+       bridge-correct subset (the admit) and does NOT force the
+       activation byte-equal coverage.
+    """
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view,
+        compare_fields,
+        parity_smoke as ce_parity_smoke,
+        clear_token_printings,
+        _card_def_to_python_printing,
+        step_both,
+    )
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import Zone, ManaCoin
+    from collections import Counter
+
+    clear_token_printings()
+    try:
+        pr = get_active_source().get_printings()
+        if pr.get("Galactic Wayfarer") is None:
+            pytest.skip("Galactic Wayfarer absent from active CardSource")
+        gw = pr.get("Galactic Wayfarer")
+
+        spec = trajectory.production_deck_to_deckspec(
+            ["Galactic Wayfarer"] * 6 + ["Forest"] * 54,
+            shared_rng_seed=7, pad_to_size=60, pad_with="Forest",
+        )
+        gw_cd = next(
+            c for c in spec.card_defs if c.name == "Galactic Wayfarer"
+        )
+        lander_pid = gw_cd.triggered_abilities[0]["effect"][
+            "token_printing_id"
+        ]
+        py_state, rust_state = trajectory.setup_matched_game(
+            spec, opening_hand_size=0
+        )
+
+        # --- Inject carrier on p0 bf BOTH engines; ETB → Lander spawn.
+        py_printing = _card_def_to_python_printing(gw_cd)
+        py_carrier = py_state.new_object(
+            py_printing, owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        py_carrier.summoning_sick = False
+        py_carrier.tapped = False
+        py_carrier.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(py_carrier)
+        dispatch_event(py_state, Event.ENTERS, obj=py_carrier)
+
+        ZONE_BATTLEFIELD = 2
+        rust_state.register_and_inject_object(
+            {
+                "name": "Galactic Wayfarer",
+                "card_types": ["Creature"],
+                "mana_cost": {
+                    "generic": gw.mana_cost.generic, "G": 1
+                },
+                "power": gw.power, "toughness": gw.toughness,
+                "effects": [],
+                "triggered_abilities": [
+                    {
+                        "event": "enters",
+                        "predicate": {"kind": "source_is_self"},
+                        "effect": {
+                            "kind": "create_token",
+                            "count": 1,
+                            "token_printing_id": lander_pid,
+                        },
+                    }
+                ],
+            },
+            0,
+            ZONE_BATTLEFIELD,
+        )
+        while rust_state.stack_size() > 0:
+            rust_state.resolve_top_of_stack()
+        while py_state.stack:
+            py_resolve(py_state)
+
+        # ---- CONTRACT 1: pre-activation byte-equal (admit contract).
+        py_view0 = build_python_field_view(py_state)
+        rust_view0 = ce_parity_smoke()._build_field_view(rust_state)
+        pre_divs = compare_fields(py_view0, rust_view0)
+        assert pre_divs == [], (
+            f"Phase 3a admit contract BROKEN — real Galactic Wayfarer "
+            f"ETB→Lander spawn must be byte-equal BEFORE any "
+            f"activation: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in pre_divs]}"
+        )
+        py_lander = next(
+            o for o in py_state.battlefield
+            if o.printing.name == "Lander"
+        )
+        lander_id = int(py_lander.id)
+        py_lib_before = len(py_state.players[0].library)
+        rust_lib_before = len(rust_view0["library_p0"])
+        assert py_lib_before == rust_lib_before
+
+        # ---- Drive the Lander activation: seed {2}, BOTH engines.
+        py_state.players[0].mana_pool.clear()
+        py_state.players[0].mana_pool.append(ManaCoin(color="C"))
+        py_state.players[0].mana_pool.append(ManaCoin(color="C"))
+        rust_state.empty_all_mana_pools()
+        rust_state.add_mana(0, "C", 2)
+        # Sanity: a basic land exists to be searched on both sides.
+        assert sum(
+            1 for c in py_state.players[0].library
+            if c.printing.is_basic_land
+        ) >= 1
+
+        step_both(
+            py_state, rust_state,
+            {
+                "kind": "activate_ability",
+                "source_id": lander_id,
+                "ability_index": 0,
+            },
+        )
+        while rust_state.stack_size() > 0:
+            rust_state.resolve_top_of_stack()
+        while py_state.stack:
+            py_resolve(py_state)
+
+        py_view = build_python_field_view(py_state)
+        rust_view = ce_parity_smoke()._build_field_view(rust_state)
+
+        # ---- CONTRACT 2a: the game-relevant activation invariants
+        # that DO hold cross-engine (the activation genuinely
+        # resolved: cost paid, Lander sacrificed, a basic land
+        # searched onto bf, library multiset preserved).
+        # Lander left the battlefield on BOTH engines (sac cost paid).
+        py_bf_names = [t[0] for t in py_view["battlefield"]]
+        rust_bf_names = [t[0] for t in rust_view["battlefield"]]
+        assert "Lander" not in py_bf_names, (
+            "Python: Lander must be sacrificed off bf by the "
+            "activation cost"
+        )
+        assert "Lander" not in rust_bf_names, (
+            "Rust: Lander must be sacrificed off bf by the "
+            "activation cost"
+        )
+        # A basic land was searched onto the battlefield on BOTH.
+        assert "Forest" in py_bf_names, (
+            "Python: SearchLibraryForBasicLandTapped must put a "
+            "Forest onto bf"
+        )
+        assert "Forest" in rust_bf_names, (
+            "Rust: SearchLibraryForBasicLandTapped must put a "
+            "Forest onto bf"
+        )
+        # Library shrank by exactly 1 (the searched land) on BOTH,
+        # and the SAME MULTISET of cards remains (only the ORDER
+        # differs — the documented gap).
+        assert len(py_view["library_p0"]) == py_lib_before - 1
+        assert len(rust_view["library_p0"]) == rust_lib_before - 1
+        py_lib_ms = Counter(t[0] for t in py_view["library_p0"])
+        rust_lib_ms = Counter(t[0] for t in rust_view["library_p0"])
+        assert py_lib_ms == rust_lib_ms, (
+            "library MULTISET must match cross-engine (the "
+            "SEARCH_LIMITATIONS #15 gap is ORDER-only, not "
+            "membership): "
+            f"py={py_lib_ms} rust={rust_lib_ms}"
+        )
+
+        # ---- CONTRACT 2b: the DOCUMENTED residual cross-engine gap.
+        # Rust post-search-shuffles the library (G19 closure),
+        # Python's Stage-3 simplification does NOT
+        # (SEARCH_LIMITATIONS.md #15 residual Python-side gap;
+        # TOKEN_PRINTING_SUBSTRATE.md §7). The library order therefore
+        # diverges, dragging the searched-land identity (battlefield)
+        # and the sacrificed-Lander token-SBA view (graveyard_p0) with
+        # it. We PIN this exact gap shape so it stays visible and
+        # auto-converts the moment the Python-side shuffle is
+        # restored.
+        py_lib_order = [t[0] for t in py_view["library_p0"]]
+        rust_lib_order = [t[0] for t in rust_view["library_p0"]]
+        assert py_lib_order != rust_lib_order, (
+            "EXPECTED known gap: the library ORDER must differ "
+            "cross-engine (Rust post-search-shuffles, Python does "
+            "not — SEARCH_LIMITATIONS #15). If this assertion ever "
+            "FAILS, the Python-side post-search shuffle has been "
+            "restored — convert CONTRACT 2 to a clean "
+            "`compare_fields == []` byte-equal assertion and close "
+            "the SEARCH_LIMITATIONS #15 residual + the "
+            "TOKEN_PRINTING_SUBSTRATE §7 gap note."
+        )
+        post_divs = compare_fields(py_view, rust_view)
+        diverged_fields = sorted(set(d.field for d in post_divs))
+        assert diverged_fields == [
+            "battlefield", "graveyard_p0", "library_p0"
+        ], (
+            "EXPECTED known-gap divergence set is exactly "
+            "{battlefield, graveyard_p0, library_p0} (all downstream "
+            "of the SEARCH_LIMITATIONS #15 post-search-shuffle gap). "
+            f"Got {diverged_fields}. A NEW field here is a real "
+            "regression — investigate before re-baselining."
+        )
+    finally:
+        clear_token_printings()
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
