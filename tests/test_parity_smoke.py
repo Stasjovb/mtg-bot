@@ -1642,6 +1642,60 @@ def test_cross_engine_resolve_top_of_stack_python_drains_stack(parity_smoke):
     assert py_state.stack == []
 
 
+def test_cross_engine_resolve_top_of_stack_python_respects_floor(parity_smoke):
+    """**Round-40 closure regression pin**: when ``floor`` is non-zero
+    the harness primitive drains only down to that depth, leaving the
+    pre-existing entries untouched.
+
+    Scenario the bench surfaced: after a landfall ``play_land`` action
+    pushed a triggered ability onto BOTH engines' stacks, the next
+    ``cast_spell`` in step_both must drain ONLY the new cast (and any
+    sub-triggers it pushes), not the older landfall trigger that Rust
+    also still carries. The fix routes the pre-cast stack depth into
+    :func:`resolve_top_of_stack_python` as ``floor`` so the drain stops
+    at the correct boundary.
+
+    The pin checks two boundary cases:
+
+    * ``floor == len(stack)`` → the loop short-circuits without draining.
+    * ``floor == 0`` (default) → backward-compatible "drain everything".
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_python_state,
+        resolve_top_of_stack_python,
+        slightly_bigger_deckspec,
+    )
+    from mtg_bot.game import StackItem
+
+    py_state = build_python_state(slightly_bigger_deckspec())
+
+    # Case 1: floor equals current stack depth → no drain, no raise.
+    sentinel_a = StackItem(source=None, controller_id=0)
+    sentinel_b = StackItem(source=None, controller_id=0)
+    py_state.stack.append(sentinel_a)
+    py_state.stack.append(sentinel_b)
+    assert len(py_state.stack) == 2
+
+    drained = resolve_top_of_stack_python(py_state, floor=2)
+    assert drained == 0
+    assert len(py_state.stack) == 2
+    assert py_state.stack[0] is sentinel_a
+    assert py_state.stack[1] is sentinel_b
+
+    # Case 2: floor > current depth → still no drain (defensive
+    # short-circuit; the harness pre-cast snapshot should never exceed
+    # the post-apply depth, but defending against the off-by-one keeps
+    # the primitive robust).
+    drained = resolve_top_of_stack_python(py_state, floor=5)
+    assert drained == 0
+    assert len(py_state.stack) == 2
+
+    # Case 3: floor=0 keyword default — backward compat for the no-
+    # pre-existing-entries case. The cast_bears walk in
+    # test_cross_engine_resolve_top_of_stack_python_drains_stack
+    # exercises the actual non-zero drain on a real StackItem.
+
+
 def test_cross_engine_cast_bears_selector_activate_ability_pre_cast_walks_clean(
     parity_smoke,
 ):

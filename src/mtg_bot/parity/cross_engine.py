@@ -7981,7 +7981,7 @@ def _dict_to_python_action(action_dict: dict):
     )
 
 
-def resolve_top_of_stack_python(py_state) -> int:
+def resolve_top_of_stack_python(py_state, *, floor: int = 0) -> int:
     """Harness-side mirror of Rust's auto-resolve-on-cast semantics (CE5 closure).
 
     Rust's ``cast_spell`` (``state_ops_cast.rs::cast_creature``) fuses
@@ -7994,10 +7994,25 @@ def resolve_top_of_stack_python(py_state) -> int:
 
     To compare apples-to-apples on the cross-engine smoke without
     growing Rust a full stack-and-priority surface, this harness
-    primitive drains Python's stack down to empty after every
+    primitive drains Python's stack down to ``floor`` items after every
     ``cast_spell`` action. The drain mirrors the canonical pattern in
     ``simulate.priority_loop`` (line 257): pop one item, run SBAs,
-    repeat until the stack is empty.
+    repeat until the stack reaches the floor.
+
+    **Why ``floor``** — once the parity bridge admits cards whose
+    ``play_land`` / cast / activate primitives push triggered abilities
+    that PERSIST on the stack across actions (e.g. Icecave Crasher's
+    landfall pump trigger, which both engines push but neither auto-
+    resolves), the pre-existing stack can be non-empty when a later
+    ``cast_spell`` arrives. Rust's ``cast_creature`` is no-stack: it
+    leaves those pre-existing entries untouched. If the harness drained
+    to zero, Python's view would lose the pre-existing entries that
+    Rust still carries — a false divergence sourced in the harness,
+    not in either engine. Capturing the pre-cast stack depth at the
+    ``step_both`` call site and passing it here as ``floor`` keeps
+    Python's drain scoped to the just-pushed cast item (plus any
+    sub-triggers it pushes during resolution) and leaves the older
+    accumulated entries in place to match Rust's observable.
 
     This is the same pattern as :func:`advance_phase_python` — a
     HARNESS-only Python mirror of a Rust primitive's semantics. The
@@ -8006,7 +8021,8 @@ def resolve_top_of_stack_python(py_state) -> int:
     walker.
 
     Returns the count of stack items drained (0 if the stack was
-    already empty — a harmless no-op on non-cast actions).
+    already at or below ``floor`` — a harmless no-op on non-cast
+    actions or on actions whose Python apply didn't push anything).
     """
     from mtg_bot.actions import resolve_top_of_stack
     from mtg_bot.turn import state_based_actions
@@ -8014,11 +8030,11 @@ def resolve_top_of_stack_python(py_state) -> int:
     drained = 0
     # Each resolve may itself push triggered-ability items (ETBs etc.)
     # onto the stack; the while-loop drains them too, matching the
-    # priority loop's "keep resolving until empty" contract. On the
-    # current synthetic deck (Bears has no ETB) the loop runs exactly
-    # one iteration, but the shape is correct for future printings
-    # that ship triggers.
-    while py_state.stack:
+    # priority loop's "keep resolving until empty" contract. Stop when
+    # the stack returns to ``floor`` — pre-existing entries above that
+    # mark belong to earlier actions (and have a matching pre-existing
+    # entry on Rust's stack) and must not be drained here.
+    while len(py_state.stack) > floor:
         resolve_top_of_stack(py_state)
         state_based_actions(py_state)
         drained += 1
@@ -8074,13 +8090,21 @@ def step_both(py_state, rust_state, action_dict: dict) -> CrossEngineStep:
     actor = py_state.priority_player_idx
     if action_dict.get("kind") == "declare_blockers":
         actor = 1 - py_state.active_player_idx
+    # Snapshot pre-apply stack depth BEFORE Python pushes the new
+    # StackItem so the CE5 closure's drain knows where to stop —
+    # pre-existing triggered-ability entries (e.g. accumulated
+    # landfall triggers from earlier turns) must NOT be drained,
+    # because Rust's no-stack ``cast_creature`` leaves them in
+    # place. See :func:`resolve_top_of_stack_python` for full
+    # rationale.
+    py_stack_floor = len(getattr(py_state, "stack", ()))
     py_apply_action(py_state, actor, py_action)
     rust_state.apply_action(action_dict)
 
     # CE5 closure: drain Python's stack for actions whose Rust analog
     # auto-resolves. See :func:`resolve_top_of_stack_python` docstring.
     if action_dict.get("kind") in _RUST_AUTO_RESOLVE_ACTION_KINDS:
-        resolve_top_of_stack_python(py_state)
+        resolve_top_of_stack_python(py_state, floor=py_stack_floor)
 
     ps = parity_smoke()
     py_view = build_python_field_view(py_state)
