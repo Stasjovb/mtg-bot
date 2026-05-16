@@ -67,21 +67,25 @@ $Action = New-ScheduledTaskAction `
 $Trigger = New-ScheduledTaskTrigger -AtStartup
 
 # Same restart-on-failure semantics as the worker daemon installer:
-# up to 999 retries, 30s between each.
+# up to 999 retries, 1 minute between each (Task Scheduler's minimum
+# RestartInterval is PT1M; PT30S is rejected as out-of-range).
 $Settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -RestartCount 999 `
-    -RestartInterval (New-TimeSpan -Seconds 30)
+    -RestartInterval (New-TimeSpan -Minutes 1)
 
 $Principal = New-ScheduledTaskPrincipal `
     -UserId "SYSTEM" `
     -LogonType ServiceAccount `
     -RunLevel Highest
 
-# PYTHONPATH carries the editable-install hint for the venv.
-$Action.Environment = "PYTHONPATH=$(Join-Path $RepoRoot 'src')"
+# (No PYTHONPATH here: the venv's editable install registered the
+# mtg_bot package via ``pip install -e .``, so ``<venv>/python -m
+# mtg_bot.cli serve`` resolves directly. ``$Action.Environment``
+# isn't a property on the action object that
+# ``New-ScheduledTaskAction`` returns; setting it raises.)
 
 Register-ScheduledTask `
     -TaskName $TaskName `

@@ -79,7 +79,7 @@ $Settings = New-ScheduledTaskSettingsSet `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -RestartCount 999 `
-    -RestartInterval (New-TimeSpan -Seconds 30)
+    -RestartInterval (New-TimeSpan -Minutes 1)
 
 # Run as SYSTEM so the task survives user logout / reboot. The mtg-bot
 # venv needs to be readable by SYSTEM (it usually is — venvs live under
@@ -89,10 +89,12 @@ $Principal = New-ScheduledTaskPrincipal `
     -LogonType ServiceAccount `
     -RunLevel Highest
 
-# Set PYTHONPATH for the task via an environment variable in the
-# action. Task Scheduler doesn't carry over the calling shell's env,
-# so we set it here.
-$Action.Environment = "PYTHONPATH=$(Join-Path $RepoRoot 'src')"
+# (No PYTHONPATH here: the venv's editable install registered the
+# mtg_bot package on the venv's site-packages via `pip install -e .`,
+# so `<venv>/python -m mtg_bot.worker_daemon` resolves the package
+# directly. ``$Action.Environment`` is not a property on the action
+# object that ``New-ScheduledTaskAction`` returns anyway — setting
+# it raises.)
 
 Register-ScheduledTask `
     -TaskName $TaskName `
