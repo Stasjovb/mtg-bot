@@ -4331,3 +4331,238 @@ def test_phase4_gravpack_monoist_flips_drop_to_admit():
     assert (tcd.power, tcd.toughness) == (2, 2)
     assert tcd.subtypes == ("Robot",)
     assert "Artifact" in (tcd.card_type, *tcd.extra_card_types)
+
+
+# ---------------------------------------------------------------------
+# Round-51 N1 (round-50 N3 finding 1) — cross-game-safe
+# _seat_token_printings regression pins.
+#
+# Round-50 N3's real multi-game Gravpack-Monoist bench validation
+# surfaced a latent round-49 substrate bug: every game past the first
+# for a token-carrier-bearing archetype raised
+#   ValueError: register_token_printing: pid=N is already registered
+#   to a DIFFERENT CardPrinting ('Robot')
+# = 56/60 FAIL_EXCEPTION. The in-test probes missed it because they
+# drive a SINGLE isolated game; _seat_token_printings registers into
+# the cross-game module-global _TOKEN_PRINTING_BY_PID, and the token
+# pid varies by seed (the per-game card_defs union ordering depends on
+# the opening hand). Before the fix each game built a FRESH token
+# CardPrinting object; the registry's identity-based conflicting-
+# registration guard then raised on the 2nd+ game.
+#
+# These pins reproduce the exact gap: ≥2 games of a Gravpack-Monoist-
+# bearing scenario across DIFFERENT seeds through the loader, asserting
+# (a) no ValueError and (b) correct per-game bridge resolution.
+# ---------------------------------------------------------------------
+
+
+def test_r51_seat_token_printings_cross_game_varying_pid_no_conflict():
+    """Unit-level cross-game pin: the SAME logical token seated across
+    games at DIFFERENT pids (the seed-varying-union scenario) must NOT
+    raise the conflicting-registration ValueError, and every game's
+    registration must resolve the right printing.
+
+    This is the deterministic core of round-50 N3 finding 1. Each
+    "game" rebuilds the token CardDef FRESH (exactly what
+    ``_token_vanilla_card_def`` does per loader invocation — a new,
+    distinct-but-equal CardDef) and seats it behind a varying number of
+    pad CardDefs so the token's list index (== its Rust-registry pid)
+    differs game-to-game, including a game that reuses an earlier pid
+    with a freshly-built token (the precise pre-fix crash: a new object
+    colliding with a stale same-pid registration). Post-fix
+    ``cross_engine.cached_token_printing`` keys by token SHAPE, so the
+    registered object is identity-stable across games and the guard
+    never fires.
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.parity.cross_engine import (
+        CardDef, clear_token_printings, _TOKEN_PRINTING_BY_PID,
+    )
+    from mtg_bot.parity.trajectory import (
+        _token_vanilla_card_def, _seat_token_printings,
+    )
+
+    clear_token_printings()
+    try:
+        def _one_game(n_pads: int):
+            # Fresh token printing + fresh token CardDef every game —
+            # this is the loader's per-invocation behavior.
+            robot = make_token_creature(
+                name="Robot", power=2, toughness=2,
+                subtypes=("Robot",), artifact=True,
+            )
+            tcd = _token_vanilla_card_def(robot)
+            carrier = CardDef(
+                name="Gravpack-ish", card_type="Creature",
+                mana_cost_generic=2, power=2, toughness=1,
+                triggered_abilities=(
+                    {
+                        "event": "dies",
+                        "predicate": {"kind": "source_is_self"},
+                        "effect": {
+                            "kind": "create_token_tapped", "count": 1,
+                            "_token_card_def": tcd,
+                        },
+                    },
+                ),
+            )
+            pads = [
+                CardDef(name=f"Pad{i}", card_type="Land",
+                        mana_produced=("G",))
+                for i in range(n_pads)
+            ]
+            seated = _seat_token_printings(pads + [carrier])
+            names = [c.name for c in seated]
+            pid = names.index("Robot")
+            # The carrier trigger was rewritten to the numeric pid and
+            # the symbolic ref dropped — and the kind survives.
+            eff = next(
+                c for c in seated if c.name == "Gravpack-ish"
+            ).triggered_abilities[0]["effect"]
+            assert eff["kind"] == "create_token_tapped"
+            assert eff["token_printing_id"] == pid
+            assert "_token_card_def" not in eff
+            return pid
+
+        # Three games. Pad count drives the deterministic token pid
+        # (= token's index in the seated card_defs list). Games 1 & 3
+        # use the same pad count -> SAME pid with a FRESH token
+        # CardDef: the exact pre-fix "pid=N already registered to a
+        # DIFFERENT CardPrinting" crash. Game 2 uses a different pad
+        # count -> a DIFFERENT pid (the seed-varying-union scenario).
+        pid_a = _one_game(2)
+        pid_b = _one_game(5)
+        pid_c = _one_game(2)
+        assert pid_a == pid_c, (
+            f"same pad count -> same pid (pre-fix this collided with a "
+            f"fresh token object): got {pid_a} then {pid_c}"
+        )
+        assert pid_b != pid_a, (
+            f"different pad count -> different pid (the seed-varying-"
+            f"union scenario): got {pid_b} vs {pid_a}"
+        )
+        # Every game registered cleanly; the identity-stable cache means
+        # all pids that ever held "Robot" still map to ONE shared
+        # printing object (so the guard would only ever fire on a
+        # genuinely different printing — a real bug).
+        robot_objs = {
+            id(v) for k, v in _TOKEN_PRINTING_BY_PID.items()
+            if v.name == "Robot"
+        }
+        assert len(robot_objs) == 1, (
+            "all cross-game Robot registrations must share ONE "
+            f"identity-stable CardPrinting object; got "
+            f"{len(robot_objs)} distinct objects"
+        )
+        for pid in (pid_a, pid_b, pid_c):
+            rp = _TOKEN_PRINTING_BY_PID[pid]
+            assert rp.name == "Robot"
+            assert (rp.power, rp.toughness) == (2, 2)
+    finally:
+        clear_token_printings()
+
+
+def test_r51_real_gravpack_archetype_multi_game_no_registry_conflict():
+    """End-to-end multi-game pin reproducing the EXACT gap the in-test
+    probes missed (round-50 N3 finding 1): drive ≥2 full games of a
+    real Gravpack-Monoist-bearing 17lands archetype through
+    :func:`setup_matched_game_from_real_decks` across DIFFERENT seeds,
+    in one process, and assert (a) NO ``ValueError`` from the cross-
+    game token registry and (b) correct per-game bridge resolution.
+
+    Archetype 37 carries Gravpack Monoist x3 (round-50 N3 scout +
+    ``docs/bench_trajectory_parity_smoke.md`` round-50 minimal repro:
+    "archetype 37, seeds 0 and 1"). The bench's ``drive_one_game``
+    calls exactly this entrypoint; pre-fix, seed-1 (game 2) raised
+    ``ValueError: register_token_printing: pid=N is already registered
+    to a DIFFERENT CardPrinting ('Robot')`` because the token's pid
+    shifts with the seed-dependent union ordering and game 2 built a
+    fresh, conflicting Robot printing — the 56/60 FAIL_EXCEPTION the
+    single-game in-test probe could never surface. Post-fix the cached
+    printing makes the registration cross-game identity-idempotent.
+
+    Bridge-resolution check (per game, both seeds): the loader-
+    materialized Gravpack Monoist's DIES trigger must resolve to a
+    ``CreateToken`` whose ``token_printing`` is the right vanilla Robot
+    (name "Robot", 2/2, ``tapped=True``) — i.e. the seeded bridge map
+    resolved the per-game pid to the correct printing, not just "didn't
+    raise".
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import clear_token_printings
+
+    pr = get_active_source().get_printings()
+    if pr.get("Gravpack Monoist") is None:
+        pytest.skip("Gravpack Monoist absent from active CardSource")
+
+    GRAVPACK_ARCHETYPE = 37  # carries Gravpack Monoist x3
+    try:
+        deck_names = trajectory.load_production_deck(
+            archetype=GRAVPACK_ARCHETYPE
+        )
+    except (FileNotFoundError, IndexError):
+        pytest.skip("17lands deck pool unavailable for archetype 37")
+    assert "Gravpack Monoist" in deck_names, (
+        "archetype 37 must carry Gravpack Monoist (round-50 N3 scout)"
+    )
+
+    clear_token_printings()
+    try:
+        # Drive 3 games across seeds 0, 1, 2 IN ONE PROCESS — exactly
+        # the bench's multi-game loop. Pre-fix, the 2nd game onward
+        # raised ValueError from the cross-game registry. We do NOT
+        # clear the registry between games (the whole point: the loader
+        # must be cross-game-safe on its own).
+        for seed in (0, 1, 2):
+            # No ValueError must escape here.
+            py_state, rust_state = (
+                trajectory.setup_matched_game_from_real_decks(
+                    deck_names, shared_rng_seed=seed,
+                )
+            )
+            # Bridge resolution: the seated Gravpack Monoist printing
+            # (materialized into py_state by build_python_state through
+            # the bridge map seeded this game) must carry the right
+            # resolved tapped Robot token.
+            gm_obj = next(
+                (
+                    o for o in (
+                        list(py_state.players[0].library)
+                        + list(py_state.players[0].hand)
+                        + list(py_state.players[1].library)
+                        + list(py_state.players[1].hand)
+                    )
+                    if o.printing.name == "Gravpack Monoist"
+                ),
+                None,
+            )
+            assert gm_obj is not None, (
+                f"seed {seed}: Gravpack Monoist must be materialized "
+                f"into a zone (it is admitted by the Phase-4 filter)"
+            )
+            trigs = gm_obj.printing.triggered_abilities
+            assert trigs, (
+                f"seed {seed}: materialized Gravpack Monoist must carry "
+                f"its DIES trigger"
+            )
+            create_eff = trigs[0].effect
+            tok = create_eff.token_printing
+            assert tok is not None, (
+                f"seed {seed}: the bridge map must have resolved the "
+                f"per-game token pid to a real Robot printing"
+            )
+            assert tok.name == "Robot", (
+                f"seed {seed}: resolved token printing must be Robot, "
+                f"got {tok.name!r}"
+            )
+            assert (tok.power, tok.toughness) == (2, 2), (
+                f"seed {seed}: resolved Robot must be 2/2, got "
+                f"{tok.power}/{tok.toughness}"
+            )
+            assert create_eff.tapped is True, (
+                f"seed {seed}: Gravpack Monoist makes a TAPPED Robot "
+                f"(create_token_tapped sister kind)"
+            )
+    finally:
+        clear_token_printings()
