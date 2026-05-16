@@ -7230,6 +7230,111 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DealDamageToOpponentCreatureByCardsInGraveyard,
         )
         return DealDamageToOpponentCreatureByCardsInGraveyard()
+    if kind == "deal_damage_to_opponent_creature_by_life_total":
+        # BLOCKED-RUST-EFFECT slice (round 47) -- deal damage to an
+        # opponent's creature equal to the source-controller's LIFE
+        # TOTAL. Rust's
+        # ``Effect::DealDamageToOpponentCreatureByLifeTotal``
+        # (cards.rs unit variant added in this slice; parse arm
+        # immediately after the round-46
+        # deal_damage_to_opponent_creature_by_cards_in_graveyard arm,
+        # to_dict immediately after the round-46 arm, resolve at
+        # state_ops_resolve.rs immediately after the round-46 resolve
+        # arm with renamed loop labels _lft for the borrow split)
+        # mirrors Python's
+        # ``DealDamageToOpponentCreatureByLifeTotal``
+        # (effects/generic/damage.py -- shipped in this slice as a
+        # sister of the round-32 / 35 / 36 / 37 / 46 classes; 0 EoE
+        # consumers today). Rust substrate landed end-to-end IN this
+        # slice; the bridge translator wires the cross-engine round
+        # trip.
+        #
+        # **Sister-of-round-32/35/36/37/46 -- SIXTH (final)
+        # denominator on same apply substrate.** Round-32's
+        # DealDamageToOpponentCreatureByArtifactCount uses artifact
+        # count as the dynamic-X; round-35's
+        # DealDamageToOpponentCreatureByCardsInHand uses HAND SIZE;
+        # round-36's DealDamageToOpponentCreatureByLandsControlled uses
+        # LANDS-CONTROLLED count; round-37's
+        # DealDamageToOpponentCreatureByCreaturesYouControl uses
+        # CREATURES-CONTROLLED count; round-46's
+        # DealDamageToOpponentCreatureByCardsInGraveyard uses
+        # GRAVEYARD SIZE; this slice uses the CONTROLLER'S LIFE
+        # TOTAL. All six arms share the apply substrate (damage to
+        # first eligible opponent creature, fizzle on empty bf, 5-zone
+        # + stack source-controller scan); the denominator is the only
+        # axis that differs. This COMPLETES the SIXTH (final)
+        # orthogonal X-from-count denominator on the same apply
+        # substrate -- the damage-to-opponent-creature row of the
+        # 6-substrate x 6-denominator X-from-count matrix is now fully
+        # saturated (artifact / hand / lands / creatures / graveyard /
+        # life-total). Life-total is the FIRST non-zone-size,
+        # scalar-read clamped denominator on the damage substrate (the
+        # prior five all read a collection size; this slice reads a
+        # scalar player attribute and clamps it -- sister to round-42
+        # which established the same clamped-scalar shape on the mill
+        # apply substrate).
+        #
+        # **Field-shape.** Unit variant on both sides; no fields
+        # beyond ``kind``. The Python class has no static ``amount``
+        # field (damage.py -- ``@dataclass(frozen=True)`` with only
+        # the inherited ``targets`` tuple, defaulted in __post_init__
+        # to a TargetSpec on IsCreature() & ControlledByOpponent()).
+        # The dynamic-X is the whole point of the class -- the count
+        # is computed at resolve time from the source-controller's
+        # clamped life total, not stored on the variant. The bridge
+        # translator ignores every other key on the dict for
+        # round-trip dict-shape consistency (mirrors round-32 /
+        # round-33 / round-34 / round-35 / round-36 / round-37 /
+        # round-46 unit-variant precedent).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # walks the source-controller via the round-32 / 35 / 36 / 37
+        # / 46 5-zone+stack scan, reads ``state.players[cidx].life``
+        # and clamps negative life to 0 via ``life.max(0)`` (round-42
+        # MillTargetPlayerEqualToYourLifeTotal precedent at
+        # state_ops_resolve.rs:1276), and applies that damage amount
+        # via saturating_add (i16 ceiling matches sibling damage arms)
+        # to the FIRST creature on the opponent's bf. Python's resolve
+        # at damage.py reads the target from the targets tuple passed
+        # by the targeting pipeline (PUSH-time pick) and calls
+        # _apply_damage with
+        # ``life_total = max(0, state.player_by_id(controller_id).life)``
+        # as the same denominator. The chooser-driven pick converges
+        # with Rust's first-eligible-creature scan when the agent
+        # picks the first-eligible target on synthetic probes with one
+        # bait creature.
+        #
+        # **Controller, not target.** Both engines read the
+        # source-CONTROLLER's life total (the player whose
+        # creature/spell is the effect source), NOT the target's --
+        # "deals damage equal to your life total" reads *your*
+        # (controller's) life. Rust resolves the controller via the
+        # 5-zone+stack scan; Python uses
+        # ``state.player_by_id(controller_id)`` where controller_id is
+        # the resolving controller.
+        #
+        # **Fizzle parity.** Both engines silently no-op when the
+        # source-controller's clamped life total is <= 0 (Python:
+        # ``if life_total <= 0: return``; Rust: the amount <= 0 guard
+        # in the resolve arm). Both engines also silently no-op when
+        # no opponent creature is in play (mirrors round-32 / 35 / 36
+        # / 37 / 46 sisters exactly).
+        #
+        # **No real-EoE end-to-end probe in this slice.** Zero EoE
+        # consumers today for the damage-by-life-total shape. Synthetic
+        # regression pin (per the round-17 Fight + round-30
+        # stun-counter + round-31 double-power + round-32
+        # by-artifact-count + round-33 per-other-creature-or-artifact
+        # + round-34 surveil-X + round-35 by-cards-in-hand + round-36
+        # by-lands-controlled + round-37 by-creatures-you-control +
+        # round-46 by-cards-in-graveyard precedent) documents the
+        # bridge plumbing; the slice ships per round-27 / round-31
+        # round-trip-surface-coverage rule.
+        from mtg_bot.effects.generic.damage import (
+            DealDamageToOpponentCreatureByLifeTotal,
+        )
+        return DealDamageToOpponentCreatureByLifeTotal()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

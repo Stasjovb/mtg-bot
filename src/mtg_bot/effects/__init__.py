@@ -66,6 +66,7 @@ from mtg_bot.effects.generic import (
     DealDamageToOpponentCreatureByCardsInHand,
     DealDamageToOpponentCreatureByCreaturesYouControl,
     DealDamageToOpponentCreatureByLandsControlled,
+    DealDamageToOpponentCreatureByLifeTotal,
     DealDamageToTargetCreature,
     DealDamageToTargetOpponent,
     DealDamageToTargetCreatureSpacecraftBoosted,
