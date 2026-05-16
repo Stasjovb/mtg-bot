@@ -1361,6 +1361,75 @@ pub enum Effect {
     /// class). Mirrors round-32 / round-33 / round-34 / round-35 /
     /// round-36 unit-variant schema convention.
     DealDamageToOpponentCreatureByCreaturesYouControl,
+    /// **BLOCKED-RUST-EFFECT slice (round 46) -- deal damage to target
+    /// creature an opponent controls equal to the number of CARDS in
+    /// the source-controller's GRAVEYARD.** Mirrors Python's
+    /// `DealDamageToOpponentCreatureByCardsInGraveyard`
+    /// (`effects/generic/damage.py` -- shipped in this slice; no
+    /// pre-existing class). Sister of round-32's
+    /// `DealDamageToOpponentCreatureByArtifactCount`, round-35's
+    /// `DealDamageToOpponentCreatureByCardsInHand`, round-36's
+    /// `DealDamageToOpponentCreatureByLandsControlled`, and round-37's
+    /// `DealDamageToOpponentCreatureByCreaturesYouControl` -- same
+    /// apply-substrate (damage-to-opponent-creature, first-eligible
+    /// target, fizzle-on-empty-bf), NEW denominator
+    /// (cards-in-graveyard in place of artifact-count / hand-size /
+    /// lands-controlled / creatures-controlled). Walks the X-from-count
+    /// denominator axis to a FIFTH entry on the round-32 damage
+    /// substrate, completing the artifact / hand / lands / creatures /
+    /// graveyard quintuplet on this apply substrate. SIXTH overall
+    /// X-from-count denominator across the substrate matrix (prior
+    /// five: artifact-count / hand-size / lands-controlled /
+    /// creatures-controlled / life-total -- round-42 mill uses life
+    /// total). Confirms the round-35 bidirectionally-extensible
+    /// X-from-count plumbing extends to a graveyard-zone-size
+    /// denominator (the prior denominators all read from hand, bf, or
+    /// life total -- graveyard is the FIRST zone-size denominator
+    /// pulled from a NON-battlefield, NON-hand source).
+    ///
+    /// **Mechanism -- count + apply.** At resolve time, count the
+    /// source-controller's graveyard size
+    /// (`state.players[idx].graveyard.len()`) -- matches Python's
+    /// `len(state.player_by_id(controller_id).graveyard)` shape. The
+    /// source itself is on the battlefield at resolve time for an
+    /// ETB-style trigger, so the source does NOT contribute to the
+    /// denominator (it's not in the graveyard yet). For an LTB-style
+    /// or graveyard-resolve trigger where the source is already in
+    /// the graveyard, the source WOULD contribute +1 by virtue of
+    /// having moved (no source-exclusion clause, mirroring round-32 /
+    /// round-35 / round-36 / round-37 sister "vanilla walk -- no
+    /// source-exclusion clause" convention). If the graveyard size is
+    /// <= 0 -> silent fizzle. Otherwise apply that damage amount to
+    /// the FIRST creature on any opponent's battlefield (mirrors
+    /// `DealDamageToOpponentCreature` /
+    /// `DealDamageToOpponentCreatureByArtifactCount` /
+    /// `DealDamageToOpponentCreatureByCardsInHand` /
+    /// `DealDamageToOpponentCreatureByLandsControlled` /
+    /// `DealDamageToOpponentCreatureByCreaturesYouControl` target
+    /// shape).
+    ///
+    /// **Source-controller resolution.** 5-zone scan + stack scan
+    /// (mirrors round-32 / round-35 / round-36 / round-37 sister
+    /// shape -- needs to resolve even if source has left bf, e.g.
+    /// counterspelled trigger that still drives the count from the
+    /// original ETB snapshot). If untrackable -> silent fizzle.
+    ///
+    /// **Target semantics -- first-slice deterministic.** Iterate
+    /// opponents in ascending player order; pick the FIRST creature
+    /// on each opponent's bf (smallest Vec index). 2-player engine =
+    /// exactly one opponent at `1 - controller`. No opponent creature
+    /// -> silent fizzle. BIT-FOR-BIT identical to round-32's /
+    /// round-35's / round-36's / round-37's target shape (same apply
+    /// substrate).
+    ///
+    /// **Schema parity with Python.** Unit variant on both sides --
+    /// the count is computed from state at resolve time, not stored
+    /// on the variant. Python's `@dataclass(frozen=True)` class has
+    /// only the inherited `targets` tuple; no static `amount` field
+    /// (the dynamic-X from graveyard size is the whole point of the
+    /// class). Mirrors round-32 / round-33 / round-34 / round-35 /
+    /// round-36 / round-37 unit-variant schema convention.
+    DealDamageToOpponentCreatureByCardsInGraveyard,
     /// **BLOCKED-RUST-EFFECT slice (round 33) — put a +1/+1 counter
     /// on this creature for each OTHER creature and/or artifact you
     /// control.** Mirrors Python's
@@ -4449,6 +4518,37 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // round-32 damage-to-opponent-creature substrate).
             Ok(Effect::DealDamageToOpponentCreatureByCreaturesYouControl)
         }
+        "deal_damage_to_opponent_creature_by_cards_in_graveyard" => {
+            // BLOCKED-RUST-EFFECT slice (round 46) -- deal damage to
+            // an opponent's creature equal to the source-controller's
+            // graveyard size. Unit variant; no fields beyond `kind`
+            // (the count is dynamic -- read from state at resolve
+            // time). Extra dict fields silently ignored for round-trip
+            // dict-shape consistency (mirrors every other unit-variant
+            // parse arm; particularly the round-32 sister
+            // `deal_damage_to_opponent_creature_by_artifact_count`,
+            // the round-35 sister
+            // `deal_damage_to_opponent_creature_by_cards_in_hand`, the
+            // round-36 sister
+            // `deal_damage_to_opponent_creature_by_lands_controlled`,
+            // and the round-37 sister
+            // `deal_damage_to_opponent_creature_by_creatures_you_control`
+            // which share the apply substrate with this arm but use an
+            // artifact-count / hand-size / lands-controlled /
+            // creatures-controlled denominator instead). Mirrors
+            // Python's `DealDamageToOpponentCreatureByCardsInGraveyard`
+            // (`damage.py` -- shipped in this slice as a sister of the
+            // round-32/35/36/37 classes; 0 EoE consumers today, slice
+            // ships per round-27/31 round-trip-surface-coverage rule
+            // and to complete the FIFTH orthogonal denominator on the
+            // round-32 damage-to-opponent-creature substrate. SIXTH
+            // overall X-from-count denominator across the substrate
+            // matrix -- prior five: artifact / hand / lands / creatures
+            // / life-total; this slice adds GRAVEYARD as the first
+            // zone-size denominator pulled from a non-battlefield,
+            // non-hand source).
+            Ok(Effect::DealDamageToOpponentCreatureByCardsInGraveyard)
+        }
         "put_plus_one_counters_on_self_per_other_creature_or_artifact" => {
             // BLOCKED-RUST-EFFECT slice (round 33) — put a +1/+1
             // counter on this creature for each OTHER creature and/or
@@ -5436,7 +5536,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard"
         ))),
     }
 }
@@ -6500,6 +6600,24 @@ pub(crate) fn effect_to_pydict<'py>(
             d.set_item(
                 "kind",
                 "deal_damage_to_opponent_creature_by_creatures_you_control",
+            )?;
+        }
+        Effect::DealDamageToOpponentCreatureByCardsInGraveyard => {
+            // BLOCKED-RUST-EFFECT slice (round 46). Unit variant; no
+            // payload fields beyond `kind` (count is dynamic --
+            // computed at resolve time from the source-controller's
+            // graveyard size). Mirrors Python's
+            // DealDamageToOpponentCreatureByCardsInGraveyard dict shape
+            // (no static `amount` field on the @dataclass). Sister of
+            // round-32 / round-35 / round-36 / round-37 with the same
+            // target shape but a different dynamic-X denominator
+            // (cards-in-graveyard in place of artifact-count /
+            // hand-size / lands-controlled / creatures-controlled).
+            // FIFTH denominator on the damage substrate; sixth overall
+            // X-from-count denominator across the substrate matrix.
+            d.set_item(
+                "kind",
+                "deal_damage_to_opponent_creature_by_cards_in_graveyard",
             )?;
         }
         Effect::PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact => {

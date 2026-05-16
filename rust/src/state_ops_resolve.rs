@@ -5400,6 +5400,124 @@ fn apply_effect(
             }
             // else: no opponent creature → silent fizzle.
         }
+        // BLOCKED-RUST-EFFECT slice (round 46) -- deal damage to an
+        // opponent's creature equal to the source-controller's
+        // graveyard size. Sister of round-32's
+        // DealDamageToOpponentCreatureByArtifactCount, round-35's
+        // DealDamageToOpponentCreatureByCardsInHand, round-36's
+        // DealDamageToOpponentCreatureByLandsControlled, and round-37's
+        // DealDamageToOpponentCreatureByCreaturesYouControl: same
+        // target shape (first eligible Creature on an opponent's bf,
+        // scanned in ascending player order), same fizzle semantics
+        // (silent no-op when count <= 0 or no opponent creature), same
+        // source-controller resolution (5-zone scan + stack scan), NEW
+        // denominator (graveyard size in place of artifact-count /
+        // hand-size / lands-controlled / creatures-controlled).
+        // Mirrors Python's
+        // `DealDamageToOpponentCreatureByCardsInGraveyard`
+        // (`damage.py` -- shipped in this slice; no pre-existing
+        // class). FIFTH denominator on the damage substrate; SIXTH
+        // overall X-from-count denominator across the substrate matrix
+        // (prior five: artifact-count / hand-size / lands-controlled /
+        // creatures-controlled / life-total). FIRST zone-size
+        // denominator pulled from a non-battlefield, non-hand source.
+        //
+        // **Graveyard-size denominator.**
+        // `state.players[cidx].graveyard.len()` BIT-FOR-BIT mirrors
+        // Python's `len(state.player_by_id(controller_id).graveyard)`
+        // shape. Mirrors the round-35 hand-size denominator's
+        // `state.players[cidx].hand.len()` shape exactly with `hand`
+        // swapped for `graveyard`. The source itself is on the
+        // battlefield at resolve time for an ETB-style trigger -- it
+        // does NOT contribute to the denominator (not in graveyard
+        // yet). For an LTB-style or graveyard-resolve trigger where
+        // the source has moved to the graveyard before this arm runs,
+        // the source WOULD count by virtue of the move (no source-
+        // exclusion clause -- mirrors round-32 / round-35 / round-36 /
+        // round-37 sister convention).
+        Effect::DealDamageToOpponentCreatureByCardsInGraveyard => {
+            // Source-controller resolution (5-zone walk + stack scan;
+            // mirrors round-32 / round-35 / round-36 / round-37 sister
+            // shape exactly).
+            let mut source_controller: Option<u8> = None;
+            'outer_sc_cgv: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_sc_cgv;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Read source-controller's graveyard size. Mirrors
+            // Python's
+            // `gy_size = len(state.player_by_id(controller_id).graveyard)`
+            // shape. usize -> i32 saturating cast (any realistic
+            // graveyard fits in i32; defensive cap follows the
+            // round-32 saturating-add denominator convention).
+            let cidx = controller as usize;
+            let gy_len = state.players[cidx].graveyard.len();
+            let amount: i32 = if gy_len > i32::MAX as usize {
+                i32::MAX
+            } else {
+                gy_len as i32
+            };
+            if amount <= 0 {
+                return Ok(()); // empty graveyard → silent fizzle (matches Python's `if gy_size <= 0: return`)
+            }
+            // Pick first eligible target: scan opponents in ascending
+            // order, pick the first Creature on each opponent's bf.
+            // BIT-FOR-BIT mirror of the round-32 / round-35 / round-36
+            // / round-37 sister target shape.
+            let mut found: Option<(usize, u32)> = None;
+            'outer_tg_cgv: for (pidx, player) in state.players.iter().enumerate() {
+                if pidx as u8 == controller {
+                    continue;
+                }
+                for obj in player.battlefield.iter() {
+                    let Some(printing) =
+                        state.registry.printings.get(obj.printing_id as usize)
+                    else {
+                        continue;
+                    };
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        found = Some((pidx, obj.id));
+                        break 'outer_tg_cgv;
+                    }
+                }
+            }
+            if let Some((pidx, target_id)) = found {
+                let amount_i16 = amount.min(i16::MAX as i32) as i16;
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.damage = obj.damage.saturating_add(amount_i16);
+                        break;
+                    }
+                }
+            }
+            // else: no opponent creature → silent fizzle.
+        }
         // BLOCKED-RUST-EFFECT slice (round 33) — put a +1/+1 counter
         // on the source for each OTHER creature and/or artifact the
         // source's controller controls. Mirrors Python's
