@@ -543,6 +543,379 @@ def test_residue_check_would_have_caught_the_known_stale_trio():
     assert not any("Command Bridge" in f for f in flagged)
 
 
+# ------------------ round-55 structural (non-lexical) hardening
+#
+# These pin the structural anti-staleness fix whose own gap round-54
+# exposed: the round-54 resolver is purely LEXICAL (an alias must
+# literally be a live variant), so Pulsar Squadron Ace — Effect
+# LookAtTopNRevealOrCounter shipped r28/29, plan-name
+# ChoiceTriggerSpacecraftRevealOrCounter never lexically resolving —
+# passed BOTH the re-walk and the per-entry cron silently. Round-55
+# adds (a) a required `verified_absent_at_commit` stamp + a
+# cards.rs/cross_engine.py-touch cadence, and (b) a non-lexical
+# name-in-wired-bridge-arm cross-check (Pulsar's name is verbatim in
+# the wired look_at_top_n_reveal_or_counter arm). Both never-blocking
+# (same hook contract). Covered: the Pulsar shape IS flagged
+# non-lexically; a genuinely-absent entry is NOT false-flagged; the
+# per-arm ack suppresses (and only the exact arm); the stale-SHA
+# cadence path; the schema-missing-field path; the helpers.
+
+
+def test_camel_to_snake_still_acronym_aware_for_round55_path():
+    """The round-55 non-lexical resolver reuses ``_camel_to_snake``
+    to map a live variant to its expected bridge ``kind``. Re-pin the
+    acronym rule on the exact Pulsar variant so a regression in the
+    snake_case rule can't silently re-open the gap."""
+    mod = _load_tool()
+    assert (
+        mod._camel_to_snake("LookAtTopNRevealOrCounter")
+        == "look_at_top_n_reveal_or_counter"
+    )
+
+
+def test_split_bridge_arm_blocks_keeps_comments(tmp_path):
+    """Unlike the count path, the round-55 arm splitter must KEEP
+    comments — a wired arm's doc-comment naming the card IS the
+    non-lexical signal (Pulsar's name is only in the arm comment).
+    Also: arm-scoped (def → sentinel), keyed by kind."""
+    mod = _load_tool()
+    fake = tmp_path / "ce.py"
+    fake.write_text(
+        textwrap.dedent(
+            '''
+            def _ta_dict_to_python_effect(eff_dict):
+                kind = eff_dict["kind"]
+                if kind == "arm_one":
+                    # names Some Card Name in a comment
+                    return 1
+                if kind == "arm_two":
+                    return 2
+                # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
+
+            def after():
+                if kind == "below_decoy":
+                    return 9
+            '''
+        ),
+        encoding="utf-8",
+    )
+    blocks = mod.split_bridge_arm_blocks(fake)
+    assert set(blocks) == {"arm_one", "arm_two"}
+    # Comment text is retained inside the arm block.
+    assert "Some Card Name" in blocks["arm_one"]
+    assert "below_decoy" not in "".join(blocks.values())
+
+
+def test_pulsar_shaped_entry_is_caught_non_lexically():
+    """THE round-55 proof. A pre-r54-shaped Pulsar entry — status
+    ``genuinely_missing``, aliases that do NOT lexically resolve to
+    the real variant ``LookAtTopNRevealOrCounter``, no ack — is
+    flagged ``residue_suspect_needs_reverify`` against the REAL live
+    tree, because "Pulsar Squadron Ace" appears verbatim in the
+    wired ``look_at_top_n_reveal_or_counter`` arm whose kind resolves
+    to live ``Effect::LookAtTopNRevealOrCounter``. The round-54
+    lexical resolver returns nothing for this exact entry (no alias
+    is a live variant) — that contrast IS the closed gap."""
+    mod = _load_tool()
+    rust = mod.collect_rust_variant_set()
+    arms = mod.split_bridge_arm_blocks()
+    bridge = mod.collect_bridge_arm_set()
+    pulsar_pre_r54 = {
+        "entry": "PulsarSquadronAce-Spacecraft-submode",
+        "card": "Pulsar Squadron Ace",
+        "status": "genuinely_missing",
+        "claimed_missing_effect": "ChoiceTriggerSpacecraftRevealOrCounter",
+        # The exact pre-r54 alias list — NOTE no
+        # "LookAtTopNRevealOrCounter". This is the gap.
+        "aliases": [
+            "ChoiceTriggerSpacecraftRevealOrCounter",
+            "LookTop5RevealSpacecraftElseCounterOnSelf",
+        ],
+        "verified_absent_at_commit": "deadbee",  # SHA-shaped, fake
+    }
+    # Round-54 LEXICAL resolver: blind to this entry (no alias is a
+    # live variant) — exactly why Pulsar slipped through.
+    lex = mod.compute_residue_staleness([pulsar_pre_r54], rust, bridge)
+    assert lex == [], (
+        "the round-54 lexical resolver is (correctly, for this test) "
+        "blind to the Pulsar shape — that blindness is the gap "
+        "round-55 closes"
+    )
+    # Round-55 STRUCTURAL check: catches it non-lexically.
+    drifts = mod.compute_structural_residue_staleness(
+        [pulsar_pre_r54], rust, arms, git_available=False
+    )
+    suspect = [
+        d
+        for d in drifts
+        if d.key.startswith("residue_suspect_needs_reverify::")
+        and d.key.endswith("PulsarSquadronAce-Spacecraft-submode")
+    ]
+    assert suspect, (
+        f"Pulsar-shaped entry MUST surface "
+        f"residue_suspect_needs_reverify; got {[d.key for d in drifts]}"
+    )
+    hit = next(
+        d
+        for d in suspect
+        if "look_at_top_n_reveal_or_counter" in d.hint
+    )
+    assert "LookAtTopNRevealOrCounter" in hit.hint
+    assert "Pulsar Squadron Ace" in hit.label
+    assert hit.line().startswith("  - NEEDS RE-VERIFY:")
+
+
+def test_genuinely_absent_entry_not_false_flagged_structurally():
+    """A genuinely-absent entry whose printed name is in NO bridge
+    arm is NOT flagged by the non-lexical check (only the unverified
+    row if it lacks a stamp). The check must not minimize the residue
+    count via false positives."""
+    mod = _load_tool()
+    rust = mod.collect_rust_variant_set()
+    arms = mod.split_bridge_arm_blocks()
+    entry = {
+        "entry": "SeedshipAgrarian-landfall-composer",
+        "card": "Seedship Agrarian",
+        "status": "genuinely_missing",
+        "claimed_missing_effect": "LandfallComplexEffectSeedship",
+        "aliases": ["LandfallComplexEffectSeedship"],
+        "verified_absent_at_commit": "abc1234",
+    }
+    drifts = mod.compute_structural_residue_staleness(
+        [entry], rust, arms, git_available=False
+    )
+    assert drifts == [], (
+        f"genuinely-absent Seedship Agrarian must NOT be flagged; "
+        f"got {[d.key for d in drifts]}"
+    )
+
+
+def test_alias_matched_name_in_arm_is_hard_stale_not_ack_suppressible():
+    """If the named wired arm's kind ALSO matches one of the entry's
+    own aliases, that is the entry's own data proving the effect
+    shipped → hard ``residue_stale``, and a ``name_in_arm_ack`` must
+    NOT suppress it (acks are for unrelated arms only; a true shipped
+    effect must hard-fail)."""
+    mod = _load_tool()
+    rust = {"FooBarEffect"}
+    arms = {"foo_bar_effect": '  # handles Stale Card here\n  return 1'}
+    entry = {
+        "entry": "x",
+        "card": "Stale Card",
+        "status": "genuinely_missing",
+        "claimed_missing_effect": "FooBarEffect",
+        "aliases": ["FooBarEffect"],  # alias-match → hard stale
+        "verified_absent_at_commit": "abc1234",
+        # Even an ack on the exact arm must not suppress the hard row.
+        "name_in_arm_ack": "foo_bar_effect",
+    }
+    drifts = mod.compute_structural_residue_staleness(
+        [entry], rust, arms, git_available=False
+    )
+    keys = [d.key for d in drifts]
+    assert any(
+        k.startswith("residue_stale::") for k in keys
+    ), keys
+    assert not any(
+        k.startswith("residue_suspect_needs_reverify::") for k in keys
+    )
+    stale = next(d for d in drifts if d.key.startswith("residue_stale::"))
+    assert "NOT ack-suppressible" in stale.hint
+    assert stale.line().startswith("  - STALE:")
+
+
+def test_name_in_arm_ack_suppresses_only_the_exact_arm():
+    """The per-arm ack suppresses the suspect row for the acked arm
+    ONLY. A SECOND, un-acked wired arm that also names the card still
+    surfaces — so an ack can never silently mask a future real
+    Pulsar. (Command-Bridge/Meltstrider shape: name legitimately in a
+    different-ability arm, hand-re-walked, genuinely absent.)"""
+    mod = _load_tool()
+    rust = {"AddManaToPool", "LookAtTopNRevealOrCounter"}
+    arms = {
+        "add_mana_to_pool": "  # mana ability of Command Bridge\n  x",
+        "look_at_top_n_reveal_or_counter": (
+            "  # Command Bridge also named here (hypothetical 2nd arm)\n y"
+        ),
+    }
+    base = {
+        "entry": "SacUnlessYouTap",
+        "card": "Command Bridge",
+        "status": "genuinely_missing",
+        "claimed_missing_effect": "SacUnlessYouTap",
+        "aliases": ["SacUnlessYouTap"],
+        "verified_absent_at_commit": "abc1234",
+    }
+    # Ack only the mana-ability arm.
+    acked = dict(base, name_in_arm_ack="add_mana_to_pool")
+    drifts = mod.compute_structural_residue_staleness(
+        [acked], rust, arms, git_available=False
+    )
+    keys = [d.key for d in drifts]
+    # add_mana_to_pool suspect suppressed; the OTHER arm still fires.
+    suspects = [
+        d
+        for d in drifts
+        if d.key.startswith("residue_suspect_needs_reverify::")
+    ]
+    assert len(suspects) == 1, keys
+    assert "look_at_top_n_reveal_or_counter" in suspects[0].hint
+    assert "add_mana_to_pool" not in suspects[0].hint
+    # Acking BOTH arms suppresses both.
+    acked_both = dict(
+        base,
+        name_in_arm_ack=[
+            "add_mana_to_pool",
+            "look_at_top_n_reveal_or_counter",
+        ],
+    )
+    assert (
+        mod.compute_structural_residue_staleness(
+            [acked_both], rust, arms, git_available=False
+        )
+        == []
+    )
+
+
+def test_missing_verified_absent_at_commit_is_unverified_row():
+    """The schema-missing-field path: a ``genuinely_missing`` entry
+    with no (or a non-SHA-shaped) ``verified_absent_at_commit`` yields
+    a never-blocking ``residue_unverified`` row."""
+    mod = _load_tool()
+    rust = mod.collect_rust_variant_set()
+    arms = mod.split_bridge_arm_blocks()
+    no_field = {
+        "entry": "x",
+        "card": "Some Genuinely Missing Card",
+        "status": "genuinely_missing",
+        "claimed_missing_effect": "TotallyAbsentEffect",
+        "aliases": ["TotallyAbsentEffect"],
+    }
+    drifts = mod.compute_structural_residue_staleness(
+        [no_field], rust, arms, git_available=False
+    )
+    assert [d.key for d in drifts] == ["residue_unverified::x"]
+    assert "no SHA-shaped" in drifts[0].hint
+    assert drifts[0].line().startswith("  - NEEDS RE-VERIFY:")
+    # A garbled (non-SHA) value is treated the same.
+    garbled = dict(no_field, verified_absent_at_commit="not-a-sha!!")
+    d2 = mod.compute_structural_residue_staleness(
+        [garbled], rust, arms, git_available=False
+    )
+    assert [d.key for d in d2] == ["residue_unverified::x"]
+
+
+def test_stale_verified_absent_at_commit_cadence_path(monkeypatch):
+    """The cadence path: a SHA-shaped stamp with ≥1 commit since it
+    touched cards.rs / cross_engine.py yields a never-blocking
+    ``residue_needs_reverify`` row. Patch the git probe so the test
+    is deterministic regardless of the checkout's real history."""
+    mod = _load_tool()
+    rust = mod.collect_rust_variant_set()
+    arms = mod.split_bridge_arm_blocks()
+    entry = {
+        "entry": "y",
+        "card": "Absent Card",
+        "status": "genuinely_missing",
+        "claimed_missing_effect": "AbsentEffect",
+        "aliases": ["AbsentEffect"],
+        "verified_absent_at_commit": "0badf00",
+    }
+    # 3 commits touched the trigger files since the stamp → stale.
+    monkeypatch.setattr(
+        mod, "commits_touching_trigger_paths_since", lambda sha: 3
+    )
+    drifts = mod.compute_structural_residue_staleness(
+        [entry], rust, arms, git_available=True
+    )
+    assert [d.key for d in drifts] == ["residue_needs_reverify::y"]
+    assert "3 commit(s) since then touched" in drifts[0].hint
+    assert "0badf00" in drifts[0].hint
+    assert drifts[0].line().startswith("  - NEEDS RE-VERIFY:")
+    # Fresh stamp (0 touches) → no cadence row.
+    monkeypatch.setattr(
+        mod, "commits_touching_trigger_paths_since", lambda sha: 0
+    )
+    assert (
+        mod.compute_structural_residue_staleness(
+            [entry], rust, arms, git_available=True
+        )
+        == []
+    )
+    # git unavailable → soft-skip (never a false re-verify).
+    assert (
+        mod.compute_structural_residue_staleness(
+            [entry], rust, arms, git_available=False
+        )
+        == []
+    )
+    # git available but history for the SHA unknown (None) → soft-skip.
+    monkeypatch.setattr(
+        mod, "commits_touching_trigger_paths_since", lambda sha: None
+    )
+    assert (
+        mod.compute_structural_residue_staleness(
+            [entry], rust, arms, git_available=True
+        )
+        == []
+    )
+
+
+def test_commits_touching_trigger_paths_since_handles_bad_input():
+    """``commits_touching_trigger_paths_since`` returns ``None``
+    (caller soft-skips, never a false re-verify) for a non-SHA-shaped
+    argument — the unverified row owns the missing-stamp error, this
+    helper just declines to compute a cadence on garbage."""
+    mod = _load_tool()
+    assert mod.commits_touching_trigger_paths_since("") is None
+    assert mod.commits_touching_trigger_paths_since("not-a-sha") is None
+    # A SHA-shaped but non-existent ref → git rev-list fails → None
+    # (real git call against the real repo; deterministic: this SHA
+    # cannot exist).
+    assert (
+        mod.commits_touching_trigger_paths_since("0" * 40) is None
+    )
+
+
+def test_real_worklist_genuinely_missing_all_carry_stamp():
+    """Structural-regression guard on the committed worklist: every
+    ``genuinely_missing`` entry carries a SHA-shaped
+    ``verified_absent_at_commit`` (round-55 schema), and the two
+    known different-ability cards carry the per-arm ack so the cron
+    stays exit-0 in-sync on the real tree."""
+    import re
+
+    mod = _load_tool()
+    entries = mod.parse_residue_worklist()
+    gm = [e for e in entries if e["status"] == "genuinely_missing"]
+    assert len(gm) >= 10
+    for e in gm:
+        sha = e.get("verified_absent_at_commit")
+        assert isinstance(sha, str) and re.fullmatch(
+            r"[0-9a-fA-F]{7,40}", sha
+        ), f"{e['entry']} missing/garbled verified_absent_at_commit"
+    by_card = {e["card"]: e for e in gm}
+    assert (
+        by_card["Command Bridge"]["name_in_arm_ack"]
+        == "add_mana_to_pool"
+    )
+    assert (
+        by_card["Meltstrider's Resolve"]["name_in_arm_ack"]
+        == "fight_target_creature_with_target_creature"
+    )
+
+
+def test_run_against_real_tree_still_in_sync_with_round55(capsys):
+    """End-to-end: the committed branch state (stamped worklist +
+    acks + refreshed sentinel) keeps the cron exit-0 in-sync WITH the
+    round-55 structural arm wired into ``run()``."""
+    mod = _load_tool()
+    rc = mod.run()
+    out = capsys.readouterr().out
+    assert rc == 0, f"expected in-sync exit 0; report:\n{out}"
+    assert "in sync" in out
+
+
 # ------------------------------------------------------ drift + report
 
 
