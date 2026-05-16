@@ -1858,3 +1858,262 @@ def test_carddef_triggered_abilities_thread_through_both_engines():
     # arm is exercised here. The end-to-end firing parity is
     # exercised by the trajectory probe in test_trajectory_parity.py.
     assert rust_state.turn_number == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 carddef-triggers landfall extension (this slice).
+#
+# Adds the compound landfall predicate shape
+# (``And(Subject(IsLand), Controlled(YOU))``) to the safe-trigger
+# allowlist as the canonical sentinel kind
+# ``"land_enters_controlled_by_you"``. The starter set's
+# `(enters, source_is_self, ...)` triples stay in place; this
+# extension adds `(enters, land_enters_controlled_by_you, gain_life)`
+# and admits Eumidian Terrabotanist on the production-deck loader.
+# ---------------------------------------------------------------------------
+
+
+def test_safe_triggers_set_carries_landfall_gain_life_shape():
+    """Pin the landfall extension entry — a future shrink would silently
+    regress production-deck coverage of Eumidian Terrabotanist (the
+    only EoE consumer this slice unblocks).
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert (
+        ("enters", "land_enters_controlled_by_you", "gain_life")
+        in _SAFE_TRIGGERS
+    )
+
+
+def test_is_landfall_predicate_dict_admits_canonical_shape():
+    """The landfall-predicate dict checker accepts the canonical
+    ``and(subject_is_land, controlled_by_you)`` shape with the
+    parser's left/right ordering.
+    """
+    from mtg_bot.parity.trajectory import _is_landfall_predicate_dict
+
+    assert _is_landfall_predicate_dict({
+        "kind": "and",
+        "left": {"kind": "subject_is_land"},
+        "right": {"kind": "controlled_by_you"},
+    })
+
+
+def test_is_landfall_predicate_dict_rejects_swapped_operand_order():
+    """Operand ordering matters: the parser emits subject_is_land on
+    the left and controlled_by_you on the right; the safe-trigger
+    gate is strict on that ordering. A swapped variant is rejected
+    until its own slice lands.
+    """
+    from mtg_bot.parity.trajectory import _is_landfall_predicate_dict
+
+    assert not _is_landfall_predicate_dict({
+        "kind": "and",
+        "left": {"kind": "controlled_by_you"},
+        "right": {"kind": "subject_is_land"},
+    })
+
+
+def test_is_landfall_predicate_dict_rejects_or_form():
+    """An ``or`` compound — even with the same operands — is rejected.
+    The starter landfall surface only covers AND.
+    """
+    from mtg_bot.parity.trajectory import _is_landfall_predicate_dict
+
+    assert not _is_landfall_predicate_dict({
+        "kind": "or",
+        "left": {"kind": "subject_is_land"},
+        "right": {"kind": "controlled_by_you"},
+    })
+
+
+def test_is_landfall_predicate_dict_rejects_extra_top_level_key():
+    """Schema-strict: an extra key beyond {kind, left, right} is
+    rejected so a future schema extension doesn't silently slip
+    through the gate.
+    """
+    from mtg_bot.parity.trajectory import _is_landfall_predicate_dict
+
+    assert not _is_landfall_predicate_dict({
+        "kind": "and",
+        "left": {"kind": "subject_is_land"},
+        "right": {"kind": "controlled_by_you"},
+        "negate": False,
+    })
+
+
+def test_is_safe_trigger_dict_admits_landfall_gain_life():
+    """The full trigger-dict checker accepts a landfall+gain_life
+    trigger built from the canonical compound predicate shape.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "gain_life", "amount": 1},
+    })
+
+
+def test_is_safe_trigger_dict_rejects_landfall_draw_cards():
+    """Landfall+draw_cards is NOT in the safe set today (no clean EoE
+    consumer; admitting it would unbalance the predicate-effect
+    product). Pins that the gate is strict on the predicate-effect
+    cross — admitting the predicate alone doesn't admit every leaf.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "draw_cards", "count": 1},
+    })
+
+
+def test_python_ta_to_safe_dict_round_trips_landfall_gain_life():
+    """A Python ``TriggeredAbility`` carrying the parser-emitted
+    landfall predicate (``And(Subject(IsLand), Controlled(YOU))``)
+    + ``GainLife`` round-trips to the canonical compound dict shape.
+    The result satisfies :func:`_is_safe_trigger_dict`.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import (
+        And,
+        Controlled,
+        Event,
+        Subject,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=And(
+            left=Subject(slot=None, inner=IsLand()),
+            right=Controlled(by=YOU, subject=None),
+        ),
+        effect=GainLife(amount=1),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d == {
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "gain_life", "amount": 1},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_rejects_landfall_with_draw_cards():
+    """Landfall predicate + DrawCards effect is unsafe today (no
+    EoE consumer; the gate enforces the predicate-effect product).
+    Verifies the round-trip helper agrees with
+    :func:`_is_safe_trigger_dict`'s reject path.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import (
+        And,
+        Controlled,
+        Event,
+        Subject,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=And(
+            left=Subject(slot=None, inner=IsLand()),
+            right=Controlled(by=YOU, subject=None),
+        ),
+        effect=DrawCards(amount=1),
+    )
+    assert _python_ta_to_safe_dict(ta) is None
+
+
+def test_simple_creature_filter_admits_eumidian_terrabotanist():
+    """End-to-end gate: the parser-emitted Eumidian Terrabotanist
+    printing now passes :func:`_printing_is_bridge_simple_creature`.
+    Pre-landfall-extension this returned False because the trigger
+    predicate was unsafe; post-extension it's admitted, threading the
+    creature into the production-deck loader.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+    )
+
+    src = OracleParserCardSource()
+    eumidian = src.get_printings().get("Eumidian Terrabotanist")
+    assert eumidian is not None, (
+        "Eumidian Terrabotanist not in OracleParserCardSource — "
+        "the parser dropped it; landfall-extension test cannot "
+        "verify the production-deck unblock."
+    )
+    assert _printing_is_bridge_simple_creature(eumidian) is True
+
+
+def test_simple_creature_filter_still_rejects_tannuk_memorial_ensign():
+    """Tannuk shares the same landfall predicate as Eumidian but
+    pairs it with the bespoke ``TannukEnsignLandfallEffect`` (deal
+    damage + second-time-bonus draw). This slice intentionally
+    leaves Tannuk on the cutting-room floor — it would need both a
+    leaf-effect ``deal_damage_each_opponent`` arm AND a second-time-
+    bonus state primitive. Pin the descope so future widening of
+    the safe-trigger leaf set surfaces here.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+    )
+
+    src = OracleParserCardSource()
+    tannuk = src.get_printings().get("Tannuk, Memorial Ensign")
+    if tannuk is None:
+        # Parser hasn't claimed it yet — descope rationale still
+        # applies, but there's nothing to assert against.
+        return
+    assert _printing_is_bridge_simple_creature(tannuk) is False
+
+
+def test_printing_to_card_def_carries_landfall_trigger_through():
+    """Eumidian Terrabotanist's parsed printing converts to a CardDef
+    whose ``triggered_abilities`` carries the canonical compound
+    landfall dict shape — the same dict both engines' bridge arms
+    consume.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    src = OracleParserCardSource()
+    eumidian = src.get_printings()["Eumidian Terrabotanist"]
+    cd = _printing_to_card_def(eumidian)
+    assert cd.card_type == "Creature"
+    assert cd.triggered_abilities == ({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "gain_life", "amount": 1},
+    },)
