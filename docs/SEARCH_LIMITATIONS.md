@@ -1946,6 +1946,143 @@ single bridge-correct real-card residue closed this round.
 
 ---
 
+## Rust port — `Effect::DestroyTargetNoncreaturePermanent` deterministic targeting; real Extinguisher Battleship NOT loader-admitted, Station-subsystem-gated (round 52)
+
+**Location**:
+`rust/src/cards.rs` (variant declaration + `parse_effect` arm +
+`effect_to_pydict` arm — `DestroyTargetNoncreaturePermanent`),
+`rust/src/state_ops_resolve.rs` (resolve arm — deterministic
+first non-Creature, non-indestructible permanent in ETB-timestamp
+order across BOTH battlefields, LTB-fanout cloned from the round-24
+nonland arm),
+`src/mtg_bot/effects/generic/destroy.py`
+(`DestroyTargetNoncreaturePermanent` — the AGENT-DRIVEN
+`requires_target()` real-card class the genuine Extinguisher
+Battleship printing parses to; pre-existed this slice),
+`src/mtg_bot/parity/cross_engine.py` (bridge arm forwarding the
+unit-variant dict to that class),
+`src/mtg_bot/parity/trajectory.py` (the `_SAFE_*` allowlists this
+slice deliberately does NOT extend).
+
+Pinned by:
+`tests/test_parity_smoke.py::test_rust_extinguisher_*` (6 synthetic
+Rust regression pins),
+`tests/test_cross_engine_etb_triggers.py::test_bridge_destroy_target_noncreature_permanent_*`
+/ `::test_rust_parser_accepts_extinguisher_sequence_in_triggered_ability`
+/ `::test_bridge_extinguisher_sequence_synthetic_end_to_end_byte_equal`
+(5 cross-engine bridge pins), and
+`tests/test_parity_smoke.py::test_cross_engine_real_eoe_extinguisher_battleship_etb_destroy_noncreature_then_aoe_parity`
+(the GENUINE real-EoE probe — drives the actual parsed
+`Sequence{[DestroyTargetNoncreaturePermanent,
+DealNDamageToEachCreature(4)]}` printing, shim-constrained).
+
+**What we do today**: this slice ships the Extinguisher Battleship
+ETB *effect half*. The real card parses to
+`Sequence{[DestroyTargetNoncreaturePermanent,
+DealNDamageToEachCreature(4)]}`. `damage_each_creature` (round 18)
+and `sequence` (round 23) were already substrated + bridged; the
+new work is the precise `Effect::DestroyTargetNoncreaturePermanent`
+Rust variant (parse + to_dict + resolve) + its bridge arm. Rust's
+resolve arm picks the destroy target deterministically (FIRST
+non-Creature, non-indestructible permanent in ETB-timestamp order
+across both battlefields). The full ETB Sequence now round-trips
+byte-equal cross-engine (genuine probe asserts: bait noncreature
+destroyed, every creature took exactly 4, carrier survives, lives
+unchanged).
+
+**Precise filter — NO `nonland≈noncreature` approximation taken.**
+The round-50/51 plan offered two options: a ≈15-LOC precise
+noncreature-filter Rust arm, OR a documented
+`nonland≈noncreature-for-EoE-pool` approximation reusing the
+pre-existing round-24 `DestroyTargetNonlandPermanent`
+(`~IsLand()`) arm. **We took the precise fix.** The two filters
+are genuinely NOT interchangeable: `~IsLand()` admits creatures +
+excludes lands; `~IsCreature()` admits lands + excludes creatures —
+on a mixed board they pick OPPOSITE candidates (the round-52 pins
+`test_rust_extinguisher_creatures_are_not_destroy_targets` and
+`test_rust_extinguisher_land_is_a_legal_noncreature_target` pin
+both divergence directions). The genuinely-parsed Extinguisher
+Battleship printing uses Python's `DestroyTargetNoncreaturePermanent`
+(`~IsCreature() & ~IsPlayer()`), so approximating via the nonland
+arm would have been a §2 silent target-set mistranslation, not an
+exact-for-the-pool shortcut (it is NOT exact — EoE has noncreature
+LANDS the nonland filter would wrongly skip and creatures it would
+wrongly hit). There is therefore **no approximation entry to
+document**: the filter is exact on both engines. (The only
+remaining deterministic-vs-agent divergence is the target *choice*,
+documented next — identical to the Monoist r51 / Fight r17
+precedent.)
+
+**Deliberate divergence — the real card is NOT production-deck-
+loader-admitted; Station-subsystem-gated.** Two independent gates,
+mirroring the round-51 Monoist split exactly:
+
+1. *Agent-driven destroy target (deterministic-bridge divergence).*
+   The real card's `DestroyTargetNoncreaturePermanent` is
+   AGENT-DRIVEN (`requires_target() is True` — the controller picks
+   ANY legal noncreature permanent, CR 601.2c). Rust's effect picks
+   the FIRST one (ETB-timestamp order) with no decision callback.
+   This is the SAME §2 decision the round-17 Fight /
+   round-51 Monoist slices made: the genuine probe drives the real
+   agent-driven Python class shim-constrained
+   (`_PickFirstLegalTargetAgent` + a SINGLE staged legal target so
+   the pick is forced byte-equal with Rust's deterministic scan).
+2. *Station + Spacecraft subsystem (the card-level gate).* The full
+   card is `[Artifact — Spacecraft] {8}` with a `Station` activated
+   ability ("Tap another creature you control: Put charge counters
+   equal to its power on this Spacecraft. Station only as a sorcery.
+   It's an artifact creature at 5+.") and a tier line
+   (`5+ | Flying, trample`). Neither `Station`, the `Spacecraft`
+   artifact type, nor the charge-counter tier-threshold P/T/keyword
+   grant is modeled on either engine. The production-deck loader's
+   `_SAFE_*` allowlists do NOT admit Station/Spacecraft cards; this
+   slice does NOT extend them. The Effect-half closure here is the
+   ETB only — the Station subsystem is explicitly out of scope (a
+   separate multi-round subsystem, shared with Warmaker Gunship and
+   the other Spacecraft residue).
+
+**Why it's OK (and which scenarios make it not-OK).** The Effect
+arm + bridge arm + GENUINE real-EoE probe close the real-card
+residue *at the cross-engine-bridge level*: the actual parsed
+printing's full ETB Sequence now round-trips byte-equal. The
+scenario where the deterministic bridge would be wrong is a
+production-deck mirror game where the controller has ≥2 legal
+noncreature permanents and an agent would rationally pick a
+non-first one (e.g. destroy the opponent's best enchantment, not
+their first-played mana rock) — there the first-noncreature pick is
+a strategy divergence. That is why the loader admit is declined
+rather than forced; and independently, the Station/Spacecraft
+subsystem is unmodeled so the card cannot legally enter a
+production-deck mirror game at all today.
+
+**Failure mode**: none in production today (Extinguisher Battleship
+stays drop-filtered by the loader on BOTH the agent-driven-destroy
+gate AND the Station/Spacecraft gate, so it never enters a
+production-deck mirror game through the bridge). If a future slice
+plumbs (a) an agent-driven single-target cross-engine decision
+substrate AND (b) the Station/Spacecraft subsystem, Extinguisher
+Battleship flips admit; until then this deterministic arm is the
+synthetic-probe + genuine-shim-constrained-probe substrate only
+(same trajectory as the Fight / Monoist deterministic siblings).
+
+**Fix scope estimate**: multi-round. The destroy-target-choice
+substrate is the shared agent-driven cross-engine decision plumbing
+(also gating Monoist, Fight-Aura). The Station/Spacecraft subsystem
+(charge-counter accrual, sorcery-speed station activation,
+tier-threshold becomes-artifact-creature + keyword grant) is its
+own multi-round subsystem shared with Warmaker Gunship and the
+remaining Spacecraft residue.
+
+**Impact estimate**: zero strength cost today (real card not
+loader-admitted on either gate; no production exposure). Real-card-
+coverage progress is the cross-engine-bridge closure (the genuine
+real-EoE probe is byte-equal). ~6,237 of 129,996 17lands EoE decks
+run Extinguisher Battleship — the Effect-half residue closed this
+round, loader-drop-filtered by design (Station-subsystem-gated,
+same honest split as round-51 Monoist Circuit-Feeder).
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
