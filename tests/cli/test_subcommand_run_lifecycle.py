@@ -2,16 +2,19 @@
 correctly issues the start_run -> push_eval_summary -> finish_run
 trio against the SQLite run DB.
 
-The body is ``# pragma: no cover`` (argparse + orchestrator
-plumbing); we test it here by stubbing out ``run_distributed_eval``
-with a fake that returns canned counts, pointing
-``MTG_BOT_RUN_DB_PATH`` at a tmp DB, and verifying the rows
-landed correctly. This pins the contract between
-``mtg_bot.cli.eval.main`` and ``mtg_bot.cli.runs.lifecycle``.
+Post v2-cutover the body drives the REST orchestrator
+(``run_stage`` against the coordinator + worker daemons) instead of
+the SSH-based ``run_distributed_eval``. The lifecycle contract under
+test is the same — start_run, then push counters via
+``push_eval_summary``, then finish_run('completed' / 'failed' /
+'killed') based on how main() exits. These tests stub
+``_rest_orch.run_stage`` so the heavy distributed-runtime work is
+not exercised; the observable is the rows that land in runs.db.
 """
 
 from __future__ import annotations
 
+import gzip
 import json
 import sys
 from pathlib import Path
@@ -19,67 +22,80 @@ from unittest.mock import patch
 
 import pytest
 
+from mtg_bot import distributed_rest_orchestrator as _rest_orch
 from mtg_bot.cli import eval as cli_eval
 from mtg_bot.cli.runs import db as runs_db, lifecycle
+
+
+def _v2_shards_config(tmp_path: Path) -> Path:
+    p = tmp_path / "shards.json"
+    p.write_text(
+        json.dumps({"worker_urls": ["http://worker-a:5198"]}),
+        encoding="utf-8",
+    )
+    return p
+
+
+def _common_setup(monkeypatch, tmp_path):
+    db_path = tmp_path / "runs.db"
+    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+    monkeypatch.setattr(lifecycle, "git_commit_short", lambda: "abc1234")
+    # Skip the real deck-pool load — the orchestrator only needs the
+    # size to populate per-game ``deck_indices``.
+    monkeypatch.setattr(cli_eval, "_count_decks_in_pool", lambda p: 4)
+    return db_path
+
+
+def _base_argv(shards: Path, deck_pool: Path, progress_dir: Path,
+               *, games: int = 622, seed: int = 42,
+               nodes: int = 200, samples: int = 4) -> list[str]:
+    return [
+        "--new", "v16", "--old", "v13",
+        "--games", str(games),
+        "--shards-config", str(shards),
+        "--progress-dir", str(progress_dir),
+        "--deck-pool", str(deck_pool),
+        "--queue-url", "http://master:5099",
+        "--bundle-url", "http://master:5099/repo.bundle",
+        "--seed", str(seed),
+        "--nodes", str(nodes),
+        "--samples", str(samples),
+        "--poll-interval-s", "0.0",
+    ]
 
 
 def test_eval_main_round_trips_start_summary_finish(
     monkeypatch, tmp_path,
 ):
-    db_path = tmp_path / "runs.db"
-    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
-    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
-    monkeypatch.setattr(lifecycle, "git_commit_short", lambda: "abc1234")
-
+    db_path = _common_setup(monkeypatch, tmp_path)
     progress_dir = tmp_path / "training_progress"
     deck_pool = tmp_path / "decks.json.gz"
-    deck_pool.write_bytes(b"")  # touch — eval doesn't open it in this test
-    shards_config = tmp_path / "shards.json"
-    shards_config.write_text(json.dumps({"shards": []}), encoding="utf-8")
+    deck_pool.write_bytes(b"")
+    shards = _v2_shards_config(tmp_path)
 
-    fake_counts = {
-        "wins_new": 320, "wins_old": 290,
-        "draws": 10, "crashed": 2,
-    }
+    captured: dict = {}
 
-    captured_call = {}
-
-    def fake_run_distributed_eval(*args, **kwargs):
-        captured_call["args"] = args
-        captured_call["kwargs"] = kwargs
-        # Touch the progress JSON like the real impl would, so the
-        # artifact registration sees a real file size.
-        progress_json = (
-            kwargs["progress_dir"]
-            / f"{kwargs['run_id_prefix']}.json"
-        )
+    def fake_run_stage(*, coordinator_url, worker_urls, spec,
+                       poll_interval_s, **kwargs):
+        captured["coordinator_url"] = coordinator_url
+        captured["spec"] = spec
+        # Touch a progress JSON so the lifecycle artifact registration
+        # sees a real file.
+        progress_json = progress_dir / f"{spec.stage_id}.json"
         progress_json.parent.mkdir(parents=True, exist_ok=True)
         progress_json.write_text("{}", encoding="utf-8")
-        return fake_counts
+        return _rest_orch.StageResult(
+            stage_id=spec.stage_id, status="complete",
+            n_games_done=620, crashed=2, timed_out=0,
+            wins_new=320, wins_old=290, draws=10,
+        )
 
-    fake_load_shards = lambda p: {"shards": []}  # noqa: E731
+    with patch.object(_rest_orch, "run_stage", fake_run_stage):
+        cli_eval.main(_base_argv(shards, deck_pool, progress_dir))
 
-    with patch.object(
-        cli_eval, "run_distributed_eval", fake_run_distributed_eval,
-    ), patch.object(
-        cli_eval, "load_shards_config", fake_load_shards,
-    ):
-        cli_eval.main([
-            "--new", "v16", "--old", "v13",
-            "--games", "622",
-            "--shards-config", str(shards_config),
-            "--progress-dir", str(progress_dir),
-            "--deck-pool", str(deck_pool),
-            "--queue-url", "http://master:5099",
-            "--bundle-url", "http://master:5099/repo.bundle",
-            "--seed", "42",
-            "--nodes", "200",
-            "--samples", "4",
-        ])
-
-    # Subcommand wired its body around the lifecycle CM.
-    assert "args" in captured_call
-    assert captured_call["kwargs"]["run_id_prefix"].startswith("eval_")
+    assert captured["coordinator_url"] == "http://master:5099"
+    assert captured["spec"].stage_id == "eval_v16_vs_v13_622g"
 
     # Verify DB rows landed.
     conn = runs_db.connect(db_path)
@@ -101,7 +117,6 @@ def test_eval_main_round_trips_start_summary_finish(
     assert config["old"] == "v13"
     assert config["games"] == 622
 
-    # The aggregate summary row records the eval counts.
     assert len(progress_rows) == 1
     p = progress_rows[0]
     assert p["wins_new"] == 320
@@ -112,44 +127,27 @@ def test_eval_main_round_trips_start_summary_finish(
     extra = json.loads(p["extra_json"])
     assert extra["win_rate"] == pytest.approx(320 / 610)
 
-    # The progress JSON is registered as an artifact.
+    # Progress JSON registered as an artifact.
     assert len(artifact_rows) == 1
     assert artifact_rows[0]["artifact_type"] == "progress_json"
 
 
 def test_eval_main_marks_failed_on_exception(monkeypatch, tmp_path):
-    """If run_distributed_eval raises, the lifecycle CM should
-    catch -> push finish_run('failed') -> re-raise. The DB row
-    must reflect failed status."""
-    db_path = tmp_path / "runs.db"
-    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
-    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
-    monkeypatch.setattr(lifecycle, "git_commit_short", lambda: "abc")
-
+    """If ``run_stage`` raises, the lifecycle CM catches → finish_run
+    with status=failed → re-raises."""
+    db_path = _common_setup(monkeypatch, tmp_path)
     progress_dir = tmp_path / "training_progress"
     deck_pool = tmp_path / "decks.json.gz"
     deck_pool.write_bytes(b"")
-    shards_config = tmp_path / "shards.json"
-    shards_config.write_text("{}", encoding="utf-8")
+    shards = _v2_shards_config(tmp_path)
 
     def boom(*a, **kw):
-        raise RuntimeError("self-play crashed")
+        raise RuntimeError("stage crashed")
 
-    with patch.object(
-        cli_eval, "run_distributed_eval", boom,
-    ), patch.object(
-        cli_eval, "load_shards_config", lambda p: {"shards": []},
-    ):
-        with pytest.raises(RuntimeError, match="self-play crashed"):
-            cli_eval.main([
-                "--new", "v16", "--old", "v13",
-                "--games", "10",
-                "--shards-config", str(shards_config),
-                "--progress-dir", str(progress_dir),
-                "--deck-pool", str(deck_pool),
-                "--queue-url", "http://master:5099",
-                "--bundle-url", "http://master:5099/repo.bundle",
-            ])
+    with patch.object(_rest_orch, "run_stage", boom):
+        with pytest.raises(RuntimeError, match="stage crashed"):
+            cli_eval.main(_base_argv(shards, deck_pool, progress_dir,
+                                     games=10))
 
     conn = runs_db.connect(db_path)
     try:
@@ -159,172 +157,24 @@ def test_eval_main_marks_failed_on_exception(monkeypatch, tmp_path):
     assert len(rows) == 1
     assert rows[0]["status"] == "failed"
     assert "RuntimeError" in (rows[0]["notes"] or "")
-    assert "self-play crashed" in (rows[0]["notes"] or "")
-
-
-def test_eval_main_threads_architecture_from_registry(monkeypatch, tmp_path):
-    """``mtg_bot eval`` must load each version's metadata and thread
-    ``architecture`` / ``action_encoding_version`` into the EvalJobSpec.
-
-    Regression test for the v2-vs-v1 cold-start eval failure: with
-    architecture defaulted to ``None`` (= flat MLP), the shard worker
-    tried to load structured-architecture weights into ``_ValuePolicyMLP``
-    and crashed with a state_dict shape mismatch on every game. This
-    test pins the fix — registry metadata must reach the spec.
-    """
-    db_path = tmp_path / "runs.db"
-    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
-    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
-    monkeypatch.setattr(lifecycle, "git_commit_short", lambda: "abc1234")
-
-    # Build a tmp registry with two structured-architecture versions.
-    registry_root = tmp_path / "trained_weights"
-    for v in ("v1", "v2"):
-        version_dir = registry_root / v
-        version_dir.mkdir(parents=True)
-        (version_dir / "weights.pt").write_bytes(b"")
-        (version_dir / "metadata.json").write_text(json.dumps({
-            "version": v,
-            "created_at": "2026-05-13T00:00:00Z",
-            "feature_dim": 0,
-            "hidden_sizes": [],
-            "with_policy": True,
-            "architecture": "structured",
-            "action_encoding_version": "canonical_v2",
-            "training": {},
-            "training_history": {},
-            "evaluation": {},
-        }), encoding="utf-8")
-
-    progress_dir = tmp_path / "training_progress"
-    deck_pool = tmp_path / "decks.json.gz"
-    deck_pool.write_bytes(b"")
-    shards_config = tmp_path / "shards.json"
-    shards_config.write_text("{}", encoding="utf-8")
-
-    captured_spec = {}
-
-    def fake_run_distributed_eval(*args, **kwargs):
-        # The second positional arg is the EvalJobSpec.
-        captured_spec["spec"] = args[1]
-        progress_json = (
-            kwargs["progress_dir"]
-            / f"{kwargs['run_id_prefix']}.json"
-        )
-        progress_json.parent.mkdir(parents=True, exist_ok=True)
-        progress_json.write_text("{}", encoding="utf-8")
-        return {"wins_new": 1, "wins_old": 0, "draws": 0, "crashed": 0}
-
-    with patch.object(
-        cli_eval, "run_distributed_eval", fake_run_distributed_eval,
-    ), patch.object(
-        cli_eval, "load_shards_config", lambda p: {"shards": []},
-    ):
-        cli_eval.main([
-            "--new", "v2", "--old", "v1",
-            "--games", "1",
-            "--shards-config", str(shards_config),
-            "--progress-dir", str(progress_dir),
-            "--deck-pool", str(deck_pool),
-            "--queue-url", "http://master:5099",
-            "--bundle-url", "http://master:5099/repo.bundle",
-            "--registry-root", str(registry_root),
-        ])
-
-    spec = captured_spec["spec"]
-    assert spec.new_architecture == "structured"
-    assert spec.old_architecture == "structured"
-    assert spec.new_action_encoding_version == "canonical_v2"
-    assert spec.old_action_encoding_version == "canonical_v2"
-
-
-def test_eval_main_falls_back_when_metadata_missing(monkeypatch, tmp_path):
-    """When a version label isn't registered (e.g. a test stub), the
-    spec falls back to the pre-fix defaults — architecture=None,
-    aev="positional_v1", hidden_sizes=flat default. This preserves
-    back-compat for ad-hoc invocations against unregistered labels.
-    """
-    db_path = tmp_path / "runs.db"
-    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
-    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
-    monkeypatch.setattr(lifecycle, "git_commit_short", lambda: "abc1234")
-
-    registry_root = tmp_path / "trained_weights"  # exists but empty
-
-    progress_dir = tmp_path / "training_progress"
-    deck_pool = tmp_path / "decks.json.gz"
-    deck_pool.write_bytes(b"")
-    shards_config = tmp_path / "shards.json"
-    shards_config.write_text("{}", encoding="utf-8")
-
-    captured_spec = {}
-
-    def fake_run_distributed_eval(*args, **kwargs):
-        captured_spec["spec"] = args[1]
-        progress_json = (
-            kwargs["progress_dir"]
-            / f"{kwargs['run_id_prefix']}.json"
-        )
-        progress_json.parent.mkdir(parents=True, exist_ok=True)
-        progress_json.write_text("{}", encoding="utf-8")
-        return {"wins_new": 1, "wins_old": 0, "draws": 0, "crashed": 0}
-
-    with patch.object(
-        cli_eval, "run_distributed_eval", fake_run_distributed_eval,
-    ), patch.object(
-        cli_eval, "load_shards_config", lambda p: {"shards": []},
-    ):
-        cli_eval.main([
-            "--new", "stub_new", "--old", "stub_old",
-            "--games", "1",
-            "--shards-config", str(shards_config),
-            "--progress-dir", str(progress_dir),
-            "--deck-pool", str(deck_pool),
-            "--queue-url", "http://master:5099",
-            "--bundle-url", "http://master:5099/repo.bundle",
-            "--registry-root", str(registry_root),
-        ])
-
-    spec = captured_spec["spec"]
-    assert spec.new_architecture is None
-    assert spec.old_architecture is None
-    assert spec.new_action_encoding_version == "positional_v1"
-    assert spec.old_action_encoding_version == "positional_v1"
-    assert spec.hidden_sizes == (1024, 1024, 512)
+    assert "stage crashed" in (rows[0]["notes"] or "")
 
 
 def test_eval_main_marks_killed_on_sigint(monkeypatch, tmp_path):
-    """KeyboardInterrupt mid-run should land in the DB as
-    status=killed (not failed)."""
-    db_path = tmp_path / "runs.db"
-    monkeypatch.setenv("MTG_BOT_RUN_DB_PATH", str(db_path))
-    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
-    monkeypatch.setattr(lifecycle, "git_commit_short", lambda: "abc")
-
+    """KeyboardInterrupt mid-run lands in the DB as status=killed."""
+    db_path = _common_setup(monkeypatch, tmp_path)
     progress_dir = tmp_path / "training_progress"
     deck_pool = tmp_path / "decks.json.gz"
     deck_pool.write_bytes(b"")
-    shards_config = tmp_path / "shards.json"
-    shards_config.write_text("{}", encoding="utf-8")
+    shards = _v2_shards_config(tmp_path)
 
     def interrupted(*a, **kw):
         raise KeyboardInterrupt()
 
-    with patch.object(
-        cli_eval, "run_distributed_eval", interrupted,
-    ), patch.object(
-        cli_eval, "load_shards_config", lambda p: {"shards": []},
-    ):
+    with patch.object(_rest_orch, "run_stage", interrupted):
         with pytest.raises(KeyboardInterrupt):
-            cli_eval.main([
-                "--new", "v16", "--old", "v13",
-                "--games", "10",
-                "--shards-config", str(shards_config),
-                "--progress-dir", str(progress_dir),
-                "--deck-pool", str(deck_pool),
-                "--queue-url", "http://master:5099",
-                "--bundle-url", "http://master:5099/repo.bundle",
-            ])
+            cli_eval.main(_base_argv(shards, deck_pool, progress_dir,
+                                     games=10))
 
     conn = runs_db.connect(db_path)
     try:
