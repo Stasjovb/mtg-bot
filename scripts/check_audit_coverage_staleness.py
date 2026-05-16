@@ -135,6 +135,42 @@ This module is that check. It:
      staleness cannot pass *silently*", not "auto-classify". A
      re-verify row is not silent.
 
+6. **The ``blocked_non_effect`` status (round-56 extension).** The
+   binary ``genuinely_missing`` / ``closed`` schema had no precise
+   bucket for "the Effect arm(s) this card needs ARE shipped in Rust;
+   the card's residual blocker is a NON-Effect gate (an unbridged
+   event like ``BECOMES_TAPPED``, a §2-declined cost-mechanic, an
+   unmodeled subsystem, or a token-registration substrate)". Such a
+   card is **not** a BLOCKED-RUST-EFFECT ask (its Effects exist) yet
+   it **cannot** be ``closed`` (``closed`` requires the blocking path
+   be bridged, and the gating path here is precisely *unbridged*).
+   Round-55 hit this with Seedship Agrarian: its real parse is
+   ``Effect::CreateToken`` (Lander) on ``Event.BECOMES_TAPPED`` +
+   ``Effect::PutPlusOneCounterOnSelf`` on landfall — BOTH Effects ARE
+   shipped + bridged at the Effect level, but ``BECOMES_TAPPED`` is
+   §2-declined / unbridged (the round-55 cron correctly rejected a
+   forced ``closed``). The round-56 third status closes that gap. Its
+   cron invariant is the *inverse* of ``genuinely_missing``: instead
+   of asserting the claimed Effect stays *absent*, it asserts every
+   name in the entry's ``shipped_variants`` list IS a live Rust
+   ``Effect::`` variant — so a ``blocked_non_effect`` entry whose
+   "shipped" Effect silently *regresses* to actually-missing (the
+   card quietly became a genuine-Effect ask again) is caught
+   (``residue_blocked_non_effect_regressed``) — AND it requires the
+   entry record its specific ``non_effect_blocker``
+   (missing/empty → ``residue_blocked_non_effect_underspecified``).
+   It deliberately does **NOT** require ``bridged=True`` (that is the
+   whole point — the card is gated precisely because some non-Effect
+   path is unbridged) and does **NOT** carry
+   ``verified_absent_at_commit`` (a genuine-absence stamp is
+   meaningless when the Effects are present; the invariant is
+   shipped-*presence*, not absence). The honest "how far from parity"
+   number is the count of ``genuinely_missing`` entries (TRUE
+   new-Rust-Effect asks); ``blocked_non_effect`` entries are NOT in
+   that count — their Effects exist; they need an event-bridge /
+   subsystem on a different lane. Same never-blocking hook contract:
+   the rows only add to the report + flip the standalone/CI exit.
+
 Standalone use::
 
     PYTHONPATH=src \\
@@ -388,11 +424,15 @@ def parse_residue_worklist(path: Path = RESIDUE_WORKLIST) -> list[dict]:
         )
     for e in entries:
         st = e.get("status")
-        if st not in ("genuinely_missing", "closed"):
+        if st not in (
+            "genuinely_missing",
+            "blocked_non_effect",
+            "closed",
+        ):
             raise RuntimeError(
                 f"residue worklist entry {e.get('entry')!r} has invalid "
-                f"status {st!r} (expected 'genuinely_missing' or "
-                f"'closed')"
+                f"status {st!r} (expected 'genuinely_missing', "
+                f"'blocked_non_effect' or 'closed')"
             )
         if not e.get("aliases"):
             raise RuntimeError(
@@ -404,6 +444,32 @@ def parse_residue_worklist(path: Path = RESIDUE_WORKLIST) -> list[dict]:
                 f"closed residue entry {e.get('entry')!r} must record a "
                 f"'resolved_variant'"
             )
+        if st == "blocked_non_effect":
+            # Round-56 invariant fields. A blocked_non_effect entry's
+            # whole contract is "these Effects ARE shipped; the card is
+            # gated by THIS non-Effect path" — both must be recorded
+            # for the cron to assert the inverse-of-genuinely_missing
+            # invariant (shipped-presence, not absence). A broken entry
+            # is itself a staleness signal (same loud-on-broken-input
+            # contract as the closed/genuinely_missing checks).
+            sv = e.get("shipped_variants")
+            if not isinstance(sv, list) or not sv:
+                raise RuntimeError(
+                    f"blocked_non_effect residue entry "
+                    f"{e.get('entry')!r} must record a non-empty "
+                    f"'shipped_variants' list (the live Rust Effect:: "
+                    f"variant names the card actually needs)"
+                )
+            blk = e.get("non_effect_blocker")
+            if not isinstance(blk, str) or not blk.strip():
+                raise RuntimeError(
+                    f"blocked_non_effect residue entry "
+                    f"{e.get('entry')!r} must record a non-empty "
+                    f"'non_effect_blocker' string (the specific "
+                    f"non-Effect gate — unbridged event / declined "
+                    f"cost-mechanic / unmodeled subsystem / "
+                    f"token-registration substrate)"
+                )
     return entries
 
 
@@ -422,6 +488,13 @@ def compute_residue_staleness(
     * a ``closed`` entry whose recorded ``resolved_variant`` no longer
       resolves to a live + bridged variant (the closure prose itself
       went stale — the inverse regression).
+
+    ``blocked_non_effect`` entries are OUT of scope here — their
+    invariant is the *inverse* (assert the named ``shipped_variants``
+    stay live, NOT that a claimed Effect stays absent) and is owned by
+    ``compute_blocked_non_effect_staleness`` (round-56). They are
+    skipped so a ``blocked_non_effect`` entry is never mis-handled by
+    the ``genuinely_missing`` or ``closed`` arm.
 
     Empty list == every residue claim still matches the live tree.
     """
@@ -456,7 +529,7 @@ def compute_residue_staleness(
                         ),
                     )
                 )
-        else:  # closed — regression guard the other way
+        elif r.status == "closed":  # regression guard the other way
             recorded = e.get("resolved_variant")
             if r.resolved_variant != recorded or not r.bridged:
                 drifts.append(
@@ -481,6 +554,123 @@ def compute_residue_staleness(
                         ),
                     )
                 )
+    return drifts
+
+
+# ------------------------------------- round-56 blocked_non_effect invariant
+#
+# The round-54 lexical check + round-55 structural hardening both
+# answer "is this `genuinely_missing` entry's claimed Effect actually
+# absent?" — they assert *absence*. A `blocked_non_effect` entry makes
+# the OPPOSITE claim: "the Effect arm(s) this card needs ARE shipped;
+# the card is gated by a NON-Effect path (an unbridged event like
+# BECOMES_TAPPED, a §2-declined cost-mechanic, an unmodeled subsystem,
+# a token-registration substrate)". Its invariant is therefore the
+# inverse: every name in the entry's `shipped_variants` MUST stay a
+# live Rust Effect:: variant (a silent regression to actually-missing
+# means the card quietly became a genuine-Effect ask again — that must
+# NOT pass silently), and the entry MUST record its specific
+# non-Effect blocker. It deliberately does NOT require bridged=True
+# (the card is gated precisely because some non-Effect path is
+# unbridged — Seedship Agrarian's Effects ARE bridged; BECOMES_TAPPED
+# is the gate) and carries no `verified_absent_at_commit` (a
+# genuine-absence stamp is meaningless when the Effects are present).
+# Same additive never-blocking hook contract as the round-54/55 rows.
+
+
+def compute_blocked_non_effect_staleness(
+    entries: list[dict],
+    rust_variants: set[str],
+) -> list["Drift"]:
+    """Round-56. For every ``blocked_non_effect`` entry emit, as
+    applicable:
+
+    * ``residue_blocked_non_effect_regressed`` — one or more names in
+      the entry's ``shipped_variants`` is NOT (any longer) a live Rust
+      ``Effect::`` variant. The entry asserts those Effects are
+      shipped (that is why it is NOT a new-Rust-Effect ask); if one
+      silently regressed to actually-missing the card quietly became a
+      genuine-Effect ask again and the honest "how far from parity"
+      count is wrong — surface it, do not pass silently.
+    * ``residue_blocked_non_effect_underspecified`` — the
+      ``non_effect_blocker`` is missing/empty. (The
+      ``parse_residue_worklist`` schema check already raises loudly on
+      this for the committed file; this row is the defensive
+      in-function mirror for direct callers / unit inputs that bypass
+      the parser, exactly like the round-55 ``residue_unverified``
+      row mirrors the absent-stamp condition.)
+
+    Does NOT require ``bridged=True`` and does NOT consult
+    ``verified_absent_at_commit`` — see the section comment.
+    ``genuinely_missing`` / ``closed`` entries are out of scope here.
+    """
+    drifts: list[Drift] = []
+    for e in entries:
+        if e.get("status") != "blocked_non_effect":
+            continue
+        entry = e.get("entry", "?")
+        card = e.get("card", "?")
+
+        blk = e.get("non_effect_blocker")
+        if not isinstance(blk, str) or not blk.strip():
+            drifts.append(
+                Drift(
+                    key=f"residue_blocked_non_effect_underspecified::"
+                    f"{entry}",
+                    label=(
+                        f"BLOCKED-NON-EFFECT residue entry '{card}' "
+                        f"({entry}) is UNDERSPECIFIED"
+                    ),
+                    claimed=1,
+                    actual=0,
+                    hint=(
+                        f"it has no non-empty `non_effect_blocker` "
+                        f"string. A blocked_non_effect entry MUST "
+                        f"record the specific non-Effect gate (an "
+                        f"unbridged event such as BECOMES_TAPPED, a "
+                        f"§2-declined cost-mechanic, an unmodeled "
+                        f"subsystem, or a token-registration "
+                        f"substrate) so the residual is actionable on "
+                        f"the correct lane (event-bridge / subsystem, "
+                        f"NOT new-Rust-Effect). Record it in "
+                        f"docs/residue_worklist.json (round-56 schema)."
+                    ),
+                )
+            )
+
+        shipped = e.get("shipped_variants") or []
+        missing = [
+            v for v in shipped if v not in rust_variants
+        ]
+        if missing:
+            drifts.append(
+                Drift(
+                    key=f"residue_blocked_non_effect_regressed::{entry}",
+                    label=(
+                        f"BLOCKED-NON-EFFECT residue entry '{card}' "
+                        f"({entry}) REGRESSED"
+                    ),
+                    claimed=1,
+                    actual=0,
+                    hint=(
+                        f"it is classed `blocked_non_effect` (the "
+                        f"Effect arm(s) it needs ARE shipped; the card "
+                        f"is gated by `{blk if isinstance(blk, str) else '?'}`"
+                        f"), but its declared shipped Rust Effect "
+                        f"variant(s) {missing!r} no longer resolve to a "
+                        f"live `Effect::` variant — the card quietly "
+                        f"became a genuine-Rust-Effect ask again. "
+                        f"Re-walk it: either the variant was "
+                        f"renamed/removed (fix `shipped_variants` in "
+                        f"docs/residue_worklist.json) or the Effect was "
+                        f"genuinely lost and the entry must move back "
+                        f"to `genuinely_missing` (which would INCREASE "
+                        f"the honest 'how far from parity' count). "
+                        f"Never-blocking, but a blocked_non_effect "
+                        f"regression can no longer pass silently."
+                    ),
+                )
+            )
     return drifts
 
 
@@ -968,10 +1158,15 @@ class Drift:
         ):
             return f"  - STALE: {self.label} — {self.hint}"
         if self.key.startswith(
+            "residue_blocked_non_effect_regressed::"
+        ):
+            return f"  - REGRESSED: {self.label} — {self.hint}"
+        if self.key.startswith(
             (
                 "residue_suspect_needs_reverify::",
                 "residue_needs_reverify::",
                 "residue_unverified::",
+                "residue_blocked_non_effect_underspecified::",
             )
         ):
             return f"  - NEEDS RE-VERIFY: {self.label} — {self.hint}"
@@ -1030,6 +1225,8 @@ def build_report(drifts: list[Drift]) -> str:
         "residue_suspect_needs_reverify::",
         "residue_needs_reverify::",
         "residue_unverified::",
+        "residue_blocked_non_effect_regressed::",
+        "residue_blocked_non_effect_underspecified::",
     )
     count_drifts = [
         d
@@ -1048,8 +1245,10 @@ def build_report(drifts: list[Drift]) -> str:
         lines.append(
             "  Per-entry residue staleness "
             "(round-54 lexical check + round-55 structural hardening "
-            "— the sub-class the count-only cron could not catch, plus "
-            "the non-lexical Pulsar-shape catch):"
+            "+ round-56 blocked_non_effect inverse-invariant — the "
+            "sub-class the count-only cron could not catch, plus the "
+            "non-lexical Pulsar-shape catch, plus the shipped-Effect "
+            "regression catch for blocked_non_effect entries):"
         )
         lines.extend(d.line() for d in residue_drifts)
     lines.append(
@@ -1111,6 +1310,18 @@ def run(*, write_stream=None) -> int:
             rust_variants,
             arm_blocks,
             git_available=git_available,
+        )
+    )
+    # Round-56 blocked_non_effect inverse-invariant — additive, same
+    # never-blocking-hook contract. Asserts every `shipped_variants`
+    # name on a blocked_non_effect entry is still a live Rust Effect::
+    # variant (a silent regression to actually-missing means the card
+    # quietly became a genuine-Effect ask again) + that the entry
+    # records its specific non-Effect blocker. Pure — reuses the
+    # already-collected live `rust_variants` set; no bridge / git.
+    drifts.extend(
+        compute_blocked_non_effect_staleness(
+            residue_entries, rust_variants
         )
     )
     print(build_report(drifts), file=stream)
