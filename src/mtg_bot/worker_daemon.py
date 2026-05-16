@@ -353,11 +353,17 @@ def collect_host_metrics(state: WorkerState) -> dict[str, Any]:
     mem = psutil.virtual_memory()
     cpu_percent = psutil.cpu_percent(interval=None)
     # load_avg_1m: POSIX has getloadavg; on Windows psutil.getloadavg()
-    # returns the rolling 60s cpu_percent average — same shape per the
-    # doc. Avoid raising on platforms where it's unavailable.
+    # returns the rolling 60s cpu_percent average. Catch ANY exception
+    # — this is purely an observability metric and shouldn't crash the
+    # whole /v2/heartbeat. Known Windows brittleness: on hosts whose
+    # performance-counter subsystem is unhealthy psutil raises
+    # ``RuntimeError: PdhAddEnglishCounterW failed`` (observed on
+    # desktop-g72aptg during the v2 cutover smoke). Fall back to the
+    # current cpu_percent reading; it's a sensible approximation and
+    # the UI's heartbeat consumer doesn't differentiate.
     try:
         load_avg_1m = psutil.getloadavg()[0]
-    except (AttributeError, OSError):  # pragma: no cover - platform-dependent
+    except Exception:  # pragma: no cover - platform-dependent
         load_avg_1m = float(cpu_percent)
 
     host: dict[str, Any] = {
