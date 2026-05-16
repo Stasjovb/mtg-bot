@@ -727,15 +727,41 @@ def _build_parser() -> argparse.ArgumentParser:  # pragma: no cover - argparse
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - argparse
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    # Wire up the production GameRunner factories. Without this the
+    # daemon falls into the stub-runner path that transitions states
+    # for tests but never claims games — causing the smoke-test silent
+    # hang (stage stays at n_games_in_flight=0 forever).
+    from mtg_bot import worker_daemon_production_runner as _prod
+
+    def _runner_factory(kind, cfg, _cbs):
+        if kind == "self_play":
+            return _prod.build_self_play_runner(
+                coordinator_url=cfg.coordinator_url,
+                stage_id=cfg.stage_id,
+                n_workers=cfg.n_workers,
+                weights_cache_root=cfg.weights_root,
+                worker_id=cfg.worker_id,
+                deck_pool_path=cfg.deck_pool_path,
+            )
+        if kind == "eval":
+            return _prod.build_eval_runner(
+                coordinator_url=cfg.coordinator_url,
+                stage_id=cfg.stage_id,
+                n_workers=cfg.n_workers,
+                weights_cache_root=cfg.weights_root,
+                worker_id=cfg.worker_id,
+                deck_pool_path=cfg.deck_pool_path,
+            )
+        raise ValueError(f"unknown runner kind: {kind!r}")
+
     app = create_app(
         weights_root=Path(args.weights_cache_root),
         n_workers=args.n_workers,
         deck_pool_path=args.deck_pool_path,
         worker_id=args.worker_id,
+        runner_factory=_runner_factory,
     )
-    # Flask's dev server is fine for Phase 2a — Phase 2c swaps in a
-    # native service supervisor (systemd / launchd / Task Scheduler)
-    # and a production-grade WSGI runner if needed.
     app.run(host=args.host, port=args.port, threaded=True)
     return 0
 
