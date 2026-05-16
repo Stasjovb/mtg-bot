@@ -568,21 +568,21 @@ def test_make_runs_db_progress_writer_pushes_aggregate_and_per_shard():
     assert agg["n_games_total"] == 100
     assert agg["crashed"] == 1
     assert agg["timed_out"] == 2
-    agg_extra = json.loads(agg["extra_json"])
+    agg_extra = agg["extra"]
     assert agg_extra["n_samples"] == 540
     assert agg_extra["n_workers"] == 3
 
     master = next(c for c in fake.calls if c.get("shard_label") == "master")
     assert master["n_games_done"] == 15
     assert master["crashed"] == 1
-    master_extra = json.loads(master["extra_json"])
+    master_extra = master["extra"]
     assert master_extra["n_samples"] == 300
     assert master_extra["n_in_flight"] == 16
     assert master_extra["n_workers"] == 1  # 1 machine per row
 
     mac = next(c for c in fake.calls if c.get("shard_label") == "mac")
     assert mac["n_games_done"] == 12
-    mac_extra = json.loads(mac["extra_json"])
+    mac_extra = mac["extra"]
     assert mac_extra["n_samples"] == 240
 
 
