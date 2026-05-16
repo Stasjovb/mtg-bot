@@ -1,0 +1,90 @@
+=== Galactic Wayfarer ===
+  type_line              = 'Creature — Human Scout'
+  P/T                    = 3/3
+  keywords               = []
+  n triggered_abilities  = 1
+    trigger: event=ENTERS pred=IsSelf eff=CreateToken
+             _python_ta_to_safe_dict -> {'event': 'enters', 'predicate': {'kind': 'source_is_self'}, 'effect': {'kind': 'create_token', 'count': 1, '_token_card_def': CardDef(name='Lander', card_type='Artifact', mana_cost_generic=0, mana_cost_colored=(), mana_produced=(), power=None, toughness=None, triggered_abilities=(), subtypes=('Lander',), supertypes=('Token',), keywords=(), extra_card_types=(), token_activated_abilities=({'cost': {'mana': {'generic': 2}, 'sacrifice_self': True}, 'effect': {'kind': 'search_library_for_basic_land_tapped'}, 'is_mana_ability': False},))}}
+  bridge-simple-creature = True  (ADMITTED)
+  is DIES carrier        = False
+
+=== Beamsaw Prospector ===
+  type_line              = 'Creature — Human Artificer'
+  P/T                    = 2/1
+  keywords               = []
+  n triggered_abilities  = 1
+    trigger: event=DIES pred=IsSelf eff=CreateToken
+             _python_ta_to_safe_dict -> {'event': 'dies', 'predicate': {'kind': 'source_is_self'}, 'effect': {'kind': 'create_token', 'count': 1, '_token_card_def': CardDef(name='Lander', card_type='Artifact', mana_cost_generic=0, mana_cost_colored=(), mana_produced=(), power=None, toughness=None, triggered_abilities=(), subtypes=('Lander',), supertypes=('Token',), keywords=(), extra_card_types=(), token_activated_abilities=({'cost': {'mana': {'generic': 2}, 'sacrifice_self': True}, 'effect': {'kind': 'search_library_for_basic_land_tapped'}, 'is_mana_ability': False},))}}
+  bridge-simple-creature = True  (ADMITTED)
+  is DIES carrier        = True
+
+=== Gravpack Monoist ===
+  type_line              = 'Creature — Human Scout'
+  P/T                    = 2/1
+  keywords               = ['flying']
+  n triggered_abilities  = 1
+    trigger: event=DIES pred=IsSelf eff=CreateToken
+             _python_ta_to_safe_dict -> {'event': 'dies', 'predicate': {'kind': 'source_is_self'}, 'effect': {'kind': 'create_token_tapped', 'count': 1, '_token_card_def': CardDef(name='Robot', card_type='Creature', mana_cost_generic=0, mana_cost_colored=(), mana_produced=(), power=2, toughness=2, triggered_abilities=(), subtypes=('Robot',), supertypes=('Token',), keywords=(), extra_card_types=('Artifact',), token_activated_abilities=())}}
+  bridge-simple-creature = True  (ADMITTED)
+  is DIES carrier        = True
+
+=== Archetypes 0..219 carrying Galactic Wayfarer ===
+  count: 62 of 220 scanned
+  indices: [0, 1, 2, 3, 4, 7, 8, 13, 15, 16, 17, 21, 33, 35, 36, 40, 42, 43, 47, 49, 55, 57, 58, 67, 70, 71, 73, 75, 92, 95, 96, 102, 107, 109, 110, 111, 115, 129, 130, 138, 140, 142, 143, 160, 167, 177, 180, 181, 183, 184, 185, 188, 189, 190, 191, 192, 193, 202, 203, 204, 210, 217]
+
+=== Archetypes 0..219 carrying Beamsaw Prospector ===
+  count: 43 of 220 scanned
+  indices: [18, 32, 36, 37, 39, 47, 61, 62, 63, 64, 68, 73, 76, 88, 91, 95, 97, 100, 101, 105, 106, 122, 123, 131, 132, 136, 137, 139, 145, 146, 152, 153, 156, 157, 169, 170, 174, 176, 179, 197, 201, 206, 207]
+
+=== Archetypes 0..219 carrying Gravpack Monoist ===
+  count: 37 of 220 scanned
+  indices: [9, 18, 22, 35, 36, 37, 39, 49, 52, 63, 64, 66, 69, 72, 73, 77, 88, 89, 90, 91, 97, 122, 123, 137, 139, 152, 153, 169, 170, 174, 179, 197, 198, 201, 209, 216, 219]
+
+=== Recommended targeted-bench subset (token-SBA exercisers) ===
+  arch  73 [DIES] Beamsaw Prospector   x2  other_admitted= 4  ['Galactic Wayfarer x1', 'Gravpack Monoist x2', 'Hullcarver x1', 'Icecave Crasher x1']
+  arch  73 [DIES] Gravpack Monoist     x2  other_admitted= 4  ['Beamsaw Prospector x2', 'Galactic Wayfarer x1', 'Hullcarver x1', 'Icecave Crasher x1']
+  arch  95 [DIES] Beamsaw Prospector   x1  other_admitted= 4  ['Eumidian Terrabotanist x2', 'Galactic Wayfarer x1', 'Hullcarver x1', 'Thawbringer x1']
+  arch 122 [DIES] Beamsaw Prospector   x1  other_admitted= 4  ['Eumidian Terrabotanist x1', 'Gravpack Monoist x1', 'Icecave Crasher x1', 'Thawbringer x2']
+  arch 123 [DIES] Beamsaw Prospector   x1  other_admitted= 4  ['Eumidian Terrabotanist x1', 'Gravpack Monoist x1', 'Icecave Crasher x1', 'Thawbringer x2']
+  arch  35 [DIES] Gravpack Monoist     x1  other_admitted= 4  ['Eumidian Terrabotanist x1', 'Galactic Wayfarer x3', 'Hullcarver x1', 'Monoist Sentry x1']
+  arch  49 [DIES] Gravpack Monoist     x1  other_admitted= 4  ['Galactic Wayfarer x1', 'Hullcarver x1', 'Icecave Crasher x1', 'Monoist Sentry x1']
+  arch 122 [DIES] Gravpack Monoist     x1  other_admitted= 4  ['Beamsaw Prospector x1', 'Eumidian Terrabotanist x1', 'Icecave Crasher x1', 'Thawbringer x2']
+  arch 123 [DIES] Gravpack Monoist     x1  other_admitted= 4  ['Beamsaw Prospector x1', 'Eumidian Terrabotanist x1', 'Icecave Crasher x1', 'Thawbringer x2']
+  arch 101 [DIES] Beamsaw Prospector   x2  other_admitted= 3  ['Hullcarver x1', "Mm'menon, the Right Hand x1", 'Monoist Sentry x1']
+  arch  36 [DIES] Beamsaw Prospector   x1  other_admitted= 3  ['Galactic Wayfarer x1', 'Gravpack Monoist x1', 'Tapestry Warden x1']
+  arch 139 [DIES] Beamsaw Prospector   x1  other_admitted= 3  ['Gravpack Monoist x1', 'Hullcarver x1', 'Monoist Sentry x1']
+  arch 146 [DIES] Beamsaw Prospector   x1  other_admitted= 3  ['Eumidian Terrabotanist x1', 'Icecave Crasher x1', 'Monoist Sentry x1']
+  arch  36 [DIES] Gravpack Monoist     x1  other_admitted= 3  ['Beamsaw Prospector x1', 'Galactic Wayfarer x1', 'Tapestry Warden x1']
+  arch  69 [DIES] Gravpack Monoist     x1  other_admitted= 3  ['Eumidian Terrabotanist x1', 'Icecave Crasher x1', 'Tapestry Warden x1']
+  arch 139 [DIES] Gravpack Monoist     x1  other_admitted= 3  ['Beamsaw Prospector x1', 'Hullcarver x1', 'Monoist Sentry x1']
+  arch  37 [DIES] Gravpack Monoist     x3  other_admitted= 2  ['Beamsaw Prospector x2', 'Monoist Sentry x1']
+  arch  37 [DIES] Beamsaw Prospector   x2  other_admitted= 2  ['Gravpack Monoist x3', 'Monoist Sentry x1']
+  arch 105 [DIES] Beamsaw Prospector   x2  other_admitted= 2  ['Hullcarver x1', 'Monoist Sentry x2']
+  arch 152 [DIES] Beamsaw Prospector   x2  other_admitted= 2  ['Gravpack Monoist x2', 'Hullcarver x1']
+  arch 153 [DIES] Beamsaw Prospector   x2  other_admitted= 2  ['Gravpack Monoist x2', 'Hullcarver x1']
+  arch 152 [DIES] Gravpack Monoist     x2  other_admitted= 2  ['Beamsaw Prospector x2', 'Hullcarver x1']
+  arch 153 [DIES] Gravpack Monoist     x2  other_admitted= 2  ['Beamsaw Prospector x2', 'Hullcarver x1']
+  arch  47 [DIES] Beamsaw Prospector   x1  other_admitted= 2  ['Galactic Wayfarer x2', 'Monoist Sentry x1']
+  arch  63 [DIES] Beamsaw Prospector   x1  other_admitted= 2  ['Gravpack Monoist x1', 'Hullcarver x1']
+  arch 145 [DIES] Beamsaw Prospector   x1  other_admitted= 2  ['Eumidian Terrabotanist x1', 'Monoist Sentry x1']
+  arch 169 [DIES] Beamsaw Prospector   x1  other_admitted= 2  ['Gravpack Monoist x1', 'Remnant Elemental x1']
+  arch 174 [DIES] Beamsaw Prospector   x1  other_admitted= 2  ['Gravpack Monoist x1', 'Monoist Sentry x1']
+  arch 201 [DIES] Beamsaw Prospector   x1  other_admitted= 2  ['Gravpack Monoist x1', 'Hullcarver x1']
+  arch  63 [DIES] Gravpack Monoist     x1  other_admitted= 2  ['Beamsaw Prospector x1', 'Hullcarver x1']
+  arch  66 [DIES] Gravpack Monoist     x1  other_admitted= 2  ['Hullcarver x1', "Mm'menon, the Right Hand x1"]
+  arch 169 [DIES] Gravpack Monoist     x1  other_admitted= 2  ['Beamsaw Prospector x1', 'Remnant Elemental x1']
+  arch 174 [DIES] Gravpack Monoist     x1  other_admitted= 2  ['Beamsaw Prospector x1', 'Monoist Sentry x1']
+  arch 198 [DIES] Gravpack Monoist     x1  other_admitted= 2  ['Eumidian Terrabotanist x1', 'Thawbringer x1']
+  arch 201 [DIES] Gravpack Monoist     x1  other_admitted= 2  ['Beamsaw Prospector x1', 'Hullcarver x1']
+  arch 179 [DIES] Beamsaw Prospector   x3  other_admitted= 1  ['Gravpack Monoist x2']
+  arch  18 [DIES] Beamsaw Prospector   x2  other_admitted= 1  ['Gravpack Monoist x1']
+  arch  39 [DIES] Beamsaw Prospector   x2  other_admitted= 1  ['Gravpack Monoist x1']
+  arch  68 [DIES] Beamsaw Prospector   x2  other_admitted= 1  ['Hullcarver x1']
+  arch 197 [DIES] Beamsaw Prospector   x2  other_admitted= 1  ['Gravpack Monoist x1']
+
+=== Prime DIES exerciser archetypes (n_other>=1) ===
+  count=47
+  --archetypes 18,35,36,37,39,47,49,61,62,63,64,66,68,69,73,77,88,89,90,91,95,97,100,101,105,106,122,123,131,132
+
+=== Archetypes carrying >=2 distinct DIES carriers ===
+  [18, 36, 37, 39, 63, 64, 73, 88, 91, 97, 122, 123, 137, 139, 152, 153, 169, 170, 174, 179, 197, 201]
