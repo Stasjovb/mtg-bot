@@ -7,11 +7,9 @@ Subcommands live in ``mtg_bot.cli.<name>``; each exposes a ``main()``
 that parses its own ``argv``. The dispatcher here just routes the
 first positional to the right module and forwards the rest.
 
-The four production subcommands (``iterate``, ``train``, ``shard``,
-``serve``) also ship as thin shims under ``scripts/`` so existing
-SSH invocations and the bundle/queue server keep working without
-client-side changes; see ``scripts/run_self_play_shard.py`` for an
-example shim.
+Post v2-cutover the ``shard`` subcommand is gone — distributed work
+goes through ``mtg_bot.worker_daemon`` (long-lived REST service)
+instead of one-shot SSH-launched shard processes.
 """
 
 from __future__ import annotations
@@ -24,7 +22,6 @@ from typing import Sequence
 _SUBCOMMANDS = {
     "iterate": "mtg_bot.cli.iterate",
     "train": "mtg_bot.cli.train",
-    "shard": "mtg_bot.cli.shard",
     "serve": "mtg_bot.cli.serve",
     "capture": "mtg_bot.cli.capture",
     "eval": "mtg_bot.cli.eval",
@@ -35,7 +32,6 @@ _SUBCOMMANDS = {
 _DESCRIPTIONS = {
     "iterate": "Run the AlphaZero training loop (self-play -> train -> eval).",
     "train": "Train the value+policy network from saved self-play data.",
-    "shard": "Run one self-play or eval shard (SSH-invoked from master).",
     "serve": "Bundle/queue HTTP server (port 5099) for the distributed flow.",
     "capture": "Capture annotated NN-driven self-play replays for replay-viewer review.",
     "eval": "Run a head-to-head eval between two registered NN versions.",

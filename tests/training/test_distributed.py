@@ -3086,29 +3086,9 @@ def test_weights_digest_returns_none_for_missing_file(tmp_path: Path):
     assert _weights_digest(str(tmp_path / "nope.pt")) is None
 
 
-def test_run_self_play_shard_script_exists_and_imports():
-    """Smoke that the script file exists at scripts/run_self_play_
-    shard.py and is at least importable / has --help. The deeper
-    integration (run a fake shard end-to-end) is covered by
-    test_run_shard_local — we don't need a duplicate via
-    subprocess."""
-    import os
-    import subprocess
-    import sys as _sys
-
-    repo_root = Path(__file__).resolve().parents[2]
-    script = repo_root / "scripts" / "run_self_play_shard.py"
-    assert script.is_file()
-    # Use the same interpreter running the test — works regardless
-    # of where the worktree lives relative to the venv.
-    env = {**os.environ, "PYTHONPATH": str(repo_root / "src")}
-    res = subprocess.run(
-        [_sys.executable, str(script), "--help"],
-        capture_output=True, text=True, env=env, timeout=30,
-    )
-    assert res.returncode == 0, res.stderr
-    assert "--spec-b64" in res.stdout
-    assert "--shard-b64" in res.stdout
+# v2-cutover removed scripts/run_self_play_shard.py — the SSH shim
+# is gone, replaced by the worker daemon's REST endpoints. The
+# corresponding "script exists and imports" smoke test was deleted.
 
 
 # ---- Distributed replay collection --------------------------------
