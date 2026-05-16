@@ -13,24 +13,34 @@ and so we have a clear record of WHY each shortcut was taken.
 
 ## Headline counts (refreshed 2026-05-15, main `c62935d2`)
 
-- **Active entries:** 28 (1-15 numbered + 13 unnumbered Rust-port /
-  combat / Python-Scry entries below). Entry #16 is CLOSED.
+- **Active entries:** 27 (1-14 numbered + 13 unnumbered Rust-port /
+  combat / Python-Scry entries below). Entries #15 and #16 are now
+  CLOSED — #15's supertypes-proxy half closed by round 37
+  (`feature/rust-search-basic-land-tapped-supertypes-migration`);
+  #16's xorshift64-only-shuffle half closed by
+  `feature/effect-rng-threading`.
 - **Round-34 audit cycle (2026-05-15):** every entry below was
   spot-checked against `rust/src/cards.rs::Effect` /
   `rust/src/state_ops_resolve.rs` / the cross-engine bridge on main
   `c62935d2` to confirm the divergence still applies.
   - Entry #15 (SearchLibraryForBasicLandTapped supertypes-proxy):
-    **PARTIAL-RESOLVED.** Round-30 supertypes substrate landed in
+    **CLOSED (round 37).** Round-30 supertypes substrate landed in
     `rust/src/cards.rs:3278` (`feature/rust-supertypes-registry`
-    merge `ef8fa004`); single consumer-side migration pending on
-    the `Effect::SearchLibraryForBasicLandTapped` arm in
-    `state_ops_resolve.rs:2378` (the in-code "deferred supertypes
-    work" comment at `state_ops_resolve.rs:2310-2319` is now the
-    direct ask). See entry-level update below.
+    merge `ef8fa004`); the consumer-side migration on the
+    `Effect::SearchLibraryForBasicLandTapped` arm in
+    `state_ops_resolve.rs:2378` shipped in round 37
+    (`feature/rust-search-basic-land-tapped-supertypes-migration`)
+    — predicate now reads
+    `card_types Land AND supertypes Basic`, bit-equivalent to
+    Python's `is_basic_land`. The cross-engine bridge in
+    `parity/cross_engine.py::build_rust_state` now stamps the
+    `("Basic",)` supertype on Land CardDefs that omit it, mirroring
+    the Python builder's existing heuristic — so the predicate's
+    extra rigor doesn't break parity probes. See entry-level update
+    below.
   - All other entries: divergence pin tests still passing on main
     (each entry's "Pinned by:" reference verified live); the
-    documented gap still exists in the cited code. No entries
-    closed this cycle beyond entry #15's substrate landing.
+    documented gap still exists in the cited code.
 - **Sibling tracking:** `docs/EOE_PROBE_READINESS_AUDIT.md` rounds
   30-35 closed 7 BLOCKED-RUST-EFFECT entries on the EoE pool
   (stun-counter, double-power, damage-by-artifact-count,
@@ -832,87 +842,95 @@ by the rarity of "proliferating my opponent makes me lose".
 
 ---
 
-## 15. SearchLibraryForBasicLandTapped: supertypes-proxy filter + xorshift64-only post-search shuffle
+## ~~15.~~ CLOSED: SearchLibraryForBasicLandTapped supertypes-proxy filter + xorshift64-only post-search shuffle
 
-**Status update (round-34 refresh, 2026-05-15):** the supertypes
-substrate landed in **round 30** (`feature/rust-supertypes-registry`
-merge `ef8fa004` — `CardPrinting.supertypes: Vec<String>` field at
+**Closed by** `feature/rust-search-basic-land-tapped-supertypes-migration`
+(round 37, 2026-05-15) — the supertypes-proxy half — and
+`feature/effect-rng-threading` (entry #16, G19 follow-up) — the
+xorshift64-only-shuffle half. Both halves of the original divergence
+are now bit-equivalent to Python's `is_basic_land` /
+`random.Random.shuffle` shapes.
+
+**Round-37 closure (supertypes half):** the round-30 supertypes
+substrate (`feature/rust-supertypes-registry` merge `ef8fa004` —
+`CardPrinting.supertypes: Vec<String>` field at
 `rust/src/cards.rs:3278`, JSON load at `cards.rs:5132-5148`,
-pymethod getter at `cards.rs:6278`). The
-`Effect::SearchLibraryForBasicLandTapped` resolve arm at
-`state_ops_resolve.rs:2378` was NOT updated to consume it — the
-filter predicate still tests `card_types contains "Land"` (see
-`state_ops_resolve.rs:2310-2319` for the in-code "deferred
-supertypes work" comment). The round-30 substrate landed alongside
-the related `Effect::SearchLibraryForCard` filter dispatch update
-(`legendary_creature` / `spacecraft` / `sliver` / `demon` predicates
-flipped from silent-fizzle to supertypes-substrate); this sibling
-arm's flip is the remaining residue. **Reclassify the supertypes
-half of this entry as PARTIAL-RESOLVED: substrate available, single
-consumer-side migration pending.** The xorshift64-only post-search
-shuffle half closed in entry #16 (G19 follow-up); the Python-side
-"resolve doesn't call `shuffle_library` today" Stage-3
-simplification is the residual gap on the Python half.
+pymethod getter at `cards.rs:6278`) landed earlier than its single
+remaining consumer. Round 22's filter-dispatch widening flipped the
+sibling `Effect::SearchLibraryForCard` arm's `legendary_creature`
+predicate to consume the substrate; the
+`Effect::SearchLibraryForBasicLandTapped` arm at
+`state_ops_resolve.rs:2378` was left on the
+`card_types contains "Land"`-only proxy (the in-code "deferred
+supertypes work" comment was the residual TODO marker).
 
-**Location**: `rust/src/state_ops_resolve.rs::apply_effect` —
-search for the `Effect::SearchLibraryForBasicLandTapped` arm (round-23
-effect-coverage slice; G19 closure post-shuffle). Variant declared
-in `rust/src/cards.rs`.
+Round 37 closes the residue: the predicate now reads
+`card_types Land AND supertypes Basic` (CR 205.4a — basic land =
+land with the Basic supertype), bit-equivalent to Python's
+`is_basic_land = is_land and "Basic" in supertypes`. Parity-side
+follow-up: `parity/cross_engine.py::build_rust_state` now stamps
+the `("Basic",)` supertype on Land CardDefs that omit it, mirroring
+the Python `_build_python_state` builder's existing heuristic — so
+the Rust-side predicate's extra rigor doesn't surface as a parity
+divergence on the convenience-form Land CardDefs (e.g.
+`CardDef(name="Forest", card_type="Land", mana_produced=("G",))`).
 
-**What we do today**: when an
-`Effect::SearchLibraryForBasicLandTapped { count }` resolves, the
-active player's library is scanned top-to-bottom (Vec iter rev), the
-topmost object whose printing's `card_types` contains "Land" is
-removed and placed onto the controller's battlefield with
-`tapped = true`, `summoning_sick = false`. Repeats up to `count`
-times; partial fill is allowed if fewer matches exist. **After all
-picks (or the early-`break` on no-more-basic-lands), the library is
-Fisher-Yates shuffled per CR 701.19 / 701.22** (G19 closure —
-xorshift64-only path; see follow-up gap #16 below for the
-cross-engine MT parity deferral).
+**Pin tests added (round 37):**
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_requires_basic_supertype`
+  — a Land without the Basic supertype (non-basic dual / shock /
+  fetch land shape) is rejected by the predicate.
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_requires_land_card_type`
+  — a non-Land carrying the Basic supertype (degenerate Basic
+  Artifact shape) is rejected by the predicate.
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_rejects_mistyped_basic_land_compound`
+  — a hand-rolled fixture mis-encoding "Basic Land" as a single
+  compound `card_types` entry (with empty supertypes) is rejected
+  by the predicate's two-AND-ed contains check.
+- `tests_rust/test_resolve.py::test_resolve_search_library_for_basic_land_tapped_picks_basic_over_nonbasic`
+  — when the library has BOTH a non-basic land at the top and a
+  basic Forest beneath it, the search walks past the non-basic and
+  lands on the Forest (the supertypes half filters out the top-of-
+  library non-basic).
 
-**Why this diverges from Python / CR**: two remaining shortcuts.
+The round-21 regression pins
+(`test_resolve_search_library_for_basic_land_tapped_*` count-1 /
+count-2 / picks-topmost / no-land-no-op / preserves-controller /
+count-zero / shuffle / shuffle-deterministic / external-rng /
+controller-routing) all continued to pass on first run after the
+migration — the synthetic Forest seed at
+`rust/src/state.rs:1791` already carried `supertypes=["Basic"]` on
+its CardPrinting (round-30 registry update), so the migration is
+behavior-preserving for the existing test surface and the four new
+pins above are the direct supertypes-half exercise.
 
-1. *"Basic land" filter is a `card_types` Land check, not a true
-   supertypes check.* Python's `is_basic_land` is
-   `is_land and "Basic" in supertypes`. The Rust bridge has no
-   `supertypes` field today (it ships `card_types` + `keywords` +
-   P/T/mana_produced and not much else), so "basic" half of "basic
-   land" is approximated by the card_types Land check.
-2. *Python's `SearchLibraryForBasicLandTapped.resolve` also does NOT
-   call `shuffle_library`*. The docstring claims "then shuffle" but
-   the resolve method elides it (Stage-3 simplification documented
-   on the class — "picks the FIRST count basic lands in library
-   order (no extra shuffle)"). So Rust's G19-closure post-search
-   shuffle is technically MORE CR-compliant than Python's path
-   today; this introduces a new cross-engine library-order
-   divergence (see follow-up gap #16 below).
+**Entry #16 (xorshift64-only shuffle half) closed earlier** by
+`feature/effect-rng-threading` — the
+`Effect::SearchLibraryForBasicLandTapped` resolve arm now routes
+its post-search Fisher-Yates shuffle through the external rng
+substrate when one is installed via
+`GameState.set_external_rng(rng)`, producing byte-identical
+permutations to `random.Random.shuffle(list)`. See entry #16
+(below) for the full closure shape.
 
-**Failure mode**:
+**Residual Python-side gap:** the original entry flagged that
+Python's `SearchLibraryForBasicLandTapped.resolve` does NOT call
+`shuffle_library` (Stage-3 simplification documented on the class).
+That Python-side gap is unchanged by this round; the cross-engine
+divergence it produced was masked by the round-30 introduction of
+external-rng threading on the Rust side (Python's no-shuffle path
+stays the canonical reference for parity probes that install the
+shared rng). The Python-side shuffle restoration is tracked under
+the broader Python-Scry-cleanup tail entries below; not in scope of
+this entry's closure.
 
-1. *Supertypes-proxy false positive.* If a card with
-   `card_types=["Land"]` but supertypes excluding "Basic" enters the
-   library (e.g. a non-basic dual land, fetch land, shock land), the
-   Rust dispatch will pick it up; Python's `is_basic_land` will
-   reject it. In the current EoE pool no non-basic land coexists
-   with `SearchLibraryForBasicLandTapped` on the same engine state
-   (the printing carries one card_type only), so the proxy is
-   faithful for the present pool — but it WILL diverge once
-   non-basic lands enter scope.
-
-**When it matters**:
-- Supertypes gap: zero in the EoE pool; non-zero the moment a
-  non-basic land joins the bridge.
-
-**Fix scope when prioritized**:
-- *Supertypes*: medium — grow `CardPrinting` with a
-  `supertypes: Vec<String>` field, extend the parser to require/parse
-  it, swap the filter to check `supertypes.iter().any(|s| s ==
-  "Basic")`. Touches the bridge schema, parsing, and every test that
-  builds a printing dict.
-
-**Impact estimate**:
-- Supertypes: zero today (EoE pool only); rises with cards.
+**Location of the now-CR-compliant code**:
+`rust/src/state_ops_resolve.rs::apply_effect` — the
+`Effect::SearchLibraryForBasicLandTapped` arm (round-23 effect-
+coverage slice; G19 closure post-shuffle; round-37 supertypes
+migration). Variant declared in `rust/src/cards.rs`. Cross-engine
+bridge supertypes default at
+`src/mtg_bot/parity/cross_engine.py::build_rust_state` (round-37
+parity follow-up).
 
 ---
 
