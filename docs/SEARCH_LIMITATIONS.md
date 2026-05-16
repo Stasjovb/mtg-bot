@@ -923,6 +923,55 @@ shared rng). The Python-side shuffle restoration is tracked under
 the broader Python-Scry-cleanup tail entries below; not in scope of
 this entry's closure.
 
+**Round-53 N1 escalation — the residual Python-side gap is now
+REAL-CARD-EXPOSED (Phase 3a).** Before round 53 the Python-no-shuffle
+vs Rust-post-search-shuffle divergence was *latent*: no production
+path drove a `SearchLibraryForBasicLandTapped` whose post-search
+library order was observable cross-engine, because every Lander-token
+carrier was dropped by the production-deck loader (§2.3 — the
+non-vanilla Lander). Round-53 N1's **Phase 3a** admits the
+fixed-single-Lander-token carriers (Galactic Wayfarer 33,469 decks,
+Beamsaw Prospector 24,310 decks — `TOKEN_PRINTING_SUBSTRATE.md` §8),
+so an explicit Lander `{2},Sac:SearchLibraryForBasicLandTapped`
+activation can now reach this divergence on a real EoE card. The gap
+is **pinned explicitly** by
+`tests/test_parity_smoke.py::test_phase3a_genuine_real_eoe_galactic_
+wayfarer_lander_activation` (CONTRACT 2 — round-39 latent-SBA
+known-gap precedent): the probe drives the activation and asserts the
+invariants that DO hold cross-engine (library multiset equal, length
+equal, Lander sacrificed off bf, basic land searched onto bf) PLUS
+the exact documented divergence set
+`{battlefield, graveyard_p0, library_p0}`. The probe **auto-converts**
+to a clean `compare_fields == []` byte-equal assertion the moment the
+Python-side shuffle is restored.
+
+**Why the Phase-3a admit stays §2-safe despite the real-card
+exposure.** The bench / trajectory walk
+(`scripts/bench_trajectory_parity.py`) drives carrier ETBs but
+**never sac-activates the Lander** (it only emits `activate_ability`
+for tapping lands for mana). Under the bench's strategy set the
+divergent activation is never driven, and the load-bearing
+cross-engine guarantee for the admit is the token *entering*
+byte-equal (proven `compare_fields == []` pre-activation — CONTRACT
+1 of the probe + the headline bridge pin). Same shape as the
+round-39 `ward_cost` filter decision ("BIT-EQUAL in the attack_all
+strategy used by the bench").
+
+**Fix-scope estimate (round-54 highest-leverage next step):** restore
+the Python-side post-search Fisher-Yates shuffle on
+`effects/generic/search.py:SearchLibraryForBasicLandTapped.resolve`,
+consuming the shared `random.Random` the parity harness installs
+(the Rust side already consumes it — entry #16) so the two engines'
+post-search permutations are byte-identical. Python-lane, ~1 slice;
+closes this residual + auto-converts the genuine probe's CONTRACT 2.
+
+**Impact estimate:** strength-neutral (the library is hidden
+information; the search picks the topmost basic on both engines
+regardless of post-search order). The cost is purely the cross-engine
+parity gap — it blocks a byte-equal Lander *activation* in the bench
+the day a strategy that sac-activates the Lander is added. Until then
+the gap is latent-under-the-current-bench-strategy + pinned.
+
 **Location of the now-CR-compliant code**:
 `rust/src/state_ops_resolve.rs::apply_effect` — the
 `Effect::SearchLibraryForBasicLandTapped` arm (round-23 effect-
