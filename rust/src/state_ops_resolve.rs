@@ -848,6 +848,65 @@ fn read_doubling_power(state: &GameState, obj_id: u32) -> i32 {
     base + obj.ueot_power_bonus() + obj.counters
 }
 
+/// **BLOCKED-RUST-EFFECT slice (round 54) — Famished Worldsire ETB
+/// source-power read.**
+///
+/// Returns the source creature's CURRENT effective power = `X` in
+/// "look at the top X cards of your library, where X is this
+/// creature's power". Computed to MATCH Python's source-of-truth
+/// `FamishedWorldsireETBEffect.resolve` (`effects/bespoke.py:116`),
+/// which reads `mtg_bot.game.effective_power(state, source)` =
+/// `_compute_effective_pt` (`game.py:2138`). Famished Worldsire's
+/// Devour rider seeds +1/+1 counters as it enters, so the read MUST
+/// fold in `obj.counters` — a base-power read would be a real §2
+/// silent mistranslation (same class the round-53 Mightform fix
+/// closed).
+///
+/// **Composition (per-slice file-isolation: re-derived here rather
+/// than cross-calling `read_doubling_power`).**
+/// `base (UEOT-SetBasePT override / manland / printed)
+///  + ueot_power_bonus()  + obj.counters`
+/// — `obj.counters` (signed i32) is Rust's analogue of Python's
+/// `plus_one_counters - minus_one_counters` (`game.py:2251`); the SBA
+/// path at `state_ops_sba.rs:200` uses the SAME composition,
+/// confirming the mapping. Source not on a battlefield → 0 (matches
+/// Python's `if source is None: return` short-circuit chained with
+/// `if x <= 0: return`).
+///
+/// **Documented residual (SEARCH_LIMITATIONS, round-54 entry).**
+/// Layer-7c static anthems and layer-7e P/T switches are NOT folded
+/// here (same established combat-side / round-53 asymmetry); no
+/// bridge-correct Famished Worldsire scenario reaches them (the card
+/// has no anthem/switch rider and the genuine probe stages none).
+fn read_famished_source_power(state: &GameState, obj_id: u32) -> i32 {
+    let mut found: Option<&GameObject> = None;
+    for player in state.players.iter() {
+        if let Some(obj) =
+            player.battlefield.iter().find(|o| o.id == obj_id)
+        {
+            found = Some(obj);
+            break;
+        }
+    }
+    let Some(obj) = found else {
+        return 0;
+    };
+    let Some(printing) =
+        state.registry.printings.get(obj.printing_id as usize)
+    else {
+        return 0;
+    };
+    let printed_base = printing.power.unwrap_or(0) as i32;
+    let base = obj
+        .ueot_base_pt_override()
+        .map(|(p, _)| p)
+        .or_else(|| {
+            obj.ueot_becomes_land_creature_pt().map(|(p, _)| p)
+        })
+        .unwrap_or(printed_base);
+    base + obj.ueot_power_bonus() + obj.counters
+}
+
 /// Push `amount` damage onto the battlefield creature's per-instance
 /// `damage` marker (saturating add into i16). Routes through
 /// `Arc::make_mut` on the containing battlefield Vec to preserve CoW.
@@ -8561,6 +8620,180 @@ fn apply_effect(
                     cards,
                 },
             );
+        }
+        // **BLOCKED-RUST-EFFECT slice (round 54) — Famished Worldsire
+        // ETB.** "Look at the top X cards of your library, where X is
+        // this creature's power. Put any number of land cards from
+        // among them onto the battlefield tapped, then shuffle."
+        // Mirrors Python's `FamishedWorldsireETBEffect.resolve`
+        // (`effects/bespoke.py:106`) STEP-FOR-STEP so the post-resolve
+        // state is byte-equal:
+        //   source = state.resolving_source            (Rust: source_obj_id)
+        //   if source is None: return                  (read returns 0 → x<=0 no-op)
+        //   x = effective_power(state, source)         (read_famished_source_power)
+        //   if x <= 0: return
+        //   examined = p.library[:x]
+        //   lands = [c for c in examined if c.printing.is_land]
+        //   for land in lands: remove → bf tapped; fire_landfall
+        //   shuffle_library(state, controller_id)
+        //
+        // **No PendingDecision.** The oracle's "put any number" is a
+        // deterministic greedy-ALL on the Python source-of-truth side
+        // (`bespoke.py:121`, documented "any number" → greedy-land
+        // simplification, strictly ramp-positive). Both engines mirror
+        // it; no decision is plumbed, so there is no §2
+        // silent-mistranslation surface from the choice.
+        Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped => {
+            // Source-controller resolution — same shape as
+            // `SearchLibraryForBasicLandTapped` / `LookTopN...`
+            // (I69 / I61): "your library" = the SOURCE's controller's
+            // library, NOT the active player's. CR 119.5 / 608.2.
+            let controller = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+            let controller_idx = controller as usize;
+            let controller_u8 = controller;
+            // X = source's CURRENT effective power (post-Devour +1/+1
+            // counters). Source off-battlefield → read returns 0.
+            // x <= 0 → silent no-op (mirrors Python's chained
+            // `if source is None: return` / `if x <= 0: return`).
+            let x = read_famished_source_power(state, source_obj_id);
+            if x <= 0 {
+                return Ok(());
+            }
+            let lib_len = state.players[controller_idx].library.len();
+            // `p.library[:x]` — examine the top min(x, lib_len) cards.
+            // Post-CE3 the top of library is lib[0]; the examined
+            // window is the first `count` entries.
+            let count = (x as usize).min(lib_len);
+            // Collect the Vec INDICES of land cards in the examined
+            // window, top-to-bottom (Python builds `lands` via a
+            // top-to-bottom list comprehension over `examined`, then
+            // `.remove(land)` each in that order — the survivors are
+            // unaffected since removal is by identity). We snapshot
+            // the indices first, then remove from the BACK so earlier
+            // indices stay valid (equivalent to Python's
+            // identity-`.remove()` loop; non-land "rest" cards stay in
+            // the library exactly where they were — `bespoke.py:122`).
+            let land_indices: Vec<usize> = {
+                let lib = &state.players[controller_idx].library;
+                let mut idxs: Vec<usize> = Vec::new();
+                for (i, obj) in lib.iter().enumerate().take(count) {
+                    let printing = match state.registry.lookup(obj.printing_id) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    // Python's `printing.is_land` = `"Land" in
+                    // card_types` (`cards/base.py:1021`). Famished
+                    // Worldsire accepts ANY land (no Basic supertype
+                    // gate — unlike `SearchLibraryForBasicLandTapped`).
+                    if printing.card_types.iter().any(|t| t == "Land") {
+                        idxs.push(i);
+                    }
+                }
+                idxs
+            };
+            // ETB-trigger fan-out: collect entered land obj_ids so we
+            // can queue `Event::Enters` (landfall) AFTER the post-move
+            // shuffle drops its borrows — same shape as
+            // `SearchLibraryForBasicLandTapped`. Python calls
+            // `fire_landfall_triggers(state, land)` per land in
+            // top-to-bottom order; we preserve that order by draining
+            // `land_indices` low→high and pushing in that order.
+            let mut entered_ids: Vec<u32> =
+                Vec::with_capacity(land_indices.len());
+            // Remove from the BACK so earlier indices stay valid.
+            for &i in land_indices.iter().rev() {
+                // CE4 closure: reserve before the player-mut borrow.
+                let etb_ts = crate::state::reserve_etb_timestamp(state);
+                let player = &mut state.players[controller_idx];
+                let lib = Arc::make_mut(&mut player.library);
+                let mut obj = lib.remove(i);
+                // Stamp battlefield entry: tapped, not summoning-sick
+                // (CR 302.1 is creature-only; a land entering via this
+                // effect has no summoning sickness regardless).
+                // Controller = the source's controller. Same per-object
+                // reset shape as `SearchLibraryForBasicLandTapped`.
+                obj.zone = ZONE_BATTLEFIELD;
+                obj.tapped = true;
+                obj.summoning_sick = false;
+                obj.controller = controller_u8;
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                obj.etb_timestamp = etb_ts;
+                entered_ids.push(obj.id);
+                Arc::make_mut(&mut player.battlefield).push(obj);
+            }
+            // Restore top-to-bottom landfall order (we removed
+            // back-to-front above, so `entered_ids` is currently
+            // bottom-to-top; Python fires landfall top-to-bottom).
+            entered_ids.reverse();
+            // Shuffle the WHOLE remaining library — CR 701.19 / 701.22,
+            // mirrors Python's `shuffle_library(state, controller_id)`
+            // = `state.rng.shuffle(p.library)`. Identical dual-path
+            // block to `SearchLibraryForBasicLandTapped`: external
+            // Python `random.Random` via `external_rng::next_below`
+            // (byte-identical to `random.Random.shuffle`) when
+            // installed, xorshift64 fallback otherwise.
+            let lib_len_post = state.players[controller_idx].library.len();
+            if lib_len_post >= 2 {
+                let py_rng_owned: Option<Py<PyAny>> = state
+                    .rng_ref()
+                    .map(|r| Python::with_gil(|py| r.clone_ref(py)));
+                if let Some(py_rng) = py_rng_owned {
+                    let player = &mut state.players[controller_idx];
+                    let lib = Arc::make_mut(&mut player.library);
+                    let n = lib.len();
+                    Python::with_gil(|py| -> PyResult<()> {
+                        let bound = py_rng.bind(py);
+                        for i in (1..n).rev() {
+                            let j = crate::external_rng::next_below(bound, i + 1)?;
+                            lib.swap(i, j);
+                        }
+                        Ok(())
+                    })?;
+                } else {
+                    // xorshift64 fallback: distinct seed per (turn,
+                    // ap, source, lib_len) tuple — same control flow as
+                    // every other xorshift site in the engine.
+                    let mut seed = (state.turn_number as u64)
+                        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ ((state.active_player as u64) << 56)
+                        ^ ((source_obj_id as u64) << 16)
+                        ^ (lib_len_post as u64);
+                    if seed == 0 {
+                        seed = 0xdead_beef_dead_beef;
+                    }
+                    let player = &mut state.players[controller_idx];
+                    let lib = Arc::make_mut(&mut player.library);
+                    let n = lib.len();
+                    let mut x_rng = seed;
+                    for i in (1..n).rev() {
+                        x_rng ^= x_rng << 13;
+                        x_rng ^= x_rng >> 7;
+                        x_rng ^= x_rng << 17;
+                        let n_u64 = (i + 1) as u64;
+                        let bound = u64::MAX - (u64::MAX % n_u64);
+                        let mut r = x_rng;
+                        while r >= bound {
+                            r ^= r << 13;
+                            r ^= r >> 7;
+                            r ^= r << 17;
+                            x_rng = r;
+                        }
+                        let j = (r % n_u64) as usize;
+                        lib.swap(i, j);
+                    }
+                }
+            }
+            // Queue ENTERS (landfall) dispatches per entered land, in
+            // top-to-bottom order — the caller (`resolve_top_of_stack`
+            // / `_pause`) drains after popping the resolving stack
+            // item. Mirrors Python's per-land
+            // `fire_landfall_triggers`.
+            state.pending_etb_dispatches.extend(entered_ids);
         }
         // Round-28 ModalChooseOne first-slice. Pushes a
         // ChooseModeChoice carrying every mode's Effect on the heap

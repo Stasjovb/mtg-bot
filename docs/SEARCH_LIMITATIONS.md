@@ -2368,6 +2368,179 @@ byte-equal on the doubling delta), loader-drop-filtered by design.
 
 ---
 
+## Rust port — `Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped` deterministic greedy-all land selection; real Famished Worldsire NOT loader-admitted, Ward/Devour-gated (round 54)
+
+**Location**:
+`rust/src/cards.rs` (new `Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped`
+unit variant + `parse_effect` + `to_dict` arms),
+`rust/src/state_ops_resolve.rs` (the new `resolve` arm + the private
+`read_famished_source_power` helper — composes
+`base + ueot_power_bonus() + obj.counters`, mirroring the round-53
+`read_doubling_power` §2 effective-power precedent),
+`src/mtg_bot/effects/bespoke.py:94`
+(`FamishedWorldsireETBEffect` — the bespoke real-card class the
+genuine Famished Worldsire printing parses to; pre-dates this slice,
+unchanged — it is the source of truth),
+`src/mtg_bot/parity/cross_engine.py` (the new
+`famished_worldsire_look_top_x_by_power_put_lands_tapped` bridge arm),
+`src/mtg_bot/parity/trajectory.py` (the `_SAFE_*` allowlists this
+slice deliberately does NOT extend).
+
+Pinned by:
+`tests/test_cross_engine_etb_triggers.py` — 6 bridge/lockstep pins
+(`test_bridge_famished_worldsire_*_basic_translation` /
+`_extra_keys_ignored` / `_equality_default_constructor` /
+`_composable_in_sequence`, `test_rust_parser_accepts_famished_worldsire_in_triggered_ability`,
+`test_rust_parser_rejects_famished_worldsire_with_typo`) + 4 Rust
+resolve regression pins (`test_rust_famished_worldsire_zero_power_silent_noop`,
+`_greedy_all_lands_enter_tapped`, `_nonland_stays_no_shuffle`,
+`_cross_controller_source_resolution`);
+`tests/test_parity_smoke.py::test_cross_engine_real_eoe_famished_worldsire_etb_look_top_x_by_power_put_lands_tapped_parity`
+(the GENUINE real-EoE byte-equal probe — drives the actual parsed
+0/0 Famished Worldsire printing's bespoke ETB vs the Rust bridge-dict
+unit-variant carrier, with +2/+2 counters so X=2 exercises the §2
+counter-fold; deterministic, no RNG).
+
+**Round-50-plan-staleness corrections (read this first).** Two
+candidates were live-verified against the live 108-variant Rust
+`Effect` enum + the live `_ta_dict_to_python_effect` bridge BEFORE
+implementing (per the round-53 verify-first directive):
+
+- **Pulsar Squadron Ace is ALREADY FULLY SHIPPED on both engines —
+  a 5th confirmed-stale residue entry** (after Mechanozoa /
+  Warmaker r51, Mightform r53). Its exact ETB ("look at the top five
+  cards … you may reveal a Spacecraft card … put it into your hand
+  … otherwise put a +1/+1 counter on this creature") is
+  `Effect::LookAtTopNRevealOrCounter { n, filter_name, max_power,
+  counter_on_miss }` (`cards.rs`, round-28/29 substrate; the doc
+  comment literally names "Pulsar-Squadron-Ace + Living-Phone
+  family"), with Python sibling
+  `LookAtTopNRevealOrCounter(n=5, filter_name="spacecraft",
+  counter_on_miss=True)` (`effects/generic/library_lookat.py:30` —
+  defaults EXACTLY match the oracle), bridge-wired at
+  `cross_engine.py:3467`. The round-50 plan's "PARTIAL — needs a
+  Spacecraft sub-mode + bottom-random" label is **stale/wrong**: the
+  `"spacecraft"` filter IS the sub-mode and it shipped round-28; the
+  bridge comment already records the round-19 reclassification
+  BLOCKED-RUST-EFFECT → shipped. NOT picked (nothing to do).
+- **Famished Worldsire's Effect was GENUINELY UNSHIPPED in Rust**
+  (verified absent from all 108 live `Effect` variants + unbridged),
+  while the Python source-of-truth `FamishedWorldsireETBEffect`
+  (`effects/bespoke.py:94`) already existed (parser literal at
+  `cards/parser/effects.py:3724`). This was the real residue to
+  close. Picked.
+
+**What we do today**: this slice ships the
+`Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped` unit
+variant + bridge arm so the real Famished Worldsire ETB round-trips
+byte-equal cross-engine. The resolve arm mirrors the Python
+source-of-truth step-for-step: source-controller resolution (CR
+119.5/608.2 — "your library"), `X = read_famished_source_power` (base
++ UEOT + signed `obj.counters` — Famished is printed **0/0** so X
+comes entirely from Devour-land +1/+1 counters; the §2 counter-fold
+class the round-53 Mightform fix established), `X <= 0` silent
+no-op, examine top `min(X, lib_len)`, greedy-remove every land
+top-to-bottom → battlefield tapped + source-controller-stamped, fire
+landfall per land top-to-bottom, non-land examined cards stay in
+place, then shuffle the whole remaining library via the
+`SearchLibraryForBasicLandTapped` external-rng/xorshift dual-path
+(byte-identical to Python's `random.Random.shuffle`).
+
+**Deliberate divergence #1 — greedy-all land selection (mirrors the
+Python source of truth).** The oracle says "Put **any number** of
+land cards … onto the battlefield tapped". Python's
+`FamishedWorldsireETBEffect.resolve` (`bespoke.py:121`) deterministically
+picks **ALL** land cards in the examined window (no decision
+callback) — a documented "any number → greedy-land" simplification,
+strictly ramp-positive (taking every available land is never worse
+for the controller than taking fewer). The Rust arm mirrors this
+greedy-all behavior exactly; **no `PendingDecision` is plumbed on
+either engine**, so there is NO §2 silent-mistranslation surface
+from the choice itself (both engines make the identical
+deterministic choice). This is a strength approximation, not a
+cross-engine divergence: a perfect agent could in principle decline
+a land (e.g. to keep a specific card for a library-order interaction
+that the subsequent shuffle would scramble anyway), but greedy-all
+is the established Python behavior and the engines stay byte-equal.
+
+**Deliberate divergence #2 — Famished Worldsire is NOT
+production-deck-loader-admitted.** Mirroring the round-51 Monoist /
+round-52 Extinguisher / round-53 Mightform Effect-half-closes /
+full-card-stays-gated split. The real printing carries (verified
+against `data/edge_of_eternities.json` + the parsed printing):
+
+1. *`Ward {3}`* (`real.ward_cost == ManaCost(generic=3)`). `ward_cost`
+   is a §2-declined feature class (HANDOFF §1/§2; the round-39
+   ward/dynamic-pt decline precedent) — the production-deck loader's
+   `_SAFE_*` allowlists do NOT model it; admitting Famished Worldsire
+   would silently drop the Ward tax (a §2 silent mistranslation).
+2. *`Devour land 3`* (an as-enters replacement: "you may sacrifice
+   any number of lands; it enters with three times that many +1/+1
+   counters"). Devour is its own enters-replacement subsystem the
+   loader does not model; without it the real card's power (and thus
+   X) is 0. The genuine probe seeds the counters directly (Rust
+   `set_counters`; Python `plus_one_counters`) to exercise the
+   downstream ETB at a realistic X, exactly as the round-53 Mightform
+   probe seeds counters to exercise the §2 path.
+
+This slice does NOT extend the `_SAFE_*` allowlists; the
+loader-admit is declined.
+
+**Why it's OK (and which scenarios make it not-OK).** The Effect
+arm + bridge arm + genuine real-EoE probe close the real card's ETB
+*at the cross-engine-bridge level*: the actual parsed
+`FamishedWorldsireETBEffect` now round-trips byte-equal cross-engine
+INCLUDING the §2 counter-fold (the probe stages a 0/0 + 2 counters,
+asserts byte-equal library + battlefield). The scenarios that make
+the loader-admit not-OK are exactly the two gates above: a
+production-deck mirror game would need the Ward tax modeled (cost
+mechanic) AND the Devour as-enters replacement modeled — until both
+land, the card stays out of production-deck mirror games entirely.
+The greedy-all land choice is a shared deterministic approximation
+(byte-equal across engines, strength-only), not a divergence.
+
+**Failure mode**: none in production today (Famished Worldsire stays
+drop-filtered by the loader on the Ward gate AND the Devour gate, so
+it never enters a production-deck mirror game through the bridge). No
+latent §2 bug: the counter-fold is handled correctly by
+`read_famished_source_power` from the outset (the round-53 Mightform
+lesson was applied proactively here — a base-power read would have
+been the same class of latent bug, avoided by mirroring the Python
+`effective_power` composition in the helper from the start).
+
+**Documented residual (same combat-side asymmetry as round 53).**
+`read_famished_source_power` folds in `obj.counters` but NOT
+layer-7c static anthems / layer-7e P/T switches (same established
+combat-side / round-53 `read_doubling_power` asymmetry). No
+bridge-correct Famished Worldsire scenario reaches them — the card
+has no anthem/switch rider and the genuine probe stages none. The
+xorshift fallback shuffle (when no external Python rng is installed)
+uses a deterministic `(turn, active_player, source_obj_id,
+library_len)` seed — identical convention to
+`SearchLibraryForBasicLandTapped`; the genuine probe is sized to a
+<2-card post-resolve library so neither engine shuffles, sidestepping
+the rng-path entirely (Python's unconditional 1-card
+`random.Random.shuffle` is also a no-op).
+
+**Fix scope estimate**: the Effect-half is CLOSED (this slice — unit
+variant + parse/to_dict/resolve + bridge arm + helper, ~3 commits).
+The remaining loader-admit gates are multi-round: the `ward_cost`
+cost-mechanic (§2-declined class, shared with Mechanozoa et al.) and
+the Devour-land as-enters-replacement subsystem (sacrifice-any-number
++ counter-scaling enters replacement). Neither is in scope here.
+
+**Impact estimate**: zero production strength cost (real card not
+loader-admitted on either gate; no production exposure path).
+Real-card-coverage progress is the cross-engine-bridge closure (the
+genuine real-EoE probe is byte-equal on library + battlefield
+state, INCLUDING the §2 counter-fold). ~2,324 of 129,996 17lands EoE
+decks run Famished Worldsire — the Effect-half residue closed this
+round, loader-drop-filtered by design (Ward/Devour-gated, same honest
+split as round-51 Monoist / round-52 Extinguisher / round-53
+Mightform).
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:

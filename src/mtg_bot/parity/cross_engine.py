@@ -7867,6 +7867,60 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DestroyTargetNoncreaturePermanent,
         )
         return DestroyTargetNoncreaturePermanent()
+    if kind == "famished_worldsire_look_top_x_by_power_put_lands_tapped":
+        # BLOCKED-RUST-EFFECT slice (round 54) — Famished Worldsire
+        # ETB bridge arm. Rust's
+        # ``Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped``
+        # (cards.rs unit variant added in this slice; parse arm
+        # immediately after the round-28
+        # ``look_top_n_put_one_in_hand_rest_to_graveyard`` arm,
+        # to_dict immediately after the round-28
+        # ``LookTopNPutOneInHandRestToGraveyard`` arm, resolve in
+        # ``state_ops_resolve.rs`` immediately after that arm) mirrors
+        # Python's ``FamishedWorldsireETBEffect``
+        # (``effects/bespoke.py:94``).
+        #
+        # **Unit variant — no fields.** X is dynamic (the source's
+        # CURRENT effective power at resolve, post-Devour +1/+1
+        # counters — Rust's ``read_famished_source_power`` composes
+        # ``base + ueot_power_bonus() + obj.counters``, the SAME
+        # composition Python's ``effective_power`` /
+        # ``_compute_effective_pt`` folds in). The "put any number" of
+        # lands is a DETERMINISTIC greedy-ALL on BOTH engines (Python
+        # source-of-truth ``bespoke.py:121`` picks every land card in
+        # the examined window — a documented "any number" →
+        # greedy-land simplification, strictly ramp-positive). No
+        # decision is plumbed on either side, so there is no §2
+        # silent-mistranslation surface from the choice. The bridge
+        # passes through verbatim; extra dict keys ignored (mirrors
+        # the round-49 ``gain_life_equal_to_your_life_total`` /
+        # round-28 ``look_top_n_put_one_in_hand_rest_to_graveyard``
+        # unit-variant arm shape).
+        #
+        # **Resolve semantics (cross-engine).** Both engines: resolve
+        # under the SOURCE's controller (CR 119.5 / 608.2 — "your
+        # library"); X = effective power; X<=0 → silent no-op;
+        # examine top min(X, lib_len); remove every land card
+        # top-to-bottom → battlefield TAPPED, controller-stamped to
+        # the source's controller, fire landfall per land in
+        # top-to-bottom order; non-land examined cards stay in the
+        # library in place; shuffle the WHOLE remaining library (the
+        # external-rng Fisher-Yates path is byte-identical to
+        # Python's ``random.Random.shuffle`` via
+        # ``external_rng::next_below``).
+        #
+        # **Real EoE consumer:** Famished Worldsire (2,324 17lands
+        # decks) — the ONLY EoE card with this shape. The full *card*
+        # stays subsystem-gated for the production-deck loader (NOT
+        # admitted): the printing carries ``Ward {3}`` + ``Devour
+        # land 3`` riders that the loader's feature allowlist does
+        # not model — see ``docs/SEARCH_LIMITATIONS.md`` round-54
+        # entry (mirrors the r51 Monoist / r52 Extinguisher / r53
+        # Mightform Effect-half-closes-card-stays-gated precedent).
+        from mtg_bot.effects.bespoke import (
+            FamishedWorldsireETBEffect,
+        )
+        return FamishedWorldsireETBEffect()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
