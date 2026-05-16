@@ -116,7 +116,13 @@ def test_start_self_play_transitions_state(client):
 
 
 def test_start_self_play_payload_shape_matches_contract(client):
-    """202 response carries ``stage_id`` and ``started_at`` per the doc."""
+    """202 response carries ``stage_id`` and ``stage_started_at``.
+
+    The field was originally ``started_at`` in the Phase 2a skeleton;
+    the contract patch renamed it to ``stage_started_at`` to
+    disambiguate from the daemon's ``process_started_at`` (the
+    long-lived daemon start timestamp surfaced in /v2/heartbeat).
+    """
     resp = client.post(
         "/v2/start_self_play",
         json={
@@ -128,8 +134,10 @@ def test_start_self_play_payload_shape_matches_contract(client):
     assert resp.status_code == 202
     body = resp.get_json()
     assert body["stage_id"] == "iter_009_self_play_v6"
-    assert isinstance(body["started_at"], str)
-    assert body["started_at"].endswith("Z")
+    assert isinstance(body["stage_started_at"], str)
+    assert body["stage_started_at"].endswith("Z")
+    # Old field name removed by the contract patch.
+    assert "started_at" not in body
 
 
 def test_start_self_play_rejects_when_busy(client):
