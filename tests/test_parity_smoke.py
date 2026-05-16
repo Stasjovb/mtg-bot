@@ -54617,6 +54617,381 @@ def test_cross_engine_synthetic_etb_optional_sac_artifact_for_effect_cross_contr
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_real_eoe_roaring_furnace_door_trigger_damage_by_cards_in_hand_parity(
+    parity_smoke,
+):
+    """Round-33 BLOCKED-RUST-EFFECT deferred-EoE-probe close -- drive
+    Roaring Furnace's door-trigger damage-by-cards-in-hand clause end-
+    to-end on BOTH engines via the bridge dict.
+
+    Closes the round-33 substrate's deferred end-to-end probe. Round
+    33 shipped ``Effect::DealDamageToOpponentCreatureByCardsInHand``
+    Rust-end-to-end with bridge pins
+    (cross_engine.py:6563-6649 + cards.rs parse arm +
+    state_ops_resolve.rs resolve arm), but the Roaring Furnace
+    consumer was deferred per the round-17/18/19/31/32
+    synthetic-only-when-riders-cascade precedent because Roaring
+    Furnace is a Room (split-card variant) whose door-trigger path
+    drives this Effect through the review-gated Room/door subsystem.
+    This probe sidesteps the Room/door substrate entirely via the
+    same side-channel free-form-CardDef-bridge pattern round-37 CCCC
+    used for Mightform Harmonizer (this file at line 52962) and
+    round-38 E4 used for Warmaker Gunship (this file at line 53352):
+    inject the carrier directly onto bf via
+    ``register_and_inject_object`` (Rust) /
+    ``new_object`` + ``_trigger_etb_abilities`` (Python), bypassing
+    the cast pipeline AND the Room/door state machinery -- only the
+    bare ENTERS triggered ability fires, carrying the
+    ``deal_damage_to_opponent_creature_by_cards_in_hand`` effect.
+
+    Path chosen -- side-channel inject via free-form CardDef + bridge
+    dict (NOT production-deck loader). Roaring Furnace is a
+    "Enchantment Room" with two door-unlock activated abilities; the
+    inject pattern bypasses BOTH the Room/door state machinery (door-
+    unlock cost + half-card state) AND the cast pipeline by leaving
+    the synthetic carrier as a bare Enchantment at probe time. The
+    Room/door subsystem rider is deferred indefinitely as a separate
+    slice -- it doesn't observably affect the Effect resolution per
+    the round-37/38 sibling-pattern precedent (the Effect counts
+    source-controller hand size at resolve time regardless of HOW
+    the trigger fired, so a bare ETB rewrite produces bit-equal
+    observables to the door-trigger path).
+
+    **Roaring Furnace is fictional / not in EoE today.** The bridge-
+    arm docstring at cross_engine.py:6637 explicitly identifies
+    Roaring Furnace as the lone Effect consumer ("Roaring Furnace's
+    door trigger, 1 EoE consumer"); however, the
+    data/edge_of_eternities.json snapshot scan shows zero cards
+    matching "Furnace" today, so the canonical oracle text the
+    bridge docstring cites is the substrate-level reference shape,
+    not a live EoE printing. The probe pins the Effect end-to-end
+    via the bridge regardless -- the same way round-36 closed
+    DealDamageToOpponentCreatureByLandsControlled (0 EoE consumers)
+    via a synthetic carrier on the round-32 cross-engine substrate.
+
+    Probe shape (mirrors Warmaker Gunship at line 53352):
+
+      1. Inject Bait Bear (2/4 -- toughness 4 above expected 3 damage
+         so SBA doesn't flip it to graveyard) onto P1's bf as the
+         opponent-controlled creature target.
+      2. Inject 3 Plains into P0's hand (a synthetic hand fixture --
+         NO triggered abilities, just bare Lands that aren't played;
+         the hand-size denominator at resolve time is 3).
+      3. Seat ``_PickFirstOpponentTargetAgent`` on P0 -- its
+         IsCreature() & ControlledByOpponent() filter has already
+         restricted legal_targets to opponent-side creatures, so the
+         agent picks the only legal target (the Bait Bear).
+      4. Inject Roaring Furnace Door-Effigy (a synthetic Enchantment
+         carrier substituting for the Room/door subsystem) onto P0's
+         bf carrying the ``source_is_self`` ENTERS trigger +
+         ``deal_damage_to_opponent_creature_by_cards_in_hand`` effect.
+         At resolve time the source-controller (P0) has 3 cards in
+         hand; per damage.py:511 ``hand_size = len(state.player_by_id(
+         controller_id).hand)`` and the Rust mirror at
+         state_ops_resolve.rs reading ``state.players[cidx].hand.len()``,
+         the Bait Bear takes 3 damage on both engines.
+      5. Drain both stacks; the Bait Bear takes 3 damage on both
+         engines.
+
+    Cross-engine assert (post-resolve contract):
+
+      * Bait Bear damage = **3** on both engines (P0's hand size at
+         resolve time = 3 Plains -- damage.py:511 reads
+         ``len(state.player_by_id(controller_id).hand)`` and Rust's
+         mirror reads ``state.players[cidx].hand.len()``).
+      * Bait Bear NOT in graveyard (toughness 4 > damage 3 -- no SBA
+         flip; the probe pins the damage delta, not lethal handling).
+      * P0/P1 lives unchanged at 20 (effect targets a creature, never
+         a player -- same as the Warmaker contract).
+      * No residual stack on either engine.
+      * The 3 Plains injected into P0's hand remain in P0's hand on
+         both engines (the Effect reads the hand count but doesn't
+         move cards out of hand).
+
+    Substrate confirmed via round-33 (bridge arm at
+    cross_engine.py:6563-6649 + cards.rs parse arm +
+    state_ops_resolve.rs resolve arm); bridge
+    ``deal_damage_to_opponent_creature_by_cards_in_hand`` arm +
+    Python ``DealDamageToOpponentCreatureByCardsInHand``
+    (damage.py:464-522).
+
+    Out of scope: Room/door subsystem (door-unlock activated abilities
+    + half-card state machinery -- separate substrate, deferred
+    indefinitely); cast-from-hand mana cost (the inject-and-dispatch-
+    ENTERS pattern bypasses the mana pipeline); production-deck filter
+    landing (would need a ``_SAFE_TRIGGERS`` extension for the
+    source_is_self + deal_damage_to_opponent_creature_by_cards_in_hand
+    product); zero-hand fizzle leg (sister round-32/35 fizzle parity
+    already pinned synthetically -- separate slice).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+
+    # CardDef placeholders -- each engine needs the printing registered
+    # so build_*_state succeeds, but with empty libraries the deck path
+    # never instantiates them. The inject calls below use raw printing
+    # dicts directly.
+    furnace = CardDef(
+        name="Roaring Furnace Door-Effigy",
+        card_type="Enchantment",
+        mana_cost_generic=2,
+        mana_cost_colored=(("R", 1),),
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_to_opponent_creature_by_cards_in_hand",
+                },
+            },
+        ),
+    )
+    plains = CardDef(
+        name="Plains",
+        card_type="Land",
+        mana_produced=("W",),
+    )
+    bait_bear = CardDef(
+        name="Bait Bear (2/4)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=4,
+    )
+    spec = DeckSpec(
+        card_defs=(furnace, plains, bait_bear),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+
+    # Inject Bait Bear (2/4) on P1's bf as the opponent-controlled
+    # creature target.
+    rust_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bear (2/4)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "effects": [],
+            "power": 2,
+            "toughness": 4,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0
+    assert rust_state.get_damage(rust_bait_id) == 0
+
+    # Inject 3 Plains into P0's hand -- bare Lands with no abilities.
+    # These are the hand-size denominator at resolve time.
+    rust_plains_dict = {
+        "name": "Plains",
+        "card_types": ["Land"],
+        "mana_produced": ["W"],
+        "effects": [],
+    }
+    rust_plains_ids = []
+    for _ in range(3):
+        rust_plains_ids.append(
+            rust_state.register_and_inject_object(
+                rust_plains_dict, 0, ZONE_HAND,
+            )
+        )
+    assert rust_state.stack_size() == 0, (
+        "Rust: bare Plains in hand should not fire any trigger"
+    )
+
+    rust_furnace_dict = {
+        "name": "Roaring Furnace Door-Effigy",
+        "card_types": ["Enchantment"],
+        "mana_cost": {"generic": 2, "R": 1},
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_to_opponent_creature_by_cards_in_hand",
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_furnace_id = rust_state.register_and_inject_object(
+        rust_furnace_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Roaring Furnace Door-Effigy's own arrival should fire "
+        "the SourceIsSelf ENTERS trigger and land "
+        "DealDamageToOpponentCreatureByCardsInHand on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByCardsInHand,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="Bait Bear (2/4)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=4,
+        produces=frozenset(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+
+    # Inject 3 Plains into P0's hand -- bare Lands with no abilities.
+    plains_printing = CardPrinting(
+        name="Plains",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0),
+        type_line="Land",
+        supertypes=(),
+        card_types=("Land",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset({"W"}),
+    )
+    py_plains_ids = []
+    for _ in range(3):
+        py_plain = py_state.new_object(
+            plains_printing, owner_id=0, zone=Zone.HAND,
+        )
+        py_state.players[0].hand.append(py_plain)
+        py_plains_ids.append(py_plain.id)
+    assert len(py_state.players[0].hand) == 3, (
+        "Python: P0 should have exactly 3 Plains in hand before the "
+        f"Furnace ETB resolves; got {len(py_state.players[0].hand)}"
+    )
+
+    furnace_printing = CardPrinting(
+        name="Roaring Furnace Door-Effigy",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("R", 1),)),
+        type_line="Enchantment",
+        supertypes=(),
+        card_types=("Enchantment",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DealDamageToOpponentCreatureByCardsInHand(),
+            ),
+        ),
+    )
+    # Seat the picker BEFORE the Furnace's trigger fires
+    # (push_triggered_ability calls choose_target at trigger-push
+    # time -- actions.py:3249). The slot's
+    # IsCreature() & ControlledByOpponent() filter restricts
+    # legal_targets to opponent-side creatures, so the agent picks
+    # the only legal target (the Bait Bear).
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+
+    py_furnace = py_state.new_object(
+        furnace_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_furnace.summoning_sick = False
+    py_furnace.tapped = False
+    py_furnace.damage = 0
+    py_furnace.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_furnace)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_furnace)
+    assert len(py_state.stack) == 1, (
+        "Python: Roaring Furnace Door-Effigy's own arrival should "
+        "fire the IsSelf ENTERS trigger and land "
+        "DealDamageToOpponentCreatureByCardsInHand on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: Bait Bear takes 3 damage (3 Plains in
+    # P0's hand at resolve time). Toughness 4 > damage 3, so no SBA
+    # flip -- Bait Bear stays on bf.
+    rust_bait_damage_after = rust_state.get_damage(rust_bait_id)
+    assert rust_bait_damage_after == 3, (
+        "Rust: Bait Bear should carry 3 damage after the door-trigger "
+        "burn (3 cards in P0's hand at resolve time); got "
+        f"{rust_bait_damage_after}"
+    )
+    assert py_bait.damage == 3, (
+        "Python: Bait Bear should carry 3 damage after the door-"
+        "trigger burn (3 cards in P0's hand at resolve time); got "
+        f"{py_bait.damage}"
+    )
+
+    # Lives unchanged on both seats -- the effect targets a creature,
+    # never a player.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # Cross-engine: byte-equal damage on the bait + same life totals.
+    assert rust_state.get_damage(rust_bait_id) == py_bait.damage
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # The Furnace itself takes no damage (effect targets opponent
+    # creature, never the source).
+    assert rust_state.get_damage(rust_furnace_id) == 0
+    assert py_furnace.damage == 0
+
+    # The Effect reads hand size but doesn't move cards out of hand --
+    # P0's 3 Plains remain in P0's hand on both engines.
+    assert len(py_state.players[0].hand) == 3, (
+        "Python: P0's hand should still hold 3 Plains after the "
+        "Effect resolves (the Effect reads the count, doesn't move "
+        f"cards); got {len(py_state.players[0].hand)}"
+    )
+    # Rust hand_sizes is the cross-engine observable here.
+    assert rust_state.hand_sizes[0] == 3, (
+        f"Rust: P0's hand should still hold 3 cards after the "
+        f"Effect resolves; got {rust_state.hand_sizes[0]}"
+    )
+    # Cross-engine: byte-equal hand sizes on P0.
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
