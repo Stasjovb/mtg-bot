@@ -1263,6 +1263,154 @@ class PairedTargetPumpDebuffUEOT(Effect):
         )
 
 
+@dataclass(frozen=True)
+class PumpYoursAndDebuffOpponentByArtifactCountUntilEOT(Effect):
+    """**Cross-engine bridge sibling of**
+    :class:`PairedTargetPumpDebuffUEOT` **for Monoist Circuit-Feeder's
+    ETB** — DETERMINISTIC first-creature pick, no agent target choice.
+
+    Monoist Circuit-Feeder (real EoE card, 14,727 17lands decks):
+    "When this creature enters, until end of turn, target creature you
+    control gets +X/+0 and target creature an opponent controls gets
+    -0/-X, where X is the number of artifacts you control."
+
+    This class is the EXACT analogue of
+    :class:`mtg_bot.effects.generic.damage.FightTargetCreatureWith
+    TargetCreature` (the deterministic-pick Rust-unit-variant bridge
+    sibling) vs the agent-driven
+    :class:`mtg_bot.effects.bespoke...EnchantedCreatureFightsTarget
+    Effect`. The real Monoist Circuit-Feeder printing parses (via
+    ``cards/parser/effects.py``) to the AGENT-DRIVEN, two-REQUIRED-
+    target :class:`PairedTargetPumpDebuffUEOT` (the controller freely
+    picks ANY legal own creature + ANY legal opponent creature, CR
+    601.2c). That class stays the real-card target. THIS class exists
+    purely as the cross-engine bridge target for Rust's unit-variant
+    ``Effect::TwoSubjectPumpAndDebuffByArtifactCount`` (which picks
+    BOTH targets deterministically at apply time with no decision
+    callback — the established campaign no-decision-callback
+    convention, ``rust/src/state_ops_resolve.rs``).
+
+    **Why NOT loader-admitted (§2).** Routing the real card's
+    agent-driven targeting through this deterministic bridge in the
+    production-deck loader would silently degrade free agent target
+    choice to a fixed first-creature pick in multi-creature board
+    states. Per the Fight precedent the deterministic sibling is NOT
+    production-deck-loader-admitted; the genuine real-EoE probe drives
+    the actual ``PairedTargetPumpDebuffUEOT`` constrained by a picker
+    shim so the agent's two-target pick is forced to the FIRST own /
+    FIRST opponent creature, byte-equal with this class's scan. See
+    ``docs/SEARCH_LIMITATIONS.md``.
+
+    **Mechanism (mirrors the Rust resolve arm BIT-FOR-BIT).**
+      * ``x = sum(1 for o in state.battlefield if o.controller_id ==
+        controller_id and o.printing.is_artifact)`` — the SAME
+        artifact-count read :class:`DealDamageToOpponentCreatureBy
+        ArtifactCount` uses (damage.py:445-448) and the SAME
+        denominator the parser's ``CountControlledMatching(
+        IsArtifact())`` formula computes.
+      * ``x = max(0, x)``; if ``x <= 0`` → silent no-op (matches the
+        Rust ``if x <= 0`` short-circuit and the round-32..49
+        X-from-count zero convention).
+      * Source-side target = FIRST creature ``o`` in
+        ``state.battlefield`` insertion order with
+        ``o.controller_id == controller_id`` (smallest list index —
+        same scan :class:`FightTargetCreatureWithTargetCreature` and
+        Rust's resolve use). If present → ``grant_pt_pump_ueot(power=
+        x, toughness=0)``.
+      * Opponent-side target = FIRST creature with
+        ``o.controller_id != controller_id``. If present →
+        ``grant_pt_pump_ueot(power=0, toughness=-x)``.
+      * Per-side INDEPENDENT (CR 608.2c — two independent "target"
+        clauses, NOT "up to one"): a missing side is a silent no-op
+        and the other side still applies. Matches the Rust arm's
+        per-side independence.
+
+    End-of-turn cleanup is the standard layer-7 ``"pump_pt"``
+    ``expires_at="cleanup"`` registry expiry (same path
+    :class:`PumpTargetCreatureUntilEOT` / :class:`PairedTargetPump
+    DebuffUEOT` use).
+
+    Unit-shape ``@dataclass(frozen=True)`` with no constructor args
+    (X is dynamic — the dynamic-X is the whole point of the class;
+    mirrors the round-32..49 unit-shape convention and Rust's unit
+    variant).
+    """
+
+    def requires_target(self) -> bool:
+        # Deterministic-pick shape: no explicit target choice. Mirrors
+        # Rust's first-slice no-decision-callback convention (same as
+        # FightTargetCreatureWithTargetCreature).
+        return False
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        x = sum(
+            1
+            for o in state.battlefield
+            if o.controller_id == controller_id and o.printing.is_artifact
+        )
+        x = max(0, x)
+        if x <= 0:
+            return
+        src = state.resolving_source
+        source_id = src.id if src is not None else -1
+        # Source-side target: FIRST creature the controller controls
+        # (battlefield insertion order — smallest index). Mirrors the
+        # Rust resolve scan + FightTargetCreatureWithTargetCreature.
+        own = next(
+            (
+                o
+                for o in state.battlefield
+                if o.controller_id == controller_id
+                and o.printing.is_creature
+            ),
+            None,
+        )
+        # Opponent-side target: FIRST creature an opponent controls.
+        opp = next(
+            (
+                o
+                for o in state.battlefield
+                if o.controller_id != controller_id
+                and o.printing.is_creature
+            ),
+            None,
+        )
+        # Per-side INDEPENDENT apply (CR 608.2c). A missing side is a
+        # silent no-op; the other side still applies.
+        if own is not None:
+            state.grant_pt_pump_ueot(
+                source_id=source_id,
+                target_id=own.id,
+                power=x,
+                toughness=0,
+                description=(
+                    f"{own.printing.name} gets +{x}/+0 UEOT"
+                ),
+            )
+            state.log.append(f"{own.printing.name} gets +{x}/+0 UEOT")
+        if opp is not None:
+            state.grant_pt_pump_ueot(
+                source_id=source_id,
+                target_id=opp.id,
+                power=0,
+                toughness=-x,
+                description=(
+                    f"{opp.printing.name} gets +0/-{x} UEOT"
+                ),
+            )
+            state.log.append(f"{opp.printing.name} gets +0/-{x} UEOT")
+
+    def describe(self) -> str:
+        return (
+            "until end of turn, target creature you control gets "
+            "+X/+0 and target creature an opponent controls gets "
+            "-0/-X, where X is the number of artifacts you control"
+        )
+
+
 def _signed(n: int) -> str:
     """Format a signed integer with an explicit ``+`` for non-negative
     values. ``+0`` reads more naturally than ``0`` in pump/debuff
