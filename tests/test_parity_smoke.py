@@ -54108,6 +54108,461 @@ def test_cross_engine_synthetic_etb_create_token_copy_of_target_creature_you_con
     assert py_new_token.printing.name == bear_printing.name
 
 
+def test_cross_engine_synthetic_etb_optional_sac_artifact_for_effect_cross_controller_routes_to_source_controller_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``optional_sac_artifact_for_effect`` trigger
+    fired by a permanent CONTROLLED BY P1 while ACTIVE_PLAYER=P0 -- the
+    cross-controller leg of the round-19 bridge arm at
+    cross_engine.py:3095. Both engines must derive the sac scope from
+    the SOURCE's controller (P1): the sacrificed artifact comes from
+    P1's bf (NOT P0's bf), AND the inner GainLife targets P1's life
+    total (NOT P0's).
+
+    **The substrate.** Per the bridge arm at cross_engine.py:3095-3196
+    + the Rust resolve at state_ops_resolve.rs:6239-6318: Rust performs
+    an INTRINSIC 5-zone walk via ``source_obj_id`` to locate the
+    source, capture its controller (cidx), then scan
+    ``state.players[cidx].battlefield`` for the FIRST Artifact, remove
+    it to the controller's graveyard (CR 400.7 reset stamps), then
+    recursively call ``apply_effect`` on the ``inner_effect`` with the
+    SAME source_obj_id (so any inner that reads
+    ``current_resolve_source_controller`` sees the OUTER source's
+    controller, not the sacrificed artifact). If the source-walk
+    fails, Rust falls back to active_player as cidx -- the pre-fix
+    observable a faulty substrate would land on. Python's
+    ``OptionalSacArtifactForEffect.resolve``
+    (effects/combinators.py:299-360) filters
+    ``state.battlefield`` to objects where ``controller_id ==
+    controller_id`` (the trigger's controller, =P1) AND
+    ``printing.is_artifact``, calls ``Agent.choose_yes_no`` on the
+    trigger's controller (P1's agent), then ``choose_sacrifice`` on
+    the same agent, routes through ``turn.sacrifice``, and calls
+    ``inner_effect.resolve(state, controller_id, targets)`` with
+    controller_id=P1.
+
+    **Inner effect choice: ``gain_life``.** GainLife (Rust
+    state_ops_resolve.rs:953-959) routes via
+    ``current_resolve_source_controller`` -- when the OUTER sac
+    recurses into the inner via ``apply_effect(state, inner_effect,
+    source_obj_id)``, the
+    ``current_resolve_source_controller`` slot is still set to the
+    OUTER source's controller (P1) because ``apply_effect`` doesn't
+    re-derive it. Python's ``GainLife.resolve(state, controller_id,
+    targets)`` reads ``controller_id`` directly (the trigger's
+    controller_id=P1). Both engines add the gain to P1's life total.
+    A pre-fix Rust with the outer cidx fallback to active_player=0
+    would have looked for an Artifact on P0's bf, sacrificed it, and
+    added the gain to P0's life. Two-slot diverging observable on
+    BOTH the graveyard-side (P0's gy grew vs P1's gy grew) and the
+    life-total side (P0 gained vs P1 gained).
+
+    **Same-controller sister coverage.** The Rust regression pins at
+    line 41350 (basic on p0 source + p0 mox + DrawCards inner) and
+    the cross-engine end-to-end probe at line 41758
+    (test_cross_engine_optional_sac_artifact_synthetic_etb_parity)
+    cover the same-controller leg with DrawCards as the inner. This
+    probe ships the missing CROSS-CONTROLLER leg AND swaps the inner
+    to GainLife so the life-total observable is symmetric with the
+    sac-side observable -- both deltas land on the SOURCE's controller
+    (P1).
+
+    **Why synthetic, not a real EoE card.** The bridge arm's docstring
+    at cross_engine.py:3157-3177 cites Selfcraft Mechan (needs the
+    reflexive "when you do" rider on a separate slice) and Larval
+    Scoutlander (needs the SearchLibraryForBasicLandTapped inner on a
+    deferred slice) as real EoE consumers; neither is the bare may-
+    sac + inner-only-gain-life shape this probe drives. A synthetic
+    2-mana Robot Artificer carrier (Artifact Creature) with the
+    bridged ETB trigger keeps this probe self-contained AND -- because
+    the carrier IS itself an Artifact -- documents that the deterministic
+    first-artifact pick will sacrifice EITHER the bait Mox OR the
+    source itself depending on bf insertion order. To make the
+    observable sharp on the bait-only path, the bait Mox is injected
+    on P1's bf BEFORE the source carrier so bf[0] = Mox; both engines'
+    first-artifact pick selects the Mox (Rust scans state.players[1]
+    .battlefield in insertion order; Python's choose_sacrifice picks
+    legal_targets[0] which is the Mox via the same insertion order).
+
+    **Source carrier choice load-bears.** With P1's bf carrying [Mox,
+    source Robot] in that ETB-timestamp order, both engines' first-
+    artifact pick sacrifices the Mox -- post-fix the Mox lands in
+    P1's graveyard. With NO artifact on P0's bf at all (P0's bf is
+    EMPTY at probe start), the pre-fix vs post-fix divergence is
+    sharp: post-fix sacrifices the Mox from P1's bf and gains life on
+    P1; pre-fix (active_player=P0 fallback) would have scanned P0's
+    bf, found NO artifact, and short-circuited the whole composer to
+    a silent no-op (inner DOESN'T fire because the if-no-artifact
+    early-return at Rust state_ops_resolve.rs:6282-6284 / Python
+    combinators.py:333-335 guards BEFORE the inner is reached).
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). P0's bf stays EMPTY throughout.
+
+      2. **Inject a bait Mox onto P1's bf** (owner/controller=1). Mox
+         is bare-Artifact with NO triggered abilities -- inject doesn't
+         push anything onto the stack. This Mox's ETB-timestamp is
+         lower than the source's (injected before), so first-artifact
+         pick will select it.
+
+      3. **Inject OptionalSac-Trigger Robot (the source) onto P1's
+         bf** with controller=1. The carrier is Artifact + Creature;
+         the ENTERS dispatch fires the SourceIsSelf trigger and lands
+         OptionalSacArtifactForEffect on the stack with controller=1
+         (the SOURCE's controller).
+
+      4. **Seat ``_YesAgent`` (yes + first-pick shim) on P1** (the
+         SOURCE's controller, which is whose agent gets called for
+         choose_yes_no + choose_sacrifice on the trigger's
+         controller_id=1 path). The agent answers True to "Sacrifice
+         an artifact for the rider?" and picks the first eligible
+         id (the Mox).
+
+      5. **Drain both stacks.** Rust's resolve: intrinsic 5-zone walk
+         finds the Robot on P1's bf, captures cidx=1, scans
+         state.players[1].battlefield for the first Artifact (the
+         Mox, since bf[0] = Mox), removes the Mox to P1's graveyard,
+         then recursively applies the inner GainLife(2) which
+         derives controller from current_resolve_source_controller
+         (still =1 from the outer scope) and adds 2 to
+         state.players[1].life. Python's resolve: trigger
+         controller_id=1, agent yeses, picks the Mox, routes through
+         turn.sacrifice to P1's graveyard, then GainLife.resolve
+         (state, 1, ()) adds 2 to state.players[1].life.
+
+      6. **Cross-engine assert (post-fix contract):**
+         - Mox in P1's graveyard on both engines (NOT P0's).
+         - P1's bf size unchanged net (-1 Mox sacrifice + 1 Robot
+           inject = 0).
+         - P0's bf stays empty (was empty pre-probe; no movement here).
+         - P0's graveyard stays empty (no artifact touched on P0's
+           side).
+         - P1's life total = 22 (20 + 2 from GainLife inner).
+         - P0's life total = 20 (unchanged).
+         - No residual stack on either engine.
+
+    **Pre-fix vs post-fix observable.**
+    Pre-fix Rust (cidx fallback to active_player=0) would have walked
+    state.players[0].battlefield, found NO artifact (P0's bf is
+    empty), and returned early (no inner fired). Post-state would
+    have been: P0 bf empty (unchanged), P1 bf retains both Mox + Robot
+    (unchanged), P0/P1 lives both 20 (unchanged), no gy growth.
+    Post-fix Rust correctly captures cidx=1 from the 5-zone walk over
+    source_obj_id, scans P1's bf, finds the Mox, sacrifices it to
+    P1's gy, recurses into GainLife(2) which adds 2 to P1's life.
+    Three-slot diverging observable: P1 gy size, P1 bf size, P1 life.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline.
+      * Decline path (Python may-no) -- the probe seats a yes agent;
+        the decline path's cross-engine observable (Rust auto-yeses;
+        Python may-no diverges) is its own surface and not load-
+        bearing here.
+      * Selfcraft Mechan reflexive "when you do" rider -- needs the
+        reflexive-trigger substrate verification on both engines;
+        a separate slice.
+      * The inner-effect-targeting forward (PutPlusOneCounter inner
+        on a target creature) -- this probe uses an untargeted
+        inner (GainLife) to keep the targeting Decision pipeline
+        out of scope.
+      * Empty-bf no-op fizzle -- the source-controller's bf is
+        non-empty (has Mox + Robot) so the early-return doesn't
+        fire post-fix. The pre-fix observable is the fizzle (because
+        P0's bf IS empty); that asymmetry is what makes the
+        cross-controller pin sharp.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * OptionalSac-Trigger Robot on P1's bf (controller=1; unchanged
+        from inject).
+      * Sacrificable Mox in P1's graveyard (NOT P0's).
+      * P0's bf: empty.
+      * P0's graveyard: empty.
+      * P1's life = 22 (20 base + 2 from GainLife inner).
+      * P0's life = 20 (unchanged).
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _SacrificeFirstAgent
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_mox_id = rust_state.register_and_inject_object(
+        {
+            "name": "Cross-Controller Sacrificable Mox",
+            "card_types": ["Artifact"],
+            "mana_cost": {"generic": 0},
+            "effects": [],
+            "triggered_abilities": [],
+        },
+        1,  # P1 owns/controls
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: bare Mox arrival should not fire any trigger"
+    )
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p0_gy_before = rust_state.graveyard_sizes[0]
+    rust_p1_gy_before = rust_state.graveyard_sizes[1]
+    rust_p0_bf_before = rust_state.battlefield_sizes[0]
+    rust_p1_bf_before = rust_state.battlefield_sizes[1]
+    assert rust_p0_bf_before == 0
+    assert rust_p1_bf_before == 1
+
+    rust_robot_id = rust_state.register_and_inject_object(
+        {
+            "name": "Cross-Controller OptionalSac-Trigger Robot",
+            "card_types": ["Artifact", "Creature"],
+            "subtypes": ["Robot", "Artificer"],
+            "mana_cost": {"generic": 2},
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "optional_sac_artifact_for_effect",
+                        "inner_effect": {
+                            "kind": "gain_life", "amount": 2,
+                        },
+                    },
+                }
+            ],
+        },
+        1,  # P1 owns/controls
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller OptionalSac-Trigger Robot's arrival "
+        "on P1 should fire the SourceIsSelf ENTERS trigger and land "
+        "OptionalSacArtifactForEffect on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.combinators import OptionalSacArtifactForEffect
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    mox_printing = CardPrinting(
+        name="Cross-Controller Sacrificable Mox",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    py_mox = py_state.new_object(
+        mox_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_mox.summoning_sick = False
+    py_mox.tapped = False
+    py_mox.damage = 0
+    py_mox.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_mox)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_p0_gy_before = len(py_state.players[0].graveyard)
+    py_p1_gy_before = len(py_state.players[1].graveyard)
+    py_p0_bf_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_before = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert py_p0_bf_before == 0
+    assert py_p1_bf_before == 1
+
+    # Seat a yes+first-pick agent on P1 (the trigger's controller).
+    class _YesAgent(_SacrificeFirstAgent):
+        def choose_yes_no(self, state, player_id, prompt):
+            return True
+
+    py_state.players[1].agent = _YesAgent()
+
+    robot_printing = CardPrinting(
+        name="Cross-Controller OptionalSac-Trigger Robot",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2),
+        type_line="Artifact Creature -- Robot Artificer",
+        supertypes=(),
+        card_types=("Artifact", "Creature"),
+        subtypes=("Robot", "Artificer"),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=OptionalSacArtifactForEffect(
+                    inner_effect=GainLife(amount=2),
+                ),
+            ),
+        ),
+    )
+    py_robot = py_state.new_object(
+        robot_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_robot.summoning_sick = False
+    py_robot.tapped = False
+    py_robot.damage = 0
+    py_robot.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_robot)
+    _trigger_etb_abilities(py_state, py_robot)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller OptionalSac-Trigger Robot's arrival "
+        "on P1 should fire the IsSelf ENTERS trigger and land "
+        "OptionalSacArtifactForEffect on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Rust post-state assertions ----
+    rust_p1_gy_ids = [
+        e["id"] for e in rust_state.graveyard_snapshot(1)
+    ]
+    rust_p0_gy_ids = [
+        e["id"] for e in rust_state.graveyard_snapshot(0)
+    ]
+    assert rust_mox_id in rust_p1_gy_ids, (
+        f"Rust cross-controller routing contract: Mox (id="
+        f"{rust_mox_id}) should be in P1's graveyard (the SOURCE'S "
+        f"controller's gy per CR 701.7a). A pre-fix Rust would have "
+        f"scanned P0's bf (empty), found NO artifact, and short-"
+        f"circuited the whole composer to a silent no-op. "
+        f"P1 gy ids={rust_p1_gy_ids}; P0 gy ids={rust_p0_gy_ids}"
+    )
+    assert rust_mox_id not in rust_p0_gy_ids, (
+        "Rust: Mox must NOT land in P0's graveyard."
+    )
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_before, (
+        "Rust: P0's graveyard should be unchanged."
+    )
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_before + 1, (
+        f"Rust cross-controller routing contract: P1's graveyard "
+        f"should grow by 1 (the sacrificed Mox); a pre-fix silent "
+        f"fizzle would have left P1's gy at {rust_p1_gy_before}. "
+        f"after P1 gy={rust_state.graveyard_sizes[1]}"
+    )
+    # P1's bf delta: pre-Mox 0 -> +1 Mox = 1, then +1 source - 1 Mox =
+    # net +1 from pre-Mox state (= 1 source remaining on P1's bf).
+    rust_p1_bf_after = rust_state.battlefield_sizes[1]
+    assert rust_p1_bf_after == 1, (
+        f"Rust: P1's bf should hold exactly 1 object (the source "
+        f"Robot; Mox sacrificed); got {rust_p1_bf_after}"
+    )
+    rust_p0_bf_after = rust_state.battlefield_sizes[0]
+    assert rust_p0_bf_after == 0, (
+        f"Rust: P0's bf should stay empty; got {rust_p0_bf_after}"
+    )
+    # Lives: P1 gained 2 (20 -> 22); P0 unchanged.
+    assert rust_state.get_life(1) == rust_p1_life_before + 2, (
+        f"Rust cross-controller routing contract: P1's life should "
+        f"grow by 2 (the inner GainLife(2) routed via "
+        f"current_resolve_source_controller=1 from the outer scope). "
+        f"before={rust_p1_life_before} after={rust_state.get_life(1)}. "
+        f"A pre-fix Rust would have had the inner fizzle along with "
+        f"the outer (no artifact on P0's bf -> early-return)."
+    )
+    assert rust_state.get_life(0) == rust_p0_life_before, (
+        f"Rust: P0's life should be unchanged; "
+        f"before={rust_p0_life_before} after={rust_state.get_life(0)}"
+    )
+
+    # ---- Python post-state assertions ----
+    py_p1_gy_ids = [o.id for o in py_state.players[1].graveyard]
+    py_p0_gy_ids = [o.id for o in py_state.players[0].graveyard]
+    assert py_mox.id in py_p1_gy_ids, (
+        f"Python cross-controller routing contract: Mox (id="
+        f"{py_mox.id}) should be in P1's graveyard. P1 gy ids="
+        f"{py_p1_gy_ids}; P0 gy ids={py_p0_gy_ids}"
+    )
+    assert py_mox.id not in py_p0_gy_ids
+    assert len(py_state.players[0].graveyard) == py_p0_gy_before
+    assert (
+        len(py_state.players[1].graveyard) == py_p1_gy_before + 1
+    ), (
+        f"Python cross-controller routing contract: P1's graveyard "
+        f"should grow by 1. before={py_p1_gy_before} "
+        f"after={len(py_state.players[1].graveyard)}"
+    )
+    py_p0_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert py_p0_bf_after == 0
+    assert py_p1_bf_after == 1, (
+        f"Python: P1's bf should hold exactly 1 object (the source "
+        f"Robot; Mox sacrificed); got {py_p1_bf_after}"
+    )
+    # Lives: P1 gained 2; P0 unchanged.
+    assert py_state.players[1].life == py_p1_life_before + 2, (
+        f"Python cross-controller routing contract: P1's life should "
+        f"grow by 2. before={py_p1_life_before} "
+        f"after={py_state.players[1].life}"
+    )
+    assert py_state.players[0].life == py_p0_life_before
+
+    # ---- Cross-engine: per-zone parity ----
+    assert rust_state.graveyard_sizes[0] == len(
+        py_state.players[0].graveyard
+    )
+    assert rust_state.graveyard_sizes[1] == len(
+        py_state.players[1].graveyard
+    )
+    assert rust_state.battlefield_sizes[0] == py_p0_bf_after
+    assert rust_state.battlefield_sizes[1] == py_p1_bf_after
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
