@@ -272,6 +272,70 @@ class GainLifeEqualToArtifactCount(Effect):
 
 
 @dataclass(frozen=True)
+class GainLifeEqualToYourLifeTotal(Effect):
+    """The source's controller gains life equal to their (the
+    source-controller's) current life total.
+
+    BLOCKED-RUST-EFFECT slice (round 49) -- sister of the round-45
+    ``GainLifeEqualToArtifactCount`` (SAME recipient = controller-self
+    + SAME apply step: simple ``gain_life`` add to the controller's
+    life total per CR 119.3, not damage healing, AND the SAME apply
+    substrate: gain-life-controller-self), with a NEW dynamic-X
+    denominator (the source-controller's current life total instead of
+    their artifact count). SECOND denominator on the
+    gain-life-controller-self apply substrate (artifact-count round-45
+    -> life-total round-49). The life-total denominator was established
+    by round-42's ``MillTargetPlayerEqualToYourLifeTotal`` (mill
+    substrate), round-47's ``DealDamageToOpponentCreatureByLifeTotal``
+    (damage substrate), and round-48's
+    ``EachOpponentLosesLifeEqualToYourLifeTotal`` (life-loss-each-
+    opponent substrate); this slice walks the X-from-count matrix to a
+    FOURTH (substrate, life-total) cell, confirming the round-35
+    bidirectionally-extensible plumbing generalizes across both axes.
+
+    Life-total clamp: negative life is clamped to 0 (``max(0, life)``)
+    before use as the denominator -- matches the round-42
+    ``MillTargetPlayer(use_controller_life=True)`` / round-47
+    damage-by-life-total / round-48 each-opponent-loses-by-life-total
+    clamping precedent (a negative life total can transiently arise
+    from a prior loss/damage in the same resolution window before the
+    SBA loop runs; a negative denominator would be nonsensical).
+    Zero clamped life -> silent no-op (skips the life-add entirely);
+    matches the ``if amount <= 0: return`` short-circuit convention
+    used by the round-45 artifact-count sister and the round-32/34/48
+    X-from-count classes.
+
+    No EoE consumers today -- ships per round-27/31/37 round-trip-
+    surface-coverage rule. The Python class lands in this slice as the
+    bridge translator's other side; the dynamic-X is the whole point of
+    the class so there are no constructor args (mirrors the round-45
+    artifact-count gain-life class' unit-shape convention).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        from mtg_bot.game import gain_life
+
+        amount = max(0, state.player_by_id(controller_id).life)
+        if amount <= 0:
+            return
+        gain_life(state, controller_id, amount)
+        p = state.player_by_id(controller_id)
+        state.log.append(
+            f"P{controller_id} gains {amount} life "
+            f"(life: {p.life}; X = your life total)"
+        )
+
+    def describe(self) -> str:
+        return (
+            "you gain life equal to your life total"
+        )
+
+
+
+@dataclass(frozen=True)
 class EachOpponentLosesLifeEqualToArtifactCount(Effect):
     """Each opponent loses life equal to the number of artifacts you
     control.

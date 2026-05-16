@@ -132,6 +132,7 @@ from mtg_bot.effects.generic import (
     GainControlOfTargetSliverPermanently,
     GainLife,
     GainLifeEqualToArtifactCount,
+    GainLifeEqualToYourLifeTotal,
     GrantActivatedAbility,
     GrantKeywords,
     GrantLifeToEachOpponent,
