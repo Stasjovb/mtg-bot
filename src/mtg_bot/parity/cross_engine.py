@@ -7129,6 +7129,107 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DealDamageToOpponentCreatureByCreaturesYouControl,
         )
         return DealDamageToOpponentCreatureByCreaturesYouControl()
+    if kind == "deal_damage_to_opponent_creature_by_cards_in_graveyard":
+        # BLOCKED-RUST-EFFECT slice (round 46) -- deal damage to an
+        # opponent's creature equal to the source-controller's
+        # graveyard size. Rust's
+        # ``Effect::DealDamageToOpponentCreatureByCardsInGraveyard``
+        # (cards.rs unit variant added in this slice; parse arm
+        # immediately after the round-37
+        # deal_damage_to_opponent_creature_by_creatures_you_control
+        # arm, to_dict immediately after the round-37 arm, resolve at
+        # state_ops_resolve.rs immediately after the round-37 resolve
+        # arm with renamed loop labels _cgv for the borrow split)
+        # mirrors Python's
+        # ``DealDamageToOpponentCreatureByCardsInGraveyard``
+        # (effects/generic/damage.py -- shipped in this slice as a
+        # sister of the round-32 / 35 / 36 / 37 classes; 0 EoE
+        # consumers today). Rust substrate landed end-to-end IN this
+        # slice; the bridge translator wires the cross-engine round
+        # trip.
+        #
+        # **Sister-of-round-32/35/36/37 -- FIFTH denominator on same
+        # apply substrate.** Round-32's
+        # DealDamageToOpponentCreatureByArtifactCount uses artifact
+        # count as the dynamic-X; round-35's
+        # DealDamageToOpponentCreatureByCardsInHand uses HAND SIZE;
+        # round-36's DealDamageToOpponentCreatureByLandsControlled uses
+        # LANDS-CONTROLLED count; round-37's
+        # DealDamageToOpponentCreatureByCreaturesYouControl uses
+        # CREATURES-CONTROLLED count; this slice uses
+        # CARDS-IN-GRAVEYARD count. All five arms share the apply
+        # substrate (damage to first eligible opponent creature, fizzle
+        # on empty bf, 5-zone + stack source-controller scan); the
+        # denominator is the only axis that differs. This completes a
+        # FIFTH orthogonal X-from-count denominator on the same apply
+        # substrate, and walks the overall X-from-count denominator
+        # axis to a SIXTH entry across the substrate matrix (prior
+        # five: artifact / hand / lands / creatures / life-total --
+        # round-42 mill uses life total). FIRST zone-size denominator
+        # pulled from a NON-battlefield, NON-hand source (graveyard)
+        # -- the prior zone-size denominators all read from hand or
+        # battlefield; this slice confirms the X-from-count plumbing
+        # extends to a non-active-zone reader.
+        #
+        # **Field-shape.** Unit variant on both sides; no fields
+        # beyond ``kind``. The Python class has no static ``amount``
+        # field (damage.py -- ``@dataclass(frozen=True)`` with only
+        # the inherited ``targets`` tuple, defaulted in __post_init__
+        # to a TargetSpec on IsCreature() & ControlledByOpponent()).
+        # The dynamic-X is the whole point of the class -- the count
+        # is computed at resolve time from the source-controller's
+        # graveyard size, not stored on the variant. The bridge
+        # translator ignores every other key on the dict for
+        # round-trip dict-shape consistency (mirrors round-32 /
+        # round-33 / round-34 / round-35 / round-36 / round-37
+        # unit-variant precedent).
+        #
+        # **Resolve semantics (cross-engine).** Rust's resolve arm
+        # walks the source-controller via the round-32 / 35 / 36 / 37
+        # 5-zone+stack scan, reads ``state.players[cidx]
+        # .graveyard.len()`` via the round-35 zone-len pattern with
+        # the zone field swapped, and applies that damage amount via
+        # saturating_add (i16 ceiling matches sibling damage arms) to
+        # the FIRST creature on the opponent's bf. Python's resolve at
+        # damage.py reads the target from the targets tuple passed by
+        # the targeting pipeline (PUSH-time pick) and calls
+        # _apply_damage with
+        # ``gy_size = len(state.player_by_id(controller_id).graveyard)``
+        # as the same denominator. The chooser-driven pick converges
+        # with Rust's first-eligible-creature scan when the agent
+        # picks the first-eligible target on synthetic probes with one
+        # bait creature.
+        #
+        # **Source contribution to denominator.** Both engines walk
+        # the source-controller's graveyard (no source-exclusion
+        # clause). For an ETB-style trigger, the source is on the bf
+        # at resolve time (not in the graveyard yet) so it does NOT
+        # contribute to the denominator. For an LTB-style or
+        # graveyard-resolve trigger where the source has moved before
+        # this arm runs, the source DOES contribute +1 by virtue of
+        # the move. Mirrors the round-32 / 35 / 36 / 37 sister
+        # convention.
+        #
+        # **Fizzle parity.** Both engines silently no-op when the
+        # source-controller's graveyard is empty (Python:
+        # ``if gy_size <= 0: return``; Rust: the amount <= 0 guard in
+        # the resolve arm). Both engines also silently no-op when no
+        # opponent creature is in play (mirrors round-32 / 35 / 36 /
+        # 37 sisters exactly).
+        #
+        # **No real-EoE end-to-end probe in this slice.** Zero EoE
+        # consumers today for the damage-by-graveyard shape. Synthetic
+        # regression pin (per the round-17 Fight + round-30
+        # stun-counter + round-31 double-power + round-32
+        # by-artifact-count + round-33 per-other-creature-or-artifact
+        # + round-34 surveil-X + round-35 by-cards-in-hand + round-36
+        # by-lands-controlled + round-37 by-creatures-you-control
+        # precedent) documents the bridge plumbing; the slice ships
+        # per round-27 / round-31 round-trip-surface-coverage rule.
+        from mtg_bot.effects.generic.damage import (
+            DealDamageToOpponentCreatureByCardsInGraveyard,
+        )
+        return DealDamageToOpponentCreatureByCardsInGraveyard()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

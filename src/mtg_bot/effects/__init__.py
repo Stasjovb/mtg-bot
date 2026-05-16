@@ -62,6 +62,7 @@ from mtg_bot.effects.generic import (
     DealDamageToControllerAndAddMana,
     DealDamageToOpponentCreature,
     DealDamageToOpponentCreatureByArtifactCount,
+    DealDamageToOpponentCreatureByCardsInGraveyard,
     DealDamageToOpponentCreatureByCardsInHand,
     DealDamageToOpponentCreatureByCreaturesYouControl,
     DealDamageToOpponentCreatureByLandsControlled,

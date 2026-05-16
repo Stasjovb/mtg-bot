@@ -679,6 +679,89 @@ class DealDamageToOpponentCreatureByCreaturesYouControl(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageToOpponentCreatureByCardsInGraveyard(Effect):
+    """Deal damage equal to the number of cards in your graveyard to
+    target creature an opponent controls.
+
+    BLOCKED-RUST-EFFECT slice (round 46) -- sister of
+    ``DealDamageToOpponentCreatureByArtifactCount`` (round 32),
+    ``DealDamageToOpponentCreatureByCardsInHand`` (round 35),
+    ``DealDamageToOpponentCreatureByLandsControlled`` (round 36), and
+    ``DealDamageToOpponentCreatureByCreaturesYouControl`` (round 37).
+    Same apply substrate (damage to first eligible opponent creature,
+    target legality re-checked on slot), NEW denominator (size of the
+    controller's graveyard zone, in place of artifact-count / hand-size
+    / lands-controlled / creatures-controlled). Establishes a FIFTH
+    orthogonal X-from-count denominator on the round-32 damage
+    substrate, completing the artifact-count / hand-size /
+    lands-controlled / creatures-controlled / cards-in-graveyard
+    quintuplet on this apply substrate. SIXTH overall X-from-count
+    denominator across the substrate matrix (prior five:
+    artifact-count / hand-size / lands-controlled /
+    creatures-controlled / life-total -- round-42 mill uses life
+    total). FIRST zone-size denominator pulled from a non-battlefield,
+    non-hand source.
+
+    The source itself is NOT in the controller's graveyard at
+    resolution time for an ETB-style trigger (it's on the battlefield),
+    so a graveyard-of-N + the cast source produces N damage, not N+1.
+    For LTB-style or graveyard-resolve triggers where the source has
+    moved to the graveyard before this arm runs, the source WOULD
+    contribute +1 by virtue of the move (no source-exclusion clause,
+    mirroring round-32 / 35 / 36 / 37 sister "vanilla walk -- no
+    source-exclusion clause" convention).
+
+    No EoE consumers today -- ships per round-27/31/37/45
+    round-trip-surface-coverage rule (each bridge arm is load-bearing
+    for the round-trip + the Rust resolve substrate completes the
+    denominator-axis quintuplet). Bespoke amount (graveyard size) so
+    the class survives PR #3's damage collapse, but the legal-target
+    pool now consults ``self.targets[0].filter`` via the structural
+    ``TargetFilter`` grammar -- ``IsCreature() & ControlledByOpponent()``.
+    """
+
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import (
+                ControlledByOpponent, IsCreature,
+            )
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets",
+                (TargetSpec(IsCreature() & ControlledByOpponent()),),
+            )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            gy_size = len(state.player_by_id(controller_id).graveyard)
+            if gy_size <= 0:
+                return
+            _apply_damage(state, targets[0], gy_size)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return (
+            "deals damage equal to the number of cards in your graveyard to "
+            "target creature an opponent controls"
+        )
+
+
+
+@dataclass(frozen=True)
 class DealDamageToTargetCreatureSpacecraftBoosted(Effect):
     """Deal ``base`` damage to a target creature; ``boosted`` instead
     if you control a Spacecraft.

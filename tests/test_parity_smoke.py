@@ -55805,6 +55805,341 @@ def test_cross_engine_synthetic_etb_gain_life_equal_to_artifact_count_bridge_dic
     )
 
 
+def test_cross_engine_synthetic_etb_deal_damage_to_opponent_creature_by_cards_in_graveyard_bridge_dict_round_trip_parity(
+    parity_smoke,
+):
+    """Round-46 BLOCKED-RUST-EFFECT slice -- drive the new
+    ``deal_damage_to_opponent_creature_by_cards_in_graveyard`` Effect
+    arm end-to-end on BOTH engines via the cross-engine bridge dict.
+    FIFTH denominator on the round-32 damage substrate (after
+    artifact-count / hand-size / lands-controlled / creatures-controlled
+    in rounds 32 / 35 / 36 / 37); SIXTH overall X-from-count denominator
+    across the substrate matrix. FIRST zone-size denominator pulled
+    from a non-battlefield, non-hand source (graveyard).
+
+    **The substrate.** Rust's
+    ``Effect::DealDamageToOpponentCreatureByCardsInGraveyard``
+    (cards.rs unit variant added in this slice; resolve at
+    state_ops_resolve.rs immediately after the round-37
+    DealDamageToOpponentCreatureByCreaturesYouControl resolve arm with
+    renamed loop labels _cgv for the borrow split) walks the source-
+    controller via the round-32 / 35 / 36 / 37 5-zone+stack scan,
+    reads ``state.players[cidx].graveyard.len()`` via the round-35
+    zone-len pattern with the zone field swapped, and applies that
+    damage amount to the FIRST creature on the opponent's bf via
+    saturating_add. Python's
+    ``DealDamageToOpponentCreatureByCardsInGraveyard.resolve``
+    (effects/generic/damage.py -- shipped in this slice as the
+    bridge's other side) reads the target from the targets tuple
+    (PUSH-time pick) and calls ``_apply_damage`` with
+    ``gy_size = len(state.player_by_id(controller_id).graveyard)`` as
+    the same denominator.
+
+    **Probe shape (synthetic same-controller inject-and-fire-ENTERS).**
+
+      1. **active_player=P0** (default).
+
+      2. **Seed P0's graveyard with 3 vanilla milled creatures** --
+         the denominator. Each is a no-effects Creature carrier; the
+         only purpose is to count toward the cards-in-graveyard
+         denominator on P0's graveyard at resolve time (3 -> source-
+         controller graveyard size = 3).
+
+      3. **Inject Bait Bear (2/3) onto P1's bf** -- the target. With
+         toughness 3 > damage 3, the Bear takes lethal: damage(3) ==
+         toughness(3) -> SBA flip on the next SBA pass. The probe
+         pins the damage delta directly (the bait's damage field
+         post-drain == 3), not the SBA flip itself (which would
+         require additional plumbing in the synthetic harness).
+
+      4. **Inject Round-46 Reaper Bear (the source) onto P0's bf**
+         with controller=0 via Rust's ``register_and_inject_object``
+         and Python's ``new_object`` + bf append + manual
+         ``_trigger_etb_abilities``. The source is a vanilla 2/2
+         Creature; the ENTERS dispatch fires the SourceIsSelf trigger
+         on both engines; the trigger lands on the stack with
+         controller=0.
+
+      5. **Drain both stacks.** The trigger resolves: Rust's
+         intrinsic 5-zone walk finds the source on P0's bf, derives
+         source-controller=0, reads ``state.players[0].graveyard
+         .len()`` (3), then walks P1's bf to find the first Creature
+         (the Bear), and applies 3 damage via saturating_add. Python's
+         resolve walks via the targets-tuple pick (the agent's
+         choose_target call surfaces the Bear at PUSH time, since the
+         IsCreature() & ControlledByOpponent() filter restricts
+         legal_targets to P1's bf creatures), then routes through
+         ``_apply_damage`` with gy_size=3. Both converge.
+
+      6. **Cross-engine assert (round-trip contract):**
+         - Bait Bear's damage field equals 3 on both engines.
+         - P0/P1 lives unchanged on both engines (effect targets a
+           creature, never a player).
+         - Source on P0's bf, decoy milled stack on P0's graveyard,
+           target on P1's bf.
+         - No residual stack on either engine.
+
+    **Sister coverage.** The round-32 Warmaker Gunship probe (line
+    ~53500) pins the artifact-count denominator on the SAME damage
+    substrate; this probe pins the cards-in-graveyard denominator on
+    the SAME substrate -- the pair documents that the X-from-count
+    plumbing supports zone-size denominators (graveyard) in addition
+    to bf-walk denominators (artifact-count). The round-45 gain-life
+    probe (line ~55468) pins the controller-self life-gain substrate
+    on the artifact-count denominator; this probe is the inverted-axis
+    walk (different substrate, different denominator, same X-from-
+    count plumbing).
+
+    **Out of scope:**
+
+      * SBA flip for the lethal-damage Bear (the synthetic harness
+        doesn't drive SBAs in this probe shape; the round-32 Warmaker
+        probe uses toughness 3 + damage 2 to avoid SBA dependence
+        entirely; this probe uses toughness 3 + damage 3 to maximize
+        the cross-engine observable on a non-zero denominator, but
+        still relies on damage-field comparison rather than SBA
+        graveyard-move).
+      * Cross-controller routing -- the synthetic same-controller
+        probe is sufficient for round-trip pin; the cross-controller
+        legs are covered by the round-32 / 35 / 36 / 37 sister
+        cross-controller pins on the same apply substrate (the
+        source-controller resolution code path is shared across all
+        five sisters).
+      * Empty-graveyard silent no-op -- the Rust regression pin
+        coverage for the round-46 arm (mirroring the round-44/45
+        zero-count pins) covers the empty-graveyard path; this probe
+        focuses on the non-empty denominator round-trip.
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Round-46 Reaper Bear on P0's bf (controller=0; 1 entry).
+      * 3 Mill Bears on P0's graveyard.
+      * Bait Bear (2/3) on P1's bf with damage=3.
+      * P0/P1 lives unchanged at 20.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+
+    ZONE_BATTLEFIELD = 2
+    ZONE_GRAVEYARD = 3
+
+    # ---- Rust side: seed P0's graveyard with 3 mill bears + Bait Bear
+    # on P1's bf + Reaper Bear on P0's bf, then verify the trigger
+    # lands and the drain marks 3 damage on the Bait Bear. ----
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+
+    rust_mill_bear_dict = {
+        "name": "Round-46 Mill Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    for _ in range(3):
+        rust_state.register_and_inject_object(
+            rust_mill_bear_dict, 0, ZONE_GRAVEYARD,
+        )
+    assert rust_state.graveyard_sizes[0] == 3
+
+    rust_bait_dict = {
+        "name": "Bait Bear (2/3)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 3,
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0
+    assert rust_state.get_damage(rust_bait_id) == 0
+
+    rust_reaper_dict = {
+        "name": "Round-46 Reaper Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "B": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_to_opponent_creature_by_cards_in_graveyard"
+                },
+            }
+        ],
+    }
+    rust_state.register_and_inject_object(
+        rust_reaper_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Reaper Bear's arrival should fire the SourceIsSelf "
+        "ENTERS trigger and land "
+        "DealDamageToOpponentCreatureByCardsInGraveyard on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side: mirror the shape via new_object +
+    # _trigger_etb_abilities. The Python class is constructed via the
+    # bridge translator on the ENTERS dispatch -- this is the round-
+    # trip leg that pins the bridge end-to-end. ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByCardsInGraveyard,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    mill_bear_printing = CardPrinting(
+        name="Round-46 Mill Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+    )
+    for _ in range(3):
+        py_mb = py_state.new_object(
+            mill_bear_printing, owner_id=0, zone=Zone.GRAVEYARD,
+        )
+        py_state.players[0].graveyard.append(py_mb)
+    assert len(py_state.players[0].graveyard) == 3
+
+    bait_printing = CardPrinting(
+        name="Bait Bear (2/3)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=3,
+        produces=frozenset(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+
+    reaper_printing = CardPrinting(
+        name="Round-46 Reaper Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("B", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DealDamageToOpponentCreatureByCardsInGraveyard(),
+            ),
+        ),
+    )
+    # Seat the picker BEFORE Reaper's trigger fires (push_triggered
+    # _ability calls choose_target at trigger-push time). The slot's
+    # IsCreature() & ControlledByOpponent() filter restricts
+    # legal_targets to opponent-side creatures, so the agent picks the
+    # only legal target (the Bait Bear). Mirrors the round-32 Warmaker
+    # probe seating pattern exactly.
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+
+    py_reaper = py_state.new_object(
+        reaper_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_reaper.summoning_sick = False
+    py_reaper.tapped = False
+    py_reaper.damage = 0
+    py_reaper.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_reaper)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_reaper)
+    assert len(py_state.stack) == 1, (
+        "Python: Reaper Bear's arrival should fire the IsSelf ENTERS "
+        "trigger and land "
+        "DealDamageToOpponentCreatureByCardsInGraveyard on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: Bait Bear takes 3 damage (3 cards in P0's
+    # graveyard at resolve time). Toughness 3 == damage 3 -- lethal,
+    # but the probe pins the damage field directly rather than the SBA
+    # flip (synthetic harness doesn't drive SBAs here, mirroring the
+    # round-32 Warmaker probe shape).
+    rust_bait_damage_after = rust_state.get_damage(rust_bait_id)
+    assert rust_bait_damage_after == 3, (
+        "Rust: Bait Bear should carry 3 damage after the ETB burn "
+        "(3 cards in P0's graveyard); got "
+        f"{rust_bait_damage_after}"
+    )
+    assert py_bait.damage == 3, (
+        "Python: Bait Bear should carry 3 damage after the ETB burn "
+        f"(3 cards in P0's graveyard); got {py_bait.damage}"
+    )
+
+    # Lives unchanged on both seats -- the effect targets a creature,
+    # never a player.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # Cross-engine: byte-equal damage on the bait + same life totals.
+    assert rust_state.get_damage(rust_bait_id) == py_bait.damage
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Reaper itself takes no damage (effect targets opponent creature).
+    assert py_reaper.damage == 0
+
+    # P0's graveyard still holds 3 mill bears (the denominator) on
+    # both engines.
+    assert rust_state.graveyard_sizes[0] == 3
+    assert len(py_state.players[0].graveyard) == 3
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
