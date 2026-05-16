@@ -2000,6 +2000,66 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # (non-vanilla-token / tapped-rider / each-player-rider stay
     # dropped) so the predicate-effect product gate stays honest.
     ("enters", "source_is_self", "create_token"),
+    # DIES + source_is_self + create_token_tapped (Phase 6 token-
+    # printing substrate, Phase 4 — round 50). The FIRST real-card
+    # token-substrate lever after Phase 1: it admits the real EoE card
+    # **Gravpack Monoist** (Creature — Robot, flying; "When this
+    # creature dies, create a tapped 2/2 Robot token." — 25,252 of
+    # 129,996 17lands EoE decks). Unlike Phase 1 (substrate-only,
+    # EoE-pool delta = 0), Phase 4 flips a real card drop→admit:
+    # Gravpack Monoist's Robot token is ALREADY vanilla (2/2 Artifact
+    # Creature, no abilities/keywords — verified against the parsed
+    # printing), so the only Phase-1 decline that kept it dropped was
+    # the ``tapped=True`` rider (``docs/TOKEN_PRINTING_SUBSTRATE.md``
+    # §2.3). The new Rust ``Effect::CreateTokenTapped`` sister variant
+    # + the ``create_token_tapped`` bridge arm + this recognizer widen
+    # close that decline with NO Phase-3 Lander-activated-ability
+    # dependency.
+    #
+    # **Why DIES (not ENTERS).** Gravpack Monoist's oracle is a death
+    # trigger ("When this creature dies, ..."). The DIES event +
+    # IsSelf predicate dispatch was proven bit-equal cross-engine by
+    # round-42 (DIES+surveil) / round-47 (DIES+gain_life /
+    # DIES+draw_cards) — the recognizer's event-string gate and
+    # ``_is_safe_trigger_dict`` already admit DIES; this entry adds the
+    # create_token_tapped leaf to the DIES×IsSelf row. The ENTERS
+    # sister entry below pre-positions the substrate for any future
+    # "When ~ enters, create a tapped token" carrier (sister to the
+    # Phase-1 ENTERS+create_token entry) — substrate-only, no EoE
+    # ENTERS+tapped consumer today.
+    #
+    # **Cross-engine parity contract (tapped vanilla token).** Both
+    # engines create ``count`` tokens of the fixed vanilla printing
+    # under the trigger's resolved controller, each entering TAPPED.
+    # Rust's ``Effect::CreateTokenTapped`` resolve arm sets
+    # ``tapped: true`` on the pushed GameObject (otherwise byte-
+    # identical to the sister ``CreateToken`` arm — same I81
+    # controller-of-effect resolution, summoning_sick=true, CE4
+    # monotonic etb_timestamp, pending ENTERS dispatch); Python's
+    # ``CreateToken.resolve`` flips ``obj.tapped = True`` post-ETB
+    # (tokens.py:286-287). The token enters tapped but its ETB still
+    # fires on BOTH engines (CR 603.6e — entering tapped does not
+    # suppress the enters trigger; the Robot token is vanilla so there
+    # is no nested ETB anyway). The token GameObject's per-object
+    # signature (printing name / P/T / controller / summoning_sick /
+    # **tapped=True**) is byte-equal — the field-view zone signature
+    # includes ``tapped`` so the real-EoE probe's byte-equal assertion
+    # genuinely exercises the tapped flag.
+    #
+    # **Loader-side auto-registration.** Same deterministic-pid
+    # ``_seat_token_printings`` pass as the Phase-1 ``create_token``
+    # entry — it now also rewrites symbolic ``create_token_tapped``
+    # triggers (the carrier-ref scan + the trigger rewrite preserve
+    # the ``kind`` so the tapped variant survives seating).
+    #
+    # **Real-EoE delta (NOT substrate-only).** A fresh EoE-pool walk
+    # confirms Gravpack Monoist flips drop→admit on this entry
+    # (~25,252 decks). Pinned by a real-EoE Gravpack-Monoist cross-
+    # engine probe + the reject-path conversion (the round-49
+    # ``test_printing_is_bridge_simple_creature_rejects_lander_cluster``
+    # Gravpack-Monoist assertion is moved to an admit-path pin).
+    ("dies", "source_is_self", "create_token_tapped"),
+    ("enters", "source_is_self", "create_token_tapped"),
 })
 
 
@@ -2085,6 +2145,26 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # PumpSelf ``granted_keywords`` rider-exclusion pattern). See
     # ``docs/TOKEN_PRINTING_SUBSTRATE.md`` §2.3.
     "create_token": frozenset({"kind", "count", "token_printing_id"}),
+    # CreateTokenTapped (Phase 6 token-printing substrate, Phase 4 —
+    # round 50). Same POST-SEATING two-key payload as the sister
+    # ``create_token`` whitelist above (``count`` +
+    # ``token_printing_id``); the tapped-vs-untapped choice rides on
+    # the dict ``kind`` (= the Rust variant name
+    # ``Effect::CreateTokenTapped``), not on a payload field, so the
+    # whitelist is identical and the ``tapped`` rider is NOT a dict
+    # key (mirrors the closed-vocab sister-variant convention — the
+    # bridge round-trips the binary choice via ``kind``, never a bool
+    # payload field). The recognizer (``_python_ta_to_safe_dict``)
+    # emits this ``kind`` when the parsed ``CreateToken`` has
+    # ``tapped=True`` and every OTHER rider
+    # (``each_player`` / ``attacking`` /
+    # ``schedule_end_of_combat_sacrifice``) at its default, gated to a
+    # vanilla token (same §2 gate as the sister arm). EoE consumer:
+    # Gravpack Monoist (DIES+IsSelf+tapped Robot — 25,252 17lands
+    # decks). See ``docs/TOKEN_PRINTING_SUBSTRATE.md`` §4 Phase 4.
+    "create_token_tapped": frozenset(
+        {"kind", "count", "token_printing_id"}
+    ),
 }
 
 
@@ -2366,9 +2446,15 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # high-deck-count carrier produces the non-vanilla Lander
             # token or carries a declined rider, so no real consumer is
             # admitted today; see ``docs/TOKEN_PRINTING_SUBSTRATE.md``).
+            # Phase 4 (round 50) adds ``create_token_tapped`` under
+            # ENTERS as the sister of the Phase-1 ``create_token``
+            # leaf — pre-positions the substrate for any future "When ~
+            # enters, create a tapped token" carrier (substrate-only on
+            # ENTERS; the real-card delta is on DIES via Gravpack
+            # Monoist, see the DIES arm below).
             safe_effect_kinds = (
                 "draw_cards", "gain_life", "scry_n", "surveil", "mill",
-                "create_token",
+                "create_token", "create_token_tapped",
             )
         elif ta.event is Event.ATTACKS:
             # Round-44 widens the ATTACKS arm from {surveil} to
@@ -2400,7 +2486,26 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # DIES+IsSelf+Scry; a future slice landing one ships it as a
             # single-line edit here AND a single new ``_SAFE_TRIGGERS``
             # entry.
-            safe_effect_kinds = ("surveil", "gain_life", "draw_cards")
+            #
+            # Phase 4 (round 50) adds ``create_token_tapped`` under
+            # DIES — this is the real-card lever: it admits **Gravpack
+            # Monoist** ("When this creature dies, create a tapped 2/2
+            # Robot token." — 25,252 17lands decks). Its Robot token is
+            # vanilla, so the Phase-1 vanilla-token gate +
+            # ``CreateTokenTapped`` Rust sister variant + the
+            # ``create_token_tapped`` bridge arm flip it drop→admit
+            # with no Phase-3 dependency. Bare (non-tapped)
+            # ``create_token`` is intentionally NOT in the DIES set —
+            # no real EoE DIES+IsSelf+bare-create_token consumer exists
+            # (every Lander-token DIES carrier is declined on the
+            # non-vanilla token; the only DIES+vanilla-token consumer
+            # is Gravpack Monoist, which is the tapped shape). A future
+            # bare-DIES consumer ships ``create_token`` here + a
+            # ``_SAFE_TRIGGERS`` entry as a single-line edit.
+            safe_effect_kinds = (
+                "surveil", "gain_life", "draw_cards",
+                "create_token_tapped",
+            )
     elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:
         # Landfall is parser-emitted under ENTERS only (CR 614 — the
         # land enters under your control); gate on event to keep the
@@ -2523,23 +2628,31 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         eff_kind = "mill"
         eff_dict = {"kind": "mill", "count": int(eff.amount)}
     elif isinstance(eff, CreateToken):
-        # Round-49 N1 token-printing substrate, Phase 1. Fixed-single-
-        # token "create N tokens of <fixed printing>" shape. Two §2
+        # Round-49 N1 token-printing substrate, Phase 1 (bare rider) +
+        # Phase 4 (round 50, the ``tapped`` rider). Fixed-single-token
+        # "create N tokens of <fixed printing>" shape. Two §2
         # silent-mistranslation gates:
         #
-        #  (1) **Bare rider only.** Rust's ``Effect::CreateToken
-        #      { count, token_printing_id }`` (rust/src/cards.rs:219)
-        #      has NO ``tapped`` / ``each_player`` / ``attacking`` /
-        #      ``schedule_end_of_combat_sacrifice`` field; the bridge
-        #      arm constructs the bare ``CreateToken(token_printing=…,
-        #      count=…)``. A carrier whose parsed CreateToken sets any
-        #      of these riders (Gravpack Monoist ``tapped=True``,
-        #      Edge Rover ``each_player=True``) would round-trip to a
-        #      token that enters untapped / under one player only on
-        #      Rust while Python honored the rider — a byte-divergent
-        #      post-resolve token object. Reject so those carriers
-        #      fall to the filter drop path (Phase 4 / Phase 5 add the
-        #      Rust sister-variant support).
+        #  (1) **Supported-rider only.** Rust's bare
+        #      ``Effect::CreateToken { count, token_printing_id }``
+        #      (cards.rs:219) has NO rider fields; Phase 4 adds the
+        #      ``Effect::CreateTokenTapped`` sister variant for the
+        #      ``tapped=True`` rider (cards.rs — the
+        #      ``create_token_tapped`` parse/to_dict/resolve arms +
+        #      the ``create_token_tapped`` bridge arm). So the
+        #      recognizer now supports TWO rider profiles:
+        #        * all riders default  -> ``create_token`` (Phase 1)
+        #        * ``tapped=True`` only -> ``create_token_tapped``
+        #          (Phase 4 — the byte-equal tapped sister)
+        #      The ``each_player=True`` rider (Edge Rover) still has
+        #      its own Rust variant + bridge arm but no loader
+        #      recognizer/auto-registration arm (Phase 5 in the design
+        #      doc); ``attacking`` and
+        #      ``schedule_end_of_combat_sacrifice`` have no Rust
+        #      mirror at all. Any carrier engaging those riders (or
+        #      ``tapped`` COMBINED with another rider) would round-trip
+        #      to a byte-divergent token, so it falls to the filter
+        #      drop path here.
         #  (2) **Vanilla token only.** The loader synthesizes a token
         #      CardDef from the parsed ``token_printing``; CardDef
         #      carries name / card-types / P/T / subtypes / keywords /
@@ -2551,8 +2664,11 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         #      static abilities, keywords the safe-keyword set doesn't
         #      cover, nested triggered abilities, or a non-creature /
         #      None-P-T body. (The token's triggered abilities, if
-        #      any, would also have to round-trip — out of Phase 1's
-        #      scope; require zero.)
+        #      any, would also have to round-trip — out of scope here;
+        #      require zero.) Gravpack Monoist's Robot token IS vanilla
+        #      (2/2 Artifact Creature, no abilities/keywords) so it
+        #      passes gate (2); only its ``tapped=True`` rider kept it
+        #      dropped under Phase 1 — Phase 4 closes that decline.
         #
         # The emitted dict carries a SYMBOLIC ``_token_card_def`` (the
         # synthesized token CardDef) rather than a numeric
@@ -2563,7 +2679,13 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # ``_is_safe_trigger_dict`` validates the POST-seating shape
         # (``token_printing_id`` numeric), so a never-seated dict that
         # leaked to the dict-side gate would correctly be rejected.
-        if eff.tapped or eff.each_player or eff.attacking:
+        #
+        # ``_seat_token_printings`` recognizes BOTH ``create_token``
+        # and ``create_token_tapped`` symbolic carriers and preserves
+        # the ``kind`` through the seating rewrite (the variant
+        # distinction must survive — it IS the tapped-vs-untapped
+        # choice on the bridge).
+        if eff.each_player or eff.attacking:
             return None
         if getattr(eff, "schedule_end_of_combat_sacrifice", False):
             return None
@@ -2571,12 +2693,19 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         token_cd = _token_vanilla_card_def(tp)
         if token_cd is None:
             return None
-        eff_kind = "create_token"
+        # Phase 4: the ``tapped`` rider routes to the
+        # ``create_token_tapped`` sister kind (Rust
+        # ``Effect::CreateTokenTapped``); all-default routes to the
+        # Phase-1 bare ``create_token``. No other rider is set here
+        # (each_player/attacking/schedule already declined above), so
+        # exactly one of the two profiles applies.
+        eff_kind = "create_token_tapped" if eff.tapped else "create_token"
         eff_dict = {
-            "kind": "create_token",
+            "kind": eff_kind,
             "count": int(eff.count),
             # Symbolic token reference — replaced with a numeric
-            # ``token_printing_id`` by ``_seat_token_printings``.
+            # ``token_printing_id`` by ``_seat_token_printings``
+            # (which preserves this ``kind``).
             "_token_card_def": token_cd,
         }
     else:
@@ -3083,16 +3212,26 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
         register_token_printing,
     )
 
+    # Phase 4 (round 50): the seating pass handles BOTH the Phase-1
+    # bare ``create_token`` symbolic carrier AND the Phase-4
+    # ``create_token_tapped`` symbolic carrier. The two are seated
+    # identically (deterministic-pid token CardDef append + bridge-map
+    # register); the ONLY difference is the ``kind`` string, which is
+    # the tapped-vs-untapped choice on the bridge and MUST survive the
+    # seating rewrite.
+    _TOKEN_CREATE_KINDS = ("create_token", "create_token_tapped")
+
     def _carrier_token_refs(cd: CardDef):
-        """Yield (idx, token_card_def) for each create_token trigger
-        on ``cd`` that still carries a symbolic ``_token_card_def``."""
+        """Yield (idx, token_card_def) for each create_token /
+        create_token_tapped trigger on ``cd`` that still carries a
+        symbolic ``_token_card_def``."""
         for i, ta in enumerate(cd.triggered_abilities):
             if not isinstance(ta, dict):
                 continue
             eff = ta.get("effect")
             if not isinstance(eff, dict):
                 continue
-            if eff.get("kind") != "create_token":
+            if eff.get("kind") not in _TOKEN_CREATE_KINDS:
                 continue
             tcd = eff.get("_token_card_def")
             if tcd is not None:
@@ -3152,7 +3291,12 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
             old = new_tas[idx]
             old_eff = old["effect"]
             new_eff = {
-                "kind": "create_token",
+                # Preserve the original kind — ``create_token`` (Phase
+                # 1, bare) vs ``create_token_tapped`` (Phase 4) IS the
+                # tapped-vs-untapped choice on the bridge; the seating
+                # pass only swaps the symbolic ``_token_card_def`` for
+                # the numeric ``token_printing_id``, never the kind.
+                "kind": old_eff["kind"],
                 "count": old_eff["count"],
                 "token_printing_id": token_pid_by_name[tcd.name],
             }

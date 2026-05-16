@@ -281,6 +281,62 @@ pub enum Effect {
     /// `state.players` index order = controller id order, mirroring
     /// Python's `for p in state.players` natural order).
     CreateTokenEachPlayer { count: i32, token_printing_id: u32 },
+    /// **Phase 6 token-printing substrate -- Phase 4 (round 50): the
+    /// `tapped` create-token rider.** Sister of the static
+    /// `CreateToken { count, token_printing_id }` arm; the ONLY
+    /// behavioral difference is that every fresh token enters the
+    /// battlefield TAPPED (CR 701.6 + the "create a tapped ~" oracle
+    /// rider). Mirrors Python's
+    /// `CreateToken(token_printing=..., count=N, tapped=True)`
+    /// (`effects/generic/tokens.py:286-287` -- the `if self.tapped:
+    /// obj.tapped = True` branch).
+    ///
+    /// **EoE consumer: Gravpack Monoist** (Creature -- Robot, flying;
+    /// "When this creature dies, create a tapped 2/2 Robot token.").
+    /// 25,252 of the 129,996 17lands EoE decks run it -- the single
+    /// highest real-card-coverage lever in the token-printing
+    /// substrate after Phase 1 (its Robot token is already vanilla, so
+    /// Phase 4 needs no Phase-3 Lander-activated-ability work). Round
+    /// 49's `tapped=True` rider was DECLINED by the Phase-1 recognizer
+    /// (`docs/TOKEN_PRINTING_SUBSTRATE.md` §2.3) precisely because the
+    /// bare `CreateToken` variant has no `tapped` mirror -- this
+    /// variant closes that decline.
+    ///
+    /// **Schema parity with Python -- sister-variant convention.**
+    /// Mirrors the sister `CreateToken` / `CreateTokenEachPlayer`
+    /// two-field schema (`count: i32`, `token_printing_id: u32`); adds
+    /// NO new field because the `tapped` boolean is encoded by variant
+    /// name (closed-vocab convention -- bool fields are second-class
+    /// in the bridge, every binary choice rides on a separate variant;
+    /// round-19/30/31/.. / round-43 `CreateTokenEachPlayer`
+    /// precedent). Python's `tapped=True` is a per-instance bool on
+    /// the existing dataclass, but the bridge MAPS it to a distinct
+    /// dict `kind` (`create_token_tapped`) for round-trip clarity.
+    ///
+    /// **Negative `count` raises** loudly (mirrors the sister
+    /// `CreateToken` arm). `count == 0` is a legal no-op. **Unknown
+    /// `token_printing_id` raises** at resolve time before any state
+    /// mutation (mirrors the sister arm's whole-or-nothing validation
+    /// contract).
+    ///
+    /// **First-slice scope (parity with the sister arm).** CR 614
+    /// token-creation replacement effects (Anointed Procession
+    /// doubling, ...) and the `each_player` / `attacking` /
+    /// `schedule_end_of_combat_sacrifice` riders are NOT plumbed here
+    /// -- the EoE consumer (Gravpack Monoist -> a single tapped Robot
+    /// on its own controller's battlefield) engages NONE of them, and
+    /// the sister arms defer the same surface for the same reason.
+    /// Those richer surfaces still resolve through the Python path.
+    ///
+    /// **ENTERS dispatch.** Mirrors the sister `CreateToken` arm's
+    /// `pending_etb_dispatches.extend(token_ids)` shape: every fresh
+    /// token id is queued for ENTERS event dispatch by the
+    /// surrounding resolver. The CE4 etb_timestamp stamping preserves
+    /// a strict per-token monotonic order. The token enters TAPPED but
+    /// is otherwise identical to the sister arm's token (same
+    /// summoning-sick=true, controller-of-effect resolution, fresh-id
+    /// allocator).
+    CreateTokenTapped { count: i32, token_printing_id: u32 },
     /// Controller adds `amount` mana of `color` to their mana pool.
     /// CR 106.1 — the resolution of a mana ability. Color is one of
     /// W/U/B/R/G/C; amount is non-negative. AddManaToPool is the
@@ -4247,6 +4303,23 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             let token_printing_id: u32 = require(dict, "token_printing_id")?.extract()?;
             Ok(Effect::CreateTokenEachPlayer { count, token_printing_id })
         }
+        "create_token_tapped" => {
+            // Phase 6 token-printing substrate -- Phase 4 (round 50).
+            // Sister of the static `create_token` arm above; same
+            // two-field schema (`count` + `token_printing_id`),
+            // distinguished by variant (closed-vocab convention -- the
+            // tapped-vs-untapped choice rides on the variant name, not
+            // a boolean field, mirroring the round-43
+            // `create_token_each_player` sister + round-19/30/31/..
+            // sister-variant precedent). Mirrors Python's
+            // `CreateToken(token_printing=..., count=N, tapped=True)`
+            // (`tokens.py:286-287`). EoE consumer: Gravpack Monoist
+            // ("When this creature dies, create a tapped 2/2 Robot
+            // token." -- 25,252 17lands decks).
+            let count: i32 = require(dict, "count")?.extract()?;
+            let token_printing_id: u32 = require(dict, "token_printing_id")?.extract()?;
+            Ok(Effect::CreateTokenTapped { count, token_printing_id })
+        }
         "add_mana_to_pool" => {
             let color: String = require(dict, "color")?.extract()?;
             // Validate against the closed mana-color vocab. Shared
@@ -6713,6 +6786,19 @@ pub(crate) fn effect_to_pydict<'py>(
             // dict-shape uses a distinct `kind` for round-trip
             // clarity.
             d.set_item("kind", "create_token_each_player")?;
+            d.set_item("count", *count)?;
+            d.set_item("token_printing_id", *token_printing_id)?;
+        }
+        Effect::CreateTokenTapped { count, token_printing_id } => {
+            // Phase 6 token-printing substrate -- Phase 4 (round 50).
+            // Two-field schema mirrors the sister `CreateToken` arm
+            // above; the tapped-vs-untapped choice rides on the
+            // variant name (and thus on the dict `kind` string), not
+            // on a boolean field. Mirrors Python's
+            // `CreateToken(tapped=True)` -- the Python class has a
+            // single `tapped: bool` field, but the bridge dict-shape
+            // uses a distinct `kind` for round-trip clarity.
+            d.set_item("kind", "create_token_tapped")?;
             d.set_item("count", *count)?;
             d.set_item("token_printing_id", *token_printing_id)?;
         }

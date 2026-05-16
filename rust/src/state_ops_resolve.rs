@@ -2478,6 +2478,130 @@ fn apply_effect(
             // sister `CreateToken` arm's pending dispatch shape.
             state.pending_etb_dispatches.extend(token_ids);
         }
+        // Phase 6 token-printing substrate -- Phase 4 (round 50): the
+        // `tapped` create-token rider. Sister of the `Effect::
+        // CreateToken` arm above; the ONLY behavioral difference is
+        // that every fresh token enters the battlefield TAPPED
+        // (`tapped: true` instead of `tapped: false`). Mirrors
+        // Python's `CreateToken(tapped=True).resolve` at
+        // `effects/generic/tokens.py:286-287` (the `if self.tapped:
+        // obj.tapped = True` post-ETB branch -- the token still enters
+        // through `put_into_battlefield` so its ETB fires, then is
+        // flipped tapped).
+        //
+        // EoE consumer: Gravpack Monoist (Creature -- Robot, flying;
+        // "When this creature dies, create a tapped 2/2 Robot
+        // token." -- 25,252 17lands decks). The Robot token is vanilla
+        // (no abilities/keywords, 2/2 Artifact Creature), so this
+        // variant + the Phase-1 vanilla-token recognizer + the
+        // recognizer widen flip Gravpack Monoist drop->admit with NO
+        // Phase-3 Lander-activated-ability dependency.
+        //
+        // **Mechanism (parity with the sister `CreateToken` arm).**
+        // Identical to the sister arm -- count>=0 validation, registry
+        // bounds check, controller-of-effect resolution
+        // (`current_resolve_source_controller`, I81 fix), fresh-id
+        // allocator, CE4 monotonic etb_timestamp, summoning_sick=true,
+        // pending ENTERS dispatch -- with the SINGLE byte difference
+        // that each pushed `GameObject` carries `tapped: true`. The
+        // each-player / attacking / schedule-eoc-sac riders are NOT
+        // plumbed here for the same reason the sister arm defers them
+        // (no EoE consumer of the tapped shape engages them; the
+        // Python path still handles those cases for future cards).
+        Effect::CreateTokenTapped {
+            count,
+            token_printing_id,
+        } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "CreateTokenTapped count must be non-negative, got {count}"
+                )));
+            }
+            // Registry-bounds check up front so an unknown printing_id
+            // surfaces before any state mutation (mirrors the sister
+            // `CreateToken` arm's whole-or-nothing validation).
+            let token_pid = *token_printing_id;
+            if state.registry.lookup(token_pid).is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "token_printing_id {token_pid} not in registry"
+                )));
+            }
+            let n = *count as usize;
+            if n == 0 {
+                return Ok(()); // legal no-op (mirrors sister CreateToken arm)
+            }
+            // Controller resolution: same I81 controller-of-effect
+            // substrate as the sister `CreateToken` arm -- both the
+            // recipient battlefield Vec pick AND the token's
+            // `controller` byte derive from
+            // `current_resolve_source_controller` (active_player as the
+            // back-compat fallback). Mirrors Python's
+            // `CreateToken.resolve(state, controller_id, targets)`
+            // building `recipients = [controller_id]`.
+            let active = state
+                .current_resolve_source_controller
+                .unwrap_or(state.active_player);
+
+            // Allocate fresh ids: scan every zone on both players for
+            // the current max id, allocate starting at max + 1.
+            // Mirrors the sister `CreateToken` arm's allocator.
+            let mut max_id: u32 = 0;
+            let mut found_any = false;
+            for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if !found_any || obj.id > max_id {
+                            max_id = obj.id;
+                            found_any = true;
+                        }
+                    }
+                }
+            }
+            let mut next_id: u32 = if found_any { max_id + 1 } else { 0 };
+
+            // CE4 closure: stamp each token with a fresh strictly-
+            // monotonic etb_timestamp (mirrors the sister arm).
+            let n_u32 = n as u32;
+            let bf_etb_base = state.next_etb_timestamp;
+            state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(n_u32);
+            let mut token_ids: Vec<u32> = Vec::with_capacity(n);
+            let bf: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[active as usize].battlefield);
+            for i in 0..n {
+                bf.push(GameObject {
+                    id: next_id,
+                    printing_id: token_pid,
+                    controller: active,
+                    zone: ZONE_BATTLEFIELD,
+                    // The Phase-4 byte difference vs the sister
+                    // `CreateToken` arm: the token enters TAPPED.
+                    tapped: true,
+                    summoning_sick: true,
+                    damage: 0,
+                    counters: 0,
+                    charge_counters: 0,
+                    loyalty_counters: 0,
+                    attached_to: None,
+                    exiled_with_source: None,
+                    stun_counters: 0,
+                    etb_timestamp: bf_etb_base.saturating_add(i as u32),
+                    ueot_modifiers: Vec::new(),
+                });
+                token_ids.push(next_id);
+                next_id += 1;
+            }
+            // Queue ENTERS per token in stamp order -- mirrors the
+            // sister `CreateToken` arm's pending dispatch shape. The
+            // token enters tapped but its ETB still fires (CR 603.6e
+            // -- entering tapped does not suppress the enters trigger).
+            state.pending_etb_dispatches.extend(token_ids);
+        }
         // Round-23: AddManaToPool. CR 106.1 — the resolution of a mana
         // ability. The active player (= controller of the resolving
         // mana ability or stack item, first-slice convention mirrored

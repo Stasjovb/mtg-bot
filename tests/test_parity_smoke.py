@@ -57258,6 +57258,225 @@ def test_cross_engine_synthetic_etb_gain_life_eq_your_life_total_bridge_dict_rou
     assert rust_p1_bf_after == py_p1_bf_after
 
 
+def test_phase4_real_eoe_gravpack_monoist_tapped_token_byte_equal():
+    """Phase 6 token-printing substrate — Phase 4 (round 50): the
+    headline real-EoE byte-equal probe.
+
+    **Real card, real loader path.** Builds a loader-seated DeckSpec
+    from the REAL Edge of Eternities card ``Gravpack Monoist``
+    (Creature — Robot, flying; "When this creature dies, create a
+    tapped 2/2 Robot token.") via
+    :func:`trajectory.production_deck_to_deckspec`. The loader's
+    ``_seat_token_printings`` pass auto-registers the vanilla Robot
+    token printing at a deterministic Rust-registry pid, rewrites the
+    carrier's DIES trigger to
+    ``{kind: create_token_tapped, count: 1, token_printing_id: <pid>}``,
+    and seeds the cross-engine bridge map at that pid — so BOTH engines
+    materialize Gravpack Monoist with the SAME tapped-Robot trigger
+    (Python via the ``create_token_tapped`` bridge arm ->
+    ``CreateToken(tapped=True)``; Rust via the
+    ``Effect::CreateTokenTapped`` sister variant).
+
+    **EoE-pool delta.** Gravpack Monoist flips drop→admit under Phase
+    4 (it was the sole Phase-1 §2.3 ``tapped=True`` decline; its Robot
+    token is already vanilla so no Phase-3 dependency). ~25,252 of
+    129,996 17lands EoE decks run it — the single highest real-card-
+    coverage lever in the token-printing substrate after Phase 1.
+
+    **What it pins (byte-equal tapped spawn).** Inject the loader-
+    materialized Gravpack Monoist onto p0's battlefield on BOTH
+    engines, mark lethal damage (1 >= toughness 1), run an SBA pass
+    (bf->graveyard move dispatches the DIES trigger on both engines),
+    drain the ``create_token_tapped`` resolve, then field-view-compare.
+    The zone signature includes the ``tapped`` flag, so the
+    ``compare_fields == []`` assertion genuinely exercises Phase 4's
+    contract: the spawned Robot enters TAPPED on BOTH engines (Rust's
+    resolve arm sets ``tapped: true``; Python's ``CreateToken.resolve``
+    flips ``obj.tapped = True``). A regression that dropped the tapped
+    flag on either side would surface here as a battlefield-signature
+    divergence.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        build_python_field_view,
+        compare_fields,
+        parity_smoke as ce_parity_smoke,
+        clear_token_printings,
+        _card_def_to_python_printing,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.game import Zone
+
+    clear_token_printings()
+    try:
+        pr = get_active_source().get_printings()
+        if pr.get("Gravpack Monoist") is None:
+            import pytest
+            pytest.skip("Gravpack Monoist absent from active CardSource")
+
+        # Loader-seated DeckSpec: real Gravpack Monoist + Island filler.
+        # The seating pass registers the Robot token printing on both
+        # engines' registries (it is in spec.card_defs) + the bridge
+        # map, and rewrites the carrier's DIES trigger to the numeric
+        # create_token_tapped shape.
+        spec = trajectory.production_deck_to_deckspec(
+            ["Gravpack Monoist"] * 8 + ["Island"] * 52,
+            shared_rng_seed=42, pad_to_size=60, pad_with="Island",
+        )
+        names = [cd.name for cd in spec.card_defs]
+        assert "Gravpack Monoist" in names
+        assert "Robot" in names, "vanilla Robot token must be seated"
+        assert "Robot" not in spec.p0_library, (
+            "token must be registered but never drawn"
+        )
+        gm_cd = next(c for c in spec.card_defs if c.name == "Gravpack Monoist")
+        gm_eff = gm_cd.triggered_abilities[0]["effect"]
+        assert gm_eff["kind"] == "create_token_tapped", (
+            f"seated Gravpack Monoist trigger must be the tapped sister "
+            f"kind; got {gm_eff['kind']!r}"
+        )
+        robot_pid = gm_eff["token_printing_id"]
+        assert robot_pid == names.index("Robot")
+
+        py_state, rust_state = build_matched_states(spec)
+
+        # ---- Inject the loader-materialized Gravpack Monoist on p0
+        # bf, BOTH engines. Python: materialize the real printing from
+        # the seated CardDef (the create_token_tapped trigger resolves
+        # through the bridge map seeded above). Rust:
+        # register_and_inject_object with the seated carrier dict (the
+        # Robot token is already registered at robot_pid by
+        # build_matched_states, so token_printing_id is valid).
+        py_printing = _card_def_to_python_printing(gm_cd)
+        # Sanity: Python materialization carries the tapped Robot rider.
+        py_trig_eff = py_printing.triggered_abilities[0].effect
+        assert py_trig_eff.tapped is True
+        assert py_trig_eff.token_printing.name == "Robot"
+        py_carrier = py_state.new_object(
+            py_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+        )
+        py_carrier.summoning_sick = False
+        py_carrier.tapped = False
+        py_carrier.damage = 0
+        py_carrier.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(py_carrier)
+
+        ZONE_BATTLEFIELD = 2
+        rust_carrier_id = rust_state.register_and_inject_object(
+            {
+                "name": "Gravpack Monoist",
+                "card_types": ["Creature"],
+                "mana_cost": {"generic": 2, "U": 1},
+                "power": 2, "toughness": 1,
+                "keywords": ["flying"],
+                "effects": [],
+                "triggered_abilities": [
+                    {
+                        "event": "dies",
+                        "predicate": {"kind": "source_is_self"},
+                        "effect": {
+                            "kind": "create_token_tapped",
+                            "count": 1,
+                            "token_printing_id": robot_pid,
+                        },
+                    }
+                ],
+            },
+            0,
+            ZONE_BATTLEFIELD,
+        )
+
+        py_bf_before = len(py_state.battlefield)
+        rust_bf_before = len(
+            ce_parity_smoke()._build_field_view(rust_state)["battlefield"]
+        )
+
+        # No DIES trigger fires just sitting on bf.
+        assert rust_state.stack_size() == 0
+        assert len(py_state.stack) == 0
+
+        # Mark lethal damage (1 >= toughness 1 for the 2/1 carrier).
+        py_carrier.damage = 1
+        rust_state.deal_damage(rust_carrier_id, 1)
+
+        # SBA pass: carrier moves bf->graveyard and the DIES trigger
+        # fires on BOTH engines, landing create_token_tapped on stack.
+        py_sba(py_state)
+        rust_state.apply_sbas()
+        assert rust_state.stack_size() == 1, (
+            "Rust: Gravpack Monoist's DIES trigger should be on the "
+            f"stack after SBA destroy; got {rust_state.stack_size()}"
+        )
+        assert len(py_state.stack) == 1, (
+            "Python: Gravpack Monoist's DIES trigger should be on the "
+            f"stack after SBA destroy; got {len(py_state.stack)}"
+        )
+
+        # Drain both stacks (resolves create_token_tapped).
+        while rust_state.stack_size() > 0:
+            rust_state.resolve_top_of_stack()
+        while py_state.stack:
+            py_resolve(py_state)
+
+        # ---- Post-drain assertions ----
+        py_view = build_python_field_view(py_state)
+        rust_view = ce_parity_smoke()._build_field_view(rust_state)
+
+        # A Robot token spawned on p0's bf on BOTH engines. Net bf
+        # delta: carrier left (bf->gy) but Robot entered -> bf count
+        # is unchanged (one out, one in).
+        py_bf = py_view["battlefield"]
+        rust_bf = rust_view["battlefield"]
+        py_bf_names = sorted(t[0] for t in py_bf)
+        rust_bf_names = sorted(t[0] for t in rust_bf)
+        assert "Robot" in py_bf_names, (
+            f"Python: tapped Robot token not spawned; bf={py_bf_names}"
+        )
+        assert "Robot" in rust_bf_names, (
+            f"Rust: tapped Robot token not spawned; bf={rust_bf_names}"
+        )
+        assert "Gravpack Monoist" not in py_bf_names, (
+            "carrier should have left bf (SBA destroy)"
+        )
+        assert len(py_bf) == py_bf_before  # -1 carrier +1 Robot
+        assert len(rust_bf) == rust_bf_before
+
+        # Carrier in p0's graveyard on both engines.
+        py_p0_gy = [o.printing.name for o in py_state.players[0].graveyard]
+        assert "Gravpack Monoist" in py_p0_gy
+        rust_p0_gy = [t[0] for t in rust_view["graveyard_p0"]]
+        assert "Gravpack Monoist" in rust_p0_gy
+
+        # The Robot token is TAPPED on the Python side (Phase 4's
+        # behavioral contract — explicit, independent of the field-
+        # view compare below).
+        py_robot = next(
+            o for o in py_state.battlefield
+            if o.printing.name == "Robot"
+        )
+        assert py_robot.tapped is True, (
+            "Phase 4: the spawned Robot token must enter TAPPED on the "
+            "Python engine (CreateToken.tapped=True)"
+        )
+
+        # Headline cross-engine byte-equal assertion. The battlefield
+        # zone signature includes the tapped flag, so this catches any
+        # tapped/untapped divergence on the spawned Robot — exactly
+        # the round-49 §2.3 divergence Phase 4 closes.
+        divs = compare_fields(py_view, rust_view)
+        assert divs == [], (
+            f"post-drain field view (real Gravpack Monoist DIES + "
+            f"create_token_tapped) diverges: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+        )
+    finally:
+        clear_token_printings()
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
