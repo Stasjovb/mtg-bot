@@ -1585,17 +1585,49 @@ Rust → no `maturin`.
 
 1. **Round-57 fix slice (substrate / N1 lane): multi-distinct-token
    cross-archetype-safe `register_token_printing` /
-   `_seat_token_printings`.** This is now a HARD blocker on raw
+   `_seat_token_printings`.** This was a HARD blocker on raw
    multi-archetype bench coverage of *any* deck carrying ≥2 distinct
    token shapes (Lander + Robot) — not just the 73/197 pair; the bug
-   triggers whenever a Lander-carrier archetype and a Robot-carrier
-   archetype are swept in one process and their per-game union sizes
-   differ by the right amount. Round-51's shape-keyed cache made
-   same-shape repeats idempotent; the round-57 sister fix must make
-   the pid→printing map tolerate the same pid reused by a *different*
-   token shape across games (see the recommended-fix paragraph above).
-   Small, well-scoped, sister of round-51. The per-game-clear
-   workaround keeps the byte-equality lane unblocked in the meantime.
+   triggered whenever a Lander-carrier archetype and a Robot-carrier
+   archetype were swept in one process and their per-game union sizes
+   differed by the right amount. Round-51's shape-keyed cache made
+   same-shape repeats idempotent; the round-57 sister fix made the
+   pid→printing map tolerate the same pid reused by a *different*
+   token shape across games. Small, well-scoped, sister of round-51.
+
+   **>> CLOSED — round-57 N1 (`feature/fix-token-pid-cross-shape-r57`,
+   merge `<MERGE_SHA>`).** Chosen approach: round-56 N3's option (b) —
+   `_seat_token_printings` calls a new
+   `cross_engine._reset_token_printing_pid_map_for_seating_pass()` at
+   pass entry, clearing ONLY the per-game `_TOKEN_PRINTING_BY_PID` map
+   while deliberately preserving the round-51 shape-keyed
+   `_TOKEN_PRINTING_CACHE_BY_KEY`. Justification on all three criteria:
+   (i) round-51 same-shape cross-game identity-idempotence PRESERVED
+   (the shape cache is untouched, so the same logical token still
+   resolves to the SAME object every game — round-51's pins, extended,
+   stay green); (ii) cross-shape collision FIXED (a stale prior-game
+   pid→Robot entry is gone before this game registers pid→Lander —
+   N3's exact `[(37,s) s0-5]+[(73,s) s0-5]` order goes
+   6/12-then-`ValueError` pre-fix → **12/12 clean** post-fix); (iii)
+   NO within-game silent mis-resolution (the seating pass writes the
+   complete correct pid→printing map AND rewrites every carrier
+   trigger's `token_printing_id` in the SAME pass from the SAME dict;
+   the bridge runs only after, reading a self-consistent map; the
+   identity-conflict guard in `register_token_printing` is UNCHANGED
+   and still catches genuine probe collisions). Options (a)
+   `(pid, current-game)` guard key (structural non-starter — the
+   bridge has no game-identity token; runs before any state exists)
+   and (c) different-shape overwrite-allow (weakens the
+   probe-collision detector) were rejected. Pinned by 2 new r57 pins
+   (unit + e2e cross-shape) + the round-57-extended r51 pins, all in
+   `tests/test_trajectory.py`. See `docs/SEARCH_LIMITATIONS.md`
+   "Cross-engine token-printing registry — two-axis safety". **Raw
+   multi-archetype bench sweeps of decks carrying ≥2 distinct token
+   shapes are now UNBLOCKED for round-58 N3 bench validation — the
+   per-game `clear_token_printings()` workaround is no longer
+   required** (the in-code pass-entry reset gives the same per-game
+   isolation natively, so `bench_trajectory_parity.py`'s normal
+   in-process multi-archetype loop is safe as-is).
 2. **The token-cease-to-exist SBA real-game byte-equality stays
    synthetic-pinned** (round-53 genuine in-test probe) until either
    (a) the filter admits enough blockers for DIES carriers to trade in

@@ -285,6 +285,69 @@ def clear_token_printings() -> None:
     _TOKEN_PRINTING_CACHE_BY_KEY.clear()
 
 
+def _reset_token_printing_pid_map_for_seating_pass() -> None:
+    """Drop ONLY the ``pid -> CardPrinting`` registration map, keeping
+    the round-51 shape-keyed identity-idempotent cache
+    (:data:`_TOKEN_PRINTING_CACHE_BY_KEY`) intact.
+
+    Round-57 N1 fix (round-56 N3 finding — the multi-distinct-token
+    cross-archetype pid collision). :func:`trajectory._seat_token_printings`
+    calls this at pass entry. The pid map
+    (:data:`_TOKEN_PRINTING_BY_PID`) is a per-GAME artifact: a token's
+    pid is its index in *this game's* ``card_defs`` union, which varies
+    by archetype AND by seed. The map is module-global and persists
+    across games, so a *different* token shape (e.g. Lander) that lands
+    on a pid a *prior* game's *different* token shape (e.g. Robot) still
+    holds would hit :func:`register_token_printing`'s identity-conflict
+    guard and raise — even though the prior game's registration is dead
+    (that game's states were long built and discarded). Round-51's
+    shape-keyed cache cannot help: Lander and Robot are *different*
+    shapes -> *different* cached objects, so the collision is a genuine
+    different-printing-at-the-same-pid clash, exactly what the guard is
+    designed to catch *within* a probe's lifetime — but here the two
+    registrations belong to two *different, sequential* games and never
+    coexist in any single bridge resolution.
+
+    Clearing the pid map at seating-pass entry is correct and complete:
+
+      * Round-51 same-shape cross-game safety PRESERVED — the shape
+        cache is NOT cleared, so :func:`cached_token_printing` still
+        returns the SAME object for the same logical token every game;
+        a same-shape token re-seated at a shifted pid still registers
+        an identity-idempotent printing (the round-51 guarantee is
+        independent of the pid-map lifetime).
+      * Cross-shape collision FIXED — a stale prior-game pid->Robot
+        entry is gone before this game registers pid->Lander, so the
+        guard sees a clean slot and no false conflict.
+      * NO within-game silent mis-resolution — :func:`_seat_token_printings`
+        registers the COMPLETE, correct pid->printing map for *this
+        game's* union (every distinct token of every carrier, in one
+        pass) AND rewrites every carrier trigger's ``token_printing_id``
+        to those same pids in the SAME pass, from the SAME
+        ``token_pid_by_name`` dict. The bridge (:func:`build_python_state`)
+        runs only AFTER the pass completes, reading a fully-populated,
+        self-consistent map. No within-game lookup can hit a stale
+        entry, because the only stale entries possible are from PRIOR
+        games and those pids are either overwritten by this game's
+        seating or never referenced by this game's trigger dicts. The
+        identity-conflict guard in :func:`register_token_printing` is
+        UNCHANGED and still fires for genuine probe collisions (two
+        manual ``register_token_printing`` calls for different
+        printings at one pid that coexist in one resolution — those
+        never route through this seating reset).
+
+    Chosen over (a) keying the guard on ``(pid, current-game)`` (the
+    bridge has no game-identity token it can see — it runs before any
+    state exists; would need new plumbing the bridge doesn't carry) and
+    over (c) overwrite-allow on a different-shape ``cached_token_printing``
+    (weakens the within-resolution probe-collision detector and is
+    strictly more complex than restoring the per-game invariant the pid
+    map is supposed to have). See ``docs/SEARCH_LIMITATIONS.md`` and the
+    round-56/57 ``docs/bench_trajectory_parity_smoke.md`` entries.
+    """
+    _TOKEN_PRINTING_BY_PID.clear()
+
+
 # Round-51 N1 fix (round-50 N3 finding 1): identity-idempotent token
 # CardPrinting cache, keyed by a STABLE token-shape signature (NOT by
 # pid). ``trajectory._seat_token_printings`` builds a token's Python
