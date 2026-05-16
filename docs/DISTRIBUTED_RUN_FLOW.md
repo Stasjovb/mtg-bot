@@ -450,3 +450,52 @@ on the wire (`state` enum), not duplicated as separate machines.
 5. **Hard cut** — delete `_push_weights_to_remote`,
    `_pull_remote_replays`, `run_shard_remote`, the orphan-sweep-via-SSH
    helpers, `cli/shard.py` (replaced by the daemon's handlers).
+
+## Phase 3 implementation decisions
+
+Decisions made while implementing Phase 3 (commits on
+`feature/coordinator-v2-endpoints`):
+
+- **Blueprint location.** The v2 endpoints live in a new module
+  `src/mtg_bot/cli/runs/v2_endpoints.py` that exposes a
+  `build_v2_blueprint(...)` factory. `mtg_bot.cli.serve.create_app`
+  imports + registers it when `queue_db_path` (or `progress_dir`) is
+  set. Existing `/run/*` and `/queue/*` endpoints are untouched.
+- **queue.db default path.** When the caller passes `progress_dir`
+  without `queue_db_path`, the factory derives
+  `<progress_dir>/coordinator_state/queue.db` — colocated with the
+  existing `runs.db` and per the run-flow doc. Pass an explicit
+  `queue_db_path` to override.
+- **shards_config.json shape.** Both the new
+  `{"workers": [{worker_id, worker_url, n_workers}]}` shape and the
+  legacy `{"shards": [{host, user, repo_path, ...}]}` shape are
+  parsed by `heartbeat_poller.load_shards_config`. Legacy entries
+  that lack a `worker_url` are silently skipped by the poller, so
+  the migration can run side-by-side with the SSH path.
+- **report_result file layout.** Npzs go to
+  `iterate_data/<stage_id>_<shard_label>_<safe_claim_id>.npz` and
+  replays go to `replays/<stage_id>_<shard_label>/<game_idx>.json.gz`
+  — close to the existing chunk-naming convention so train + UI keep
+  reading from the same directories without code changes.
+- **Late-duplicate detection.** `queue_db.requeue_claim` tombstones
+  the old claim row (`reported=1` with `report_json={"abandoned":
+  true}`) instead of deleting. `record_report` distinguishes the
+  abandoned tombstone (returns `"conflict"` → 409) from a genuine
+  on-time duplicate (returns `"duplicate"` → silent 200), giving the
+  worker a clear "your work was reassigned" signal.
+- **Claim_id uniqueness across re-claims.** When `claim_next_game`
+  detects a primary-key collision on the base claim_id (i.e. a
+  prior abandoned claim for the same `game_idx`), it appends an
+  `int(now_unix * 1000)` suffix so old and new claim_ids are
+  distinguishable. Worker libraries should treat the claim_id as
+  opaque.
+- **HeartbeatPoller liveness re-queue scope.** A DEAD transition
+  re-queues all claim_ids the coordinator's in-memory tracker
+  believes the worker holds. The set is populated on `/v2/claim`
+  and pruned on `/v2/report_result`; it does NOT survive
+  coordinator restart. After restart, the claim-TTL sweep (run on
+  startup) is the recovery mechanism. The two are layered per the
+  API doc.
+- **Existing endpoints untouched.** No changes to `mtg_bot serve`'s
+  pre-Phase-3 surface (`/queue/*`, `/run/*`, `/setup_remote.*`,
+  `/repo.bundle`). Existing tests keep passing.
