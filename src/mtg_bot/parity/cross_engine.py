@@ -178,6 +178,40 @@ class CardDef:
     # needed because ``register_printing`` already accepts a multi-
     # element ``card_types`` list (verified round-49).
     extra_card_types: tuple[str, ...] = ()
+    # Token-activated-ability substrate (round-52 N1 — Phase 3
+    # precursor of the Lander-token cluster, ``TOKEN_PRINTING_SUBSTRATE``
+    # §6). Each entry is a dict matching BOTH Rust's
+    # ``parse_activated_ability`` schema (``rust/src/cards.rs`` —
+    # consumed via ``register_printing``'s ``activated_abilities`` key,
+    # already on main since the CE20 substrate) AND the Python
+    # ``ActivatedAbility`` shape (bridged by
+    # :func:`_aa_dict_to_python_activated_ability`):
+    #
+    #   ``{"cost": {"mana": {"generic": 2}, "sacrifice_self": True},
+    #      "effect": {"kind": "search_library_for_basic_land_tapped"},
+    #      "is_mana_ability": False}``
+    #
+    # This is the field a synthesized TOKEN CardDef carries so a token's
+    # activated abilities round-trip Python<->Rust. It exists on the
+    # general ``CardDef`` (not a token-only subtype) because the loader
+    # synthesizes the token printing as a plain CardDef; ``card_type``
+    # / ``power`` / etc. are reused unchanged. Empty tuple is the
+    # back-compat default — every pre-round-52 fixture omits it, so
+    # ``build_rust_state`` omits the ``activated_abilities`` registry
+    # key (Rust maps the absence to an empty Vec — except the existing
+    # land mana-ability auto-wire, which is orthogonal and untouched)
+    # and ``_card_def_to_python_printing`` materializes an empty
+    # ``activated_abilities`` tuple (modulo the same land auto-wire).
+    #
+    # SUBSTRATE-ONLY (round-52): the field + its bridge plumbing land
+    # so the Lander token's ``{2}, Sac:
+    # SearchLibraryForBasicLandTapped`` can be REPRESENTED and pinned
+    # round-trip-correct; NO Lander carrier is admitted by the
+    # production-deck loader this slice (``_token_vanilla_card_def``
+    # still declines any token with activated abilities — Phase-3's
+    # later slices flip that). See ``docs/TOKEN_PRINTING_SUBSTRATE.md``
+    # §6 for the remaining Phase-3 steps.
+    token_activated_abilities: tuple[dict, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +352,15 @@ def _token_printing_cache_key(card_def: "CardDef") -> tuple:
         tuple(card_def.supertypes),
         tuple(card_def.keywords),
         repr(tuple(card_def.triggered_abilities)),
+        # Round-52 N1 (Phase-3 precursor): the token-activated-ability
+        # tuple is part of the token's forward-relevant shape — two
+        # tokens differing only in their activated abilities (e.g. a
+        # vanilla Robot vs. the Lander) must NOT collide on this cache
+        # key. Serialized via ``repr`` like ``triggered_abilities``
+        # (entries are dicts). Vanilla tokens carry ``()`` so this is
+        # almost always empty; it stays correct the moment a Phase-3
+        # slice admits a Lander carrier.
+        repr(tuple(card_def.token_activated_abilities)),
     )
 
 
@@ -8230,6 +8273,23 @@ def build_rust_state(spec: DeckSpec):
             printing_dict["keywords"] = [
                 kw.replace(" ", "_") for kw in card.keywords
             ]
+        # Round-52 N1 (Phase-3 precursor): pass token_activated_
+        # abilities through to the Rust registry under the
+        # ``activated_abilities`` key. Rust's ``parse_printing`` already
+        # consumes this key (CE20 substrate, on main) via
+        # ``parse_activated_ability`` — NO Rust change is needed; this
+        # slice is pure Python-lane. The dicts are passed verbatim
+        # (Rust's parser is the schema authority; the Python bridge
+        # ``_aa_dict_to_python_activated_ability`` consumes the SAME
+        # dicts, so the ability round-trips from ONE source). Pre-
+        # round-52 fixtures default to an empty tuple => key omitted =>
+        # Rust maps the absence to an empty Vec (modulo the orthogonal
+        # land mana-ability auto-wire, which Rust applies independently
+        # via apply_mana_produced_bridge).
+        if card.token_activated_abilities:
+            printing_dict["activated_abilities"] = [
+                dict(aa) for aa in card.token_activated_abilities
+            ]
         pid = reg.register_printing(printing_dict)
         name_to_pid[card.name] = pid
 
@@ -8255,6 +8315,178 @@ def build_rust_state(spec: DeckSpec):
         p0_lib_pids,
         p1_lib_pids,
         shuffle_seed=spec.shuffle_seed,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Round-52 N1 (Phase-3 precursor): activated-ability dict -> Python
+# ActivatedAbility bridge. Mirrors Rust's parse_activated_ability /
+# parse_activation_cost (rust/src/cards.rs) so a token's activated
+# abilities round-trip Python<->Rust from ONE CardDef-carried dict.
+# ---------------------------------------------------------------------------
+
+
+# The activation-cost dict keys this bridge translates. Kept in lockstep
+# with Rust's ``parse_activation_cost`` accepted-key set
+# (``rust/src/cards.rs``). Every key here maps to an identically-named
+# ``ActivationCost`` bool field on the Python side EXCEPT ``mana`` (a
+# nested ManaCost dict). The two engines must agree on EVERY cost
+# component or the activation would silently mistranslate (§2): a key
+# Rust honors but Python drops (or vice versa) means the ability is
+# castable on one engine and not the other. So this bridge is
+# deliberately STRICT — it raises on any cost key it can't round-trip
+# 1:1, exactly mirroring Rust's "unknown activation_cost key" error.
+_AA_COST_BOOL_KEYS: frozenset[str] = frozenset(
+    {
+        "tap_self",
+        "sacrifice_self",
+        "requires_target_creature_you_control",
+        "sacrifice_another_creature_or_artifact",
+        "sacrifice_a_land",
+        "sacrifice_another_artifact",
+        "sacrifice_food",
+        "sacrifice_a_desert",
+    }
+)
+
+
+def _aa_dict_to_python_activation_cost(cost_dict: dict):
+    """Translate one activation-cost dict (Rust's
+    ``parse_activation_cost`` shape) into a Python ``ActivationCost``.
+
+    Round-52 N1 Phase-3 precursor. Dict shape (all keys optional;
+    missing => the Python/Rust dataclass default):
+
+      ``{"mana": {"generic": 2, "G": 1}, "sacrifice_self": True,
+         "tap_self": False}``
+
+    §2 silent-mistranslation discipline: this raises on ANY cost key
+    not in the bridge-correct set (``mana`` + :data:`_AA_COST_BOOL_KEYS`)
+    so a cost component one engine honors but the other can't surface
+    NEVER lands silently. The accepted bool-key set is the
+    intersection of Rust's ``parse_activation_cost`` accepted keys and
+    Python's ``ActivationCost`` bool fields with byte-equal activation
+    semantics — the exact subset both engines pay identically. The
+    Lander's ``{2}, Sac: ~`` cost uses only ``mana`` + ``sacrifice_self``.
+    """
+    from mtg_bot.cards.base import ManaCost
+
+    if not isinstance(cost_dict, dict):
+        raise ValueError(
+            "activated_ability.cost must be a dict (mirrors Rust "
+            "parse_activated_ability)"
+        )
+    unknown = set(cost_dict) - {"mana"} - _AA_COST_BOOL_KEYS
+    if unknown:
+        raise ValueError(
+            f"cross_engine activated-ability bridge: unsupported "
+            f"activation_cost key(s) {sorted(unknown)!r}; valid: "
+            f"'mana' + {sorted(_AA_COST_BOOL_KEYS)!r}. A cost "
+            f"component outside this set would silently mistranslate "
+            f"cross-engine (one engine would model the activation "
+            f"differently than the other) — extend BOTH this bridge "
+            f"and Rust's parse_activation_cost in lockstep, or decline "
+            f"the carrier (docs/TOKEN_PRINTING_SUBSTRATE.md §2/§6)."
+        )
+    mana = None
+    raw_mana = cost_dict.get("mana")
+    if raw_mana is not None:
+        if not isinstance(raw_mana, dict):
+            raise ValueError(
+                "activation_cost.mana must be a dict (mirrors Rust "
+                "parse_mana_cost)"
+            )
+        generic = 0
+        colored: list[tuple[str, int]] = []
+        for k, v in raw_mana.items():
+            n = int(v)
+            if n < 0:
+                raise ValueError(
+                    f"activation_cost.mana[{k!r}] must be non-negative "
+                    f"(got {n}; mirrors Rust parse_mana_cost u8 extract)"
+                )
+            if k in ("generic", "C"):
+                generic += n
+            elif k in ("W", "U", "B", "R", "G"):
+                colored.append((k, n))
+            else:
+                raise ValueError(
+                    f"unknown activation_cost.mana key {k!r}; valid: "
+                    f"generic, C, W, U, B, R, G (mirrors Rust "
+                    f"parse_mana_cost)"
+                )
+        mana = ManaCost(generic=generic, colored=tuple(sorted(colored)))
+
+    kwargs: dict = {}
+    if mana is not None:
+        kwargs["mana"] = mana
+    for bk in _AA_COST_BOOL_KEYS:
+        if bk in cost_dict:
+            val = cost_dict[bk]
+            if not isinstance(val, bool):
+                raise ValueError(
+                    f"activation_cost.{bk} must be a bool (mirrors "
+                    f"Rust parse_activation_cost)"
+                )
+            kwargs[bk] = val
+    from mtg_bot.effects.base import ActivationCost
+
+    return ActivationCost(**kwargs)
+
+
+def _aa_dict_to_python_activated_ability(aa_dict: dict):
+    """Translate one activated-ability dict (Rust's
+    ``parse_activated_ability`` shape) into a Python
+    ``ActivatedAbility``.
+
+    Round-52 N1 Phase-3 precursor (``TOKEN_PRINTING_SUBSTRATE`` §6).
+    Dict shape:
+
+      ``{"cost": {...},                         # required, cost dict
+         "effect": {"kind": ...},               # required, effect dict
+         "is_mana_ability": False}``            # optional, default False
+
+    The ``effect`` dict recurses through the existing
+    :func:`_ta_dict_to_python_effect` bridge — so the Lander's
+    ``{"kind": "search_library_for_basic_land_tapped"}`` effect reuses
+    the round-21 bridge arm (already on main, fully deterministic, no
+    agent seating — :class:`SearchLibraryForBasicLandTapped.resolve`
+    picks the first ``count`` basic lands in library order on BOTH
+    engines, no PendingDecision). ``cost`` recurses through
+    :func:`_aa_dict_to_python_activation_cost`. This is the SAME dict
+    Rust's ``register_printing`` consumes (via its
+    ``activated_abilities`` key -> ``parse_activated_ability``), so the
+    ability round-trips from ONE CardDef-carried dict, no shape drift.
+    """
+    from mtg_bot.effects.base import ActivatedAbility
+
+    if not isinstance(aa_dict, dict):
+        raise ValueError(
+            "token_activated_abilities entry must be a dict (mirrors "
+            "Rust parse_activated_ability)"
+        )
+    if "cost" not in aa_dict:
+        raise ValueError(
+            "activated_ability dict missing required 'cost' key "
+            "(mirrors Rust parse_activated_ability require())"
+        )
+    if "effect" not in aa_dict:
+        raise ValueError(
+            "activated_ability dict missing required 'effect' key "
+            "(mirrors Rust parse_activated_ability require())"
+        )
+    cost = _aa_dict_to_python_activation_cost(aa_dict["cost"])
+    effect = _ta_dict_to_python_effect(aa_dict["effect"])
+    is_mana_ability = aa_dict.get("is_mana_ability", False)
+    if not isinstance(is_mana_ability, bool):
+        raise ValueError(
+            "activated_ability.is_mana_ability must be a bool (mirrors "
+            "Rust parse_activated_ability)"
+        )
+    return ActivatedAbility(
+        cost=cost,
+        effect=effect,
+        is_mana_ability=is_mana_ability,
     )
 
 
@@ -8336,6 +8568,22 @@ def _card_def_to_python_printing(card: "CardDef"):
                 is_mana_ability=True,
             )
             for color in card.mana_produced
+        )
+    # Round-52 N1 (Phase-3 precursor): thread CardDef.token_activated_
+    # abilities into the Python CardPrinting's activated_abilities tuple
+    # via the bridge helper, so a synthesized token CardDef's activated
+    # abilities materialize bit-identically to what Rust's
+    # ``register_printing`` builds from the SAME dicts (its
+    # ``activated_abilities`` key -> parse_activated_ability). Appended
+    # AFTER the land mana-ability auto-wire — the two are orthogonal
+    # (a Land never carries token_activated_abilities; a token is never
+    # a mana-producing Land) but the append keeps the contract honest
+    # if a future shape combines them. Empty tuple => no-op (every
+    # pre-round-52 fixture).
+    if card.token_activated_abilities:
+        activated_abilities = activated_abilities + tuple(
+            _aa_dict_to_python_activated_ability(aa)
+            for aa in card.token_activated_abilities
         )
     # ETB-trigger Slice 3: bridge the harness-side
     # ``triggered_abilities`` dict-list into Python's
