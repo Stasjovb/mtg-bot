@@ -540,6 +540,217 @@ def test_play_eval_game_handles_timeout_preserves_partial(monkeypatch):
     assert outcome == "timed_out"
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 — subprocess-pool wiring (use_subprocess_pool=True).
+#
+# These tests verify the runner's plumbing: that ``_setup`` spawns the
+# pool, ``_play_one`` submits to it, and ``_teardown`` shuts it down.
+# We monkeypatch ``concurrent.futures.ProcessPoolExecutor`` to a
+# ``ThreadPoolExecutor`` for tests — this exercises the same submit /
+# .result() code path without paying for real subprocess spawn or
+# requiring the work function to be picklable (test mocks aren't).
+# ---------------------------------------------------------------------------
+
+
+def test_self_play_runner_creates_pool_on_setup_when_subprocess_enabled(
+    tmp_path, monkeypatch,
+):
+    """``use_subprocess_pool=True`` makes ``_setup`` build a pool
+    whose ``max_workers`` matches the n_workers passed to setup
+    (not the factory-time value)."""
+    from concurrent.futures import ThreadPoolExecutor
+    captured = {}
+
+    def fake_ppe(*, max_workers, mp_context=None):
+        captured["max_workers"] = max_workers
+        captured["mp_context"] = mp_context
+        return ThreadPoolExecutor(max_workers=max_workers)
+
+    monkeypatch.setattr(prr.concurrent.futures, "ProcessPoolExecutor", fake_ppe)
+
+    events: list[tuple[str, dict]] = []
+    runner = prr.build_self_play_runner(
+        coordinator_url="http://test:5099",
+        stage_id="stage_x",
+        n_workers=1,  # factory-time hint, overridden by setup
+        weights_cache_root=tmp_path,
+        worker_id="t",
+        log_event=lambda n, p: events.append((n, p)),
+        deck_pool_path=str(tmp_path / "missing.json.gz"),
+        use_subprocess_pool=True,
+    )
+    # Setup with n_workers=8 — the pool max must reflect this.
+    runner.setup("http://test:5099", tmp_path, "self_play", 8)
+    assert captured["max_workers"] == 8
+    assert captured["mp_context"] is not None  # spawn context requested
+    # log_event fires a 'pool_created' diagnostic with the chosen size.
+    pool_events = [p for n, p in events if n == "pool_created"]
+    assert pool_events and pool_events[0]["max_workers"] == 8
+    assert pool_events[0]["mode"] == "subprocess"
+    # Teardown should drop the pool reference.
+    runner.teardown()
+
+
+def test_self_play_runner_play_one_submits_to_pool_when_enabled(
+    tmp_path, monkeypatch,
+):
+    """When the pool is active, ``_play_one`` MUST go through
+    ``pool.submit(...)`` (not the in-thread fallback). We monkeypatch
+    the top-level ``_subprocess_play_self_play`` to a sentinel that
+    proves it ran; we also monkeypatch ``ProcessPoolExecutor`` to a
+    ``ThreadPoolExecutor`` so the test stays in-process."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(
+        prr.concurrent.futures, "ProcessPoolExecutor",
+        lambda **kw: ThreadPoolExecutor(max_workers=kw["max_workers"]),
+    )
+
+    def fake_subprocess_play(*, claim, coordinator_url, weights_cache_root,
+                             deck_pool_path, write_structured_tokens=False):
+        return {
+            "outcome": "completed",
+            "winner": 0,
+            "n_samples": 7,
+            "npz_bytes": b"FAKE_NPZ",
+            "duration_s": 0.001,
+            "game_idx": claim["game_idx"],
+            "version": "vTEST",
+            "nodes": claim.get("nodes"),
+            "samples": claim.get("samples"),
+        }
+
+    monkeypatch.setattr(prr, "_subprocess_play_self_play", fake_subprocess_play)
+
+    events: list[tuple[str, dict]] = []
+    runner = prr.build_self_play_runner(
+        coordinator_url="http://test:5099",
+        stage_id="stage_x",
+        n_workers=1,
+        weights_cache_root=tmp_path,
+        worker_id="t",
+        log_event=lambda n, p: events.append((n, p)),
+        deck_pool_path=str(tmp_path / "ignored.json.gz"),
+        use_subprocess_pool=True,
+    )
+    runner.setup("http://test:5099", tmp_path, "self_play", 4)
+    try:
+        result = runner.play_one_game(_make_claim(game_idx=3), "test")
+    finally:
+        runner.teardown()
+
+    assert result.outcome == "completed"
+    assert result.winner == 0
+    assert result.n_samples == 7
+    assert result.npz_bytes == b"FAKE_NPZ"
+    # Subprocess-flagged emit fired (vs the in-thread game_start which
+    # doesn't carry mode).
+    starts = [p for n, p in events if n == "game_start"]
+    assert starts and starts[0].get("mode") == "subprocess"
+
+
+def test_eval_runner_play_one_submits_to_pool_when_enabled(
+    tmp_path, monkeypatch,
+):
+    """Mirror of the self-play test for eval — the eval runner must
+    route through ``_subprocess_play_eval`` and map the dict back to
+    the wins_new / wins_old / draws shape on ``GameResult``."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(
+        prr.concurrent.futures, "ProcessPoolExecutor",
+        lambda **kw: ThreadPoolExecutor(max_workers=kw["max_workers"]),
+    )
+
+    def fake_subprocess_eval(*, claim, coordinator_url,
+                             weights_cache_root, deck_pool_path):
+        return {
+            "outcome": "completed",
+            "winner": 0,  # remapped: 0 means "new won"
+            "n_samples": 42,
+            "duration_s": 0.001,
+            "game_idx": claim["game_idx"],
+            "new_version": "vNEW",
+            "old_version": "vOLD",
+            "nodes": claim.get("nodes"),
+            "samples": claim.get("samples"),
+        }
+
+    monkeypatch.setattr(prr, "_subprocess_play_eval", fake_subprocess_eval)
+
+    runner = prr.build_eval_runner(
+        coordinator_url="http://test:5099",
+        stage_id="stage_x",
+        n_workers=1,
+        weights_cache_root=tmp_path,
+        worker_id="t",
+        deck_pool_path=str(tmp_path / "ignored.json.gz"),
+        use_subprocess_pool=True,
+    )
+    runner.setup("http://test:5099", tmp_path, "eval", 4)
+    try:
+        result = runner.play_one_game(_make_claim(kind="eval"), "test")
+    finally:
+        runner.teardown()
+
+    assert result.outcome == "completed"
+    assert result.winner == 0
+    assert result.wins_new == 1
+    assert result.wins_old == 0
+    assert result.draws == 0
+
+
+def test_self_play_runner_teardown_shuts_down_pool(tmp_path, monkeypatch):
+    """``_teardown`` must call ``pool.shutdown(...)`` and drop the
+    reference, so a re-setup builds a fresh pool rather than reusing
+    a torn-down one."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    shutdowns: list[dict] = []
+
+    class TrackingPool(ThreadPoolExecutor):
+        def shutdown(self, wait=True, cancel_futures=False):  # noqa: D401
+            shutdowns.append({"wait": wait, "cancel_futures": cancel_futures})
+            return super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(
+        prr.concurrent.futures, "ProcessPoolExecutor",
+        lambda **kw: TrackingPool(max_workers=kw["max_workers"]),
+    )
+
+    runner = prr.build_self_play_runner(
+        coordinator_url="http://test:5099",
+        stage_id="stage_x",
+        n_workers=1,
+        weights_cache_root=tmp_path,
+        worker_id="t",
+        use_subprocess_pool=True,
+    )
+    runner.setup("http://test:5099", tmp_path, "self_play", 2)
+    runner.teardown()
+    assert len(shutdowns) == 1
+    assert shutdowns[0]["cancel_futures"] is True
+
+
+def test_runners_default_to_in_thread_when_subprocess_pool_disabled(tmp_path):
+    """Sanity check that the default ``use_subprocess_pool=False``
+    keeps the in-thread path active — no pool is created, no
+    subprocess spawned. Tests use this default; production sets True."""
+    runner = prr.build_self_play_runner(
+        coordinator_url="http://test:5099",
+        stage_id="stage_x",
+        n_workers=4,
+        weights_cache_root=tmp_path,
+        worker_id="t",
+    )
+    runner.setup("http://test:5099", tmp_path, "self_play", 4)
+    # Internal state is captured in the closure; we can't directly
+    # introspect, but the proof is "teardown doesn't try to shut down
+    # a pool that doesn't exist." (Would otherwise AttributeError if
+    # the pool attribute were always created and we used wrong type.)
+    runner.teardown()
+
+
 def test_self_play_runner_setup_logs_warning_on_wrong_kind(tmp_path, caplog):
     """If a self-play runner is invoked for an eval stage, the
     setup hook logs a warning (and proceeds — better than failing

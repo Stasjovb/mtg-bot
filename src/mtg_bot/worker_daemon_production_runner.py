@@ -42,8 +42,10 @@ unchanged.
 
 from __future__ import annotations
 
+import concurrent.futures
 import io
 import logging
+import multiprocessing
 import threading
 import time
 import traceback
@@ -341,6 +343,233 @@ def _play_eval_game(
 
 
 # ---------------------------------------------------------------------------
+# Subprocess game executors (Phase 2 — true multi-core concurrency).
+#
+# These two functions are the body of a single game; they're top-level
+# (not closures) so they pickle cleanly into a
+# :class:`concurrent.futures.ProcessPoolExecutor` worker. The runner
+# factory below submits one of these per claim when
+# ``use_subprocess_pool=True``; each PPE worker has its own Python
+# interpreter (and its own GIL), so N parallel games on a single daemon
+# run truly concurrently instead of GIL-serialized.
+#
+# Module-level state caches the deck pool + per-version
+# :class:`NNPimcConfig` so successive submits to the same persistent
+# subprocess reuse the heavy startup work (deck pool decode ~1.5 GB,
+# state_dict load ~10 MB, CUDA context ~1.5 GB). Each subprocess is its
+# own interpreter, so these globals are isolated from the parent and
+# from peer workers.
+# ---------------------------------------------------------------------------
+
+
+_SUBPROCESS_STATE: dict[str, Any] = {}
+
+
+def _subprocess_play_self_play(
+    *,
+    claim: dict[str, Any],
+    coordinator_url: str,
+    weights_cache_root: str,
+    deck_pool_path: Optional[str],
+    write_structured_tokens: bool = False,
+) -> dict[str, Any]:
+    """Body of one self-play game, executed in a PPE subprocess.
+
+    All args must be picklable. Returns a picklable dict the parent
+    decodes into a :class:`GameResult`.
+    """
+    t0 = time.perf_counter()
+
+    # Lazy deck-pool load (per-subprocess; persists across submits).
+    if _SUBPROCESS_STATE.get("deck_pool") is None:
+        path = _resolve_deck_pool_path(deck_pool_path)
+        if not path.is_file():
+            raise RuntimeError(
+                f"deck pool not found at {path} (subprocess); pass "
+                f"deck_pool_path via worker daemon --deck-pool-path."
+            )
+        from mtg_bot.decks import decks_from_json
+        _SUBPROCESS_STATE["deck_pool"] = decks_from_json(path)
+    deck_pool = _SUBPROCESS_STATE["deck_pool"]
+
+    # Lazy per-version weights + NNPimcConfig (persists across submits).
+    configs = _SUBPROCESS_STATE.setdefault("configs_by_version", {})
+    weights = claim.get("weights") or {}
+    version = weights.get("p0") or weights.get("new")
+    if not version:
+        raise RuntimeError(
+            f"self-play claim missing weights.p0: claim={claim}"
+        )
+    cfg = configs.get(version)
+    if cfg is None:
+        weights_dir = fetch_weights_if_missing(
+            coordinator_url=coordinator_url,
+            version=version,
+            weights_root=Path(weights_cache_root),
+        )
+        metadata = _read_metadata_json(weights_dir)
+        cfg = _build_nn_pimc_config(weights_dir / "weights.pt", metadata)
+        configs[version] = cfg
+
+    nodes = int(claim.get("nodes") or cfg.inner_nodes)
+    samples = int(claim.get("samples") or cfg.samples)
+    per_game_timeout_sec = claim.get("per_game_timeout_sec")
+    if per_game_timeout_sec is not None:
+        per_game_timeout_sec = float(per_game_timeout_sec)
+    capture_every = int(claim.get("capture_every") or 0)
+    seed = int(claim.get("seed") or 0)
+    game_idx = int(claim.get("game_idx") or 0)
+    deck_indices = list(claim.get("deck_indices") or [0, 0])
+
+    from mtg_bot.training import NNPimcConfig
+    per_game_cfg = NNPimcConfig(
+        weights_path=cfg.weights_path,
+        samples=samples,
+        inner_nodes=nodes,
+        hidden_sizes=cfg.hidden_sizes,
+        architecture=cfg.architecture,
+        policy_hidden_sizes=cfg.policy_hidden_sizes,
+        action_encoding_version=cfg.action_encoding_version,
+        with_policy=cfg.with_policy,
+        puct=cfg.puct,
+        batch_size=cfg.batch_size,
+        device=cfg.device,
+    )
+    factory = per_game_cfg.build
+
+    chunk, outcome_kind, winner, n_samples = _play_self_play_game(
+        factory=factory,
+        base_seed=seed,
+        game_idx=game_idx,
+        deck_pool=deck_pool,
+        deck_indices=deck_indices,
+        per_game_timeout_sec=per_game_timeout_sec,
+        capture_every=capture_every,
+        action_encoding_version=cfg.action_encoding_version,
+        write_structured_tokens=write_structured_tokens,
+    )
+    npz_bytes = _encode_npz_bytes(
+        chunk, write_structured_tokens=write_structured_tokens,
+    )
+    duration_s = time.perf_counter() - t0
+    return {
+        "outcome": outcome_kind,
+        "winner": winner,
+        "n_samples": n_samples,
+        "npz_bytes": npz_bytes,
+        "duration_s": duration_s,
+        "game_idx": game_idx,
+        "version": version,
+        "nodes": nodes,
+        "samples": samples,
+    }
+
+
+def _subprocess_play_eval(
+    *,
+    claim: dict[str, Any],
+    coordinator_url: str,
+    weights_cache_root: str,
+    deck_pool_path: Optional[str],
+) -> dict[str, Any]:
+    """Body of one eval game, executed in a PPE subprocess. Mirror of
+    :func:`_subprocess_play_self_play` but loads two NN versions
+    (``new`` and ``old``) and routes through
+    :func:`_play_eval_game` for the alternation/remap.
+    """
+    t0 = time.perf_counter()
+
+    if _SUBPROCESS_STATE.get("deck_pool") is None:
+        path = _resolve_deck_pool_path(deck_pool_path)
+        if not path.is_file():
+            raise RuntimeError(
+                f"deck pool not found at {path} (subprocess); pass "
+                f"deck_pool_path via worker daemon --deck-pool-path."
+            )
+        from mtg_bot.decks import decks_from_json
+        _SUBPROCESS_STATE["deck_pool"] = decks_from_json(path)
+    deck_pool = _SUBPROCESS_STATE["deck_pool"]
+
+    configs = _SUBPROCESS_STATE.setdefault("configs_by_version", {})
+
+    def _ensure_cfg(version: str):
+        cfg = configs.get(version)
+        if cfg is not None:
+            return cfg
+        weights_dir = fetch_weights_if_missing(
+            coordinator_url=coordinator_url,
+            version=version,
+            weights_root=Path(weights_cache_root),
+        )
+        metadata = _read_metadata_json(weights_dir)
+        cfg = _build_nn_pimc_config(weights_dir / "weights.pt", metadata)
+        configs[version] = cfg
+        return cfg
+
+    weights = claim.get("weights") or {}
+    new_version = weights.get("new") or weights.get("p0")
+    old_version = weights.get("old") or weights.get("p1")
+    if not new_version or not old_version:
+        raise RuntimeError(
+            f"eval claim missing weights.new / weights.old: claim={claim}"
+        )
+
+    new_cfg_base = _ensure_cfg(new_version)
+    old_cfg_base = _ensure_cfg(old_version)
+
+    nodes = int(claim.get("nodes") or new_cfg_base.inner_nodes)
+    samples = int(claim.get("samples") or new_cfg_base.samples)
+    per_game_timeout_sec = claim.get("per_game_timeout_sec")
+    if per_game_timeout_sec is not None:
+        per_game_timeout_sec = float(per_game_timeout_sec)
+    seed = int(claim.get("seed") or 0)
+    game_idx = int(claim.get("game_idx") or 0)
+    deck_indices = list(claim.get("deck_indices") or [0, 0])
+
+    from mtg_bot.training import NNPimcConfig
+
+    def _per_game(base):
+        return NNPimcConfig(
+            weights_path=base.weights_path,
+            samples=samples,
+            inner_nodes=nodes,
+            hidden_sizes=base.hidden_sizes,
+            architecture=base.architecture,
+            policy_hidden_sizes=base.policy_hidden_sizes,
+            action_encoding_version=base.action_encoding_version,
+            with_policy=base.with_policy,
+            puct=base.puct,
+            batch_size=base.batch_size,
+            device=base.device,
+        )
+
+    p0_factory = _per_game(new_cfg_base).build
+    p1_factory = _per_game(old_cfg_base).build
+
+    winner, decisions, outcome_kind = _play_eval_game(
+        p0_factory=p0_factory,
+        p1_factory=p1_factory,
+        base_seed=seed,
+        game_idx=game_idx,
+        deck_pool=deck_pool,
+        deck_indices=deck_indices,
+        per_game_timeout_sec=per_game_timeout_sec,
+    )
+    duration_s = time.perf_counter() - t0
+    return {
+        "outcome": outcome_kind,
+        "winner": winner,
+        "n_samples": int(decisions),
+        "duration_s": duration_s,
+        "game_idx": game_idx,
+        "new_version": new_version,
+        "old_version": old_version,
+        "nodes": nodes,
+        "samples": samples,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Self-play GameRunner
 # ---------------------------------------------------------------------------
 
@@ -355,6 +584,7 @@ def build_self_play_runner(
     *,
     deck_pool_path: Optional[str] = None,
     http_get: Callable[..., tuple[int, bytes, dict[str, str]]] = _http_get,
+    use_subprocess_pool: bool = False,
 ) -> GameRunner:
     """Production self-play :class:`GameRunner`.
 
@@ -371,9 +601,24 @@ def build_self_play_runner(
        action_encoding_version all auto-discover.
     4. Override per-claim knobs (``nodes``, ``samples``) on the cached
        config.
-    5. Run one game via ``_generate_one_game_data`` — synchronous in
-       the current thread.
+    5. Run one game via ``_generate_one_game_data`` — either synchronously
+       in the caller's thread (default) or dispatched to a
+       :class:`concurrent.futures.ProcessPoolExecutor` of ``n_workers``
+       subprocesses (when ``use_subprocess_pool=True``) so the Python
+       GIL doesn't serialize parallel claim-loop threads.
     6. Encode the per-game chunk to npz bytes; return :class:`GameResult`.
+
+    ``use_subprocess_pool``:
+        When True, ``_setup`` spawns a :class:`ProcessPoolExecutor` with
+        ``max_workers=n_workers`` (spawn context, Windows-safe). Each
+        ``_play_one`` invocation submits the game body to the pool and
+        blocks on the future. Subprocess persistence means the deck
+        pool + NN weights are loaded once per subprocess (lazily on
+        first task), then reused across that subprocess's lifetime.
+
+        Default is ``False`` for back-compat with the existing tests
+        that monkeypatch internals — those mocks don't propagate to
+        subprocesses, so tests stay on the in-thread path.
     """
 
     # In-memory caches. Multiple claim-loop threads dispatch through
@@ -443,7 +688,7 @@ def build_self_play_runner(
             )
             return cfg
 
-    def _setup(coord_url_unused, weights_root_unused, kind, n_workers_unused):
+    def _setup(coord_url_unused, weights_root_unused, kind, n_workers_at_setup):
         # All lazy — weight load happens on first claim, deck pool is
         # loaded on first game. ``setup`` just records the kind for
         # the assertion below; misuse (calling the self-play factory
@@ -455,8 +700,64 @@ def build_self_play_runner(
                 "[self_play_runner] setup called with kind=%s "
                 "(expected self_play)", kind,
             )
+        # Bring up the subprocess pool if requested. We pull the
+        # active n_workers from the claim-loop setup call (which is
+        # authoritative — it reflects the daemon's current --n-workers)
+        # rather than the factory-time ``n_workers`` arg, which was
+        # captured before the daemon had a chance to override.
+        if use_subprocess_pool and state.get("pool") is None:
+            n = max(1, int(n_workers_at_setup))
+            state["pool"] = concurrent.futures.ProcessPoolExecutor(
+                max_workers=n,
+                mp_context=multiprocessing.get_context("spawn"),
+            )
+            _emit("pool_created", {"max_workers": n, "mode": "subprocess"})
 
     def _play_one(claim: dict, shard_label: str) -> GameResult:
+        # Subprocess path: submit to the PPE and decode the result.
+        pool = state.get("pool")
+        if pool is not None:
+            game_idx = int(claim.get("game_idx") or 0)
+            _emit(
+                "game_start",
+                {
+                    "claim_id": claim.get("claim_id"),
+                    "game_idx": game_idx,
+                    "version": (claim.get("weights") or {}).get("p0"),
+                    "mode": "subprocess",
+                },
+            )
+            future = pool.submit(
+                _subprocess_play_self_play,
+                claim=claim,
+                coordinator_url=coordinator_url,
+                weights_cache_root=str(weights_cache_root),
+                deck_pool_path=deck_pool_path,
+                write_structured_tokens=False,
+            )
+            payload = future.result()  # releases GIL while waiting
+            _emit(
+                "game_end",
+                {
+                    "claim_id": claim.get("claim_id"),
+                    "game_idx": payload["game_idx"],
+                    "outcome": payload["outcome"],
+                    "winner": payload["winner"],
+                    "n_samples": payload["n_samples"],
+                    "duration_s": payload["duration_s"],
+                    "mode": "subprocess",
+                },
+            )
+            return GameResult(
+                outcome=payload["outcome"],
+                winner=payload["winner"],
+                n_samples=payload["n_samples"],
+                duration_s=payload["duration_s"],
+                npz_bytes=payload["npz_bytes"],
+            )
+
+        # In-thread fallback (tests, n_workers=1, or
+        # ``use_subprocess_pool=False`` builds).
         t0 = time.perf_counter()
         _ensure_deck_pool()
 
@@ -547,6 +848,14 @@ def build_self_play_runner(
         )
 
     def _teardown() -> None:
+        pool = state.get("pool")
+        if pool is not None:
+            # cancel_futures=True drops queued claims so we don't
+            # block teardown on a backlog; in-flight games still get
+            # waited on (PPE has no force-kill knob without going to
+            # mp.Process directly, which is a bigger change).
+            pool.shutdown(wait=True, cancel_futures=True)
+            state["pool"] = None
         state["configs_by_version"].clear()
         state["deck_pool"] = None
 
@@ -568,6 +877,7 @@ def build_eval_runner(
     *,
     deck_pool_path: Optional[str] = None,
     http_get: Callable[..., tuple[int, bytes, dict[str, str]]] = _http_get,
+    use_subprocess_pool: bool = False,
 ) -> GameRunner:
     """Production eval :class:`GameRunner`.
 
@@ -581,6 +891,12 @@ def build_eval_runner(
        remap the winner so seat 0 always means "new won."
     5. Return :class:`GameResult` with ``wins_new`` / ``wins_old`` /
        ``draws``.
+
+    ``use_subprocess_pool`` mirrors the self-play factory: True spawns
+    a ``ProcessPoolExecutor`` and dispatches each game to a subprocess
+    so the Python GIL doesn't serialize parallel claim-loop threads.
+    Default ``False`` keeps the in-thread path for the
+    monkeypatch-heavy test suite.
     """
 
     state: dict[str, Any] = {
@@ -645,15 +961,74 @@ def build_eval_runner(
             )
             return cfg
 
-    def _setup(coord_url_unused, weights_root_unused, kind, n_workers_unused):
+    def _setup(coord_url_unused, weights_root_unused, kind, n_workers_at_setup):
         state["kind"] = kind
         if kind != "eval":
             log.warning(
                 "[eval_runner] setup called with kind=%s "
                 "(expected eval)", kind,
             )
+        if use_subprocess_pool and state.get("pool") is None:
+            n = max(1, int(n_workers_at_setup))
+            state["pool"] = concurrent.futures.ProcessPoolExecutor(
+                max_workers=n,
+                mp_context=multiprocessing.get_context("spawn"),
+            )
+            _emit("pool_created", {"max_workers": n, "mode": "subprocess"})
 
     def _play_one(claim: dict, shard_label: str) -> GameResult:
+        # Subprocess path: submit to the PPE and decode the result.
+        pool = state.get("pool")
+        if pool is not None:
+            game_idx = int(claim.get("game_idx") or 0)
+            weights = claim.get("weights") or {}
+            _emit(
+                "game_start",
+                {
+                    "claim_id": claim.get("claim_id"),
+                    "game_idx": game_idx,
+                    "new_version": weights.get("new"),
+                    "old_version": weights.get("old"),
+                    "mode": "subprocess",
+                },
+            )
+            future = pool.submit(
+                _subprocess_play_eval,
+                claim=claim,
+                coordinator_url=coordinator_url,
+                weights_cache_root=str(weights_cache_root),
+                deck_pool_path=deck_pool_path,
+            )
+            payload = future.result()
+            winner_remapped = payload["winner"]
+            decisions = payload["n_samples"]
+            outcome_kind = payload["outcome"]
+            wins_new = 1 if winner_remapped == 0 else 0
+            wins_old = 1 if winner_remapped == 1 else 0
+            draws = 1 if winner_remapped is None and outcome_kind == "completed" else 0
+            _emit(
+                "game_end",
+                {
+                    "claim_id": claim.get("claim_id"),
+                    "game_idx": payload["game_idx"],
+                    "outcome": outcome_kind,
+                    "winner_remapped": winner_remapped,
+                    "decisions": decisions,
+                    "duration_s": payload["duration_s"],
+                    "mode": "subprocess",
+                },
+            )
+            return GameResult(
+                outcome=outcome_kind,
+                winner=winner_remapped,
+                wins_new=wins_new,
+                wins_old=wins_old,
+                draws=draws,
+                n_samples=decisions,
+                duration_s=payload["duration_s"],
+            )
+
+        # In-thread fallback.
         t0 = time.perf_counter()
         _ensure_deck_pool()
 
@@ -749,6 +1124,10 @@ def build_eval_runner(
         )
 
     def _teardown() -> None:
+        pool = state.get("pool")
+        if pool is not None:
+            pool.shutdown(wait=True, cancel_futures=True)
+            state["pool"] = None
         state["configs_by_version"].clear()
         state["deck_pool"] = None
 
