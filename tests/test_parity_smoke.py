@@ -50863,6 +50863,363 @@ def test_cross_engine_synthetic_etb_lose_life_cross_controller_routes_to_source_
     assert rust_p1_bf_after == py_p1_bf_after
 
 
+def test_cross_engine_synthetic_etb_pump_self_until_eot_cross_controller_routes_to_source_parity(
+    parity_smoke,
+):
+    """Probe: synthetic ETB ``pump_self_until_eot(power_bonus=3,
+    toughness_bonus=1)`` trigger fired by a permanent CONTROLLED BY
+    P1 while ACTIVE_PLAYER=P0 -- the cross-controller leg of the
+    round-22 ``pump_self_until_eot`` bridge arm. Both engines must
+    pump the SOURCE itself (the P1-side Bear), regardless of which
+    seat is the active player.
+
+    **The substrate.** Per the Rust regression pin
+    ``test_rust_pump_self_until_eot_cross_controller_routing``
+    (tests/test_parity_smoke.py:45603): Rust's
+    ``Effect::PumpSelfUntilEOT { power_bonus, toughness_bonus }``
+    resolve arm (state_ops_resolve.rs:4280-4305) walks both players'
+    battlefields to recover the source object, then pushes a
+    ``UeotModifier::PowerToughnessBonus`` onto that object's UEOT
+    modifier stack. The intrinsic source-finder is the I-fix for
+    this arm: the cross-controller case works correctly without any
+    caller plumbing because the resolve walks both bf zones and
+    pumps whichever object is the trigger source -- it does NOT
+    derive the pump target from active_player. Python's
+    ``PumpSelfUntilEOT.resolve`` (effects/generic/pump.py:626-654)
+    reads ``state.resolving_source`` and calls
+    ``state.grant_pt_pump_ueot`` with ``target_id=source.id``. The
+    trigger emission sets ``resolving_source`` correctly to the
+    P1-side Bear, so Python pumps the right object.
+
+    **Same-controller sister coverage.** The Rust regression pin
+    ``test_rust_pump_self_until_eot_basic_plus_two_plus_two`` at
+    line 45560 exercises source_owner=p0 (active_player and source
+    controller coincide -- the pump target is P0's bf Bear
+    regardless of routing). The Rust regression pin
+    ``test_rust_pump_self_until_eot_cross_controller_routing`` at
+    line 45603 already exercises the cross-controller leg on the
+    Rust side. This probe ships the missing CROSS-ENGINE leg:
+    source on P1's bf (controller=1), ACTIVE_PLAYER=P0. The
+    SOURCE's controller (P1) and the active player (P0) DIFFER, so
+    a hypothetical pre-fix Rust that derived the pump target from
+    active_player's bf would have looked at P0's empty bf, found
+    nothing, and silently no-opped. Post-fix Rust walks both bfs,
+    finds the source on P1's bf, and pumps it.
+
+    **Why synthetic, not a real EoE card.** The bridge arm docstring
+    (cross_engine.py around line 3748) defers cross-engine end-to-end
+    probes per the round-17/18/19 synthetic-only-when-riders-cascade
+    precedent (8 EoE consumers all cascade granted_keywords riders
+    that the bare bridge arm does not carry). A synthetic 2/2 vanilla
+    ("Cross-Controller PumpSelf Bear") with the bridged ETB trigger
+    keeps this probe self-contained and mirrors the established
+    cross-controller template (mill / destroy_target /
+    each_opponent_discards / target_opponent_loses_life /
+    each_opponent_loses_life / pump_creatures_you_control /
+    lose_life).
+
+    **Untargeted -- no agent shim required.** The pump targets the
+    source itself; no decision pipeline involvement.
+
+    Probe shape (cross-controller inject-and-fire-ENTERS):
+
+      1. **active_player=P0** (default after ``make_state`` /
+         ``build_python_state``). Confirmed via
+         ``state.active_player`` on Rust and
+         ``state.active_player_idx`` on Python.
+
+      2. **Inject Cross-Controller PumpSelf Bear (the source) onto
+         P1's bf** with controller=1 (Rust's
+         ``register_and_inject_object``; Python's ``new_object`` +
+         bf append + manual ``_trigger_etb_abilities``). The
+         injection's ENTERS dispatch fires the SourceIsSelf
+         trigger; the trigger lands on the stack with controller=1
+         (the SOURCE's controller).
+
+      3. **Drain both stacks** (no agent shim required -- this is
+         self-targeted). The trigger resolves: Rust's source-finder
+         walks both bfs, finds the source on P1's bf, and pushes
+         a +3/+1 UeotModifier on it. Python's resolve reads
+         ``resolving_source`` (the P1-side Bear) and calls
+         ``grant_pt_pump_ueot`` with target_id = the Bear's id.
+
+      4. **Cross-engine assert (post-fix contract):**
+         - The P1-side Bear's effective_power = 5 (printed 2 + 3).
+         - The P1-side Bear's effective_toughness = 3 (printed 2 + 1).
+         - P0's bf is empty (and stays empty).
+         - No residual stack on either engine.
+         - No life / hand / graveyard deltas (PT-only effect).
+
+    **Pre-fix vs post-fix observable.**
+    Pre-fix Rust would have:
+      - Looked only at active_player=P0's bf, found no eligible
+        source, silently no-opped. The P1-side Bear's
+        effective_power would still be 2 (printed) and
+        effective_toughness would still be 2 (printed).
+    Post-fix Rust walks both bfs, finds the P1-side source, and
+    pumps it to 5/3. The OBSERVABLE distinguishing the two:
+    post-fix P1-Bear effective P/T = 5/3; pre-fix P1-Bear
+    effective P/T = 2/2. Python's always-correct behavior
+    (resolving_source carries the trigger source identity) makes
+    the cross-engine pin sharp.
+
+    Out of scope:
+
+      * Cast-from-hand mana cost -- the inject-and-dispatch-ENTERS
+        pattern bypasses the mana pipeline.
+      * (0, 0) silent no-op short-circuit -- the same-controller
+        Rust pin at line 45587 exercises this path; this probe
+        drives (3, 1) for a sharp asymmetric P/T delta on the
+        P1-side source.
+      * Negative bonuses -- both engines accept negative pumps for
+        debuff-shaped self-pumps (per cross_engine.py:3771-3777
+        contract); this probe drives positive bonuses.
+      * granted_keywords rider -- the bare bridge arm does NOT
+        carry granted_keywords; the EoE consumers that cascade
+        keywords are out of scope per the bridge arm docstring.
+
+    Sister probes:
+      * ``pump_creatures_you_control_until_eot`` cross-controller
+        probe (recently merged on c8db7c2c) -- pumps creatures the
+        SOURCE's controller controls (a different controller-scoping
+        shape: source_controller's-bf-walk vs source-only).
+
+    Expected post-dispatch + post-drain state on BOTH engines:
+
+      * Cross-Controller PumpSelf Bear on P1's battlefield
+        (controller=1; effective P/T = 5/3 post-pump).
+      * P0's bf: empty (was empty, still empty).
+      * P0 / P1 lives / hands / graveyards / libraries: unchanged.
+      * No residual stack on either engine.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+
+    spec = DeckSpec(
+        card_defs=(),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # Confirm pre-condition: active_player=P0 on both engines.
+    assert rust_state.active_player == 0, (
+        f"Probe pre-condition: Rust active_player must be 0; "
+        f"got {rust_state.active_player}"
+    )
+    assert py_state.active_player_idx == 0, (
+        f"Probe pre-condition: Python active_player_idx must be 0; "
+        f"got {py_state.active_player_idx}"
+    )
+
+    # ---- Rust side: inject Cross-Controller PumpSelf Bear onto
+    # P1's bf with controller=1. ----
+    ZONE_BATTLEFIELD = 2
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_p0_hand_size_before = rust_state.hand_sizes[0]
+    rust_p1_hand_size_before = rust_state.hand_sizes[1]
+    rust_p0_gy_size_before = rust_state.graveyard_sizes[0]
+    rust_p1_gy_size_before = rust_state.graveyard_sizes[1]
+
+    rust_source_dict = {
+        "name": "Cross-Controller PumpSelf Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "pump_self_until_eot",
+                    "power_bonus": 3,
+                    "toughness_bonus": 1,
+                },
+            }
+        ],
+    }
+    rust_source_id = rust_state.register_and_inject_object(
+        rust_source_dict, 1, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Cross-Controller PumpSelf Bear's arrival on P1 "
+        "should fire the SourceIsSelf ENTERS trigger and land "
+        "PumpSelfUntilEOT on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+    # Pre-resolve: printed P/T = 2/2 (no UEOT modifier yet).
+    assert rust_state.effective_power(rust_source_id) == 2
+    assert rust_state.effective_toughness(rust_source_id) == 2
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import PumpSelfUntilEOT
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+
+    source_printing = CardPrinting(
+        name="Cross-Controller PumpSelf Bear",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=PumpSelfUntilEOT(
+                    power_bonus=3, toughness_bonus=1,
+                ),
+            ),
+        ),
+    )
+
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    py_p0_hand_size_before = len(py_state.players[0].hand)
+    py_p1_hand_size_before = len(py_state.players[1].hand)
+    py_p0_gy_size_before = len(py_state.players[0].graveyard)
+    py_p1_gy_size_before = len(py_state.players[1].graveyard)
+
+    py_source = py_state.new_object(
+        source_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_source.summoning_sick = False
+    py_source.tapped = False
+    py_source.damage = 0
+    py_source.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_source)
+    _trigger_etb_abilities(py_state, py_source)
+    assert len(py_state.stack) == 1, (
+        "Python: Cross-Controller PumpSelf Bear's arrival on P1 "
+        "should fire the IsSelf ENTERS trigger and land "
+        "PumpSelfUntilEOT on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+    # Pre-resolve: printed P/T = 2/2.
+    assert effective_power(py_state, py_source) == 2
+    assert effective_toughness(py_state, py_source) == 2
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+
+    # Stacks empty on both sides.
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Post-drain: the P1-side source's effective P/T = 5/3 on both
+    # engines. The cross-controller routing is the load-bearing pin:
+    # pre-fix Rust would have looked only at active_player=P0's bf,
+    # silent-no-opped, leaving P/T at printed 2/2.
+    assert rust_state.effective_power(rust_source_id) == 5, (
+        f"Rust cross-controller routing contract: P1-side source's "
+        f"effective_power should be 5 (printed 2 + bonus 3); got "
+        f"{rust_state.effective_power(rust_source_id)}. A pre-fix "
+        f"Rust would have scanned only active_player=P0's bf, found "
+        f"nothing, and left effective_power at printed 2."
+    )
+    assert rust_state.effective_toughness(rust_source_id) == 3, (
+        f"Rust: P1-side source's effective_toughness should be 3 "
+        f"(printed 2 + bonus 1); got "
+        f"{rust_state.effective_toughness(rust_source_id)}"
+    )
+
+    # Python observable: same shape.
+    assert effective_power(py_state, py_source) == 5, (
+        f"Python: P1-side source's effective_power should be 5 "
+        f"(printed 2 + bonus 3); got "
+        f"{effective_power(py_state, py_source)}"
+    )
+    assert effective_toughness(py_state, py_source) == 3, (
+        f"Python: P1-side source's effective_toughness should be 3 "
+        f"(printed 2 + bonus 1); got "
+        f"{effective_toughness(py_state, py_source)}"
+    )
+
+    # Cross-engine: P/T parity.
+    assert (
+        rust_state.effective_power(rust_source_id)
+        == effective_power(py_state, py_source)
+    )
+    assert (
+        rust_state.effective_toughness(rust_source_id)
+        == effective_toughness(py_state, py_source)
+    )
+
+    # P0's bf is empty (no source planted on P0's side).
+    rust_p0_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 0
+    )
+    py_p0_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 0
+    )
+    assert rust_p0_bf_after == 0
+    assert py_p0_bf_after == 0
+
+    # Source still on P1's bf (inject anchor).
+    rust_p1_bf_after = sum(
+        1 for o in rust_state.battlefield_snapshot()
+        if int(o["controller_id"]) == 1
+    )
+    py_p1_bf_after = sum(
+        1 for o in py_state.battlefield if o.controller_id == 1
+    )
+    assert rust_p1_bf_after == 1, (
+        f"Rust: P1's bf should still hold the source. "
+        f"after p1_bf={rust_p1_bf_after}"
+    )
+    assert py_p1_bf_after == 1, (
+        f"Python: P1's bf should still hold the source. "
+        f"after p1_bf={py_p1_bf_after}"
+    )
+
+    # Lives unchanged on both seats (PT-only effect).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # Hand / graveyard sizes unchanged on both engines.
+    assert rust_state.hand_sizes[0] == rust_p0_hand_size_before
+    assert rust_state.hand_sizes[1] == rust_p1_hand_size_before
+    assert rust_state.graveyard_sizes[0] == rust_p0_gy_size_before
+    assert rust_state.graveyard_sizes[1] == rust_p1_gy_size_before
+    assert len(py_state.players[0].hand) == py_p0_hand_size_before
+    assert len(py_state.players[1].hand) == py_p1_hand_size_before
+    assert len(py_state.players[0].graveyard) == py_p0_gy_size_before
+    assert len(py_state.players[1].graveyard) == py_p1_gy_size_before
+
+    # Cross-engine: per-zone parity.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.hand_sizes[1] == len(py_state.players[1].hand)
+    assert (
+        rust_state.graveyard_sizes[0]
+        == len(py_state.players[0].graveyard)
+    )
+    assert (
+        rust_state.graveyard_sizes[1]
+        == len(py_state.players[1].graveyard)
+    )
+    assert rust_p0_bf_after == py_p0_bf_after
+    assert rust_p1_bf_after == py_p1_bf_after
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
