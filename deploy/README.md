@@ -258,6 +258,69 @@ rationale.
 | `--weights-cache-root` | `trained_weights` | Shared filesystem deployments where weights live elsewhere. |
 | `--worker-id` | hostname | Two daemons on the same box; otherwise leave alone. |
 
+## Self-update (`POST /v2/self_update`)
+
+Push new code to a worker without SSHing in or touching the box.
+The worker pulls the coordinator's existing `/repo.bundle` (no
+GitHub creds — Tailscale only, so this works identically on the
+master, Mac, Win10, and ephemeral AWS instances), `git reset
+--hard`s to the ref, conditionally rebuilds the Rust engine + deps,
+and re-execs in place.
+
+Pre-req: the worker must be **IDLE** (mid-stage → 409; `/v2/stop`
+first or wait for natural drain). Roll the whole fleet by iterating
+the `worker_urls` in `shards_config.json`:
+
+```bash
+# one worker
+curl -X POST http://<tailnet-ip>:5198/v2/self_update \
+  -H 'Content-Type: application/json' \
+  -d '{"coordinator_url":"http://desktop-j05412i:5099"}'
+
+# verify it landed (git_commit advances; state returns to IDLE;
+# a build failure shows state ERROR + last_update.error)
+curl -s http://<tailnet-ip>:5198/v2/heartbeat | jq '{state,git_commit,last_update}'
+```
+
+`ref` is optional (default `main`) — pass e.g.
+`{"...":"...","ref":"feature/x"}` to put a worker on a branch for a
+one-off test (the coordinator's bundle is `--all`, so every branch
+is fetchable).
+
+**Operational caveats:**
+
+- **Worker checkouts must stay pristine.** Self-update runs `git
+  reset --hard <ref>` (leaving a detached HEAD at the target SHA)
+  and deliberately does NOT `git clean`, so gitignored artifacts
+  (`.venv-py313/`, `trained_weights/`, the deck pool) survive. Any
+  *tracked-file* local drift on a worker IS discarded. Never hand-
+  edit tracked files on a worker box; treat it as deploy-managed.
+- **Conditional-rebuild heuristic.** A Rust rebuild fires only when
+  `rust/`, `Cargo.toml`, `Cargo.lock`, or `pyproject.toml` changed
+  between the old and target commit; deps reinstall only on
+  `pyproject.toml`. This is a *path* heuristic — a dependency
+  upgrade that lands without a `pyproject.toml` edit (e.g. a `pip
+  install` done out-of-band, or a transitive bump) will NOT be
+  picked up. Force a full rebuild by self-updating to a commit that
+  touches `pyproject.toml`, or rebuild manually. `pyproject.toml`
+  conservatively triggers BOTH a Rust and a deps rebuild.
+- **Windows re-exec under Task Scheduler.** `os.execv` keeps the PID
+  on POSIX (systemd/launchd never see the unit "exit" — clean,
+  supervisor-independent). On Windows the CRT spawns a *replacement*
+  process and exits the original; the `MTGBotWorker` Task Scheduler
+  action tracks the original PID, so after a self-update the task
+  instance reads as ended even though a healthy detached daemon is
+  serving. The daemon still works (heartbeat green, claims served);
+  the cosmetic mismatch clears on the next reboot / `Start-
+  ScheduledTask`. POSIX workers (Mac, AWS) have no such caveat —
+  prefer them as the self-update target where it matters. A
+  follow-up could add a Windows-specific spawn+exit shim that
+  re-registers the task; not done today.
+- **Brief unavailability during re-exec.** <1s socket-rebind gap
+  (werkzeug sets `SO_REUSEADDR`); invisible to the coordinator's
+  STALE-tolerant (30s) heartbeat poller. A worker mid-self-update
+  looks exactly like a normal process restart.
+
 ## Troubleshooting
 
 | Symptom | Probable cause | Fix |
@@ -265,4 +328,7 @@ rationale.
 | `Connection refused` on `/v2/heartbeat` | daemon not running, or `--host` is `127.0.0.1` and you're hitting the tailnet IP | Check service status; restart with the tailnet IP. |
 | Coordinator shows worker as STALE/DEAD | daemon process crashed; supervisor will restart on its own backoff | `journalctl -u mtg-bot-worker -f` / `~/Library/Logs/mtg-bot/worker.err.log` to find the exception. |
 | `/v2/start_self_play` 409 `worker_busy` | previous stage didn't drain | `POST /v2/stop` to that worker, or wait for natural drain. |
+| `/v2/self_update` 409 `worker_busy` | worker mid-stage or mid-update | `POST /v2/stop` then retry, or wait for natural drain. |
+| Worker stuck `ERROR` after self-update, `last_update.error` set | bundle fetch / `git reset` / rebuild failed (detail in `error`) | Fix the cause (network, dirty tree, build break) then re-`POST /v2/self_update`; or `clear_error` path / restart the service. Code may already be on the new SHA but the process is on the old modules. |
+| Self-update succeeded but Rust behaves like old code | conditional-rebuild heuristic skipped the rebuild (no `rust/`/`Cargo*`/`pyproject.toml` delta) | Self-update to a commit touching `pyproject.toml`, or rebuild manually (`maturin develop --release`). |
 | Stage stuck at `running` | one worker has a stale claim past its TTL | Coordinator's heartbeat-driven re-queue (~90s) or claim TTL sweep (1200s default) will recover; check coordinator logs. |

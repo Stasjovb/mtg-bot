@@ -162,6 +162,16 @@ and `coordinator_url`; the orchestrator never overrides per-machine
 knobs. `shards_config.json` on the master is a URL list:
 `{"worker_urls": ["http://<tailnet-host>:5198", ...]}`.
 
+Workers self-update over REST: `POST /v2/self_update` (IDLE-only)
+pulls the coordinator's `/repo.bundle` (Tailscale-only, no GitHub
+creds — AWS-ready), conditionally rebuilds the Rust engine + deps
+only when `rust/`/`Cargo.*`/`pyproject.toml` changed, then re-execs
+in place. Pipeline in `mtg_bot.worker_daemon_self_update`; endpoint +
+`UPDATING` state + `git_commit`/`last_update` heartbeat fields in
+`mtg_bot.worker_daemon`. Operational caveats (pristine-checkout
+requirement, Windows Task-Scheduler re-exec, rebuild heuristic) are
+in [`deploy/README.md`](deploy/README.md).
+
 ## Run database
 
 Every `mtg_bot` subcommand records its run into a SQLite DB at
