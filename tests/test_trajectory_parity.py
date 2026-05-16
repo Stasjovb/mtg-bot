@@ -2504,18 +2504,17 @@ def test_double_strike_combat_damage_doubles_parity():
       * Regular substep: DS attacker is still on bf with 0 damage;
         deals its 2 regular damage.
 
-    Both engines DO assert byte-equal (`compare_fields == []`) on
-    the post-combat state — that is the strongest cross-engine
-    invariant the probe pins, and it holds. The CR-vs-engine
-    divergence ("life_p1 should be 20 per CR 510.1c — only trample
-    spills damage past blockers; without trample, the regular-damage
-    assignment lands on the now-dead blocker as a no-op") is
-    documented in `docs/SEARCH_LIMITATIONS.md` (round-18 entry:
-    double-strike + dead blocker → spillover to player on both
-    engines). The probe asserts the OBSERVED behavior so it
-    regression-pins the cross-engine agreement; flipping to CR-strict
-    behavior is a separate engine slice that would update both engines
-    + this probe in lockstep.
+    Both engines assert byte-equal (`compare_fields == []`) on the
+    post-combat state AND deliver CR-correct behavior:
+    `life_p1 == pre_combat_life_p1` (20). Per CR 510.1c, only
+    trample spills damage past blockers; without trample, the
+    regular-damage assignment lands on the now-dead blocker as a
+    no-op. The round-18 `SEARCH_LIMITATIONS.md` entry is RESOLVED
+    with this round's fix — gate the Python unblocked path on
+    `was_blocked = len(attacker.blocked_by) > 0` in
+    `combat._resolve_damage_step`, and gate the Rust CE18 pass-2
+    redirect on `attacker_has_trample` in
+    `state_ops_combat.deal_combat_damage`.
     """
     import pytest
 
@@ -2578,10 +2577,10 @@ def test_double_strike_combat_damage_doubles_parity():
     assert compare_fields(py_view, rust_view) == []
 
     # Both engines: blocker dies in first-strike substep, attacker
-    # survives. Both engines also (incorrectly per CR 510.1c) spill
-    # double-strike's regular damage to the player when the blocker
-    # is dead before regular-damage. See SEARCH_LIMITATIONS.md
-    # (round-18 entry).
+    # survives. Per CR 510.1c, regular damage from the attacker is
+    # assigned to the (dead) blocker as a no-op — life_p1 is
+    # unchanged. Round-18 SEARCH_LIMITATIONS entry is RESOLVED with
+    # this fix; the probe now pins the CR-correct expected value.
     p0_gy = [entry[0] for entry in py_view["graveyard_p0"]]
     p1_gy = [entry[0] for entry in py_view["graveyard_p1"]]
     assert "Bear Wall" in p1_gy, (
@@ -2594,18 +2593,11 @@ def test_double_strike_combat_damage_doubles_parity():
         f"got p0_gy={p0_gy}"
     )
     assert py_view["life_p0"] == pre_combat_life_p0
-    # Observed cross-engine behavior: both engines treat the attacker
-    # as "unblocked" for the regular-damage substep when its blocker
-    # died in the first-strike substep, spilling 2 to the player.
-    # CR 510.1c says only trample lets damage spill past blockers, so
-    # the canonical expectation is life_p1 == pre_combat_life_p1 (20).
-    # The deliberate divergence is documented in
-    # docs/SEARCH_LIMITATIONS.md round-18 entry; pin the OBSERVED
-    # value (18) here so a future regression on the cross-engine
-    # agreement still surfaces.
-    assert py_view["life_p1"] == pre_combat_life_p1 - 2, (
-        f"both engines spill double-strike's regular damage to player "
-        f"(documented in SEARCH_LIMITATIONS round-18 entry); "
+    # CR 510.1c: a blocked attacker stays blocked even when all
+    # blockers die. Without trample, the regular-damage assignment
+    # lands on the (dead) blocker; the defending player takes 0.
+    assert py_view["life_p1"] == pre_combat_life_p1, (
+        f"per CR 510.1c, no spillover past dead blocker without trample; "
         f"got life_p1={py_view['life_p1']}"
     )
 

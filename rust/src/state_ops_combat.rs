@@ -1225,16 +1225,24 @@ impl GameState {
             // a within-function `damage < toughness` predicate, same
             // shape as the round-9 first-strike slice.
             //
-            // CE18 closure (I45). Before the closure, Rust simply
-            // dropped pass-2 creature-target entries when the target
-            // died in FS. That filter was CR-correct (CR 510.1h: a
-            // creature stays blocked even if all blockers leave; the
-            // attacker's remaining damage is wasted without trample),
-            // but Python's behavior is over-permissive — it rebuilds
-            // the blockers list per-substep, finds it empty, and
-            // routes the damage to the defender. Per Phase 5
-            // convention "converge Rust toward Python regardless of
-            // CR-correctness", we redirect here.
+            // CE18 closure (I45) — REVISITED by the double-strike
+            // spillover fix. Before the closure, Rust simply dropped
+            // pass-2 creature-target entries when the target died in
+            // FS. That filter was CR-correct (CR 510.1c: a blocked
+            // attacker stays blocked even when all blockers leave;
+            // damage is wasted without trample). CE18 inverted to
+            // "redirect to defender if no live blockers remain" so
+            // Rust matched Python's then-buggy "rebuild live list →
+            // empty → unblocked path → spill to player" behavior.
+            //
+            // The current fix corrects BOTH engines per CR 510.1c:
+            // only `trample` (CR 702.19b) lets remainder spill past
+            // dead blockers. Without trample, the entry is DROPPED
+            // (assignment lands on the dead blocker as a no-op).
+            // The CE18 redirect is therefore gated on
+            // `attacker_has_trample` below. Python's fix is the
+            // matching `was_blocked` gate in combat.py
+            // `_resolve_damage_step`.
             //
             // Pre-build alive-blocker-by-attacker map from the
             // declared `self.blockers` list: for each attacker, count
@@ -1272,17 +1280,34 @@ impl GameState {
                             Some(e)
                         } else if attacker_id_set.contains(&e.source_id) {
                             // Source is an attacker AND its creature
-                            // target is dead in FS pass. CE18 / I45
-                            // redirect: if the attacker has no
-                            // remaining alive blockers, redirect to
-                            // the defending player. Otherwise drop
-                            // (the surviving blocker(s) have their
-                            // own entries and there's no spillover).
+                            // target is dead in FS pass.
+                            //
+                            // Double-strike spillover fix (CR 510.1c):
+                            // a blocked attacker stays blocked even
+                            // when all its blockers die in FS — the
+                            // regular-damage assignment lands on the
+                            // dead blocker as a no-op. ONLY trample
+                            // (CR 702.19b) lets the remainder spill
+                            // to the defender. So:
+                            //   * has_trample + no live blockers →
+                            //     redirect to defender (trample-
+                            //     through past dead blockers).
+                            //   * has_trample + some live blockers →
+                            //     drop (the live blocker(s) have
+                            //     their own entries that already
+                            //     absorbed `need` + the trample-spill
+                            //     entry was emitted in the plan loop).
+                            //   * no trample → drop regardless (CR
+                            //     510.1c: damage is wasted, no
+                            //     player spillover).
                             let n_alive = alive_blockers_per_attacker
                                 .get(&e.source_id)
                                 .copied()
                                 .unwrap_or(0);
-                            if n_alive == 0 {
+                            let attacker_has_trample = battlefield_has_keyword(
+                                self, e.source_id, "trample",
+                            );
+                            if attacker_has_trample && n_alive == 0 {
                                 Some(PlanEntry {
                                     source_id: e.source_id,
                                     target: DamageTarget::Player(defending_player),

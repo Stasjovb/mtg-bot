@@ -2012,66 +2012,57 @@ slice ships).
 
 ---
 
-## Combat — double-strike regular damage spills past dead blocker (no trample required)
+## Combat — double-strike regular damage spills past dead blocker (no trample required) — RESOLVED
+
+**Status**: RESOLVED on
+`feature/rust-fix-double-strike-spillover` (commit `edf67e20`
+Python; commit `3952d841` Rust). Round-18 entry kept here as a
+historical record of the closure.
 
 **Location**: combat damage resolution on both engines —
-`src/mtg_bot/combat.py` (regular-damage substep) and
-`rust/src/state_ops_combat.rs` (mirror).
+`src/mtg_bot/combat.py::_resolve_damage_step` and
+`rust/src/state_ops_combat.rs::deal_combat_damage`.
 
-**What we do today**: when a double-strike attacker kills its
-blocker in the first-strike substep (the blocker has no first
-strike + insufficient toughness), the regular-damage substep
-treats the attacker as if it were UNBLOCKED — its regular damage
-spills to the defending player. Surfaced by
-`tests/test_trajectory_parity.py::test_double_strike_combat_damage_doubles_parity`
-(round-18 keyword trajectory probe): 2/2 double-strike vs 2/2
-vanilla blocker on both engines yields `life_p1 == 18` (not 20).
-Both engines agree byte-for-byte (`compare_fields == []`); the
-divergence is from current CR, not between engines.
+**The bug** (round-18): when a double-strike attacker killed its
+blocker in the first-strike substep, the regular-damage substep
+treated the attacker as UNBLOCKED — its regular damage spilled to
+the defending player. Per CR 510.1c, a blocked attacker stays
+blocked even when all blockers leave the battlefield; only
+**trample** (CR 702.19b) lets damage spill past dead blockers.
+Both engines agreed byte-for-byte on the wrong answer.
 
-**Why this is wrong under current CR**: per CR 510.1c, regular-
-damage assignment from a blocked attacker still goes to the
-blocker — even if that blocker has been destroyed by first-strike
-damage and is no longer on the battlefield. Only **trample** lets
-damage spill past blockers (CR 702.19b). A double-strike-only
-attacker (no trample) blocked by a creature that dies in the
-first-strike substep should deal its regular damage to the
-(dead) blocker as a no-op; the player should take 0 damage in
-the regular substep.
+**The fix**:
+- Python: gate the unblocked-path branch on
+  `was_blocked = len(attacker.blocked_by) > 0` instead of on the
+  live `blockers` list. `attacker.blocked_by` is NOT cleared when
+  individual blockers die (only when the attacker itself leaves
+  combat), so it correctly records "was this attacker blocked at
+  declare-blockers time". Trample still spills the remaining
+  power when no live blockers absorbed it.
+- Rust: gate the CE18 pass-2 "dead blocker → defender" redirect
+  on `attacker_has_trample`. Without trample, the entry is
+  dropped (assignment lands on the dead blocker as a no-op). With
+  trample, the redirect remains so trample's spill semantics hold.
 
-**Failure mode**: double-strike consistently overestimates damage
-output against equal-toughness blockers without first strike.
-Bot will overvalue double-strike attacks into blocker walls (+2
-phantom player damage per such attack), and the simulator will
-underestimate the "block to absorb" defensive line because
-blocking with a small creature still lets the player take
-double-strike damage.
+**Verification**:
+- `tests/test_trajectory_parity.py::test_double_strike_combat_damage_doubles_parity`:
+  expected `life_p1` flipped from `pre_combat_life_p1 - 2` (18)
+  to `pre_combat_life_p1` (20). The byte-equal cross-engine
+  assertion (`compare_fields == []`) still holds — both engines
+  deliver the CR-correct value byte-for-byte.
+- Existing 1059-test gate passes — no regressions on
+  `test_parity_smoke` + `test_cross_engine_etb_triggers` +
+  `test_trajectory_parity` + `test_trajectory`.
 
-**When it matters**: any board state with a double-strike
-attacker the defender could realistically wall up. Common in
-midrange / aggro decks; rarer in pure ramp / control. The card
-pool (EoE) currently has no double-strike printings the filter
-admits, so production self-play does not hit this divergence
-yet. It WILL bite once double-strike is in scope.
-
-**Fix scope when prioritized**: 50-100 LOC across both engines —
-in the regular-damage substep, an attacker whose blocker(s) all
-died in the first-strike substep should NOT be recategorized to
-"unblocked"; instead its regular-damage assignment goes to the
-already-dead blocker (a no-op for damage to the player). Trample
-keeps its existing spillover path (assign lethal to the dead
-blocker — `0` since the blocker is already destroyed — then
-spill the rest to the defender, which preserves trample's
-intended behavior). The probe's expected value flips from
-`life_p1 == pre - 2` to `life_p1 == pre`.
-
-**Impact estimate**: today **zero strength cost** — no current EoE
-double-strike printing rides the production pipeline. Strength
-cost on the fix is +small in any future card pool with double-
-strike (correct combat math means correct attack-or-hold
-decisions). Perf cost is negligible — the substep already walks
-blocker assignments; only the "blocker is dead → reclassify
-attacker as unblocked" branch goes away.
+**Scope of the fix**: only the 1-attacker / 1-blocker / dead-
+blocker case was explicitly probed. The same gate covers
+N-blocker variants where ALL blockers die — `attacker.blocked_by`
+remains non-empty even after every blocker is removed from the
+battlefield. Trample remains the sole spillover keyword. First-
+strike + trample combined preserves the existing trample-on-
+first-strike spillover via the same gate (`attacker_has_trample`
+TRUE → redirect on the FS pass too, when the trampler killed all
+blockers).
 
 ---
 
