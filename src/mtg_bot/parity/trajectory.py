@@ -1641,6 +1641,57 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # interaction).
     ("attacks", "source_is_self", "draw_cards"),
     ("attacks", "source_is_self", "gain_life"),
+    # DIES+IsSelf+gain_life extension (this slice — round-47 sister to
+    # round-44's ATTACKS+IsSelf+gain_life). Adds the second leaf to the
+    # DIES+IsSelf arm (after round-42's surveil), completing the natural
+    # ENTERS / DIES / ATTACKS × {gain_life} matrix for the bare
+    # "Whenever ~ dies, you gain N life" Soul-Warden-on-death shape.
+    # Pure substrate slice — no cross-engine bridge work needed since
+    # both the DIES event and the gain_life leaf already round-trip on
+    # the bridge:
+    #
+    #   * DIES event dispatch: Rust ``state_ops_resolve.rs`` /
+    #     ``state_ops_sba.rs`` ``dispatch_event(Event::Dies, ...)``
+    #     fires every DIES-event triggered ability after a creature
+    #     moves from battlefield to graveyard (Slice 5 of the
+    #     carddef-triggers ramp — see cards.rs:6035 parser arm; the
+    #     DIES dispatch path was verified bit-equal vs Python's
+    #     ``effects.dispatch.fire_dies_triggers`` by the round-42
+    #     ENTERS+DIES surveil pair).
+    #   * ``gain_life`` leaf: ``cross_engine._ta_dict_to_python_effect``
+    #     "gain_life" arm (round 1 of Phase 6 carddef-triggers) +
+    #     Python ``GainLife(amount: int)`` (effects/generic/life.py).
+    #     Rust ``Effect::GainLife { amount: i32 }`` resolves
+    #     deterministically (no PendingDecision / agent setup needed —
+    #     life-total mutation is a pure scalar update).
+    #
+    # **Cross-engine default-strategy contract.** Identical to round-44
+    # ATTACKS+IsSelf+gain_life: no agent setup needed for the trajectory
+    # walk. The terminal post-triggered-ability path drains the
+    # deterministic GainLife resolve in lockstep on both engines because
+    # the effect mutates state via a pure scalar update with no
+    # PendingDecision queue interaction.
+    #
+    # **No real-EoE consumer admitted today.** Same precedent as
+    # round-43 (substrate-only) / round-44 (substrate-only) / round-45
+    # landfall+draw substrate-only. The 17lands deck pool's EoE
+    # creatures with DIES+IsSelf+GainLife: zero (the EoE death-triggers
+    # cluster is CreateToken-heavy; Edge Rover / Gravpack Monoist /
+    # Beamsaw Prospector all carry DIES+IsSelf+CreateToken which needs
+    # token-printing pre-registration substrate the loader doesn't
+    # seat — a separate larger slice). The shape is a common one in
+    # the broader MTG card pool (Doomed Traveler-style "When ~ dies,
+    # create a 1/1 with flying" or Disciple of the Vault-style "Whenever
+    # an artifact you control is put into a graveyard, opponent loses
+    # 1 life" variants share the DIES dispatch path) so the substrate
+    # is pre-positioned for any future EoE / standard-format printing
+    # carrying the bare DIES+IsSelf+GainLife shape — the next slice
+    # landing such a card need not extend the allowlist again.
+    #
+    # Pinned by reject-path tests so the predicate-effect product gate
+    # stays honest in the meantime; sister to the round-44 ATTACKS+
+    # IsSelf+draw_cards/gain_life substrate-only landing precedent.
+    ("dies", "source_is_self", "gain_life"),
     # Landfall — "Whenever a land you control enters, ...". Compound
     # predicate sentinel; see ``_is_safe_trigger_dict`` /
     # ``_python_ta_to_safe_dict`` for the canonical-vs-nested shape
@@ -1934,15 +1985,21 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # here AND a single new ``_SAFE_TRIGGERS`` entry.
             safe_effect_kinds = ("surveil", "draw_cards", "gain_life")
         else:
-            # Event.DIES — only the surveil leaf is in the safe set
-            # today. A future per-event extension (e.g. DIES+gain_life
-            # for Grasping-Longneck-style triggers, blocked today
-            # because Grasping Longneck carries Reach which is outside
-            # :data:`_SAFE_KEYWORDS`) lands as a single edit here AND
-            # a single new ``_SAFE_TRIGGERS`` entry; the recognizer's
-            # event-string gate above and the
-            # ``_is_safe_trigger_dict`` dict-side gate stay unchanged.
-            safe_effect_kinds = ("surveil",)
+            # Event.DIES — round-42 shipped the surveil leaf; this slice
+            # (round-47 DIES+IsSelf+gain_life) widens the DIES arm from
+            # {surveil} to {surveil, gain_life}, mirroring the round-44
+            # ATTACKS-event widening pattern on the orthogonal DIES axis.
+            # ``draw_cards`` is intentionally left out today — no EoE
+            # consumer carries DIES+IsSelf+DrawCards and the Soul-Warden-
+            # on-death "gain life" shape is the more frequent precedent
+            # in the broader MTG card pool; a future slice landing such
+            # a consumer ships ``draw_cards`` under DIES as a single-line
+            # edit here AND a single new ``_SAFE_TRIGGERS`` entry. The
+            # recognizer's event-string gate above and the
+            # ``_is_safe_trigger_dict`` dict-side gate stay unchanged
+            # since both already admit DIES + the gain_life payload-key
+            # whitelist from :data:`_SAFE_EFFECT_KEYS`.
+            safe_effect_kinds = ("surveil", "gain_life")
     elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:
         # Landfall is parser-emitted under ENTERS only (CR 614 — the
         # land enters under your control); gate on event to keep the

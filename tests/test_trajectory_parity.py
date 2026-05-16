@@ -5091,3 +5091,245 @@ def test_real_eoe_deck_with_thawbringer_walk_first_turns_parity():
     # Sanity: we landed on turn 3 UNTAP.
     assert py_state.turn_number == 3
     assert py_state.step.name == "UNTAP"
+
+
+# ---------------------------------------------------------------------------
+# Round-47 DIES+IsSelf+gain_life carddef-triggers extension end-to-end
+# fire probe.
+#
+# Adds one new entry to :data:`_SAFE_TRIGGERS`:
+#   * ``("dies", "source_is_self", "gain_life")``
+# Plus widens the DIES arm of :func:`_python_ta_to_safe_dict`'s
+# ``IsSelf`` branch from ``{"surveil"}`` (round 42) to
+# ``{"surveil", "gain_life"}``.
+#
+# **No real-EoE consumer admitted by this slice** (substrate-only,
+# sister of the round-44 ATTACKS+gain_life slice's no-consumer
+# extension). The end-to-end fire probe below uses a SYNTHETIC carrier
+# since no real EoE creature exercises the bare shape today. The
+# probe drives death-by-damage SBA on a 2/2 carrier with damage>=2
+# pre-loaded, mirroring the round-22 indestructible-SBA probe
+# pattern in test_parity_smoke.py (``obj.damage += N`` on Python
+# + ``rust_state.deal_damage(id, N)`` on Rust + ``py_sba(state)``
+# + ``rust_state.apply_sbas()``). The DIES trigger fires on the
+# SBA-induced bf->graveyard move on BOTH engines; the GainLife
+# resolve adds +2 life to the carrier's controller (p0) in
+# lockstep.
+# ---------------------------------------------------------------------------
+
+
+def _inject_dies_gain_life_carrier_on_p0_bf(py_state, rust_state):
+    """Inject a synthetic DIES+IsSelf+GainLife(2) carrier onto p0's bf
+    on BOTH engines.
+
+    Mirrors :func:`_inject_landfall_draw_carrier_on_p0_bf` in shape
+    but uses the DIES event + GainLife leaf rather than the landfall
+    predicate + DrawCards leaf. The carrier is a vanilla 2/2 so a
+    single-shot 2 damage drives lethal SBA on the next pass.
+
+    Post-condition: a 2/2 "Synthetic Dies GainLife Carrier" creature
+    is on p0's bf carrying the parser-canonical DIES+IsSelf trigger
+    emitting GainLife(2) on resolution.
+
+    Returns: ``(py_carrier_id, rust_carrier_id)`` — both engines
+    assign their own object id; the caller asserts cross-engine state
+    via printing-name lookup or hand/library counts rather than
+    relying on id-match (the carriers are injected mid-walk so the
+    id-allocation order isn't synced).
+    """
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    # ---- Python side ----
+    carrier_printing = CardPrinting(
+        name="Synthetic Dies GainLife Carrier",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("W", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        keywords=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.DIES,
+                predicate=IsSelf(),
+                effect=GainLife(amount=2),
+            ),
+        ),
+    )
+    py_carrier = py_state.new_object(
+        carrier_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_carrier.summoning_sick = False
+    py_carrier.tapped = False
+    py_carrier.damage = 0
+    py_carrier.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_carrier)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_carrier_id = rust_state.register_and_inject_object(
+        {
+            "name": "Synthetic Dies GainLife Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "W": 1},
+            "effects": [],
+            "power": 2,
+            "toughness": 2,
+            "keywords": [],
+            "triggered_abilities": [
+                {
+                    "event": "dies",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "gain_life",
+                        "amount": 2,
+                    },
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return int(py_carrier.id), int(rust_carrier_id)
+
+
+def test_carddef_safe_dies_gain_life_fires_on_sba_death_parity():
+    """End-to-end fire probe for the round-47 DIES+IsSelf+gain_life
+    extension.
+
+    Set up a vanilla 60-card mirror match, walk turn 1 phases to
+    PRECOMBAT_MAIN, side-channel inject a synthetic DIES+IsSelf+
+    GainLife(2) carrier onto p0's bf, mark 2 damage on it (= lethal
+    for a 2/2), then run an SBA pass on both engines. The DIES
+    trigger should fire on BOTH engines as the carrier moves bf->gy,
+    drain the GainLife(2) effect, and lift p0's life from 20 -> 22.
+
+    The synthetic-carrier injection pattern mirrors the round-37 DDDD
+    landfall+pump_self probe + round-22 indestructible-SBA probe (the
+    canonical ``obj.damage = lethal + py_sba(state)`` /
+    ``deal_damage + rust_state.apply_sbas()`` shape). No real-EoE
+    consumer carries the bare DIES+IsSelf+GainLife shape today
+    (substrate-only slice; the EoE death-triggers cluster is
+    CreateToken-heavy), so the probe is synthetic-only — pre-positions
+    the substrate for any future EoE / standard-format printing
+    carrying this shape.
+    """
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.parity import trajectory
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+
+    spec = _vanilla_60_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+
+    # Walk to turn 1 PRECOMBAT_MAIN (3 phase advances).
+    _advance_n_phases(py_state, rust_state, 3)
+    assert py_state.step.name == "PRECOMBAT_MAIN"
+    assert py_state.active_player_idx == 0
+
+    # Pre-injection life parity.
+    assert py_state.players[0].life == rust_state.get_life(0) == 20
+    assert py_state.players[1].life == rust_state.get_life(1) == 20
+
+    # Inject the synthetic carrier on p0's bf.
+    py_carrier_id, rust_carrier_id = _inject_dies_gain_life_carrier_on_p0_bf(
+        py_state, rust_state,
+    )
+
+    # Pre-death parity (no triggers fired yet — DIES requires the bf-
+    # to-graveyard move; just sitting on bf doesn't dispatch).
+    assert rust_state.stack_size() == 0, (
+        "Rust: DIES trigger should NOT fire on bf entry — DIES "
+        "dispatch fires only on bf->graveyard move"
+    )
+    assert len(py_state.stack) == 0, (
+        "Python: DIES trigger should NOT fire on bf entry"
+    )
+
+    # Mark lethal damage on the carrier on both engines (2 = lethal
+    # for a 2/2). Round-22 indestructible-SBA probe pattern.
+    py_carrier = next(
+        o for o in py_state.battlefield if int(o.id) == py_carrier_id
+    )
+    py_carrier.damage = 2
+    rust_state.deal_damage(rust_carrier_id, 2)
+    assert py_carrier.damage == 2
+    assert rust_state.get_damage(rust_carrier_id) == 2
+
+    # SBA pass on both engines. The carrier moves bf->graveyard
+    # (damage>=toughness; not indestructible) and the DIES trigger
+    # fires on BOTH engines, landing GainLife(2) on the stack.
+    py_sba(py_state)
+    rust_state.apply_sbas()
+
+    # The trigger should be on both stacks now.
+    assert rust_state.stack_size() == 1, (
+        "Rust: synthetic carrier's DIES trigger should be on the stack "
+        "after the SBA-induced lethal-damage destroy moved it to gy; "
+        f"got stack_size={rust_state.stack_size()}"
+    )
+    assert len(py_state.stack) == 1, (
+        "Python: synthetic carrier's DIES trigger should be on the "
+        f"stack after the SBA-induced destroy; got "
+        f"stack_size={len(py_state.stack)}"
+    )
+
+    # Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        py_resolve(py_state)
+
+    # Post-drain: p0 life rose by 2 on BOTH engines (DIES+GainLife(2)).
+    # p1 life unchanged.
+    assert rust_state.get_life(0) == 22, (
+        f"Rust p0 life should be 22 after DIES+GainLife(2); got "
+        f"{rust_state.get_life(0)}"
+    )
+    assert py_state.players[0].life == 22, (
+        f"Python p0 life should be 22; got {py_state.players[0].life}"
+    )
+    assert rust_state.get_life(1) == 20, (
+        f"Rust p1 life should still be 20; got {rust_state.get_life(1)}"
+    )
+    assert py_state.players[1].life == 20, (
+        f"Python p1 life should still be 20; got "
+        f"{py_state.players[1].life}"
+    )
+
+    # Cross-engine: same observable life totals.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # The carrier landed in p0's graveyard on BOTH engines.
+    py_p0_gy_names = [
+        o.printing.name for o in py_state.players[0].graveyard
+    ]
+    assert "Synthetic Dies GainLife Carrier" in py_p0_gy_names, (
+        f"expected synthetic carrier in Python p0 graveyard after "
+        f"SBA destroy; got {py_p0_gy_names}"
+    )
+    from mtg_bot.parity.cross_engine import parity_smoke
+    rust_view_post = parity_smoke()._build_field_view(rust_state)
+    rust_p0_gy_names = [t[0] for t in rust_view_post["graveyard_p0"]]
+    assert "Synthetic Dies GainLife Carrier" in rust_p0_gy_names, (
+        f"expected synthetic carrier in Rust p0 graveyard after "
+        f"SBA destroy; got {rust_p0_gy_names}"
+    )
+
+    # Field-view compare on the post-drain state — both stacks empty.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"post-drain field view (after DIES+GainLife(2)) diverges: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
