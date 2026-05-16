@@ -628,7 +628,7 @@ class StateCallbacks:
 # ---------------------------------------------------------------------------
 
 
-def build_production_self_play_runner() -> CallableGameRunner:
+def build_production_self_play_runner() -> CallableGameRunner:  # pragma: no cover - deferred
     """Construct the production self-play runner.
 
     The real implementation spins up an NN evaluator + SHM server +
@@ -673,7 +673,7 @@ def build_production_self_play_runner() -> CallableGameRunner:
     return CallableGameRunner(_play_one, _setup, _teardown)
 
 
-def build_production_eval_runner() -> CallableGameRunner:
+def build_production_eval_runner() -> CallableGameRunner:  # pragma: no cover - deferred
     """Same shape as :func:`build_production_self_play_runner` but for
     the eval path. Eval claims carry ``weights: {new, old}`` and the
     runner loads both into separate evaluators; the per-game result
