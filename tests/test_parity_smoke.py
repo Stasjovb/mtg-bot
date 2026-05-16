@@ -61441,6 +61441,387 @@ def test_r55_genuine_real_eoe_lander_sac_fully_byte_equal():
         clear_token_printings()
 
 
+# ---------------------------------------------------------------------------
+# Round-56 N1 — ExileEachOpponentsGraveyard Rust regression pins +
+# genuine real-EoE Dauntless Scrapbot probe.
+#
+# Effect::ExileEachOpponentsGraveyard (unit variant) mirrors Python's
+# ExileEachOpponentsGraveyard (effects/generic/exile.py:260): every
+# card in each opponent's graveyard moves to THAT opponent's own exile
+# zone (CR 406 / 400.7). Structural twin of EachOpponentMillsCards
+# (same source-controller finder + 2-player opponent loop). The
+# regression pins drive the Rust resolve arm directly through an ETB
+# trigger; the genuine probe drives the ACTUAL parsed Dauntless
+# Scrapbot printing's ETB Sequence first arm cross-engine.
+# ---------------------------------------------------------------------------
+
+
+def _r56_eeg_rust_make_state():
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    return build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+
+
+_R56_EEG_SRC_DICT = {
+    "name": "EEG Source",
+    "card_types": ["Artifact", "Creature"],
+    "power": 3,
+    "toughness": 1,
+    "triggered_abilities": [
+        {
+            "event": "enters",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {"kind": "exile_each_opponents_graveyard"},
+        }
+    ],
+}
+_R56_EEG_ZG = 3  # ZONE_GRAVEYARD
+_R56_EEG_ZE = 5  # ZONE_EXILE
+_R56_EEG_ZB = 2  # ZONE_BATTLEFIELD
+
+
+def test_r56_rust_exile_each_opponents_graveyard_empties_opponent_gy():
+    """Rust regression pin: an ETB exile_each_opponents_graveyard
+    moves every card in the single opponent's graveyard to that
+    opponent's own exile zone, in graveyard order.
+    """
+    st = _r56_eeg_rust_make_state()
+    st.register_and_inject_object(
+        {"name": "A", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 1, _R56_EEG_ZG)
+    st.register_and_inject_object(
+        {"name": "B", "card_types": ["Creature"],
+         "power": 2, "toughness": 2}, 1, _R56_EEG_ZG)
+    st.register_and_inject_object(_R56_EEG_SRC_DICT, 0, _R56_EEG_ZB)
+    while st.stack_size() > 0:
+        st.resolve_top_of_stack()
+    assert [e["printing_name"]
+            for e in st.graveyard_snapshot(1)] == []
+    assert [e["printing_name"]
+            for e in st.exile_snapshot(1)] == ["A", "B"]
+
+
+def test_r56_rust_exile_each_opponents_graveyard_controllers_own_gy_untouched():
+    """Rust regression pin: the controller's OWN graveyard is NOT
+    exiled (only ``1 - controller``'s). Mirrors Python's ``p.id ==
+    controller_id`` skip.
+    """
+    st = _r56_eeg_rust_make_state()
+    st.register_and_inject_object(
+        {"name": "Own", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 0, _R56_EEG_ZG)
+    st.register_and_inject_object(
+        {"name": "Theirs", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 1, _R56_EEG_ZG)
+    st.register_and_inject_object(_R56_EEG_SRC_DICT, 0, _R56_EEG_ZB)
+    while st.stack_size() > 0:
+        st.resolve_top_of_stack()
+    # Controller p0's own graveyard intact; opponent p1's exiled.
+    assert [e["printing_name"]
+            for e in st.graveyard_snapshot(0)] == ["Own"]
+    assert [e["printing_name"]
+            for e in st.exile_snapshot(0)] == []
+    assert [e["printing_name"]
+            for e in st.graveyard_snapshot(1)] == []
+    assert [e["printing_name"]
+            for e in st.exile_snapshot(1)] == ["Theirs"]
+
+
+def test_r56_rust_exile_each_opponents_graveyard_empty_gy_silent_noop():
+    """Rust regression pin: an empty opponent graveyard is a silent
+    no-op (no error, no zone change) — mirrors EachOpponentMillsCards'
+    empty-library silent stop.
+    """
+    st = _r56_eeg_rust_make_state()
+    st.register_and_inject_object(_R56_EEG_SRC_DICT, 0, _R56_EEG_ZB)
+    while st.stack_size() > 0:
+        st.resolve_top_of_stack()
+    for pid in (0, 1):
+        assert st.graveyard_snapshot(pid) == []
+        assert st.exile_snapshot(pid) == []
+    assert st.get_life(0) == 20
+    assert st.get_life(1) == 20
+
+
+def test_r56_rust_exile_each_opponents_graveyard_preserves_gy_order():
+    """Rust regression pin: graveyard order is preserved into exile
+    (a 3-card graveyard exiles head-to-tail in the same order — the
+    std::mem::take + in-order push mirrors Python's ``list(p.graveyard)``
+    snapshot + per-card append).
+    """
+    st = _r56_eeg_rust_make_state()
+    for nm in ("First", "Second", "Third"):
+        st.register_and_inject_object(
+            {"name": nm, "card_types": ["Creature"],
+             "power": 1, "toughness": 1}, 1, _R56_EEG_ZG)
+    st.register_and_inject_object(_R56_EEG_SRC_DICT, 0, _R56_EEG_ZB)
+    while st.stack_size() > 0:
+        st.resolve_top_of_stack()
+    assert [e["printing_name"]
+            for e in st.exile_snapshot(1)] == ["First", "Second", "Third"]
+    assert st.graveyard_snapshot(1) == []
+
+
+def test_r56_rust_exile_each_opponents_graveyard_source_controller_resolution():
+    """Rust regression pin: 'each opponent' resolves under the
+    SOURCE's controller, not the active player. p1's source ETBs while
+    p0 is the active player -> p0 (p1's opponent) gets exiled, p1's own
+    graveyard untouched (same source-controller convention as
+    EachOpponentMillsCards / EachOpponentDiscards).
+    """
+    st = _r56_eeg_rust_make_state()
+    assert st.active_player == 0
+    st.register_and_inject_object(
+        {"name": "P0Grave", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 0, _R56_EEG_ZG)
+    st.register_and_inject_object(
+        {"name": "P1Grave", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 1, _R56_EEG_ZG)
+    # Source controlled by p1 (the non-active player).
+    st.register_and_inject_object(_R56_EEG_SRC_DICT, 1, _R56_EEG_ZB)
+    while st.stack_size() > 0:
+        st.resolve_top_of_stack()
+    # p1's opponent is p0 -> p0's graveyard exiled into p0's exile;
+    # p1's own graveyard untouched.
+    assert [e["printing_name"]
+            for e in st.graveyard_snapshot(0)] == []
+    assert [e["printing_name"]
+            for e in st.exile_snapshot(0)] == ["P0Grave"]
+    assert [e["printing_name"]
+            for e in st.graveyard_snapshot(1)] == ["P1Grave"]
+    assert [e["printing_name"]
+            for e in st.exile_snapshot(1)] == []
+
+
+def test_cross_engine_real_eoe_dauntless_scrapbot_etb_exile_each_opponents_graveyard_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Dauntless Scrapbot
+    (~18,378 17lands decks), the ETB Sequence's FIRST arm
+    (ExileEachOpponentsGraveyard).**
+
+    Drives the **ACTUAL parsed Dauntless Scrapbot printing** on the
+    Python side: ``get_active_source().get_printings()["Dauntless
+    Scrapbot"]`` — which the parser maps
+    (cards/parser/effects.py:5246 ``_EXILE_EACH_OPPONENTS_GRAVEYARD``
+    + the compound-ETB Sequence splitter) to
+    ``Sequence([ExileEachOpponentsGraveyard(),
+    CreateToken(Lander)])`` on an ``Event.ENTERS`` SourceIsSelf
+    trigger.
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "When this creature enters, exile each opponent's graveyard.
+         Create a Lander token. (It's an artifact with "{2}, {T},
+         Sacrifice this token: Search your library for a basic land
+         card, put it onto the battlefield tapped, then shuffle.")"
+
+    **Honest split (§2 — Effect-half closes byte-equal; full card
+    stays loader-gated).** The Effect arm under test is the Sequence's
+    FIRST leaf: ``ExileEachOpponentsGraveyard`` — shipped this round
+    as ``Effect::ExileEachOpponentsGraveyard`` (Rust unit variant +
+    parse + to_dict + resolve), bridged via cross_engine.py
+    ``exile_each_opponents_graveyard``. The Sequence's SECOND leaf,
+    ``CreateToken(Lander)``, is **token-registration-loader-gated**:
+    the cross-engine ``create_token`` bridge raises unless a Python
+    CardPrinting is pre-registered for the Rust ``token_printing_id``,
+    and the production-deck loader does not admit the Lander
+    token-creation / Sequence-rider feature class. So this probe
+    drives the closeable exile-half cross-engine and asserts byte-
+    equality on THAT observable only; it deliberately does NOT assert
+    Lander-token parity (that is the loader-gated half). Mirrors the
+    r51 Monoist / r52 Extinguisher / r53 Mightform / r54 Famished
+    "Effect-half-closes / full-card-stays-gated" precedent — see
+    ``docs/SEARCH_LIMITATIONS.md`` round-56 entry. The full Dauntless
+    Scrapbot card is NOT added to the production-deck loader
+    ``_SAFE_*`` allowlist.
+
+    **Deterministic, no RNG.** No library / shuffle is involved —
+    pure graveyard->exile moves. p1 (the opponent) is seeded with two
+    cards in its graveyard; the controller p0's own graveyard is
+    seeded with one card that must stay (controller's own graveyard
+    is never exiled). Fully reproducible.
+
+    Rust drives the bridge-dict unit-variant carrier (the loader does
+    NOT admit the real card — Lander/Sequence rider; the established
+    Monoist/Extinguisher/Mightform/Famished cross-engine driving
+    pattern). Python drives the GENUINE parsed printing's ENTERS
+    Sequence (its full Sequence resolves in pure Python — the Lander
+    token lands on the Python side; we simply do not cross-assert it).
+
+    Probe shape:
+      1. Seed p1 (opponent) graveyard = [GraveX, GraveY]; p0
+         (controller) own graveyard = [P0Keep] — on BOTH engines.
+      2. Materialize the source on p0's battlefield (Rust: bridge-dict
+         carrier carrying just exile_each_opponents_graveyard; Python:
+         the GENUINE parsed Dauntless Scrapbot printing's full ETB
+         Sequence); fire its ENTERS trigger.
+      3. Drain both stacks.
+      4. Byte-equal on the exile-half observable: p1 graveyard EMPTY
+         on both; p1 exile == [GraveX, GraveY] on both; p0's own
+         graveyard still == [P0Keep] on both; p0 exile empty on both;
+         lives unchanged.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.game import Zone
+    from mtg_bot.effects.generic.exile import ExileEachOpponentsGraveyard
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = get_active_source().get_printings().get("Dauntless Scrapbot")
+    if real is None:
+        pytest.skip("Dauntless Scrapbot absent from active CardSource")
+    # Sanity: the genuinely-parsed printing carries a SINGLE ENTERS
+    # trigger whose effect is a Sequence whose FIRST leaf is
+    # ExileEachOpponentsGraveyard (the arm this probe pins).
+    assert real.is_creature
+    assert len(real.triggered_abilities) == 1
+    real_eff = real.triggered_abilities[0].effect
+    seq_effects = getattr(real_eff, "effects", None)
+    assert seq_effects is not None and len(seq_effects) >= 1, (
+        f"genuine Dauntless Scrapbot ETB must be a Sequence; got "
+        f"{type(real_eff).__name__}"
+    )
+    assert isinstance(seq_effects[0], ExileEachOpponentsGraveyard), (
+        f"genuine Dauntless Scrapbot's ETB Sequence first leaf must be "
+        f"ExileEachOpponentsGraveyard; got "
+        f"{type(seq_effects[0]).__name__}"
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    ZB, ZG = 2, 3
+
+    def _gp(name):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=1, toughness=1, produces=frozenset(),
+        )
+
+    # ---- Rust side: bridge-dict carrier carrying ONLY the closeable
+    # exile-half arm (the Lander/CreateToken Sequence leaf is loader-
+    # gated and not round-trippable cross-engine).
+    rust_state.register_and_inject_object(
+        {"name": "GraveX", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 1, ZG)
+    rust_state.register_and_inject_object(
+        {"name": "GraveY", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 1, ZG)
+    rust_state.register_and_inject_object(
+        {"name": "P0Keep", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 0, ZG)
+    rust_state.register_and_inject_object(
+        {
+            "name": "Dauntless Scrapbot",
+            "card_types": ["Artifact", "Creature"],
+            "power": 3,
+            "toughness": 1,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "exile_each_opponents_graveyard"
+                    },
+                }
+            ],
+        },
+        0,
+        ZB,
+    )
+    assert rust_state.stack_size() == 1
+
+    # ---- Python side: GENUINE parsed Dauntless Scrapbot printing
+    # (its full ETB Sequence — exile arm + Lander token — resolves in
+    # pure Python; we cross-assert only the exile-half observable).
+    for nm in ("GraveX", "GraveY"):
+        o = py_state.new_object(_gp(nm), owner_id=1,
+                                zone=Zone.GRAVEYARD)
+        py_state.players[1].graveyard.append(o)
+    okeep = py_state.new_object(_gp("P0Keep"), owner_id=0,
+                                zone=Zone.GRAVEYARD)
+    py_state.players[0].graveyard.append(okeep)
+    py_src = py_state.new_object(real, owner_id=0,
+                                 zone=Zone.BATTLEFIELD)
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_src)
+    _trigger_etb_abilities(py_state, py_src)
+    assert len(py_state.stack) == 1, (
+        "Python: the genuine Dauntless Scrapbot printing's ENTERS "
+        f"trigger should land on the stack. Got {len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks.
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        resolve_top_of_stack(py_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- GENUINE cross-engine byte-equal assertions (exile-half
+    # observable ONLY — the Lander/CreateToken Sequence leaf is the
+    # documented loader-gated half and is intentionally NOT cross-
+    # asserted here).
+    rust_p1_gy = [e["printing_name"]
+                  for e in rust_state.graveyard_snapshot(1)]
+    rust_p1_ex = [e["printing_name"]
+                  for e in rust_state.exile_snapshot(1)]
+    py_p1_gy = [o.printing.name for o in py_state.players[1].graveyard]
+    py_p1_ex = [o.printing.name for o in py_state.players[1].exile]
+    assert rust_p1_gy == [] == py_p1_gy, (
+        f"opponent graveyard must be emptied on BOTH engines; "
+        f"rust={rust_p1_gy} py={py_p1_gy}"
+    )
+    assert rust_p1_ex == ["GraveX", "GraveY"] == py_p1_ex, (
+        f"opponent's exile must hold the exiled cards in graveyard "
+        f"order on BOTH engines; rust={rust_p1_ex} py={py_p1_ex}"
+    )
+    assert rust_p1_ex == py_p1_ex
+
+    # Controller p0's OWN graveyard is NOT exiled on either engine.
+    rust_p0_gy = [e["printing_name"]
+                  for e in rust_state.graveyard_snapshot(0)]
+    py_p0_gy = [o.printing.name for o in py_state.players[0].graveyard]
+    assert rust_p0_gy == ["P0Keep"] == py_p0_gy, (
+        f"controller's own graveyard must be untouched on BOTH "
+        f"engines; rust={rust_p0_gy} py={py_p0_gy}"
+    )
+    # Neither Sequence leaf touches the CONTROLLER's exile zone
+    # (ExileEachOpponentsGraveyard exiles into the OPPONENT's exile;
+    # CreateToken(Lander) lands on the battlefield, not exile). So p0
+    # exile is empty on BOTH engines — including Python where the full
+    # Sequence (incl. the un-cross-asserted Lander token) resolved.
+    assert [e["printing_name"]
+            for e in rust_state.exile_snapshot(0)] == []
+    assert [o.printing.name
+            for o in py_state.players[0].exile] == [], (
+        "controller's exile must be empty on BOTH engines (neither "
+        "Sequence leaf exiles into the controller's own exile); got "
+        f"py p0 exile="
+        f"{[o.printing.name for o in py_state.players[0].exile]}"
+    )
+
+    # Lives unchanged on both engines (this arm only moves cards).
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
