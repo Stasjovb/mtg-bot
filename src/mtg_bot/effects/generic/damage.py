@@ -598,6 +598,87 @@ class DealDamageToOpponentCreatureByLandsControlled(Effect):
 
 
 @dataclass(frozen=True)
+class DealDamageToOpponentCreatureByCreaturesYouControl(Effect):
+    """Deal damage equal to the number of creatures you control to target
+    creature an opponent controls.
+
+    BLOCKED-RUST-EFFECT slice (round 37) -- sister of
+    ``DealDamageToOpponentCreatureByArtifactCount`` (round 32),
+    ``DealDamageToOpponentCreatureByCardsInHand`` (round 35), and
+    ``DealDamageToOpponentCreatureByLandsControlled`` (round 36). Same
+    apply substrate (damage to first eligible opponent creature,
+    target legality re-checked on slot), NEW denominator (count of
+    permanents the controller controls whose ``printing.is_creature``
+    is True, in place of artifact-count / hand-size / lands-controlled).
+    Establishes a FOURTH orthogonal X-from-count denominator on the
+    round-32 damage substrate, completing the artifact-count /
+    hand-size / lands-controlled / creatures-controlled quadruplet on
+    this apply substrate.
+
+    Dual-typed artifact-creatures count toward BOTH the artifact-count
+    and the creatures-controlled denominators independently (mirrors
+    Scryfall typeline conventions; the ``is_artifact`` and
+    ``is_creature`` printing properties are independent disjunctions
+    over ``card_types``).
+
+    The source itself counts toward the denominator if it is a Creature
+    still on the source-controller's bf at resolve time (vanilla walk
+    over ``state.battlefield`` -- no source-exclusion clause).
+
+    No EoE consumers today -- ships per round-27/31
+    round-trip-surface-coverage rule (each bridge arm is load-bearing
+    for the round-trip + the Rust resolve substrate completes the
+    denominator-axis quadruplet). Bespoke amount (creatures count) so
+    the class survives PR #3's damage collapse, but the legal-target
+    pool now consults ``self.targets[0].filter`` via the structural
+    ``TargetFilter`` grammar -- ``IsCreature() & ControlledByOpponent()``.
+    """
+
+    targets: tuple = ()
+
+    def __post_init__(self) -> None:
+        if not self.targets:
+            from mtg_bot.effects.object_predicates import (
+                ControlledByOpponent, IsCreature,
+            )
+            from mtg_bot.effects.targets import TargetSpec
+            object.__setattr__(
+                self, "targets",
+                (TargetSpec(IsCreature() & ControlledByOpponent()),),
+            )
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        if not targets:
+            return
+        prior = getattr(state, "resolving_controller_id", None)
+        try:
+            state.resolving_controller_id = controller_id
+            if not _slot_target_still_legal(
+                state, self.targets[0], targets[0]
+            ):
+                return
+            creatures_count = sum(
+                1 for o in state.battlefield
+                if o.controller_id == controller_id and o.printing.is_creature
+            )
+            if creatures_count <= 0:
+                return
+            _apply_damage(state, targets[0], creatures_count)
+        finally:
+            state.resolving_controller_id = prior
+
+    def describe(self) -> str:
+        return (
+            "deals damage equal to the number of creatures you control to "
+            "target creature an opponent controls"
+        )
+
+
+
+@dataclass(frozen=True)
 class DealDamageToTargetCreatureSpacecraftBoosted(Effect):
     """Deal ``base`` damage to a target creature; ``boosted`` instead
     if you control a Spacecraft.

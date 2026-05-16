@@ -4831,6 +4831,127 @@ fn apply_effect(
             }
             // else: no opponent creature → silent fizzle.
         }
+        // BLOCKED-RUST-EFFECT slice (round 37) -- deal damage to an
+        // opponent's creature equal to the source-controller's
+        // creatures count. Sister of round-32's
+        // DealDamageToOpponentCreatureByArtifactCount, round-35's
+        // DealDamageToOpponentCreatureByCardsInHand, and round-36's
+        // DealDamageToOpponentCreatureByLandsControlled: same target
+        // shape (first eligible Creature on an opponent's bf, scanned
+        // in ascending player order), same fizzle semantics (silent
+        // no-op when count <= 0 or no opponent creature), same
+        // source-controller resolution (5-zone scan + stack scan),
+        // NEW denominator (creatures-controlled in place of artifact
+        // count / hand-size / lands-controlled). Mirrors Python's
+        // `DealDamageToOpponentCreatureByCreaturesYouControl`
+        // (shipped in this slice; 0 EoE consumers today, slice ships
+        // per round-27/31 round-trip-surface-coverage rule and to
+        // complete the FOURTH orthogonal denominator on the round-32
+        // damage-to-opponent-creature substrate).
+        //
+        // **Creatures denominator.** Walk the source-controller's bf
+        // once; for each obj, count +1 if `printing.card_types`
+        // contains "Creature". Mirrors the round-32 artifact-count
+        // walking pattern BIT-FOR-BIT with "Artifact" replaced by
+        // "Creature" -- and matches Python's
+        // `sum(1 for o in state.battlefield if o.controller_id ==
+        // controller_id and o.printing.is_creature)` denominator
+        // shape. The source itself counts toward the denominator if it
+        // is a Creature still on the source-controller's bf at resolve
+        // time (mirrors Python's vanilla walk over state.battlefield
+        // -- no source-exclusion clause). Dual-typed artifact-
+        // creatures carry BOTH "Creature" and "Artifact" in card_types
+        // -- they count for both the artifact-count and the
+        // creatures-controlled denominators independently (mirrors
+        // Scryfall typeline conventions and Python's `is_artifact` /
+        // `is_creature` disjunction at the printing level).
+        Effect::DealDamageToOpponentCreatureByCreaturesYouControl => {
+            // Source-controller resolution (5-zone walk + stack scan;
+            // mirrors round-32 / round-35 / round-36 sister shape
+            // exactly).
+            let mut source_controller: Option<u8> = None;
+            'outer_sc_cyc: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_sc_cyc;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Count source-controller's creatures on bf. Mirrors
+            // Python's `sum(1 for o in state.battlefield if
+            // o.controller_id == controller_id and
+            // o.printing.is_creature)` shape. Walks the round-32
+            // artifact-count loop BIT-FOR-BIT with the type string
+            // replaced.
+            let cidx = controller as usize;
+            let mut amount: i32 = 0;
+            for obj in state.players[cidx].battlefield.iter() {
+                let Some(printing) = state.registry.printings.get(obj.printing_id as usize)
+                else {
+                    continue;
+                };
+                if printing.card_types.iter().any(|t| t == "Creature") {
+                    amount = amount.saturating_add(1);
+                }
+            }
+            if amount <= 0 {
+                return Ok(()); // no creatures → silent fizzle (matches Python's `if creatures_count <= 0: return`)
+            }
+            // Pick first eligible target: scan opponents in ascending
+            // order, pick the first Creature on each opponent's bf.
+            // BIT-FOR-BIT mirror of the round-32 / round-35 / round-36
+            // sister target shape.
+            let mut found: Option<(usize, u32)> = None;
+            'outer_tg_cyc: for (pidx, player) in state.players.iter().enumerate() {
+                if pidx as u8 == controller {
+                    continue;
+                }
+                for obj in player.battlefield.iter() {
+                    let Some(printing) =
+                        state.registry.printings.get(obj.printing_id as usize)
+                    else {
+                        continue;
+                    };
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        found = Some((pidx, obj.id));
+                        break 'outer_tg_cyc;
+                    }
+                }
+            }
+            if let Some((pidx, target_id)) = found {
+                let amount_i16 = amount.min(i16::MAX as i32) as i16;
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.damage = obj.damage.saturating_add(amount_i16);
+                        break;
+                    }
+                }
+            }
+            // else: no opponent creature → silent fizzle.
+        }
         // BLOCKED-RUST-EFFECT slice (round 33) — put a +1/+1 counter
         // on the source for each OTHER creature and/or artifact the
         // source's controller controls. Mirrors Python's
