@@ -304,18 +304,19 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 5bd56d4a (round-55 HEAD, post N1+N2+N3),
-     resynced by the round-55 post-merge re-verify+fold slice.
-     Counts UNCHANGED (109/111/19) — N2's token-cease-to-exist
-     SBA shipped no new Effect variant; N1 cron-hardening + N3
-     Pulsar-probe are tooling/test only. The 11 still-
-     genuinely-missing entries were re-stamped
-     verified_absent_at_commit=5bd56d4a (cron structural check
-     re-confirmed absence at this HEAD); Seedship Agrarian
-     reclassified out (stale label — both its Effects already
-     shipped). -->
-rust_effect_variants = 109
-bridge_arms = 111
+     Measured at main 134b4778 (round-56 HEAD, post N1+N2+N3),
+     resynced by the round-56 post-merge fold slice. Rust
+     variant + bridge-arm +1 each from N1's ExileEachOpponents-
+     Graveyard (Dauntless Scrapbot effect-half). The 10 still-
+     genuinely-missing entries re-stamped verified_absent_at_-
+     commit=134b4778 (cron structural check re-confirmed
+     absence). Dauntless Scrapbot folded genuinely_missing ->
+     blocked_non_effect (N1 shipped ExileEachOpponentsGraveyard;
+     Sequence+CreateToken pre-shipped; residual = Lander token-
+     registration). Pulsar BLOCKED-PROBE residual discharged
+     (N1 fixed the spacecraft-filter bug, probe byte-equal). -->
+rust_effect_variants = 110
+bridge_arms = 112
 safe_triggers = 19
 safe_keywords = 12
 safe_effect_keys = 8
