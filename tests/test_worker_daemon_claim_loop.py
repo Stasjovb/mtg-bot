@@ -433,7 +433,6 @@ def test_start_self_play_202_uses_stage_started_at():
         resp = client.post(path, json={
             "stage_id": stage_id,
             "coordinator_url": "http://coord:5099",
-            "n_workers": 1,
         })
         assert resp.status_code == 202
         body = resp.get_json()
@@ -468,7 +467,6 @@ def test_stop_response_shape():
     client.post("/v2/start_self_play", json={
         "stage_id": "s",
         "coordinator_url": "http://coord:5099",
-        "n_workers": 1,
     })
     resp = client.post("/v2/stop")
     body = resp.get_json()
@@ -792,10 +790,13 @@ def test_create_app_with_runner_factory_spawns_real_runner(tmp_path):
         cfg.retry_backoff_s = (0.0,)
         return real_factory(kind, cfg, cbs)
 
+    # Daemon's --n-workers CLI flag drives the pool size (worker-owned
+    # config). The orchestrator's request body no longer carries it.
     app = worker_daemon.create_app(
         start_delay_s=0.01,
         weights_root=tmp_path / "trained_weights",
         runner_factory=factory_with_transport,
+        n_workers=2,
     )
     app.testing = True
     client = app.test_client()
@@ -804,7 +805,6 @@ def test_create_app_with_runner_factory_spawns_real_runner(tmp_path):
         json={
             "stage_id": "factory_stage",
             "coordinator_url": "http://coord:5099",
-            "n_workers": 2,
         },
     )
     assert resp.status_code == 202

@@ -404,6 +404,8 @@ def create_app(
     runner_factory: "RunnerFactory | None" = None,
     retry_backoff_s: tuple[float, ...] | None = None,
     worker_id: str | None = None,
+    n_workers: int = 0,
+    deck_pool_path: str | None = None,
 ) -> Flask:
     """Build the Flask app with the v2 endpoints wired.
 
@@ -415,28 +417,40 @@ def create_app(
     ----------
     start_delay_s:
         Back-compat parameter, retained so existing tests can keep
-        passing it. Phase 2b uses a real claim-loop runner whose
-        STARTING → RUNNING transition is driven by the runner.setup()
-        completion, so this only affects test-only stub fallback
-        behavior (the in-process runner does mark_running immediately
-        if no runner_factory is supplied).
+        passing it. The real claim-loop runner's STARTING → RUNNING
+        transition is driven by the runner.setup() completion, so
+        this only affects test-only stub fallback behavior (the
+        in-process runner does mark_running immediately if no
+        runner_factory is supplied).
     weights_root:
         Directory the daemon caches downloaded weights under. Defaults
-        to ``./trained_weights/`` relative to the daemon's cwd —
-        matches the existing ``cli/shard.py`` convention.
+        to ``./trained_weights/`` relative to the daemon's cwd.
     runner_factory:
         Optional callable invoked with ``(kind, claim_loop_cfg, state_cbs)``
         that returns a :class:`ClaimLoopRunner`. The default factory
         builds a no-op stub runner that just flips STARTING → RUNNING
-        after ``start_delay_s`` (so existing tests behave identically
-        to the Phase 2a skeleton). Tests that want to exercise the
-        full loop supply a factory backed by a callable game runner.
+        after ``start_delay_s``. Tests that want to exercise the full
+        loop supply a factory backed by a callable game runner.
     retry_backoff_s:
         Override the default (1, 3, 10) backoff schedule. Useful in
         tests that hammer 5xx without paying for real sleeps.
     worker_id:
         Override the default :func:`resolve_worker_id` result. Set
         from the CLI's ``--worker-id`` flag.
+    n_workers:
+        Pool size for the multiprocessing pool the production runner
+        spawns. Worker-owned configuration: comes from the daemon's
+        ``--n-workers`` CLI flag (baked into the native service file),
+        NOT from the orchestrator's ``/v2/start_*`` request body. The
+        v2 contract is explicit on this — see ``docs/DISTRIBUTED_API_v2.md``
+        "Worker-owned config" note. Default 0 = unset / decided by the
+        runner (tests pass small explicit values).
+    deck_pool_path:
+        Path to the deck pool JSON the production runner samples from.
+        Same worker-owned-config principle as ``n_workers``: from the
+        daemon's ``--deck-pool-path`` CLI flag. ``None`` falls back to
+        the runner's system-wide default
+        (``data/17lands/eoe_decks.json.gz``).
     """
     app = Flask(__name__)
     state = WorkerState(start_delay_s=start_delay_s)
@@ -455,6 +469,13 @@ def create_app(
     )
     app.config["RETRY_BACKOFF_S"] = effective_backoff
     app.config["RUNNER_FACTORY"] = runner_factory
+    # Worker-owned config — set at daemon launch time via CLI flags and
+    # baked into the native service file. The orchestrator's
+    # /v2/start_self_play and /v2/start_eval requests carry only
+    # ``stage_id`` + ``coordinator_url``; per-machine operational knobs
+    # like the pool size or the deck pool path are decided here.
+    app.config["N_WORKERS"] = int(n_workers)
+    app.config["DECK_POOL_PATH"] = deck_pool_path
 
     def _state_callbacks() -> _claim_loop.StateCallbacks:
         return _claim_loop.StateCallbacks(
@@ -493,20 +514,20 @@ def create_app(
         Runs in a daemon thread so the Flask handler can return 202
         without blocking on weights fetch / pool spin-up.
         """
-        # ``deck_pool_path`` is an optional field on the start_*
-        # request body. ``None`` makes the production runner fall
-        # back to the system-wide default
-        # (``data/17lands/eoe_decks.json.gz``). Stage-spec callers
-        # use it to point at tiny test pools for smoke runs.
+        # ``n_workers`` + ``deck_pool_path`` are WORKER-OWNED config
+        # (CLI flags on the daemon, baked into the native service
+        # file's invocation), NOT part of the orchestrator's request
+        # body. See ``docs/DISTRIBUTED_API_v2.md`` "Worker-owned
+        # config" note for the rationale.
         cfg = _claim_loop.ClaimLoopConfig(
             coordinator_url=body["coordinator_url"],
             stage_id=body["stage_id"],
             kind=kind,
-            n_workers=int(body.get("n_workers", 0)),
+            n_workers=int(app.config.get("N_WORKERS", 0)),
             worker_id=resolved_worker_id,
             weights_root=effective_weights_root,
             shard_label=resolved_worker_id,
-            deck_pool_path=body.get("deck_pool_path"),
+            deck_pool_path=app.config.get("DECK_POOL_PATH"),
             retry_backoff_s=effective_backoff,
         )
         cbs = _state_callbacks()
@@ -521,7 +542,11 @@ def create_app(
     def _start(kind: str):
         body = request.get_json(silent=True) or {}
         stage_id = body.get("stage_id")
-        n_workers = int(body.get("n_workers", 0))
+        # n_workers is worker-owned: the daemon's --n-workers CLI flag
+        # decides the pool size, NOT the orchestrator's request body.
+        # The v2 cutover hard-cut the legacy n_workers field; orchestrators
+        # send only {stage_id, coordinator_url}.
+        n_workers = int(app.config.get("N_WORKERS", 0))
         accepted, current_state = state.try_start(kind, stage_id, n_workers)
         if not accepted:
             return (
@@ -631,7 +656,7 @@ def create_app(
 def _build_parser() -> argparse.ArgumentParser:  # pragma: no cover - argparse
     parser = argparse.ArgumentParser(
         prog="mtg_bot.worker_daemon",
-        description="MTG-bot distributed worker daemon (REST, Phase 2a skeleton).",
+        description="MTG-bot distributed worker daemon (REST, v2).",
     )
     parser.add_argument(
         "--host",
@@ -647,13 +672,55 @@ def _build_parser() -> argparse.ArgumentParser:  # pragma: no cover - argparse
         default=5198,
         help="Bind port. Default: 5198 (worker daemon canonical port).",
     )
+    parser.add_argument(
+        "--n-workers",
+        type=int,
+        default=max(1, (os.cpu_count() or 2) - 2),
+        help=(
+            "Multiprocessing pool size for game compute. WORKER-OWNED "
+            "config — the orchestrator does NOT dictate this in the "
+            "/v2/start_* request body any more (see DISTRIBUTED_API_v2). "
+            "Default: cpu_count() - 2."
+        ),
+    )
+    parser.add_argument(
+        "--deck-pool-path",
+        default=None,
+        help=(
+            "Path to the deck pool JSON the runner samples from. "
+            "WORKER-OWNED config. ``None`` falls back to the runner's "
+            "system-wide default (data/17lands/eoe_decks.json.gz)."
+        ),
+    )
+    parser.add_argument(
+        "--weights-cache-root",
+        default="trained_weights",
+        help=(
+            "Directory the daemon caches downloaded weights under. "
+            "WORKER-OWNED config. Default: ./trained_weights/"
+        ),
+    )
+    parser.add_argument(
+        "--worker-id",
+        default=None,
+        help=(
+            "Override the resolved worker_id. Default resolution: "
+            "MTG_BOT_WORKER_ID env → ~/.mtg_bot_worker_id file → "
+            "socket.gethostname()."
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - argparse
     parser = _build_parser()
     args = parser.parse_args(argv)
-    app = create_app()
+    app = create_app(
+        weights_root=Path(args.weights_cache_root),
+        n_workers=args.n_workers,
+        deck_pool_path=args.deck_pool_path,
+        worker_id=args.worker_id,
+    )
     # Flask's dev server is fine for Phase 2a — Phase 2c swaps in a
     # native service supervisor (systemd / launchd / Task Scheduler)
     # and a production-grade WSGI runner if needed.
