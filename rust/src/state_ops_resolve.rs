@@ -2325,6 +2325,159 @@ fn apply_effect(
             // the resolving spell's stack item pops.
             state.pending_etb_dispatches.extend(token_ids);
         }
+        // BLOCKED-RUST-EFFECT slice (round 43) -- each living player
+        // creates `count` tokens of the given printing under their
+        // own control. Sister of the `Effect::CreateToken` arm
+        // above; differs only in the recipient set (every living
+        // player vs source-controller). Mirrors Python's
+        // `CreateToken(each_player=True).resolve` at
+        // `effects/generic/tokens.py:202-294` (the `each_player`
+        // branch builds `recipients = [p.id for p in state.players
+        // if not p.has_lost]` and runs the per-token push loop once
+        // per recipient).
+        //
+        // EoE consumer: Edge Rover (Artifact Creature -- Robot
+        // Scout, "When this creature dies, each player creates a
+        // Lander token."). Each-player-creates-token is the FIRST
+        // each-player token shape in the audit's BLOCKED-RUST-EFFECT
+        // residue and the precondition for any future "each player
+        // creates X" sister card.
+        //
+        // **Mechanism -- fanout.** Two-pass: (1) up-front validation
+        // (count >= 0, registry hit on the printing id) so an
+        // invalid input surfaces BEFORE any state mutation -- a
+        // mid-fanout failure would half-give some recipients tokens
+        // and corrupt state. (2) For each living player (skip
+        // `has_lost == true` per CR 102.5; mirrors Python's
+        // `if not p.has_lost` guard at tokens.py:212), allocate a
+        // fresh id range and push `count` tokens onto THEIR
+        // battlefield Vec (NOT the source-controller's), tagged
+        // `controller = recipient_idx`. Recipients are iterated in
+        // `state.players` index order (= controller id order),
+        // mirroring Python's `for p in state.players` natural order.
+        //
+        // **ETB timestamps.** Strict per-token monotonic stamps
+        // across all recipients combined (recipient0 first, then
+        // recipient1, ...). The CE4 ordering invariant -- a single
+        // effect's tokens always carry strictly-increasing stamps,
+        // regardless of which player ends up owning them -- mirrors
+        // the sister `CreateToken` arm's `bf_etb_base + i` loop and
+        // matches Python's natural fanout order.
+        //
+        // **Pending ENTERS dispatch.** Every fresh token (across
+        // every recipient) gets queued in
+        // `pending_etb_dispatches`. The surrounding resolver fans
+        // out ENTERS event dispatch in queue order, which equals
+        // (recipient0_tokens..., recipient1_tokens..., ...).
+        //
+        // **Out-of-scope first-slice riders.** CR 614 token-creation
+        // replacements (Anointed Procession, Moonlit Meditation,
+        // Exalted Sunborn), the `tapped`/`attacking`/end-of-combat
+        // sacrifice flag bundle -- NONE are plumbed here for the
+        // same reason the sister `CreateToken` arm defers them: the
+        // EoE consumer (Edge Rover -> Lander) doesn't engage any of
+        // them, and the Python path still handles those cases for
+        // future cards.
+        Effect::CreateTokenEachPlayer {
+            count,
+            token_printing_id,
+        } => {
+            if *count < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "CreateTokenEachPlayer count must be non-negative, got {count}"
+                )));
+            }
+            let token_pid = *token_printing_id;
+            if state.registry.lookup(token_pid).is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "token_printing_id {token_pid} not in registry"
+                )));
+            }
+            let n = *count as usize;
+            if n == 0 {
+                return Ok(()); // legal no-op (mirrors sister CreateToken arm)
+            }
+            // Pre-pass 1: collect living-recipient indices in
+            // `state.players` order. Mirrors Python's
+            // `[p.id for p in state.players if not p.has_lost]`.
+            let n_players = state.players.len();
+            let mut living: Vec<usize> = Vec::with_capacity(n_players);
+            for idx in 0..n_players {
+                if !state.players[idx].has_lost {
+                    living.push(idx);
+                }
+            }
+            if living.is_empty() {
+                // No living players (degenerate state) -- silent
+                // no-op, mirrors Python's empty-recipients-Vec
+                // natural fallthrough.
+                return Ok(());
+            }
+            // Allocate fresh ids: scan every zone on every player
+            // for the current max id, allocate starting at max + 1.
+            // Mirrors the sister `CreateToken` arm's allocator.
+            let mut max_id: u32 = 0;
+            let mut found_any = false;
+            for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if !found_any || obj.id > max_id {
+                            max_id = obj.id;
+                            found_any = true;
+                        }
+                    }
+                }
+            }
+            let mut next_id: u32 = if found_any { max_id + 1 } else { 0 };
+            // CE4 closure: stamp each token (across all recipients
+            // combined) with a fresh strictly-monotonic etb_timestamp.
+            let total_tokens = (n * living.len()) as u32;
+            let bf_etb_base = state.next_etb_timestamp;
+            state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(total_tokens);
+            // Per-token global index so timestamps stay strictly
+            // monotonic across the whole fanout.
+            let mut global_token_idx: u32 = 0;
+            let mut token_ids: Vec<u32> = Vec::with_capacity(total_tokens as usize);
+            for recipient_idx in living {
+                let recipient_u8 = recipient_idx as u8;
+                let bf: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[recipient_idx].battlefield);
+                for _ in 0..n {
+                    bf.push(GameObject {
+                        id: next_id,
+                        printing_id: token_pid,
+                        controller: recipient_u8,
+                        zone: ZONE_BATTLEFIELD,
+                        tapped: false,
+                        summoning_sick: true,
+                        damage: 0,
+                        counters: 0,
+                        charge_counters: 0,
+                        loyalty_counters: 0,
+                        attached_to: None,
+                        exiled_with_source: None,
+                        // Tokens enter with no stun counters per
+                        // make_object precedent (round 30).
+                        stun_counters: 0,
+                        etb_timestamp: bf_etb_base.saturating_add(global_token_idx),
+                        ueot_modifiers: Vec::new(),
+                    });
+                    token_ids.push(next_id);
+                    next_id += 1;
+                    global_token_idx += 1;
+                }
+            }
+            // Queue ENTERS for every fresh token in fanout order
+            // (recipient0 first, then recipient1, ...). Mirrors the
+            // sister `CreateToken` arm's pending dispatch shape.
+            state.pending_etb_dispatches.extend(token_ids);
+        }
         // Round-23: AddManaToPool. CR 106.1 — the resolution of a mana
         // ability. The active player (= controller of the resolving
         // mana ability or stack item, first-slice convention mirrored
