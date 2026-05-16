@@ -2710,6 +2710,108 @@ pattern for exercising a non-default Rust decision strategy).
 
 ---
 
+## Cross-engine token-printing registry — module-global, two-axis safety (round-51 shape cache + round-57 per-game pid-map reset)
+
+**Location**: `src/mtg_bot/parity/cross_engine.py`
+(`_TOKEN_PRINTING_BY_PID` module-global pid→`CardPrinting` map;
+`register_token_printing` identity-conflict guard at line ~259;
+`_TOKEN_PRINTING_CACHE_BY_KEY` round-51 shape cache;
+`cached_token_printing`; round-57
+`_reset_token_printing_pid_map_for_seating_pass`) +
+`src/mtg_bot/parity/trajectory.py` `_seat_token_printings`
+(per-game seating call site; calls the round-57 reset at pass entry).
+
+**What the shortcut is**: the `create_token` family bridge arms resolve
+Rust's `token_printing_id: u32` to a Python `CardPrinting` via a
+**module-global** map (not per-`GameState` — the bridge runs during
+`build_python_state`'s printing materialization, before any state
+object exists, so there is no per-game context the registry can key
+on). A token's pid is its index in **that game's** `card_defs` union,
+which varies by archetype AND seed. The map persisting process-wide
+across an N-game bench sweep means a later game's pid can collide with
+an earlier game's stale registration. The `register_token_printing`
+identity-conflict guard (`existing is not py_printing` → `ValueError`)
+exists to catch genuine probe collisions (two manual registrations for
+DIFFERENT printings at one pid that coexist in one bridge resolution —
+a real silent-divergence bug). Two complementary mechanisms keep the
+loader path conflict-free on two orthogonal axes WITHOUT deleting that
+guard:
+
+- **Same-shape cross-game axis (round-51 N1)**:
+  `cached_token_printing(card_def)` keys a `CardPrinting` by token
+  SHAPE (name + types + P/T + subtypes/supertypes + keywords +
+  triggered/activated-ability tuples), so the SAME logical token
+  re-seated across games/seeds resolves to the SAME identity-stable
+  object → a repeat `register_token_printing` is identity-idempotent,
+  never a false conflict. Covers: one token shape, many games, shifting
+  pid.
+- **Cross-shape multi-archetype axis (round-57 N1, round-56 N3
+  finding)**: `_reset_token_printing_pid_map_for_seating_pass()` clears
+  ONLY the pid→printing map at every `_seat_token_printings` pass entry
+  (the shape cache is deliberately NOT cleared, so the round-51
+  guarantee is preserved). The pid map is a **per-game** artifact;
+  resetting it restores that invariant so a DIFFERENT token shape
+  (Lander) landing on a pid a prior game's DIFFERENT shape (Robot)
+  occupied finds a clean slot instead of the stale-Robot conflict.
+  Covers: two different shapes colliding on one pid across archetypes
+  in one process (the exact round-56 N3 bench find).
+
+**Why it's OK / failure mode**: within a single game,
+`_seat_token_printings` writes the COMPLETE, correct pid→printing map
+for that game's union AND rewrites every carrier trigger's
+`token_printing_id` to those same pids in the SAME pass from the SAME
+`token_pid_by_name` dict; the bridge runs only AFTER the pass
+completes, reading a self-consistent map. No within-game lookup can hit
+a stale entry (the only stale entries possible are from PRIOR games,
+whose pids are either overwritten by this game's seating or never
+referenced by this game's trigger dicts) — so the round-57 reset
+introduces NO within-game silent mis-resolution. The identity-conflict
+guard is UNCHANGED and still fires for genuine probe collisions (manual
+`register_token_printing` pairs never route through the seating reset).
+The NOT-OK scenario would be a non-loader caller manually registering
+two different printings at one pid that DO coexist in one resolution —
+that still raises, as intended. No real-card-exposed divergence: the
+fix removes a hard blocker (raw multi-archetype bench sweeps of decks
+carrying ≥2 distinct token shapes are now unblocked); resolution stays
+byte-equal everywhere the path is reachable (round-56 validated 0
+FAIL_DIVERGENCE across 210 games with the per-game-clear workaround;
+the round-57 in-code reset makes that workaround unnecessary).
+
+**Rejected alternatives** (round-56 N3's three candidates): (a) key the
+guard on `(pid, current-game)` — the bridge has no game-identity token
+it can see (runs before any state exists); would need new plumbing the
+bridge does not carry, and is a STRUCTURAL non-starter, not just more
+work; (c) overwrite-allow when the new printing is a different-shape
+`cached_token_printing` — weakens the within-resolution
+probe-collision detector and is strictly more complex than restoring
+the per-game invariant the pid map is supposed to have. Option (b)
+(chosen) is the minimal correct fix and the round-56 doc's
+recommended approach.
+
+**Fix scope estimate**: closed (round-57 N1, ~25 lines + a dedicated
+internal helper; sister of round-51 N1).
+
+**Impact estimate**: zero production strength cost (parity
+infrastructure only). Unblocks round-58+ raw multi-archetype bench
+validation of any deck carrying ≥2 distinct token shapes (Lander +
+Robot) without the per-game `clear_token_printings()` workaround.
+
+**Pinned by**:
+`tests/test_trajectory.py::test_r51_seat_token_printings_cross_game_varying_pid_no_conflict`
+(round-51 same-shape axis, round-57-extended to assert cross-game
+object identity independently of the now-per-game pid map) +
+`..._r51_real_gravpack_archetype_multi_game_no_registry_conflict`
+(round-51 e2e same-shape) +
+`..._r57_unit_cross_shape_distinct_tokens_same_pid_no_conflict`
+(round-57 cross-shape unit, no 17lands) +
+`..._r57_real_cross_shape_multi_archetype_no_registry_conflict`
+(round-57 cross-shape e2e — N3's exact `[(37,s) s0-5]+[(73,s) s0-5]`
+order, both shapes resolve correctly per game). The three
+collision-axis pins FAIL at the pre-fix baseline with the exact N3
+`pid=7 … Robot … Lander` `ValueError`; all PASS with the fix.
+
+---
+
 ## Dauntless Scrapbot — `ExileEachOpponentsGraveyard` Effect half shipped byte-equal; full card stays loader-gated (Lander token-registration / Sequence rider)
 
 **Location**: `rust/src/cards.rs`
