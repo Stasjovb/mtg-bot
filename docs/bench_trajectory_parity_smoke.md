@@ -345,3 +345,100 @@ re-run of the original failing seeds (arch=4 seed=0 max-turns=15) is
 worth doing in round 42 to confirm whether `play_land::stack` and
 `cast_spell::graveyard_p0,battlefield` are actually fixed on main
 HEAD or just no longer firing at max-turns=20.
+
+## Round 42 verification — round-41 cluster already closed by harness pre-cast floor
+
+Round 42 picked up the round-41 H1 hypothesis that the
+`cast_spell::life_p0,stack` (×8) cluster on arch 13-17 represented a
+single bridge gap. Reproduction on current main (`add70c40` /
+`439bd28a`) shows the cluster — and its sibling shapes — already at
+zero divergences.
+
+### Targeted reproducer (cluster's own seed/arch range)
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 13-17 --seeds 0-5 --max-turns 20 --verbose
+```
+
+| Status            | Count |
+|-------------------|-------|
+| Total games       | 30    |
+| PASS              | 0     |
+| FAIL_DIVERGENCE   | 0     |
+| FAIL_TIMEOUT      | 30    |
+| Wall time         | 38.1s |
+
+All 30 games TIMEOUT cleanly (no creatures past the filter for
+attack_all to swing); previously every arch 13-17 × seed 4 game in
+round-41's Sweep B fired the `cast_spell::life_p0,stack` shape, so the
+cluster's deterministic divergence has vanished.
+
+### Wider re-run of Sweep B's full grid
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 0-50 --seeds 0-5 --max-turns 20 \
+    --json-out tmp/bench_wide.json
+```
+
+| Status            | Sweep B (round 41) | Round 42 re-run |
+|-------------------|--------------------|-----------------|
+| Total games       | 306                | 306             |
+| PASS              | 10                 | 16              |
+| FAIL_DIVERGENCE   | 17                 | **0**           |
+| FAIL_TIMEOUT      | 279                | 290             |
+| Wall time         | 406s               | 399s            |
+
+| Shape                                    | Sweep B | Round 42 |
+|------------------------------------------|---------|----------|
+| `cast_spell::life_p0,stack`              | 8       | **0**    |
+| `cast_spell::stack`                      | 6       | **0**    |
+| `cast_spell::life_p1,stack`              | 3       | **0**    |
+| `play_land::stack`                       | 0       | 0        |
+| `cast_spell::graveyard_p0,battlefield`   | 0       | 0        |
+
+Zero divergences total across 306 games. The +6 PASS delta vs Sweep B
+matches the games that previously fired one of the three closed shapes
+and now run to a clean conclusion.
+
+### Root cause attribution
+
+The harness-only fix already on main —
+**`5a24fe0f fix(parity): resolve_top_of_stack_python honors a pre-cast floor`**
+(merged via `d2c95349`) — closed the entire cluster. That patch
+changed `step_both`'s CE5 closure to drain Python's stack only down
+to its pre-cast depth, leaving pre-existing landfall triggers in
+place to match Rust's no-stack `cast_creature` observable.
+
+Round-41 H1 was correct that all three shapes (`cast_spell::stack`,
+`cast_spell::life_p0,stack`, `cast_spell::life_p1,stack`) shared a
+common bridge mechanism — but the mechanism was the harness drain,
+not a missing trigger pipeline on either engine side. The
+`life_p0,stack` variant was a side effect of the same drain wiping
+Python's persistent landfall-pump entries: once those entries went
+missing, the matching life-loss trigger they would have resolved
+into also went missing on Python while still resolving on Rust,
+producing the compound `life_p0 + stack` divergence shape.
+
+### Bench rerun result
+
+- Cluster size before (round 41 Sweep B): 17 divergences total
+  (8 life_p0,stack + 6 stack + 3 life_p1,stack).
+- Cluster size after (round 42 verification on `439bd28a`): 0.
+- New shapes surfaced: none — the cluster simply went silent.
+
+### Next-round notes
+
+- The two old `round-37` shapes (`play_land::stack`,
+  `cast_spell::graveyard_p0,battlefield`) remain at 0 in round 42's
+  306-game re-run — confirms they were fixed pre-round-41 and not
+  just hiding behind a max-turns mismatch.
+- Round 42+ slice budget for "chase the round-41 cluster" can be
+  reallocated: the FAIL_TIMEOUT dominance (290/306 = 95%) is now the
+  binding signal-coverage constraint. The CardDef filter extension
+  work (I2's slice) is the highest-leverage path to surface new
+  divergence shapes — admit more creatures and the new shapes will
+  appear at seeds the current admit set never reaches.
