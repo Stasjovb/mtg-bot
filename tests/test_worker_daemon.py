@@ -103,7 +103,6 @@ def test_start_self_play_transitions_state(client):
         json={
             "stage_id": "iter_009_self_play_v6",
             "coordinator_url": "http://desktop-j05412i:5099",
-            "n_workers": 8,
         },
     )
     assert resp.status_code == 202
@@ -128,7 +127,6 @@ def test_start_self_play_payload_shape_matches_contract(client):
         json={
             "stage_id": "iter_009_self_play_v6",
             "coordinator_url": "http://desktop-j05412i:5099",
-            "n_workers": 8,
         },
     )
     assert resp.status_code == 202
@@ -147,7 +145,6 @@ def test_start_self_play_rejects_when_busy(client):
         json={
             "stage_id": "stage_a",
             "coordinator_url": "http://coord:5099",
-            "n_workers": 4,
         },
     )
     assert first.status_code == 202
@@ -156,7 +153,6 @@ def test_start_self_play_rejects_when_busy(client):
         json={
             "stage_id": "stage_b",
             "coordinator_url": "http://coord:5099",
-            "n_workers": 4,
         },
     )
     assert second.status_code == 409
@@ -168,17 +164,23 @@ def test_start_self_play_rejects_when_busy(client):
     )
 
 
-def test_start_self_play_sets_pool_size_in_heartbeat(client):
-    """After start, heartbeat ``host.pool_size`` reflects ``n_workers``."""
-    client.post(
+def test_start_self_play_sets_pool_size_in_heartbeat():
+    """After start, heartbeat ``host.pool_size`` reflects the daemon's
+    ``--n-workers`` CLI flag (worker-owned config) — NOT a request-body
+    field. The v2 cutover dropped ``n_workers`` from the orchestrator's
+    /v2/start_* request body; the daemon decides its own pool size.
+    """
+    app = worker_daemon.create_app(start_delay_s=0.02, n_workers=6)
+    app.testing = True
+    client_ = app.test_client()
+    client_.post(
         "/v2/start_self_play",
         json={
             "stage_id": "stage_c",
             "coordinator_url": "http://coord:5099",
-            "n_workers": 6,
         },
     )
-    body = client.get("/v2/heartbeat").get_json()
+    body = client_.get("/v2/heartbeat").get_json()
     assert body["host"]["pool_size"] == 6
 
 
@@ -194,7 +196,6 @@ def test_start_eval_routes_to_eval_states(client):
         json={
             "stage_id": "eval_v6_vs_v5",
             "coordinator_url": "http://coord:5099",
-            "n_workers": 4,
         },
     )
     assert resp.status_code == 202
@@ -218,7 +219,6 @@ def test_stop_returns_to_idle(client):
         json={
             "stage_id": "stage_d",
             "coordinator_url": "http://coord:5099",
-            "n_workers": 4,
         },
     )
     # Wait until RUNNING so the test exercises the RUNNING → STOPPING
