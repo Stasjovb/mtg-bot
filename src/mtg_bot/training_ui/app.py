@@ -177,6 +177,23 @@ def _row_to_ui_dict(
             val = progress_row.get(key)
             if val is not None:
                 ui[key] = val
+        # Derive rates + ETA from the counter columns so any consumer
+        # with an aggregate row gets the headline "Games/hr",
+        # "Samples/hr", "ETA" stats without needing the writer to
+        # pre-compute them. Mirrors the per-shard rollup branch's
+        # derivation (in the ``rollup is not None`` block above) so
+        # both paths produce the same UI shape — runs with an
+        # aggregate row don't show blank cards next to runs without.
+        done = progress_row.get("n_games_done") or 0
+        total = progress_row.get("n_games_total") or 0
+        elapsed = progress_row.get("elapsed_seconds") or 0.0
+        if done > 0 and elapsed > 0:
+            ui["games_per_hour"] = 3600.0 * done / elapsed
+            if total > done:
+                avg_per_game = elapsed / done
+                ui["estimated_remaining_seconds"] = (
+                    (total - done) * avg_per_game
+                )
         # Fan out extra_json keys onto the top-level dict. Setdefault
         # so the structured counters above always win.
         extra_raw = progress_row.get("extra_json")
@@ -184,6 +201,17 @@ def _row_to_ui_dict(
             try:
                 extra = json.loads(extra_raw)
                 if isinstance(extra, dict):
+                    # ``n_samples`` powers samples_per_hour — pulled
+                    # before the setdefault so the derived field can
+                    # land before the fan-out fixes anything else.
+                    n_samples_extra = extra.get("n_samples")
+                    if (
+                        isinstance(n_samples_extra, (int, float))
+                        and n_samples_extra > 0 and elapsed > 0
+                    ):
+                        ui["samples_per_hour"] = (
+                            3600.0 * n_samples_extra / elapsed
+                        )
                     for k, v in extra.items():
                         if k.startswith("_"):
                             # Internal markers (e.g. ``original_status``,
