@@ -897,3 +897,166 @@ under-powered body, both downstream of the 1–2-creature filter admit
 set) and the prioritized forward recommendation: the CardDef filter
 extension is the single highest-leverage lever, exactly as the
 round-42/45/46 entries projected.
+
+## Round 48 — post-expansion conversion measurement (Icetill Explorer admit)
+
+Round 48 measures the bench-visible effect of round-48 N1's CardDef
+bridge filter admit-set expansion (merge `8786788a`): the
+`landfall+mill` leaf was admitted via the real EoE card **Icetill
+Explorer**, raising Sweep-A archetypes **10/11/12 from 1→2 creature
+copies each**. N1's own targeted sanity check (30 games) already showed
+those three archetypes going 2→3 PASS with 0 FAIL_DIVERGENCE; this
+slice runs the **identical round-46/47 Sweep A grid** for direct
+comparability and quantifies the timeout→PASS conversion + checks
+whether the newly-exercised `landfall+mill` code path surfaces any
+cross-engine divergence (its real-game first exposure).
+
+Round 48 also landed N2's Rust `EachOpponentLosesLifeEqualToYourLife
+Total` substrate (merge `ca9013e8`) — no bench-visible effect (no EoE
+consumer), so it does not figure in the conversion math.
+
+Main HEAD at run: `8786788a` (N1 + N2 both merged this round).
+
+### Sweep A — round-46/47 comparable grid
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 0,1,4,5,10,11,12,13,14,15 --seeds 0-5 --max-turns 22 \
+    --json-out tmp/bench_r48.json --verbose
+```
+
+| Status            | Round 46 | Round 47 | Round 48 |
+|-------------------|----------|----------|----------|
+| Total games       | 60       | 60       | 60       |
+| PASS              | 18       | 18       | **21**   |
+| FAIL_DIVERGENCE   | **0**    | **0**    | **0**    |
+| FAIL_TIMEOUT      | 42       | 42       | **39**   |
+| ARCHETYPE_FILTERED | 0       | 0        | 0        |
+| FAIL_EXCEPTION    | 0        | 0        | 0        |
+| Wall time         | 75.47s   | 78.34s   | 76.32s   |
+
+### Conversion delta — exactly 3 cells flipped, all on the expanded archetypes
+
+A cell-by-cell diff of the round-47 JSON artifact (`tmp/bench_r47.json`)
+vs round-48's (`tmp/bench_r48.json`) shows **exactly 3 differing cells,
+all `FAIL_TIMEOUT → PASS`, all on the round-48-expanded archetypes at
+seed 1**:
+
+| Cell           | Round 47     | Round 48 |
+|----------------|--------------|----------|
+| arch=10 seed=1 | FAIL_TIMEOUT | **PASS** |
+| arch=11 seed=1 | FAIL_TIMEOUT | **PASS** |
+| arch=12 seed=1 | FAIL_TIMEOUT | **PASS** |
+
+Every other one of the 60 cells is byte-identical to round 47. (Note:
+the authoritative round-47 JSON shows arch 10/11/12 PASSing at seeds
+**0 and 3** — the round-47 prose summary's "2P at seeds 0,1" was
+imprecise; the artifact is the source of truth. Round 48 adds seed 1,
+giving seeds 0/1/3 PASS.) Per-archetype conversion delta vs round 47:
+
+| Arch | Carries (post-r48)              | R47 P/T | R48 P/T | Δ PASS |
+|------|----------------------------------|---------|---------|--------|
+| 0    | Thawbringer ×1                   | 3 / 3   | 3 / 3   | 0      |
+| 1    | Thawbringer ×1                   | 3 / 3   | 3 / 3   | 0      |
+| 4    | Icecave Crasher ×1               | 5 / 1   | 5 / 1   | 0      |
+| 5    | Icecave Crasher ×1               | 1 / 5   | 1 / 5   | 0      |
+| 10   | Thawbringer + **Icetill Expl. ×2** | 2 / 4 | **3 / 3** | **+1** |
+| 11   | Thawbringer + **Icetill Expl. ×2** | 2 / 4 | **3 / 3** | **+1** |
+| 12   | Thawbringer + **Icetill Expl. ×2** | 2 / 4 | **3 / 3** | **+1** |
+| 13   | Eumidian Terrabotanist ×1        | 0 / 6   | 0 / 6   | 0      |
+| 14   | Eumidian Terrabotanist ×1        | 0 / 6   | 0 / 6   | 0      |
+| 15   | Eumidian Terrabotanist ×1        | 0 / 6   | 0 / 6   | 0      |
+
+Total: **+3 FAIL_TIMEOUT → PASS, 0 regressions, 0 divergences.** The
+conversion is exactly the predicted shape — the second Icetill Explorer
+copy gives arch 10/11/12's seed-1 draw enough creature board to close
+the game before the turn-22 cap, where the single-copy round-47 deck
+ran out of attackers.
+
+### Sweep B — expanded-archetype resolution (seeds 0–9)
+
+To get extra resolution on the 3 expanded archetypes beyond seeds 0–5:
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 10,11,12 --seeds 0-9 --max-turns 22 \
+    --json-out tmp/bench_r48_expanded.json --verbose
+```
+
+| Status            | Count |
+|-------------------|-------|
+| Total games       | 30    |
+| PASS              | 9     |
+| FAIL_DIVERGENCE   | **0** |
+| FAIL_TIMEOUT      | 21    |
+| Wall time         | 37.55s |
+
+Per-archetype: 10/11/12 each 3 PASS / 7 FAIL_TIMEOUT (PASS at seeds
+0/1/3; TIMEOUT at 2/4/5/6/7/8/9). Confirms the seed-1 conversion holds
+and that seeds 6–9 (unreached by Sweep A) add no new divergence and no
+further PASS — the 2-copy admit lifts exactly the one extra seed (1)
+into the closeable band; the rest still lack enough creature board.
+
+### Divergence-shape histogram
+
+**No divergences fired across all 90 games (60 Sweep A + 30 Sweep B).**
+The `landfall+mill` code path that round-48 N1's admit newly exercises
+in real production-deck games ran clean on its first real exposure —
+**0-divergence held**. This is the central result: the lever was
+designed to surface a divergence if the new path mistranslated across
+engines, and it did not. Every previously-tracked shape (round-37
+`play_land::stack`, `cast_spell::graveyard_p0,battlefield`; round-41
+`cast_spell::stack`, `cast_spell::life_p0,stack`,
+`cast_spell::life_p1,stack`; round-43 Thawbringer `cast_spell::stack`)
+remains at zero.
+
+### Gate
+
+Docs-only slice plus two `tmp/` JSON artifacts; no production, harness,
+or bench-script behavior changed, so the parity gate was **not** re-run.
+Round 48's pre-slice baseline (`8786788a`, **1185 passed**, orchestrator-
+verified with the .pyd rebuilt after N1+N2 merged) remains the recorded
+gate; nothing in this slice touches code on the gate's path.
+
+### Remaining timeout population + forward recommendation
+
+39/60 Sweep-A games (65%) still FAIL_TIMEOUT — the same root cause
+round 47 quantified (1–2-creature decks padded with ~58 lands; most
+games never draw a creature, the rest field a lone vanilla body that
+can't close 20 before the cap). The Icetill Explorer admit converted
+the 3 cells where a 2-copy deck just barely tips into closeable; it
+does **not** touch the 36 remaining timeouts on archetypes that still
+carry only 1 admitted creature (0/1/4/5 at their timeout seeds, all of
+13/14/15).
+
+**The filter-admit lever still has headroom but its character has
+changed.** N1's round-48 scout flagged that the remaining filter
+*rejects* are now dominated by **CreateToken / target-pick** features,
+which need *substrate* work (Rust effect variants + bridge arms), not
+a pure allowlist extension — i.e. the cheap "admit a vanilla creature"
+extensions are largely exhausted on these specific Sweep-A archetypes.
+The highest-leverage round-49+ paths, in order:
+
+1. **Continue CardDef admits where a vanilla/plain-trigger creature
+   still exists in a timeout-dominant archetype's raw list** (arch
+   13/14/15 each carry 11–13 raw distinct creatures; only 1 admitted).
+   Each new copy that tips a deck into the closeable band converts ~1
+   timeout seed/archetype, exactly as the Icetill Explorer copy just
+   did — but the per-admit yield is now ~1 game, not a cluster.
+2. **CreateToken / target-pick substrate** (the Rust-lane work N1's
+   scout points at) — unblocks the bigger remaining reject population
+   but is multi-round substrate work, not a one-line filter admit.
+3. **`--require-creatures N` bench-harness classification tweak**
+   (round-47 deferred option 2): reclassify the no-creature-draw
+   timeouts as `ARCHETYPE_FILTERED` so the FAIL_TIMEOUT count becomes a
+   truer signal-coverage metric. Cosmetic for signal, not coverage.
+
+Net for round 49: the filter-admit lever is **not exhausted** but its
+cheap (vanilla-creature) headroom on the Sweep-A grid is thinning; the
+remaining reject population is substrate-shaped per N1's flag, so the
+campaign's center of gravity shifts back toward the Rust-substrate lane
+(CreateToken / target-pick) for the next bulk-conversion step. No new
+divergence-shape candidates surfaced — the `landfall+mill` path is
+clean, so there is no round-49 fix slice from this measurement.
