@@ -163,6 +163,18 @@ headline numbers.
 }
 ```
 
+`status` flips to `complete` **automatically** once every `game_idx`
+has a row in the results table and no claims are still in-flight —
+no explicit `/close` call is required for the natural-drain path.
+The transition fires inside the coordinator's `/v2/report_result`
+handler the moment the last in-flight game reports, so an
+orchestrator polling this endpoint sees `complete` on the first GET
+after the final result lands. (The explicit `/close` endpoint below
+still exists for early-stop scenarios where the orchestrator wants
+to abandon residual queued work.) A stage created with
+`games: []` (zero work) is auto-closed at creation time and reads
+`complete` on the very first GET.
+
 ### `POST /v2/stage/<stage_id>/close`
 
 Orchestrator (or the early-stop watcher) signals "no more work for
@@ -170,6 +182,12 @@ this stage." Coordinator marks the stage as `drained`: subsequent
 `/v2/claim` calls for this stage return 204 and any pending entries
 in the queue are dropped. Already-in-flight claims still report
 back normally. When in-flight drops to 0, status becomes `complete`.
+
+This endpoint is for **early-stop / abandon-residual-work** flows
+(e.g. the eval watcher's Wilson-CI pass/fail). It's NOT required
+for the natural-drain path — the coordinator auto-closes stages
+on its own once every game has reported a result (see the
+`/v2/stage/<id>` note above).
 
 ```json
 // Request

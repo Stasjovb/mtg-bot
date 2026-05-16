@@ -251,6 +251,14 @@ Orchestrator:
     → {"status":"complete","n_games_done":987,"crashed":2,"timed_out":11}
 ```
 
+The transition to `complete` is automatic — the coordinator's
+`/v2/report_result` handler flips the stage's `status` the moment
+the last in-flight game's result lands, no orchestrator-side
+`/close` call required. (Self-play stages naturally drain this
+way; eval stages either auto-close the same way once all 500/2000
+games run OR are explicitly closed early by the Wilson-CI watcher
+— see Phase 6.)
+
 ### Phase 5 — Train (in-process on master)
 
 Train stage stays as it is today — `mtg_bot train` invoked as a
