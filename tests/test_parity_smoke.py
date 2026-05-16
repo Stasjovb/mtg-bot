@@ -52905,6 +52905,396 @@ def test_cross_engine_synthetic_etb_equip_to_target_creature_you_control_cross_c
     assert rust_p1_bear_entry["controller_id"] == 1
 
 
+def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity(
+    parity_smoke,
+):
+    """Round-31 BLOCKED-RUST-EFFECT deferred-EoE-probe close — drive
+    Mightform Harmonizer's landfall+double-power clause end-to-end on
+    BOTH engines via the bridge dict.
+
+    Closes the round-31 substrate's deferred end-to-end probe (commit
+    90bc39ca: ``Effect::DoubleTargetCreaturesPowerUEOT`` shipped Rust-
+    end-to-end with 8 cross-engine bridge pins, but the Mightform
+    consumer was deferred per the round-17/18/19 synthetic-only-when-
+    riders-cascade precedent because driving the LANDFALL trigger path
+    through both engines required the etb-subject-substrate predicate
+    plumbing on the review-gated branch). Round-36 ZZZ
+    (commit cd6e8ae9) extended the substrate by landing the canonical
+    landfall-predicate compound (``And(Subject(IsLand),
+    Controlled(YOU))``) on both engines' bridge arms via
+    ``_SAFE_TRIGGERS`` extension for the carddef-triggers production-
+    deck loader. The same parser-emitted compound is already accepted
+    by both engines' free-form CardDef loader (test_parity_smoke
+    bypass of the production-deck filter), as shown by the round-19
+    Eumidian Terrabotanist landfall+gain_life probe (this file at
+    line 10098) and the round-20 Tannuk Memorial Ensign landfall+
+    damage_each_opponent probe (line 10983) — both drive the same
+    landfall predicate shape on a synthetic CardDef without going
+    through the production-deck filter. This probe is the missing
+    third leg: the SAME landfall predicate paired with the round-31
+    DoubleTargetCreaturesPowerUEOT effect.
+
+    Path chosen — side-channel inject via free-form CardDef + bridge
+    dict (NOT ``_SAFE_TRIGGERS`` extension). The carddef-triggers
+    bridge filter would need a fourth predicate-effect product entry
+    (``(enters, "land_enters_controlled_by_you",
+    "double_target_creatures_power_ueot")``) to ship Mightform onto
+    the production-deck loader. That's deferred — this slice closes
+    the deferred end-to-end probe via the existing free-form CardDef
+    path (the same shape the Eumidian + Tannuk probes use), which
+    skips ``_SAFE_TRIGGERS`` entirely; the production-deck loader
+    landing is a follow-up slice.
+
+    Probe shape (mirrors Tannuk Memorial Ensign at line 10983 +
+    Dubious Delicacy pump-target picker at line 15979): inject Bait
+    Bear (3/3) FIRST onto P0's bf so it's index 0 (Rust's
+    ``DoubleTargetCreaturesPowerUEOT`` resolve arm at
+    state_ops_resolve.rs:4437-4498 walks bf in insertion order and
+    picks the first creature); inject Mightform Harmonizer SECOND
+    onto P0's bf carrying the canonical landfall predicate compound +
+    ``double_target_creatures_power_ueot`` effect (Mightform's own
+    arrival doesn't fire the trigger — subject_is_land filter rejects
+    Mightform-the-Creature, same Tannuk short-circuit at line 11137);
+    seat ``_PickFirstControlledCreatureAgent`` on P0 BEFORE the
+    trigger fires (push_triggered_ability calls
+    ``controller.agent.choose_target`` at trigger-push time —
+    actions.py:3249); inject Forest into P0's hand and play_land it;
+    drain both stacks.
+
+    Cross-engine assert (post-resolve contract):
+
+      * Bait Bear effective_power = **6** on both engines (printed 3
+        + UEOT +3 from the snapshot-pump doubling — the load-bearing
+        observable; pump.py:234 ``snapshot = effective_power(state,
+        obj)``; Rust state_ops_resolve.rs:4482 mirror).
+      * Bait Bear effective_toughness unchanged at **3** (the
+        doubling is power-only — pump.py:240 ``toughness=0``).
+      * Mightform's own effective P/T unchanged at **4/4** (source
+        not picked — pump landed on Bait Bear, not Mightform).
+      * P0/P1 lives unchanged at 20.
+      * No residual stack on either engine.
+
+    Substrate confirmed via round-31 commit 90bc39ca (Rust's
+    ``Effect::DoubleTargetCreaturesPowerUEOT`` substrate end-to-end:
+    cards.rs:842-886 unit-variant arm; parse 3947-3955; to_dict
+    5937-5941; resolve state_ops_resolve.rs:4437-4498; mirrors
+    Python's pump.py:194-253) and round-36 ZZZ commit cd6e8ae9 (the
+    canonical landfall predicate compound is the parser-emitted
+    shape both engines' bridge arms parse and dispatch).
+
+    Out of scope: cast-from-hand mana cost (the inject-and-dispatch-
+    ENTERS pattern bypasses the mana pipeline); Warp clause on
+    Mightform (separate substrate); production-deck filter landing
+    (would need a fourth ``_SAFE_TRIGGERS`` entry).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstControlledCreatureAgent
+
+    landfall_predicate = {
+        "kind": "and",
+        "left": {"kind": "subject_is_land"},
+        "right": {"kind": "controlled_by_you"},
+    }
+    mightform = CardDef(
+        name="Mightform Harmonizer",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("G", 2),),
+        power=4,
+        toughness=4,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": landfall_predicate,
+                "effect": {
+                    "kind": "double_target_creatures_power_ueot",
+                },
+            },
+        ),
+    )
+    # Bait creature with printed power 3 so the doubling-pump observable
+    # (printed 3 + UEOT +3 = effective 6) is distinct from Mightform's
+    # printed 4 (would be 8 if mis-targeted; would be 3 if pump didn't
+    # apply). Toughness 3 is unchanged (the doubling is power-only).
+    bait_bear = CardDef(
+        name="Bait Bear (3/3)",
+        card_type="Creature",
+        mana_cost_generic=2,
+        mana_cost_colored=(("G", 1),),
+        power=3,
+        toughness=3,
+    )
+    forest = CardDef(
+        name="Forest", card_type="Land", mana_produced=("G",),
+    )
+    spec = DeckSpec(
+        card_defs=(mightform, bait_bear, forest),
+        p0_library=("Forest", "Forest"),
+        p1_library=("Forest", "Forest"),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+
+    # ---- Rust side ----
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+    # Inject Bait Bear FIRST so it's index 0 on P0's bf — Rust's
+    # DoubleTargetCreaturesPowerUEOT resolve arm walks bf in
+    # insertion order and picks the first creature.
+    rust_bait_dict = {
+        "name": "Bait Bear (3/3)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "G": 1},
+        "effects": [],
+        "power": 3,
+        "toughness": 3,
+    }
+    rust_bait_id = rust_state.register_and_inject_object(
+        rust_bait_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0
+    assert rust_state.effective_power(rust_bait_id) == 3
+    assert rust_state.effective_toughness(rust_bait_id) == 3
+
+    rust_mightform_dict = {
+        "name": "Mightform Harmonizer",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 2, "G": 2},
+        "effects": [],
+        "power": 4,
+        "toughness": 4,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": landfall_predicate,
+                "effect": {
+                    "kind": "double_target_creatures_power_ueot",
+                },
+            }
+        ],
+    }
+    rust_mightform_id = rust_state.register_and_inject_object(
+        rust_mightform_dict, 0, ZONE_BATTLEFIELD,
+    )
+    # Mightform's own arrival does NOT fire the landfall trigger
+    # (Mightform is a Creature, not a Land — subject_is_land filter
+    # short-circuits, same as Tannuk's probe at line 11137).
+    assert rust_state.stack_size() == 0, (
+        "Rust: Mightform's own arrival should NOT fire its landfall "
+        "trigger -- subject_is_land filter rejects (Mightform is a "
+        f"Creature). Got stack_size={rust_state.stack_size()}"
+    )
+    assert rust_state.effective_power(rust_mightform_id) == 4
+    assert rust_state.effective_toughness(rust_mightform_id) == 4
+
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+
+    # Inject Forest onto P0's hand, then play_land. The play_land
+    # path dispatches ENTERS for the Forest; the dispatcher walks
+    # every bf permanent (including Mightform) and fires matching
+    # triggers. With Bait Bear at index 0 of P0's bf, Rust's
+    # bf-iter-first-creature pick lands on the Bear.
+    rust_forest_dict = {
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+        "effects": [],
+    }
+    rust_forest_id = rust_state.register_and_inject_object(
+        rust_forest_dict, 0, ZONE_HAND,
+    )
+    rust_state.play_land(rust_forest_id, 0)
+    assert rust_state.find_object_zone(rust_forest_id) == ZONE_BATTLEFIELD, (
+        "Rust: Forest should be on bf after play_land"
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Mightform's landfall trigger should be on the stack "
+        "after the Forest enters under P0's control"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _play_land
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.pump import DoubleTargetCreaturesPowerUEOT
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Subject, YOU,
+    )
+    from mtg_bot.game import Zone, effective_power, effective_toughness
+
+    py_predicate = And(
+        left=Subject(slot=None, inner=IsLand()),
+        right=Controlled(by=YOU, subject=None),
+    )
+    bait_printing = CardPrinting(
+        name="Bait Bear (3/3)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=3,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    mightform_printing = CardPrinting(
+        name="Mightform Harmonizer",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("G", 2),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=4,
+        toughness=4,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=py_predicate,
+                effect=DoubleTargetCreaturesPowerUEOT(),
+            ),
+        ),
+    )
+
+    # Inject Bait Bear FIRST so it's index 0 on P0's bf — same order
+    # as Rust so both engines' first-creature pick lands on the same
+    # target.
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    assert effective_power(py_state, py_bait) == 3
+    assert effective_toughness(py_state, py_bait) == 3
+
+    # Seat the picker BEFORE Mightform's trigger fires (push_triggered_
+    # ability calls controller.agent.choose_target at trigger-push
+    # time — actions.py:3249). The shim mirrors Rust's source-
+    # controller's-bf-first-creature pick (state_ops_resolve.rs:4459
+    # iterates bf in insertion order). With Bait Bear injected first,
+    # both engines pick the Bear.
+    py_state.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    py_mightform = py_state.new_object(
+        mightform_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_mightform.summoning_sick = False
+    py_mightform.tapped = False
+    py_mightform.damage = 0
+    py_mightform.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_mightform)
+    # Mightform wasn't fanned through _trigger_etb_abilities (we
+    # materialized it on bf directly) — stack remains empty as we
+    # never dispatched ENTERS for Mightform's own arrival.
+    assert len(py_state.stack) == 0
+    assert effective_power(py_state, py_mightform) == 4
+    assert effective_toughness(py_state, py_mightform) == 4
+
+    # Move a Forest from library to hand on Python side.
+    py_forest = py_state.players[0].library[0]
+    assert py_forest.printing.name == "Forest"
+    py_state.players[0].library.remove(py_forest)
+    py_forest.zone = Zone.HAND
+    py_state.players[0].hand.append(py_forest)
+
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+
+    # Reset per-turn cap so _play_land doesn't gate (mirrors the
+    # Eumidian/Tannuk probes' reset pattern).
+    py_state.players[0].lands_played_this_turn = 0
+    _play_land(py_state, 0, py_forest.id)
+    assert any(
+        o.printing.name == "Forest" and o.controller_id == 0
+        for o in py_state.battlefield
+    ), "Python: Forest should be on bf after _play_land"
+    assert len(py_state.stack) == 1, (
+        "Python: Mightform's landfall trigger should be on the stack "
+        "after Forest enters under P0's control"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: Bait Bear's effective power is 6
+    # (printed 3 + UEOT +3 snapshot-pump), toughness unchanged at 3.
+    rust_bait_power_after = rust_state.effective_power(rust_bait_id)
+    rust_bait_tough_after = rust_state.effective_toughness(rust_bait_id)
+    assert rust_bait_power_after == 6, (
+        f"Rust bait bear effective power should be 6 after the "
+        f"DoubleTargetCreaturesPowerUEOT resolve (printed 3 + UEOT "
+        f"+3 snapshot); got {rust_bait_power_after}"
+    )
+    assert rust_bait_tough_after == 3, (
+        f"Rust bait bear effective toughness should be unchanged at "
+        f"3 (the doubling is power-only); got {rust_bait_tough_after}"
+    )
+    py_bait_power_after = effective_power(py_state, py_bait)
+    py_bait_tough_after = effective_toughness(py_state, py_bait)
+    assert py_bait_power_after == 6, (
+        f"Python bait bear effective power should be 6 after the "
+        f"DoubleTargetCreaturesPowerUEOT resolve (printed 3 + UEOT "
+        f"+3 snapshot); got {py_bait_power_after}"
+    )
+    assert py_bait_tough_after == 3, (
+        f"Python bait bear effective toughness should be unchanged "
+        f"at 3 (the doubling is power-only); got {py_bait_tough_after}"
+    )
+
+    # Mightform's own effective P/T unchanged at 4/4 (it was not the
+    # picked target — the pump landed on Bait Bear, not Mightform).
+    rust_mightform_power_after = rust_state.effective_power(
+        rust_mightform_id
+    )
+    rust_mightform_tough_after = rust_state.effective_toughness(
+        rust_mightform_id
+    )
+    assert rust_mightform_power_after == 4, (
+        f"Rust Mightform effective power should be unchanged at 4 "
+        f"(source not picked); got {rust_mightform_power_after}"
+    )
+    assert rust_mightform_tough_after == 4
+    py_mightform_power_after = effective_power(py_state, py_mightform)
+    py_mightform_tough_after = effective_toughness(py_state, py_mightform)
+    assert py_mightform_power_after == 4, (
+        f"Python Mightform effective power should be unchanged at 4 "
+        f"(source not picked); got {py_mightform_power_after}"
+    )
+    assert py_mightform_tough_after == 4
+
+    # Cross-engine: byte-equal effective P/T on both creatures.
+    assert rust_bait_power_after == py_bait_power_after
+    assert rust_bait_tough_after == py_bait_tough_after
+    assert rust_mightform_power_after == py_mightform_power_after
+    assert rust_mightform_tough_after == py_mightform_tough_after
+
+    # Lives unchanged on both seats — the landfall double-power clause
+    # doesn't touch life totals.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+    # Cross-engine: same observable life totals.
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
