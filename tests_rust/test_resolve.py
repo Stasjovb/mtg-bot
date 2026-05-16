@@ -16038,3 +16038,214 @@ def test_untap_step_with_zero_stun_counter_untaps_normally(
     # Bare untap: tapped cleared, stun_counters stays at 0.
     assert state.is_tapped(p0_creature) is False
     assert state.get_stun_counters(p0_creature) == 0
+
+
+# --- MillTargetPlayerEqualToYourLifeTotal dispatch ---------------------
+#
+# BLOCKED-RUST-EFFECT slice (round 42) -- mill an opponent a number of
+# cards equal to the source-controller's current life total.
+# Mirrors Python's ``MillTargetPlayer(use_controller_life=True)``
+# (Space-Time Anomaly, EoE; ``draw_mill.py:151``).
+#
+# Sister of round-32 / 35 / 36 / 37 (damage substrate, four
+# denominators), round-33 (counters substrate), round-34 (surveil
+# substrate) -- FOURTH apply substrate and FIFTH denominator on the
+# X-from-count plumbing.
+
+
+def _space_time_anomaly_dict(card_types=None):
+    """A mill-X-equal-to-life printing dict. Source-controller's life
+    total drives the count; mills target opponent at resolve time.
+    Default Sorcery-typed (Space-Time Anomaly's true card_types).
+    Tests that inject onto the battlefield pass
+    ``card_types=["Creature"]`` so the source survives post-resolve
+    instead of routing to its controller's graveyard."""
+    if card_types is None:
+        card_types = ["Sorcery"]
+    p = {
+        "name": "Test Space-Time Anomaly",
+        "card_types": card_types,
+        "mana_cost": {"generic": 2, "U": 1, "B": 1},
+        "effects": [
+            {"kind": "mill_target_player_equal_to_your_life_total"}
+        ],
+    }
+    if "Creature" in card_types:
+        p["power"] = 2
+        p["toughness"] = 2
+    return p
+
+
+def test_resolve_mill_target_player_equal_to_life_total_mills_defender(
+    synthetic_state,
+):
+    """Happy path: p0's life is 20 (synthetic default), source on
+    p0's battlefield -> p1 library 50 -> 30, p1 graveyard 0 -> 20.
+    p0's library and graveyard are untouched (load-bearing distinction
+    from ``Effect::Mill`` which would have hit p0's library)."""
+    p0_lib_before = synthetic_state.library_sizes[0]
+    p0_grave_before = synthetic_state.graveyard_sizes[0]
+    p1_lib_before = synthetic_state.library_sizes[1]
+    p1_grave_before = synthetic_state.graveyard_sizes[1]
+    assert p1_lib_before == 50
+    assert synthetic_state.life_totals[0] == 20
+
+    src_id = synthetic_state.register_and_inject_object(
+        _space_time_anomaly_dict(card_types=["Creature"]),
+        0,  # controller p0
+        ZONE_BATTLEFIELD,
+    )
+    synthetic_state.push_to_stack(src_id, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    assert synthetic_state.is_stack_empty() is True
+    # Defender (p1): library -20, graveyard +20 (count = p0 life = 20).
+    assert synthetic_state.library_sizes[1] == p1_lib_before - 20
+    assert synthetic_state.graveyard_sizes[1] == p1_grave_before + 20
+    # Controller (p0): library + graveyard untouched. Source was a
+    # Creature on battlefield -- post-resolve leaves it on p0's
+    # battlefield, NOT p0's graveyard, so no graveyard delta on p0.
+    assert synthetic_state.library_sizes[0] == p0_lib_before
+    assert synthetic_state.graveyard_sizes[0] == p0_grave_before
+
+
+def test_resolve_mill_target_player_equal_to_life_total_uses_source_controller_life(
+    engine,
+):
+    """The count comes from the SOURCE's controller's life, NOT the
+    defender's. Set p0 life = 5, p1 life = 17, source on p0's bf,
+    p0 controls -> mill p1 by 5 (not by 17). Pins the
+    source-controller resolution path."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=30
+    )
+    state.set_life(0, 5)
+    state.set_life(1, 17)
+    p1_lib_before = state.library_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _space_time_anomaly_dict(),
+        0,
+        ZONE_HAND,
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # Count = p0's life = 5; mills 5 cards off p1's library top.
+    assert state.library_sizes[1] == p1_lib_before - 5
+    assert state.graveyard_sizes[1] == p1_grave_before + 5
+
+
+def test_resolve_mill_target_player_equal_to_life_total_zero_life_no_op(
+    engine,
+):
+    """Source-controller at exactly 0 life: silent no-op (count = 0).
+    Mirrors the Python clamp ``max(0, life)`` at draw_mill.py:187."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=30
+    )
+    state.set_life(0, 0)
+    p1_lib_before = state.library_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _space_time_anomaly_dict(),
+        0,
+        ZONE_HAND,
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.is_stack_empty() is True
+    assert state.library_sizes[1] == p1_lib_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_mill_target_player_equal_to_life_total_negative_life_no_op(
+    engine,
+):
+    """Source-controller at negative life (engine reports raw totals
+    pre-SBA): clamp to 0 via ``max(0, life)`` -> silent no-op. Mirrors
+    Python's ``max(0, life)`` clamp at draw_mill.py:187 — the
+    'arbitrary lose-life-past-zero' edge case (e.g. a chain of damage
+    triggers that lower life past 0 mid-resolution before SBAs run)."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=30
+    )
+    state.set_life(0, -3)
+    p1_lib_before = state.library_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+
+    src_id = state.register_and_inject_object(
+        _space_time_anomaly_dict(),
+        0,
+        ZONE_HAND,
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    assert state.library_sizes[1] == p1_lib_before
+    assert state.graveyard_sizes[1] == p1_grave_before
+
+
+def test_resolve_mill_target_player_equal_to_life_total_library_smaller_than_life(
+    engine,
+):
+    """Defender's library has fewer cards than the source-controller's
+    life total: mill all remaining (Python parity with `if not
+    target.library: break`). No crash. Sets p0 life = 50 against a
+    small p1 library of 3."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=3
+    )
+    state.set_life(0, 50)
+    p1_lib_before = state.library_sizes[1]
+    p1_grave_before = state.graveyard_sizes[1]
+    assert p1_lib_before == 3
+
+    src_id = state.register_and_inject_object(
+        _space_time_anomaly_dict(),
+        0,
+        ZONE_HAND,
+    )
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # All 3 milled; library drained.
+    assert state.library_sizes[1] == 0
+    assert state.graveyard_sizes[1] == p1_grave_before + 3
+
+
+def test_resolve_mill_target_player_equal_to_life_total_distinct_from_static_mill(
+    engine,
+):
+    """Schema-distinct from sister ``MillTargetPlayer { count }``: the
+    dynamic-X arm ignores any ``count`` / ``amount`` field on the dict
+    (the count is computed from state, not stored on the variant). A
+    bogus count=99 in the dict does NOT mill 99 cards — the source-
+    controller's life total of 20 (default) drives the count."""
+    state = engine.make_synthetic_state(
+        num_battlefield=0, num_hand=1, num_library=50
+    )
+    p1_lib_before = state.library_sizes[1]
+
+    d = {
+        "name": "Test extra-fields ignored",
+        "card_types": ["Sorcery"],
+        "mana_cost": {"U": 1},
+        "effects": [
+            {
+                "kind": "mill_target_player_equal_to_your_life_total",
+                "count": 99,
+                "amount": 7,
+            }
+        ],
+    }
+    src_id = state.register_and_inject_object(d, 0, ZONE_HAND)
+    state.push_to_stack(src_id, 0)
+    state.resolve_top_of_stack()
+
+    # Mills p0's life = 20 cards, NOT 99 or 7. Extra fields silently
+    # ignored.
+    assert state.library_sizes[1] == p1_lib_before - 20
