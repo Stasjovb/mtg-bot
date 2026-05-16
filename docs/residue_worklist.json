@@ -1,0 +1,194 @@
+{
+  "_README": "Machine-readable BLOCKED-RUST-EFFECT residue worklist. Built by the round-54 full programmatic residue re-walk (Agent N3). The per-entry staleness arm of scripts/check_audit_coverage_staleness.py reads THIS file (not the prose audit) and FAILs if any `genuinely_missing` entry's `claimed_missing_effect` (resolved through `aliases`) actually exists as a live Rust Effect:: variant AND a wired _ta_dict_to_python_effect bridge arm — i.e. the entry is stale and the audit residue would over-count it. `closed` entries are the historical reclassifications kept for the cron's regression check (they MUST resolve to a live+bridged variant; if one stops resolving, the closure prose itself went stale). One place to update when a residue card is closed: flip its `status` to `closed`, set `resolved_variant`, and sync EOE_PROBE_READINESS_AUDIT.md. See scripts/check_audit_coverage_staleness.py docstring.",
+  "_schema": {
+    "entry": "short stable label (matches the audit per-card row)",
+    "card": "EoE printing name",
+    "claimed_missing_effect": "the plan-invented / audit-named Effect the residue row asserts is missing",
+    "aliases": "candidate real Rust Effect:: variant names the claimed name could actually be (plan-name -> real-variant resolution; first one present in the live enum wins)",
+    "status": "genuinely_missing = audit correctly lists it as BLOCKED-RUST-EFFECT (cron asserts it stays missing); closed = effect arm shipped + bridged, reclassified out (cron asserts it stays resolvable)",
+    "resolved_variant": "for closed entries: the live Rust Effect:: variant the effect actually shipped as",
+    "reclassified_to": "for closed entries: the residual non-Effect blocker bucket",
+    "closed_round": "round the effect arm landed",
+    "note": "human context"
+  },
+  "entries": [
+    {
+      "entry": "TapTargetAndPutStunCounter",
+      "card": "Mechanozoa",
+      "claimed_missing_effect": "TapTargetAndPutStunCounter",
+      "aliases": ["TapTargetOpponentPermanentAndStunIt", "PutStunCounterOnTappedCreature"],
+      "status": "closed",
+      "resolved_variant": "TapTargetOpponentPermanentAndStunIt",
+      "reclassified_to": "BLOCKED-FILTER (warp_cost)",
+      "closed_round": 30,
+      "note": "Effect shipped r30 + bridged; corrected in audit r51. Only warp_cost gates the production-deck loader admit, not the Effect."
+    },
+    {
+      "entry": "DealDamageToAnyTargetEqualToArtifactCount",
+      "card": "Warmaker Gunship",
+      "claimed_missing_effect": "DealDamageToAnyTargetEqualToArtifactCount",
+      "aliases": ["DealDamageToOpponentCreatureByArtifactCount"],
+      "status": "closed",
+      "resolved_variant": "DealDamageToOpponentCreatureByArtifactCount",
+      "reclassified_to": "BLOCKED-Station-subsystem",
+      "closed_round": 32,
+      "note": "Effect shipped r32 + bridged + deferred-EoE probe exists; corrected in audit r51. Station ability + Spacecraft type gate the card, not the Effect."
+    },
+    {
+      "entry": "DoubleTargetPowerUntilEOT",
+      "card": "Mightform Harmonizer",
+      "claimed_missing_effect": "DoubleTargetPowerUntilEOT",
+      "aliases": ["DoubleTargetCreaturesPowerUEOT"],
+      "status": "closed",
+      "resolved_variant": "DoubleTargetCreaturesPowerUEOT",
+      "reclassified_to": "BLOCKED-FILTER/substrate (landfall Subject(IsLand) predicate + warp_cost)",
+      "closed_round": 31,
+      "note": "Effect shipped r31 (plan-invented name conflated the real DoubleTargetCreaturesPowerUEOT); r53 N2 fixed a real latent counter-omission bug in the shipped arm + added a real-EoE probe. Headline corrected r53; the round-54 re-walk reconciled the remaining self-contradictory locations (~line 80 vs 586/598/984/1048)."
+    },
+    {
+      "entry": "TwoMobileSubjects",
+      "card": "Monoist Circuit-Feeder",
+      "claimed_missing_effect": "TwoMobileSubjects",
+      "aliases": ["TwoSubjectPumpAndDebuffByArtifactCount"],
+      "status": "closed",
+      "resolved_variant": "TwoSubjectPumpAndDebuffByArtifactCount",
+      "reclassified_to": "PROBED (real-EoE cross-engine probe shipped r51)",
+      "closed_round": 51,
+      "note": "ROUND-54 NEWLY-FOUND STALE (beyond the known r51/r53 three). N2 r51 shipped Effect::TwoSubjectPumpAndDebuffByArtifactCount + bridge arm + a genuine real-EoE byte-equal probe (~14,727 decks). The round-19/round-34/§2.6 residue tables still listed it as BLOCKED-RUST-EFFECT — the round-52 count-only cron could not catch this (Rust variant count grew, it did not flag the per-entry residue claim)."
+    },
+    {
+      "entry": "DestroyNoncreatureThenAOEDamage",
+      "card": "Extinguisher Battleship",
+      "claimed_missing_effect": "DestroyNoncreatureThenAOEDamage",
+      "aliases": ["DestroyTargetNoncreaturePermanent"],
+      "status": "closed",
+      "resolved_variant": "DestroyTargetNoncreaturePermanent",
+      "reclassified_to": "BLOCKED-Station-subsystem (effect-half closed; card still Station/Spacecraft loader-gated)",
+      "closed_round": 52,
+      "note": "ROUND-54 NEWLY-FOUND STALE (beyond the known r51/r53 three). N2 r52 shipped Effect::DestroyTargetNoncreaturePermanent (corrected the r50/r51 plan's unsafe nonland≈noncreature approximation) composed via Sequence with the already-shipped DamageEachCreature; all three arms bridge-wired. The ETB effect is fully substrated on both engines; only the Station ability + Spacecraft type gate the full-card production-deck admit."
+    },
+    {
+      "entry": "CastFromExileWithCostHike",
+      "card": "Lightstall Inquisitor",
+      "claimed_missing_effect": "CastFromExileWithCostHike",
+      "aliases": ["CastFromExileWithCostHike"],
+      "status": "genuinely_missing",
+      "note": "No Rust arm. play-from-exile-with-cost-hike permission subsystem; multi-round."
+    },
+    {
+      "entry": "EachOpponentExilesFromHand",
+      "card": "Lightstall Inquisitor",
+      "claimed_missing_effect": "EachOpponentExilesFromHand",
+      "aliases": ["EachOpponentExilesFromHand"],
+      "status": "genuinely_missing",
+      "note": "No Rust arm (same card as CastFromExileWithCostHike — second arm of Lightstall Inquisitor)."
+    },
+    {
+      "entry": "SacUnlessYouTap",
+      "card": "Command Bridge",
+      "claimed_missing_effect": "SacUnlessYouTap",
+      "aliases": ["SacUnlessYouTap", "SacrificeSelfUnlessYouTapAPermanent"],
+      "status": "genuinely_missing",
+      "note": "No Rust arm. land-ETB trigger path + tap-a-permanent cost decision subsystem; multi-round."
+    },
+    {
+      "entry": "ReturnPermanentCardWithMVXorLessFromGY",
+      "card": "Astelli Reclaimer",
+      "claimed_missing_effect": "ReturnPermanentCardWithMVXorLessFromGY",
+      "aliases": ["ReturnPermanentCardWithMVXorLessFromGY", "ReturnNoncreatureNonlandFromGYWithMVLEManaSpent"],
+      "status": "genuinely_missing",
+      "note": "No mana-value-condition GY-return arm. X = mana spent to cast self -> cast-cost-paid ledger subsystem; multi-round."
+    },
+    {
+      "entry": "PumpAndGrantDiesReturnTrigger",
+      "card": "Perigee Beckoner",
+      "claimed_missing_effect": "PumpAndGrantDiesReturnTrigger",
+      "aliases": ["PumpAndGrantDiesReturnTrigger", "GrantDiesReturnTriggerAndPumpUntilEOT"],
+      "status": "genuinely_missing",
+      "note": "No nested-trigger-grant substrate (grants a NEW triggered ability onto the target); multi-round."
+    },
+    {
+      "entry": "TwoMobileSubjects-residual",
+      "card": "Monoist Circuit-Feeder (legacy duplicate row)",
+      "claimed_missing_effect": "TwoMobileSubjects",
+      "aliases": ["TwoSubjectPumpAndDebuffByArtifactCount"],
+      "status": "closed",
+      "resolved_variant": "TwoSubjectPumpAndDebuffByArtifactCount",
+      "reclassified_to": "PROBED",
+      "closed_round": 51,
+      "note": "Same closure as TwoMobileSubjects above; kept as a distinct cron regression row because the audit listed Monoist Circuit-Feeder in BOTH the round-19 residue table and §2.6."
+    },
+    {
+      "entry": "EnchantedDealsDamageThenPropagate",
+      "card": "Pain for All",
+      "claimed_missing_effect": "EnchantedDealsDamageThenPropagate",
+      "aliases": ["EnchantedDealsDamageThenPropagate"],
+      "status": "genuinely_missing",
+      "note": "No self-replicating damage substrate. Aura attached_to + damage-feedback subsystem; multi-round."
+    },
+    {
+      "entry": "ExileEachOpponentGYAndCreateToken",
+      "card": "Dauntless Scrapbot",
+      "claimed_missing_effect": "ExileEachOpponentGYAndCreateToken",
+      "aliases": ["ExileEachOpponentGYAndCreateToken", "ExileEachOpponentGraveyardThenCreateLander"],
+      "status": "genuinely_missing",
+      "note": "No exile-each-graveyard substrate + Lander token-registration loader-gated; multi-round."
+    },
+    {
+      "entry": "FallersFaithful-damage-this-turn",
+      "card": "Faller's Faithful",
+      "claimed_missing_effect": "DestroyTargetThenDrawIfUndamaged",
+      "aliases": ["DestroyTargetThenDrawIfUndamaged", "DestroyTargetIfNotDamagedThisTurnDraw"],
+      "status": "genuinely_missing",
+      "note": "No damage-this-turn ledger neither engine maintains for this; multi-round."
+    },
+    {
+      "entry": "AuraShapeFight-MeltstridersResolve",
+      "card": "Meltstrider's Resolve",
+      "claimed_missing_effect": "EnchantedCreatureFightsTarget",
+      "aliases": ["EnchantedCreatureFightsTarget"],
+      "status": "genuinely_missing",
+      "note": "Bare bilateral Fight shipped (FightTargetCreatureWithTargetCreature); the Aura-shape Effect::EnchantedCreatureFightsTarget (source fighter = Aura's attached_to) is still missing — Aura-attachment subsystem. See SEARCH_LIMITATIONS.md."
+    },
+    {
+      "entry": "RovingActuator-cast-copy-half",
+      "card": "Roving Actuator",
+      "claimed_missing_effect": "ExileGraveyardCastFromExile",
+      "aliases": ["ExileGraveyardCastFromExile", "VoidExileFromGYCopyAndCastForFree"],
+      "status": "genuinely_missing",
+      "note": "Void condition shipped (ConditionalIfVoid r29); the exile-then-cast-copy-for-free half is still new Rust — cast-from-exile-copy subsystem; multi-round."
+    },
+    {
+      "entry": "FamishedWorldsire-composition",
+      "card": "Famished Worldsire",
+      "claimed_missing_effect": "LookXAndPutLandsTapped",
+      "aliases": ["LookXAndPutLandsTapped", "LookTopXByPowerPutLandsTapped"],
+      "status": "genuinely_missing",
+      "note": "X-from-source-power + selective-put-lands-tapped composition; no Rust arm. PARTIAL: X-by-power plumbing pattern exists, the specific composition is new. (N2 r54 was instructed to live-verify this card — fold its finding at rebase.)"
+    },
+    {
+      "entry": "TractorBeam-composition",
+      "card": "Tractor Beam",
+      "claimed_missing_effect": "TapEnchantedYouControlAndDontUntap",
+      "aliases": ["TapEnchantedYouControlAndDontUntap", "TapEnchantedThenControlSwapNoUntap"],
+      "status": "genuinely_missing",
+      "note": "TapEnchantedPermanent shipped; control-swap + don't-untap composition is still new Rust — Aura-attachment subsystem; multi-round."
+    },
+    {
+      "entry": "PulsarSquadronAce-Spacecraft-submode",
+      "card": "Pulsar Squadron Ace",
+      "claimed_missing_effect": "ChoiceTriggerSpacecraftRevealOrCounter",
+      "aliases": ["ChoiceTriggerSpacecraftRevealOrCounter", "LookTop5RevealSpacecraftElseCounterOnSelf"],
+      "status": "genuinely_missing",
+      "note": "PARTIAL: LookAtTopNRevealOrCounter substrate exists + bridged, but the Spacecraft-reveal sub-mode parameter + bottom-random ordering is a genuine missing parameter. The claimed sub-mode Effect name does NOT resolve to a live variant — correctly stays BLOCKED-RUST-EFFECT (substrate-present partial). N2 r54 was instructed to live-verify this card — fold its finding at rebase."
+    },
+    {
+      "entry": "SeedshipAgrarian-landfall-composer",
+      "card": "Seedship Agrarian",
+      "claimed_missing_effect": "LandfallComplexEffectSeedship",
+      "aliases": ["LandfallComplexEffectSeedship"],
+      "status": "genuinely_missing",
+      "note": "§2.6 LandfallWithComplexEffect tail — needs a new effect arm (distinct from the Remnant-Elemental compose-existing case). landfall predicate is etb-subject-substrate's job; the effect arm is genuinely new Rust."
+    }
+  ]
+}

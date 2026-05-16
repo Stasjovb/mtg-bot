@@ -86,7 +86,7 @@ against `rust/src/cards.rs::Effect` on `c62935d2`:
 | `SacUnlessYouTap` (Command Bridge) | 1 | No Rust arm | **STILL BLOCKED.** |
 | `ReturnPermanentCardWithMVXorLessFromGY` (Astelli Reclaimer) | 1 | No mana-value-condition GY-return arm | **STILL BLOCKED.** |
 | `PumpAndGrantDiesReturnTrigger` (Perigee Beckoner) | 1 | No nested-trigger-grant substrate | **STILL BLOCKED.** |
-| `TwoMobileSubjects` (Monoist Circuit-Feeder) | 1 | No simultaneous-two-target substrate | **STILL BLOCKED.** |
+| `TwoMobileSubjects` (Monoist Circuit-Feeder) | 1 | ~~No simultaneous-two-target substrate~~ | ~~**STILL BLOCKED.**~~ **STALE — corrected round 54.** Closed round 51: `Effect::TwoSubjectPumpAndDebuffByArtifactCount` + bridge arm `two_subject_pump_and_debuff_by_artifact_count` + a genuine real-EoE byte-equal cross-engine probe (~14,727 decks). The plan-invented `TwoMobileSubjects` name resolves to the shipped variant. **NOT BLOCKED-RUST-EFFECT** → PROBED/CLOSED. (One of the 2 entries the round-54 full re-walk surfaced beyond the known r51/r53 three.) |
 | `EachOpponentExilesFromHand` (Lightstall Inquisitor — same card as above) | 1 | No Rust arm | **STILL BLOCKED.** |
 | `EnchantedDealsDamageThenPropagate` (Pain for All) | 1 | No self-replicating damage substrate | **STILL BLOCKED.** |
 | `ExileEachOpponentGYAndCreateToken` (Dauntless Scrapbot) | 1 | No exile-each-graveyard substrate | **STILL BLOCKED.** |
@@ -100,6 +100,23 @@ against `rust/src/cards.rs::Effect` on `c62935d2`:
 | `DestroyNoncreatureThenAOEDamage` (Extinguisher Battleship) | 1 | All components substrated (`DestroyTargetNonlandPermanent` at `cards.rs:635`, `DamageEachCreature` at `cards.rs:145`, `Sequence`); bridge arms wired (cross_engine.py:4158, 4262, 1184) | Reclassify to BLOCKED-BRIDGE-ARM (composition probe pending). |
 
 ### Updated BLOCKED-RUST-EFFECT residue (~21 cards)
+
+> **STALE — corrected round 54.** The verbatim residue list below is
+> the round-34 snapshot and is kept verbatim per the keep-verbatim
+> convention, but **3 of its entries have since had their Effect arm
+> shipped + bridged** and are NOT BLOCKED-RUST-EFFECT: `Monoist
+> Circuit-Feeder` (→ `TwoSubjectPumpAndDebuffByArtifactCount`, closed
+> round 51, real-EoE probe); `Mightform Harmonizer` (was already
+> closed round 31 as `DoubleTargetCreaturesPowerUEOT` — it never
+> belonged in the no-Rust-arm list; r53 fixed a latent bug + added a
+> probe); and the Extinguisher Battleship effect-half (this section
+> already reclassified Extinguisher to BLOCKED-BRIDGE-ARM in the
+> intro paragraph below — its `DestroyTargetNoncreaturePermanent` +
+> `DamageEachCreature` + `Sequence` arms all shipped + bridged round
+> 52, so it is effect-closed, Station-subsystem-gated). The **true
+> honest residue is ~13 distinct new-Rust-Effect asks / 13 distinct
+> cards** — see the round-54 full programmatic re-walk section + table
+> above and `docs/residue_worklist.json`.
 
 Subtracting the round-30-through-35 closures (~7 cards: 2 stun, 1
 double-power, 1 damage-by-artifact, 1 counters-per-other, 1
@@ -209,17 +226,29 @@ track. The cron remains the right intervention.
 >   Effect gap).
 >
 > Net: the carried ~17 BLOCKED-RUST-EFFECT names included these 2
-> mis-bucketed entries; the **true new-Rust-Effect residue is ~15
-> distinct asks, not ~17** — these 2 were never Rust-Effect-blocked,
-> so the count did not "shrink", the bucket was over-counted. This is
-> the **same staleness class the round-34 and round-49 refreshes
-> flagged** (audit headline frozen while substrate shipped underneath
-> it), and it strengthens the round-19 cron proposal (auto-diff the
-> Effect-variant inventory + bridge-arm inventory against the audit
-> headline + per-card buckets on every `main` merge). The headline
-> count line and the residue body below are corrected in place; the
-> per-card bucket rows for Mechanozoa / Warmaker Gunship are corrected
-> at their §round-19 residue-table and §2.6 locations.
+> mis-bucketed entries; the round-51 figure was **~15 distinct asks,
+> not ~17** — these 2 were never Rust-Effect-blocked, so the count did
+> not "shrink", the bucket was over-counted. This is the **same
+> staleness class the round-34 and round-49 refreshes flagged** (audit
+> headline frozen while substrate shipped underneath it), and it
+> strengthens the round-19 cron proposal.
+>
+> **STALE — corrected round 54: the round-51 "~15" was itself stale.**
+> The full programmatic re-walk (round-54 section above) found 2 more
+> stale entries — **Monoist Circuit-Feeder** (Effect closed round 51)
+> and **Extinguisher Battleship** effect-half (closed round 52) — both
+> still listed in the residue tables when this round-51 note was
+> written. The **true honest residue is ~13 distinct new-Rust-Effect
+> asks / 13 distinct cards** (round-51 −2 + round-54 −2 vs the carried
+> ~17). The headline count line and the residue body below are
+> corrected in place; the per-card bucket rows for Mechanozoa /
+> Warmaker Gunship / Mightform Harmonizer / Monoist Circuit-Feeder /
+> Extinguisher Battleship are corrected at their §round-19
+> residue-table and §2.6 locations. Round 54 also extended the cron
+> with a **per-entry residue check** (reads `docs/residue_worklist.json`)
+> so this sub-class — a residue entry naming an Effect that actually
+> exists — is now caught structurally, not by hand on the next
+> refresh.
 
 This section is the round-49 batch refresh covering rounds 35
 through 48 (the round-34 headline section above was flagged stale
@@ -240,7 +269,7 @@ kept verbatim below for cross-round narrative continuity.
 | --- | --- | --- | --- |
 | Bridge-arm effect `kind ==` literals in `_ta_dict_to_python_effect` | 76+ | **106 distinct** | +30 |
 | Rust `Effect::` enum variants (top-level) | (untracked) | **~104** | — |
-| BLOCKED-RUST-EFFECT residue (truly no-Rust-arm asks) | ~21 cards / ~14 distinct asks | **~15 distinct new-Rust-Effect asks** (round-51 corrected: was carried as ~17; Mechanozoa + Warmaker Gunship were never Rust-Effect-blocked — reclassified to BLOCKED-FILTER(warp) / BLOCKED-Station-subsystem) | −2 over-count (see round-51 note above) |
+| BLOCKED-RUST-EFFECT residue (truly no-Rust-arm asks) | ~21 cards / ~14 distinct asks | ~~**~15 distinct new-Rust-Effect asks** (round-51 corrected: was carried as ~17; Mechanozoa + Warmaker Gunship were never Rust-Effect-blocked)~~ **STALE — corrected round 54: the true honest count is ~13 distinct new-Rust-Effect asks / 13 distinct cards.** The round-51 "~15" was itself stale — Monoist Circuit-Feeder closed round 51 (`TwoSubjectPumpAndDebuffByArtifactCount`) and Extinguisher Battleship's effect-half closed round 52 (`DestroyTargetNoncreaturePermanent`+`DamageEachCreature`+`Sequence`); both were still listed in the residue tables. See the round-54 full programmatic re-walk section above for the reconciled per-entry worklist + `docs/residue_worklist.json`. | −4 over-count vs the carried ~17 (round-51 −2 + round-54 −2) |
 | `_SAFE_KEYWORDS` (production-deck bridge filter) | 11 | **12** (+`reach`, round 45) | +1 |
 | `_SAFE_TRIGGERS` triples | 3 (round-1 starter) | **15** | +12 |
 | `SEARCH_LIMITATIONS.md` active entries | 28 | **27** (−1, round-37 supertypes-proxy close) | −1 |
@@ -313,6 +342,113 @@ token-registration-loader-gated, not Rust-blocked. The campaign's
 center of gravity over rounds 35–48 moved from "drain the residue"
 to "complete the primitive matrix"; the audit's prior framing
 (residue is a shrinking queue) was the source of the staleness flags.
+
+> **STALE — corrected round 54.** The round-48 paragraph immediately
+> above asserts the round-34 residue list "remain unclosed — none
+> gained a matching Rust arm" and explicitly names `Monoist
+> Circuit-Feeder`, `Pulsar Squadron Ace`, `Famished Worldsire`, etc.
+> Round 51 closed **Monoist Circuit-Feeder** (`Effect::TwoSubjectPumpAndDebuffByArtifactCount`
+> + bridge + real-EoE byte-equal probe) and round 52 closed the
+> **Extinguisher Battleship** effect-half (`Effect::DestroyTargetNoncreaturePermanent`
+> + `Effect::DamageEachCreature` + `Sequence`, all bridge-wired). The
+> "none gained a matching Rust arm" claim is therefore stale for those
+> two entries (Mechanozoa/Warmaker/Mightform were the three already
+> flagged before round 54; Monoist + Extinguisher are the **two
+> additional stale entries the round-54 full programmatic re-walk
+> surfaced**). See the round-54 re-walk section directly below for the
+> reconciled per-entry worklist + the true honest headline count; the
+> round-48 prose is kept verbatim per the keep-verbatim convention.
+
+### Round-54: full programmatic BLOCKED-RUST-EFFECT residue re-walk + per-entry cron extension
+
+The round-52 cron (`scripts/check_audit_coverage_staleness.py`)
+structurally caught **count** drift (Rust-variant / bridge-arm /
+`_SAFE_*` totals vs the STALENESS-SENTINEL block) but, by
+construction, **could not catch a residue entry that names an Effect
+which actually exists** — it diffs inventory sizes, not per-entry
+residue claims. Rounds 51 and 53 hand-found 3 such confirmed-stale
+entries (Mechanozoa r51, Warmaker Gunship r51, Mightform Harmonizer
+r53). That is a *systemic* sub-class, and the audit was internally
+self-contradictory because of it (e.g. round-19 §2.6 line ~80 records
+Mightform's round-31 closure while lines ~586/598/984/1048 still say
+"no Rust arm").
+
+Round 54 did the systematic fix: a **full programmatic re-walk** of
+every entry currently classed BLOCKED-RUST-EFFECT in this doc,
+resolving each plan-invented/audit-named missing Effect against the
+*live* `rust/src/cards.rs::Effect` enum (via
+`measure_effect_coverage.collect_rust_effect_variants` — the same
+parser the cron + coverage doc use) **and** the live
+`_ta_dict_to_python_effect` bridge-arm inventory, with a
+plan-name→real-variant alias-resolution pass (e.g. the plan's
+`DoubleTargetPowerUntilEOT` resolves to the shipped
+`DoubleTargetCreaturesPowerUEOT`; `TwoMobileSubjects` →
+`TwoSubjectPumpAndDebuffByArtifactCount`;
+`DestroyNoncreatureThenAOEDamage` → `DestroyTargetNoncreaturePermanent`).
+The canonical machine-readable worklist this produced is
+`docs/residue_worklist.json`; the cron now reads it and FAILs if any
+`genuinely_missing` entry's claimed Effect actually resolves to a
+live + bridged variant (the per-entry staleness arm — Deliverable B).
+
+#### Re-walk summary table (entry → claimed-missing-Effect → live-status → new-classification)
+
+| Card | Claimed-missing Effect (plan name) | Live status | New classification |
+| --- | --- | --- | --- |
+| **Mechanozoa** | `TapTargetAndPutStunCounter` | **shipped-as `TapTargetOpponentPermanentAndStunIt` (round 30) + bridged** | BLOCKED-FILTER (warp_cost) — *corrected r51, re-confirmed r54* |
+| **Warmaker Gunship** | `DealDamageToAnyTargetEqualToArtifactCount` | **shipped-as `DealDamageToOpponentCreatureByArtifactCount` (round 32) + bridged** | BLOCKED-Station-subsystem — *corrected r51, re-confirmed r54* |
+| **Mightform Harmonizer** | `DoubleTargetPowerUntilEOT` | **shipped-as `DoubleTargetCreaturesPowerUEOT` (round 31) + bridged** (r53 fixed a latent counter bug + added a real probe) | BLOCKED-FILTER/substrate (landfall Subject(IsLand) + warp) — *headline corrected r53; **§round-19/§2.6 locations reconciled r54*** |
+| **Monoist Circuit-Feeder** | `TwoMobileSubjects` | **shipped-as `TwoSubjectPumpAndDebuffByArtifactCount` (round 51) + bridged + real-EoE byte-equal probe** | PROBED/CLOSED — **🆕 NEWLY found stale by the round-54 re-walk** (beyond the known 3) |
+| **Extinguisher Battleship** | `DestroyNoncreatureThenAOEDamage` | **effect-half shipped round 52** (`DestroyTargetNoncreaturePermanent` + `DamageEachCreature` + `Sequence`, all bridge-wired) | BLOCKED-Station-subsystem (effect closed; card Station/Spacecraft loader-gated) — **🆕 NEWLY found stale by the round-54 re-walk** (beyond the known 3) |
+| Lightstall Inquisitor (cast-from-exile) | `CastFromExileWithCostHike` | genuinely-missing | BLOCKED-RUST-EFFECT (stays) |
+| Lightstall Inquisitor (each-opp-exiles) | `EachOpponentExilesFromHand` | genuinely-missing | BLOCKED-RUST-EFFECT (stays) |
+| Command Bridge | `SacUnlessYouTap` | genuinely-missing | BLOCKED-RUST-EFFECT (stays) |
+| Astelli Reclaimer | `ReturnPermanentCardWithMVXorLessFromGY` | genuinely-missing | BLOCKED-RUST-EFFECT (stays) |
+| Perigee Beckoner | `PumpAndGrantDiesReturnTrigger` | genuinely-missing | BLOCKED-RUST-EFFECT (stays) |
+| Pain for All | `EnchantedDealsDamageThenPropagate` | genuinely-missing | BLOCKED-RUST-EFFECT (stays) |
+| Dauntless Scrapbot | `ExileEachOpponentGYAndCreateToken` | genuinely-missing | BLOCKED-RUST-EFFECT (stays) |
+| Faller's Faithful | `DestroyTargetThenDrawIfUndamaged` | genuinely-missing | BLOCKED-RUST-EFFECT (stays) |
+| Meltstrider's Resolve | `EnchantedCreatureFightsTarget` (Aura) | genuinely-missing (bare `Fight` shipped; Aura-shape not) | BLOCKED-RUST-EFFECT (stays) |
+| Roving Actuator | `ExileGraveyardCastFromExile` (cast-copy half) | genuinely-missing (Void cond shipped; cast-copy half not) | BLOCKED-RUST-EFFECT (stays) |
+| Famished Worldsire | `LookXAndPutLandsTapped` | genuinely-missing (X-by-power plumbing exists; composition not) | BLOCKED-RUST-EFFECT (stays) |
+| Tractor Beam | `TapEnchantedYouControlAndDontUntap` | genuinely-missing (`TapEnchantedPermanent` shipped; control-swap+no-untap not) | BLOCKED-RUST-EFFECT (stays) |
+| Pulsar Squadron Ace | `ChoiceTrigger` Spacecraft sub-mode | genuinely-missing (substrate `LookAtTopNRevealOrCounter` exists + bridged; the Spacecraft-reveal sub-mode param is a real missing arm — partial) | BLOCKED-RUST-EFFECT (stays, substrate-present partial) |
+| Seedship Agrarian | `LandfallComplexEffectSeedship` (§2.6 tail) | genuinely-missing (distinct from Remnant-Elemental's compose-existing case) | BLOCKED-RUST-EFFECT (stays) |
+
+#### True honest BLOCKED-RUST-EFFECT headline count
+
+| | OLD (carried) | CORRECTED (round-54 re-walk) |
+| --- | --- | --- |
+| Carried BLOCKED-RUST-EFFECT residue names | ~17 (round-34 / round-19 / §2.6) | — |
+| Round-51 correction (Mechanozoa + Warmaker out — Effect already shipped) | → ~15 | (already in the round-51 note) |
+| **Round-54 re-walk: − Monoist Circuit-Feeder (closed r51) − Extinguisher Battleship effect-half (closed r52)** | | **→ ~13 distinct new-Rust-Effect asks / 13 distinct cards** |
+
+The **true honest BLOCKED-RUST-EFFECT residue is ~13 distinct
+new-Rust-Effect asks** (13 distinct cards; Lightstall Inquisitor
+carries 2 of the arms): Lightstall Inquisitor, Command Bridge, Astelli
+Reclaimer, Perigee Beckoner, Pain for All, Dauntless Scrapbot,
+Faller's Faithful, Meltstrider's Resolve (Aura-shape Fight), Roving
+Actuator (cast-copy half), Famished Worldsire (composition), Tractor
+Beam (composition), Pulsar Squadron Ace (Spacecraft sub-mode),
+Seedship Agrarian (landfall composer). The headline was **provably
+inflated**: the round-52 "~15" was itself stale (Monoist closed r51,
+Extinguisher effect closed r52) — the round-52 count-only cron grew
+the Rust-variant total when those landed but, having no per-entry
+residue check, never flagged that the residue *tables* still listed
+them. Deliverable B closes that gap structurally.
+
+The re-walk found **0 false-flag entries** the other direction: every
+`genuinely_missing` row was re-verified to NOT resolve to any live
+Rust variant — the remaining ~13 are genuinely Rust-blocked, not more
+hidden stale carry-overs. This is an accurate worklist, not a
+count-minimization.
+
+Per-location reconciliation done this round: the Mightform Harmonizer
+self-contradiction (round-19 §2.6 closure note vs the "no Rust arm"
+rows at the round-19 residue table / §2.6 / the recurring-arm table)
+is resolved in place below with `~~strike~~ **STALE — corrected round
+54.**` markers mirroring the existing round-51/53 format; Monoist
+Circuit-Feeder and Extinguisher Battleship get the same treatment at
+their round-34-residue / round-19-residue / §2.6 locations.
 
 ### X-from-count primitive matrix — current 6-substrate × 6-denominator state
 
@@ -586,7 +722,7 @@ These are not as cleanly reclassifiable, but the audit's
 | `OptionalSacrificeArtifactForCounterAndDraw` (Selfcraft Mechan — 1 card) | `Effect::OptionalSacArtifactForEffect { inner_effect }` at `cards.rs:1371` (parser at `cards.rs:3668`) | Wrapper substrated; inner counter+draw composes via existing `Effect::Sequence` over `PutPlusOneCounterOnSelf` + `DrawCards` (both already substrated + bridge-wired). **One bridge arm slice for the wrapper** unblocks Selfcraft Mechan. Move to BLOCKED-BRIDGE-ARM. |
 | `ChoiceTrigger` / Pulsar Squadron Ace (1 card) | `Effect::LookAtTopNRevealOrCounter` at `cards.rs:2152` (parser at `cards.rs:4272`) | Rust arm exists with parser. Pulsar Squadron Ace's specific revelation-of-Spacecraft variant likely needs a sub-mode parameter, but the substrate dispatch + reveal-or-counter shape is already there. **Move to BLOCKED-BRIDGE-ARM** with sub-mode follow-up risk. |
 | `OptionalCreateTwoTokensOrSelfPump` (Terrapact Intimidator — 1 card) | `Effect::MayDo { effect, prompt }` at `cards.rs:1579` (parser at `cards.rs:3742`) | Wrapper substrated; "create two tokens" sub-mode needs `CreateToken` parameterization for the specific token type. Bridge missing both `may_do` arm AND the create-token parameterization. **Halfway-substrated** — one bridge slice for `may_do` plus per-token parameterization. |
-| `LandfallWithComplexEffect` (Glacier Godmaw, Mightform Harmonizer, Genemorph Imago, Seedship Agrarian, Remnant Elemental — 5 cards) | Predicate substrate (Subject family) ALREADY SHIPPED via `feature/etb-subject-substrate`; **Glacier Godmaw landfall lander-token PROBED on main** (`test_cross_engine_real_eoe_glacier_godmaw_etb_create_lander_artifact_token_leviathan_carrier_parity`) | Per-card effect arms differ: Mightform Harmonizer needs new `Effect::DoubleTargetPowerUntilEOT` (true new Rust). Genemorph Imago landfall = compose existing `SetBasePTUntilEOT` (round 18) with landfall predicate (bridge follow-up). Remnant Elemental = compose existing `PutPlusOneCounterOnSelf` + Subject predicate (bridge composition). Seedship Agrarian needs a new arm. **2 of 5 are bridge-only**, 1 PROBED, 2 still need true new Rust. |
+| `LandfallWithComplexEffect` (Glacier Godmaw, Mightform Harmonizer, Genemorph Imago, Seedship Agrarian, Remnant Elemental — 5 cards) | Predicate substrate (Subject family) ALREADY SHIPPED via `feature/etb-subject-substrate`; **Glacier Godmaw landfall lander-token PROBED on main** (`test_cross_engine_real_eoe_glacier_godmaw_etb_create_lander_artifact_token_leviathan_carrier_parity`) | Per-card effect arms differ: ~~Mightform Harmonizer needs new `Effect::DoubleTargetPowerUntilEOT` (true new Rust)~~ **STALE — corrected round 54: Mightform Harmonizer's effect arm shipped round 31 as `Effect::DoubleTargetCreaturesPowerUEOT` + bridged (r53 bug-fixed + probed); the `DoubleTargetPowerUntilEOT` name was plan-invented and conflated the real shipped variant. NOT true new Rust — Mightform is gated only by the landfall `Subject(IsLand)` predicate + `warp_cost`.** Genemorph Imago landfall = compose existing `SetBasePTUntilEOT` (round 18) with landfall predicate (bridge follow-up). Remnant Elemental = compose existing `PutPlusOneCounterOnSelf` + Subject predicate (bridge composition). Seedship Agrarian needs a new arm. **The only genuine new-Rust-arm ask in this bucket is Seedship Agrarian; the other 4 are predicate/bridge-composition.** |
 | `Roving Actuator` void-style exile-then-cast-copy | `Effect::ConditionalIfVoid { then_effect, else_effect }` at `cards.rs:2045` (parser at `cards.rs:4203`) | Void condition substrated. Exile-then-cast-copy still needs new Rust. **Partial unblock** (the trigger shell can lift; the cast-copy effect is the residual gap). |
 | `Famished Worldsire` look-X-and-put-lands-tapped | `Effect::DealDamageEqualToSourcePowerAnyTarget` at `cards.rs:1269` shows the X-from-source-power pattern exists; `Effect::SearchLibraryForBasicLandTapped { count }` at `cards.rs:217` exists for the lands-tapped half | Specific "look-X-then-put-lands-tapped" composition needs new Rust, but the X-plumbing pattern is unblocked. **Partial unblock.** |
 | `Tractor Beam` TapEnchantedYouControlAndDontUntap | `Effect::TapEnchantedPermanent` at `cards.rs:1476` (parser at `cards.rs:3686`) | Tap-enchanted substrated. Control-swap + don't-untap composition still needs new Rust. **Partial unblock.** |
@@ -598,13 +734,13 @@ These are not as cleanly reclassifiable, but the audit's
 | §2.6 entry | Status |
 | --- | --- |
 | `TapTargetAndPutStunCounter` (Mechanozoa, Cryogen Relic activated half — 2 cards) | ~~No StunCounter substrate in Rust. Confirmed BLOCKED-RUST-EFFECT.~~ **STALE — corrected round 51.** Round-30 shipped `Effect::TapTargetOpponentPermanentAndStunIt` (`cards.rs:2468`) + bridge arm (`cross_engine.py:3168` → `tap.py:217`). **Mechanozoa is NOT BLOCKED-RUST-EFFECT** — its exact ETB is fully substrated + bridged on both engines (round-51 N3 real-printing cross-engine probe is byte-equal). Mechanozoa's only residual blocker is `warp_cost` gating the production-deck loader admit (§2-declined cost-mechanic) → **BLOCKED-FILTER (warp_cost)**, not an Effect gap. (Cryogen Relic's *activated-half* stun shape `put_stun_counter_on_tapped_creature` also shipped round-30 + bridged; its remaining gap is the activated-ability cross-engine harness, not the Effect.) |
-| `DoubleTargetPowerUntilEOT` (Mightform Harmonizer — 1 card) | ~~No Rust arm. Confirmed.~~ **STALE — corrected round 53 (3rd confirmed-stale entry after Mechanozoa/Warmaker r51).** The arm shipped round 31 as `Effect::DoubleTargetCreaturesPowerUEOT` (`cards.rs:886`, `90bc39ca`) + bridge arm `double_target_creatures_power_ueot` (`cross_engine.py:5951`) — there was never a separate `DoubleTargetPowerUntilEOT` ask; the plan-invented name conflated it. **Mightform Harmonizer is NOT BLOCKED-RUST-EFFECT.** Round-53 N2 additionally found + fixed a real latent §2 bug in the shipped round-31 arm (Rust doubled *base* power via `read_battlefield_creature_power`; Python doubles *effective* power incl. +1/+1 counters — disagreed on a countered creature) and added a genuine real-EoE landfall+counter cross-engine probe (byte-equal post-fix; see `SEARCH_LIMITATIONS.md` round-53 entry). Residual blockers are the landfall `Predicate::Subject(IsLand)` substrate + `warp_cost` loader gate → **BLOCKED-FILTER/substrate**, not an Effect gap. The §round-19 / §2.6 "needs new Rust" framing for Mightform Harmonizer is correspondingly stale (full residue re-walk pending — round-54). |
+| `DoubleTargetPowerUntilEOT` (Mightform Harmonizer — 1 card) | ~~No Rust arm. Confirmed.~~ **STALE — corrected round 53 (3rd confirmed-stale entry after Mechanozoa/Warmaker r51).** The arm shipped round 31 as `Effect::DoubleTargetCreaturesPowerUEOT` (`cards.rs:886`, `90bc39ca`) + bridge arm `double_target_creatures_power_ueot` (`cross_engine.py:5951`) — there was never a separate `DoubleTargetPowerUntilEOT` ask; the plan-invented name conflated it. **Mightform Harmonizer is NOT BLOCKED-RUST-EFFECT.** Round-53 N2 additionally found + fixed a real latent §2 bug in the shipped round-31 arm (Rust doubled *base* power via `read_battlefield_creature_power`; Python doubles *effective* power incl. +1/+1 counters — disagreed on a countered creature) and added a genuine real-EoE landfall+counter cross-engine probe (byte-equal post-fix; see `SEARCH_LIMITATIONS.md` round-53 entry). Residual blockers are the landfall `Predicate::Subject(IsLand)` substrate + `warp_cost` loader gate → **BLOCKED-FILTER/substrate**, not an Effect gap. The §round-19 / §2.6 "needs new Rust" framing for Mightform Harmonizer is correspondingly stale — **the round-54 full programmatic re-walk reconciled all such locations** (this row, §2.6 line `DoubleTargetPowerUntilEOT`, the §2.6 LandfallWithComplexEffect row, the round-34 closures table line ~80 which already recorded the round-31 closure) so the doc is no longer internally self-contradictory on Mightform. |
 | `CastFromExileWithCostHike` (Lightstall Inquisitor — 1 card) | No Rust arm. Confirmed. |
 | `SacUnlessYouTap` (Command Bridge — 1 card) | No Rust arm. Confirmed (first land-ETB in audit). |
 | `ReturnPermanentCardWithMVXorLessFromGY` (Astelli Reclaimer — 1 card) | No mana-value-condition GY-return arm in Rust. Confirmed. |
 | `DealDamageToAnyTargetEqualToArtifactCount` (Warmaker Gunship — 1 card) | ~~No X-from-artifact-count plumbing. ... Confirmed.~~ **STALE — corrected round 51.** Round-32 shipped `Effect::DealDamageToOpponentCreatureByArtifactCount` + bridge arm (`cross_engine.py:6326`); a round-32 deferred-EoE end-to-end probe (`test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_parity`) already exists. **Warmaker Gunship is NOT BLOCKED-RUST-EFFECT** — its ETB Effect arm is fully substrated + bridged. Its residual blocker is the `Station` ability + `Spacecraft` artifact type gating the production-deck loader admit → **BLOCKED-Station-subsystem**, not an Effect gap. |
 | `PumpAndGrantDiesReturnTrigger` (Perigee Beckoner — 1 card) | No nested-trigger-grant substrate. Confirmed. |
-| `TwoMobileSubjects` (Monoist Circuit-Feeder — 1 card) | No simultaneous-two-target substrate. Confirmed. |
+| `TwoMobileSubjects` (Monoist Circuit-Feeder — 1 card) | ~~No simultaneous-two-target substrate. Confirmed.~~ **STALE — corrected round 54 (4th confirmed-stale entry after Mechanozoa/Warmaker r51, Mightform r53).** Closed round 51: `Effect::TwoSubjectPumpAndDebuffByArtifactCount` (`cards.rs`) + bridge arm `two_subject_pump_and_debuff_by_artifact_count` + a genuine real-EoE byte-equal cross-engine probe (~14,727 decks; the real printing parses to the agent-driven `PairedTargetPumpDebuffUEOT`, the deterministic sibling rides the dedicated variant). The plan-invented `TwoMobileSubjects` name resolves to the shipped variant. **Monoist Circuit-Feeder is NOT BLOCKED-RUST-EFFECT** → PROBED/CLOSED. |
 | `EachOpponentExilesFromHand` (Lightstall Inquisitor — 1 card; same card as cast-from-exile entry above) | No Rust arm. Confirmed. |
 | `EnchantedDealsDamageThenPropagate` (Pain for All — 1 card) | No self-replicating damage substrate. Confirmed. |
 | `ExileEachOpponentGYAndCreateToken` (Dauntless Scrapbot — 1 card) | No exile-each-graveyard substrate. Confirmed. |
@@ -981,10 +1117,10 @@ Order-of-magnitude effects that recur across many cards:
 | `ExileTargetUntilSourceLeaves` | 5 (All-Fates Stalker, Banishing Light, Hardlight Containment, Pinnacle Starcage, Seam Rip) | Rust has `ExileTargetCreatureUntilSourceLeaves`; the Banishing-Light shape (any nonland permanent) and Pinnacle-Starcage shape (AOE-conditional) are siblings |
 | `AttachSelfToTargetCreature` / `EquipToTargetCreatureYouControl` | 4 (Auxiliary Boosters, Illvoi Light Jammer, Meltstrider's Gear, Squire's Lightblade) | Rust has the unit-variant arms; bridge does not wire them |
 | ~~`TapTargetAndPutStunCounter` (stun-counter substrate)~~ **CLOSED round-30 / corrected round-51** | ~~2 (Mechanozoa, Cryogen Relic activated half)~~ → **0 Effect-blocked** | ~~no stun-counter shape in Rust today~~ **STALE.** `Effect::TapTargetOpponentPermanentAndStunIt` (Mechanozoa) + `put_stun_counter_on_tapped_creature` (Cryogen Relic activated half) both shipped round-30 + bridged. Mechanozoa → **BLOCKED-FILTER (warp_cost)**, not Effect-blocked (round-51 real-printing CE probe byte-equal). NOT a BLOCKED-RUST-EFFECT row. |
-| `LandfallWithComplexEffect` (landfall predicate + non-trivial effect) | 4 (Glacier Godmaw, Mightform Harmonizer, Genemorph Imago, Seedship Agrarian, Remnant Elemental) | predicate is in etb-subject-substrate; effect arms (mass-pump + vigilance/haste, double-power-EOT, set-base-PT, +1/+1 counter on self via landfall) need new Rust arms |
+| `LandfallWithComplexEffect` (landfall predicate + non-trivial effect) | 4 (Glacier Godmaw, Mightform Harmonizer, Genemorph Imago, Seedship Agrarian, Remnant Elemental) | predicate is in etb-subject-substrate; effect arms (mass-pump + vigilance/haste, ~~double-power-EOT~~, set-base-PT, +1/+1 counter on self via landfall) need new Rust arms. **STALE — corrected round 54:** the `double-power-EOT` effect arm is NOT missing — Mightform Harmonizer's effect shipped round 31 as `Effect::DoubleTargetCreaturesPowerUEOT` + bridged (r53 bug-fixed + probed); its only residual gates are the landfall `Subject(IsLand)` predicate + `warp_cost`. `Genemorph Imago`'s `SetBasePTUntilEOT` arm also already exists (round 18, `RUST_AHEAD_OF_POOL`); `Remnant Elemental` composes the already-shipped `PutPlusOneCounterOnSelf` + the landfall predicate (bridge composition, not a new Effect). The genuine new-Rust-arm in this bucket is **`Seedship Agrarian`'s landfall effect arm** only. |
 | `SetBasePTUntilEOT` | 1 (Genemorph Imago) | Rust has `SetBasePTUntilEOT` arm; no bridge or trigger-driven wiring |
 | `Fight` (creature-vs-creature) | 1 (Meltstrider's Resolve) | bare bilateral form shipped (`Effect::FightTargetCreatureWithTargetCreature` + bridge + `FightTargetCreatureWithTargetCreature` Python sibling); Aura-shape (Meltstrider's Resolve specifically — source fighter is the Aura's `attached_to` enchanted creature) is the deferred follow-up — needs new `Effect::EnchantedCreatureFightsTarget` Rust variant routing through `attached_to` end-to-end. See SEARCH_LIMITATIONS.md "Fight" entry |
-| `DoubleTargetPowerUntilEOT` | 1 (Mightform Harmonizer) | no Rust arm |
+| ~~`DoubleTargetPowerUntilEOT`~~ **CLOSED round-31 / corrected round 54** | ~~1 (Mightform Harmonizer)~~ → **0 Effect-blocked** | ~~no Rust arm~~ **STALE.** Shipped round 31 as `Effect::DoubleTargetCreaturesPowerUEOT` (`cards.rs:886`) + bridge arm `double_target_creatures_power_ueot` — the plan-invented `DoubleTargetPowerUntilEOT` name conflated the real shipped variant. r53 fixed a latent effective-vs-base power bug + added a real-EoE probe. Mightform Harmonizer → **BLOCKED-FILTER/substrate** (landfall `Subject(IsLand)` + `warp_cost`), NOT a BLOCKED-RUST-EFFECT row. |
 | `OptionalDiscardThenDraw` (Melded Moxite-shape `if_you_do`) | 1 (Melded Moxite — also counted in §2.4) | Rust has `IfYouDo`; just needs bridge arm |
 | `OptionalSacrificeArtifactForCounterAndDraw` (Selfcraft Mechan) | 1 (Selfcraft Mechan) | nested optional-sac + counter + draw; partly in Rust |
 | `ExileGraveyardCastFromExile` (Roving Actuator void-style) | 1 (Roving Actuator) | needs `Void` trigger condition + exile-then-cast-copy substrate |
@@ -995,11 +1131,11 @@ Order-of-magnitude effects that recur across many cards:
 | `ChoiceTrigger` (Pulsar Squadron Ace look-5-reveal-Spacecraft) | 1 (Pulsar Squadron Ace) | revelation + put-into-hand-OR-counter-on-self path |
 | ~~`DealDamageToAnyTargetEqualToArtifactCount` (Warmaker Gunship)~~ **CLOSED round-32 / corrected round-51** | ~~1 (Warmaker Gunship)~~ → **0 Effect-blocked** | ~~X-from-artifact-count needs dynamic-X plumbing~~ **STALE.** `Effect::DealDamageToOpponentCreatureByArtifactCount` shipped round-32 + bridged + deferred-EoE probe exists. Warmaker Gunship → **BLOCKED-Station-subsystem** (Station ability + Spacecraft type), not Effect-blocked. NOT a BLOCKED-RUST-EFFECT row. |
 | `PumpAndGrantDiesReturnTrigger` (Perigee Beckoner) | 1 (Perigee Beckoner) | grants a *new* DIES trigger on the target — needs nested-trigger substrate |
-| `TwoMobileSubjects` (Monoist Circuit-Feeder) | 1 (Monoist Circuit-Feeder) | targets one of yours and one of theirs simultaneously |
+| ~~`TwoMobileSubjects` (Monoist Circuit-Feeder)~~ **CLOSED round-51 / corrected round 54** | ~~1 (Monoist Circuit-Feeder)~~ → **0 Effect-blocked** | ~~targets one of yours and one of theirs simultaneously~~ **STALE.** Shipped round 51 as `Effect::TwoSubjectPumpAndDebuffByArtifactCount` + bridge arm `two_subject_pump_and_debuff_by_artifact_count` + a genuine real-EoE byte-equal cross-engine probe (~14,727 decks). The plan-invented `TwoMobileSubjects` name resolves to the shipped variant. Monoist Circuit-Feeder → **PROBED/CLOSED**, NOT a BLOCKED-RUST-EFFECT row. (One of the 2 entries the round-54 full re-walk surfaced beyond the known r51/r53 three.) |
 | `EachOpponentExilesFromHand` (Lightstall Inquisitor) | 1 | (also above) |
 | `EnchantedDealsDamageThenPropagate` (Pain for All) | 1 (Pain for All) | self-replicating damage shape; no Rust arm |
 | `TapEnchantedYouControlAndDontUntap` (Tractor Beam) | 1 (Tractor Beam) | tap + control-swap + don't-untap composition |
-| `DestroyNoncreatureThenAOEDamage` (Extinguisher Battleship) | 1 (Extinguisher Battleship) | sequence with mass-damage component |
+| ~~`DestroyNoncreatureThenAOEDamage` (Extinguisher Battleship)~~ **EFFECT CLOSED round-52 / corrected round 54** | ~~1 (Extinguisher Battleship)~~ → **0 Effect-blocked** | ~~sequence with mass-damage component~~ **STALE.** Effect-half shipped round 52: `Effect::DestroyTargetNoncreaturePermanent` (precise new variant — round-52 N2 corrected the r50/r51 plan's unsafe nonland≈noncreature approximation) composed via `Sequence` with the already-shipped `Effect::DamageEachCreature`; all three arms bridge-wired (`destroy_target_noncreature_permanent`, `damage_each_creature`, `sequence`). The ETB effect is fully substrated on both engines. Residual blocker is the `Station` ability + `Spacecraft` artifact type gating the full-card production-deck admit → **BLOCKED-Station-subsystem**, NOT a BLOCKED-RUST-EFFECT row. (The 2nd of the 2 entries the round-54 full re-walk surfaced beyond the known r51/r53 three.) |
 | `OptionalCreateTwoTokensOrSelfPump` (Terrapact Intimidator) | 1 (Terrapact Intimidator) | opponent-decision substrate |
 | `SacExceptIfTapped` (Command Bridge sibling, dup of above) | (Command Bridge) | (counted once) |
 | `ExileEachOpponentGYAndCreateToken` (Dauntless Scrapbot) | 1 (Dauntless Scrapbot) | exile-each-graveyard substrate + create-token sequence |
@@ -1048,7 +1184,7 @@ branch), a tiny bridge extension, or true new substrate.
 | 22 | sequence composer bridge arm | 0 (subsumed) | Already implied by Fell Gravship + Uthros Scanship; the per-arm gap is what gates them. |
 | 23 | multi-event dispatcher (Enters OR Attacks) | 2 | New substrate. Syr Vondam, Haliya Ascendant Cadet. |
 | 24 | Not(IsToken) / SubjectIsToken predicate | 1 | New substrate. Weapons Manufacturing. |
-| 25 | various truly-new Rust Effect arms (per-card-unique, see §2.6) | ~30 | True new code. Spread across Astelli Reclaimer, Astrolithic / Spacecraft destroy-noncreature-then-AOE, Pain for All, Tractor Beam, Pulsar Squadron Ace, Lightstall Inquisitor, Famished Worldsire, Roving Actuator, Warmaker Gunship, Perigee Beckoner, Monoist Circuit-Feeder, Faller's Faithful, Command Bridge, Terrapact Intimidator, Selfcraft Mechan, Extinguisher Battleship, Dauntless Scrapbot, Genemorph Imago, Mightform Harmonizer, Remnant Elemental, Icecave Crasher, Seedship Agrarian (effect half), plus tail. |
+| 25 | various truly-new Rust Effect arms (per-card-unique, see §2.6) | ~~~30~~ **~13 (round-54 corrected)** | True new code. Round-19 list (kept verbatim): Astelli Reclaimer, Astrolithic / Spacecraft destroy-noncreature-then-AOE, Pain for All, Tractor Beam, Pulsar Squadron Ace, Lightstall Inquisitor, Famished Worldsire, Roving Actuator, Warmaker Gunship, Perigee Beckoner, Monoist Circuit-Feeder, Faller's Faithful, Command Bridge, Terrapact Intimidator, Selfcraft Mechan, Extinguisher Battleship, Dauntless Scrapbot, Genemorph Imago, Mightform Harmonizer, Remnant Elemental, Icecave Crasher, Seedship Agrarian (effect half), plus tail. **STALE — corrected round 54:** the round-54 full programmatic re-walk found the true honest count is **~13 distinct new-Rust-Effect asks**. Already effect-shipped + bridged (NOT in the ~13): Warmaker Gunship (r32), Monoist Circuit-Feeder (r51), Extinguisher Battleship effect-half (r52), Mightform Harmonizer (r31), Genemorph Imago `SetBasePTUntilEOT` (r18), Selfcraft Mechan (`OptionalSacArtifactForEffect` bridged), Terrapact Intimidator (`MayDo` bridged). Remnant Elemental = bridge-composition (not new Effect). The honest ~13: Lightstall Inquisitor, Command Bridge, Astelli Reclaimer, Perigee Beckoner, Pain for All, Dauntless Scrapbot, Faller's Faithful, Meltstrider's Resolve (Aura Fight), Roving Actuator (cast-copy half), Famished Worldsire (composition), Tractor Beam (composition), Pulsar Squadron Ace (Spacecraft sub-mode), Seedship Agrarian (landfall composer). See the round-54 re-walk section + `docs/residue_worklist.json`. |
 
 **Headline takeaway from §3:** the three highest-yield gaps —
 create_token bridge (13), Predicate::Subject substrate (9), DIES
