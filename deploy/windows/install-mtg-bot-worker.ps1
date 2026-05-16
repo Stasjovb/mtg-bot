@@ -55,13 +55,26 @@ if (-not (Test-Path $RepoRoot)) {
     throw "Repo root not found at $RepoRoot"
 }
 
+function Quote-Arg($s) {
+    # Wrap any value containing whitespace in double-quotes. The
+    # ``-Argument`` parameter of ``New-ScheduledTaskAction`` is a
+    # single concatenated command line, so a path that contains
+    # spaces (e.g. ``C:\Users\Gregg Keithley\...``) splits into
+    # multiple positional args inside the spawned python and
+    # argparse errors out. The whole installer ran a few minutes
+    # ago on a path with spaces and the SYSTEM-launched process
+    # crashed instantly with no listener bound.
+    if ("$s" -match "\s") { return '"' + $s + '"' }
+    return "$s"
+}
+
 $Arguments = @(
     "-m", "mtg_bot.worker_daemon",
     "--host", $TailnetIP,
     "--port", "5198",
     "--n-workers", "$NWorkers",
-    "--deck-pool-path", $DeckPoolPath,
-    "--weights-cache-root", $WeightsCacheRoot
+    "--deck-pool-path", (Quote-Arg $DeckPoolPath),
+    "--weights-cache-root", (Quote-Arg $WeightsCacheRoot)
 ) -join " "
 
 $Action = New-ScheduledTaskAction `

@@ -46,6 +46,17 @@ if (-not (Test-Path $RepoRoot)) {
     throw "Repo root not found at $RepoRoot"
 }
 
+function Quote-Arg($s) {
+    # Wrap any value containing whitespace in double-quotes. The
+    # ``-Argument`` parameter of ``New-ScheduledTaskAction`` is a
+    # single concatenated command line, so a path that contains
+    # spaces (e.g. ``C:\Users\Gregg Keithley\...``) splits into
+    # multiple positional args inside the spawned python and
+    # argparse errors out.
+    if ("$s" -match "\s") { return '"' + $s + '"' }
+    return "$s"
+}
+
 # The v2 endpoints (queue.db, /v2/stage/*, heartbeat poller) auto-
 # activate when --queue-db-path defaults to
 # <progress_dir>/coordinator_state/queue.db. We pass --repo-root
@@ -56,7 +67,7 @@ $Arguments = @(
     "-m", "mtg_bot.cli",
     "serve",
     "--port", "$Port",
-    "--repo-root", "`"$RepoRoot`""
+    "--repo-root", (Quote-Arg $RepoRoot)
 ) -join " "
 
 $Action = New-ScheduledTaskAction `
