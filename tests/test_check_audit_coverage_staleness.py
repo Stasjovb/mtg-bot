@@ -422,13 +422,20 @@ def test_compute_residue_staleness_closed_entry_regression_guard():
 
 def test_parse_residue_worklist_real_file_is_valid():
     """The committed ``docs/residue_worklist.json`` parses + validates
-    + has both statuses (structural-regression guard, like
-    ``test_live_inventory_parses_real_tree``)."""
+    + carries all three round-56 statuses (structural-regression
+    guard, like ``test_live_inventory_parses_real_tree``)."""
     mod = _load_tool()
     entries = mod.parse_residue_worklist()
     assert len(entries) >= 15
     statuses = {e["status"] for e in entries}
-    assert statuses == {"genuinely_missing", "closed"}
+    # Round-56 added the third `blocked_non_effect` status; the
+    # committed file now carries all three (Seedship Agrarian is the
+    # blocked_non_effect entry).
+    assert statuses == {
+        "genuinely_missing",
+        "blocked_non_effect",
+        "closed",
+    }
     # The round-51/53 confirmed-stale trio + the round-54 pair must
     # all be recorded as closed (not genuinely_missing).
     closed_cards = {
@@ -914,6 +921,275 @@ def test_run_against_real_tree_still_in_sync_with_round55(capsys):
     out = capsys.readouterr().out
     assert rc == 0, f"expected in-sync exit 0; report:\n{out}"
     assert "in sync" in out
+
+
+# ----------------- round-56 blocked_non_effect status invariant
+#
+# These pin the round-56 third residue status. Its cron invariant is
+# the INVERSE of genuinely_missing: instead of asserting a claimed
+# Effect stays absent, it asserts every name in the entry's
+# `shipped_variants` IS a live Rust Effect:: variant (a silent
+# regression to actually-missing → residue_blocked_non_effect_regressed
+# — the card quietly became a genuine-Effect ask again) AND requires
+# the entry record its specific `non_effect_blocker`
+# (missing/empty → residue_blocked_non_effect_underspecified). It does
+# NOT require bridged=True (the whole point — the card is gated
+# precisely because some non-Effect path is unbridged) and does NOT
+# consult verified_absent_at_commit (a genuine-absence stamp is
+# meaningless when the Effects are present). Same additive
+# never-blocking post-commit-hook contract as the round-54/55 rows
+# (the hook tests below are status-agnostic and still cover it).
+# Covered: shipped-Effect-present is NOT flagged (even unbridged),
+# the regression IS flagged, the underspecified path, the
+# parser-accepts-the-status + validates-its-fields error paths, the
+# real committed worklist carries exactly the round-56 reclassification,
+# and the round-54 lexical / round-55 structural arms leave
+# blocked_non_effect entries alone.
+
+
+def test_blocked_non_effect_shipped_variants_present_not_flagged():
+    """The happy path: a ``blocked_non_effect`` entry whose every
+    ``shipped_variants`` name IS a live Rust variant is NOT flagged —
+    and it is NOT flagged even though it is UNBRIDGED (the invariant
+    deliberately does not require bridged=True; the card is gated
+    precisely because some non-Effect path is unbridged)."""
+    mod = _load_tool()
+    entry = {
+        "entry": "SeedshipAgrarian-landfall-composer",
+        "card": "Seedship Agrarian",
+        "status": "blocked_non_effect",
+        "claimed_missing_effect": "LandfallComplexEffectSeedship",
+        "aliases": ["LandfallComplexEffectSeedship"],
+        "shipped_variants": ["CreateToken", "PutPlusOneCounterOnSelf"],
+        "non_effect_blocker": (
+            "Event.BECOMES_TAPPED unbridged + Lander token-registration"
+        ),
+    }
+    # Both shipped variants live; NO bridge-arm set passed at all —
+    # the function does not consult bridging by design.
+    rust = {"CreateToken", "PutPlusOneCounterOnSelf", "Unrelated"}
+    drifts = mod.compute_blocked_non_effect_staleness([entry], rust)
+    assert drifts == [], (
+        f"a blocked_non_effect entry whose shipped Effects are all "
+        f"live must NOT be flagged (and bridging is irrelevant); got "
+        f"{[d.key for d in drifts]}"
+    )
+
+
+def test_blocked_non_effect_regressed_shipped_variant_is_flagged():
+    """THE round-56 proof: a ``blocked_non_effect`` entry whose
+    declared-shipped Effect silently regressed to actually-missing
+    (renamed/removed from the live enum) is flagged
+    ``residue_blocked_non_effect_regressed`` — the card quietly became
+    a genuine-Rust-Effect ask again and that must NOT pass silently."""
+    mod = _load_tool()
+    entry = {
+        "entry": "SeedshipAgrarian-landfall-composer",
+        "card": "Seedship Agrarian",
+        "status": "blocked_non_effect",
+        "claimed_missing_effect": "LandfallComplexEffectSeedship",
+        "aliases": ["LandfallComplexEffectSeedship"],
+        "shipped_variants": ["CreateToken", "PutPlusOneCounterOnSelf"],
+        "non_effect_blocker": "Event.BECOMES_TAPPED unbridged",
+    }
+    # PutPlusOneCounterOnSelf is GONE from the live enum → regression.
+    rust = {"CreateToken"}
+    drifts = mod.compute_blocked_non_effect_staleness([entry], rust)
+    assert len(drifts) == 1
+    d = drifts[0]
+    assert d.key == (
+        "residue_blocked_non_effect_regressed::"
+        "SeedshipAgrarian-landfall-composer"
+    )
+    assert "Seedship Agrarian" in d.label
+    assert "PutPlusOneCounterOnSelf" in d.hint
+    assert "no longer resolve" in d.hint
+    # Renders as a plain REGRESSED line, not the numeric form.
+    assert d.line().startswith("  - REGRESSED:")
+    assert "doc-claimed" not in d.line()
+
+
+def test_blocked_non_effect_underspecified_blocker_is_flagged():
+    """A ``blocked_non_effect`` entry with no (or empty)
+    ``non_effect_blocker`` yields a never-blocking
+    ``residue_blocked_non_effect_underspecified`` row (the defensive
+    in-function mirror — the parser also raises loudly on the
+    committed file; see the parser test below)."""
+    mod = _load_tool()
+    base = {
+        "entry": "x",
+        "card": "Some Blocked Card",
+        "status": "blocked_non_effect",
+        "claimed_missing_effect": "Whatever",
+        "aliases": ["Whatever"],
+        "shipped_variants": ["CreateToken"],
+    }
+    rust = {"CreateToken"}
+    # Missing entirely.
+    d1 = mod.compute_blocked_non_effect_staleness([base], rust)
+    assert [d.key for d in d1] == [
+        "residue_blocked_non_effect_underspecified::x"
+    ]
+    assert "no non-empty `non_effect_blocker`" in d1[0].hint
+    assert d1[0].line().startswith("  - NEEDS RE-VERIFY:")
+    # Present but blank.
+    blank = dict(base, non_effect_blocker="   ")
+    d2 = mod.compute_blocked_non_effect_staleness([blank], rust)
+    assert [d.key for d in d2] == [
+        "residue_blocked_non_effect_underspecified::x"
+    ]
+
+
+def test_blocked_non_effect_other_statuses_out_of_scope():
+    """``compute_blocked_non_effect_staleness`` touches ONLY
+    blocked_non_effect entries — a genuinely_missing / closed entry
+    in the same batch is ignored (the round-54/55 arms own those)."""
+    mod = _load_tool()
+    entries = [
+        {
+            "entry": "gm",
+            "card": "GM Card",
+            "status": "genuinely_missing",
+            "claimed_missing_effect": "AbsentEffect",
+            "aliases": ["AbsentEffect"],
+            "verified_absent_at_commit": "abc1234",
+        },
+        {
+            "entry": "cl",
+            "card": "Closed Card",
+            "status": "closed",
+            "claimed_missing_effect": "X",
+            "aliases": ["XVariant"],
+            "resolved_variant": "XVariant",
+        },
+    ]
+    assert (
+        mod.compute_blocked_non_effect_staleness(entries, {"XVariant"})
+        == []
+    )
+
+
+def test_lexical_and_structural_arms_skip_blocked_non_effect():
+    """A ``blocked_non_effect`` entry must NOT be mishandled by the
+    round-54 lexical arm (it would otherwise fall into the old
+    ``else: closed`` branch and be wrongly closure-regression-flagged)
+    nor by the round-55 structural arm (genuinely_missing-only)."""
+    mod = _load_tool()
+    entry = {
+        "entry": "bne",
+        "card": "Seedship Agrarian",
+        "status": "blocked_non_effect",
+        "claimed_missing_effect": "LandfallComplexEffectSeedship",
+        "aliases": ["LandfallComplexEffectSeedship"],
+        "shipped_variants": ["CreateToken"],
+        "non_effect_blocker": "BECOMES_TAPPED unbridged",
+    }
+    # Round-54 lexical arm: no genuinely_missing/closed handling fires.
+    assert (
+        mod.compute_residue_staleness([entry], {"CreateToken"}, set())
+        == []
+    )
+    # Round-55 structural arm: status != genuinely_missing → skipped.
+    assert (
+        mod.compute_structural_residue_staleness(
+            [entry], {"CreateToken"}, {}, git_available=False
+        )
+        == []
+    )
+
+
+def test_parse_residue_worklist_accepts_blocked_non_effect(tmp_path):
+    """The parser accepts the new status and enforces its two required
+    fields (non-empty ``shipped_variants`` list + non-empty
+    ``non_effect_blocker`` string) loudly — same broken-input-is-loud
+    contract as the closed ``resolved_variant`` check."""
+    mod = _load_tool()
+    good = tmp_path / "wl.json"
+    good.write_text(
+        '{"entries": [{"entry": "x", "status": "blocked_non_effect", '
+        '"aliases": ["A"], "shipped_variants": ["CreateToken"], '
+        '"non_effect_blocker": "BECOMES_TAPPED unbridged"}]}',
+        encoding="utf-8",
+    )
+    parsed = mod.parse_residue_worklist(good)
+    assert parsed[0]["status"] == "blocked_non_effect"
+
+    miss_sv = tmp_path / "wl2.json"
+    miss_sv.write_text(
+        '{"entries": [{"entry": "x", "status": "blocked_non_effect", '
+        '"aliases": ["A"], "non_effect_blocker": "z"}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="shipped_variants"):
+        mod.parse_residue_worklist(miss_sv)
+
+    empty_sv = tmp_path / "wl3.json"
+    empty_sv.write_text(
+        '{"entries": [{"entry": "x", "status": "blocked_non_effect", '
+        '"aliases": ["A"], "shipped_variants": [], '
+        '"non_effect_blocker": "z"}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="shipped_variants"):
+        mod.parse_residue_worklist(empty_sv)
+
+    miss_blk = tmp_path / "wl4.json"
+    miss_blk.write_text(
+        '{"entries": [{"entry": "x", "status": "blocked_non_effect", '
+        '"aliases": ["A"], "shipped_variants": ["CreateToken"]}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="non_effect_blocker"):
+        mod.parse_residue_worklist(miss_blk)
+
+
+def test_real_worklist_has_round56_reclassification():
+    """Structural-regression guard on the committed worklist: it
+    carries exactly the round-56 reclassification — Seedship Agrarian
+    is ``blocked_non_effect`` with both shipped Effects + a blocker
+    string, and its declared shipped variants ARE live Rust variants
+    (so the cron stays exit-0 in-sync on the real tree). It is the
+    ONLY blocked_non_effect entry; every genuinely_missing entry is a
+    TRUE new-Rust-Effect ask (none resolve to a live variant)."""
+    mod = _load_tool()
+    entries = mod.parse_residue_worklist()
+    statuses = {e["status"] for e in entries}
+    assert statuses == {
+        "genuinely_missing",
+        "blocked_non_effect",
+        "closed",
+    }
+    bne = [
+        e for e in entries if e["status"] == "blocked_non_effect"
+    ]
+    assert len(bne) == 1
+    seed = bne[0]
+    assert seed["card"] == "Seedship Agrarian"
+    assert seed["shipped_variants"] == [
+        "CreateToken",
+        "PutPlusOneCounterOnSelf",
+    ]
+    assert seed["non_effect_blocker"].strip()
+    # `verified_absent_at_commit` is meaningless for blocked_non_effect
+    # (the Effects are present) — it must NOT carry one.
+    assert "verified_absent_at_commit" not in seed
+    # The declared shipped Effects ARE live Rust variants → the round-56
+    # invariant holds on the real tree (no regression row).
+    rust = mod.collect_rust_variant_set()
+    assert mod.compute_blocked_non_effect_staleness(entries, rust) == []
+    # The honest "how far from parity" count: every genuinely_missing
+    # entry is a TRUE new-Rust-Effect ask (none lexically resolve to a
+    # live variant — re-pinned against the REAL tree).
+    bridge = mod.collect_bridge_arm_set()
+    for e in entries:
+        if e["status"] != "genuinely_missing":
+            continue
+        r = mod.resolve_residue_entry(e, rust, bridge)
+        assert r.resolved_variant is None, (
+            f"{e['entry']} is classed genuinely_missing but resolves "
+            f"to live Effect::{r.resolved_variant} — it is NOT a TRUE "
+            f"new-Rust-Effect ask"
+        )
 
 
 # ------------------------------------------------------ drift + report

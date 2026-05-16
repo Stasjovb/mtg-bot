@@ -6,10 +6,10 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **83 of 228 Python Effect classes covered (36.4%)** — by distinct-class count.
-- **545 of 690 per-card emissions covered (79.0%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **84 of 228 Python Effect classes covered (36.8%)** — by distinct-class count.
+- **546 of 690 per-card emissions covered (79.1%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
 - **109 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
-- **WARNING: 1 Rust variant(s) with no Python counterpart**: `Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped` -> `FamishedWorldsireLookTopXByPowerPutLandsTapped`. This indicates bridge drift — either Python emits the class under a different name, or the Rust variant is unused. Audit `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` in `scripts/measure_effect_coverage.py`.
+- **0 Rust variants without a Python counterpart** — the bridge is in sync with the Python vocabulary.
 - **17 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `DealDamageToOpponentCreatureByCardsInGraveyard`, `DealDamageToOpponentCreatureByCreaturesYouControl`, `DealDamageToOpponentCreatureByLandsControlled`, `DealDamageToOpponentCreatureByLifeTotal`, `EachOpponentLosesLifeEqualToArtifactCount`, `EachOpponentLosesLifeEqualToYourLifeTotal`, `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves`, `FightTargetCreatureWithTargetCreature`, `GainLifeEqualToArtifactCount`, `GainLifeEqualToYourLifeTotal`, `GrantKeywordsToTargetCreatureUntilEOT`, `PumpCreaturesOpponentsControlUntilCasterNextTurn`, `ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield`, `ReturnEnchantmentOrCreatureFromYourGraveyardToHand`, `ScryN`, `SetBasePTUntilEOT`, `TwoSubjectPumpAndDebuffByArtifactCount`. These have no pool card exercising them today and are NOT counted as orphans.
 
 ## Coverage by frequency tier
@@ -43,7 +43,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency 1 (161 singletons)
 
-- Covered by Rust: **16 / 161** (9.9%)
+- Covered by Rust: **17 / 161** (10.6%)
 - The long tail is dominated by bespoke per-card classes; porting these to Rust before the generic vocabulary fills out would be poor return on investment.
 
 ## Rust variants and their Python counterparts
@@ -138,7 +138,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 86 | `Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves` | `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves` | 0 |
 | 87 | `Effect::MayDo` | `MayDo` | 4 |
 | 88 | `Effect::LookTopNPutOneInHandRestToGraveyard` | `LookTopNPutOneInHandRestToGraveyard` | 1 |
-| 89 | `Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped` | `FamishedWorldsireLookTopXByPowerPutLandsTapped` | 0 |
+| 89 | `Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped` | `FamishedWorldsireETBEffect` | 1 |
 | 90 | `Effect::ChooseOneMode` | `ModalChooseOne` | 13 |
 | 91 | `Effect::IfYouDo` | `IfYouDo` | 4 |
 | 92 | `Effect::EachOpponentMillsCards` | `EachOpponentMillsCards` | 1 |

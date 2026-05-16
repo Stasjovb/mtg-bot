@@ -164,6 +164,28 @@ RUST_TO_PYTHON_OVERRIDES: dict[str, str] = {
     "CreateTokenTapped": "CreateToken",
     "SurveilXEqualToArtifactCount": "Surveil",
     "MillTargetPlayerEqualToYourLifeTotal": "MillTargetPlayer",
+    # --- Round-56 N2 fold: Famished Worldsire override.
+    #
+    # Round-54 N2 shipped Effect::FamishedWorldsireLookTopXByPowerPut
+    # LandsTapped (cards.rs:5320/7437) + a wired bridge arm
+    # (cross_engine.py:7870 — the bridge pin passes the cron's
+    # bridged-arm gate, so this is NOT real bridge drift). But the
+    # 1:1 identity rule mapped the variant to a same-named Python
+    # class that does NOT exist: the REAL Famished Worldsire printing
+    # parses to the bespoke ``FamishedWorldsireETBEffect``
+    # (``effects/bespoke.py`` — verified to exist + be pool-walked at
+    # round-56 refresh time, in-pool freq 1, the Famished Worldsire
+    # card itself). So the coverage doc emitted a false
+    # "1 Rust variant with no Python counterpart" WARNING. Mapping to
+    # the real in-pool class is the CORRECT relationship (the bridge
+    # genuinely round-trips this Effect through ``FamishedWorldsireETB
+    # Effect``), NOT a suppression — exactly the round-52 N3
+    # matrix-variant override-fold class (same-named class absent →
+    # override to the real class; do NOT allowlist via
+    # RUST_AHEAD_OF_POOL, which is for variants whose same-named class
+    # exists but has 0 in-pool consumers — the opposite case).
+    "FamishedWorldsireLookTopXByPowerPutLandsTapped":
+        "FamishedWorldsireETBEffect",
 }
 
 # Rust variants that have NO direct Python counterpart in the current
