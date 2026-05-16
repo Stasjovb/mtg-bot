@@ -68,6 +68,73 @@ This module is that check. It:
    (robust acronym-aware snake_case so e.g. ``DoubleTargetCreaturesPowerUEOT``
    → bridge ``double_target_creatures_power_ueot``).
 
+5. **Structural (non-lexical) anti-staleness hardening (round-55).**
+   The round-54 alias resolver in (4) is purely *lexical*: it only
+   fires when one of an entry's curated ``aliases`` is *literally* a
+   live Rust variant. Round-54 exposed its gap on Pulsar Squadron Ace
+   — the Effect ``LookAtTopNRevealOrCounter`` + ``"spacecraft"``
+   filter + bridge had shipped round 28/29 (the Rust doc-comment at
+   ``rust/src/cards.rs`` literally names "Pulsar-Squadron-Ace"), yet
+   the entry's plan-name ``ChoiceTriggerSpacecraftRevealOrCounter``
+   did *not* lexically alias-resolve to ``LookAtTopNRevealOrCounter``,
+   so BOTH the re-walk's "0 false-flags" pass AND the new per-entry
+   cron missed it; the orchestrator caught it by hand. A guard
+   defeatable by a non-lexically-matching plan-name is not a
+   structural guarantee. Round-55 closes that with two additive,
+   never-blocking signals (same hook contract — the report just gains
+   rows; the hook still ignores the exit code):
+
+   * **``verified_absent_at_commit`` + a re-verification cadence.**
+     Every ``genuinely_missing`` entry must carry a
+     ``verified_absent_at_commit`` git SHA — the commit at which a
+     human/agent actually re-verified (live-enum + bridge + the
+     name-in-bridge-arm check below) that the card's effect is
+     genuinely absent. A missing field is itself a staleness signal
+     (``residue_unverified``). The **cadence rule**: an entry needs
+     re-verification if *any commit since its
+     ``verified_absent_at_commit`` touched
+     ``rust/src/cards.rs`` or ``src/mtg_bot/parity/cross_engine.py``*
+     — those are the *only* two files whose changes can ship/bridge
+     an Effect and thereby turn a genuinely-missing residue stale
+     (exactly the Pulsar mechanism). That is the precise, minimal
+     trigger: a stamp older than the last cards.rs / cross_engine.py
+     touch can no longer be trusted, so the cron emits a
+     ``residue_needs_reverify`` row. When git history is unavailable
+     (a source tarball / a CI checkout with no ``rust/src/cards.rs``
+     ancestry) the cadence check soft-skips — git-history *absence*
+     is a known non-signal, not a staleness signal, so it must never
+     produce a false re-verify (the broken-input-is-loud philosophy
+     applies to the worklist/sentinel, NOT to optional git history).
+
+   * **Non-lexical name-in-bridge-arm cross-check.** Independent of
+     the curated ``aliases``, the card's *printed name* is scanned
+     against the live bridge-arm blocks inside
+     ``_ta_dict_to_python_effect`` (each ``if kind == "..."`` block,
+     same scope/comment rule as ``count_bridge_arms`` — comments are
+     KEPT here on purpose: a wired arm's doc-comment naming the card
+     is the very signal, cf. Pulsar's
+     ``look_at_top_n_reveal_or_counter`` arm naming "Pulsar Squadron
+     Ace"). If the card name appears in an arm whose ``kind``
+     resolves (acronym-aware snake_case) to a *live Rust ``Effect::``
+     variant* — i.e. a fully-wired end-to-end effect path exists,
+     named for that card — then either: (a) that arm's ``kind`` also
+     matches one of the entry's own ``aliases`` → the entry's own
+     data proves it should have resolved → hard ``residue_stale``;
+     or (b) no alias matches (the *exact pre-r54 Pulsar shape*) → a
+     ``residue_suspect_needs_reverify`` row demanding a hand re-walk.
+     The (b) branch is what makes Pulsar-shaped staleness structurally
+     un-silenceable: a wired arm naming the card surfaces it even
+     when the plan-name never lexically matched the variant. It does
+     *not* false-FAIL genuinely-absent cards whose name happens to
+     appear in an *unrelated* card's-other-ability arm (Command
+     Bridge in ``add_mana_to_pool``; Meltstrider's Resolve in the
+     bare-bilateral ``fight_target_creature_with_target_creature``
+     arm) — those legitimately surface as never-blocking
+     *suspect/re-verify* prompts, which is correct: a human DID have
+     to re-walk them, and the cron's contract is "Pulsar-shaped
+     staleness cannot pass *silently*", not "auto-classify". A
+     re-verify row is not silent.
+
 Standalone use::
 
     PYTHONPATH=src \\
@@ -417,6 +484,389 @@ def compute_residue_staleness(
     return drifts
 
 
+# ---------------------------------------- round-55 structural anti-staleness
+#
+# The round-54 resolver above is purely *lexical* (an alias must
+# literally BE a live variant). Pulsar Squadron Ace defeated it: the
+# Effect shipped r28/29 but the plan-name never lexically matched the
+# variant, so a count-blind AND alias-blind gap let a stale entry pass
+# both the re-walk and the cron. These two additive signals close that
+# — both never-blocking (same hook contract; they only add report
+# rows + flip the standalone/CI exit, exactly like the round-54 rows).
+
+CARDS_RS = REPO_ROOT / "rust" / "src" / "cards.rs"
+# The two files whose changes can ship/bridge an Effect and thereby
+# turn a `genuinely_missing` residue stale — i.e. the EXACT Pulsar
+# mechanism (Effect arm in cards.rs + bridge arm in cross_engine.py).
+# A `verified_absent_at_commit` older than the last touch of EITHER
+# can no longer be trusted. Paths are repo-root-relative POSIX (git's
+# pathspec form, stable across OS).
+_REVERIFY_TRIGGER_PATHS = (
+    "rust/src/cards.rs",
+    "src/mtg_bot/parity/cross_engine.py",
+)
+
+
+def _git(*args: str) -> str | None:
+    """Run ``git`` in the repo and return stripped stdout, or ``None``
+    if git is unavailable / the command fails / there is no history
+    (a source tarball or a CI checkout with no ancestry). Git-history
+    *absence* is a known non-signal — it must never manufacture a
+    false re-verify — so this swallows every failure to ``None`` and
+    the caller soft-skips. (Contrast the worklist / sentinel parsers,
+    which raise loudly: a broken worklist IS a staleness signal;
+    missing optional git history is NOT.)"""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", *args],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip()
+
+
+def commits_touching_trigger_paths_since(sha: str) -> int | None:
+    """Number of commits AFTER ``sha`` (exclusive, up to ``HEAD``)
+    that touched ``rust/src/cards.rs`` or
+    ``src/mtg_bot/parity/cross_engine.py`` — the cadence trigger.
+
+    Returns ``None`` (caller soft-skips, never a false re-verify)
+    when git or the history for ``sha`` is unavailable: an unknown
+    SHA, a shallow / tarball checkout, or no git at all. ``0`` means
+    the stamp is still fresh (no relevant code moved since); ``>0``
+    means it must be re-verified.
+    """
+    if not sha or not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
+        # Not a plausible SHA — let the schema check (which requires
+        # the field be present + SHA-shaped) own that error; here we
+        # just decline to compute a cadence on garbage.
+        return None
+    # `sha..HEAD` is empty (rc 0, no output) when sha == HEAD or HEAD
+    # is an ancestor of sha; non-empty when commits exist after sha.
+    # `--` + the two pathspecs scopes it to the trigger files only.
+    out = _git(
+        "rev-list",
+        "--count",
+        f"{sha}..HEAD",
+        "--",
+        *_REVERIFY_TRIGGER_PATHS,
+    )
+    if out is None:
+        return None
+    try:
+        return int(out)
+    except ValueError:
+        return None
+
+
+def _card_name_variants(name: str) -> set[str]:
+    """Surface forms a printed card name can take in a Rust
+    doc-comment / bridge-arm comment. Rust doc-comments hyphenate
+    multi-word card names (``Pulsar-Squadron-Ace``); apostrophes are
+    sometimes dropped (``Meltstriders Resolve``). Keep this small and
+    deterministic — over-broad variants would manufacture false
+    name hits."""
+    base = name.strip()
+    out = {
+        base,
+        base.replace("'", ""),
+        base.replace("'", "’"),  # curly apostrophe
+        base.replace(" ", "-"),
+        base.replace(" ", "-").replace("'", ""),
+    }
+    return {v for v in out if v}
+
+
+def split_bridge_arm_blocks(
+    cross_engine_path: Path = CROSS_ENGINE,
+) -> dict[str, str]:
+    """Return ``{kind: arm_block_text}`` for every ``if/elif kind ==
+    "..."`` arm inside ``_ta_dict_to_python_effect``. An arm block is
+    the text from one ``kind ==`` guard to the next (or the
+    PHASE5 sentinel). Comments are KEPT — unlike the count path —
+    because a wired arm's doc-comment NAMING the card is precisely the
+    non-lexical signal (Pulsar's ``look_at_top_n_reveal_or_counter``
+    arm names "Pulsar Squadron Ace" only in its comment). Same scoping
+    (def → sentinel) as ``count_bridge_arms`` so the two never
+    disagree on which arms exist."""
+    text = cross_engine_path.read_text(encoding="utf-8")
+    start = text.index("def _ta_dict_to_python_effect")
+    end = text.index(
+        "# === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===", start
+    )
+    body = text[start:end]
+    guard = re.compile(r'(?:el)?if kind == "([a-z0-9_]+)"\s*:', re.M)
+    hits = list(guard.finditer(body))
+    blocks: dict[str, str] = {}
+    for i, m in enumerate(hits):
+        s = m.start()
+        e = hits[i + 1].start() if i + 1 < len(hits) else len(body)
+        # Several arms can share a kind via separate guards; append so
+        # the name scan sees all of them.
+        blocks[m.group(1)] = blocks.get(m.group(1), "") + body[s:e]
+    return blocks
+
+
+@dataclass(frozen=True)
+class NonLexicalSignal:
+    """One non-lexical name-in-bridge-arm hit for a residue card."""
+
+    arm_kind: str  # the bridge arm whose block names the card
+    variant: str  # the live Rust Effect:: variant that arm wires
+    alias_match: bool  # arm_kind == snake_case(one of the entry aliases)
+
+
+def find_name_in_wired_bridge_arms(
+    entry: dict,
+    rust_variants: set[str],
+    arm_blocks: dict[str, str],
+) -> list[NonLexicalSignal]:
+    """The non-lexical Pulsar catch. Scan the card's printed-name
+    surface forms against EVERY live bridge-arm block; for each arm
+    whose ``kind`` (acronym-aware snake_case) corresponds to a LIVE
+    Rust ``Effect::`` variant, a fully-wired end-to-end effect path
+    NAMED for that card exists — independent of whatever
+    (possibly-wrong) ``aliases`` the entry curated. This is exactly
+    the pre-r54 Pulsar shape the lexical resolver was blind to.
+
+    Returns ALL such hits (sorted by arm kind for determinism), each
+    flagged with whether the arm also lexically matches an alias
+    (sharpens hard-stale vs needs-reverify). Returning every hit —
+    not just the first — is what keeps the per-arm ``name_in_arm_ack``
+    suppression honest: acking one legitimately-unrelated arm cannot
+    mask a *second*, genuinely-stale arm that also names the card.
+    Pure text; no engine import, no ``.pyd``."""
+    card = entry.get("card", "")
+    if not card or card == "?":
+        return []
+    name_forms = _card_name_variants(card)
+    # snake_case of every live variant → its expected bridge kind, so
+    # we can map an arm's kind back to a live variant deterministically.
+    variant_by_kind = {_camel_to_snake(v): v for v in rust_variants}
+    alias_kinds = {
+        _camel_to_snake(a) for a in entry.get("aliases", [])
+    }
+    hits: list[NonLexicalSignal] = []
+    for kind in sorted(arm_blocks):
+        block = arm_blocks[kind]
+        if not any(form in block for form in name_forms):
+            continue
+        variant = variant_by_kind.get(kind)
+        if variant is None:
+            # The arm names the card but its kind doesn't correspond
+            # to a live variant (a synthetic/composed arm) — not a
+            # shipped-Effect signal, skip.
+            continue
+        hits.append(
+            NonLexicalSignal(
+                arm_kind=kind,
+                variant=variant,
+                alias_match=kind in alias_kinds,
+            )
+        )
+    return hits
+
+
+def compute_structural_residue_staleness(
+    entries: list[dict],
+    rust_variants: set[str],
+    arm_blocks: dict[str, str],
+    *,
+    git_available: bool = True,
+) -> list["Drift"]:
+    """Round-55 structural hardening. For every ``genuinely_missing``
+    entry emit, as applicable:
+
+    * ``residue_unverified`` — no (or non-SHA-shaped)
+      ``verified_absent_at_commit``: the entry was never structurally
+      re-verified, so its genuine-absence is an unbacked claim.
+    * ``residue_needs_reverify`` — the stamp is stale by the cadence
+      rule (≥1 commit since it touched cards.rs / cross_engine.py).
+      Soft-skipped when git history is unavailable (never a false
+      re-verify).
+    * ``residue_stale`` — the card name appears in a LIVE-WIRED bridge
+      arm whose ``kind`` ALSO matches one of the entry's own aliases:
+      the entry's own data proves it should have lexically resolved →
+      hard stale (the round-54 row, reached non-lexically).
+    * ``residue_suspect_needs_reverify`` — the card name appears in a
+      live-wired bridge arm but NO alias matches (the exact pre-r54
+      Pulsar shape): a never-blocking demand for a hand re-walk,
+      UNLESS the entry carries ``name_in_arm_ack`` listing that exact
+      arm kind (an audited "this is a different ability of the same
+      card, hand-re-walked, genuinely absent" acknowledgment). The
+      ack is per-arm: a *second*, un-acked arm naming the card — or
+      the acked arm's kind changing — still surfaces the row, so the
+      ack can never silently mask a future real Pulsar.
+
+    ``closed`` entries are out of scope here — the round-54
+    ``compute_residue_staleness`` already regression-guards them.
+    """
+    drifts: list[Drift] = []
+    for e in entries:
+        if e.get("status") != "genuinely_missing":
+            continue
+        entry = e.get("entry", "?")
+        card = e.get("card", "?")
+
+        # --- non-lexical name-in-wired-bridge-arm cross-check --------
+        # Audited per-arm acks: arms a human re-walked + confirmed are
+        # a DIFFERENT ability of the same card (genuinely absent).
+        # Normalize to a set of arm kinds; tolerate str or list.
+        raw_ack = e.get("name_in_arm_ack")
+        if isinstance(raw_ack, str):
+            acked_arms = {raw_ack}
+        elif isinstance(raw_ack, (list, tuple)):
+            acked_arms = {str(a) for a in raw_ack}
+        else:
+            acked_arms = set()
+        for sig in find_name_in_wired_bridge_arms(
+            e, rust_variants, arm_blocks
+        ):
+            if sig.alias_match:
+                # Hard stale — the entry's OWN aliases prove the
+                # effect shipped + bridged for this card. NEVER
+                # suppressible by an ack (an ack is for unrelated
+                # arms only; a true shipped effect must hard-fail).
+                drifts.append(
+                    Drift(
+                        key=f"residue_stale::{entry}",
+                        label=(
+                            f"BLOCKED-RUST-EFFECT residue entry "
+                            f"'{card}' ({entry})"
+                        ),
+                        claimed=0,
+                        actual=1,
+                        hint=(
+                            f"its printed name appears in the LIVE, "
+                            f"wired bridge arm `kind == "
+                            f'"{sig.arm_kind}"` (→ live '
+                            f"`Effect::{sig.variant}`), and that arm's "
+                            f"kind matches one of the entry's own "
+                            f"aliases — the effect is shipped + bridged "
+                            f"end-to-end for this card. Reclassify it "
+                            f"out of BLOCKED-RUST-EFFECT in "
+                            f"docs/EOE_PROBE_READINESS_AUDIT.md and flip "
+                            f"its status to 'closed' in "
+                            f"docs/residue_worklist.json. (Non-lexical "
+                            f"catch — the round-55 hardening of the "
+                            f"round-54 lexical resolver.) NOT "
+                            f"ack-suppressible."
+                        ),
+                    )
+                )
+                continue
+            if sig.arm_kind in acked_arms:
+                # Audited: this exact arm was hand-re-walked and is a
+                # different ability of the same card — genuinely
+                # absent. Suppressed (the ack is the audit trail).
+                continue
+            drifts.append(
+                Drift(
+                    key=f"residue_suspect_needs_reverify::{entry}",
+                    label=(
+                        f"BLOCKED-RUST-EFFECT residue entry "
+                        f"'{card}' ({entry}) is Pulsar-shaped "
+                        f"SUSPECT"
+                    ),
+                    claimed=0,
+                    actual=1,
+                    hint=(
+                        f"its printed name appears in the LIVE, "
+                        f"wired bridge arm `kind == "
+                        f'"{sig.arm_kind}"` (→ live '
+                        f"`Effect::{sig.variant}`) but NONE of the "
+                        f"entry's curated aliases lexically resolve "
+                        f"to it — this is the exact shape that let "
+                        f"Pulsar Squadron Ace pass the round-54 "
+                        f"resolver + re-walk silently. Hand-re-walk "
+                        f"this card. If the named arm is a DIFFERENT "
+                        f"ability of the same card (e.g. a mana "
+                        f"ability or a bare-shape sibling) and the "
+                        f"claimed effect IS genuinely missing, record "
+                        f'`"name_in_arm_ack": "{sig.arm_kind}"` on '
+                        f"this entry to acknowledge it (per-arm; a "
+                        f"new un-acked arm still surfaces). If the "
+                        f"claimed effect really did ship, close the "
+                        f"entry. Never-blocking, but Pulsar-shaped "
+                        f"staleness can no longer pass WITHOUT this "
+                        f"prompt or an explicit ack."
+                    ),
+                )
+            )
+
+        # --- verified_absent_at_commit presence + cadence -----------
+        sha = e.get("verified_absent_at_commit")
+        if not isinstance(sha, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{7,40}", sha or ""
+        ):
+            drifts.append(
+                Drift(
+                    key=f"residue_unverified::{entry}",
+                    label=(
+                        f"BLOCKED-RUST-EFFECT residue entry '{card}' "
+                        f"({entry}) is UNVERIFIED"
+                    ),
+                    claimed=1,
+                    actual=0,
+                    hint=(
+                        f"it has no SHA-shaped "
+                        f"`verified_absent_at_commit` field. Every "
+                        f"`genuinely_missing` entry must record the "
+                        f"commit at which its genuine-absence was "
+                        f"actually re-verified (live-enum + bridge + "
+                        f"name-in-wired-arm). Re-verify the card is "
+                        f"absent at HEAD and stamp the SHA in "
+                        f"docs/residue_worklist.json (round-55 schema)."
+                    ),
+                )
+            )
+            # No usable SHA → no cadence to compute; the unverified
+            # row already demands a re-stamp.
+            continue
+
+        if not git_available:
+            continue
+        n_commits = commits_touching_trigger_paths_since(sha)
+        if n_commits is None:
+            # Git history unavailable for this SHA — soft-skip; a
+            # missing-history is a known non-signal, never a false
+            # re-verify.
+            continue
+        if n_commits > 0:
+            drifts.append(
+                Drift(
+                    key=f"residue_needs_reverify::{entry}",
+                    label=(
+                        f"BLOCKED-RUST-EFFECT residue entry '{card}' "
+                        f"({entry}) STAMP IS STALE"
+                    ),
+                    claimed=1,
+                    actual=0,
+                    hint=(
+                        f"`verified_absent_at_commit` is `{sha}`, but "
+                        f"{n_commits} commit(s) since then touched "
+                        f"rust/src/cards.rs or "
+                        f"src/mtg_bot/parity/cross_engine.py — the two "
+                        f"files whose changes can ship/bridge an "
+                        f"Effect (the exact Pulsar mechanism). The "
+                        f"stamp can no longer be trusted. Re-verify "
+                        f"the card is still genuinely absent at HEAD "
+                        f"and refresh the SHA (or close it if it "
+                        f"shipped). Never-blocking."
+                    ),
+                )
+            )
+    return drifts
+
+
 # ------------------------------------------------------- doc-asserted counts
 
 
@@ -508,15 +958,23 @@ class Drift:
     hint: str
 
     def line(self) -> str:
-        # Per-entry residue drifts (round-54) are boolean stale/not —
-        # the "doc-claimed N, actual M (delta)" framing only makes
-        # sense for the numeric count diffs, so render the residue
-        # rows as a plain STALE line; the hint carries the full
-        # actionable detail in both cases.
+        # Per-entry residue drifts (round-54 + the round-55 structural
+        # rows) are boolean stale/not — the "doc-claimed N, actual M
+        # (delta)" framing only makes sense for the numeric count
+        # diffs, so render the residue rows as a plain tagged line;
+        # the hint carries the full actionable detail in both cases.
         if self.key.startswith(
             ("residue_stale::", "residue_closure_stale::")
         ):
             return f"  - STALE: {self.label} — {self.hint}"
+        if self.key.startswith(
+            (
+                "residue_suspect_needs_reverify::",
+                "residue_needs_reverify::",
+                "residue_unverified::",
+            )
+        ):
+            return f"  - NEEDS RE-VERIFY: {self.label} — {self.hint}"
         return (
             f"  - {self.label}: doc-claimed {self.claimed}, "
             f"actual {self.actual} "
@@ -566,12 +1024,17 @@ def build_report(drifts: list[Drift]) -> str:
             "inventory, and every BLOCKED-RUST-EFFECT residue entry's "
             "claimed-missing Effect still matches the live tree."
         )
+    _RESIDUE_PREFIXES = (
+        "residue_stale::",
+        "residue_closure_stale::",
+        "residue_suspect_needs_reverify::",
+        "residue_needs_reverify::",
+        "residue_unverified::",
+    )
     count_drifts = [
         d
         for d in drifts
-        if not d.key.startswith(
-            ("residue_stale::", "residue_closure_stale::")
-        )
+        if not d.key.startswith(_RESIDUE_PREFIXES)
     ]
     residue_drifts = [d for d in drifts if d not in count_drifts]
     lines = [
@@ -584,18 +1047,21 @@ def build_report(drifts: list[Drift]) -> str:
     if residue_drifts:
         lines.append(
             "  Per-entry residue staleness "
-            "(round-54 check — the sub-class the count-only cron "
-            "could not catch):"
+            "(round-54 lexical check + round-55 structural hardening "
+            "— the sub-class the count-only cron could not catch, plus "
+            "the non-lexical Pulsar-shape catch):"
         )
         lines.extend(d.line() for d in residue_drifts)
     lines.append(
         "  Fix: refresh docs/EOE_PROBE_READINESS_AUDIT.md (headline "
         "table + the STALENESS-SENTINEL block + the per-card residue "
-        "rows), sync docs/residue_worklist.json, and, if the Rust "
-        "variant count moved, regenerate + commit "
-        "docs/RUST_EFFECT_COVERAGE.md. This is the round-34/49/51/53 "
-        "staleness class the round-19 cron proposal + the round-54 "
-        "per-entry extension target."
+        "rows), sync docs/residue_worklist.json (including the "
+        "`verified_absent_at_commit` stamp on every still-genuinely-"
+        "missing entry), and, if the Rust variant count moved, "
+        "regenerate + commit docs/RUST_EFFECT_COVERAGE.md. This is the "
+        "round-34/49/51/53 staleness class the round-19 cron proposal "
+        "+ the round-54 per-entry extension + the round-55 structural "
+        "(non-lexical) hardening target."
     )
     return "\n".join(lines)
 
@@ -628,6 +1094,23 @@ def run(*, write_stream=None) -> int:
     drifts.extend(
         compute_residue_staleness(
             residue_entries, rust_variants, bridge_arms
+        )
+    )
+    # Round-55 structural (non-lexical) hardening — additive, same
+    # never-blocking-hook contract. Catches the Pulsar shape the
+    # round-54 *lexical* resolver was blind to (name in a wired bridge
+    # arm whose Effect shipped, even when no curated alias matched) +
+    # enforces the `verified_absent_at_commit` stamp + its cadence.
+    # `git_available` gates ONLY the cadence sub-check (an unknown SHA
+    # / tarball checkout soft-skips per-entry inside the function too).
+    git_available = _git("rev-parse", "--is-inside-work-tree") == "true"
+    arm_blocks = split_bridge_arm_blocks()
+    drifts.extend(
+        compute_structural_residue_staleness(
+            residue_entries,
+            rust_variants,
+            arm_blocks,
+            git_available=git_available,
         )
     )
     print(build_report(drifts), file=stream)
