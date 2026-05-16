@@ -53295,6 +53295,333 @@ def test_cross_engine_real_eoe_mightform_harmonizer_landfall_double_power_parity
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_parity(
+    parity_smoke,
+):
+    """Round-32 BLOCKED-RUST-EFFECT deferred-EoE-probe close — drive
+    Warmaker Gunship's ETB damage-by-artifact-count clause end-to-end
+    on BOTH engines via the bridge dict.
+
+    Closes the round-32 substrate's deferred end-to-end probe. Round
+    32 shipped ``Effect::DealDamageToOpponentCreatureByArtifactCount``
+    Rust-end-to-end with bridge pins (cross_engine.py:6029-6099 +
+    cards.rs parse arm + state_ops_resolve.rs:4529-4616), but the
+    Warmaker Gunship consumer was deferred per the round-17/18/19/31
+    synthetic-only-when-riders-cascade precedent because Warmaker is
+    a Spacecraft and the production-deck path would need the Station
+    state machinery + Spacecraft-as-artifact-creature flip. This probe
+    sidesteps the Spacecraft riders entirely via the same side-channel
+    free-form-CardDef-bridge pattern round-37 CCCC used for Mightform
+    Harmonizer (this file at line 52908): inject the carrier directly
+    onto bf via ``register_and_inject_object`` (Rust) /
+    ``new_object`` + ``_trigger_etb_abilities`` (Python), bypassing
+    the cast pipeline AND the Station/Spacecraft state machinery —
+    only the bare ETB triggered ability fires.
+
+    Path chosen — side-channel inject via free-form CardDef + bridge
+    dict (NOT production-deck loader). Warmaker is "Artifact —
+    Spacecraft" with Station; the inject pattern bypasses both the
+    Station activated ability and the 6+ flip semantics by leaving
+    Warmaker as a bare Artifact at probe time. The Station / 6+ /
+    Flying riders are deferred — this slice closes the deferred end-
+    to-end probe via the bare ETB damage-by-artifact-count clause.
+
+    Probe shape (mirrors Nova Hellkite at line 13508 + Uthros Scanship
+    Spacecraft inject at line 17685):
+
+      1. Inject 1 Bait Artifact ("Junk Artifact") onto P0's bf so
+         artifact_count BEFORE Warmaker enters = 1.
+      2. Inject Bait Bear (2/3 — toughness above the expected 2 damage
+         so SBA doesn't flip it to graveyard) onto P1's bf as the
+         opponent-controlled creature target.
+      3. Seat ``_PickFirstOpponentTargetAgent`` on P0 — its
+         IsCreature() & ControlledByOpponent() filter has already
+         restricted legal_targets to opponent-side creatures, so the
+         agent picks the only legal target (the Bait Bear).
+      4. Inject Warmaker Gunship onto P0's bf carrying the
+         ``source_is_self`` ENTERS trigger + ``deal_damage_to_opponent_
+         creature_by_artifact_count`` effect. Warmaker is an Artifact,
+         so artifact_count AT RESOLVE = 2 (Junk Artifact + Warmaker
+         itself).
+      5. Drain both stacks; the Bait Bear takes 2 damage on both
+         engines.
+
+    Cross-engine assert (post-resolve contract):
+
+      * Bait Bear damage = **2** on both engines (Junk Artifact +
+        Warmaker = 2 artifacts on P0's bf at resolve time —
+        damage.py:445-448 ``sum(1 for o in state.battlefield if
+        o.controller_id == controller_id and o.printing.is_artifact)``;
+        Rust state_ops_resolve.rs:4571-4579 mirror).
+      * Bait Bear NOT in graveyard (toughness 3 > damage 2 — no SBA
+        flip; the probe pins the damage delta, not lethal handling).
+      * P0/P1 lives unchanged at 20 (effect targets a creature, never
+        a player — same as the Nova Hellkite contract).
+      * No residual stack on either engine.
+
+    Substrate confirmed via round-32 (commits visible in cross_engine.py
+    at lines 6029-6099 + cards.rs + state_ops_resolve.rs:4529-4616);
+    bridge ``deal_damage_to_opponent_creature_by_artifact_count`` arm
+    + Python ``DealDamageToOpponentCreatureByArtifactCount``
+    (damage.py:405-459).
+
+    Out of scope: Station activated ability (Spacecraft state
+    machinery — separate substrate); 6+ Flying static (kicks in only
+    after Station counters reach 6, irrelevant to the bare ETB
+    trigger); cast-from-hand mana cost (the inject-and-dispatch-
+    ENTERS pattern bypasses the mana pipeline); production-deck
+    filter landing (would need a ``_SAFE_TRIGGERS`` extension for
+    the source_is_self + deal_damage_to_opponent_creature_by_
+    artifact_count product).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+
+    # CardDef placeholders — each engine needs the printing registered
+    # so build_*_state succeeds, but with empty libraries the deck path
+    # never instantiates them. The inject calls below use raw printing
+    # dicts directly.
+    warmaker = CardDef(
+        name="Warmaker Gunship",
+        card_type="Artifact",
+        mana_cost_generic=2,
+        mana_cost_colored=(("R", 1),),
+        subtypes=("Spacecraft",),
+        power=4,
+        toughness=3,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_to_opponent_creature_by_artifact_count",
+                },
+            },
+        ),
+    )
+    junk = CardDef(
+        name="Junk Artifact",
+        card_type="Artifact",
+        mana_cost_generic=1,
+    )
+    bait_bear = CardDef(
+        name="Bait Bear (2/3)",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=3,
+    )
+    spec = DeckSpec(
+        card_defs=(warmaker, junk, bait_bear),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_junk_dict = {
+        "name": "Junk Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+    }
+    rust_junk_id = rust_state.register_and_inject_object(
+        rust_junk_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: bare Junk Artifact arrival should not fire any trigger"
+    )
+
+    rust_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Bear (2/3)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "G": 1},
+            "effects": [],
+            "power": 2,
+            "toughness": 3,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0
+    assert rust_state.get_damage(rust_bait_id) == 0
+
+    rust_warmaker_dict = {
+        "name": "Warmaker Gunship",
+        "card_types": ["Artifact"],
+        "subtypes": ["Spacecraft"],
+        "mana_cost": {"generic": 2, "R": 1},
+        "effects": [],
+        "power": 4,
+        "toughness": 3,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "deal_damage_to_opponent_creature_by_artifact_count",
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_warmaker_id = rust_state.register_and_inject_object(
+        rust_warmaker_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Warmaker Gunship's own arrival should fire the "
+        "SourceIsSelf ENTERS trigger and land "
+        "DealDamageToOpponentCreatureByArtifactCount on the stack. "
+        f"Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToOpponentCreatureByArtifactCount,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    junk_printing = CardPrinting(
+        name="Junk Artifact",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=()),
+        type_line="Artifact",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=(),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+    )
+    py_junk = py_state.new_object(
+        junk_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_junk.summoning_sick = False
+    py_junk.tapped = False
+    py_junk.damage = 0
+    py_junk.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_junk)
+    assert py_junk.printing.is_artifact
+
+    bait_printing = CardPrinting(
+        name="Bait Bear (2/3)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=1, colored=(("G", 1),)),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=3,
+        produces=frozenset(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+
+    warmaker_printing = CardPrinting(
+        name="Warmaker Gunship",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("R", 1),)),
+        type_line="Artifact - Spacecraft",
+        supertypes=(),
+        card_types=("Artifact",),
+        subtypes=("Spacecraft",),
+        power=4,
+        toughness=3,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=DealDamageToOpponentCreatureByArtifactCount(),
+            ),
+        ),
+    )
+    # Seat the picker BEFORE Warmaker's trigger fires
+    # (push_triggered_ability calls choose_target at trigger-push
+    # time — actions.py:3249). The slot's
+    # IsCreature() & ControlledByOpponent() filter restricts
+    # legal_targets to opponent-side creatures, so the agent picks
+    # the only legal target (the Bait Bear).
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+
+    py_warmaker = py_state.new_object(
+        warmaker_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_warmaker.summoning_sick = False
+    py_warmaker.tapped = False
+    py_warmaker.damage = 0
+    py_warmaker.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_warmaker)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_warmaker)
+    assert len(py_state.stack) == 1, (
+        "Python: Warmaker Gunship's own arrival should fire the "
+        "IsSelf ENTERS trigger and land "
+        "DealDamageToOpponentCreatureByArtifactCount on the stack. "
+        f"Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: Bait Bear takes 2 damage (Junk + Warmaker
+    # = 2 artifacts on P0's bf at resolve time). Toughness 3 > damage 2,
+    # so no SBA flip — Bait Bear stays on bf.
+    rust_bait_damage_after = rust_state.get_damage(rust_bait_id)
+    assert rust_bait_damage_after == 2, (
+        "Rust: Bait Bear should carry 2 damage after the ETB burn "
+        "(2 artifacts on P0's bf: Junk + Warmaker); got "
+        f"{rust_bait_damage_after}"
+    )
+    assert py_bait.damage == 2, (
+        "Python: Bait Bear should carry 2 damage after the ETB burn "
+        f"(2 artifacts on P0's bf: Junk + Warmaker); got {py_bait.damage}"
+    )
+
+    # Lives unchanged on both seats — the effect targets a creature,
+    # never a player.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # Cross-engine: byte-equal damage on the bait + same life totals.
+    assert rust_state.get_damage(rust_bait_id) == py_bait.damage
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+    # Warmaker itself takes no damage (effect targets opponent creature).
+    assert rust_state.get_damage(rust_warmaker_id) == 0
+    assert py_warmaker.damage == 0
+    # Junk Artifact untouched too.
+    assert rust_state.get_damage(rust_junk_id) == 0
+    assert py_junk.damage == 0
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
