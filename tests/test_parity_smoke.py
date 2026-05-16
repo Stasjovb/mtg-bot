@@ -57477,6 +57477,347 @@ def test_phase4_real_eoe_gravpack_monoist_tapped_token_byte_equal():
         clear_token_printings()
 
 
+def test_cross_engine_real_eoe_mechanozoa_etb_tap_target_opponent_permanent_and_stun_it_parity(
+    parity_smoke,
+):
+    """Round-51 BLOCKED-RUST-EFFECT mis-bucketing close -- drive the
+    REAL Mechanozoa printing's ETB through BOTH engines via the
+    already-shipped ``tap_target_opponent_permanent_and_stun_it``
+    bridge arm, asserting byte-equal post-resolve state. Proves the
+    Effect+bridge already round-trip end-to-end on the real card --
+    NO new Rust, NO .pyd rebuild (uses main's already-built engine).
+
+    **Mis-bucketing context (round-50 N2 finding,
+    ``docs/RESIDUE_CARD_PLANS.md``).** The audit carried Mechanozoa
+    (~21,779 decks -- 2nd-highest in the residue) as
+    BLOCKED-RUST-EFFECT on a STALE "no StunCounter substrate in Rust
+    -- Confirmed" §2.6/§round-19 line that predates round-30. Round-30
+    shipped ``Effect::TapTargetOpponentPermanentAndStunIt``
+    (``cards.rs:2468`` enum / ``cards.rs:5037`` parse arm /
+    ``cards.rs:7187`` to_dict arm / ``state_ops_resolve.rs:7839``
+    resolve arm) and round-30 bridge-wired the Python sibling
+    ``TapTargetOpponentPermanentAndStunIt`` (``tap.py:217``) at
+    ``cross_engine.py:3168``. Mechanozoa's ONLY remaining blocker is
+    the ``warp_cost`` keyword on the printing -- a §2-declined
+    cost-mechanic class that gates the *production-deck loader admit*,
+    NOT the Effect arm. So Mechanozoa belongs in BLOCKED-FILTER
+    (warp), not BLOCKED-RUST-EFFECT, and a real-printing ETB
+    cross-engine probe is droppable today with ZERO new Rust. This
+    probe lands that drop; the companion commit reclassifies the
+    audit.
+
+    **Verbatim oracle (`data/edge_of_eternities.json`, Mechanozoa,
+    collector #66):**
+
+        "Artifact Creature - Robot Jellyfish" {4}{U}{U}  5/5
+        "When this creature enters, tap target artifact or creature
+         an opponent controls and put a stun counter on it. (If a
+         permanent with a stun counter would become untapped, remove
+         one from it instead.)
+         Warp {2}{U} (You may cast this card from your hand for its
+         warp cost. ...)"
+
+    **Path chosen -- synthetic-injection of the REAL printing (NOT
+    the production-deck loader), and WHY.** The Mechanozoa printing
+    carries ``Warp`` (warp_cost). ``warp_cost`` is a §2-declined
+    cost-mechanic (HANDOFF_2026_05_16.md §workstream-2 decline list;
+    CLAUDE.md scope reminder): the production-deck loader's
+    creature-feature allowlist will never admit a warp_cost printing,
+    so the deck-loader path cannot exercise Mechanozoa. Per the
+    round-17 Fight / round-32 Warmaker Gunship synthetic-driver
+    precedent (this file, Warmaker probe), the probe injects the real
+    printing's exact characteristics (name / Artifact-Creature types /
+    {4}{U}{U} cost / 5/5 P/T / the verbatim ETB triggered ability)
+    directly onto bf via ``register_and_inject_object`` (Rust) /
+    ``new_object`` + ``_trigger_etb_abilities`` (Python), bypassing
+    BOTH the cast pipeline AND the warp_cost filter -- only the bare
+    ETB triggered ability fires. This is "drives the REAL printing"
+    in the campaign's established sense (every prior real-EoE probe
+    reconstructs the printing's exact card characteristics + verbatim
+    ETB and synthetic-injects; none parse the JSON at test time). We
+    do NOT attempt to admit warp_cost -- it is explicitly out of
+    scope (§2-declined cost-mechanic).
+
+    Predicate decomposition (same as Nova Hellkite / Warmaker
+    Gunship): ``SourceIsSelf``. Effect:
+    ``tap_target_opponent_permanent_and_stun_it`` (unit variant; no
+    fields beyond ``kind``).
+
+    Probe shape (inject-and-fire-ENTERS, mirrors Warmaker Gunship at
+    this file's Warmaker probe):
+
+      1. Inject a vanilla 3/3 bait creature ("Bait Golem") onto P1's
+         bf -- an opponent-controlled creature, the legal target for
+         Mechanozoa's "tap target artifact or creature an opponent
+         controls". 3 toughness so it isn't an SBA concern (no
+         damage involved -- this Effect taps + stuns, never burns).
+         Start it UNTAPPED so the tap mutation is observable.
+      2. Seat ``_PickFirstOpponentTargetAgent`` on P0 BEFORE
+         Mechanozoa's trigger fires (push_triggered_ability calls
+         choose_target at trigger-push time). The slot's
+         ``(is_artifact or is_creature) and controller != self``
+         filter (tap.py:227-235 legal_targets) has already restricted
+         legal_targets to the one opponent-controlled permanent, so
+         the agent's first-opponent-permanent pick converges with
+         Rust's first-eligible bf scan bit-for-bit (single bait =>
+         no ordering ambiguity).
+      3. Inject the real Mechanozoa printing onto P0's bf. Both
+         engines dispatch ENTERS; SourceIsSelf matches; one
+         TapTargetOpponentPermanentAndStunIt lands on the stack
+         (target pre-chosen: Python at push time via the agent,
+         Rust intrinsically via the resolve arm's first-eligible
+         scan).
+      4. Drain both stacks. Resolve: the bait Golem is tapped AND
+         gains exactly 1 stun counter on BOTH engines (both
+         mutations land on the SAME target -- the load-bearing
+         Mechanozoa property: it does not tap one permanent and stun
+         a different one).
+
+    Cross-engine byte-equal contract (post-drain):
+
+      * Bait Golem ``tapped == True`` on both engines.
+      * Bait Golem ``stun_counters == 1`` on both engines.
+      * Both mutations on the SAME object (one chosen target).
+      * Mechanozoa itself untapped + 0 stun counters (effect targets
+        the opponent's permanent, never the source).
+      * P0/P1 life unchanged at 20 (this Effect never touches life).
+      * No residual stack on either engine.
+
+    Out of scope (explicitly, per §2): Warp alt-cast / warp_cost
+    filter admit (§2-declined cost-mechanic -- the whole reason this
+    is a synthetic-injection probe, not a deck-loader probe); the
+    "remove a stun counter instead of untapping" reminder-text
+    interaction (a future untap-step probe -- not the ETB contract).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+    from tests.parity._picker_shims import _PickFirstOpponentTargetAgent
+
+    # CardDef placeholders -- each engine needs the printing registered
+    # so build_*_state succeeds, but with empty libraries the deck path
+    # never instantiates them. The inject calls below use raw printing
+    # dicts directly (the real Mechanozoa characteristics; warp_cost is
+    # deliberately NOT modeled here -- it gates only the deck loader,
+    # which this synthetic-injection path bypasses).
+    mechanozoa = CardDef(
+        name="Mechanozoa",
+        card_type="Artifact Creature",
+        mana_cost_generic=4,
+        mana_cost_colored=(("U", 2),),
+        subtypes=("Robot", "Jellyfish"),
+        power=5,
+        toughness=5,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "tap_target_opponent_permanent_and_stun_it",
+                },
+            },
+        ),
+    )
+    bait_golem = CardDef(
+        name="Bait Golem (3/3)",
+        card_type="Creature",
+        mana_cost_generic=3,
+        power=3,
+        toughness=3,
+    )
+    spec = DeckSpec(
+        card_defs=(mechanozoa, bait_golem),
+        p0_library=(),
+        p1_library=(),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+
+    # ---- Rust side ----
+    ZONE_BATTLEFIELD = 2
+    rust_bait_id = rust_state.register_and_inject_object(
+        {
+            "name": "Bait Golem (3/3)",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 3},
+            "effects": [],
+            "power": 3,
+            "toughness": 3,
+        },
+        1,
+        ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 0, (
+        "Rust: bare Bait Golem arrival should not fire any trigger"
+    )
+    assert rust_state.is_tapped(rust_bait_id) is False
+    assert rust_state.get_stun_counters(rust_bait_id) == 0
+
+    rust_mechanozoa_dict = {
+        "name": "Mechanozoa",
+        "card_types": ["Artifact", "Creature"],
+        "subtypes": ["Robot", "Jellyfish"],
+        "mana_cost": {"generic": 4, "U": 2},
+        "effects": [],
+        "power": 5,
+        "toughness": 5,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "tap_target_opponent_permanent_and_stun_it",
+                },
+            }
+        ],
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_mechanozoa_id = rust_state.register_and_inject_object(
+        rust_mechanozoa_dict, 0, ZONE_BATTLEFIELD,
+    )
+    assert rust_state.stack_size() == 1, (
+        "Rust: Mechanozoa's own arrival should fire the SourceIsSelf "
+        "ENTERS trigger and land TapTargetOpponentPermanentAndStunIt "
+        f"on the stack. Got stack_size={rust_state.stack_size()}"
+    )
+
+    # ---- Python side ----
+    from mtg_bot.actions import _trigger_etb_abilities
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.tap import (
+        TapTargetOpponentPermanentAndStunIt,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    bait_printing = CardPrinting(
+        name="Bait Golem (3/3)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=3, colored=()),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=3,
+        toughness=3,
+        produces=frozenset(),
+    )
+    py_bait = py_state.new_object(
+        bait_printing, owner_id=1, zone=Zone.BATTLEFIELD,
+    )
+    py_bait.summoning_sick = False
+    py_bait.tapped = False
+    py_bait.damage = 0
+    py_bait.stun_counters = 0
+    py_bait.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_bait)
+    assert py_bait.printing.is_creature
+    assert py_bait.tapped is False
+    assert py_bait.stun_counters == 0
+
+    mechanozoa_printing = CardPrinting(
+        name="Mechanozoa",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=4, colored=(("U", 2),)),
+        type_line="Artifact Creature - Robot Jellyfish",
+        supertypes=(),
+        card_types=("Artifact", "Creature"),
+        subtypes=("Robot", "Jellyfish"),
+        power=5,
+        toughness=5,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(),
+                effect=TapTargetOpponentPermanentAndStunIt(),
+            ),
+        ),
+    )
+    # Seat the picker BEFORE Mechanozoa's trigger fires
+    # (push_triggered_ability calls choose_target at trigger-push
+    # time). The slot's (is_artifact or is_creature) and
+    # controller != self filter restricts legal_targets to the one
+    # opponent-controlled permanent, so the agent picks it.
+    py_state.players[0].agent = _PickFirstOpponentTargetAgent()
+
+    py_mechanozoa = py_state.new_object(
+        mechanozoa_printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_mechanozoa.summoning_sick = False
+    py_mechanozoa.tapped = False
+    py_mechanozoa.damage = 0
+    py_mechanozoa.stun_counters = 0
+    py_mechanozoa.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_mechanozoa)
+    py_p0_life_before = py_state.players[0].life
+    py_p1_life_before = py_state.players[1].life
+    _trigger_etb_abilities(py_state, py_mechanozoa)
+    assert len(py_state.stack) == 1, (
+        "Python: Mechanozoa's own arrival should fire the IsSelf "
+        "ENTERS trigger and land TapTargetOpponentPermanentAndStunIt "
+        f"on the stack. Got stack size={len(py_state.stack)}"
+    )
+
+    # ---- Drain both stacks, then compare ----
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # Per-engine post-state: the bait Golem is tapped AND carries
+    # exactly 1 stun counter (both mutations on the SAME target).
+    rust_bait_tapped = rust_state.is_tapped(rust_bait_id)
+    rust_bait_stun = rust_state.get_stun_counters(rust_bait_id)
+    assert rust_bait_tapped is True, (
+        "Rust: Bait Golem should be TAPPED after Mechanozoa's ETB; "
+        f"got is_tapped={rust_bait_tapped}"
+    )
+    assert rust_bait_stun == 1, (
+        "Rust: Bait Golem should carry exactly 1 stun counter after "
+        f"Mechanozoa's ETB; got {rust_bait_stun}"
+    )
+    assert py_bait.tapped is True, (
+        "Python: Bait Golem should be TAPPED after Mechanozoa's ETB; "
+        f"got tapped={py_bait.tapped}"
+    )
+    assert py_bait.stun_counters == 1, (
+        "Python: Bait Golem should carry exactly 1 stun counter after "
+        f"Mechanozoa's ETB; got {py_bait.stun_counters}"
+    )
+
+    # Mechanozoa itself untouched -- effect targets the opponent's
+    # permanent, never the source.
+    assert rust_state.is_tapped(rust_mechanozoa_id) is False
+    assert rust_state.get_stun_counters(rust_mechanozoa_id) == 0
+    assert py_mechanozoa.tapped is False
+    assert py_mechanozoa.stun_counters == 0
+
+    # Lives unchanged on both seats -- this Effect never touches life.
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+    # Cross-engine: byte-equal tapped + stun-counter state on the
+    # bait, byte-equal source state, byte-equal life totals.
+    assert rust_state.is_tapped(rust_bait_id) == py_bait.tapped
+    assert rust_state.get_stun_counters(rust_bait_id) == (
+        py_bait.stun_counters
+    )
+    assert rust_state.is_tapped(rust_mechanozoa_id) == (
+        py_mechanozoa.tapped
+    )
+    assert rust_state.get_stun_counters(rust_mechanozoa_id) == (
+        py_mechanozoa.stun_counters
+    )
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

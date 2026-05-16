@@ -178,6 +178,49 @@ track. The cron remains the right intervention.
 
 ## Current state (as of 2026-05-16, main `8e584628`) — round-35→48 batch refresh
 
+> **Round-51 mis-bucketing correction (content-correction, not a
+> re-survey).** Round-50 N2's residue scoping
+> (`docs/RESIDUE_CARD_PLANS.md`) walked each carried residue name
+> against the *live* `Effect` enum + `_ta_dict_to_python_effect` arm
+> inventory and found **2 of the carried BLOCKED-RUST-EFFECT names
+> were never Rust-Effect-blocked** — their Effect arms shipped rounds
+> ago and are bridge-wired:
+> - **Mechanozoa** (~21,779 decks): exact ETB is
+>   `Effect::TapTargetOpponentPermanentAndStunIt`, shipped **round-30**
+>   (`cards.rs:2468` enum / `5037` parse / `7187` to_dict /
+>   `state_ops_resolve.rs:7839` resolve) and bridge-wired round-30
+>   (`cross_engine.py:3168` → `tap.py:217`). The §2.6 / §round-19 "no
+>   StunCounter substrate in Rust — Confirmed" line is **STALE**
+>   (predates round-30, never re-checked). Mechanozoa's only residual
+>   blocker is the `warp_cost` keyword gating the *production-deck
+>   loader admit* — a §2-declined cost-mechanic — **NOT the Effect
+>   arm**. → reclassified to **BLOCKED-FILTER (warp_cost)**.
+>   Round-51 N3 dropped a zero-Rust real-printing cross-engine probe
+>   (`test_cross_engine_real_eoe_mechanozoa_etb_tap_target_opponent_permanent_and_stun_it_parity`,
+>   byte-equal both engines) confirming the round-trip — no Rust
+>   change, no `.pyd` rebuild.
+> - **Warmaker Gunship** (~5,926 decks): ETB is exactly
+>   `Effect::DealDamageToOpponentCreatureByArtifactCount`, shipped
+>   **round-32** and bridge-wired (`cross_engine.py:6326`); a
+>   round-32 deferred-EoE end-to-end probe already exists in
+>   `test_parity_smoke.py`. The residual blocker is the
+>   `Station` ability + `Spacecraft` artifact type, **not the Effect
+>   arm**. → reclassified to **BLOCKED-Station-subsystem** (not an
+>   Effect gap).
+>
+> Net: the carried ~17 BLOCKED-RUST-EFFECT names included these 2
+> mis-bucketed entries; the **true new-Rust-Effect residue is ~15
+> distinct asks, not ~17** — these 2 were never Rust-Effect-blocked,
+> so the count did not "shrink", the bucket was over-counted. This is
+> the **same staleness class the round-34 and round-49 refreshes
+> flagged** (audit headline frozen while substrate shipped underneath
+> it), and it strengthens the round-19 cron proposal (auto-diff the
+> Effect-variant inventory + bridge-arm inventory against the audit
+> headline + per-card buckets on every `main` merge). The headline
+> count line and the residue body below are corrected in place; the
+> per-card bucket rows for Mechanozoa / Warmaker Gunship are corrected
+> at their §round-19 residue-table and §2.6 locations.
+
 This section is the round-49 batch refresh covering rounds 35
 through 48 (the round-34 headline section above was flagged stale
 twice — rounds 47 and 48 — because its X-from-count narrative and
@@ -197,7 +240,7 @@ kept verbatim below for cross-round narrative continuity.
 | --- | --- | --- | --- |
 | Bridge-arm effect `kind ==` literals in `_ta_dict_to_python_effect` | 76+ | **106 distinct** | +30 |
 | Rust `Effect::` enum variants (top-level) | (untracked) | **~104** | — |
-| BLOCKED-RUST-EFFECT residue (truly no-Rust-arm asks) | ~21 cards / ~14 distinct asks | **~21 cards / ~13–14 distinct asks** | ≈0 (see note) |
+| BLOCKED-RUST-EFFECT residue (truly no-Rust-arm asks) | ~21 cards / ~14 distinct asks | **~15 distinct new-Rust-Effect asks** (round-51 corrected: was carried as ~17; Mechanozoa + Warmaker Gunship were never Rust-Effect-blocked — reclassified to BLOCKED-FILTER(warp) / BLOCKED-Station-subsystem) | −2 over-count (see round-51 note above) |
 | `_SAFE_KEYWORDS` (production-deck bridge filter) | 11 | **12** (+`reach`, round 45) | +1 |
 | `_SAFE_TRIGGERS` triples | 3 (round-1 starter) | **15** | +12 |
 | `SEARCH_LIMITATIONS.md` active entries | 28 | **27** (−1, round-37 supertypes-proxy close) | −1 |
@@ -512,12 +555,12 @@ These are not as cleanly reclassifiable, but the audit's
 
 | §2.6 entry | Status |
 | --- | --- |
-| `TapTargetAndPutStunCounter` (Mechanozoa, Cryogen Relic activated half — 2 cards) | No StunCounter substrate in Rust. Confirmed BLOCKED-RUST-EFFECT. |
+| `TapTargetAndPutStunCounter` (Mechanozoa, Cryogen Relic activated half — 2 cards) | ~~No StunCounter substrate in Rust. Confirmed BLOCKED-RUST-EFFECT.~~ **STALE — corrected round 51.** Round-30 shipped `Effect::TapTargetOpponentPermanentAndStunIt` (`cards.rs:2468`) + bridge arm (`cross_engine.py:3168` → `tap.py:217`). **Mechanozoa is NOT BLOCKED-RUST-EFFECT** — its exact ETB is fully substrated + bridged on both engines (round-51 N3 real-printing cross-engine probe is byte-equal). Mechanozoa's only residual blocker is `warp_cost` gating the production-deck loader admit (§2-declined cost-mechanic) → **BLOCKED-FILTER (warp_cost)**, not an Effect gap. (Cryogen Relic's *activated-half* stun shape `put_stun_counter_on_tapped_creature` also shipped round-30 + bridged; its remaining gap is the activated-ability cross-engine harness, not the Effect.) |
 | `DoubleTargetPowerUntilEOT` (Mightform Harmonizer — 1 card) | No Rust arm. Confirmed. |
 | `CastFromExileWithCostHike` (Lightstall Inquisitor — 1 card) | No Rust arm. Confirmed. |
 | `SacUnlessYouTap` (Command Bridge — 1 card) | No Rust arm. Confirmed (first land-ETB in audit). |
 | `ReturnPermanentCardWithMVXorLessFromGY` (Astelli Reclaimer — 1 card) | No mana-value-condition GY-return arm in Rust. Confirmed. |
-| `DealDamageToAnyTargetEqualToArtifactCount` (Warmaker Gunship — 1 card) | No X-from-artifact-count plumbing. Adjacent `DealDamageEqualToSourcePowerAnyTarget` exists (different denominator) but artifact-count specifically needs its own arm. Confirmed. |
+| `DealDamageToAnyTargetEqualToArtifactCount` (Warmaker Gunship — 1 card) | ~~No X-from-artifact-count plumbing. ... Confirmed.~~ **STALE — corrected round 51.** Round-32 shipped `Effect::DealDamageToOpponentCreatureByArtifactCount` + bridge arm (`cross_engine.py:6326`); a round-32 deferred-EoE end-to-end probe (`test_cross_engine_real_eoe_warmaker_gunship_etb_damage_by_artifact_count_parity`) already exists. **Warmaker Gunship is NOT BLOCKED-RUST-EFFECT** — its ETB Effect arm is fully substrated + bridged. Its residual blocker is the `Station` ability + `Spacecraft` artifact type gating the production-deck loader admit → **BLOCKED-Station-subsystem**, not an Effect gap. |
 | `PumpAndGrantDiesReturnTrigger` (Perigee Beckoner — 1 card) | No nested-trigger-grant substrate. Confirmed. |
 | `TwoMobileSubjects` (Monoist Circuit-Feeder — 1 card) | No simultaneous-two-target substrate. Confirmed. |
 | `EachOpponentExilesFromHand` (Lightstall Inquisitor — 1 card; same card as cast-from-exile entry above) | No Rust arm. Confirmed. |
@@ -895,7 +938,7 @@ Order-of-magnitude effects that recur across many cards:
 | `CreateLanderToken` (parameterized create-token: 2/2 Robot, 1/1 Soldier, Lander, Munitions, copy-of-target, multicolor-conditional) | 13 (Auxiliary Boosters, Bioengineered Future, Biomechan Engineer, Biotech Specialist, Dauntless Scrapbot, Glacier Godmaw, Infinite Guideline Station, Sunstar Expansionist, Terrapact Intimidator, Eusocial Engineering, plus tail) | create-token branch covers the base arm; this counts the cards whose create_token has parameters or conditional gates beyond the existing branch shape |
 | `ExileTargetUntilSourceLeaves` | 5 (All-Fates Stalker, Banishing Light, Hardlight Containment, Pinnacle Starcage, Seam Rip) | Rust has `ExileTargetCreatureUntilSourceLeaves`; the Banishing-Light shape (any nonland permanent) and Pinnacle-Starcage shape (AOE-conditional) are siblings |
 | `AttachSelfToTargetCreature` / `EquipToTargetCreatureYouControl` | 4 (Auxiliary Boosters, Illvoi Light Jammer, Meltstrider's Gear, Squire's Lightblade) | Rust has the unit-variant arms; bridge does not wire them |
-| `TapTargetAndPutStunCounter` (stun-counter substrate) | 2 (Mechanozoa, Cryogen Relic activated half) | no stun-counter shape in Rust today |
+| ~~`TapTargetAndPutStunCounter` (stun-counter substrate)~~ **CLOSED round-30 / corrected round-51** | ~~2 (Mechanozoa, Cryogen Relic activated half)~~ → **0 Effect-blocked** | ~~no stun-counter shape in Rust today~~ **STALE.** `Effect::TapTargetOpponentPermanentAndStunIt` (Mechanozoa) + `put_stun_counter_on_tapped_creature` (Cryogen Relic activated half) both shipped round-30 + bridged. Mechanozoa → **BLOCKED-FILTER (warp_cost)**, not Effect-blocked (round-51 real-printing CE probe byte-equal). NOT a BLOCKED-RUST-EFFECT row. |
 | `LandfallWithComplexEffect` (landfall predicate + non-trivial effect) | 4 (Glacier Godmaw, Mightform Harmonizer, Genemorph Imago, Seedship Agrarian, Remnant Elemental) | predicate is in etb-subject-substrate; effect arms (mass-pump + vigilance/haste, double-power-EOT, set-base-PT, +1/+1 counter on self via landfall) need new Rust arms |
 | `SetBasePTUntilEOT` | 1 (Genemorph Imago) | Rust has `SetBasePTUntilEOT` arm; no bridge or trigger-driven wiring |
 | `Fight` (creature-vs-creature) | 1 (Meltstrider's Resolve) | bare bilateral form shipped (`Effect::FightTargetCreatureWithTargetCreature` + bridge + `FightTargetCreatureWithTargetCreature` Python sibling); Aura-shape (Meltstrider's Resolve specifically — source fighter is the Aura's `attached_to` enchanted creature) is the deferred follow-up — needs new `Effect::EnchantedCreatureFightsTarget` Rust variant routing through `attached_to` end-to-end. See SEARCH_LIMITATIONS.md "Fight" entry |
@@ -908,7 +951,7 @@ Order-of-magnitude effects that recur across many cards:
 | `SacUnlessYouTap` (Command Bridge) | 1 (Command Bridge) | "sacrifice it unless you tap an untapped permanent" — no Rust arm; first land-ETB in the audit |
 | `ReturnPermanentCardWithMVXorLessFromGY` (Astelli Reclaimer) | 1 (Astelli Reclaimer) | needs mana-value-condition substrate on the GY-return arm |
 | `ChoiceTrigger` (Pulsar Squadron Ace look-5-reveal-Spacecraft) | 1 (Pulsar Squadron Ace) | revelation + put-into-hand-OR-counter-on-self path |
-| `DealDamageToAnyTargetEqualToArtifactCount` (Warmaker Gunship) | 1 (Warmaker Gunship) | X-from-artifact-count needs dynamic-X plumbing |
+| ~~`DealDamageToAnyTargetEqualToArtifactCount` (Warmaker Gunship)~~ **CLOSED round-32 / corrected round-51** | ~~1 (Warmaker Gunship)~~ → **0 Effect-blocked** | ~~X-from-artifact-count needs dynamic-X plumbing~~ **STALE.** `Effect::DealDamageToOpponentCreatureByArtifactCount` shipped round-32 + bridged + deferred-EoE probe exists. Warmaker Gunship → **BLOCKED-Station-subsystem** (Station ability + Spacecraft type), not Effect-blocked. NOT a BLOCKED-RUST-EFFECT row. |
 | `PumpAndGrantDiesReturnTrigger` (Perigee Beckoner) | 1 (Perigee Beckoner) | grants a *new* DIES trigger on the target — needs nested-trigger substrate |
 | `TwoMobileSubjects` (Monoist Circuit-Feeder) | 1 (Monoist Circuit-Feeder) | targets one of yours and one of theirs simultaneously |
 | `EachOpponentExilesFromHand` (Lightstall Inquisitor) | 1 | (also above) |
