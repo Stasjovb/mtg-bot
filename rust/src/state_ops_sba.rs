@@ -357,6 +357,15 @@ impl GameState {
             // resolution: LEAVES resolves before DIES. Walkers fire
             // ONLY LEAVES (no DIES per the creature-gate above).
             self.pending_leaves_dispatches.push(dying_obj_id);
+            // Round-55: token-cease sibling. An SBA-destroyed token
+            // creature (lethal damage / zero toughness) ceases to
+            // exist (CR 111.7) rather than entering the graveyard.
+            // Queued here; removed by the LEAVES-drain tail (and the
+            // belt-and-suspenders sweep at apply_sbas' tail) AFTER
+            // the DIES + LEAVES dispatches fire — so the token is
+            // still an observer for its own dies/leaves trigger,
+            // matching Python's by-reference move_off_battlefield.
+            crate::state_ops_zones::queue_token_cease(self, dying_obj_id);
         }
         // Drain pending DIES dispatches AFTER the SBA loop completes.
         // Order matches push-order — each dying creature's triggers
@@ -369,6 +378,14 @@ impl GameState {
         // `move_off_battlefield` sequence (turn.py:280-289 fires
         // DIES then LEAVES; Python's stack is also LIFO).
         crate::state_ops_resolve::drain_pending_leaves_dispatches(self)?;
+        // Round-55: belt-and-suspenders token-cease sweep. The LEAVES
+        // drain above already drained the cease queue at its own
+        // tail; this catches any token id queued by an SBA-destroy
+        // bf-exit whose printing is a token (SBA-destroyed tokens —
+        // a token creature dying to lethal damage / zero toughness).
+        // Idempotent: if the LEAVES drain already emptied the queue
+        // this is a zero-cost no-op.
+        crate::state_ops_zones::drain_pending_token_cease(self);
         Ok(count)
     }
 

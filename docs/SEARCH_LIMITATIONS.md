@@ -991,20 +991,27 @@ end-to-end repro showed:
   has none). **CLOSED round 54** (`land.summoning_sick = False` added
   to the resolve, same slice — once library order matched, both
   engines search the SAME object id so the bf tuple is byte-equal).
-- `graveyard_p0` — the sacrificed Lander token. Python (source of
-  truth, CR 111.7) correctly applies the token-ceases-to-exist SBA so
-  its graveyard is empty; Rust leaves the dead token in the graveyard
-  (the Rust runtime carries no `is_token` field — **same root cause
-  as the `Effect::EachOpponentSacrificesCreature` Rust-port entry**
-  below). This is a **RUST-lane token-SBA gap, ORTHOGONAL to #15**,
-  NOT closable from the Python lane (Python is already correct). It is
-  pinned as the precisely-narrowed residual in the genuine probe's
-  CONTRACT 2 (`diverged_fields == ["graveyard_p0"]` with the exact
-  shape: Python graveyard empty, Rust holds the Lander) and
-  **auto-converts** to a clean `compare_fields == []` the moment the
-  Rust token-cease-to-exist SBA lands (Rust-agent / Phase-3
-  follow-up — `TOKEN_PRINTING_SUBSTRATE.md` §7). **This is NOT a #15
-  concern and #15 is fully closed regardless of it.**
+- `graveyard_p0` — the sacrificed Lander token. **CLOSED round 55**
+  (Rust-agent N2 — the Rust token-cease-to-exist SBA). Python (source
+  of truth, CR 111.7) correctly applies the token-ceases-to-exist SBA
+  so its graveyard is empty; pre-round-55 Rust left the dead token in
+  the graveyard (the Rust runtime had no `is_token` notion). Round 55
+  added `RegistryData::is_token` (derived from the Round-30
+  `supertypes` Vec — `"Token" in supertypes`, the SAME bit the
+  cross-engine bridge already round-trips for token printings via
+  `("Token",)`) and a deferred token-cease queue
+  (`pending_token_cease`) populated at every bf-exit site
+  (`queue_token_cease`, sibling of the LEAVES push) and drained at the
+  tail of `drain_pending_leaves_dispatches` + `apply_sbas` — AFTER the
+  DIES+LEAVES dispatches so the token is still its own dies/leaves
+  observer (Python's by-reference `move_off_battlefield` semantics),
+  then removed from whatever non-bf zone it landed in. The genuine
+  probe's CONTRACT 2 was **flipped from the precisely-narrowed
+  `diverged_fields == ["graveyard_p0"]` known-gap to `compare_fields()
+  == []`** — the WHOLE Lander sac-activation is now byte-equal
+  cross-engine. The **shared-root `Effect::EachOpponentSacrifices-
+  Creature` entry is CLOSED in the same slice** (the resolver's
+  `find_map` predicate now gates on `!registry.is_token`).
 
 **Why the Phase-3a admit stays §2-safe.** Unchanged from round 53:
 the bench / trajectory walk (`scripts/bench_trajectory_parity.py`)
@@ -1039,6 +1046,76 @@ and `land.summoning_sick = False`. Cross-engine shared-rng threading
 demonstrated in
 `tests/test_parity_smoke.py::test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation`
 (`py_state.rng = r` + `rust_state.set_external_rng(r)`).
+
+---
+
+## Rust token-cease-to-exist SBA (CR 111.7 / 704.5d) — deferred-queue timing note (round 55, NOT a divergence)
+
+**This is NOT a deliberate divergence — it documents a design choice
+in a CR-compliant feature so a future maintainer understands the
+timing.** Round 55 (agent N2) gave Rust the CR 111.7 / 704.5d
+token-cease-to-exist behavior, byte-matching Python.
+
+**Location**: `rust/src/state_ops_zones.rs`
+(`RegistryData::is_token`, `queue_token_cease`,
+`drain_pending_token_cease`, `mark_left_battlefield_if_nonland`
+neighbor); `rust/src/state.rs` (`pending_token_cease` field);
+`rust/src/state_ops_resolve.rs` + `state_ops_actions.rs` +
+`state_ops_sba.rs` (the `queue_token_cease` sibling at every bf-exit
+site; the cease-drain at the tail of
+`drain_pending_leaves_dispatches` + `apply_sbas`). Python source of
+truth: `src/mtg_bot/turn.py:241-263` (`move_off_battlefield`).
+
+**The design choice**: Python's token cease-to-exist is *eager* — in
+`move_off_battlefield` the token is removed from the battlefield and
+the `is_token` branch simply never pushes it to graveyard/exile; the
+token is in NO zone, yet `_fire_dies_triggers(state, obj)` /
+LEAVES still fire with `obj` passed **by reference**. Rust's bf-exit
+primitives instead push the object to its destination zone, queue
+DIES/LEAVES *by id*, then drain. Rust matches Python's *observable*
+result by **deferring** the cease-removal: every bf-exit queues the
+leaving id onto `pending_token_cease`; the token stays in its
+destination zone through the DIES + LEAVES dispatch (so it is still
+findable as its own dies/leaves extra-observer — the by-reference
+faithful equivalent), then `drain_pending_token_cease` (run AFTER
+both drains) removes it if its printing `is_token`. Final state:
+token in no zone — byte-equal to Python.
+
+**Matched Python quirk (intentional, not "more correct")**: Python's
+SBA loop (`_state_based_actions_pass`) does **NOT** scrub tokens that
+appear in a non-battlefield zone via a non-bf-exit path
+(`turn.py:1179-1182` KNOWN GAP: "Token in non-battlefield zone other
+than via leave-play: not actively scrubbed"). Rust matches this:
+`pending_token_cease` is filled **only on a bf-EXIT**, and
+`drain_pending_token_cease` explicitly does **not** scrub the
+battlefield (a token re-entering bf via a re-entrant LEAVES trigger
+legitimately exists). Rust does not invent a divergent "scrub every
+token in every zone every SBA pass" behavior — it mirrors Python's
+exact (narrower) trigger surface. No EoE card today moves a token
+into a non-bf zone except via leave-play, so the shared quirk is
+unobservable in the pool; it is documented for fidelity per §2.
+
+**`is_token` derivation (no new per-printing field)**: token-ness is
+`supertypes` contains `"Token"` — identical to Python's
+`CardPrinting.is_token`. The cross-engine bridge already round-trips
+a token printing's `("Token",)` supertype tuple
+(`build_rust_state`'s `printing_dict["supertypes"]` + the
+`_seat_token_printings` `supertypes=("Token",)` stamp), so a token
+registered cross-engine is `is_token` on BOTH engines with zero new
+plumbing. Token-creation arms (`CreateToken` /
+`CreateTokenTapped` / `CreateTokenEachPlayer`) reference a
+`token_printing_id` registered with that supertype tuple, so
+freshly-minted tokens resolve as tokens with no per-object flag.
+
+**Impact**: pure cross-engine parity gain — the 57,779-deck Galactic
+Wayfarer / Beamsaw Prospector Lander cluster's
+`{2},Sac:SearchLibraryForBasicLandTapped` activation is now FULLY
+byte-equal cross-engine (the genuine Phase-3a probe's `graveyard_p0`
+residual flipped to `compare_fields() == []`). Perf: one
+unconditional `Vec<u32>` push per bf-exit + one post-drain scan over
+non-bf zones — negligible (bf-exits are not the hot loop). Pinned by
+the `test_r55_*` regression + bridge pins and the genuine real-EoE
+probe in `tests/test_parity_smoke.py`.
 
 ---
 
@@ -1710,110 +1787,30 @@ damage. Perf neutral.
 
 ---
 
-## Rust port — `Effect::EachOpponentSacrificesCreature` nontoken-filter shortcut
+## ~~Rust port — `Effect::EachOpponentSacrificesCreature` nontoken-filter shortcut~~ — CLOSED round 55
 
-**Location**:
-`rust/src/state_ops_resolve.rs:6529-6539`
-(`Effect::EachOpponentSacrificesCreature` resolver — the
-`bf.iter().find_map` first-creature scan with no `is_token`
-predicate),
-`rust/src/cards.rs:1412-1425, 3393`
-(variant declaration + `parse_effect` arm),
-`src/mtg_bot/effects/generic/opponent_punishers.py:30-63`
-(Python's `EachOpponentSacrificesCreature` with the
-`not o.printing.is_token` legal-list filter).
+**Closed by** `feature/rust-token-cease-to-exist-sba-r55` (round-55
+agent N2), shared-root with the token-cease-to-exist SBA (#15
+`graveyard_p0` residual above). The Rust runtime gained
+`RegistryData::is_token` (derived from the Round-30 `supertypes` Vec —
+`"Token" in supertypes`, the SAME bit the cross-engine bridge already
+round-trips for token printings via `("Token",)`). The
+`Effect::EachOpponentSacrificesCreature` resolver
+(`rust/src/state_ops_resolve.rs`) now gates its `bf.iter().find_map`
+first-creature predicate on `!registry.is_token(...)` so it matches
+the printed oracle text ("each opponent sacrifices a NONTOKEN
+creature of their choice") and Python’s
+`EachOpponentSacrificesCreature.resolve` `not o.printing.is_token`
+legal-list filter. On a (token-at-index-0 ∧ nontoken-at-index-1+)
+opponent bf both engines now sacrifice the first NONTOKEN identically.
 
-Pinned by:
+**Pin flipped:**
 `tests/test_parity_smoke.py::test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_divergence_pin`
-(per-engine divergence assertion landed in
-`feature/phase5-ce-bridge-each-opp-sac-token-first-divergence`).
-
-**What we do today**: Rust's resolver scans the opponent's bf
-for the first object whose `card_types` contains "Creature" and
-sacrifices that object. The Rust runtime carries no `is_token`
-field on `CardPrinting` — token-vs-printed creatures are
-indistinguishable at this scan. So if a token sits at bf-iter
-index 0 and a nontoken creature at index 1, Rust sacrifices the
-TOKEN.
-
-Python's `EachOpponentSacrificesCreature.resolve` first builds
-its `legal` list by walking `state.battlefield` and filtering
-by `o.controller_id == p.id and o.printing.is_creature and not
-o.printing.is_token` — the `is_token` filter drops every Token-
-supertype printing. The agent's pick comes from the filtered
-list. So when a token sits at bf-iter index 0 and a nontoken at
-index 1, Python's `legal` contains ONLY the nontoken; the
-nontoken is sacrificed.
-
-**Why this diverges from CR**: the printed oracle text on
-Susurian Dirgecraft (and the other 3+ EoE consumers of this
-arm) is "each opponent sacrifices a NONTOKEN creature of their
-choice" — the nontoken filter is part of the rules text, not a
-heuristic. Python matches the printed text; Rust's shortcut
-omits the filter for performance / brevity (one bf-iter pass
-beats a filtered legal-list construction + agent callback) and
-diverges from the rules text on the token-at-index-0 case.
-
-**Failure mode**: when an opponent has any token AND any
-nontoken creature with the token at bf-iter index 0, Rust
-sacrifices the token (rules-illegal pick) while Python
-sacrifices the first nontoken (rules-correct). On the practical
-gameplay surface this means: a controller with a Soldier token
-on bf at index 0 and a real creature at index 1, facing a
-Susurian Dirgecraft, will lose the TOKEN on Rust (cheap loss)
-but the NONTOKEN on Python (expensive loss). The strength gap
-favors the Rust side because tokens are typically lower-value;
-the bot trained on the Rust shortcut would over-value Susurian
-Dirgecraft against token-heavy boards.
-
-**Cross-engine smoke surfacing**: pinned by the per-engine
-assertion in
-`test_cross_engine_real_eoe_susurian_dirgecraft_etb_each_opp_sac_token_first_divergence_pin`.
-The probe asserts Rust's p1 bf token-count drops to 0 AND
-Python's stays at 1 AND the two values are NOT equal. If the
-Rust gap closes (resolver gains the nontoken filter), the
-probe flags the regression immediately and the engineer
-flips it to a parity assertion.
-
-**Why it's OK for now**: the divergence is observable only on
-the (token-at-index-0 ∧ nontoken-at-index-1+) intersection of
-opponent bf-states facing a `each_opponent_sacrifices_creature`
-effect. The 3+ EoE consumers are mid-cost cards whose ETB
-fires once on entry; the divergent intersection is gameplay-
-real but not common (token-heavy decks aren't the dominant EoE
-archetype). The bridge documentation already notes the gap in
-the Susurian Dirgecraft sibling probe's docstring; this entry
-adds the doc backstop and the regression pin.
-
-**Fix scope when prioritized**: small.
-1. Extend `rust/src/state_ops_resolve.rs:6532-6538`'s
-   `find_map` predicate from
-   `printing.card_types.iter().any(|t| t == "Creature")`
-   to also require "the printing is not a token" — Rust today
-   has no per-printing `is_token` field, so the closure path
-   either:
-   (a) Add an `is_token: bool` field to Rust's `CardPrinting`
-       struct + thread it through `parse_printing` / the registry
-       loaders + populate it from the dict-shape's
-       `supertypes` containing "Token" (or from a dedicated
-       `is_token` key), then gate the predicate on it; OR
-   (b) Inline the supertype-string check into the predicate
-       (cheaper but spreads the convention across N call sites).
-2. Update `cross_engine.py`'s `each_opponent_sacrifices_creature`
-   bridge arm docstring (no code change — the bridge is
-   already structurally correct).
-3. Flip the divergence-pin probe to a cross-engine parity
-   assertion (both engines: token remains on bf, nontoken
-   sacrificed; delete the per-engine docstring's "this pin
-   documents the gap" framing).
-4. Remove THIS SEARCH_LIMITATIONS entry.
-
-**Impact estimate**: bounded to the (token-at-index-0 ∧
-nontoken-at-index-1+) intersection × `each_opponent_sacrifices_creature`
-consumers (3+ EoE cards). Strength cost: small — the bot
-trained on the Rust shortcut would over-value the effect
-against token-heavy boards because it perceives the sacrifice
-as cheap. Perf neutral on the fix.
+was flipped from a per-engine divergence pin to a cross-engine
+PARITY assertion (both engines: token stays on bf, nontoken
+sacrificed, p1 graveyard contents match cross-engine). The probe’s
+Rust token dict gained `"supertypes": ["Token"]` so token-ness
+round-trips (bridge-correctness, mirrors Python `make_token_creature`).
 
 ---
 

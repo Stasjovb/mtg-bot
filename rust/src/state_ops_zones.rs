@@ -95,6 +95,103 @@ pub(crate) fn mark_left_battlefield_if_nonland(
     }
 }
 
+/// Round-55 token-cease-to-exist (CR 111.7 / 704.5d).
+///
+/// Queue a battlefield-exiting object's id onto
+/// `state.pending_token_cease`. Called at every bf-exit site
+/// IMMEDIATELY AFTER the matching `pending_leaves_dispatches.push`
+/// (the two queues are 1:1 — every bf-exit site already pushes the
+/// leaving id onto the LEAVES queue; this is its token-cease
+/// sibling). The id is queued UNCONDITIONALLY — the `is_token`
+/// decision is deferred to `drain_pending_token_cease`, which looks
+/// the object up by id (in whatever non-bf zone it landed in) and
+/// reads its own `printing_id`. Deferring the type test means this
+/// queue-site needs no registry access and no per-site
+/// `printing_id` plumbing — one mechanical sibling line per
+/// bf-exit site.
+///
+/// **Timing rationale.** The token is left in its destination zone
+/// until the LEAVES/DIES dispatch drains so its own death/leave
+/// triggers still see it as an extra observer — exactly Python's
+/// `turn.move_off_battlefield` semantics, where the token is gone
+/// from every zone but `_fire_dies_triggers(state, obj)` still
+/// fires with `obj` passed by reference. The cease-removal runs at
+/// the tail of `drain_pending_leaves_dispatches` (and again at the
+/// tail of `apply_sbas`), AFTER both the DIES and LEAVES drains.
+pub(crate) fn queue_token_cease(state: &mut GameState, obj_id: u32) {
+    state.pending_token_cease.push(obj_id);
+}
+
+/// Drain `state.pending_token_cease`: for each queued id, find the
+/// object in a NON-battlefield zone (graveyard / exile / hand /
+/// library, either player); if its printing `is_token`, remove it
+/// (CR 111.7 — a token in any zone other than the battlefield
+/// ceases to exist). Non-token leaving objects are queued too (the
+/// queue-site is unconditional) but are a no-op skip here — the
+/// `is_token` gate is the only thing that removes anything.
+///
+/// The battlefield is intentionally NOT scrubbed: this queue is
+/// only ever filled on a bf-EXIT, and a token that somehow ended
+/// up back on the battlefield (a re-entrant LEAVES trigger
+/// re-creating it) is a fresh permanent that legitimately exists.
+/// Python's `move_off_battlefield` likewise only ever skips the
+/// graveyard/exile push — it never scrubs a token from the
+/// battlefield itself.
+///
+/// Idempotent and re-entrant-safe: `std::mem::take` empties the
+/// queue first; an id already absent from every non-bf zone (a
+/// non-token that went to graveyard and stays, or a token already
+/// ceased) is a no-op skip. FIFO over the queued ids (cease order
+/// = bf-exit order), matching the sibling DIES/LEAVES drains.
+pub(crate) fn drain_pending_token_cease(state: &mut GameState) {
+    let drained: Vec<u32> = std::mem::take(&mut state.pending_token_cease);
+    if drained.is_empty() {
+        return;
+    }
+    for obj_id in drained {
+        // Locate the object + decide token-ness from ITS printing.
+        // `state.registry` is borrowed immutably for the lookup; we
+        // resolve (player_idx, zone_tag, pos) first, then mutate.
+        let mut hit: Option<(usize, u8, usize)> = None;
+        'scan: for (pidx, player) in state.players.iter().enumerate() {
+            // ZONE tags: 3=graveyard, 5=exile, 1=hand, 0=library
+            // (battlefield zone 2 intentionally excluded).
+            for (zone_tag, zone) in [
+                (ZONE_GRAVEYARD, &player.graveyard),
+                (ZONE_EXILE, &player.exile),
+                (1u8, &player.hand),
+                (0u8, &player.library),
+            ] {
+                if let Some(pos) = zone.iter().position(|o| {
+                    o.id == obj_id
+                        && state.registry.is_token(o.printing_id)
+                }) {
+                    hit = Some((pidx, zone_tag, pos));
+                    break 'scan;
+                }
+            }
+        }
+        if let Some((pidx, zone_tag, pos)) = hit {
+            let player = &mut state.players[pidx];
+            match zone_tag {
+                ZONE_GRAVEYARD => {
+                    Arc::make_mut(&mut player.graveyard).remove(pos);
+                }
+                ZONE_EXILE => {
+                    Arc::make_mut(&mut player.exile).remove(pos);
+                }
+                1 => {
+                    Arc::make_mut(&mut player.hand).remove(pos);
+                }
+                0 => {
+                    Arc::make_mut(&mut player.library).remove(pos);
+                }
+                _ => unreachable!("zone_tag set only to the 4 above"),
+            }
+        }
+    }
+}
+
 #[pymethods]
 impl GameState {
     /// Mirror of `battlefield_sizes` / `hand_sizes` for the graveyard
@@ -233,6 +330,16 @@ impl GameState {
         if source_was_battlefield {
             mark_left_battlefield_if_nonland(self, obj.printing_id);
             self.pending_leaves_dispatches.push(obj.id);
+            // Round-55: token-cease sibling of the LEAVES push for
+            // the generic `move_object` bf-exit primitive (CR 111.7
+            // / 704.5d). Queued unconditionally; drain_pending_
+            // token_cease (run at the tail of the
+            // drain_pending_leaves_dispatches below) only removes it
+            // if its printing is a token AND it landed in a non-bf
+            // zone — so a bf->bf bounce-and-replay leaves the
+            // re-entered token alone (it legitimately exists on the
+            // battlefield again).
+            crate::state_ops_zones::queue_token_cease(self, obj.id);
         }
         obj.zone = target_zone;
         obj.controller = target_player;
