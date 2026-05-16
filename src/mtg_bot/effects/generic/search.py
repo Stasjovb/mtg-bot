@@ -184,6 +184,17 @@ class SearchLibraryForBasicLandTapped(Effect):
             p.library.remove(land)
             land.zone = Zone.BATTLEFIELD
             land.tapped = True
+            # CR 302.1 — summoning sickness applies only to creatures;
+            # a land entering via a search effect has no summoning
+            # sickness. A library GameObject defaults
+            # ``summoning_sick=True`` (game.py), so it must be cleared
+            # explicitly here — the prior code left it stale, making
+            # the searched land enter summoning-sick on Python while
+            # the Rust ``Effect::SearchLibraryForBasicLandTapped`` arm
+            # explicitly sets ``summoning_sick = false``. Round-54
+            # cross-engine byte-equality fix (same resolve path as the
+            # SEARCH_LIMITATIONS #15 shuffle restoration).
+            land.summoning_sick = False
             land.controller_id = controller_id
             state.battlefield.append(land)
             state.log.append(
