@@ -802,6 +802,68 @@ def test_claim_loop_threads_share_runner_setup():
     )
 
 
+def test_claim_loop_bounded_join_recovers_from_hung_thread(caplog):
+    """A thread wedged inside ``play_one_game`` (e.g. subprocess game
+    that never returns) must NOT pin the daemon in STOPPING forever.
+    The bounded join in ``ClaimLoopRunner.run`` abandons it after
+    ``cfg.drain_join_timeout_s`` and transitions to IDLE so the next
+    stage can start. Repro of the 2026-05-15 production incident
+    where master+mac needed external ``Stop-ScheduledTask`` to
+    unstick from STOPPING after the smoke-stage drain.
+    """
+    import logging as _logging
+    import threading as _threading
+
+    n_workers = 2
+    fake = FakeCoordinator(
+        claims_queue=[_make_claim(0), _make_claim(1)]
+    )
+    state = worker_daemon.WorkerState(start_delay_s=0.01)
+
+    hang = _threading.Event()  # never set — game thread blocks forever
+
+    def play_one_hangs(claim, shard_label):
+        # Block until the test releases the event (post-assertions).
+        hang.wait()
+        return cl.GameResult(outcome="completed")
+
+    runner = cl.CallableGameRunner(play_one_hangs)
+    cfg = cl.ClaimLoopConfig(
+        coordinator_url="http://fake:5099",
+        stage_id="stage_X", kind="self_play",
+        n_workers=n_workers,
+        worker_id="test", weights_root=Path("trained_weights_test"),
+        shard_label="test",
+        retry_backoff_s=(0.0, 0.0, 0.0),
+        # Short timeout so the test wall stays ~quarter-second.
+        drain_join_timeout_s=0.25,
+        http_get=fake.http_get,
+        http_post_json=fake.http_post_json,
+        http_post_multipart=fake.http_post_multipart,
+    )
+    cbs = _state_callbacks_for(state)
+    state.try_start("self_play", "stage_X", n_workers=n_workers)
+    loop = cl.ClaimLoopRunner(cfg, cbs, runner)
+    with caplog.at_level(_logging.WARNING):
+        loop.run()
+
+    # Daemon recovered to IDLE despite hung worker threads.
+    snap = state.snapshot()
+    assert snap["state"] == worker_daemon.State.IDLE
+    # Bounded-drain warning fired and named the abandoned threads.
+    abandon_warns = [
+        r.message for r in caplog.records
+        if "still alive after" in r.message
+    ]
+    assert abandon_warns, (
+        "expected a 'still alive after' warning when threads hang past "
+        "the drain timeout"
+    )
+    # Unblock the abandoned daemon threads so they exit cleanly during
+    # pytest teardown.
+    hang.set()
+
+
 def test_claim_loop_one_thread_crash_pulls_all_threads_to_error():
     """One thread crashing must mark the daemon ERROR and the peer
     threads must exit on their next ``is_stop_requested()`` check

@@ -850,11 +850,17 @@ def build_self_play_runner(
     def _teardown() -> None:
         pool = state.get("pool")
         if pool is not None:
-            # cancel_futures=True drops queued claims so we don't
-            # block teardown on a backlog; in-flight games still get
-            # waited on (PPE has no force-kill knob without going to
-            # mp.Process directly, which is a bigger change).
-            pool.shutdown(wait=True, cancel_futures=True)
+            # ``wait=False`` signals the pool's worker subprocesses to
+            # shut down but does NOT block teardown waiting for them
+            # to exit. Combined with the bounded ``thread.join`` in
+            # ``ClaimLoopRunner.run``, this keeps the daemon's drain
+            # transition prompt even when one subprocess is hung — the
+            # orphan subprocesses get reaped by their own
+            # ``Process.join`` in the executor's manager thread (or
+            # when the daemon process exits). ``cancel_futures=True``
+            # drops any still-queued tasks; running tasks proceed
+            # until they finish.
+            pool.shutdown(wait=False, cancel_futures=True)
             state["pool"] = None
         state["configs_by_version"].clear()
         state["deck_pool"] = None
