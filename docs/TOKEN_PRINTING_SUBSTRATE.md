@@ -335,8 +335,24 @@ lowest leverage.
   high-deck-count carrier is Lander/declined; Tunnel Surveyor is the
   only clean consumer and is 0-deck). Pre-positions the cluster for
   Phase 2/3.
-- Tests: synthetic cross-engine bridge pins + synthetic real-game
-  ENTERS+create_token trajectory probe + reject-path pins.
+- Tests (+11, gate **1185 → 1196**):
+  - 5 cross-engine bridge pins (`test_cross_engine_etb_triggers.py`):
+    recognizer admits clean vanilla-token carrier (Tunnel Surveyor);
+    declines non-vanilla Lander cluster (Galactic Wayfarer / Beamsaw
+    Prospector); declines tapped/each_player/attacking riders;
+    `_token_vanilla_card_def` per-disqualifier gate; loader-seating
+    assigns the deterministic Rust-registry pid + bridge-map
+    registration + Rust Registry accepts the seated dict.
+  - 1 synthetic real-game cross-engine trajectory probe
+    (`test_trajectory_parity.py::test_r49_carddef_create_token_fires_on_cast_parity`):
+    loader-seated DeckSpec → cast a vanilla-Robot-token maker →
+    on-stack ETB create_token → token spawns byte-equal on BOTH
+    engines (post-drain field-view compare clean).
+  - 5 helper pins (`test_trajectory.py`): `_is_safe_trigger_dict`
+    accepts post-seating shape / rejects symbolic + rider shapes;
+    `_seat_token_printings` no-op fast path + shared-token dedup;
+    EoE-pool-delta reject pin (Lander cluster + Gravpack Monoist
+    stay dropped — the reject-path Phase 3 will later convert).
 - Recommended round-50 next phase: **Phase 4** (`tapped` rider sister
   variant — pure Rust + recognizer, flips Gravpack Monoist's 25,252
   decks drop→admit; its Robot token is already vanilla so it needs no

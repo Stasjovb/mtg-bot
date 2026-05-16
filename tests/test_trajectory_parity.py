@@ -5566,3 +5566,190 @@ def test_carddef_safe_dies_draw_cards_fires_on_sba_death_parity():
         f"post-drain field view (after DIES+DrawCards(1)) diverges: "
         f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Round-49 N1 token-printing substrate (Phase 1) — synthetic real-game
+# create_token trajectory probe.
+#
+# Why synthetic and not a real-EoE consumer (substrate-only landing,
+# round-37 DDDD / round-43 / round-44 / round-47 / round-48 precedent):
+# every high-deck-count EoE fixed-single-token creature carrier
+# produces the non-vanilla ``Lander`` token (DECLINED §2 — token
+# activated ability would silently vanish; Phase 3) or carries a
+# declined rider (Gravpack Monoist tapped=True / Edge Rover
+# each_player=True) or a declined carrier feature (Knight Luminary
+# warp / Honored Knight-Captain activated ability). The only clean
+# creature carrier with a vanilla token is Tunnel Surveyor, which is in
+# 0 of 129,996 17lands decks. So this probe drives the substrate on a
+# synthetic carrier (the round-49 N1 EoE-pool delta is 0; verified by
+# scripts/scout_r49_create_token_shapes.py + the recognizer-decline
+# bridge pins in test_cross_engine_etb_triggers.py).
+#
+# This is the headline cross-engine probe for the token-printing
+# substrate: a vanilla-token ENTERS+IsSelf+CreateToken carrier driven
+# from a loader-SEATED DeckSpec through setup_matched_game ->
+# build_matched_states -> cast -> on-stack ETB fire -> token spawns
+# byte-equal on BOTH engines. Mirrors the
+# test_carddef_safe_etb_trigger_fires_on_cast_parity shape.
+# ---------------------------------------------------------------------------
+
+
+def _carddef_token_maker_seated_deckspec(seed: int = 42):
+    """Build a 60-card mirror DeckSpec carrying a synthetic creature
+    with ENTERS+IsSelf+CreateToken(count=1, vanilla Robot 2/2 token),
+    run through the round-49 ``_seat_token_printings`` loader pass so
+    the token printing is auto-registered (deterministic pid =
+    card_defs index, NO hand-picked magic constant) and the carrier
+    trigger carries the numeric ``token_printing_id``.
+
+    The carrier costs {1}{G} so it's castable on the same cadence as
+    the existing Grizzly-Bears / Carddef-ETB-Drawer probes.
+    """
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec
+    from mtg_bot.parity.trajectory import (
+        _token_vanilla_card_def,
+        _seat_token_printings,
+    )
+
+    # Vanilla artifact-creature Robot token (mirrors the EoE Robot
+    # token Wedgelight Rammer / Eusocial Engineering / Mechan
+    # Assembler print — 2/2, no abilities, multi-type).
+    robot = make_token_creature(
+        name="R49 Robot Token", power=2, toughness=2,
+        subtypes=("Robot",), artifact=True,
+    )
+    token_cd = _token_vanilla_card_def(robot)
+    assert token_cd is not None
+    maker = CardDef(
+        name="R49 Token Maker",
+        card_type="Creature",
+        mana_cost_generic=1,
+        mana_cost_colored=(("G", 1),),
+        power=2,
+        toughness=2,
+        triggered_abilities=(
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                # Symbolic — _seat_token_printings rewrites this to a
+                # numeric token_printing_id.
+                "effect": {
+                    "kind": "create_token",
+                    "count": 1,
+                    "_token_card_def": token_cd,
+                },
+            },
+        ),
+    )
+    forest = CardDef(name="Forest", card_type="Land", mana_produced=("G",))
+    seated = _seat_token_printings([maker, forest])
+    return DeckSpec(
+        card_defs=tuple(seated),
+        p0_library=("Forest",) * 50 + ("R49 Token Maker",) * 10,
+        p1_library=("Forest",) * 50 + ("R49 Token Maker",) * 10,
+        shared_rng_seed=seed,
+    )
+
+
+def test_r49_carddef_create_token_fires_on_cast_parity():
+    """Cast a synthetic Token Maker (ENTERS+IsSelf+CreateToken,
+    vanilla Robot 2/2) from a loader-SEATED DeckSpec; assert the ETB
+    trigger fires + a Robot token spawns on the controller's
+    battlefield + byte-equal field views post-drain on BOTH engines.
+
+    Headline round-49 N1 substrate probe. Pins the full path:
+    _seat_token_printings auto-registration -> setup_matched_game ->
+    build_matched_states (carrier + token printing on both registries,
+    bridge map seeded at the deterministic pid) -> cast -> on-stack
+    create_token resolve -> token on bf -> cross-engine field-view
+    parity.
+    """
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view,
+        compare_fields,
+        parity_smoke,
+        clear_token_printings,
+    )
+    from mtg_bot.parity import trajectory
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.game import StackItem, Zone
+
+    clear_token_printings()
+    try:
+        spec = _carddef_token_maker_seated_deckspec(seed=42)
+        py_state, rust_state = trajectory.setup_matched_game(spec)
+
+        # Find the first Token Maker in p0's opening hand (matching
+        # object id across engines via shared_rng_seed).
+        py_p0 = py_state.players[0]
+        py_maker = next(
+            o for o in py_p0.hand
+            if o.printing.name == "R49 Token Maker"
+        )
+        rust_p0_hand = rust_state.hand_snapshot(0)
+        rust_maker_entry = next(
+            e for e in rust_p0_hand
+            if e["printing_name"] == "R49 Token Maker"
+        )
+        rust_maker_id = rust_maker_entry["id"]
+        assert int(py_maker.id) == int(rust_maker_id), (
+            f"object-id mismatch: py={py_maker.id} rust={rust_maker_id}"
+        )
+
+        py_bf_before = len(getattr(py_state, "battlefield", []) or [])
+        rust_bf_before = len(
+            parity_smoke()._build_field_view(rust_state)["battlefield"]
+        )
+
+        # Drive the cast: push to stack on both, resolve spell ->
+        # bf + ETB on stack, drain.
+        rust_state.push_to_stack(rust_maker_id, 0)
+        rust_state.resolve_top_of_stack()
+
+        py_p0.hand.remove(py_maker)
+        py_maker.zone = Zone.STACK
+        py_state.stack.append(StackItem(source=py_maker, controller_id=0))
+        py_resolve(py_state)
+
+        # ETB create_token trigger should be on both stacks now.
+        assert rust_state.stack_size() == 1, (
+            "Rust: ETB CreateToken trigger missing from stack after cast"
+        )
+        assert len(py_state.stack) == 1, (
+            "Python: ETB CreateToken trigger missing from stack after cast"
+        )
+
+        # Drain both stacks (resolves the create_token).
+        while rust_state.stack_size() > 0:
+            rust_state.resolve_top_of_stack()
+        while py_state.stack:
+            py_resolve(py_state)
+
+        # Post-drain: maker on bf + ONE Robot token on bf, both
+        # engines (+2 battlefield permanents net for p0).
+        py_view = build_python_field_view(py_state)
+        rust_view = parity_smoke()._build_field_view(rust_state)
+        py_bf_names = sorted(t[0] for t in py_view["battlefield"])
+        rust_bf_names = sorted(t[0] for t in rust_view["battlefield"])
+        assert "R49 Token Maker" in py_bf_names
+        assert "R49 Token Maker" in rust_bf_names
+        assert "R49 Robot Token" in py_bf_names, (
+            f"Python: Robot token not spawned; bf={py_bf_names}"
+        )
+        assert "R49 Robot Token" in rust_bf_names, (
+            f"Rust: Robot token not spawned; bf={rust_bf_names}"
+        )
+        assert len(py_view["battlefield"]) == py_bf_before + 2
+        assert len(rust_view["battlefield"]) == rust_bf_before + 2
+        # Cross-engine: same battlefield signature (token printing
+        # name / P/T / controller / summoning-sick all byte-equal).
+        divs = compare_fields(py_view, rust_view)
+        assert divs == [], (
+            f"post-drain field view (after ENTERS+CreateToken) "
+            f"diverges: "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+        )
+    finally:
+        clear_token_printings()
