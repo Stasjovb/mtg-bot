@@ -1517,6 +1517,74 @@ def test_per_shard_machines_tolerates_malformed_extra_json(
     assert machines[0]["n_games_done"] == 60
 
 
+def test_aggregate_row_derives_rates_and_eta_for_self_play(
+    client, progress_dir: Path,
+):
+    """When the writer populates an aggregate run_progress row with
+    n_games_done + elapsed_seconds + extra_json[n_samples], the UI
+    derives ``games_per_hour``, ``samples_per_hour``, and
+    ``estimated_remaining_seconds`` at read time. The headline UI
+    stats card (SAMPLES, GAMES/HR, SAMPLES/HR, ETA) reads these fields
+    so all four must surface for any aggregate-row run, not just the
+    per-shard-rollup fallback path."""
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "smoke_self_play_v5", kind="self_play",
+            status="running",
+            started_at="2026-05-16T06:00:00+00:00",
+        )
+        _seed_progress(
+            conn, "smoke_self_play_v5",
+            n_games_done=10, n_games_total=100,
+            elapsed_seconds=200.0,  # 200s for 10 games -> 180/hr
+            extra={"n_samples": 5000, "n_workers": 3},
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/smoke_self_play_v5").get_json()
+    # Counters fanned out as before.
+    assert body["n_games_done"] == 10
+    assert body["n_games_total"] == 100
+    assert body["n_samples"] == 5000
+    assert body["n_workers"] == 3
+    # Derived: 10 games / 200s × 3600 = 180 games/hr.
+    assert body["games_per_hour"] == pytest.approx(180.0)
+    # Derived: 5000 samples / 200s × 3600 = 90000 samples/hr.
+    assert body["samples_per_hour"] == pytest.approx(90000.0)
+    # 90 games remaining × 20s/game = 1800s ETA.
+    assert body["estimated_remaining_seconds"] == pytest.approx(1800.0)
+
+
+def test_aggregate_row_skips_derivation_when_no_games_done_yet(
+    client, progress_dir: Path,
+):
+    """Fresh stage with 0 games done shouldn't divide-by-zero or
+    surface nonsense rates. games_per_hour / samples_per_hour /
+    estimated_remaining_seconds stay absent (UI renders ``—``).
+    """
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "fresh_run", kind="self_play", status="running",
+            started_at="2026-05-16T06:00:00+00:00",
+        )
+        _seed_progress(
+            conn, "fresh_run",
+            n_games_done=0, n_games_total=100,
+            elapsed_seconds=5.0,
+            extra={"n_samples": 0, "n_workers": 3},
+        )
+    finally:
+        conn.close()
+    body = client.get("/api/runs/fresh_run").get_json()
+    assert body["n_games_done"] == 0
+    # Derived rates absent until first game lands.
+    assert body.get("games_per_hour") is None
+    assert body.get("samples_per_hour") is None
+    assert body.get("estimated_remaining_seconds") is None
+
+
 def test_extra_json_preserves_underscore_keys_in_top_level(
     client, progress_dir: Path,
 ):
