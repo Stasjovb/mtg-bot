@@ -341,6 +341,67 @@ class EachOpponentLosesLifeEqualToArtifactCount(Effect):
 
 
 @dataclass(frozen=True)
+class EachOpponentLosesLifeEqualToYourLifeTotal(Effect):
+    """Each opponent loses life equal to your (the source-controller's)
+    current life total.
+
+    BLOCKED-RUST-EFFECT slice (round 48) -- sister of the round-44
+    ``EachOpponentLosesLifeEqualToArtifactCount`` (SAME recipient set +
+    apply step: each opponent of the source-controller, direct life
+    subtraction CR 118.4 not damage, AND the SAME apply substrate:
+    life-loss-each-opponent), with a NEW dynamic-X denominator (the
+    source-controller's current life total instead of their artifact
+    count). SECOND denominator on the life-loss-each-opponent apply
+    substrate (artifact-count round-44 -> life-total round-48). The
+    life-total denominator was established by round-42's
+    ``MillTargetPlayerEqualToYourLifeTotal`` (mill substrate) and
+    round-47's ``DealDamageToOpponentCreatureByLifeTotal`` (damage
+    substrate); this slice walks the X-from-count matrix to a third
+    (substrate, life-total) cell, confirming the round-35
+    bidirectionally-extensible plumbing generalizes across both axes.
+
+    Life-total clamp: negative life is clamped to 0 (``max(0, life)``)
+    before use as the denominator -- matches the round-42
+    ``MillTargetPlayer(use_controller_life=True)`` /
+    round-47 damage-by-life-total clamping precedent (a negative life
+    total can transiently arise from a prior loss/damage in the same
+    resolution window before the SBA loop runs; a negative denominator
+    would be nonsensical). Zero clamped life -> silent no-op (skips the
+    per-opponent loop entirely); matches the
+    ``if amount <= 0: return`` short-circuit convention used by the
+    round-44 sister and the round-32/34 X-from-count classes.
+
+    No EoE consumers today -- ships per round-27/31/37 round-trip-
+    surface-coverage rule. The Python class lands in this slice as the
+    bridge translator's other side; the dynamic-X is the whole point of
+    the class so there are no constructor args (mirrors the round-44
+    artifact-count each-opponent class' unit-shape convention).
+    """
+
+    def resolve(
+        self, state: "GameState", controller_id: int,
+        targets: tuple[Target, ...] = (),
+    ) -> None:
+        amount = max(0, state.player_by_id(controller_id).life)
+        if amount <= 0:
+            return
+        for p in state.players:
+            if p.id == controller_id or p.has_lost:
+                continue
+            p.life -= amount
+            state.log.append(
+                f"P{p.id} loses {amount} life "
+                f"(life: {p.life}; X = your life total)"
+            )
+
+    def describe(self) -> str:
+        return (
+            "each opponent loses life equal to your life total"
+        )
+
+
+
+@dataclass(frozen=True)
 class TargetOpponentLosesNYouGainN(Effect):
     """Target opponent loses ``amount`` life; the ability's controller
     gains ``amount`` life. Matches Susurian Voidborn's

@@ -3990,6 +3990,95 @@ fn apply_effect(
             state.players[opponent_idx].life =
                 state.players[opponent_idx].life.saturating_sub(amount);
         }
+        // BLOCKED-RUST-EFFECT slice (round 48) -- each opponent of the
+        // source-controller loses life equal to the source-controller's
+        // CURRENT LIFE TOTAL. Sister of round-44's
+        // `Effect::EachOpponentLosesLifeEqualToArtifactCount` (SAME
+        // recipient set + apply step + apply substrate) and round-42's
+        // `MillTargetPlayerEqualToYourLifeTotal` / round-47's
+        // `DealDamageToOpponentCreatureByLifeTotal` (SAME life-total
+        // denominator on OTHER substrates). SECOND denominator on the
+        // life-loss-each-opponent apply substrate; walks the
+        // X-from-count matrix to a third (substrate, life-total) cell.
+        //
+        // **Direct life subtraction (CR 118.4) -- NOT damage.** Mirrors
+        // round-44 EachOpponentLosesLifeEqualToArtifactCount exactly:
+        // routes around damage-prevention / Worship-style replacement
+        // effects (CR 614). Two-player engine: "each opponent" reduces
+        // to "the one opponent" at `1 - controller`.
+        //
+        // **Life-total denominator.** Read the source-controller's
+        // current life total and clamp negative life to 0
+        // (`life.max(0)`) -- BIT-FOR-BIT mirror of the round-42
+        // `MillTargetPlayerEqualToYourLifeTotal` life clamp and Python's
+        // `max(0, life)` shape. The round-44 sister walks the bf for an
+        // artifact count; this arm reads the life total instead -- the
+        // ONLY mechanical difference between the two arms (same source-
+        // finder, same apply, same zero-no-op).
+        //
+        // **Source-finder dispatch (round-44 sister pattern).** 5-zone
+        // walk + stack scan. Source not found anywhere = silent fizzle
+        // (lost-track-of-source tolerance, mirrors
+        // EachOpponentLosesLife / EachOpponentLosesLifeEqualToArtifactCount
+        // / DiscardSelf shape). Uses the 5-zone walk rather than
+        // `current_resolve_source_controller` for cross-arm consistency
+        // with the round-44 sister and so the inject-and-fire-ENTERS
+        // synthetic harness resolves correctly.
+        //
+        // **Zero-life = silent no-op** (matches Python's `if amount <=
+        // 0: return` short-circuit before the per-opponent loop; also
+        // mirrors GainLife / DrawCards / Mill / EachOpponentLosesLife /
+        // EachOpponentLosesLifeEqualToArtifactCount / DiscardSelf
+        // zero-amount conventions).
+        Effect::EachOpponentLosesLifeEqualToYourLifeTotal => {
+            // Source-controller resolution (5-zone walk + stack scan;
+            // mirrors round-44 EachOpponentLosesLifeEqualToArtifactCount
+            // sister shape exactly).
+            let mut source_controller: Option<u8> = None;
+            'outer_sc_eollyl: for player in state.players.iter() {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    for obj in zone.iter() {
+                        if obj.id == source_obj_id {
+                            source_controller = Some(obj.controller);
+                            break 'outer_sc_eollyl;
+                        }
+                    }
+                }
+            }
+            if source_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    source_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = source_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Life-total denominator: clamp negative life to 0
+            // (matches Python's `max(0, life)` clamp and the round-42
+            // MillTargetPlayerEqualToYourLifeTotal precedent).
+            let cidx = controller as usize;
+            let amount: i32 = state.players[cidx].life.max(0);
+            if amount <= 0 {
+                return Ok(()); // life <= 0 -> silent no-op
+            }
+            // Each opponent: the OTHER player in 2-player land.
+            let opponent_id = 1 - controller;
+            let opponent_idx = opponent_id as usize;
+            // Direct life subtraction -- not damage. Negative life is
+            // handled by SBA loop. Mirrors round-44 sister BIT-FOR-BIT.
+            state.players[opponent_idx].life =
+                state.players[opponent_idx].life.saturating_sub(amount);
+        }
         // BLOCKED-RUST-EFFECT slice (round 45) -- the source's
         // controller GAINS life equal to the source-controller's
         // artifact count. Sister of round-26's `Effect::GainLife
