@@ -99,15 +99,22 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
-# Re-anchored at HEAD ``921d759a`` (cycle-8 fold) — the cycle-5..8
-# Tier-A folds closed Focus Fire + Biosynthic Burst, auto-growing the
-# live guardrail's admit set from the round-73 4-card set to this exact
-# 6. This stays an EXACT-set pin: a future legitimate grow (or any
-# regression that admits an un-covered spell) must fail loudly here and
-# be re-anchored honestly, never weakened to a superset/subset check.
+# Re-anchored at the round-76 spell-card-bridge **Phase 2** landing —
+# Phase 2 ships the 2-slot heterogeneous-target grammar (the
+# DiplomaticRelationsEffect Rust variant + bridge + reverse-leaf +
+# StackItem.target_obj_id_2 / current_resolve_payload_target_id_2
+# double-swap + the guardrail's surgical (2,2)/('my_creature',
+# 'creature') widening), auto-growing the live guardrail's admit set
+# from the cycle-8 6-card single-target set to this exact 7 (the +1 is
+# Diplomatic Relations — the SOLE 2-slot card admitted; the widening is
+# surgical, NOT a blanket multi-target widen). This stays an EXACT-set
+# pin: a future legitimate grow (or any regression that admits an
+# un-covered spell) must fail loudly here and be re-anchored honestly,
+# never weakened to a superset/subset check.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
-    "Biosynthic Burst", "Depressurize", "Focus Fire",
-    "Orbital Plunge", "Radiant Strike", "Seedship Impact",
+    "Biosynthic Burst", "Depressurize", "Diplomatic Relations",
+    "Focus Fire", "Orbital Plunge", "Radiant Strike",
+    "Seedship Impact",
 ]
 # The two members this module's carrier-sweep probes drive directly
 # through the full Phase-1 carrier path (Seedship / Orbital and Focus
@@ -120,11 +127,13 @@ def test_phase1_admit_set_is_exactly_the_covered_bridged_seatable_set():
     """Verify-first guard: the live spell-card-bridge admit set (the
     set of EoE printings passing the production-deck loader's
     ``_printing_is_bridge_simple_spell`` guardrail) is EXACTLY
-    ``{Biosynthic Burst, Depressurize, Focus Fire, Orbital Plunge,
-    Radiant Strike, Seedship Impact}`` at this HEAD (re-anchored at
-    ``921d759a``, cycle-8 fold — the cycle-5..8 Tier-A folds closed
-    #6 Biosynthic Burst and #5 Focus Fire, which AUTO-JOINED the
-    guardrail's live covered-set query; the set was {Depressurize,
+    ``{Biosynthic Burst, Depressurize, Diplomatic Relations, Focus
+    Fire, Orbital Plunge, Radiant Strike, Seedship Impact}`` at this
+    HEAD (re-anchored at the round-76 **Phase 2** landing — Phase 2's
+    2-slot heterogeneous-target grammar flipped Diplomatic Relations
+    DECLINE→ADMITTED, growing the set 6→7; the prior 6 was the cycle-8
+    fold {Biosynthic Burst, Depressurize, Focus Fire, Orbital Plunge,
+    Radiant Strike, Seedship Impact}; the set was {Depressurize,
     Orbital Plunge, Radiant Strike, Seedship Impact} after the round-73
     Lander-spell-token-seating sub-substrate flipped Seedship Impact /
     Orbital Plunge DECLINE→SEATED, and {Depressurize, Radiant Strike}

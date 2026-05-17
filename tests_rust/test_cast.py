@@ -1086,3 +1086,145 @@ def test_castspell_spell_resolves_pause_sibling_parity(synthetic_state):
     assert synthetic_state.find_object_zone(5) == ZONE_GRAVEYARD
     assert synthetic_state.find_object_zone(spell_id) == ZONE_GRAVEYARD
     assert synthetic_state.is_stack_empty() is True
+
+
+# ====================================================================
+# Spell-card-bridge lever, Phase 2 (round-76) — the 2-slot
+# heterogeneous-target grammar. `Action::CastSpell` on Diplomatic
+# Relations binds TWO deterministic-first targets (slot 0 = first
+# caster-controlled creature, slot 1 = first non-caster-controlled
+# creature) onto the StackItem; the double resolve-time swap threads
+# both into `DiplomaticRelationsEffect` (pump slot-0 +1/+0 +
+# vigilance UEOT, then deal slot-0's post-pump effective power as
+# damage to slot-1), then move_source_post_resolve sends the spell
+# hand -> graveyard.
+# ====================================================================
+
+def _diplomatic_relations_spell_dict():
+    """A real-shape 2-slot Instant carrying the closed Tier-A #7
+    ``diplomatic_relations_effect`` (field-free — the 2-slot targets
+    ride on the StackItem, NOT the dict)."""
+    return {
+        "name": "Test Diplomatic Relations",
+        "card_types": ["Instant"],
+        "mana_cost": {"generic": 2, "G": 1},
+        "effects": [{"kind": "diplomatic_relations_effect"}],
+    }
+
+
+def test_castspell_diplomatic_relations_two_slot_bind_and_resolve(
+    synthetic_state,
+):
+    """Pin #DR (Phase-2 2-slot grammar — the load-bearing assertion):
+    `Action::CastSpell` on Diplomatic Relations binds slot 0 = first
+    caster (p0) creature + slot 1 = first non-caster (p1) creature
+    onto the spell StackItem; `resolve_top_of_stack` swaps BOTH into
+    the payload-target slots and `DiplomaticRelationsEffect` pumps
+    slot-0 +1/+0 (+ vigilance UEOT) then deals slot-0's post-pump
+    effective power as damage to slot-1; the spell goes to p0's
+    graveyard.
+
+    The synthetic seed's first p0-bf creature is Grizzly Bears (id
+    5, 2/2 = slot 0); the first p1-bf creature is Grizzly Bears (id
+    72, 2/2 = slot 1). Post-resolve: slot-0 is 3/2 (2/2 +1/+0 UEOT)
+    so slot-1 takes 3 damage → 3 > its 2 toughness → SBA destroys it
+    (the lethal-via-effect-power path, byte-equal with Python's
+    `_apply_damage` + SBA)."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _diplomatic_relations_spell_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 2)
+    slot0 = 5   # first p0-controlled creature (seed Grizzly Bears 2/2)
+    slot1 = 72  # first p1-controlled creature (seed Grizzly Bears 2/2)
+    assert synthetic_state.printing_name_of(slot0) == "Grizzly Bears"
+    assert synthetic_state.printing_name_of(slot1) == "Grizzly Bears"
+    gy_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": spell_id})
+    synthetic_state.resolve_top_of_stack()
+    synthetic_state.apply_sbas()
+
+    # Spell -> p0 graveyard (CR 608.2m).
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 1
+    assert synthetic_state.is_stack_empty() is True
+    # Slot 0 (p0 Grizzly Bears, 2/2) pumped to 3-power + vigilance
+    # UEOT, still on the battlefield.
+    assert synthetic_state.find_object_zone(slot0) == ZONE_BATTLEFIELD
+    assert synthetic_state.effective_power(slot0) == 3, (
+        "slot-0 Grizzly Bears must be 3-power post-pump (2/2 +1/+0)")
+    # Slot 1 (p1 Grizzly Bears, 2/2) took 3 damage (slot-0's
+    # post-pump power) → 3 > 2 toughness → SBA-destroyed (the
+    # lethal-via-effective-power path; byte-equal with Python).
+    assert synthetic_state.find_object_zone(slot1) == ZONE_GRAVEYARD, (
+        "slot-1 must be SBA-destroyed by slot-0's post-pump power "
+        "(3 damage > 2 toughness)")
+
+
+def test_castspell_diplomatic_relations_no_opponent_creature_pumps_only(
+    synthetic_state,
+):
+    """Pin #DR2 (the slot-1-illegal fizzle branch — CR 608.2b):
+    Diplomatic Relations with NO non-caster creature still resolves;
+    slot 0 is pumped + gains vigilance but the damage component
+    silently fizzles (Python's `opp_target is None` early return
+    AFTER the pump). We strip p1's creatures off the battlefield so
+    no non-caster creature exists → slot 1 unbound, the pump-only
+    branch."""
+    # Remove every p1 creature from the battlefield (ids 72..76 in
+    # the default seed) so the 2-slot scan finds NO slot-1
+    # candidate. (Moving to p1 graveyard is enough — off-battlefield.)
+    for p1_cre in range(72, 77):
+        assert synthetic_state.printing_name_of(p1_cre) == "Grizzly Bears"
+        synthetic_state.move_object(p1_cre, ZONE_GRAVEYARD, 1)
+    spell_id = synthetic_state.register_and_inject_object(
+        _diplomatic_relations_spell_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 2)
+    slot0 = 5
+    assert synthetic_state.printing_name_of(slot0) == "Grizzly Bears"
+    gy_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": spell_id})
+    synthetic_state.resolve_top_of_stack()
+    synthetic_state.apply_sbas()
+
+    # Spell -> graveyard; slot-0 pumped (3-power); NO damage dealt
+    # anywhere (slot 1 unbound — the pump-only fizzle branch).
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[0] == gy_before + 1
+    assert synthetic_state.effective_power(slot0) == 3, (
+        "slot-0 still pumped even when the damage component fizzles "
+        "(Python pumps BEFORE the opp_target None check)")
+    # No other p0 creature took damage (id 6 is the next p0 Bears).
+    assert synthetic_state.get_damage(6) == 0
+
+
+def test_castspell_diplomatic_relations_pause_sibling_parity(
+    synthetic_state,
+):
+    """Pin #DR3 (sibling-parity guard — the §3.4 requirement): the
+    2-slot double resolve-swap fires IDENTICALLY in
+    `resolve_top_of_stack_pause` as in `resolve_top_of_stack`. Drive
+    the 2-slot cast then drain via the `_pause` entry point; same
+    observable (slot-0 pumped to 3-power, slot-1 p1 Bears
+    SBA-destroyed by the 3 damage, spell in graveyard)."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _diplomatic_relations_spell_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    synthetic_state.add_mana(0, "C", 2)
+
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": spell_id})
+    synthetic_state.resolve_top_of_stack_pause()
+    synthetic_state.apply_sbas()
+
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_GRAVEYARD
+    assert synthetic_state.effective_power(5) == 3
+    assert synthetic_state.find_object_zone(72) == ZONE_GRAVEYARD
+    assert synthetic_state.is_stack_empty() is True

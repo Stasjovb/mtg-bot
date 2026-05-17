@@ -6435,6 +6435,201 @@ fn apply_effect(
             // (CR 608.2b — the spell resolves, damage is not dealt;
             // Python's `_slot_target_still_legal` returns early).
         }
+        // DiplomaticRelationsEffect (Effect-uncovered Tier-A #7 —
+        // Diplomatic Relations; spell-card-bridge Phase 2). The
+        // FIRST 2-slot heterogeneous-target spell arm. Mirrors
+        // Python's `DiplomaticRelationsEffect.resolve`
+        // (`effects/bespoke.py:1940-2008`) BIT-FOR-BIT against the
+        // Python source of truth:
+        //  - slot 0 (friendly pumped creature) rides on
+        //    `current_resolve_payload_target_id` (swapped in by both
+        //    resolve entry points from `StackItem.target_obj_id`);
+        //  - slot 1 (opponent's damaged creature) rides on
+        //    `current_resolve_payload_target_id_2` (from
+        //    `StackItem.target_obj_id_2`).
+        // Python: pump slot-0 +1/+0 + vigilance UEOT (target
+        // re-validated: still on a bf AND still caster-controlled,
+        // else the WHOLE effect fizzles — `my_obj=None` short-
+        // circuits before damage too); then if slot-1 exists +
+        // is opponent-controlled, deal slot-0's POST-PUMP effective
+        // power (counters-inclusive) as damage.
+        Effect::DiplomaticRelationsEffect => {
+            // Source-controller resolution (the established sister
+            // 5-zone-walk + stack-scan shape — `BiosynthicBurst
+            // Effect` `:6091`, `FocusFireEffect` `:6215`). This is
+            // the caster (= `controller_id` in Python's `resolve`).
+            let mut src_controller: Option<u8> = None;
+            'dr_outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) =
+                        zone.iter().find(|o| o.id == source_obj_id)
+                    {
+                        src_controller = Some(obj.controller);
+                        break 'dr_outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Slot 0: the friendly pumped creature. Read the bound
+            // target, re-validate (CR 608.2b — Python re-checks the
+            // creature is on a bf AND still controlled by the
+            // caster, else `my_obj = None` and the WHOLE effect is a
+            // no-op — NO damage either).
+            let slot0_id = state.current_resolve_payload_target_id;
+            let mut my_pidx: Option<usize> = None;
+            if let Some(t0) = slot0_id {
+                'find0: for (pidx, player) in
+                    state.players.iter().enumerate()
+                {
+                    if let Some(obj) = player
+                        .battlefield
+                        .iter()
+                        .find(|o| o.id == t0)
+                    {
+                        // Still controlled by the caster?
+                        if obj.controller == controller {
+                            my_pidx = Some(pidx);
+                        }
+                        break 'find0;
+                    }
+                }
+            }
+            let (Some(my_pidx), Some(my_id)) = (my_pidx, slot0_id)
+            else {
+                // slot-0 illegal at resolve → whole effect fizzles
+                // (Python: `my_obj = None` → early return before
+                // damage). Silent no-op.
+                return Ok(());
+            };
+            // Pump slot-0 +1/+0 UEOT + grant vigilance UEOT — the
+            // EXACT push shapes the cross-engine-proven
+            // `DepressurizeEffect` (PowerToughnessBonus) /
+            // `BiosynthicBurstEffect` (GrantKeyword, lowercase) arms
+            // use. Both drain at cleanup byte-equal on both engines.
+            {
+                let zone: &mut Vec<GameObject> = Arc::make_mut(
+                    &mut state.players[my_pidx].battlefield,
+                );
+                for obj in zone.iter_mut() {
+                    if obj.id == my_id {
+                        obj.ueot_modifiers.push(
+                            UeotModifier::PowerToughnessBonus {
+                                power: 1,
+                                toughness: 0,
+                            },
+                        );
+                        obj.ueot_modifiers.push(
+                            UeotModifier::GrantKeyword {
+                                keyword: "vigilance".to_string(),
+                            },
+                        );
+                        break;
+                    }
+                }
+            }
+            // Slot 1: the opponent's damaged creature. Read the
+            // second bound target, re-validate (must be on a bf AND
+            // controlled by a NON-caster — Python checks
+            // `opp_obj.controller_id != controller_id`). If
+            // illegal/absent, the pump already applied and the
+            // damage component is skipped (Python returns after the
+            // pump in that branch).
+            let slot1_id = state.current_resolve_payload_target_id_2;
+            let mut opp_pidx: Option<usize> = None;
+            if let Some(t1) = slot1_id {
+                'find1: for (pidx, player) in
+                    state.players.iter().enumerate()
+                {
+                    if let Some(obj) = player
+                        .battlefield
+                        .iter()
+                        .find(|o| o.id == t1)
+                    {
+                        if obj.controller != controller {
+                            opp_pidx = Some(pidx);
+                        }
+                        break 'find1;
+                    }
+                }
+            }
+            let (Some(opp_pidx), Some(opp_id)) = (opp_pidx, slot1_id)
+            else {
+                return Ok(()); // pump applied, damage component
+                               // fizzles — Python early return.
+            };
+            // Damage = slot-0's POST-PUMP EFFECTIVE power, counters-
+            // INCLUSIVE (Python's `effective_power` view — the EXACT
+            // counters-inclusive formula re-derived privately per
+            // the file-isolation rule, identical to the
+            // `DepressurizeEffect` conditional read `:5928-5951`:
+            // base = ueot_base_pt_override().p OR printed_power,
+            // plus obj.counters, plus obj.ueot_power_bonus() — which
+            // now includes the just-pushed +1).
+            let amount: i32 = {
+                let o = state.players[my_pidx]
+                    .battlefield
+                    .iter()
+                    .find(|x| x.id == my_id)
+                    .expect("slot-0 id validated but not found");
+                let printing = state
+                    .registry
+                    .lookup(o.printing_id)
+                    .expect("slot-0 printing must resolve");
+                let printed_p = printing.power.unwrap_or(0) as i32;
+                let base_p = o
+                    .ueot_base_pt_override()
+                    .map(|(p, _)| p)
+                    .unwrap_or(printed_p);
+                base_p + o.counters + o.ueot_power_bonus()
+            };
+            // Apply damage to slot-1 via the proven
+            // `obj.damage.saturating_add` primitive shape
+            // (`DealDamageAnyTarget` / `FocusFireEffect`). SBA
+            // handles lethal post-resolve byte-equal. Applied
+            // UNCONDITIONALLY (no `amount > 0` clamp): Python's
+            // `_apply_damage` does `obj.damage += amount`
+            // unconditionally — `effective_power` is NOT clamped to
+            // 0 (`game.py:_compute_effective_pt`), so a byte-equal
+            // mirror must add the (rare) non-positive amount too.
+            // With the just-pushed +1/+0 the realistic amount is
+            // >= 1 for any non-negative-power creature; the
+            // unconditional add only matters for a theoretically
+            // negative effective power, where matching Python's
+            // unclamped `+=` is the byte-equal contract. `saturating
+            // _add` on the i16 mirrors Python's unbounded int add
+            // for the realistic damage range (same shape as the
+            // proven FocusFire/DealDamageAnyTarget arms).
+            let amount_i16 = amount
+                .clamp(i16::MIN as i32, i16::MAX as i32)
+                as i16;
+            let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                &mut state.players[opp_pidx].battlefield,
+            );
+            for obj in bf_mut.iter_mut() {
+                if obj.id == opp_id {
+                    obj.damage =
+                        obj.damage.saturating_add(amount_i16);
+                    break;
+                }
+            }
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared
@@ -11804,12 +11999,23 @@ impl GameState {
         // state leaks across resolution boundaries (pin #4 / #6).
         let saved_target = self.current_resolve_payload_target_id;
         self.current_resolve_payload_target_id = top.target_obj_id;
+        // Spell-card-bridge lever Phase 2 (round-76): swap in the
+        // SECOND bound target for a 2-slot spell (Diplomatic
+        // Relations). Identical save → set → restore bracketing as
+        // slot 0; `None` for every single-target / pre-Phase-2 push
+        // (back-compat — the closed Phase-1 single-target arms
+        // self-scan and ignore BOTH payload slots, so the swap is a
+        // correct no-op for them). Mirrored into BOTH resolve entry
+        // points (the §3.4 sibling-parity requirement; pin #4 / #6).
+        let saved_target_2 = self.current_resolve_payload_target_id_2;
+        self.current_resolve_payload_target_id_2 = top.target_obj_id_2;
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_payload_target_id_2 = saved_target_2;
         self.current_resolve_payload_target_id = saved_target;
         self.current_resolve_source_controller = saved_ctrl;
         effects_result?;
@@ -11980,12 +12186,23 @@ impl GameState {
         // `resolve_top_of_stack` for the rationale.
         let saved_target = self.current_resolve_payload_target_id;
         self.current_resolve_payload_target_id = top.target_obj_id;
+        // Spell-card-bridge lever Phase 2 (round-76): swap in the
+        // SECOND bound target for a 2-slot spell (Diplomatic
+        // Relations). Identical save → set → restore bracketing as
+        // slot 0; `None` for every single-target / pre-Phase-2 push
+        // (back-compat — the closed Phase-1 single-target arms
+        // self-scan and ignore BOTH payload slots, so the swap is a
+        // correct no-op for them). Mirrored into BOTH resolve entry
+        // points (the §3.4 sibling-parity requirement; pin #4 / #6).
+        let saved_target_2 = self.current_resolve_payload_target_id_2;
+        self.current_resolve_payload_target_id_2 = top.target_obj_id_2;
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_payload_target_id_2 = saved_target_2;
         self.current_resolve_payload_target_id = saved_target;
         self.current_resolve_source_controller = saved_ctrl;
         effects_result?;

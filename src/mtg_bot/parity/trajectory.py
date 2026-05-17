@@ -3845,6 +3845,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.bespoke import (
         BiosynthicBurstEffect,
         DepressurizeEffect,
+        DiplomaticRelationsEffect,
         FocusFireEffect,
         SeedshipImpactEffect,
     )
@@ -3900,6 +3901,27 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # §2 teeth).
         if isinstance(eff, FocusFireEffect):
             return {"kind": "focus_fire_effect", "base": int(eff.base)}
+        # Diplomatic Relations (Effect-uncovered Tier-A #7; round-76;
+        # spell-card-bridge **Phase 2** — the 2-slot heterogeneous-
+        # target grammar). Pid-FREE covered unit variant — Rust's
+        # ``parse_effect`` ``"diplomatic_relations_effect"`` arm takes
+        # NO fields and the dict→Python bridge arm (cross_engine.py
+        # ``diplomatic_relations_effect``) constructs the field-free
+        # ``DiplomaticRelationsEffect()``. The +1/+0, vigilance, and
+        # power-equal damage are intrinsic; the 2-slot targets ride
+        # on the spell StackItem, NOT in this dict. No token pid → no
+        # :func:`_seat_token_printings` dependency; the round-trip is
+        # the clean ``biosynthic_burst_effect`` unit-leaf idiom.
+        # Adding this leaf — TOGETHER with the guardrail's Phase-2
+        # 2-slot widening (:func:`_printing_is_bridge_simple_spell`)
+        # — is what flips Diplomatic Relations into the spell-card-
+        # bridge admit set: with the Rust variant + bridge arm landed
+        # it is now covered+bridged AND round-trips here, so the
+        # guardrail admits the ``{2}{G}`` 2-slot Instant (the admit
+        # set grows 6→7; auto-grow, no hardcoded list — the §2
+        # teeth).
+        if isinstance(eff, DiplomaticRelationsEffect):
+            return {"kind": "diplomatic_relations_effect"}
         # Lander-pid spell effects (Seedship Impact / Orbital Plunge) —
         # the Lander-spell-token-seating sub-substrate (round-73; the
         # follow-on the round-70 SEARCH_LIMITATIONS seam scoped). Their
@@ -3956,31 +3978,45 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
 
 
 def _printing_is_bridge_simple_spell(printing) -> bool:
-    """True iff a CardPrinting is a PURE single-target Instant/Sorcery
-    the spell-card-bridge lever round-trips byte-equal across engines.
+    """True iff a CardPrinting is a covered Instant/Sorcery whose
+    target grammar the spell-card-bridge lever round-trips byte-equal
+    across engines (Phase-1 single-target OR Phase-2 2-slot).
 
-    Spell-card-bridge lever, **Phase 1** (round-70; spec at
-    ``docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md`` §3; scoping basis
-    ``docs/SPELL_CARD_BRIDGE_LEVER_DESIGN.md``).
+    Spell-card-bridge lever, **Phase 1** (round-70) **+ Phase 2**
+    (round-76; spec at ``docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md``
+    §3 + its Phase-2 section; scoping basis
+    ``docs/SPELL_CARD_BRIDGE_LEVER_DESIGN.md`` §3.0).
 
-    Motivating set: the single-target Tier-A spells whose bespoke
-    Effect close has landed AND whose effect carries no loader-
-    unseatable token pid — at landing that is Radiant Strike +
-    Depressurize. Seedship Impact / Orbital Plunge are covered but
-    DECLINED in Phase 1 (Lander ``token_printing_id`` unseatable on
-    the spell path — see :func:`_python_spell_effect_to_dict`).
-    Diplomatic Relations (2-slot grammar) is Phase 2; Close Encounter
-    (additional-cost-choice + the ``CloseEncounterEffect`` not
-    covered) is the §2.2-declined Tier-C card.
+    Motivating set:
+
+    - **Phase 1 (single-target — ``(1,1)`` / ``()``):** the
+      single-target Tier-A spells whose bespoke Effect close has
+      landed AND whose effect carries no loader-unseatable token pid
+      — currently the 6-card set {Radiant Strike, Depressurize,
+      Focus Fire, Biosynthic Burst, Seedship Impact, Orbital Plunge}
+      (Seedship Impact / Orbital Plunge admitted via the round-73
+      Lander-spell-token-seating sub-substrate).
+    - **Phase 2 (2-slot heterogeneous — ``(2,2)`` /
+      ``('my_creature','creature')``):** Diplomatic Relations — the
+      SINGLE 2-slot grammar admitted, exactly the disjoint
+      friendly-creature + opponent-creature slot pair the
+      ``_select_spell_targets`` per-slot-kind first-legal convention
+      drives byte-equal. Adding it grows the admit set 6→7.
+
+    Close Encounter (additional-cost-choice + the
+    ``CloseEncounterEffect`` not covered) STAYS the §2.2-declined
+    Tier-C card; every other multi-target / modal / X / warp /
+    additional-cost shape STAYS filtered (the decline set, §2.2).
 
     The §2 teeth: it admits ONLY a spell whose ``spell_effect`` is a
     COVERED+BRIDGED effect (queried against the LIVE covered set, NOT
     a hardcoded list — so it auto-gates on each per-card Tier-A close
     having LANDED) AND round-trips through the reverse serializer
     (which structurally declines the unseatable-token-pid shapes),
-    single-mode, no X / kicker / warp / additional-cost-choice,
-    exactly one required target, an implicit (homogeneous) target
-    slot the deterministic-first convention drives byte-equal. Every
+    single-mode, no X / kicker / warp / additional-cost-choice, with
+    a target grammar that is EITHER the Phase-1 implicit single
+    target OR the Phase-2 exact 2-slot ``('my_creature','creature')``
+    pair the deterministic-first convention drives byte-equal. Every
     other spell shape stays filtered (the decline set, §2.2).
     """
     if not (
@@ -4021,13 +4057,32 @@ def _printing_is_bridge_simple_spell(printing) -> bool:
     from mtg_bot.effects.combinators import ModalChooseOne
     if isinstance(se, ModalChooseOne):
         return False  # modal — later phase
-    # Phase-1 single-target ONLY — Phase 2 widens to the 2-slot
-    # grammar (Diplomatic Relations: (2,2) / heterogeneous slots).
+    # Target-grammar gate — Phase 1 (single-target) OR Phase 2 (the
+    # exact 2-slot ('my_creature','creature') heterogeneous pair).
+    # Every OTHER target shape (any-number, opponent-zone, 3+ slots,
+    # other 2-slot kind-tuples) STAYS positively declined — the §2
+    # teeth. The Phase-2 widening is SURGICAL: it admits ONLY the
+    # one heterogeneous pair the cross-engine 2-slot binding +
+    # resolve-time double-swap is implemented + pinned byte-equal
+    # for (Diplomatic Relations), NOT a blanket "any 2-target"
+    # widen (that would ship the count-chasing anti-pattern §2
+    # exists to prevent).
     min_t, max_t = se.target_count_range()
-    if (min_t, max_t) != (1, 1):
-        return False  # Phase 1 = exactly one required target
-    if se.target_slot_kinds():
-        return False  # heterogeneous-slot grammar is Phase 2
+    slot_kinds = se.target_slot_kinds()
+    _PHASE1_SHAPE = (min_t, max_t) == (1, 1) and not slot_kinds
+    # Phase-2 admit shape: exactly two required targets with the
+    # disjoint friendly/opponent creature slot pair. ``_select_spell
+    # _targets`` filters the flat ``legal_targets`` per slot_kind and
+    # the first-legal convention picks slot 0 = first caster-
+    # controlled creature, slot 1 = first non-caster-controlled
+    # creature — the EXACT pair the Rust ``cast_spell_noncreature``
+    # 2-slot scan binds + the double resolve-swap threads byte-equal.
+    _PHASE2_SHAPE = (min_t, max_t) == (2, 2) and tuple(slot_kinds) == (
+        "my_creature",
+        "creature",
+    )
+    if not (_PHASE1_SHAPE or _PHASE2_SHAPE):
+        return False  # every other target grammar stays declined
     # The load-bearing §2 gate: the effect must be COVERED + BRIDGED
     # (its emitted Effect classes ⊆ the LIVE covered set AND each has
     # a _ta_dict_to_python_effect bridge arm + a Rust variant). This

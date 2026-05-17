@@ -424,6 +424,9 @@ pub fn make_state(
         // None by default. Set by the resolver during targeted
         // activation dispatch, cleared after each apply.
         current_resolve_payload_target_id: None,
+        // Spell-card-bridge lever Phase 2: second resolve-time
+        // payload-target slot (2-slot spells). None by default.
+        current_resolve_payload_target_id_2: None,
         // CE20 Slice 5 (Walker loyalty Slice C): empty
         // once-per-turn-per-walker ledger at construction.
         loyalty_activated_this_turn: std::collections::HashSet::new(),

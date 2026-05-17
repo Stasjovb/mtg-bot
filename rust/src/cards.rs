@@ -1410,6 +1410,68 @@ pub enum Effect {
     /// (creatures∪Spacecraft set-union, +`base` offset) + the
     /// attacking/blocking target filter only — no new substrate kind.
     FocusFireEffect { base: i32 },
+    /// **Effect-uncovered Tier-A #7 — Diplomatic Relations.** The
+    /// 2-slot heterogeneous-target spell the spell-card-bridge
+    /// **Phase 2** lever admits (round-76; spec
+    /// `docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md` Phase-2 section).
+    /// "Target creature you control gets +1/+0 and gains vigilance
+    /// until end of turn. It deals damage equal to its power to
+    /// target creature an opponent controls."
+    ///
+    /// **Field-free unit variant** (the `BiosynthicBurstEffect`
+    /// idiom): the +1/+0, the vigilance grant, and the
+    /// power-equal-to-effective-power damage are all intrinsic — no
+    /// dict payload. Mirrors Python's `DiplomaticRelationsEffect`
+    /// (`effects/bespoke.py:1884`), which also carries no fields.
+    ///
+    /// **The 2-slot target grammar (the genuinely-new Phase-2
+    /// substrate).** Python's `target_slot_kinds()` is
+    /// `("my_creature", "creature")` — slot 0 is a creature the
+    /// caster controls (pumped), slot 1 is an opponent's creature
+    /// (damaged). Both targets are bound at cast time onto the spell
+    /// `StackItem` (`StackItem.target_obj_id` = slot-0 friendly,
+    /// `StackItem.target_obj_id_2` = slot-1 opponent) and threaded
+    /// to resolve via the existing `current_resolve_payload_target_id`
+    /// swap PLUS the new `current_resolve_payload_target_id_2` swap.
+    /// The Phase-1 single-target carrier (`target_obj_id`) is
+    /// UNCHANGED — Phase 2 only adds the second slot, defaulted
+    /// `None`, so every Phase-1 single-target arm is byte-equal.
+    ///
+    /// **Resolve semantics (mirrors Python `resolve`,
+    /// `effects/bespoke.py:1940-2008`, byte-equal to the SoT):**
+    /// 1. Locate slot-0 (friendly creature) by the resolve-time
+    ///    payload-target swap. Re-validate (CR 608.2b): it must be
+    ///    on a battlefield AND still controlled by the caster, else
+    ///    the whole effect fizzles silently (Python's `my_obj = None`
+    ///    short-circuit returns early — no damage either).
+    /// 2. Push a `+1/+0` UEOT `PowerToughnessBonus` modifier (the
+    ///    EXACT shape `DepressurizeEffect`/`PumpTargetCreatureUntil
+    ///    EOT` push, proven byte-equal) AND a UEOT `GrantKeyword
+    ///    {"vigilance"}` modifier (the EXACT shape the proven
+    ///    `GrantKeywordsToTargetCreatureUntilEOT` arm uses; its
+    ///    continuous-effect↔ueot_modifiers equivalence is already
+    ///    cross-engine-proven byte-equal). Both drain at cleanup on
+    ///    both engines.
+    /// 3. Locate slot-1 (opponent's creature) by the second
+    ///    payload-target swap. Re-validate: on a battlefield AND
+    ///    controlled by a non-caster, else the damage component
+    ///    fizzles (the pump already applied — Python returns after
+    ///    the pump in that branch).
+    /// 4. Read the slot-0 creature's POST-PUMP effective power
+    ///    (counters-inclusive per Python's `effective_power`, the
+    ///    `DepressurizeEffect` counters-inclusive formula re-derived
+    ///    privately per the file-isolation rule: `base =
+    ///    ueot_base_pt_override().p OR printed_power`, plus
+    ///    `obj.counters`, plus `obj.ueot_power_bonus()` which now
+    ///    includes the just-pushed `+1`) and deal that much damage
+    ///    to the slot-1 creature via `obj.damage.saturating_add`
+    ///    (the `DealDamageAnyTarget` damage primitive shape). SBA
+    ///    handles lethal post-resolve byte-equal.
+    ///
+    /// All three sub-primitives (UEOT-pump, UEOT-keyword-grant,
+    /// damage) are shipped + cross-engine-proven; this is the fused
+    /// composite arm + the 2-slot binding only.
+    DiplomaticRelationsEffect,
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -5368,6 +5430,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             };
             Ok(Effect::FocusFireEffect { base })
         }
+        "diplomatic_relations_effect" => {
+            // Effect-uncovered Tier-A #7 — Diplomatic Relations
+            // (spell-card-bridge Phase 2). Unit variant; no fields
+            // (mirrors the `biosynthic_burst_effect` field-free
+            // idiom). Python's `DiplomaticRelationsEffect()` carries
+            // no fields — the +1/+0 / vigilance / power-equal damage
+            // are all intrinsic. The 2-slot targets ride on the
+            // StackItem, NOT in this dict.
+            Ok(Effect::DiplomaticRelationsEffect)
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -6695,7 +6767,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard, put_plus_one_counter_on_opponents_creature, diplomatic_relations_effect"
         ))),
     }
 }
@@ -7845,6 +7917,17 @@ pub(crate) fn effect_to_pydict<'py>(
             // bridge arm + the trajectory.py reverse-serializer leaf.
             d.set_item("kind", "focus_fire_effect")?;
             d.set_item("base", *base)?;
+        }
+        Effect::DiplomaticRelationsEffect => {
+            // Effect-uncovered Tier-A #7 — Diplomatic Relations
+            // (spell-card-bridge Phase 2). Unit variant — `kind`
+            // only (the `biosynthic_burst_effect` field-free
+            // to_dict idiom). Bidirectional with the
+            // `diplomatic_relations_effect` parse arm + the
+            // cross_engine.py bridge arm + the trajectory.py
+            // reverse-serializer leaf. The 2-slot targets are NOT
+            // serialized here — they ride on the StackItem.
+            d.set_item("kind", "diplomatic_relations_effect")?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;
