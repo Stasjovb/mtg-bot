@@ -9,7 +9,7 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 - **89 of 228 Python Effect classes covered (39.0%)** — by distinct-class count.
 - **551 of 690 per-card emissions covered (79.9%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
 - **116 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
-- **WARNING: 2 Rust variant(s) with no Python counterpart**: `Effect::DestroyTargetCreatureThenDrawIfUndamaged` -> `DestroyTargetCreatureThenDrawIfUndamaged`, `Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped` -> `PumpTargetCreatureUntilEotGrantDiesReturnTapped`. This indicates bridge drift — either Python emits the class under a different name, or the Rust variant is unused. Audit `RUST_TO_PYTHON_OVERRIDES` / `RUST_AHEAD_OF_POOL` in `scripts/measure_effect_coverage.py`.
+- **0 Rust variants without a Python counterpart** — the bridge is in sync with the Python vocabulary.
 - **17 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `DealDamageToOpponentCreatureByCardsInGraveyard`, `DealDamageToOpponentCreatureByCreaturesYouControl`, `DealDamageToOpponentCreatureByLandsControlled`, `DealDamageToOpponentCreatureByLifeTotal`, `EachOpponentLosesLifeEqualToArtifactCount`, `EachOpponentLosesLifeEqualToYourLifeTotal`, `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves`, `FightTargetCreatureWithTargetCreature`, `GainLifeEqualToArtifactCount`, `GainLifeEqualToYourLifeTotal`, `GrantKeywordsToTargetCreatureUntilEOT`, `PumpCreaturesOpponentsControlUntilCasterNextTurn`, `ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield`, `ReturnEnchantmentOrCreatureFromYourGraveyardToHand`, `ScryN`, `SetBasePTUntilEOT`, `TwoSubjectPumpAndDebuffByArtifactCount`. These have no pool card exercising them today and are NOT counted as orphans.
 
 ## Coverage by frequency tier
@@ -65,7 +65,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 13 | `Effect::DiscardCard` | `TargetOpponentDiscardsCasterChoice` | 1 |
 | 14 | `Effect::ScryN` | `ScryN` | 0 |
 | 15 | `Effect::DestroyTarget` | `DestroyTargetCreature` | 9 |
-| 16 | `Effect::DestroyTargetCreatureThenDrawIfUndamaged` | `DestroyTargetCreatureThenDrawIfUndamaged` | 0 |
+| 16 | `Effect::DestroyTargetCreatureThenDrawIfUndamaged` | `DestroyTargetCreature` | 9 |
 | 17 | `Effect::DamageEachOpponent` | `DealDamageEachOpponent` | 4 |
 | 18 | `Effect::DamageEachCreature` | `DealNDamageToEachCreature` | 3 |
 | 19 | `Effect::CreateToken` | `CreateToken` | 41 |
@@ -99,7 +99,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 47 | `Effect::DealDamageAnyTarget` | `DealDamageAnyTarget` | 7 |
 | 48 | `Effect::PumpSelfUntilEOT` | `PumpSelfUntilEOT` | 12 |
 | 49 | `Effect::PumpTargetCreatureUntilEOT` | `PumpTargetCreatureUntilEOT` | 26 |
-| 50 | `Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped` | `PumpTargetCreatureUntilEotGrantDiesReturnTapped` | 0 |
+| 50 | `Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped` | `PumpTargetCreatureUntilEOT` | 26 |
 | 51 | `Effect::FightTargetCreatureWithTargetCreature` | `FightTargetCreatureWithTargetCreature` | 0 |
 | 52 | `Effect::DoubleTargetCreaturesPowerUEOT` | `DoubleTargetCreaturesPowerUEOT` | 1 |
 | 53 | `Effect::DealDamageToOpponentCreatureByArtifactCount` | `DealDamageToOpponentCreatureByArtifactCount` | 1 |
