@@ -132,6 +132,48 @@ OUTPUT_DOC = REPO_ROOT / "docs" / "POOL_PARITY.md"
 SMOKE_TEST = REPO_ROOT / "tests" / "test_parity_smoke.py"
 RESIDUE_WORKLIST = REPO_ROOT / "docs" / "residue_worklist.json"
 
+# --- The DEDICATED genuine-real-EoE probe modules (cycles 3-4) ----------
+#
+# HONEST-MEASUREMENT-TOOLING fix (resolves the orchestrator's standing
+# cycle-4 flag). The original PROBED detector scanned ONLY
+# ``tests/test_parity_smoke.py`` for ``test_cross_engine_real_eoe_
+# <slug>_parity`` functions. Cycles 3-4 added FOUR new dedicated probe
+# modules (the ``test_probe_covered_unprobed_{a,b,c,d}.py`` batch
+# stream) carrying ~27 genuine real-EoE cross-engine byte-equality
+# probes that use the EXACT same idiom + the EXACT same
+# ``test_cross_engine_real_eoe_<...>_parity`` naming convention as the
+# 60 cards already credited from the smoke file — but live in a
+# different file, so the metric did not see them and ``PROBED``
+# understated real probe coverage. This list is the closed set of
+# modules whose ``*_parity`` functions are scanned with the SAME
+# inclusion bar (see ``genuine_probed_cards``).
+#
+# DELIBERATELY EXCLUDED (a defensible zero-undercount integrity
+# choice, NOT an oversight):
+#
+#   * ``tests/test_probe_warp_admitted.py`` and
+#     ``tests/test_probe_spell_card_bridge_admitted.py`` — these ARE
+#     genuine real-EoE byte-equal probes, but (a) their functions do
+#     NOT use the established ``_parity`` slug-keyed naming convention
+#     (they are ``test_warp_admitted_*`` /
+#     ``test_spell_card_bridge_phase1_carrier_*`` parametrized sweeps),
+#     so crediting them would require a SECOND, looser inclusion rule —
+#     a weaker bar than the established one; and (b) every card they
+#     pin (Radiant Strike, Depressurize, Seedship Impact, Orbital
+#     Plunge, the five warp creatures) is ALREADY individually PROBED
+#     via its canonical ``test_cross_engine_real_eoe_<slug>_parity``
+#     function in ``tests/test_parity_smoke.py``. Excluding the
+#     differently-named modules therefore costs ZERO undercount while
+#     keeping exactly ONE inclusion predicate at exactly the
+#     established bar — the "match the established bar; if unsure,
+#     undercount rather than inflate" discipline.
+PROBE_MODULES: tuple[Path, ...] = (
+    REPO_ROOT / "tests" / "test_probe_covered_unprobed_a.py",
+    REPO_ROOT / "tests" / "test_probe_covered_unprobed_b.py",
+    REPO_ROOT / "tests" / "test_probe_covered_unprobed_c.py",
+    REPO_ROOT / "tests" / "test_probe_covered_unprobed_d.py",
+)
+
 # Tier keys (stable — the doc + test reference these verbatim).
 TIER_PROBED = "probed"
 TIER_COVERED = "covered_by_construction"
@@ -203,19 +245,18 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", primary.lower()).strip("_")
 
 
-def genuine_probed_cards(
-    pool_names: set[str], smoke_path: Path = SMOKE_TEST
-) -> set[str]:
-    """The set of EoE pool card names that have a genuine real-EoE
-    cross-engine *parity* probe pinning them.
+def _smoke_probed_cards(pool_names: set[str], smoke_path: Path) -> set[str]:
+    """``tests/test_parity_smoke.py``'s slug-keyed detection (the
+    ORIGINAL, unchanged rule — kept byte-for-byte so the 60 cards it
+    already credits are unaffected).
 
     Detection: every ``def test_cross_engine_real_eoe_<mid>_parity``
-    function in ``tests/test_parity_smoke.py``; ``<mid>`` is matched
-    against the slug of each pool card's printed name, longest slug
-    first (so ``mechan_assembler`` wins over ``mechan``). Only
-    ``*_parity`` functions count — ``*_divergence_pin`` functions
-    assert a KNOWN divergence, the opposite of byte-equality, and are
-    deliberately excluded. Pure text; no engine import."""
+    function in the smoke file; ``<mid>`` is matched against the slug
+    of each pool card's printed name, longest slug first (so
+    ``mechan_assembler`` wins over ``mechan``). Only ``*_parity``
+    functions count — ``*_divergence_pin`` functions assert a KNOWN
+    divergence, the opposite of byte-equality, and are deliberately
+    excluded. Pure text; no engine import."""
     text = smoke_path.read_text(encoding="utf-8")
     fn_mids = re.findall(
         r"def test_cross_engine_real_eoe_(\w+?)_parity\(", text
@@ -232,6 +273,124 @@ def genuine_probed_cards(
             if mid == sg or mid.startswith(sg + "_"):
                 probed.add(slug_to_name[sg])
                 break
+    return probed
+
+
+# A ``*_parity`` probe function's GENUINE-card binding: the EoE pool
+# printing it drives end-to-end is resolved via
+# ``get_active_source().get_printings().get("<Card Name>")`` (or the
+# ``[...]`` subscript form). That call — NOT the function-name spelling
+# — is the load-bearing "this probe pins THAT card" assertion (the
+# function name is only a human label; the batch authors elided
+# apostrophes in some names, e.g. ``samis_curiosity`` for
+# ``"Sami's Curiosity"``, so a slug-of-the-function-name match would
+# silently UNDERCOUNT). We anchor on the genuine binding instead, the
+# same thing ``measure_effect_coverage``/``card_effect_classes`` treat
+# as authoritative. The name capture tolerates an embedded apostrophe
+# (double-quoted Python string) and surrounding whitespace/newlines.
+#
+# The quoted-string capture must be quote-style aware: a card name
+# carries an apostrophe (``"Sami's Curiosity"``,
+# ``"Mm'menon, Uthros Exile"``) which a naive ``["']([^"']+)["']``
+# would truncate at the embedded ``'`` — the precise bug that made the
+# slug rule undercount these. Match a double-quoted string whose body
+# may contain ``'`` OR a single-quoted string whose body may contain
+# ``"`` (no card name needs an escaped same-style quote). ``\s*`` /
+# ``re.DOTALL`` tolerate the multi-line ``.get(\n    "Name"\n)`` form.
+_PROBE_GET_PRINTING_RE = re.compile(
+    r"get_printings\(\)\s*(?:\.\s*get\s*\(|\[)\s*"
+    r"""(?:"([^"]+)"|'([^']+)')""",
+    re.DOTALL,
+)
+# A genuine probe is a TOP-LEVEL (column-0) function whose name starts
+# ``test_cross_engine_real_eoe_`` and ends ``_parity``. Anchoring at
+# column 0 (``^def`` / ``re.MULTILINE``) means the body is bounded by
+# the NEXT column-0 ``def``/``class``/``@`` (or EOF) — so a
+# ``*_divergence_pin`` function, a module-level binding, or a helper
+# AFTER the last ``*_parity`` function is correctly OUTSIDE every
+# credited body (the integrity guard the companion test pins).
+_PROBE_FN_HEADER_RE = re.compile(
+    r"^def (test_cross_engine_real_eoe_\w+?_parity)\(", re.MULTILINE
+)
+# A new top-level construct ends the preceding function body.
+_TOP_LEVEL_BOUNDARY_RE = re.compile(
+    r"^(?:def |class |@|[A-Za-z_])", re.MULTILINE
+)
+
+
+def _probe_module_probed_cards(
+    pool_names: set[str], module_path: Path
+) -> set[str]:
+    """The genuine-real-EoE PROBED cards a dedicated probe module
+    (``tests/test_probe_covered_unprobed_*.py``) pins.
+
+    Inclusion predicate (the SAME bar the 60 smoke-file PROBED cards
+    meet — match it EXACTLY): a card ``C`` is credited iff the module
+    contains a ``def test_cross_engine_real_eoe_<...>_parity`` function
+    whose body resolves the GENUINE parsed printing via
+    ``get_active_source().get_printings().get("C")`` (or ``[...]``),
+    where ``"C"`` is an exact live EoE pool card name. These modules
+    use the IDENTICAL idiom as the smoke-file probes (genuine parsed
+    ``spell_effect`` / ``triggered_abilities`` on Python, a bridged
+    synthetic carrier on Rust, ``compare_fields == []`` over the whole
+    field view on a controlled real-EoE state) and the IDENTICAL
+    ``..._parity`` naming convention; only the file differs. Functions
+    NOT ending ``_parity`` (e.g. ``*_divergence_pin``, or a
+    differently-named sweep) contribute nothing — same exclusion as the
+    smoke file. A bound name that is not a live pool card (a synthetic
+    stub / typo / negative-control fixture) is NOT credited — that is
+    the integrity guard against over-counting. Pure text; no engine
+    import (mirrors the smoke detector's contract)."""
+    if not module_path.exists():
+        return set()
+    text = module_path.read_text(encoding="utf-8")
+    probed: set[str] = set()
+    for hm in _PROBE_FN_HEADER_RE.finditer(text):
+        # The body runs from just after the header line to the start of
+        # the NEXT top-level construct (column-0 def/class/@/identifier)
+        # or EOF — precisely bounding it to THIS one function.
+        body_start = text.index("\n", hm.end()) + 1
+        nb = _TOP_LEVEL_BOUNDARY_RE.search(text, body_start)
+        body_end = nb.start() if nb else len(text)
+        body = text[body_start:body_end]
+        for dq, sq in _PROBE_GET_PRINTING_RE.findall(body):
+            nm = dq or sq
+            if nm in pool_names:
+                probed.add(nm)
+    return probed
+
+
+def genuine_probed_cards(
+    pool_names: set[str],
+    smoke_path: Path = SMOKE_TEST,
+    probe_modules: tuple[Path, ...] = PROBE_MODULES,
+) -> set[str]:
+    """The set of EoE pool card names that have a genuine real-EoE
+    cross-engine *parity* probe pinning them.
+
+    UNION of two detectors at EXACTLY ONE inclusion bar:
+
+      1. ``tests/test_parity_smoke.py`` — slug-keyed ``*_parity``
+         function-name match (the original rule, unchanged: the 60
+         cards it credits are byte-for-byte unaffected).
+      2. the dedicated ``tests/test_probe_covered_unprobed_*.py`` batch
+         modules — genuine-``get_printings()``-binding match inside
+         each ``*_parity`` function (resolves the
+         apostrophe-name-elision the slug rule would silently
+         undercount). Same idiom, same naming convention, same
+         strength bar (genuine parsed printing driven end-to-end,
+         full ``compare_fields`` byte-equality on a controlled
+         real-EoE state).
+
+    A card need only meet the bar in EITHER source to be PROBED (set
+    union). The honest-measurement-tooling fix: before this, only (1)
+    was scanned, so PROBED understated real probe coverage by the
+    batch-module cards. The integrity guard: a probe that binds a name
+    which is not a live pool card (a synthetic stub) is NOT credited
+    — the metric never over-counts."""
+    probed = _smoke_probed_cards(pool_names, smoke_path)
+    for mod_path in probe_modules:
+        probed |= _probe_module_probed_cards(pool_names, mod_path)
     return probed
 
 
