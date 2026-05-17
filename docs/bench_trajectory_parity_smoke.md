@@ -3174,6 +3174,18 @@ regression pin
 (`test_parity_smoke.py::test_r69_max_turns_raise_is_parity_safe_and_recovers_timeout_signal`,
 above the `PHASE5_PROBES` sentinel) + this docs entry. Full parity
 gate (`test_parity_smoke + test_cross_engine_etb_triggers +
-test_trajectory_parity + test_trajectory`, `--no-cov -n 4`) **1449 →
-1450** (+1, the new pin; no regression — no pinned trajectory
-shifted). No Rust → no `maturin`.
+test_trajectory_parity + test_trajectory`, `--no-cov -n 4`): **1450**
+on the pre-rebase tree (1449 → 1450, +1 the new pin); **1479** on the
+final tree after two clean rebases onto a fast-moving origin/main
+(through `72673fb2` spell-card-bridge, then `f881e1cd` Tier-A #4
+Depressurize — which raised the baseline to 1478 via concurrently-
+merged Orbital Plunge / Depressurize / spell-card-bridge probes; +1
+the new pin). No regression — no pinned trajectory shifted; each
+`tests/test_parity_smoke.py` rebase conflict was the standard
+mechanical insert-above re-splice at the `PHASE5_PROBES` sentinel
+(every origin/main probe preserved verbatim + the round-69 pin
+appended above the marker; syntax-validated each time). The `.pyd`
+was already rebuilt by the orchestrator's post-merge resync against
+the current origin/main Rust (verified by build mtime > the latest
+Rust commit on each rebase target); as a non-Rust slice this slice
+did NOT rebuild it. No Rust touched → no `maturin` here.
