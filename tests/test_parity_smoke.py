@@ -66542,6 +66542,156 @@ def test_r69_max_turns_raise_is_parity_safe_and_recovers_timeout_signal():
     )
 
 
+def test_zone_signature_is_counter_aware_engine_agnostic(parity_smoke):
+    """**Focused regression for the ``_zone_signature`` counters-
+    awareness fix** (the ``_net_counters`` slice — merge
+    ``ecc5f680``, HANDOFF §3a forward-flagged tooling item).
+
+    The four migrated real-EoE probes exercise ``_net_counters``
+    end-to-end through genuine card resolves, but nothing pins the
+    helper's contract or the comparator's counter-divergence
+    sensitivity as a standalone unit. This test does exactly that:
+
+    1. ``_net_counters`` returns the engine-agnostic net matching
+       Rust's single signed ``obj.counters`` i32 — explicit
+       ``counters`` attr wins (covers the Rust dict-shim path), else
+       ``plus_one_counters − minus_one_counters`` (the real Python
+       ``GameObject`` shape), else ``0`` (``StackItem`` / bare obj),
+       per the documented resolution order.
+    2. ``_zone_signature``'s slot 4 now REFLECTS a synthetic Python
+       counter difference — pre-fix it read ``getattr(obj,
+       "counters", 0)``, a structural ``0`` for every Python
+       GameObject, so two counter-differing states produced an
+       identical signature (the masking bug this slice closed).
+    3. Cross-engine: a synthetic Python(+3)-vs-Rust(+1) net-counter
+       MISMATCH is now DETECTED by ``compare_fields`` (the diagnostic
+       working — pre-fix it was masked behind a constant ``py=0``),
+       with ONLY the per-object counters slot divergent (surgical),
+       while a MATCHED ``+3 == +3`` state stays byte-equal (the fix
+       is non-regressive — the engines genuinely agree on net
+       counters; no real divergence was hidden behind the prior
+       blindness, consistent with the slice's gate-green outcome).
+    """
+    import types
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        build_python_state,
+        build_rust_state,
+        build_python_field_view,
+        compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+
+    zs = parity_smoke._zone_signature
+    nc = parity_smoke._net_counters
+
+    # ---- (1) engine-agnostic net helper + documented precedence ------
+    assert nc(types.SimpleNamespace(
+        plus_one_counters=3, minus_one_counters=0)) == 3
+    assert nc(types.SimpleNamespace(
+        plus_one_counters=0, minus_one_counters=2)) == -2
+    assert nc(types.SimpleNamespace(
+        plus_one_counters=5, minus_one_counters=4)) == 1  # net 5 - 4
+    assert nc(types.SimpleNamespace(
+        plus_one_counters=0, minus_one_counters=0)) == 0
+    # StackItem-like (no counter fields) → 0, matching Rust's
+    # constant-0 stack-entry slot.
+    assert nc(types.SimpleNamespace(source=object())) == 0
+    # Explicit ``counters`` attr wins unconditionally (Rust dict-shim
+    # path) — even when it is 0 and split fields are non-zero.
+    assert nc(types.SimpleNamespace(counters=7)) == 7
+    assert nc(types.SimpleNamespace(
+        counters=0, plus_one_counters=9, minus_one_counters=0)) == 0
+
+    # ---- (2) slot 4 reflects a synthetic Python counter difference ---
+    def _cp(name, p, t):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=p, toughness=t, produces=frozenset(),
+        )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_a = build_python_state(spec)
+    obj_a = py_a.new_object(_cp("Sig Probe", 2, 2), owner_id=0,
+                            zone=Zone.BATTLEFIELD)
+    obj_a.summoning_sick = False
+    py_a.battlefield.append(obj_a)
+    sig_no_counter = zs([obj_a])
+
+    obj_a.plus_one_counters = 3
+    sig_plus3 = zs([obj_a])
+    obj_a.plus_one_counters = 0
+    obj_a.minus_one_counters = 2
+    sig_minus2 = zs([obj_a])
+
+    # Pre-fix every one of these was identical (slot 4 == 0 always).
+    assert sig_no_counter[0][4] == 0
+    assert sig_plus3[0][4] == 3
+    assert sig_minus2[0][4] == -2
+    assert sig_no_counter != sig_plus3 != sig_minus2 != sig_no_counter
+
+    # ---- (3) cross-engine: a real counter mismatch is now DETECTED ---
+    def _seat_pair(py_net: int, rs_net: int):
+        py = build_python_state(spec)
+        rs = build_rust_state(spec)
+        pv = py.new_object(_cp("XEng Sig", 1, 9), owner_id=1,
+                           zone=Zone.BATTLEFIELD)
+        pv.summoning_sick = False
+        if py_net >= 0:
+            pv.plus_one_counters = py_net
+        else:
+            pv.minus_one_counters = -py_net
+        py.battlefield.append(pv)
+        rid = rs.register_and_inject_object(
+            {"name": "XEng Sig", "card_types": ["Creature"],
+             "power": 1, "toughness": 9}, 1, 2,  # zone=BATTLEFIELD
+        )
+        if rs_net != 0:
+            assert rs.set_counters(rid, rs_net) is True
+        return compare_fields(
+            build_python_field_view(py),
+            ce_parity_smoke()._build_field_view(rs),
+        )
+
+    # Matched net counters: NO spurious counters diff — passes on a
+    # REAL +3 == +3 match (pre-fix it "passed" only because py was
+    # blindly 0 and rust was 0).
+    matched = _seat_pair(py_net=3, rs_net=3)
+    assert all(not str(fd.field).startswith(("battlefield", "graveyard"))
+               or fd.py_value == fd.rust_value for fd in matched), (
+        f"matched net-counter state must be byte-equal on the "
+        f"counter-bearing zones; diffs={matched}"
+    )
+
+    # Synthetic divergence: Python net +3, Rust net +1. PRE-FIX this
+    # was MASKED (py slot 4 was a constant 0). POST-FIX the comparator
+    # sees py=+3 vs rust=+1 and the battlefield field diverges — the
+    # diagnostic now WORKS.
+    diverged = _seat_pair(py_net=3, rs_net=1)
+    bf = [fd for fd in diverged if str(fd.field).startswith("battlefield")]
+    assert bf, (
+        "a synthetic Python(+3)-vs-Rust(+1) net-counter difference "
+        "must now be DETECTED on the battlefield field — pre-fix it "
+        f"was masked behind a constant py=0; diffs={diverged}"
+    )
+    fd = bf[0]
+    assert isinstance(fd.py_value, tuple) and isinstance(fd.rust_value, tuple)
+    pt, rt = fd.py_value[0], fd.rust_value[0]
+    assert pt[4] == 3 and rt[4] == 1, (
+        f"the counters slot must carry the real net on BOTH engines; "
+        f"py_tuple={pt} rust_tuple={rt}"
+    )
+    assert pt[:4] == rt[:4] and pt[5:] == rt[5:], (
+        "only the counters slot may differ — the fix is surgical "
+        f"(py_tuple={pt} rust_tuple={rt})"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
