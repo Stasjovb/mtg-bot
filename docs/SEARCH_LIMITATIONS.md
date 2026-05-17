@@ -6034,6 +6034,64 @@ load-bearing soundness improvement for the staged flip.
 
 ---
 
+## B3-S2 RustZoneView codec slot-source — canonical_v2 modifier-flag scope
+
+**Where.** `src/mtg_bot/search/rust_zone_view.py`
+(`_RustCardView`); the codec's `_canonical_zone_sort_key`
+(`src/mtg_bot/training/action_encoding.py:347-370`) reads 6 boolean
+modifier flags via `getattr(card, <flag>, False)`. The Rust
+`object_to_pydict` (`rust/src/state_ops_snapshot.rs:68`) does NOT
+carry these 6 flags.
+
+**What the shortcut is.** When `decision_source` is `rust` /
+`rust_shadow` the codec sources zone positions from the Rust
+`*_snapshot` pymethods via the `RustZoneView` shim. Under
+`canonical_v2` the codec sorts hand/gy/exile by
+`(printing.name, warped, cast_via_warp, face_down,
+playable_from_exile_this_turn, play_from_exile_requires_kavu,
+cast_from_exile_with_lightstall_surcharge, card.id)`. The Rust
+snapshot carries `printing_name` + `id` but NOT the 6 boolean
+modifier flags, so the shim's `_RustCardView` omits them and
+`getattr(card, flag, False)` yields `False` for all six.
+
+**Why it's OK (admitted-surface-exact).** All 6 flags are non-default
+ONLY on the warp / manifest-morph / alt-cost-exile-recast axes. Those
+carriers are loader-DECLINED on the bridge-admitted population (the
+same C1 §1.4 / "Deferred alt-cost flags" scoping). On the
+loader-admitted flip population every hidden-zone card has all 6
+flags `False`, so the v2 sort key reduces to
+`(printing.name, False×6, card.id)` — **byte-identical to the Python
+path** on the admitted surface. The C6 hard boundary (`66485d6d`,
+`LoaderAdmitPolicy.RAISE`) makes a non-admitted card unable to enter
+a Rust-sourced game, so the simplification is unreachable on the
+flip population by construction. `decision_source="python"` (the
+default) does not touch this path at all (the RustZoneView is never
+constructed) — parity-neutral.
+
+**Failure mode.** If an alt-cost carrier (a card with a non-False
+warp/manifest/exile-recast modifier) ever became loader-admitted AND
+two same-printing-name copies sat in a hidden zone differing only in
+a modifier flag, the v2 slot order between them could differ from
+the Python path (a within-printing slot permutation, never a
+cross-printing one). Direction: a benign slot reshuffle of
+otherwise-equivalent cards, not an illegal/extra slot — but it would
+break the v-chain-SAFE byte-identity claim for that card. Unreachable
+today (C6-fenced).
+
+**Fix scope.** A small Rust snapshot extension: have
+`object_to_pydict` emit the 6 modifier booleans (read-only state
+extraction, NO rules logic — the B3-pre-EXT micro-slice shape).
+`_RustCardView` then reads them instead of defaulting `False`.
+Sequenced ONLY when an alt-cost carrier becomes loader-admitted (no
+earlier value — it is unreachable until then).
+
+**Impact.** Zero on the admitted flip population (byte-identical v2
+sort). Zero on `decision_source="python"` (path not taken). The
+caveat is the staged-flip "scope to the live surface, forward-note
+the rest" discipline (C1 precedent), not a strength regression.
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,

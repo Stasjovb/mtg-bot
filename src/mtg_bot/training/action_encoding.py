@@ -1072,6 +1072,18 @@ def _enumerate_legal(state: Any, viewer: PlayerID) -> list:
     (no adapter context) fall through to ``legal_actions`` directly —
     same behavior as before, no caching available.
     """
+    # B3-S2: the Rust-backed provider already maps its Rust
+    # legal_decisions dicts to search Decisions through the
+    # non-vestigial rust_decision_adapter. Source the legal set
+    # straight from it (the codec then encodes each Decision against
+    # the RustZoneView via `encode`, unchanged). The provider's own
+    # combat-window emission is the B3-S3 factored-combat scope; for
+    # the S2 priority-window axis legal_decisions() is exactly the
+    # set to encode. Detected by the provider's marker attribute so
+    # no isinstance import cycle is introduced.
+    if getattr(state, "_is_rust_decision_provider", False):
+        return list(state.legal_decisions())
+
     eng = _engine_state(state)
     phase = _combat_phase(state)
     if phase == "attackers":
