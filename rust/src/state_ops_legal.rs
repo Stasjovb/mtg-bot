@@ -162,29 +162,47 @@
 //! future slice extends the key to a 6-tuple (string + 4 bools +
 //! `Option<String>`).
 //!
-//! ## DeclareAttackers extension (rust(legal-decisions-declare-attackers))
+//! ## DeclareAttackers — factored per-attacker emission (G1: the
+//! C1-analog for the combat axis; rust(legal-decisions-factored-combat))
 //!
-//! **Deliberate divergence from Python.** Python's `legal_actions`
-//! does NOT emit DeclareAttackers. The Python engine docstring
-//! (`src/mtg_bot/engine.py:10-19`) is explicit: "the combat-declaration
-//! actions (`DeclareAttackers`, `DeclareBlockers`) that aren't
-//! enumerable as legal moves because their decision space is
-//! combinatorial." Python instead uses a factored search-side approach
-//! in `src/mtg_bot/search/combat_decisions.py` — `AttackerDecision`
-//! (one per eligible attacker, 2 branches each) feeds MCTS at search
-//! time, and the adapter accumulates them into a single engine-level
-//! `DeclareAttackers(frozenset[int])` once all per-creature decisions
-//! are collected.
+//! **G1 CLOSED — byte-compatible with the Python search seam.**
+//! Python's `legal_actions` does NOT emit a whole `DeclareAttackers`
+//! action — the engine docstring (`src/mtg_bot/engine.py:10-19`) is
+//! explicit that the combat-declaration actions "aren't enumerable as
+//! legal moves because their decision space is combinatorial." Python
+//! uses a FACTORED search-side decomposition in
+//! `src/mtg_bot/search/combat_decisions.py` — `AttackerDecision(
+//! attacker_id, attack)`, ONE per eligible attacker with exactly two
+//! branches (`attack=True` then `attack=False`) — surfaced by
+//! `MtgGameStateAdapter.legal_decisions` (`engine_adapter.py:808-814`)
+//! for the HEAD pending attacker, accumulated by the adapter into a
+//! single engine-level `DeclareAttackers(frozenset[int])` at finalize
+//! (`engine_adapter.py:1080-1108`).
 //!
-//! For the Rust port's first-slice we emit a powerset enumeration
-//! directly from `legal_decisions` so a uniform "one Python dict per
-//! legal Action" iterator covers the DECLARE_ATTACKERS phase too.
-//! This is a Rust-only emission (no Python counterpart) — the
-//! parity-smoke harness skips comparing emission sets during the
-//! DECLARE_ATTACKERS phase. When the factored-search shape lands in
-//! Rust (one `AttackerDecision` action per eligible attacker, mirroring
-//! `search/combat_decisions.py:44-55`), this powerset block goes away
-//! and the per-attacker enumeration replaces it.
+//! Pre-G1 the Rust port emitted a Rust-only capped `2^n` POWERSET of
+//! whole `DeclareAttackers` actions — neither a superset nor
+//! byte-equal to Python's factored set (it lost the per-creature MCTS
+//! progressive-widening shape the codec ATTACKER slots are built for,
+//! and silently dropped the middle of the combinatorial space above
+//! the cap). That was the documented G1 flip-blocker
+//! (`NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md` §2.4 G1). G1 replaces
+//! the powerset block with the byte-compatible factored emission: for
+//! the HEAD pending attacker (smallest-id eligible — matching the
+//! adapter's `_pending_attackers = sorted(o.id for o in eligible)`
+//! `engine_adapter.py:1315` AND the codec's `_pending_attacker_head`
+//! `min(...)` fallback `action_encoding.py:990-995`) emit exactly two
+//! `{"kind":"attacker_decision","attacker_id":head,"attack":<bool>}`
+//! dicts (`attack=true` then `attack=false`), mapping 1:1 to the
+//! codec's implicit-attacker `SLOT_ATTACKER_ATTACK` /
+//! `SLOT_ATTACKER_SKIP` slots (`action_encoding.py:708-712`). The B3
+//! Python provider (sibling slice — NOT this one) owns the
+//! per-creature accumulation + finalize-to-whole-`declare_attackers`
+//! (the existing whole-action `apply_action` arm — UNCHANGED). It is
+//! parity-NEUTRAL under the Python-sourced single-script-replay
+//! harness (the C1 §4 proof — the harness never sources a choice from
+//! `rust.legal_decisions`; it replays a Python-derived
+//! `declare_attackers` whole-action dict, which the unchanged
+//! whole-action arm still applies byte-identically).
 //!
 //! **Gating.** Emit DeclareAttackers ONLY when:
 //! - `phase == PHASE_DECLARE_ATTACKERS` (round-2 step constant; see
@@ -231,19 +249,22 @@
 //!   (these don't change attacker eligibility but interact in the
 //!   declare-blockers step which is out of this slice's scope).
 //!
-//! **Emission shape**: one Python dict per subset, matching
-//! `actions.rs:action_to_pydict` for `Action::DeclareAttackers`:
-//! `{"kind": "declare_attackers", "attacker_ids": [id1, id2, ...]}`.
-//! The `attacker_ids` list is in battlefield iteration order (stable,
-//! matches `Vec` ordering); the empty set emits `attacker_ids = []`.
+//! **Emission shape (post-G1, the byte-compatible factored shape)**:
+//! exactly two Python dicts for the head pending attacker, matching
+//! `actions.rs:action_to_pydict` for `Action::AttackerDecision`:
+//! `{"kind":"attacker_decision","attacker_id":<head>,"attack":true}`
+//! then `{"kind":"attacker_decision","attacker_id":<head>,
+//! "attack":false}`. The `attack=true`-first order mirrors
+//! `engine_adapter.py:811-814`. Zero eligible attackers ⇒ NO combat
+//! dict emitted (the adapter skips the factored phase entirely,
+//! `engine_adapter.py:1295-1310`; the priority window opens instead).
 //!
-//! **Powerset cap.** With `n` eligible attackers and
-//! `n <= DECLARE_ATTACKERS_POWERSET_CAP` (4), emit all `2^n` subsets.
-//! With `n > 4`, emit only two dicts: the empty subset ("don't
-//! attack") and the full subset ("attack with everyone"). The cap
-//! exists so a 10-creature board doesn't produce 1024 dicts per
-//! `legal_decisions` call; a future factored-search slice replaces
-//! this with `n` separate `AttackerDecision`-style dicts.
+//! **No cap, no dropped middle.** The factored shape has a fixed
+//! fan-out of 2 per `legal_decisions` call regardless of board width
+//! — the `2^n` powerset explosion + its `DECLARE_ATTACKERS_POWERSET
+//! _CAP` lossy bound are GONE (the cap dropped the strategically-
+//! valuable middle subsets on wide boards; the factored walk reaches
+//! every attack pattern through MCTS depth, not a capped breadth).
 //!
 //! ## ActivateAbility extension (rust(legal-decisions-activate-ability))
 //!
@@ -320,31 +341,49 @@
 //! `Action::ActivateAbility` variant) and `action_to_pydict`
 //! unchanged.
 //!
-//! ## DeclareBlockers extension (rust(legal-decisions-declare-blockers))
+//! ## DeclareBlockers — factored per-blocker emission (G1: the
+//! C1-analog for the combat axis; rust(legal-decisions-factored-combat))
 //!
-//! **Deliberate divergence from Python** — same shape as the
-//! DeclareAttackers extension above. Python's `legal_actions` does
-//! NOT emit DeclareBlockers (see `src/mtg_bot/engine.py:10-19` for
-//! the explicit "combat-declaration actions ... aren't enumerable as
-//! legal moves because their decision space is combinatorial"
-//! statement). Python uses factored `BlockerDecision`s in
-//! `src/mtg_bot/search/combat_decisions.py` — one decision per
-//! eligible blocker, with one branch per attacker plus a "don't
-//! block" branch — fed to MCTS at search time. The adapter
-//! accumulates per-blocker decisions into a single engine-level
-//! `DeclareBlockers(assignments=tuple[tuple[int,int], ...])` at
-//! apply time.
+//! **G1 CLOSED — byte-compatible with the Python search seam** (same
+//! shape story as the DeclareAttackers factored section above).
+//! Python's `legal_actions` does NOT emit a whole `DeclareBlockers`
+//! action (`src/mtg_bot/engine.py:10-19` — the combat-declaration
+//! actions "aren't enumerable as legal moves because their decision
+//! space is combinatorial"). Python uses FACTORED `BlockerDecision(
+//! blocker_id, attacker_id)`s in
+//! `src/mtg_bot/search/combat_decisions.py` — ONE per eligible
+//! blocker, with one branch per currently-attacking creature plus a
+//! final `attacker_id=None` ("don't block") branch — surfaced for
+//! the HEAD pending blocker by `MtgGameStateAdapter.legal_decisions`
+//! (`engine_adapter.py:815-828`), accumulated by the adapter into a
+//! single engine-level `DeclareBlockers(assignments=tuple[tuple[int,
+//! int], ...])` at finalize (`engine_adapter.py:1114-1144`).
 //!
-//! For the Rust port we emit a direct enumeration of assignments so
-//! `legal_decisions` covers the DECLARE_BLOCKERS phase uniformly.
-//! Combinatorial complexity is HARDER than DeclareAttackers: with N
-//! eligible blockers and M attackers, each blocker independently
-//! picks one of `M + 1` options (block attacker_j, or don't block),
-//! yielding `(M + 1)^N` total assignments. This explodes faster
-//! than DeclareAttackers's `2^N` — a 4-blocker / 4-attacker board
-//! has `5^4 = 625` assignments. The cap is critical.
+//! Pre-G1 the Rust port emitted a Rust-only capped `(M+1)^N` PRODUCT
+//! of whole `DeclareBlockers` assignments — neither a superset nor
+//! byte-equal to Python's factored set. G1 replaces it with the
+//! byte-compatible factored emission: for the HEAD pending blocker
+//! (smallest-id eligible — matching the adapter's `_pending_blockers
+//! = sorted(o.id for o in eligible)` `engine_adapter.py:1360` AND the
+//! codec's `_pending_blocker_head` `min(...)` fallback
+//! `action_encoding.py:1007-1012`) emit one
+//! `{"kind":"blocker_decision","blocker_id":head,"attacker_id":<atk>}`
+//! per currently-attacking creature (in `self.attackers` declaration
+//! order, mirroring the adapter's battlefield-attacking walk),
+//! followed by a final `{"kind":"blocker_decision","blocker_id":
+//! head,"attacker_id":None}` ("don't block"). The codec recovers the
+//! policy slot `SLOT_BLOCKER_BASE + atk_pos` from the `attacker_id`
+//! VALUE via `_attacking_creatures` (sorted-by-id,
+//! `action_encoding.py:414-420,714-733`) / `SLOT_BLOCKER_SKIP` for
+//! the None branch — so the slot is independent of branch list order
+//! (list order is parity-NEUTRAL under the Python-sourced
+//! single-script-replay harness; the C1 §4 proof). The B3 Python
+//! provider (sibling slice — NOT this one) owns the per-blocker
+//! accumulation + finalize-to-whole-`declare_blockers` (the
+//! UNCHANGED whole-action `apply_action` arm, which keeps the CE16
+//! menace post-validation `.retain` at the finalize boundary).
 //!
-//! **Gating**: emit DeclareBlockers ONLY when:
+//! **Gating**: emit factored blocker decisions ONLY when:
 //! - `phase == PHASE_DECLARE_BLOCKERS` (see `state_ops_steps.rs:65`).
 //! - `priority_player == player_id` (already verified by the
 //!   priority gate above).
@@ -373,28 +412,28 @@
 //! the first-slice cost; future slices can add the keyword filter at
 //! enumeration once `effective_keywords` ports through PyO3.
 //!
-//! **Emission shape**: one Python dict per assignment, matching
-//! `actions.rs:action_to_pydict` for `Action::DeclareBlockers`:
-//! `{"kind": "declare_blockers", "assignments": [[blocker_id,
-//! attacker_id], ...]}`. The `assignments` list contains only the
-//! blockers that ARE blocking — "doesn't block" is encoded by
-//! omission, not by a `(blocker_id, None)` pair. This matches
-//! Python's `DeclareBlockers(assignments=tuple[tuple[int, int],
-//! ...])` dataclass shape.
+//! **Emission shape (post-G1, the byte-compatible factored shape)**:
+//! `m+1` Python dicts for the head pending blocker, matching
+//! `actions.rs:action_to_pydict` for `Action::BlockerDecision`:
+//! `{"kind":"blocker_decision","blocker_id":<head>,"attacker_id":
+//! <atk>}` per attacking creature, then a final `…,"attacker_id":
+//! None` (the "don't block" branch — encoded as an explicit Python
+//! `None`, mirroring `BlockerDecision(attacker_id=None)`, NOT by
+//! omission). Zero eligible blockers ⇒ NO combat dict emitted (the
+//! adapter skips the factored blocker phase entirely,
+//! `engine_adapter.py:1339-1356`; the priority window opens instead).
 //!
-//! **Combinatorial product cap.** With `n_blockers <=
-//! DECLARE_BLOCKERS_PRODUCT_CAP` (3) AND `m_attackers <=
-//! DECLARE_BLOCKERS_MAX_ATTACKERS` (3), emit all `(M+1)^N`
-//! assignments — each blocker independently chooses among M
-//! attackers + "don't block." With either dimension over its cap,
-//! emit ONLY the "no blocks" assignment (an empty Vec). The dropped
-//! middle assignments are still reachable at apply time via direct
-//! `Action::DeclareBlockers` construction; they're just not
-//! enumerated by `legal_decisions`. Same tunable-knob story as
-//! DeclareAttackers's `POWERSET_CAP`: the factored-search shape from
-//! `search/combat_decisions.py:120-178` is the eventual replacement.
-//! See "DeclareBlockers Rust-only enumeration" in
-//! `docs/SEARCH_LIMITATIONS.md`.
+//! **No cap, no dropped middle.** The factored shape has a fixed
+//! fan-out of `m+1` per `legal_decisions` call (one branch per live
+//! attacker + don't-block) regardless of blocker-board width — the
+//! `(M+1)^N` product explosion + its `DECLARE_BLOCKERS_PRODUCT_CAP` /
+//! `DECLARE_BLOCKERS_MAX_ATTACKERS` lossy bounds are GONE (the caps
+//! collapsed every non-trivial blocker board to "no blocks only";
+//! the factored walk reaches every block pattern through MCTS depth,
+//! not a capped breadth). The two `docs/SEARCH_LIMITATIONS.md`
+//! "Rust-only enumeration" entries (DeclareAttackers powerset +
+//! DeclareBlockers product) are replaced at landing by the single
+//! closed-G1 note.
 
 use crate::state::GameState;
 use crate::state_ops_steps::{
@@ -405,43 +444,26 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashSet;
 
-/// First-slice cap on the powerset enumeration in
-/// `DeclareAttackers` emission. With `n <= 4` eligible attackers the
-/// enumerator emits the full `2^n` subsets (so a small board produces
-/// exhaustive choices, mirroring the search-side combinatorial pattern
-/// in Python's `search/combat_decisions.py`). With `n > 4`, the
-/// enumerator emits only the canonical "attack with nothing" + "attack
-/// with everyone" pair so the dict-count stays bounded at 2 instead
-/// of exploding to 32+. Tunable knob: future slices can lift this once
-/// the factored-search shape (one AttackerDecision per eligible
-/// attacker, per `search/combat_decisions.py:44-55`) lands and replaces
-/// the powerset emission. See "DeclareAttackers Rust-only enumeration"
-/// in `docs/SEARCH_LIMITATIONS.md`.
-const DECLARE_ATTACKERS_POWERSET_CAP: usize = 4;
-
-/// First-slice cap on the product enumeration in `DeclareBlockers`
-/// emission. With `n_blockers <= DECLARE_BLOCKERS_PRODUCT_CAP` (3)
-/// AND `m_attackers <= DECLARE_BLOCKERS_MAX_ATTACKERS` (3), the
-/// enumerator emits the full `(M+1)^N` assignments — every blocker
-/// independently picks one of `M` attackers OR "don't block." Worst
-/// case at the cap: `(3+1)^3 = 64` dicts. Above either threshold the
-/// enumerator emits only the canonical "no blocks" assignment (an
-/// empty Vec) so the dict-count stays bounded at 1 instead of
-/// exploding to thousands. Combinatorial growth is harder than
-/// DeclareAttackers's `2^N` — a 4×4 board would be `5^4 = 625`, a
-/// 5×5 board `6^5 = 7776`. Tunable knob: future slices can lift
-/// either cap once the factored-search shape (one BlockerDecision
-/// per eligible blocker, per `search/combat_decisions.py:120-178`)
-/// lands and replaces the product emission. See "DeclareBlockers
-/// Rust-only enumeration" in `docs/SEARCH_LIMITATIONS.md`.
-const DECLARE_BLOCKERS_PRODUCT_CAP: usize = 3;
-
-/// Companion cap on the attacker dimension of the `DeclareBlockers`
-/// product. See `DECLARE_BLOCKERS_PRODUCT_CAP` for the rationale —
-/// both dimensions must be at-or-below their cap for the full
-/// enumeration to emit; either dimension over its cap falls through
-/// to the bounded "no-blocks-only" branch.
-const DECLARE_BLOCKERS_MAX_ATTACKERS: usize = 3;
+// **G1 (the C1-analog for the combat axis) — the powerset / product
+// caps are GONE.** The former `DECLARE_ATTACKERS_POWERSET_CAP` (4),
+// `DECLARE_BLOCKERS_PRODUCT_CAP` (3), and
+// `DECLARE_BLOCKERS_MAX_ATTACKERS` (3) constants gated a Rust-only
+// `2^n` powerset / `(M+1)^N` product enumeration of WHOLE
+// `DeclareAttackers`/`DeclareBlockers` actions — a deliberate
+// divergence from Python's factored search seam that was neither a
+// superset nor byte-equal to the per-creature
+// `AttackerDecision`/`BlockerDecision` set
+// (`src/mtg_bot/search/combat_decisions.py` +
+// `engine_adapter.py:808-828`). G1 replaces that emission with the
+// byte-compatible factored per-creature shape (one
+// `attacker_decision` / `blocker_decision` dict per HEAD pending
+// creature), so the caps — and the combinatorial-explosion failure
+// mode they bounded — no longer exist. The factored shape has a
+// fixed tiny fan-out (2 for attackers; `M+1` for blockers) with no
+// dropped-middle information loss. The two `SEARCH_LIMITATIONS.md`
+// "Rust-only enumeration" entries are replaced by the closed-G1
+// note at landing (see the module docstring's factored-emission
+// section).
 
 fn check_player_id(player_id: u8) -> PyResult<usize> {
     let idx = player_id as usize;
@@ -1088,40 +1110,52 @@ fn additional_costs_payable(
     true
 }
 
-/// Build a `{"kind": "declare_attackers", "attacker_ids": [...]}` dict.
-/// Mirrors `actions.rs:action_to_pydict`'s `Action::DeclareAttackers`
-/// arm so a dict produced here round-trips through `parse_action` and
-/// back without key drift. The `attacker_ids` Vec is cloned into a
-/// fresh Python list — PyO3's `Vec<u32>` -> Python list conversion
-/// preserves Vec iteration order, so the subset's order on the wire
-/// equals the order the enumerator pushed ids in.
-fn declare_attackers_dict<'py>(
+/// Build a `{"kind": "attacker_decision", "attacker_id": <id>,
+/// "attack": <bool>}` dict — the G1 factored per-attacker
+/// sub-decision (the C1-analog for the combat axis). Byte-compatible
+/// mirror of Python's `AttackerDecision(attacker_id: int, attack:
+/// bool)` dataclass (`src/mtg_bot/search/combat_decisions.py:44-55`)
+/// serialized to a dict, and round-trips through
+/// `actions.rs:parse_action`'s `"attacker_decision"` arm /
+/// `action_to_pydict`'s `Action::AttackerDecision` arm without key
+/// drift. Replaced the former whole-action `declare_attackers_dict`
+/// powerset-subset emitter — the powerset emission is gone (the
+/// factored shape is the byte-compatible search-seam shape; see the
+/// module docstring's "DeclareAttackers extension" section, now the
+/// factored-emission section).
+fn attacker_decision_dict<'py>(
     py: Python<'py>,
-    attacker_ids: &[u32],
+    attacker_id: u32,
+    attack: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
-    d.set_item("kind", "declare_attackers")?;
-    d.set_item("attacker_ids", attacker_ids.to_vec())?;
+    d.set_item("kind", "attacker_decision")?;
+    d.set_item("attacker_id", attacker_id)?;
+    d.set_item("attack", attack)?;
     Ok(d)
 }
 
-/// Build a `{"kind": "declare_blockers", "assignments":
-/// [[blocker_id, attacker_id], ...]}` dict. Mirrors
-/// `actions.rs:action_to_pydict`'s `Action::DeclareBlockers` arm so
-/// a dict produced here round-trips through `parse_action` and back
-/// without key drift. The `assignments` Vec is cloned into a fresh
-/// Python list of 2-tuples — PyO3's `Vec<(u32, u32)>` -> Python list
-/// conversion preserves Vec iteration order. Blockers that don't
-/// block are omitted from the list (not encoded as a sentinel pair),
-/// matching Python's `DeclareBlockers(assignments=tuple[tuple[int,
-/// int], ...])` dataclass shape.
-fn declare_blockers_dict<'py>(
+/// Build a `{"kind": "blocker_decision", "blocker_id": <id>,
+/// "attacker_id": <id|None>}` dict — the G1 factored per-blocker
+/// sub-decision. Byte-compatible mirror of Python's
+/// `BlockerDecision(blocker_id: int, attacker_id: Optional[int])`
+/// dataclass (`src/mtg_bot/search/combat_decisions.py:57-73`)
+/// serialized to a dict. `attacker_id = None` ⇒ the "don't block"
+/// branch (PyO3 sets a Python `None`; `parse_action`'s
+/// `"blocker_decision"` arm maps absent-or-None → `None`).
+/// Round-trips through `action_to_pydict`'s
+/// `Action::BlockerDecision` arm. Replaced the former whole-action
+/// `declare_blockers_dict` product-assignment emitter — the
+/// `(M+1)^N` product emission is gone.
+fn blocker_decision_dict<'py>(
     py: Python<'py>,
-    assignments: &[(u32, u32)],
+    blocker_id: u32,
+    attacker_id: Option<u32>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
-    d.set_item("kind", "declare_blockers")?;
-    d.set_item("assignments", assignments.to_vec())?;
+    d.set_item("kind", "blocker_decision")?;
+    d.set_item("blocker_id", blocker_id)?;
+    d.set_item("attacker_id", attacker_id)?;
     Ok(d)
 }
 
@@ -1222,32 +1256,57 @@ impl GameState {
                 eligible.push(obj.id);
             }
 
-            let n = eligible.len();
-            if n <= DECLARE_ATTACKERS_POWERSET_CAP {
-                // Full powerset: bitmask 0 (= empty set, "attack with
-                // nothing") through 2^n - 1 (= full set, "attack with
-                // everyone"). Each subset's ids are pushed in
-                // `eligible`-iteration order (smallest bit index
-                // first) so the wire shape is deterministic.
-                let total = 1u32 << n;
-                for bitmask in 0..total {
-                    let mut subset: Vec<u32> = Vec::with_capacity(n);
-                    for i in 0..n {
-                        if (bitmask >> i) & 1 == 1 {
-                            subset.push(eligible[i]);
-                        }
-                    }
-                    actions.push(declare_attackers_dict(py, &subset)?);
-                }
-            } else {
-                // Past the cap: emit only the two canonical extremes
-                // ("don't attack" + "attack with everyone") so the
-                // dict-count stays bounded. The dropped middle
-                // subsets are still reachable at apply time via
-                // direct `Action::DeclareAttackers` construction —
-                // they're just not enumerated by `legal_decisions`.
-                actions.push(declare_attackers_dict(py, &[])?);
-                actions.push(declare_attackers_dict(py, &eligible)?);
+            // **G1 — factored per-attacker emission (the C1-analog
+            // for the combat axis).** Replaces the former capped
+            // powerset block. Byte-compatible mirror of the Python
+            // search seam: `MtgGameStateAdapter.legal_decisions`
+            // (`engine_adapter.py:808-814`) issues, for the HEAD
+            // pending attacker, exactly two `AttackerDecision`s —
+            // `attack=True` then `attack=False`. The adapter's
+            // pending list is `sorted(o.id for o in eligible)`
+            // (`engine_adapter.py:1315`) so the head is the
+            // smallest-id eligible attacker; the codec's no-adapter
+            // fallback uses the same `min(o.id for o in elig)`
+            // (`action_encoding.py:990-995`). We emit for that same
+            // head so the dict maps 1:1 to the codec's implicit-
+            // attacker `SLOT_ATTACKER_ATTACK` / `SLOT_ATTACKER_SKIP`
+            // slots (`action_encoding.py:708-712`).
+            //
+            // The B3 Python provider (a sibling slice — NOT this
+            // one) owns the per-creature accumulation + the
+            // finalize-to-whole-`declare_attackers` step
+            // (`engine_adapter.py:1080-1108` ported verbatim per
+            // `NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md` §3.3); it
+            // applies the chosen factored decision (which `tap`s a
+            // declared attacker via the round-5 primitive, removing
+            // it from `eligible` on the next call so the head
+            // advances) OR, for `attack=false`, the provider pops
+            // the head from its own pending list and re-queries —
+            // at which point the next-smallest eligible id becomes
+            // the head here. This is the stateless-Rust /
+            // stateful-provider split the design specifies; Rust
+            // emits the head's factored option pair, the provider
+            // drives the walk. Vigilance creatures stay untapped,
+            // so the provider's pending-pop is what advances the
+            // head past a non-attacking or vigilant declared
+            // creature — exactly the Python adapter's
+            // `_pending_attackers.pop(0)` semantics
+            // (`engine_adapter.py:1097`).
+            //
+            // Empty `eligible` ⇒ no combat decision is emitted (the
+            // adapter's `_enter_declare_attackers` skips the
+            // factored phase entirely when `not eligible`,
+            // `engine_adapter.py:1295-1310`; the step's priority
+            // window opens instead — handled by the priority
+            // emission below). The former powerset block emitted an
+            // empty-subset `declare_attackers` dict even with zero
+            // eligible; the factored shape correctly emits NOTHING,
+            // matching Python (which has no DeclareAttackers /
+            // AttackerDecision in `legal_actions` at all and whose
+            // adapter skips the phase).
+            if let Some(&head) = eligible.iter().min() {
+                actions.push(attacker_decision_dict(py, head, true)?);
+                actions.push(attacker_decision_dict(py, head, false)?);
             }
         }
 
@@ -1298,63 +1357,72 @@ impl GameState {
                 eligible_blockers.push(obj.id);
             }
 
-            // Attackers come from `self.attackers` — the set the
-            // active player committed to during the DECLARE_ATTACKERS
-            // phase (see `state_ops_combat.rs:declare_attacker`,
-            // which pushes onto this Vec). We mirror its iteration
-            // order so emission ordering is deterministic.
+            // **G1 — factored per-blocker emission (the C1-analog
+            // for the combat axis).** Replaces the former capped
+            // `(M+1)^N` product block. Byte-compatible mirror of the
+            // Python search seam: `MtgGameStateAdapter.legal_decisions`
+            // (`engine_adapter.py:815-828`) issues, for the HEAD
+            // pending blocker, one `BlockerDecision(blocker_id=head,
+            // attacker_id=atk)` per currently-attacking creature (in
+            // `attacking`-iteration order) followed by a final
+            // `BlockerDecision(blocker_id=head, attacker_id=None)`
+            // ("don't block"). The adapter's pending list is
+            // `sorted(o.id for o in eligible)`
+            // (`engine_adapter.py:1360`) so the head is the
+            // smallest-id eligible blocker; the codec's no-adapter
+            // fallback uses the same `min(o.id for o in elig)`
+            // (`action_encoding.py:1007-1012`). We emit for that
+            // same head.
+            //
+            // **Attacker branch ids + ordering.** Branches come from
+            // `self.attackers` — the set the active player committed
+            // during DECLARE_ATTACKERS (`state_ops_combat.rs:
+            // declare_attacker` pushes onto this Vec). The Python
+            // adapter walks `[o.id for o in battlefield if
+            // o.attacking]`; the codec recovers the policy slot via
+            // `_attacking_creatures` = `sorted(... by id)`
+            // (`action_encoding.py:414-420,714-733`). The codec
+            // derives `atk_pos` from the `attacker_id` VALUE (its
+            // index in the sorted attacking list), so the slot is
+            // independent of the order we list the branch dicts in —
+            // we mirror the adapter's literal seam order
+            // (`self.attackers` declaration order, "don't block"
+            // last) for faithfulness; list order is parity-NEUTRAL
+            // under the Python-sourced single-script-replay harness
+            // (the C1 §4 proof — the harness never sources a choice
+            // from `rust.legal_decisions`).
+            //
+            // The B3 Python provider (sibling slice — NOT this one)
+            // owns the per-blocker accumulation + finalize-to-whole-
+            // `declare_blockers` (`engine_adapter.py:1114-1144`
+            // ported verbatim per the wiring design §3.3, which
+            // keeps the CE16 menace post-validation `.retain` at the
+            // finalize boundary). It pops its pending head and
+            // re-queries; the next-smallest eligible blocker id
+            // becomes the head here — the stateless-Rust /
+            // stateful-provider split the design specifies.
+            //
+            // Empty `eligible_blockers` ⇒ no combat decision is
+            // emitted (the adapter skips the factored blocker phase
+            // entirely when `not eligible`,
+            // `engine_adapter.py:1339-1356`, opening the priority
+            // window instead — handled by the priority emission
+            // below). The former product block emitted an empty-
+            // assignment `declare_blockers` dict even with zero
+            // eligible blockers; the factored shape correctly emits
+            // NOTHING, matching Python (no DeclareBlockers /
+            // BlockerDecision in `legal_actions` at all, adapter
+            // skips the phase).
             let attackers: &[u32] = &self.attackers;
-            let n_blockers = eligible_blockers.len();
-            let m_attackers = attackers.len();
-
-            if n_blockers <= DECLARE_BLOCKERS_PRODUCT_CAP
-                && m_attackers <= DECLARE_BLOCKERS_MAX_ATTACKERS
-            {
-                // Full product space: each blocker independently
-                // picks one of (M+1) choices — block attacker_j for
-                // j in 0..M, or "don't block" (the M-th choice, by
-                // convention). With N blockers and M attackers,
-                // total assignments = (M+1)^N. Iterate combo from
-                // 0..(M+1)^N; for each, decompose into per-blocker
-                // choices via repeated `combo % (M+1)` / `combo /=
-                // (M+1)`. Choice index `< M` -> block attackers[j];
-                // choice index `== M` -> blocker omitted from the
-                // assignment list (the "don't block" sentinel).
-                //
-                // Edge cases this handles naturally:
-                // - N=0 (no blockers): (M+1)^0 = 1 iteration emits a
-                //   single empty assignment list. Matches Python's
-                //   "must emit something" + "empty assignments means
-                //   no blocks" semantics.
-                // - M=0 (no attackers in `state.attackers`):
-                //   (0+1)^N = 1 iteration; each blocker's choice
-                //   index is 0, which is `== M` (the "don't block"
-                //   sentinel), so the assignment list is empty.
-                //   Matches "no attackers means no blocks possible."
-                let m_plus_1 = (m_attackers + 1) as u32;
-                let total = (m_plus_1 as u64).pow(n_blockers as u32);
-                for combo_raw in 0..total {
-                    let mut combo = combo_raw;
-                    let mut assignments: Vec<(u32, u32)> =
-                        Vec::with_capacity(n_blockers);
-                    for &blocker_id in eligible_blockers.iter() {
-                        let choice = (combo % (m_plus_1 as u64)) as usize;
-                        combo /= m_plus_1 as u64;
-                        if choice < m_attackers {
-                            assignments.push((blocker_id, attackers[choice]));
-                        }
-                        // else: blocker doesn't block — omitted.
-                    }
-                    actions.push(declare_blockers_dict(py, &assignments)?);
+            if let Some(&head) = eligible_blockers.iter().min() {
+                for &atk in attackers.iter() {
+                    actions.push(blocker_decision_dict(
+                        py,
+                        head,
+                        Some(atk),
+                    )?);
                 }
-            } else {
-                // Past the cap: emit only the canonical "no blocks"
-                // assignment (an empty Vec). The dropped middle
-                // assignments are still reachable at apply time via
-                // direct `Action::DeclareBlockers` construction —
-                // they're just not enumerated by `legal_decisions`.
-                // Bounded at 1 dict regardless of N or M.
-                actions.push(declare_blockers_dict(py, &[])?);
+                actions.push(blocker_decision_dict(py, head, None)?);
             }
         }
 

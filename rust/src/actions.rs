@@ -297,6 +297,76 @@ pub enum Action {
     /// round-24 TurnFaceUp "scaffold the variant, defer the dispatch
     /// semantics" pattern.
     UnlockRoomHalf { card_id: u32, half_name: String },
+    /// **Factored per-creature attacker sub-decision (G1 — the
+    /// C1-analog for the combat axis).** The byte-compatible Rust
+    /// mirror of `src/mtg_bot/search/combat_decisions.py:44-55`'s
+    /// `AttackerDecision(attacker_id: int, attack: bool)` dataclass.
+    /// Issued ONE per eligible attacker by the Rust `legal_decisions`
+    /// combat window (the head pending attacker — smallest-id eligible,
+    /// matching the Python adapter's `_pending_attackers =
+    /// sorted(o.id for o in eligible)` at
+    /// `engine_adapter.py:1315` AND the codec's
+    /// `_pending_attacker_head` `min(...)` fallback at
+    /// `action_encoding.py:990-995`), with exactly two branches —
+    /// `attack=true` then `attack=false` — mirroring
+    /// `engine_adapter.py:811-814`.
+    ///
+    /// **Search-side construct, faithfully mirrored.** In Python these
+    /// never reach `apply_action`: `MtgGameStateAdapter` accumulates
+    /// per-creature decisions into a single engine-level
+    /// `DeclareAttackers(frozenset[int])`
+    /// (`engine_adapter.py:1080-1108`). The B3 Python provider
+    /// (`RustGameStateAdapter`, a sibling slice — NOT this one) ports
+    /// that accumulation verbatim and finalizes via the existing
+    /// whole-action `apply_action({"kind":"declare_attackers",
+    /// "attacker_ids":[…]})` arm. For round-trip completeness the
+    /// `apply_action` dispatch ALSO accepts a single
+    /// `attacker_decision` dict directly: `attack=true` dispatches the
+    /// existing round-5 `declare_attacker(attacker_id)` primitive (the
+    /// SAME primitive the whole-action `DeclareAttackers` arm uses —
+    /// single source of truth, byte-identical accumulation), `attack=
+    /// false` is a no-op (the creature simply isn't declared, exactly
+    /// as Python's `_apply_attacker_decision` only appends to
+    /// `_chosen_attackers` when `decision.attack`,
+    /// `engine_adapter.py:1095-1096`).
+    ///
+    /// **Additive, non-destructive.** The powerset
+    /// `DeclareAttackers` emission it replaces and the whole-action
+    /// `DeclareAttackers { attacker_ids }` apply arm are UNCHANGED;
+    /// the Python single-script-replay harness drives the whole-action
+    /// shape (`cross_engine._dict_to_python_action` produces
+    /// `DeclareAttackers`, never the factored kind), so this is
+    /// parity-NEUTRAL by the C1 §4 single-script-replay proof.
+    AttackerDecision { attacker_id: u32, attack: bool },
+    /// **Factored per-creature blocker sub-decision (G1).** The
+    /// byte-compatible Rust mirror of
+    /// `src/mtg_bot/search/combat_decisions.py:57-73`'s
+    /// `BlockerDecision(blocker_id: int, attacker_id: Optional[int])`
+    /// dataclass. Issued ONE per eligible blocker by the Rust
+    /// `legal_decisions` combat window (the head pending blocker —
+    /// smallest-id eligible, matching the Python adapter's
+    /// `_pending_blockers = sorted(o.id for o in eligible)` at
+    /// `engine_adapter.py:1360` AND the codec's
+    /// `_pending_blocker_head` `min(...)` fallback at
+    /// `action_encoding.py:1007-1012`), with one branch per attacking
+    /// creature plus a final `attacker_id=None` ("don't block")
+    /// branch, mirroring `engine_adapter.py:816-828`.
+    ///
+    /// `attacker_id is None` (`None`) means "don't block." Otherwise
+    /// it is one of the currently-attacking creatures' ids. The
+    /// `apply_action` dispatch accepts a single `blocker_decision`
+    /// dict directly: `attacker_id=Some` dispatches the existing
+    /// round-5 `declare_blocker(blocker_id, attacker_id)` primitive
+    /// (the SAME primitive the whole-action `DeclareBlockers` arm
+    /// uses), `attacker_id=None` is a no-op (mirrors Python's
+    /// `_apply_blocker_decision` only recording when
+    /// `decision.attacker_id is not None`,
+    /// `engine_adapter.py:1127-1128`). Additive + non-destructive +
+    /// parity-NEUTRAL exactly like `AttackerDecision` above.
+    BlockerDecision {
+        blocker_id: u32,
+        attacker_id: Option<u32>,
+    },
 }
 
 // --- dict -> Rust ------------------------------------------------
@@ -505,8 +575,47 @@ pub fn parse_action(dict: &Bound<'_, PyDict>) -> PyResult<Action> {
                 crew_id,
             })
         }
+        "attacker_decision" => {
+            // G1 factored per-attacker sub-decision (the C1-analog
+            // for the combat axis). Mirrors Python's
+            // `AttackerDecision(attacker_id: int, attack: bool)`
+            // dataclass (`search/combat_decisions.py:44-55`). Two
+            // required keys: `attacker_id` (u32) + `attack` (bool).
+            // Missing either → `KeyError` via `require`; wrong type
+            // → `TypeError` from PyO3's extract machinery — same
+            // shape as `play_land`'s `card_id`. Round-trips through
+            // `action_to_pydict` below.
+            let attacker_id: u32 = require(dict, "attacker_id")?.extract()?;
+            let attack: bool = require(dict, "attack")?.extract()?;
+            Ok(Action::AttackerDecision {
+                attacker_id,
+                attack,
+            })
+        }
+        "blocker_decision" => {
+            // G1 factored per-blocker sub-decision. Mirrors Python's
+            // `BlockerDecision(blocker_id: int, attacker_id:
+            // Optional[int])` dataclass
+            // (`search/combat_decisions.py:57-73`). `blocker_id`
+            // (u32) is required; `attacker_id` is required-but-
+            // nullable: present-and-int → block that attacker,
+            // present-and-None (or absent) → "don't block" (the
+            // factored no-block branch). Same Option-extraction
+            // shape as `activate_ability`'s `target_creature_id`
+            // (missing key OR explicit None map to None).
+            let blocker_id: u32 = require(dict, "blocker_id")?.extract()?;
+            let attacker_id: Option<u32> =
+                match dict.get_item("attacker_id")? {
+                    Some(v) if !v.is_none() => Some(v.extract()?),
+                    _ => None,
+                };
+            Ok(Action::BlockerDecision {
+                blocker_id,
+                attacker_id,
+            })
+        }
         other => Err(PyValueError::new_err(format!(
-            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, activate_ability, cast_spell, turn_face_up, unlock_room_half, activate_station"
+            "unknown action kind {other:?}; valid: pass_priority, play_land, declare_attackers, declare_blockers, attacker_decision, blocker_decision, activate_ability, cast_spell, turn_face_up, unlock_room_half, activate_station"
         ))),
     }
 }
@@ -623,6 +732,34 @@ pub fn action_to_pydict<'py>(
             d.set_item("kind", "activate_station")?;
             d.set_item("spacecraft_id", *spacecraft_id)?;
             d.set_item("crew_id", *crew_id)?;
+        }
+        Action::AttackerDecision {
+            attacker_id,
+            attack,
+        } => {
+            // G1 factored per-attacker sub-decision. Two scalar keys
+            // — `attacker_id` (u32) + `attack` (bool) — round-trip
+            // through `parse_action`'s `"attacker_decision"` arm
+            // without key drift. Same shape as Python's
+            // `AttackerDecision` dataclass serialized to a dict.
+            d.set_item("kind", "attacker_decision")?;
+            d.set_item("attacker_id", *attacker_id)?;
+            d.set_item("attack", *attack)?;
+        }
+        Action::BlockerDecision {
+            blocker_id,
+            attacker_id,
+        } => {
+            // G1 factored per-blocker sub-decision. `blocker_id`
+            // (u32) + `attacker_id` (`Option<u32>` → Python int /
+            // None). Always emit `attacker_id` so round-trip is
+            // symmetric (None → Python None re-parses to the
+            // "don't block" branch). PyO3's `set_item` handles
+            // `Option<u32>` via the `IntoPy` impl — same shape as
+            // `cast_room_half`'s `Option<String>` above.
+            d.set_item("kind", "blocker_decision")?;
+            d.set_item("blocker_id", *blocker_id)?;
+            d.set_item("attacker_id", *attacker_id)?;
         }
     }
     Ok(d)
