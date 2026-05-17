@@ -2980,6 +2980,139 @@ intentionally NOT cross-asserted).
 
 ---
 
+## BECOMES_TAPPED event bridge SHIPPED (round 58) — Seedship Agrarian narrowed: BECOMES_TAPPED→CreateToken half byte-equal, residual is the orthogonal landfall+1/+1 leaf (NOT token-registration)
+
+**Status**: this is NOT a divergence — it is a **closed campaign
+landmine** plus an honest residual narrowing. Documented here per the
+"document deliberate scope boundaries at the time they land" rule.
+
+**What shipped (round 58 N1).** `Event::BECOMES_TAPPED` is now a
+fully-bridged cross-engine event, round-tripping the SAME way
+ENTERS / DIES / ATTACKS do:
+
+- **Rust** (`rust/src/cards.rs`): new `Event::BecomesTapped` enum
+  variant + `"becomes_tapped"` parser arm; admitted in
+  `state_ops_resolve::dispatch_event`. A centralized chokepoint
+  `state_ops_resolve::tap_permanent_and_dispatch` (the Rust analogue
+  of Python's `turn.tap_permanent`: flip + dispatch iff the state
+  actually changed, no-op-if-already-tapped) is invoked at every
+  production tap site that mirrors a Python `tap_permanent` caller:
+  attack-tap (`state_ops_combat.rs` — placed BEFORE the per-attacker
+  `Event::Attacks` dispatch so the stack-push order is byte-equal to
+  Python's `combat.py:104` tap → `combat.py:115` ATTACKS), the
+  `Effect::TapTarget` / `TapTargetArtifactOrCreature` /
+  `TapEnchantedPermanent` / `TapAnotherTargetCreature` arms, and (via
+  an inline dispatch where mana-credit / cost-pay ordering forces an
+  already-committed flip) tap-for-mana (`state_ops_mana.rs`) and the
+  `{T}` `tap_self` activated-ability cost (`state_ops_actions.rs`).
+  `TapTargetOpponentPermanentAndStunIt` snapshots `was_tapped` and
+  dispatches conditionally (Python adds the stun counter
+  UNCONDITIONALLY but fires BECOMES_TAPPED only on the
+  untapped→tapped transition, tap.py:237-256).
+- **Bridge** (`src/mtg_bot/parity/cross_engine.py`):
+  `_ta_dict_to_python_triggered_ability` maps `"becomes_tapped"` →
+  `Event.BECOMES_TAPPED` (string passthrough, no Cast/IS_CAST-style
+  spelling skew).
+- **Loader** (`src/mtg_bot/parity/trajectory.py`):
+  `("becomes_tapped","source_is_self","create_token")` added to
+  `_SAFE_TRIGGERS`; the recognizer event-gate widened to admit
+  `Event.BECOMES_TAPPED` with a dedicated narrow leaf set
+  (`create_token` only).
+
+**Firing-set parity (the §2 source of truth — CR 701.21a).** Python
+fires `Event.BECOMES_TAPPED` ONLY through `turn.tap_permanent`
+(`src/mtg_bot/turn.py:542-571`), the no-op-if-already-tapped
+chokepoint, called from: tap-for-mana
+(`actions.py:auto_tap_for_cost`), the `{T}` `tap_self` activated
+cost (`actions.py:_activate_ability`),
+`tap_permanent_you_control` activated cost, convoke, crew, attack-tap
+of a non-vigilance attacker (`combat.py:104`, fired BEFORE the
+per-attacker ATTACKS dispatch at `combat.py:115`), and the
+tapper-effect family (`effects/generic/tap.py`,
+`effects/combinators.py:163`, `effects/bespoke.py:496`). Python
+deliberately does NOT fire it for permanents entering tapped
+(`_play_land`'s `card.tapped = True`, search-land-tapped,
+reanimate-tapped, token-created-tapped) nor for regeneration's
+replacement tap (`turn.py:1268`) — those are direct
+`obj.tapped = True` assignments, NOT `tap_permanent` calls (CR
+701.21a: a permanent entering tapped never "becomes tapped"). Rust's
+emission set matches this EXACTLY: the entering-tapped (Search
+LibraryForBasicLandTapped, land-enters-tapped effect) and
+regeneration / stun-only (`PutStunCounterOnTappedCreature`) Rust
+sites stay raw `obj.tapped = true` with no dispatch.
+
+**§2 scope: combinations admitted vs declined under BECOMES_TAPPED.**
+- ADMIT: `source_is_self` (→ `IsSelf()`) + `create_token`
+  (→ `CreateToken`) — the ONLY combo with a real EoE consumer
+  (Seedship Agrarian) and both bridge arms are event-agnostic +
+  already byte-equal-proven under ENTERS/DIES.
+- DECLINE (no `_SAFE_TRIGGERS` entry; falls through the recognizer):
+  * `IsHost()` predicate (Cryoshatter-shape "enchanted permanent
+    becomes tapped", `enchantment_builder.py:497`) — Rust's predicate
+    substrate has no `SourceIsHost` arm (only `SourceIsSelf`);
+    admitting it would silently mistranslate the host relationship.
+    Separate predicate-substrate slice.
+  * Any non-`create_token` effect under BECOMES_TAPPED — no EoE
+    consumer carries those today; admitting would be
+    preventative-only and widen the bench-admit surface without a
+    real signal source. Future slice ships the single new entry +
+    one-line recognizer widen (same pattern as the
+    ENTERS/DIES/ATTACKS leaf-set extensions).
+  * Crew / `ActivateStation` and `tap_permanent_you_control` Rust
+    tap: NO Rust tap-resolution substrate exists (`ActivateStation`
+    raises not-implemented) — wiring an emission with no tap would
+    be a divergent invention. Honest §2 decline; will be wired
+    when/if the Rust crew/station substrate lands.
+
+**Seedship Agrarian — the residual is now NARROWED and RE-CLASSIFIED.**
+The `docs/residue_worklist.json` `SeedshipAgrarian-landfall-composer`
+entry's `non_effect_blocker` was
+*"Event.BECOMES_TAPPED unbridged (§2-declined, no cross_engine.py
+bridge arm) + Lander token-registration substrate"*. Round 58
+discharges the FIRST half entirely (BECOMES_TAPPED is now bridged)
+**and a verify-first re-walk of the live parser shows the SECOND half
+was mis-stated**: Seedship's two triggers are
+(1) `BECOMES_TAPPED / IsSelf / CreateToken(Lander)` — NOW byte-equal
+cross-engine (the genuine probe drives the real parsed printing and
+asserts the Lander spawn is byte-equal up to the token-registration
+boundary), and (2) `Landfall — Whenever a land you control enters,
+put a +1/+1 counter on this creature` =
+`ENTERS / land_enters_controlled_by_you / PutPlusOneCounterOnSelf`.
+The full-card admit still fails (the loader filter requires EVERY
+trigger to round-trip), but the blocker is now precisely **trigger 2's
+`put_plus_one_counter_on_self` landfall leaf** — which is NOT in the
+landfall safe-leaf set (today: gain_life / pump_self_until_eot /
+draw_cards / mill) — a SEPARATE, already-known substrate gap. It is
+**NOT** the BECOMES_TAPPED event (closed) and **NOT** Lander
+token-registration (the existing round-49/53 create_token +
+`_seat_token_printings` machinery already handles the Lander token
+for the BECOMES_TAPPED trigger — the genuine probe proves the spawn
+byte-equal). For orchestrator fold: the BECOMES_TAPPED half of
+`SeedshipAgrarian-landfall-composer` is byte-equal; the residual is
+narrowed and re-pointed to the landfall+PutPlusOneCounterOnSelf leaf.
+
+**Pinned by**: 6 Rust regression pins
+(`tests/test_cross_engine_etb_triggers.py::test_r58_becomes_tapped_*`
+— fires on attack-tap; pushed-before-ATTACKS ordering; fires on
+tap-for-mana; fires on TapTarget effect; does NOT fire on vigilance
+attacker; does NOT fire on already-tapped re-tap); 3 cross-engine
+bridge pins (`..._bridge_round_trips_source_is_self_draw` +
+`..._bridge_round_trips_create_token` +
+`..._safe_trigger_dict_admits_seedship_shape`); 1 genuine real-EoE
+cross-engine probe
+(`tests/test_parity_smoke.py::test_cross_engine_real_eoe_seedship_agrarian_becomes_tapped_create_lander_parity`
+— drives the actual parsed Seedship Agrarian printing's BECOMES_TAPPED
+trigger cross-engine; byte-equal on the Lander-spawn observable up to
+the token-registration boundary). **Latent-bug pin inverted**
+(round-39/53/56 precedent): the pre-existing
+`tests/test_trajectory.py::test_phase3a_lander_cluster_residue_stays_declined`
+asserted Seedship's Lander trigger must NOT round-trip — it was
+pinning the bug (no bridge arm existed); now inverted to assert it
+round-trips byte-equal with the full-card decline re-pointed to the
+orthogonal landfall leaf.
+
+---
+
 ## Tracked but not in this doc
 
 Things tracked elsewhere that you might also want to know about:
