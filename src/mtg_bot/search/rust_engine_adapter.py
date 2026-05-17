@@ -200,6 +200,25 @@ class RustGameStateAdapter:
         self._legal_cache_value = dicts
         return dicts
 
+    def _reset_priority_to_active(self) -> None:
+        """Set Rust ``priority_player`` to the active player — the
+        Rust-side port of ``MtgGameStateAdapter._enter_priority_for_
+        current_step`` (``engine_adapter.py:1146-1153``) and the
+        ``_run_priority_action`` priority resets
+        (``:966,:985-987``). The Python adapter ALWAYS returns
+        priority to the active player after a step ends, after a stack
+        resolution (CR 117.1c), and after any non-pass action; Rust's
+        ``advance_phase`` does NOT reset priority (only its
+        CLEANUP->UNTAP wrap does), and ``pass_priority`` only toggles
+        — so the provider must mirror the Python reset explicitly to
+        keep ``priority_player`` byte-equal (the S4 STATE_EQ tripwire
+        surfaced this; new-code-is-right — match the Python SoT). For
+        the 2-player no-loss model the active player is the reset
+        target (Python's ``_next_alive(active_player_idx)``)."""
+        ap = int(self._rust.active_player_idx)
+        if int(self._rust.get_priority_player()) != ap:
+            self._rust.give_priority_to(ap)
+
     def _advance_to_next_decision(self) -> None:
         """Drive Rust forward until the game ends or the next
         priority/decision moment is pending. Rust's ``advance_phase``
@@ -221,7 +240,16 @@ class RustGameStateAdapter:
                 self._pass_count = 0
                 continue
             # A priority phase (incl. the factored-combat declare
-            # phases) — the caller must decide here.
+            # phases) — the caller must decide here. Priority is NOT
+            # reset here: the Python adapter resets priority ONLY at
+            # the points _run_priority_action handles (step-end /
+            # resolution / non-pass action — mirrored there) and on a
+            # single in-round pass priority correctly moves to the
+            # OTHER player (engine_adapter.py:972-977). Resetting here
+            # would clobber that mid-round handoff (the S4 STATE_EQ
+            # tripwire surfaced exactly this: a single-pass window
+            # must keep priority at the opponent, not the active
+            # player).
             return
 
     def _run_priority_action(self, decision: Decision) -> None:
@@ -240,15 +268,28 @@ class RustGameStateAdapter:
                 if self._rust.stack_size() > 0:
                     # Resolve one stack item with real effect dispatch
                     # (NOT the pop-only complete_step_via_priority_round
-                    # — that does not fire effects). Priority returns
-                    # to the active player after a resolution (CR
-                    # 117.1c); Rust's resolve_top_of_stack already
-                    # resets priority_player = active_player.
+                    # — that does not fire effects). CR 117.1c: priority
+                    # returns to the active player after a resolution
+                    # (engine_adapter.py:966). Mirror it explicitly —
+                    # resolve_top_of_stack does not guarantee the
+                    # priority reset on its own.
                     self._rust.resolve_top_of_stack()
                     self._rust.apply_sbas()
+                    self._reset_priority_to_active()
                 else:
-                    # Empty stack, both passed -> the step ends.
+                    # Empty stack, both passed -> the step ends. The
+                    # Python adapter advances the step and (via
+                    # _enter_priority_for_current_step) returns priority
+                    # to the active player; advance_phase does NOT, so
+                    # mirror the reset (engine_adapter.py:971 ->
+                    # :1146-1153). _advance_to_next_decision also
+                    # resets at the next priority window, but resetting
+                    # here keeps priority_player byte-equal at THIS
+                    # post-apply compare point (the S4 STATE_EQ check
+                    # runs immediately after apply()).
                     self._rust.advance_phase()
+                    if not self._rust.is_over():
+                        self._reset_priority_to_active()
             else:
                 # Pass priority to the other player (2-player toggle).
                 self._rust.pass_priority()
@@ -265,6 +306,11 @@ class RustGameStateAdapter:
             self._rust.apply_action(d)
             self._rust.apply_sbas()
             self._pass_count = 0
+            # CR 117.3c / engine_adapter.py:985-987: priority returns
+            # to the active player after any non-pass action. Rust's
+            # apply_action does not guarantee this; mirror it.
+            if not self._rust.is_over():
+                self._reset_priority_to_active()
 
     # ------------------------------------------------------------------
     # search.GameState protocol
