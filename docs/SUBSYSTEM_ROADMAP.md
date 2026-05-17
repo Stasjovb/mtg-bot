@@ -168,6 +168,43 @@ second:
    >   the honest near-term lever remains the per-card Effect lane +
    >   the bench-divergence sweep.
 
+   > **⚠ Continuous-pipeline orchestrator fold (post warp Phase 1,
+   > merge `9f3ef1d1`).**
+   > - **warp_cost Phase 1 REALIZED:** Red Tiger Mechan + Bygone
+   >   Colossus admit (+2 cards / **+6,450** cumulative 17lands
+   >   decks); Timeline Culler correctly DECLINED. The implementing
+   >   agent caught a live-tree drift (the spec branch would have
+   >   admitted 5 not 2 — guardrail tightened to the Phase-1
+   >   boundary `triggered_abilities==()`) and found+fixed 2
+   >   pre-existing cross-engine-harness bugs (alt-cost flags
+   >   dropped in `_dict_to_python_action`; `advance_phase_python`
+   >   END-step mirror). Gate 1397→1415. **Next warp work:** the
+   >   safe-trigger+warp residue trio (Germinating Wurm / Knight
+   >   Luminary / Starbreach Whale — ~+3 cards, mechanical, their
+   >   trigger half already ships bridge-correct; just need a pin
+   >   that the ETB fires byte-equal under a warp-cast on the
+   >   now-landed substrate) = **Phase 1.5**, sequence BEFORE
+   >   **Phase 2** (Timeline Culler, +1 / **+8,986**, adds
+   >   `warp_additional_life_cost` + graveyard-cast). See
+   >   `docs/WARP_COST_PHASE1_DESIGN.md`.
+   > - **Spell-card-bridge lever (round-64/65 finding) — sizing
+   >   CORRECTED:** the Effect-uncovered mini-specs' "~1 round /
+   >   unlocks all 31 Tier-A at once" was optimistic. All 7 ready
+   >   Tier-A cards are TARGETED → the shared lever is **~2 Rust
+   >   rounds, flipping cards INCREMENTALLY** as each per-card
+   >   Effect closes (Phase 1 single-target → up to 6; Phase 2
+   >   2-slot → +Diplomatic Relations = up to 7). Sequence AFTER
+   >   3-5 Tier-A Effect closes. New canonical doc:
+   >   `docs/SPELL_CARD_BRIDGE_LEVER_DESIGN.md`; cross-reference it
+   >   from the Effect-uncovered row alongside
+   >   `EFFECT_UNCOVERED_TIERA_MINISPECS.md` (two layers: per-card
+   >   Effect close drains the pool-parity bucket + makes the card
+   >   cross-engine-probeable; this lever is the SEPARATE shared
+   >   bench-admit carrier). **Close Encounter is Tier-C**, NOT
+   >   Tier-A (additional-cost-choice + warp entanglement — the
+   >   lever does not rescue it; authoritative in
+   >   `EFFECT_UNCOVERED_TIERA_MINISPECS.md` §1.2).
+
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
    `Effect-uncovered`, so bridging BECOMES_TAPPED alone flips
