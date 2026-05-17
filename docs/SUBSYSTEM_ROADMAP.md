@@ -161,6 +161,16 @@ second:
    >   Phase 3+). Future roadmap reads must cross-check
    >   `classify_pool().tiers`, not just `subsystem_attribution()` —
    >   residue cards are invisible to the attribution model.
+   >   **RE-VERIFIED LIVE `c43e636a`** (see
+   >   `docs/AURA_ATTACHMENT_PHASE1_DESIGN.md` §0.5/§1/§6 — the
+   >   implement-ready-but-DEPRIORITIZED Phase-1 spec): the LIVE pool
+   >   now has 14 `is_aura` printings; the Phase-1 guardrail still
+   >   admits **exactly 1 (Frantic Strength, 0 decks)**; the entire
+   >   Aura attach substrate (Phases 1-3) flips **0 real-bench decks**;
+   >   only Phase 4 carries deck count (Chorale 2,783 + Moonlit 633,
+   >   multi-gated, more rounds out). Same honest-zero verdict as
+   >   cost-reduction — DEPRIORITIZE; the only genuine motivation is
+   >   Phase-3 residue closure (parity-distance metric, not leverage).
    > - **Sequencing (head-to-head):** do **warp_cost BEFORE
    >   Aura-attachment** — ~24× leverage-per-Rust-round (15,436 vs
    >   633 single-gate decks), contained vs sprawling. Confirmed
