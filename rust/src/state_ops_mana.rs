@@ -393,3 +393,99 @@ impl GameState {
         Ok(Some(produced_color))
     }
 }
+
+/// **legal_decisions mana-awareness — Slice 1 (the SoT-flip-blocking
+/// non-destructive `can_pay_cost` predicate).**
+///
+/// Non-destructive mana-affordability predicate. Returns `true` iff
+/// `player_idx` could pay `cost` right now by consuming floating pool
+/// mana then auto-tapping every untapped, non-summoning-sick mana
+/// source they control. Reads ZERO mutation (it never mutates, so it
+/// snapshots nothing). The named-public counterpart to the
+/// destructive `pay_mana_cost` twin above — the SL note's exact fix
+/// shape: "permissive in `legal_decisions`, strict in apply", the two
+/// co-located so the pair is one unit.
+///
+/// Mirrors Python `mtg_bot.actions.can_pay_cost`
+/// (`src/mtg_bot/actions.py:336-403`) — the source of truth —
+/// algorithm-for-algorithm for the live CastSpell surface's
+/// `generic + 5-colored` `ManaCost` shape (the only shape the Rust
+/// `cards::ManaCost` struct carries — `cards.rs:38-46`: no `x_pips`,
+/// no `hybrid` list, no Phyrexian field; Python's hybrid/X handling is
+/// unreachable here). The two halves of the algorithm already exist
+/// and are byte-equal-pinned by the ActivateAbility gate (pins I50):
+///
+///   * `auto_tap_headroom_pool(state, idx)`
+///     (`state_ops_legal.rs:559`) — the non-destructive "current
+///     floating pool PLUS every untapped non-sick mana source"
+///     hypothetical pool. Exactly Python's pool + `_untapped_lands`
+///     auto-tap accounting (`actions.py:364-392`).
+///   * `pool_can_cover(pool, cost)` (`state_ops_legal.rs:514`) —
+///     exact colored-then-generic affordability over a count pool,
+///     mirroring `pay_mana_cost`'s pre-mutation gate and Python's
+///     "pay colored first, then generic with the remainder"
+///     (`actions.py:371-403`).
+///
+/// So for the live surface `can_pay_cost` IS
+/// `pool_can_cover(&auto_tap_headroom_pool(state, idx), cost)`. This
+/// wrapper gives the predicate one canonical name (the SL note can
+/// point at it), one place for the alt-cost / restricted-coin /
+/// convoke / X-hybrid-Phyrexian extensions to grow (see the design
+/// doc §2.4/§2.5 — designed extension points, NOT silent gaps), and
+/// co-locates it with `pay_mana_cost`.
+///
+/// `spell_kind` is Python's per-coin spend-restriction context
+/// (`actions.py:338`). The Rust `ManaPool` is a bare count struct
+/// with NO per-coin restriction model (verified: `pool_can_cover` /
+/// `auto_tap_headroom_pool` operate on raw counts); no live
+/// bridge-admitted CastSpell card exercises a restricted-coin
+/// context (those are Treasure/Eldrazi/artifact-spend idioms off the
+/// cast surface). Carried in the signature for forward-composition
+/// (a stable signature is the parity contract for the pins) but
+/// IGNORED by the predicate — equivalent to Python's behavior when no
+/// coin carries a restriction (the dominant real case), and it can
+/// only keep the predicate a SUPERSET of Python in the restricted
+/// corner, preserving the `Rust ⊇ Python` direction the
+/// single-script-replay contract needs (design doc §4 proves
+/// parity-neutrality). The restricted-coin port is bundled with the
+/// alt-cost slice.
+///
+/// `convoke` / `sac_for_mana` are Python's upper-bound wideners
+/// ("only ever make a spell cheaper"); no live admitted axis card has
+/// convoke and sac-for-mana is the Treasure idiom — both off the live
+/// cast surface. Omitted from Slice 1 (matching the live admitted
+/// surface); adding them later is a pure widening (never narrows the
+/// emitted set) so it lands without re-pinning. Same surgical-scope
+/// discipline as WARP_COST_PHASE2 §1.
+pub(crate) fn can_pay_cost(
+    state: &crate::state::GameState,
+    player_idx: usize,
+    cost: &crate::cards::ManaCost,
+    spell_kind: &SpellKind,
+) -> bool {
+    // Slice 1: `spell_kind` is the forward-composition stub (the
+    // Rust ManaPool has no per-coin restriction model; no live
+    // admitted card exercises a restricted-coin context). Ignored
+    // here exactly as Python's `_coin_satisfies_context` is a no-op
+    // when no coin carries a restriction (the dominant real case).
+    let _ = spell_kind;
+    let headroom =
+        crate::state_ops_legal::auto_tap_headroom_pool(state, player_idx);
+    crate::state_ops_legal::pool_can_cover(&headroom, cost)
+}
+
+/// The Rust analog of Python's `spell_kind: str | frozenset[str]`
+/// (`src/mtg_bot/actions.py:338`) — the per-coin spend-restriction
+/// context. **Slice 1: a forward-composition stub** — an opaque
+/// carried value the predicate ignores (§2.4 of the design doc). The
+/// shape is fixed NOW so the restricted-coin port (bundled with the
+/// alt-cost slice) does not change `can_pay_cost`'s signature again —
+/// a stable signature is the parity contract for the pin tests. The
+/// unit variant is the only one Slice 1 constructs (`SpellKind::Any`,
+/// the "no restriction" default mirroring Python's plain `"spell"`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpellKind {
+    /// No spend restriction (Python's default `"spell"` context —
+    /// every coin/source is usable). The only variant Slice 1 uses.
+    Any,
+}
