@@ -126,7 +126,7 @@ class CardDef:
     """
 
     name: str
-    card_type: str          # "Land" or "Creature"
+    card_type: str          # "Land" | "Creature" | "Instant" | "Sorcery"
     mana_cost_generic: int = 0
     mana_cost_colored: tuple[tuple[str, int], ...] = ()
     mana_produced: tuple[str, ...] = ()  # for lands
@@ -238,6 +238,35 @@ class CardDef:
     warp_cost_generic: int = 0
     warp_cost_colored: tuple[tuple[str, int], ...] = ()
     has_warp: bool = False
+    # Spell-card-bridge lever, Phase 1 (round-70). Pure single-mode
+    # single-target Instant/Sorcery (EoE Tier-A — Radiant Strike +
+    # Depressurize are the live admit set at landing; Seedship Impact /
+    # Orbital Plunge are covered but DECLINED in Phase 1 because their
+    # Rust ``parse_effect`` requires a Lander ``token_printing_id`` the
+    # loader's spell path cannot seat — the Lander-spell-token-seating
+    # sub-substrate is a documented follow-on; Diplomatic Relations is
+    # Phase 2; Close Encounter is §2.2-declined Tier-C). ``spell_effect``
+    # is ONE effect dict in the SAME schema Rust's ``parse_effect``
+    # consumes and ``_ta_dict_to_python_effect`` bridges (the established
+    # bidirectional-from-one-source convention — see
+    # ``triggered_abilities`` / ``token_activated_abilities`` / the warp
+    # ``(generic, colored)`` scalars). A single dict (not a tuple) — a
+    # spell has exactly one ``spell_effect``. ``None`` = not a spell
+    # (back-compat default; every pre-lever CardDef omits it, so
+    # ``build_rust_state`` keeps the hardcoded ``effects: []`` and
+    # ``_card_def_to_python_printing`` leaves ``spell_effect=None``).
+    # ``card_type`` is "Instant" or "Sorcery" for a spell CardDef. The
+    # guardrail ``trajectory._printing_is_bridge_simple_spell``
+    # positively rejects modal / X / kicker / warp /
+    # additional-cost-choice / multi-slot / permanent-spell /
+    # unseatable-token-pid shapes (later phases / other substrates) so
+    # only the lever-correct dict reaches this field. Treated
+    # immutable-by-discipline like the ``dict(ta) for ta in
+    # triggered_abilities`` precedent — built once in
+    # ``_printing_to_card_def``, never mutated (keeps the frozen
+    # dataclass hash contract intact: no current consumer hashes a
+    # CardDef carrying a spell_effect).
+    spell_effect: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -8866,6 +8895,19 @@ def build_rust_state(spec: DeckSpec):
                 (("generic", card.warp_cost_generic),)
                 if card.warp_cost_generic else ()
             ) | {color: n for color, n in card.warp_cost_colored}
+        # Spell-card-bridge lever, Phase 1 (round-70): a spell CardDef
+        # carries exactly one ``spell_effect`` dict (the SAME schema
+        # Rust's ``parse_effect`` consumes — the round-64 per-card
+        # Tier-A round ships the matching ``parse_effect`` arm + the
+        # dict<->Python bridge arm; this lever just stops hardcoding
+        # ``[]`` for a spell). ``card_types`` is already ``["Instant"]``
+        # / ``["Sorcery"]`` via the existing
+        # ``[card.card_type, *card.extra_card_types]`` above — no
+        # change there. Non-spell CardDefs (spell_effect is None —
+        # every pre-lever fixture) keep the hardcoded ``effects: []``
+        # (back-compat).
+        if card.spell_effect is not None:
+            printing_dict["effects"] = [card.spell_effect]
         pid = reg.register_printing(printing_dict)
         name_to_pid[card.name] = pid
 
@@ -9186,6 +9228,21 @@ def _card_def_to_python_printing(card: "CardDef"):
         _ta_dict_to_python_triggered_ability(ta)
         for ta in card.triggered_abilities
     )
+    # Spell-card-bridge lever, Phase 1 (round-70): materialize the
+    # Python ``CardPrinting.spell_effect`` from the CardDef dict via
+    # the EXISTING dict->Python translator (the same one that bridges
+    # triggered-ability effects). None for every non-spell CardDef
+    # (back-compat default; the guardrail rejects modal/X/etc. so
+    # only a covered+bridged single-effect dict reaches here). The
+    # round-64 per-card Tier-A round inserts the card's bridge arm
+    # IMMEDIATELY ABOVE ``# === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_
+    # LINE ===`` (cross_engine.py — the marker, verified live); the
+    # lever's guardrail (trajectory._printing_is_bridge_simple_spell)
+    # gates on the effect being a COVERED arm so this never raises /
+    # mistranslates.
+    spell_effect = None
+    if card.spell_effect is not None:
+        spell_effect = _ta_dict_to_python_effect(card.spell_effect)
     # Phase 6 carddef-substrate slice: thread keywords into the
     # Python CardPrinting using its native frozenset shape +
     # space-separated spelling. Rust side already received the
@@ -9215,6 +9272,11 @@ def _card_def_to_python_printing(card: "CardDef"):
         # rejects the life / graveyard riders so they default here.
         warp_cost=warp_cost,
         warp_cost_str=warp_cost_str,
+        # Spell-card-bridge lever, Phase 1 (round-70). None for every
+        # non-spell CardDef (back-compat default — the guardrail
+        # rejects modal/X/warp/unseatable-token-pid so only a
+        # covered+bridged single-target effect reaches here).
+        spell_effect=spell_effect,
     )
 
 
