@@ -180,10 +180,75 @@ class RustGameStateAdapter:
     def _phase(self) -> int:
         return int(self._rust.current_phase())
 
-    def _alive_count(self) -> int:
-        # 2-player model. winner_id() is set only post-game; pre-game
-        # both players are alive. A player that has lost flips is_over.
+    def _n_players(self) -> int:
+        # 2-player model (same as MtgGameStateAdapter / the Rust
+        # GameState — players[0], players[1]). The CR-aware
+        # alive-skipping walk needs the modulus; sourcing it here keeps
+        # the _next_alive port a 1:1 mirror of Python's
+        # ``len(state.players)``.
         return 2
+
+    def _lost_set(self) -> frozenset[int]:
+        """The set of player ids Python's ``_next_alive`` /
+        ``_run_priority_action`` treats as ``has_lost``.
+
+        Python's ``_next_alive`` (``simulate.py:46``) and the
+        priority-round threshold (``engine_adapter.py:953``) key on
+        ``Player.has_lost``, which ``turn.draw_card`` sets **eagerly**
+        (``turn.py:110`` — the moment a player draws from an empty
+        library, BEFORE the next SBA pass) plus the SBA-set life<=0 /
+        poison cases. Rust's sticky ``has_lost`` flag lags that eager
+        signal until its own SBA pass, but Rust's ``losers()``
+        (``state_ops_winloss.rs:95``) is the eager OR'd-three predicate
+        (``has_lost`` OR ``attempted_draw_on_empty`` OR ``life<=0``)
+        documented to "surface the loss before the next SBA pass,
+        mirroring Python's eager ``p.has_lost = True`` in
+        ``turn.draw_card``" — i.e. it is the byte-equal Rust analog of
+        Python's eager ``has_lost`` at the shadow STATE_EQ compare
+        points. Using it (NOT raw Rust ``has_lost``) is what makes the
+        port match the Python source-of-truth exactly (G5)."""
+        return frozenset(int(pid) for pid in self._rust.losers())
+
+    def _next_alive_idx(self, start_idx: int) -> int:
+        """Byte-exact port of Python's ``simulate._next_alive``
+        (``simulate.py:46``): start at ``start_idx``, walk
+        ``+1 mod n_players`` skipping players Python treats as
+        ``has_lost``, return the first alive one; if ALL are lost
+        return ``start_idx`` unchanged (mirror ``_next_alive``'s
+        all-lost fallback precisely — do NOT invent different
+        all-lost behavior).
+
+        The Python source-of-truth applies ``_next_alive`` at every
+        priority/active reset (``engine_adapter.py:966/974/985/1151``,
+        the combat-defender picks ``:1256/:1331``, and
+        ``simulate._advance_to_next_active_player`` ``:432``). The
+        Rust-driver adapter previously set priority to the raw active
+        player UNCONDITIONALLY (the "2-player no-loss model"
+        simplifying assumption flagged in
+        ``_reset_priority_to_active``'s own docstring); in the
+        post-player-loss tail (a decked-out active player) that
+        diverged ``priority_player`` then ``active_player`` from the
+        Python SoT (blocker G5). This helper closes that gap by
+        mirroring ``_next_alive`` exactly."""
+        n = self._n_players()
+        lost = self._lost_set()
+        idx = start_idx % n
+        for _ in range(n):
+            if idx not in lost:
+                return idx
+            idx = (idx + 1) % n
+        return start_idx % n
+
+    def _alive_count(self) -> int:
+        """Mirror Python's pass-round-complete threshold
+        ``sum(1 for p in state.players if not p.has_lost)``
+        (``engine_adapter.py:953-956``). Pre-loss this is 2 (the
+        no-loss 2-player model); once a player decks out Python's
+        round completes after the single remaining player passes — the
+        Rust-driver port must use the same alive count so the
+        pass-round bookkeeping stays byte-equal in the post-loss tail
+        (G5)."""
+        return self._n_players() - len(self._lost_set())
 
     def _invalidate_legal_cache(self) -> None:
         self._legal_cache_player = None
@@ -212,12 +277,21 @@ class RustGameStateAdapter:
         CLEANUP->UNTAP wrap does), and ``pass_priority`` only toggles
         — so the provider must mirror the Python reset explicitly to
         keep ``priority_player`` byte-equal (the S4 STATE_EQ tripwire
-        surfaced this; new-code-is-right — match the Python SoT). For
-        the 2-player no-loss model the active player is the reset
-        target (Python's ``_next_alive(active_player_idx)``)."""
-        ap = int(self._rust.active_player_idx)
-        if int(self._rust.get_priority_player()) != ap:
-            self._rust.give_priority_to(ap)
+        surfaced this; new-code-is-right — match the Python SoT).
+
+        The reset target is Python's
+        ``_next_alive(state, state.active_player_idx)`` — the CR-aware
+        alive-skipping walk, NOT the raw active player. The three
+        Python sites this mirrors all start at ``active_player_idx``:
+        post-resolution (``engine_adapter.py:966``), post-non-pass-
+        action (``:985``), and ``_enter_priority_for_current_step``
+        / step-end (``:1151``). In the post-player-loss tail the
+        active player can itself be decked-out; Python's ``_next_alive``
+        skips it (G5 — the previous unconditional ``active_player_idx``
+        reset diverged ``priority_player`` here)."""
+        target = self._next_alive_idx(int(self._rust.active_player_idx))
+        if int(self._rust.get_priority_player()) != target:
+            self._rust.give_priority_to(target)
 
     def _advance_to_next_decision(self) -> None:
         """Drive Rust forward until the game ends or the next
@@ -291,8 +365,25 @@ class RustGameStateAdapter:
                     if not self._rust.is_over():
                         self._reset_priority_to_active()
             else:
-                # Pass priority to the other player (2-player toggle).
+                # Single in-round pass — Python sets
+                # ``priority = _next_alive((pid + 1) % n_players)``
+                # (engine_adapter.py:974-977), NOT a raw toggle: in the
+                # post-player-loss tail the "other" player can be
+                # decked-out, and Python's alive-skip keeps priority on
+                # the sole survivor (G5). ``pass_priority()`` is kept
+                # for its CR-117.3 ``consecutive_passes`` bump (it is
+                # not in the STATE_EQ field view, but preserving it
+                # keeps Rust's internal pass bookkeeping honest); the
+                # alive-skip then corrects the holder to the
+                # ``_next_alive`` target when the raw toggle would land
+                # on a lost player.
+                pid = int(self._rust.get_priority_player())
                 self._rust.pass_priority()
+                target = self._next_alive_idx(
+                    (pid + 1) % self._n_players()
+                )
+                if int(self._rust.get_priority_player()) != target:
+                    self._rust.give_priority_to(target)
         else:
             d = decision_to_rust_dict(decision)
             # G2 interim mask bookkeeping: record the land drop so the
