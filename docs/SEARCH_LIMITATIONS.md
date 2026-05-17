@@ -4954,6 +4954,97 @@ until the spell-path token-seating sub-substrate lands. The lever
 itself (the carrier) is unaffected — it flips Radiant Strike +
 Depressurize on landing and auto-grows as the gate widens.
 
+## Bench deck-out-aware early terminator — DECLINED (honest-no-ship): no parity-PROVABLE predicate covers the population, and the sound one is dominated by the already-shipped blanket cap-120
+
+**Location**: `scripts/bench_trajectory_parity.py` (the
+`while not _game_over(py_state)` driver loop, `drive_one_game`). This
+entry documents a deliberately **NOT-taken** optimization (the
+round-70 forward flag, `docs/bench_trajectory_parity_smoke.md` round
+70 / round 72) — recorded here because declining a flagged
+optimization on parity-soundness grounds is itself a load-bearing
+search-correctness decision the next agent must inherit (so the
+forward flag is not re-attempted blind).
+
+**What the optimization would have been**: round-70 flagged a
+"deck-out-aware early terminator" — detect that a game is a pure
+deck-out race whose winner is already determined, and short-circuit
+to that exact verdict instead of playing out the ~50 remaining empty
+turns the blanket `--max-turns 120` (round-72, `7c7d5eeb`) currently
+runs.
+
+**Why it is DECLINED (verify-first per-game evidence)**: the canonical
+broad grid's 15 cap-60 FAIL_TIMEOUT games (archetypes 0-29 × seeds
+0-1; the round-70 residual population) were each driven to natural
+termination and snapshotted. Findings:
+
+- The only **parity-PROVABLE** early-terminal predicate is the strict
+  conjunction *"both libraries contain ONLY lands AND both hands
+  contain ONLY lands AND zero nonland permanents on the battlefield
+  AND empty stack AND no poison"*. Under it the remaining trajectory
+  is provably deterministic and damage-free (nothing castable, no
+  creature can ever enter, no SBA but deck-out can fire), so the
+  winner is computable now from library sizes + draw cadence and is
+  byte-identical to play-it-out. It is engine-agnostic (both engines
+  model zone contents identically — `step_both` byte-equality holds
+  the whole game) and sound (any non-land card anywhere → predicate
+  fails → play it out unchanged; a game that *could* still diverge is
+  never short-circuited).
+- That sound predicate fires on **only ~2 of the 15** games
+  (arch 6, arch 29 — the pure all-lands mirrors; predicate true from
+  turn 1, deck-out turn 108, winner 0). The **majority**
+  (arch 19/26/27/28, deck-out turn 108) carry non-land cards
+  persistently in hand/library that the bridge filter declines and
+  the deterministic driver never plays — the sound predicate
+  correctly NEVER fires there. arch 24/25 seed 1 are **not deck-out
+  at all** (combat-damage `life total <= 0` ~turn 72 — the round-70
+  lone-1/1 slow clock); a deck-out terminator must never fire there
+  and correctly does not. arch 20 seed 1 has an active surveil effect
+  (non-frozen) and is likewise correctly excluded.
+- A *looser* predicate broad enough to cover arch 19/26/27/28 would
+  have to prove those specific non-land cards can never be
+  cast / never deal damage across ~50 remaining turns — i.e.
+  effectively simulate the game. That is exactly the
+  "short-circuit a game that could still diverge" hazard the forward
+  flag's own parity-safety bar forbids; it is **not soundly
+  provable** without the simulation it is meant to avoid.
+
+**Why it's OK to decline (the honest-no-ship math)**: the round-72
+blanket `--max-turns 120` already eliminates the FAIL_TIMEOUT floor
+(23.3% → 0.0% on the canonical grid) at a measured cost of **+3s over
+the entire 60-game cap-60 sweep** (round-70 real-bench cross-check;
+the bench parallelizes the slow deck-out tail). The sound predicate's
+2/15 coverage would shave ~107 frozen turns off two games inside a
+sweep whose total slow-tail cost is already +3s parallelized — a
+**zero-meaningful-wall** gain — while the predicate broad enough to
+matter is not parity-provable. Per `feedback_no_fallback_hybrids` /
+`feedback_parity_new_code_is_right` and the forward flag's own
+"honest-no-ship if equivalence unprovable" bar: ship nothing. The
+blanket cap-120 is the correct, already-landed, fully parity-safe
+mitigation; the early terminator is dominated and is **closed, not
+deferred**.
+
+**Failure mode**: none — nothing is shipped; the bench is byte-for-
+byte unchanged (the round-72 cap-120 + its `test_r72_...` pin remain
+the live, pinned state). The risk this entry guards against is a
+future agent re-attempting the forward flag and either (a)
+re-deriving the same negative result (wasted cycles) or (b) shipping
+the unsound broad predicate and silently corrupting parity verdicts
+on the arch-19/26/27/28-shaped population.
+
+**Fix scope estimate**: N/A — declined by design. If a future bench
+ever drops the blanket cap (making the wall cost non-negligible), the
+*sound* strict-lands-only predicate could be revisited as a
+**supplement** to (never a replacement for) a finite cap, gated by
+the exact conjunction above plus a per-game pin asserting
+early-terminal verdict == play-it-out verdict on the arch-6/29 shape.
+It would still only cover the all-lands sub-population; the
+arch-19/26/27/28 shape stays unprovable and must keep playing out.
+
+**Impact estimate**: zero (nothing shipped). The characterization
+itself is the deliverable — it converts the round-70 forward flag
+from "open future lever" to "closed, dominated, with the soundness
+boundary and per-game evidence on record".
+
 ---
 
 ## Adding a new entry
