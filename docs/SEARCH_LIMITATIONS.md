@@ -4187,6 +4187,98 @@ intentionally NOT exercised).
 
 ---
 
+## Pull Through the Weft — second-clause ("lands to battlefield tapped") parse-drop
+
+**Location**: `src/mtg_bot/cards/parser/effects.py:1746-1782` (the
+`_RETURN_UP_TO_N_NONLAND_PERMANENT_GY_TO_HAND_THEN_LANDS_BF_TAPPED`
+recognizer and its docstring) → emits
+`ReturnUpToNNonlandPermanentCardsFromGraveyardToHand`
+(`src/mtg_bot/effects/generic/bounce.py`, the class docstring states
+the drop verbatim: *"the second 'lands to battlefield tapped' clause
+is dropped at parse time — no engine primitive yet"*).
+
+**What the shortcut is**: Pull Through the Weft's printed oracle text
+is the compound sentence "Return up to two target nonland permanent
+cards from your graveyard to your hand, **then return up to two target
+land cards from your graveyard to the battlefield tapped**." The parser
+matches the FULL unsplit sentence with a single recognizer and
+**deliberately drops the entire second clause** (the "lands to
+battlefield tapped" half) as an unimplemented rider — no
+"return-up-to-N-land-cards-from-graveyard-to-battlefield-tapped" engine
+primitive exists. The parsed Python `spell_effect` is therefore
+*only* the first clause:
+`ReturnUpToNNonlandPermanentCardsFromGraveyardToHand(max_n=2,
+min_n=0)`. The recognizer captures both "up to N" counts as regex
+parameters (the first drives the primitive; the second is consumed but
+its effect is not modeled) so the regex matches the full oracle
+surface — but the second clause's *behavior* is absent.
+
+This is a **pre-existing parser-side simplification, NOT introduced by
+this campaign** — it predates the Effect-uncovered triage work. It is
+recorded here now because it becomes **load-bearing the moment the B8
+graveyard-multi-select Rust substrate
+(`docs/EFFECT_UNCOVERED_TIERA_MINISPECS_BATCH3.md` §3) is implemented
+and Pull Through the Weft's Effect is bridged + cross-engine probed**:
+the Rust close MUST mirror the **parsed (single-clause) Python
+effect**, NOT the printed oracle text. The Python parsed effect is the
+source of truth (`feedback_parity_new_code_is_right.md`); a future
+round must NOT "fix" Rust to over-implement the dropped land-return
+clause, because that would make the two engines diverge (Rust doing
+the land return, Python silently not) — the exact inverse of the usual
+"new code is right" direction, here because the *parser* already
+decided the simplification.
+
+**Why it's OK (and the NOT-OK scenario)**: OK because (a) the
+simplification is on the Python source-of-truth side, so both engines
+will agree once Rust mirrors the parsed effect (cross-engine parity is
+preserved — the campaign's actual invariant); (b) it is strictly MORE
+faithful than the prior static-registry entry, which returned a bare
+`ReturnCreatureFromYourGraveyardToHand()` dropping BOTH the "up to two"
+count AND the "nonland permanent" widening AND the second clause — the
+per-clause grammar preserves the multi-target count and the
+nonland-permanent scope (the parser CLAUDE.md "faithful to oracle
+text" rule is partially honored: the first clause is exact). NOT-OK
+when: an AI must reason about Pull Through the Weft's *full* printed
+value (it will under-value the card by the land-return half — a
+strength cost on decks that run it, ~2,235 17lands decks) OR a future
+round implements the land-graveyard-to-battlefield-tapped primitive
+and "fixes" only one engine, silently desyncing them.
+
+**Failure mode**: the bot under-values Pull Through the Weft (sees a
+2-card nonland-permanent graveyard return, not the additional 2-land
+ramp-from-graveyard) — a play-strength approximation, not a
+correctness crash. The cross-engine divergence failure mode is latent
+and only triggered by an asymmetric "fix" of the dropped clause.
+
+**Fix scope estimate**: implementing the dropped clause correctly is a
+*new engine primitive* ("return up to N target land cards from your
+graveyard to the battlefield tapped") on BOTH engines + the parser
+recognizer emitting a composite of the two clauses + a cross-engine
+bridge arm + parity pins — roughly a 1-2-round substrate of its own
+(the `ReturnToBattlefieldTapped`-land variant of the B8
+graveyard-multi-select primitive). NOT in scope of the B8 close; B8
+mirrors the parsed single-clause effect only.
+
+**Impact estimate**: zero cross-engine parity cost as long as Rust
+mirrors the parsed Python effect (the B8 implement-time requirement —
+pin it). Play-strength cost: a modest under-valuation of Pull Through
+the Weft on the ~2,235 17lands decks that run it (the engine resolves
+the higher-value first clause faithfully; only the secondary
+land-ramp-from-graveyard rider is missing).
+
+**Pinned by**: (to be added at B8 implement time) the B8 genuine
+real-EoE probe
+`test_cross_engine_real_eoe_pull_through_the_weft_multiselect_parity`
+must assert byte-equal hand contents for the *first clause only* with
+a land card in the graveyard explicitly NOT returned to the
+battlefield (the parsed-effect-is-SoT pin — confirming Rust does NOT
+over-implement the dropped clause). Until B8 lands this entry is the
+record of the pre-existing parser drop; no Rust consumer exercises it
+yet (Pull Through the Weft stays loader-gated on the spell-card-bridge
+lever).
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,
