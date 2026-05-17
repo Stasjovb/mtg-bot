@@ -78,16 +78,16 @@ def test_shadow_is_protocol_conformant():
 
 def test_shadow_runs_divergence_clean_over_the_valid_prefix():
     """The bake-in must run divergence-clean (all four assertions
-    hold every step) over the window where it is currently valid: the
-    matched start state + the bounded prefix BEFORE the documented
-    G4 (I20-cast-set) asymmetry accumulates. This proves the
-    shadow-checker harness itself is correct + the matched states
-    start byte-equal; the FULL terminal run is blocked by G4 (the
-    precisely-scoped NEW pre-flip blocker the bake-in surfaced — see
-    test_g4_i20_cast_set_blocker_is_surfaced and
-    docs/SEARCH_LIMITATIONS.md). 40 steps is comfortably inside the
-    pre-G4 window for the tiny synthetic deck (G4 first trips ~step
-    143 once Python has held mana across phases for several turns)."""
+    hold every step) over the matched start state + a bounded prefix.
+    This proves the shadow-checker harness itself is correct + the
+    matched states start byte-equal. 40 steps is comfortably inside
+    the divergence-clean window for the tiny synthetic deck.
+
+    (Pre-G4-closure this window stopped at ~step 143 where the I20
+    mana-timing asymmetry tripped LEGAL_SET_EQ; G4 is now CLOSED by
+    the lockstep mana mirror — see
+    test_g4_i20_cast_set_axis_is_closed_by_lockstep — so the clean
+    window now extends through the entire mana-floating window.)"""
     adapter = _shadow()
     rng = random.Random(2026)
     for _ in range(40):
@@ -101,24 +101,100 @@ def test_shadow_runs_divergence_clean_over_the_valid_prefix():
     # divergence-clean over the valid window.
 
 
-def test_g4_i20_cast_set_blocker_is_surfaced():
-    """HONEST-STOP EVIDENCE PIN (NOT a silent skip). The bake-in
-    SURFACES a genuine, precisely-scoped NEW pre-flip blocker — G4,
-    the C1/G1-analog for the I20 axis: the documented Python
-    mana-hold-until-cleanup simplification (turn.py:1081-1083 /
-    RUST_PARITY_GAPS §I20) diverges the legal CAST SET (not just the
-    mana_pool field) under the role-swapped Rust-driven / Python-
-    shadow contract. The existing step_both harness avoided this by
-    replaying a Python-derived script + reconciling I20 via
-    advance_phase_python; once Python is a passive shadow, its
-    stale-held-mana legal_actions offers a CastSpell that Rust's
-    CR-correct per-phase-empty model correctly prunes. This pin
-    PROVES the tripwire fires loudly on G4 (it is real, not papered
-    over — feedback_no_fallback_hybrids). Closing G4 (drive the
-    Python checker's phase advancement through advance_phase_python
-    so its mana matches Rust's CR-correct per-phase empty) is an
-    orchestrator-sequenced bake-in-scaling refinement, NOT a B3-S4
-    deliverable; B3-S4 ships the harness + this honest evidence."""
+def test_g4_i20_cast_set_axis_is_closed_by_lockstep():
+    """G4 CLOSURE PIN. G4 (the C1/G1-analog for the I20 axis: the
+    documented Python mana-hold-until-cleanup simplification,
+    turn.py:1081-1083 / RUST_PARITY_GAPS §I20, diverging the legal
+    CAST SET under the role-swapped Rust-driven / Python-shadow
+    contract) is **CLOSED** by
+    ``ShadowCheckedRustAdapter._install_i20_phase_exit_mana_mirror``
+    — it drives the Python shadow's per-phase-exit mana empty in
+    lockstep with the Rust driver's CR-106.4 empty (the same
+    ``advance_phase_python``-step-1 semantics the existing
+    ``cross_engine.step_both`` harness already proves).
+
+    Pre-closure, this seed tripped a LEGAL_SET_EQ ``cast_spell``
+    divergence at step ~143 (Python's held-over floating mana made it
+    offer a CastSpell Rust's per-phase-empty model correctly pruned).
+    This pin PROVES that divergence is GONE: the run is now
+    divergence-clean through the ENTIRE mana-floating window (well
+    past the old step-143 G4 trip point), and the mana_pool_p0/p1
+    carve-out is removed (``_DOCUMENTED_ACCEPTED_FIELDS`` is empty),
+    so STATE_EQ now also asserts full mana-pool byte-equality.
+
+    NOTE — a SEPARATE, pre-existing, non-G4 issue is honestly pinned
+    by ``test_post_player_loss_priority_port_divergence_is_surfaced``:
+    once a player decks out (degenerate 3-card synthetic deck, ~turn
+    6-8) the Rust-driver priority-reset port
+    (``RustGameStateAdapter._reset_priority_to_active``) diverges from
+    Python's alive-aware ``_next_alive`` on ``priority_player`` /
+    ``active_player``. That is NOT the I20/G4 mana axis (it is the
+    Rust-driver priority port, a distinct surface) — G4 closure does
+    not depend on it and is complete without it; it is flagged for
+    the orchestrator as a separate follow-up
+    (docs/SEARCH_LIMITATIONS.md / SOT_FLIP_CUTOVER_PLAN ledger G4
+    entry)."""
+    adapter = _shadow()
+    rng = random.Random(2026)
+    steps = 0
+    raised: ShadowDivergenceError | None = None
+    # 145 steps clears the old step-143 G4 trip point with margin but
+    # stops BEFORE the separate ~step-149 post-deck-out priority-port
+    # divergence (pinned independently below). The point of THIS pin
+    # is: the I20 cast-set divergence no longer occurs in its window.
+    while not adapter.is_terminal() and steps < 145:
+        try:
+            legal = adapter.legal_decisions()
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        choice = rng.choice(legal)
+        try:
+            adapter.apply(choice)
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        steps += 1
+    assert raised is None, (
+        f"G4 (the I20 mana-timing cast-set asymmetry) must be CLOSED "
+        f"by the lockstep mana mirror — the run must be "
+        f"divergence-clean through the entire mana-floating window "
+        f"(it tripped at step ~143 pre-closure). Got a divergence at "
+        f"step {steps}: [{raised.tripwire}] {raised}"
+        if raised is not None else ""
+    )
+    # We ran well past the old G4 trip point with no divergence: the
+    # I20 cast-set axis is closed. (>=144 also guards against a
+    # premature terminal masking the result on this seed.)
+    assert steps >= 144, (
+        f"expected to run past the old step-143 G4 trip point; only "
+        f"reached step {steps} (terminal={adapter.is_terminal()})"
+    )
+
+
+def test_post_player_loss_priority_port_divergence_is_surfaced():
+    """HONEST-STOP EVIDENCE PIN for a SEPARATE, pre-existing, NON-G4
+    issue the strengthened tripwire now surfaces (it was MASKED by G4
+    tripping first at step ~143 before any player decked out).
+
+    Root cause (verified): in the degenerate 3-card
+    ``tiny_synthetic_deckspec`` both players deck out by ~turn 6-8.
+    When the active player has lost, Python's
+    ``_enter_priority_for_current_step`` uses ``_next_alive`` (CR-
+    aware: skips the lost active player), but the Rust-driver port
+    ``RustGameStateAdapter._reset_priority_to_active`` sets priority
+    to the (lost) active player unconditionally — a ``priority_player``
+    then ``active_player`` STATE_EQ divergence.
+
+    This is **NOT the I20/G4 mana axis** (G4 is closed — see
+    test_g4_i20_cast_set_axis_is_closed_by_lockstep) and **NOT
+    introduced by the G4 mana mirror** (which only clears mana
+    pools). It is a distinct Rust-driver priority-port gap in the
+    post-player-loss tail, flagged for the orchestrator
+    (docs/SEARCH_LIMITATIONS.md / SOT_FLIP_CUTOVER_PLAN ledger G4
+    entry). This pin keeps it HONEST (the tripwire fires loudly on it
+    — it is real, not papered over: feedback_no_fallback_hybrids /
+    feedback_silent_noop_pipelines)."""
     adapter = _shadow()
     rng = random.Random(2026)
     steps = 0
@@ -137,22 +213,29 @@ def test_g4_i20_cast_set_blocker_is_surfaced():
             break
         steps += 1
     assert raised is not None, (
-        "expected the bake-in to surface the G4 I20-cast-set blocker "
-        "loudly, but the run completed clean — the tripwire would be "
-        "a silent no-op (feedback_silent_noop_pipelines)"
+        "expected the bake-in to surface the separate post-deck-out "
+        "priority-port divergence loudly, but the run completed clean "
+        "— the tripwire would be a silent no-op "
+        "(feedback_silent_noop_pipelines)"
     )
-    # The surfaced blocker is the I20-cast-set divergence: Python
-    # offers a CastSpell its held-over mana makes payable that Rust's
-    # per-phase-empty model prunes (LEGAL_SET_EQ), OR the mana_pool
-    # itself when it is the only delta (documented-accepted, so the
-    # cast-set LEGAL_SET_EQ is the load-bearing one).
-    assert raised.tripwire == "LEGAL_SET_EQ", (
-        f"G4 must surface as a LEGAL_SET_EQ cast-set divergence, got "
+    # It surfaces as a STATE_EQ priority_player / active_player
+    # divergence (NOT a LEGAL_SET_EQ cast_spell — that was the now-
+    # closed G4 I20 signature).
+    assert raised.tripwire == "STATE_EQ", (
+        f"the separate post-loss issue must surface as STATE_EQ, got "
         f"{raised.tripwire}: {raised}"
     )
-    assert "cast_spell" in str(raised), (
-        f"G4 evidence must name the cast_spell the I20 held mana "
-        f"makes Python offer but Rust prunes: {raised}"
+    assert (
+        "priority_player" in str(raised)
+        or "active_player" in str(raised)
+    ), (
+        f"the separate post-loss issue must name the priority/active "
+        f"player port divergence (NOT the closed G4 cast_spell): "
+        f"{raised}"
+    )
+    assert "cast_spell" not in str(raised), (
+        f"this must NOT be the closed G4 I20 cast-set signature "
+        f"(that axis is closed by the lockstep mana mirror): {raised}"
     )
 
 
