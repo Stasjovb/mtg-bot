@@ -18702,5 +18702,395 @@ def test_cross_engine_ff_destroy_then_draw_zero_amount_parity():
     assert py == (False, 1, 0, 3, 20, 20), py
 
 
+# ---------------------------------------------------------------------
+# Round-58 N1 — BECOMES_TAPPED event bridge
+#
+# Rust-engine regression pins (the event fires on every production tap
+# path that mirrors Python's `turn.tap_permanent`; does NOT fire when
+# it shouldn't) + cross-engine bridge round-trip pins (the
+# (BECOMES_TAPPED, source_is_self, create_token) triple round-trips
+# byte-equal Python<->Rust, the SAME shape ENTERS/DIES/ATTACKS use).
+#
+# Python's BECOMES_TAPPED firing model (the source of truth, §2): it
+# fires ONLY through `turn.tap_permanent` (the no-op-if-already-tapped
+# chokepoint), called from tap-for-mana, the {T} tap_self activated
+# cost, tap_permanent_you_control, convoke, crew, attack-tap of a
+# non-vigilance attacker (BEFORE the per-attacker ATTACKS dispatch),
+# and the tapper-effect family. It deliberately does NOT fire for
+# permanents entering tapped nor for regeneration's replacement tap
+# (CR 701.21a). Rust's emission set matches this exactly.
+# ---------------------------------------------------------------------
+
+
+def _bt_self_draw_creature_dict(name="BT SelfDraw", count=1, keywords=None):
+    """A creature with a ``BECOMES_TAPPED + source_is_self + draw_cards``
+    trigger — the canonical observable shape for the Rust-side
+    regression pins (drawing is a pure deterministic zone move; the
+    stack growing by 1 is the witness that the event fired)."""
+    d = {
+        "name": name,
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "becomes_tapped",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": count},
+            }
+        ],
+    }
+    if keywords:
+        d["keywords"] = list(keywords)
+    return d
+
+
+def test_r58_becomes_tapped_fires_on_attack_tap():
+    """Rust regression pin: a non-vigilance attacker BECOMES_TAPPED
+    when it is tapped to attack. Mirrors Python's
+    ``combat.declare_attackers`` -> ``turn.tap_permanent`` (combat.py:
+    104) firing ``Event.BECOMES_TAPPED``."""
+    import mtg_bot_engine
+
+    s = mtg_bot_engine.make_synthetic_state()
+    oid = s.register_and_inject_object(
+        _bt_self_draw_creature_dict("BT Attacker"), 0, 2  # ZONE_BATTLEFIELD
+    )
+    s.clear_summoning_sick_for_player(0)
+    assert s.stack_size() == 0, "ETB must NOT fire BECOMES_TAPPED"
+    assert s.declare_attacker(oid) is True
+    snap = [o for o in s.battlefield_snapshot() if o["id"] == oid][0]
+    assert snap["tapped"] is True
+    assert s.stack_size() == 1, (
+        "attack-tap of a non-vigilance attacker must fire "
+        "BECOMES_TAPPED -> the SourceIsSelf draw trigger lands on "
+        "the stack"
+    )
+
+
+def test_r58_becomes_tapped_pushed_before_attacks_trigger():
+    """Rust regression pin (ORDERING — the load-bearing §2 byte-
+    equality constraint). A creature carrying BOTH a
+    BECOMES_TAPPED+draw and an ATTACKS+gain_life trigger: when it is
+    declared as an attacker, Python pushes the BECOMES_TAPPED trigger
+    FIRST (``tap_permanent`` at combat.py:104) and the ATTACKS trigger
+    SECOND (``_fire_attacks_triggers`` at combat.py:115). So the
+    ATTACKS trigger is on TOP of the stack (pushed last → resolves
+    first). Rust must match this push order exactly."""
+    import mtg_bot_engine
+
+    s = mtg_bot_engine.make_synthetic_state()
+    d = {
+        "name": "BT+ATK",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 2,
+        "triggered_abilities": [
+            {
+                "event": "becomes_tapped",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            },
+            {
+                "event": "attacks",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "gain_life", "amount": 3},
+            },
+        ],
+    }
+    oid = s.register_and_inject_object(d, 0, 2)
+    s.clear_summoning_sick_for_player(0)
+    assert s.declare_attacker(oid) is True
+    assert s.stack_size() == 2, (
+        "both the BECOMES_TAPPED and the ATTACKS trigger must be on "
+        "the stack"
+    )
+    # ATTACKS was pushed last (combat.py:115 after tap at :104), so
+    # it is on top. Resolving it first must not raise; resolving the
+    # remaining (BECOMES_TAPPED) trigger then drains the stack.
+    s.resolve_top_of_stack()
+    assert s.stack_size() == 1
+    s.resolve_top_of_stack()
+    assert s.stack_size() == 0
+
+
+def test_r58_becomes_tapped_fires_on_tap_for_mana():
+    """Rust regression pin: a land that taps for mana BECOMES_TAPPED.
+    Mirrors Python's ``auto_tap_for_cost`` routing every land through
+    ``turn.tap_permanent`` (actions.py:981-985 — the docstring cites
+    Chrome Companion / Grove of the Burnwillows becomes-tapped mana
+    triggers)."""
+    import mtg_bot_engine
+
+    s = mtg_bot_engine.make_synthetic_state()
+    land = {
+        "name": "BT Mana Land",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+        "triggered_abilities": [
+            {
+                "event": "becomes_tapped",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": 1},
+            }
+        ],
+    }
+    lid = s.register_and_inject_object(land, 0, 2)
+    assert s.stack_size() == 0
+    assert s.tap_for_mana(lid) == "G"
+    assert s.stack_size() == 1, (
+        "tap-for-mana must fire BECOMES_TAPPED on the tapped land"
+    )
+
+
+def test_r58_becomes_tapped_fires_on_tap_target_effect():
+    """Rust regression pin: ``Effect::TapTarget`` (a Twiddle-shape
+    tapper effect) fires BECOMES_TAPPED on the creature it taps.
+    Mirrors Python's ``effects/generic/tap.py`` Tap-family routing the
+    tap through ``turn.tap_permanent``. Uses an empty-DeckSpec Rust
+    state so ``TapTarget{AnyCreature}`` (which picks the FIRST
+    defending-side bf object) deterministically lands on our injected
+    victim rather than a synthetic-state filler creature."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    s = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    # p1 victim creature carrying a BECOMES_TAPPED+self draw trigger
+    # (p1's only bf object, so it IS the defending-side bf[0]).
+    vic = s.register_and_inject_object(
+        _bt_self_draw_creature_dict("BT Victim"), 1, 2
+    )
+    # p0 source whose resolving ENTERS trigger is
+    # TapTarget(AnyCreature) -> taps the defending (p1) bf[0].
+    src = {
+        "name": "BT Tapper Source",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "tap_target",
+                    "target": {"kind": "any_creature"},
+                },
+            }
+        ],
+    }
+    s.register_and_inject_object(src, 0, 2)
+    # The source's ETB fired its own ENTERS trigger (TapTarget) onto
+    # the stack. Resolving it taps p1's victim, which must in turn
+    # fire the victim's BECOMES_TAPPED draw trigger.
+    assert s.stack_size() == 1
+    s.resolve_top_of_stack()  # resolve TapTarget -> taps victim
+    # The victim's BECOMES_TAPPED trigger is now on the stack.
+    assert s.stack_size() == 1, (
+        "TapTarget tapping the victim must fire the victim's "
+        "BECOMES_TAPPED trigger"
+    )
+    vsnap = [o for o in s.battlefield_snapshot() if o["id"] == vic][0]
+    assert vsnap["tapped"] is True
+
+
+def test_r58_becomes_tapped_does_not_fire_on_vigilance_attacker():
+    """Rust regression pin (NEGATIVE): a vigilance attacker does NOT
+    tap when attacking (CR 702.21), so it does NOT become tapped and
+    BECOMES_TAPPED does NOT fire. Mirrors Python's ``declare_attackers``
+    skipping ``tap_permanent`` for vigilance creatures (combat.py:
+    102-104)."""
+    import mtg_bot_engine
+
+    s = mtg_bot_engine.make_synthetic_state()
+    oid = s.register_and_inject_object(
+        _bt_self_draw_creature_dict("BT Vig", keywords=["vigilance"]), 0, 2
+    )
+    s.clear_summoning_sick_for_player(0)
+    assert s.declare_attacker(oid) is True
+    snap = [o for o in s.battlefield_snapshot() if o["id"] == oid][0]
+    assert snap["tapped"] is False, "vigilance attacker must NOT tap"
+    assert s.stack_size() == 0, (
+        "no tap occurred -> BECOMES_TAPPED must NOT fire (CR 701.21a "
+        "the creature never 'becomes tapped')"
+    )
+
+
+def test_r58_becomes_tapped_does_not_fire_on_already_tapped_retap():
+    """Rust regression pin (NEGATIVE — the no-op-if-already-tapped
+    gate). A creature tapped via the cost/test primitive
+    ``tap_object`` (which deliberately does NOT dispatch) and then
+    re-tapped by a TapTarget effect must NOT fire BECOMES_TAPPED on
+    the re-tap — the permanent was already tapped, so it does not
+    'become tapped' again. Mirrors Python's ``turn.tap_permanent``
+    early-return on ``obj.tapped`` (turn.py:565-566)."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    s = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    vic = s.register_and_inject_object(
+        _bt_self_draw_creature_dict("BT PreTapped"), 1, 2
+    )
+    # Pre-tap WITHOUT firing the event (cost/test primitive).
+    assert s.tap_object(vic) is True
+    assert s.stack_size() == 0, "tap_object must not dispatch"
+    # Now a TapTarget effect re-targets the already-tapped victim
+    # (p1's only bf object → the defending-side bf[0]).
+    src = {
+        "name": "BT Retap Source",
+        "card_types": ["Creature"],
+        "power": 1,
+        "toughness": 1,
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "tap_target",
+                    "target": {"kind": "any_creature"},
+                },
+            }
+        ],
+    }
+    s.register_and_inject_object(src, 0, 2)
+    assert s.stack_size() == 1  # the source's ENTERS TapTarget
+    s.resolve_top_of_stack()  # resolve TapTarget on already-tapped victim
+    assert s.stack_size() == 0, (
+        "re-tapping an already-tapped permanent must NOT fire "
+        "BECOMES_TAPPED (no-op-if-already-tapped parity with Python's "
+        "tap_permanent early return)"
+    )
+
+
+def test_r58_becomes_tapped_bridge_round_trips_source_is_self_draw():
+    """Cross-engine bridge pin: the
+    ``(becomes_tapped, source_is_self, draw_cards)`` triple round-trips
+    Rust-dict -> Python ``TriggeredAbility`` carrying
+    ``Event.BECOMES_TAPPED`` / ``IsSelf()`` / ``DrawCards`` — the SAME
+    bridge shape ENTERS/DIES/ATTACKS use (event-string passthrough, no
+    Cast/IS_CAST-style spelling skew)."""
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+    )
+
+    ta = _ta_dict_to_python_triggered_ability(
+        {
+            "event": "becomes_tapped",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {"kind": "draw_cards", "count": 2},
+        }
+    )
+    assert ta.event is Event.BECOMES_TAPPED
+    assert isinstance(ta.predicate, IsSelf)
+    assert ta.predicate.subject is None
+    assert isinstance(ta.effect, DrawCards)
+    assert ta.effect.amount == 2
+    assert ta.once_per_turn is False
+
+
+def test_r58_becomes_tapped_bridge_round_trips_create_token():
+    """Cross-engine bridge pin: the
+    ``(becomes_tapped, source_is_self, create_token)`` triple — the
+    Seedship Agrarian shape — round-trips to ``Event.BECOMES_TAPPED``
+    / ``IsSelf()`` / ``CreateToken`` once the token printing is
+    registered (the create_token bridge arm is event-agnostic; it
+    works identically under BECOMES_TAPPED as under ENTERS/DIES)."""
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings,
+        register_token_printing,
+    )
+
+    py_lander = CardPrinting(
+        name="Lander Token (r58 bridge pin)",
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line="Token Artifact -- Lander",
+        supertypes=("Token",),
+        card_types=("Artifact",),
+        subtypes=("Lander",),
+        power=None,
+        toughness=None,
+        produces=frozenset(),
+        triggered_abilities=(),
+    )
+    pid = 90_581  # arbitrary fixed pid for this isolated bridge pin
+    clear_token_printings()
+    register_token_printing(pid, py_lander)
+    try:
+        ta = _ta_dict_to_python_triggered_ability(
+            {
+                "event": "becomes_tapped",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {
+                    "kind": "create_token",
+                    "count": 1,
+                    "token_printing_id": pid,
+                },
+            }
+        )
+    finally:
+        clear_token_printings()
+    assert ta.event is Event.BECOMES_TAPPED
+    assert isinstance(ta.predicate, IsSelf)
+    assert isinstance(ta.effect, CreateToken)
+    assert ta.effect.token_printing.name == "Lander Token (r58 bridge pin)"
+
+
+def test_r58_becomes_tapped_safe_trigger_dict_admits_seedship_shape():
+    """Cross-engine bridge pin: the loader-side
+    ``_is_safe_trigger_dict`` gate admits the exact Seedship-Agrarian
+    BECOMES_TAPPED Rust-shape dict (the ``_SAFE_TRIGGERS`` triple
+    ``("becomes_tapped","source_is_self","create_token")`` plus the
+    ``create_token`` payload-key whitelist), and rejects the §2-
+    declined sibling combinations."""
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    # ADMIT: Seedship's BECOMES_TAPPED+IsSelf+create_token shape.
+    assert _is_safe_trigger_dict(
+        {
+            "event": "becomes_tapped",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {
+                "kind": "create_token",
+                "count": 1,
+                "token_printing_id": 123,
+            },
+        }
+    ) is True
+    # DECLINE: BECOMES_TAPPED + a non-admitted leaf (draw_cards) — no
+    # _SAFE_TRIGGERS entry (substrate pre-positioned only for
+    # create_token; the recognizer lists draw under other events, but
+    # the triple gate rejects becomes_tapped+draw_cards).
+    assert _is_safe_trigger_dict(
+        {
+            "event": "becomes_tapped",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {"kind": "draw_cards", "count": 1},
+        }
+    ) is False
+    # DECLINE: BECOMES_TAPPED + a non-source_is_self predicate
+    # (source_is_creature) + create_token — no _SAFE_TRIGGERS entry.
+    assert _is_safe_trigger_dict(
+        {
+            "event": "becomes_tapped",
+            "predicate": {"kind": "source_is_creature"},
+            "effect": {
+                "kind": "create_token",
+                "count": 1,
+                "token_printing_id": 123,
+            },
+        }
+    ) is False
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

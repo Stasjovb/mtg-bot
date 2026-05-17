@@ -8208,6 +8208,23 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         event = Event.BLOCKS
     elif event_str == "leaves_battlefield":
         event = Event.LEAVES_BATTLEFIELD
+    elif event_str == "becomes_tapped":
+        # Round-58 BECOMES_TAPPED event bridge. Python's enum member
+        # is ``Event.BECOMES_TAPPED`` (string value ``"becomes_tapped"``
+        # — `src/mtg_bot/effects/predicates.py:60`); Rust's enum
+        # variant is ``Event::BecomesTapped`` parsed from the SAME
+        # ``"becomes_tapped"`` string (`cards.rs` parse_triggered_
+        # ability). The bridge passes the string through unchanged
+        # (no Cast/IS_CAST-style spelling skew). A
+        # ``(becomes_tapped, source_is_self, create_token)`` triple
+        # round-trips identically to the ENTERS/DIES/ATTACKS triples
+        # because the predicate (`source_is_self` -> ``IsSelf()``) and
+        # the effect (`create_token`) bridge arms are event-agnostic,
+        # and BOTH engines fire BECOMES_TAPPED at the SAME tap sites
+        # in the SAME order (Python's `turn.tap_permanent` chokepoint;
+        # Rust's `tap_permanent_and_dispatch` chokepoint + the inline
+        # mana/tap_self dispatches — see the round-58 commits).
+        event = Event.BECOMES_TAPPED
     else:
         raise ValueError(
             f"cross_engine triggered_abilities bridge: event "

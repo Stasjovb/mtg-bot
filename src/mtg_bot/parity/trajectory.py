@@ -2093,6 +2093,89 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # predicate, Seedship Agrarian BECOMES_TAPPED event, Bioengineered
     # Future non-creature→Phase 2 ALL stay declined).
     ("dies", "source_is_self", "create_token"),
+    # BECOMES_TAPPED + source_is_self + create_token (round-58 N1 —
+    # the BECOMES_TAPPED event bridge). The FOURTH event in the safe
+    # set (after ENTERS / DIES / ATTACKS), and the FIRST that is NOT
+    # a zone-change / combat event — it fires on the tap-state
+    # transition of an existing battlefield permanent. Closes the
+    # campaign landmine cited repeatedly since round-42 (the
+    # "``BECOMES_TAPPED`` event — no bridge arm — would silently
+    # mistranslate" §2 decline): there is now a bridge arm, and
+    # BOTH engines fire the event at the SAME tap sites in the SAME
+    # order.
+    #
+    # **Real-EoE consumer: Seedship Agrarian** (3/3 {3}{G},
+    # Creature — Insect Scientist). Its FIRST trigger is
+    # "Whenever this creature becomes tapped, create a Lander token"
+    # = ``BECOMES_TAPPED / IsSelf / CreateToken(Lander)``. (Its
+    # SECOND trigger, "Landfall — ... put a +1/+1 counter on this
+    # creature", is the already-bridged
+    # ``ENTERS / land_enters_controlled_by_you /
+    # put_plus_one_counter_on_self`` shape — out of scope of THIS
+    # entry but already round-trips.) This entry closes the
+    # BECOMES_TAPPED→CreateToken HALF of Seedship Agrarian: the
+    # event now round-trips byte-equal. The residual is narrowed to
+    # the Lander token-registration substrate ONLY (a SEPARATE
+    # substrate — Lander's ``{2},{T},Sac:SearchLibraryForBasicLand
+    # Tapped`` activated ability on the spawned token printing; same
+    # boundary Galactic Wayfarer / Beamsaw Prospector hit). See
+    # ``docs/SEARCH_LIMITATIONS.md`` "BECOMES_TAPPED event bridge"
+    # for the honest split.
+    #
+    # **Cross-engine parity contract (event firing-set + ordering).**
+    # Python fires ``Event.BECOMES_TAPPED`` ONLY through
+    # ``turn.tap_permanent`` (`src/mtg_bot/turn.py:542-571`), the
+    # no-op-if-already-tapped chokepoint, called from: tap-for-mana
+    # (`actions.py:auto_tap_for_cost`), the ``{T}`` activated-ability
+    # ``tap_self`` cost (`actions.py:_activate_ability`),
+    # ``tap_permanent_you_control`` activated cost, convoke, crew,
+    # attack-tap of a non-vigilance attacker (`combat.py:104`, fired
+    # BEFORE the per-attacker ATTACKS dispatch at `combat.py:115`),
+    # and the tapper-effect family (`effects/generic/tap.py`,
+    # `combinators.py:163`, `bespoke.py:496`). It deliberately does
+    # NOT fire for permanents entering tapped (`_play_land`,
+    # search-land-tapped, reanimate-tapped, token-created-tapped) nor
+    # for regeneration's replacement tap (CR 701.21a — entering
+    # tapped never "becomes tapped"). Rust's emission set matches
+    # this EXACTLY: the round-58 emission slice routes the production
+    # tap sites through the centralized
+    # ``state_ops_resolve::tap_permanent_and_dispatch`` chokepoint
+    # (mirroring `turn.tap_permanent`'s no-op-if-already-tapped +
+    # dispatch shape) plus inline dispatches at the
+    # mana/tap_self sites; the entering-tapped / regeneration-tap
+    # Rust sites stay raw ``obj.tapped = true`` (no event). The
+    # attack-tap dispatch is placed BEFORE the ``Event::Attacks``
+    # dispatch so the per-attacker stack-push order is byte-equal
+    # to Python's (BECOMES_TAPPED triggers ahead of ATTACKS
+    # triggers).
+    #
+    # **Scope: which (predicate, effect) combos are admitted vs
+    # declined under BECOMES_TAPPED (§2 bridge-correctness).**
+    #   ADMIT: ``source_is_self`` (-> ``IsSelf()``) + ``create_token``
+    #     (-> ``CreateToken``). This is the ONLY combo with a real
+    #     EoE consumer (Seedship Agrarian) and BOTH the predicate and
+    #     effect bridge arms are event-agnostic + already proven
+    #     byte-equal under ENTERS/DIES (round-49/53 create_token
+    #     work). The event itself is the only new substrate; it
+    #     round-trips because both engines' firing-set + ordering
+    #     match.
+    #   DECLINE (no entry, falls through the recognizer):
+    #     * ``IsHost()`` predicate (Cryoshatter-shape "enchanted
+    #       permanent becomes tapped" — `enchantment_builder.py:497`):
+    #       the Rust predicate substrate has no ``SourceIsHost`` arm
+    #       (only ``SourceIsSelf``); admitting it would silently
+    #       mistranslate the host-relationship. Separate predicate-
+    #       substrate slice.
+    #     * Any non-``create_token`` effect under BECOMES_TAPPED
+    #       (draw_cards / gain_life / surveil / etc.): no EoE
+    #       BECOMES_TAPPED consumer carries those today; admitting
+    #       them would be preventative-only AND would widen the
+    #       loader's bench-admit surface without a real signal
+    #       source. A future slice landing such a card ships the
+    #       single new ``_SAFE_TRIGGERS`` entry + a one-line widen
+    #       in the recognizer's BECOMES_TAPPED arm (same pattern as
+    #       the ENTERS/DIES/ATTACKS leaf-set widenings).
+    ("becomes_tapped", "source_is_self", "create_token"),
 })
 
 
@@ -2597,12 +2680,23 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     # from the 17lands deck pool and Appendage Amalgam has Flash).
     # The event-string is emitted further down per arm — gate here so
     # any future event extension stays a single edit.
-    if ta.event not in (Event.ENTERS, Event.DIES, Event.ATTACKS):
+    # Round-58 widens the ENTERS/DIES/ATTACKS gate to also admit
+    # BECOMES_TAPPED (the FOURTH event in the safe set — adds Seedship
+    # Agrarian whose first trigger is BECOMES_TAPPED+IsSelf+CreateToken;
+    # without BECOMES_TAPPED support the whole printing would be
+    # dropped because the safe-trigger filter requires EVERY trigger
+    # to round-trip and Seedship's landfall trigger alone wouldn't
+    # admit it). The event-string is emitted per arm below.
+    if ta.event not in (
+        Event.ENTERS, Event.DIES, Event.ATTACKS, Event.BECOMES_TAPPED,
+    ):
         return None
     if ta.event is Event.ENTERS:
         event_str = "enters"
     elif ta.event is Event.DIES:
         event_str = "dies"
+    elif ta.event is Event.BECOMES_TAPPED:
+        event_str = "becomes_tapped"
     else:  # Event.ATTACKS
         event_str = "attacks"
     # Recognize one of the safe predicate shapes; produce the
@@ -2655,7 +2749,7 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # ships ``scry_n`` under ATTACKS as a single-line edit
             # here AND a single new ``_SAFE_TRIGGERS`` entry.
             safe_effect_kinds = ("surveil", "draw_cards", "gain_life")
-        else:
+        elif ta.event is Event.DIES:
             # Event.DIES — round-42 shipped the surveil leaf; the
             # round-47 DIES+IsSelf+gain_life entry widened it to
             # {surveil, gain_life}; THIS slice (round-47 DIES+IsSelf+
@@ -2703,6 +2797,30 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
                 "surveil", "gain_life", "draw_cards",
                 "create_token", "create_token_tapped",
             )
+        else:
+            # Event.BECOMES_TAPPED (round-58 N1 — the BECOMES_TAPPED
+            # event bridge). The ONLY safe leaf under
+            # BECOMES_TAPPED+IsSelf today is ``create_token`` — the
+            # Seedship Agrarian shape ("Whenever this creature becomes
+            # tapped, create a Lander token"). Deliberately narrow:
+            # no other EoE BECOMES_TAPPED+IsSelf consumer exists, and
+            # the ``create_token`` bridge arm is event-agnostic +
+            # already proven byte-equal under ENTERS/DIES (round-49/53
+            # create_token work) so this is a single-leaf widen, NOT
+            # the full ENTERS-style {draw_cards, gain_life, scry_n,
+            # surveil, mill, create_token, create_token_tapped} set.
+            # A future slice landing a BECOMES_TAPPED carrier with a
+            # different leaf ships that leaf here + the paired
+            # ``("becomes_tapped","source_is_self",<leaf>)``
+            # ``_SAFE_TRIGGERS`` entry (same one-line-widen pattern as
+            # the ENTERS/DIES/ATTACKS leaf-set extensions). The
+            # predicate-effect product is enforced by
+            # ``_SAFE_TRIGGERS`` (the
+            # ``("becomes_tapped","source_is_self","create_token")``
+            # tuple), so even though ``create_token`` is listed here
+            # the triple gate rejects any other event/predicate
+            # pairing that isn't an explicit ``_SAFE_TRIGGERS`` entry.
+            safe_effect_kinds = ("create_token",)
     elif _is_landfall_predicate_python(pred) and ta.event is Event.ENTERS:
         # Landfall is parser-emitted under ENTERS only (CR 614 — the
         # land enters under your control); gate on event to keep the
