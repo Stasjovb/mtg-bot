@@ -171,24 +171,33 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   shim + determinization-via-Rust + the **`rust_shadow` 4-assertion
 >   bake-in tripwire** (negative-control-pinned). The bake-in harness
 >   the C4 re-sweep runs through is **READY**.
-> - **NEW pre-flip blocker G4** (surfaced BY the bake-in — exactly as
->   designed): the C1/G1-analog for the I20 axis. Rust `advance_phase`
->   empties mana per-phase (CR 106.4 — correct); Python holds mana
->   until cleanup (the documented I20 simplification — Python the
->   known-wrong side). Role-swapped ⇒ a legal-CAST-SET divergence.
->   **The flip IMPROVES CR-correctness** — G4 is the bake-in correctly
->   detecting Python's I20 disagreeing, not a Rust bug. (S2/S3 scoped
->   non-blocking C6-fenced follow-ups noted.)
-> - **NEXT (the single genuine flip lane): G4 closure** — the bounded
->   Python-shadow reconciliation (drive `advance_phase_python` in the
->   bake-in's Python side, the I20 fix `step_both` already proves),
->   OR umbrella-accept C6-fenced as an intentional flip correctness-
->   improvement → then run the **C4 post-R76 scaled re-sweep THROUGH
->   the rust_shadow bake-in** (equivalence evidence) → **the atomic
->   SoT-flip (B3-S5) is an ORCHESTRATOR+USER go/no-go on that
->   evidence — explicitly NOT autonomous** (the single least-
->   reversible action in the campaign) → bake-in period → Step 5/6
->   bridge-vestigialization cleanup
+> - **G4 — CLOSED-by-lockstep (`5a0b966f`, path A).** Surfaced BY the
+>   bake-in exactly as designed (the C1/G1-analog for the I20 axis:
+>   Rust `advance_phase` empties mana per-phase, CR 106.4 — correct;
+>   Python held mana until cleanup, the documented I20 simplification —
+>   Python the known-wrong side; role-swapped ⇒ a legal-CAST-SET
+>   divergence). **Closed** by
+>   `ShadowCheckedRustAdapter._install_i20_phase_exit_mana_mirror`
+>   driving the Python shadow's per-phase-exit mana empty in lockstep
+>   with the Rust driver's CR-106.4 empty (the same
+>   `advance_phase_python`-step-1 semantics `step_both` proves; pure
+>   Python, `rust_shadow.py` only; the mana_pool carve-out REMOVED →
+>   STATE_EQ strengthened to full byte-equality). **The flip IMPROVES
+>   CR-correctness** — Python's hold-until-cleanup simplification is
+>   the retired side. A SEPARATE pre-existing Rust-driver
+>   priority-port follow-up (NOT G4, NOT the mana axis;
+>   post-deck-out tail) was honestly unmasked + flagged for the
+>   orchestrator (see the `SOT_FLIP_CUTOVER_PLAN.md` ledger G4
+>   entry). (S2/S3 scoped non-blocking C6-fenced follow-ups noted.)
+> - **NEXT (the single genuine flip lane): G4 is CLOSED →** the
+>   orchestrator sequences the SEPARATE unmasked priority-port
+>   follow-up (small, in `rust_engine_adapter.py` — out of the G4
+>   lane scope) before running the **C4 post-R76 scaled re-sweep
+>   THROUGH the rust_shadow bake-in** (equivalence evidence) →
+>   **the atomic SoT-flip (B3-S5) is an ORCHESTRATOR+USER go/no-go
+>   on that evidence — explicitly NOT autonomous** (the single
+>   least-reversible action in the campaign) → bake-in period →
+>   Step 5/6 bridge-vestigialization cleanup
 >   (`docs/BRIDGE_VESTIGIALIZATION_PLAN.md`). No known hidden gaps
 >   remain (G2 interim-maskable non-blocker; G3 accepted C6-fenced
 >   caveat, SL entry owed at B3-impl).

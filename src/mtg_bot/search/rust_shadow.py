@@ -37,6 +37,18 @@ zone-position/id + variant flags) — the same shape the C1 asymmetry
 pin compares cast sets with
 (``tests/test_cross_engine_legal_set_asymmetry.py``).
 
+**G4 / I20 CLOSED-BY-LOCKSTEP.** The B3-S4 bake-in surfaced G4 (the
+C1/G1-analog for the I20 axis: Python's documented hold-mana-until-
+cleanup simplification, ``turn.py:1081-1083``, diverges the legal CAST
+SET under the role-swapped Rust-driven contract). It is now CLOSED:
+``_install_i20_phase_exit_mana_mirror`` drives the Python shadow's
+per-phase-exit mana empty in lockstep with the Rust driver's CR-106.4
+empty — the same ``advance_phase_python``-step-1 semantics the
+existing ``cross_engine.step_both`` harness already proves (spec
+§4.3). The ``_DOCUMENTED_ACCEPTED_FIELDS`` mana_pool carve-out is
+REMOVED; STATE_EQ now asserts FULL byte-equality incl. mana_pool (the
+tripwire is strictly strengthened).
+
 Wiring: ``decision_source="rust_shadow"`` on ``HeuristicsConfig``
 selects this provider via the ``engine_adapter_factory``. It is
 exercised ONLY when the flag is moved off the default ``"python"`` —
@@ -183,6 +195,65 @@ class ShadowCheckedRustAdapter:
         # cached so CHOSEN_EQ can re-encode it under both zone views.
         self._viewer = viewer_for_codec
         self._last_legal: list[Decision] = []
+        # G4 closure — drive the Python shadow's mana-empty in lockstep
+        # with the Rust driver's CR-106.4 per-phase empty.
+        self._install_i20_phase_exit_mana_mirror()
+
+    # ---- G4 / I20 lockstep reconciliation ----------------------------
+
+    def _install_i20_phase_exit_mana_mirror(self) -> None:
+        """Drive ``advance_phase_python``'s mana-empty (its step 1) on
+        the Python SHADOW in lockstep with the Rust DRIVER's CR-106.4
+        per-phase empty — the G4 closure (``docs/SEARCH_LIMITATIONS.md``
+        B3-S4 G4 / ``RUST_PARITY_GAPS §I20``).
+
+        **Why this exact hook (verify-first).** Rust's ``advance_phase``
+        (``rust/src/state_ops_steps.rs:495``) calls
+        ``empty_all_mana_pools_inline`` on EVERY call, BEFORE the phase
+        counter ticks (CR 106.4 — mana empties on phase exit). The
+        Python engine DELIBERATELY holds mana across phases within a
+        turn and clears only at cleanup (the documented I20
+        simplification, ``turn.py:1081-1083``). The existing
+        ``cross_engine.step_both`` harness reconciles this by driving
+        ``advance_phase_python`` (whose **step 1** is exactly
+        ``for p in py_state.players: p.mana_pool.clear()`` — the CR
+        106.4 phase-exit empty) in lockstep with ``rust.advance_phase()``.
+
+        The Python SHADOW here is a self-driving ``MtgGameStateAdapter``
+        that owns its OWN phase tick + untap + draw + cleanup via
+        ``_advance_to_next_step`` / ``_enter_step`` — those transitions
+        are NOT divergent (the harness runs divergence-clean for 140+
+        steps until floating mana is held across a phase boundary). So
+        we do NOT call ``advance_phase_python`` wholesale (that would
+        double-tick the phase); we mirror ONLY its divergent piece —
+        the per-phase-exit mana empty — at the Python adapter's single
+        phase-exit point (``_advance_to_next_step``, the one place
+        ``state.step`` ticks forward; combat sub-phase finalize stays
+        in-step and does NOT tick — verified). Emptying BEFORE the
+        delegate matches Rust's "empties BEFORE the phase index ticks"
+        ordering exactly. One empty per ``_advance_to_next_step`` call
+        == one empty per Rust ``advance_phase`` == 1:1 with CR 106.4.
+
+        Instance-scoped (only this shadow's ``self._py``) and pure
+        Python — the production Python engine
+        (``decision_source="python"``) and the
+        ``MtgGameStateAdapter`` class are untouched; this is the
+        shadow-checker side only, exactly as ``step_both`` is a
+        harness-only Python mirror.
+        """
+        py = self._py
+        original_advance = py._advance_to_next_step
+
+        def _advance_with_i20_phase_exit_mana_empty() -> None:
+            # CR 106.4 phase-exit empty — mirrors Rust
+            # ``empty_all_mana_pools_inline`` firing in
+            # ``advance_phase`` BEFORE the phase counter ticks, and is
+            # bit-identical to ``advance_phase_python``'s step 1.
+            for p in py.engine_state.players:
+                p.mana_pool.clear()
+            original_advance()
+
+        py._advance_to_next_step = _advance_with_i20_phase_exit_mana_empty
 
     # ---- internal assertions -----------------------------------------
 
@@ -270,36 +341,31 @@ class ShadowCheckedRustAdapter:
     # filter; it is NOT a blanket skip (the negative-control tests
     # prove STATE_EQ still fires on a non-accepted divergence).
     #
-    # * mana_pool_p0 / mana_pool_p1 — I20 (RUST_PARITY_GAPS §I20).
-    #   Rust `advance_phase` empties mana every phase tick (CR 106.4 —
-    #   the CR-correct model); the Python simplified engine
-    #   DELIBERATELY holds mana across phases within a turn and clears
-    #   only at cleanup (documented simplification, turn.py:1081-1083).
-    #   The existing step_both harness reconciles this by driving
-    #   advance_phase_python (the Python mana-empty mirror) in lockstep
-    #   with rust.advance_phase(). The vanilla MtgGameStateAdapter
-    #   priority loop (the shadow checker) uses Python's native
-    #   hold-until-cleanup model, so a Rust-driven shadow diverges on
-    #   mana_pool at every non-cleanup phase boundary where mana is
-    #   floating. This is the documented I20 asymmetry surfacing under
-    #   the role-swapped contract — accepted, NOT a flip-blocker (the
-    #   apply-side mana gate is the hard correctness boundary; the
-    #   reduced-universe admitted population is C6-fenced). The proper
-    #   closure (drive advance_phase_python in lockstep so the Python
-    #   checker matches Rust's CR-correct per-phase empty) is named in
-    #   docs/SEARCH_LIMITATIONS.md and is an orchestrator-sequenced
-    #   bake-in-scaling refinement, NOT a B3-S4 blocker.
-    _DOCUMENTED_ACCEPTED_FIELDS = frozenset(
-        {"mana_pool_p0", "mana_pool_p1"}
-    )
+    # **EMPTY — the G4/I20 carve-out was REMOVED (closed-by-lockstep,
+    # NOT documented-and-accepted).** It previously held
+    # {mana_pool_p0, mana_pool_p1} as the documented-accepted I20
+    # sub-case. G4 is now CLOSED by driving the Python shadow's
+    # per-phase-exit mana empty in lockstep with the Rust driver's
+    # CR-106.4 empty (`_install_i20_phase_exit_mana_mirror`, the same
+    # `advance_phase_python`-step-1 semantics `step_both` already
+    # proves). With the lockstep mirror in place the shadow's
+    # `mana_pool_p0/p1` are byte-equal to Rust's at every compare
+    # point, so STATE_EQ now asserts FULL mana-pool equality too — the
+    # tripwire is STRICTLY STRENGTHENED. The frozenset stays as the
+    # general documented-gap reconciliation hook (negative-control-
+    # verified: STATE_EQ still fires on any non-accepted divergence)
+    # but currently carves out NOTHING.
+    _DOCUMENTED_ACCEPTED_FIELDS: frozenset = frozenset()
 
     def _assert_state_eq(self) -> None:
-        """compare_fields(py_view, rust_view) has no UNDOCUMENTED
-        divergence (documented-accepted I20 fields reconciled exactly
-        as the existing step_both harness does — spec §4.3) AND
-        rust.fingerprint() stable across two independent clones from
-        the current Rust state (per-seed determinism, the
-        BRIDGE_VESTIGIALIZATION_PLAN §2.3 J2 invariant)."""
+        """compare_fields(py_view, rust_view) has NO divergence (the
+        G4/I20 mana-pool axis is now closed-by-lockstep — see
+        `_install_i20_phase_exit_mana_mirror`; the documented-accepted
+        set is EMPTY, so this asserts full byte-equality incl.
+        mana_pool) AND rust.fingerprint() stable across two
+        independent clones from the current Rust state (per-seed
+        determinism, the BRIDGE_VESTIGIALIZATION_PLAN §2.3 J2
+        invariant)."""
         from mtg_bot.parity.cross_engine import (
             build_python_field_view, compare_fields, parity_smoke,
         )
@@ -347,6 +413,13 @@ class ShadowCheckedRustAdapter:
         c._rust = self._rust.clone()
         c._viewer = self._viewer
         c._last_legal = list(self._last_legal)
+        # The clone's ``_py`` is a FRESH MtgGameStateAdapter whose
+        # ``_advance_to_next_step`` is the un-wrapped bound method
+        # again — re-install the G4/I20 phase-exit mana mirror so the
+        # lockstep reconciliation survives cloning (the determinizer /
+        # search clones the adapter; an un-mirrored clone would
+        # re-introduce the G4 cast-set divergence on the clone's line).
+        c._install_i20_phase_exit_mana_mirror()
         return c
 
     def active_player(self) -> PlayerID:
