@@ -3189,3 +3189,204 @@ was already rebuilt by the orchestrator's post-merge resync against
 the current origin/main Rust (verified by build mtime > the latest
 Rust commit on each rebase target); as a non-Rust slice this slice
 did NOT rebuild it. No Rust touched → no `maturin` here.
+
+## Round 70 (2026-05-17) — the residual ~23% FAIL_TIMEOUT floor is NOT a permanent floor and NOT a Rust-substrate ask — it is a SECOND, larger budget mis-size: 14/14 recover to a clean PASS at cap-120 (0 divergence); round-65's `<3-copy → never-converter` hypothesis REFUTED with per-game data
+
+Round 69 raised the bench `--max-turns` default 25 → 60 and recovered
+~30 points of parity signal, leaving a residual **23.3% (14/60)** of
+the canonical broad-sweep games (archetypes 0-29 × seeds 0-1) that
+STILL hit exactly the cap (turn 61) with no parity verdict. Round 69's
+prose asserted that residual is "the genuine deep structural floor
+(frozen 1/1 mirrors / empty-board never-cast needing even more turns):
+the true round-65 residue, [the] Phase-3/5 substrate lever is still
+the right tool for THAT." Round 65 had earlier defined the same
+population as the `< 3` admitted-creature-copy
+**`structural_never_converter`** class needing a multi-round
+TOKEN_PRINTING_SUBSTRATE Phase-3/5 Rust campaign.
+
+**Both assertions were never proven per-game. Both are now refuted
+with per-game ground truth.**
+
+### The missing instrumentation — escalating-cap GROUND TRUTH
+
+Round-69's `scout_timeout_stall_anatomy.py` classifies a *single-cap*
+run via a life-trajectory heuristic (`budget_progressing` /
+`frozen_stalemate` / `no_board`). That heuristic cannot tell a
+genuinely-board-locked stalemate (will NEVER converge) from a
+very-slow-but-progressing game (a bigger budget converts it) — and,
+critically, **it only watches life, so it is blind to the
+bridge-filtered near-creatureless mirror's actual terminator:
+library exhaustion (deck-out), which leaves both players frozen at
+20 life while the game still ends.**
+
+`scripts/scout_timeout_floor_recoverability.py` (read-only; reuses
+`bench_trajectory_parity`'s EXACT per-step primitives + the REAL
+production loader — byte-identical trajectory to a real bench run, it
+imports and calls the bench's own helpers) supplies the missing
+ground truth: it drives the SAME (archetype, seed) game at an
+**escalating cap ladder** (60 → 90 → 120 → 160 → 220), records the
+exact cap at which each residual first reaches a real parity verdict,
+and captures the round-65 admitted-creature-copy count per game so the
+round-65 `<3` boundary is confirmed/refuted with data, not prose.
+
+It reproduces round 69 **exactly** at cap-60: 46/60 verdict,
+**14/60 (23.3%) residual FAIL_TIMEOUT, all 14 hitting precisely turn
+61** — byte-identical to the real bench, validating the instrument.
+
+### The finding — 14/14 residual = `budget_recoverable`, ZERO permanent floor
+
+Canonical broad sweep (archetypes 0-29 × seeds 0-1 = 60 games;
+197s total scout wall over the full ladder):
+
+| GROUND-TRUTH 3-way class | Count | % of residual |
+|---|---:|---:|
+| **`budget_recoverable`** (converges to a real verdict at a higher cap) | **14** | **100%** |
+| `genuine_stalemate` (board-locked, never converges) | **0** | 0% |
+| `structural_never_converter` (round-65 `<3`-copy, never converges) | **0** | 0% |
+
+**All 14 residual games converge to a clean `PASS` (0 →
+FAIL_DIVERGENCE, 0 → FAIL_EXCEPTION across all 60 games × all 5 cap
+rungs).** The recovery cap is **120**, not 60:
+
+| Cap | Grid verdict | Recovered |
+|---:|---|---|
+| 60 | 46/60 (76.7%) | baseline (round-69's published number) |
+| 90 | 48/60 (80.0%) | +2 (the two genuine slow-damage clocks) |
+| **120** | **60/60 (100%)** | **+12 (all remaining)** |
+| 160 | 60/60 | +0 (none needed) |
+| 220 | 60/60 | +0 (none needed) |
+
+### Why the prior diagnoses were wrong (per-game evidence)
+
+- **Round-65's `<3 admitted-copy → structural_never_converter`
+  hypothesis is REFUTED.** *All 14* residual games carry `<3`
+  admitted creature copies (10 carry **zero**) — they are *exactly*
+  round-65's "structural never-converter, needs TOKEN_PRINTING_
+  SUBSTRATE Phase-3/5 Rust" population. **All 14 converge to PASS at
+  cap-120 with no Rust substrate whatsoever.** `<3 copies` predicts
+  "slow (deck-out race)", NOT "never converges". The Rust-substrate
+  ask round 65 attached to this population does not exist.
+- **Round-69's `frozen_stalemate` / `no_board` labels are FALSE
+  POSITIVES.** 12 of the 14 converge at **turn 108 with both players
+  still at 20 life** — they are pure **deck-out wins**: zero damage is
+  ever dealt; the game ends when a library empties (~turn 108). The
+  round-69 single-cap classifier called these `no_board` /
+  `frozen_stalemate` ("raising the cap converts NOTHING") *only
+  because it watches life, not library size*. The remaining 2
+  (arch 24/25 seed 1) are a genuine lone-1/1 slow damage clock
+  (20→0 over ~72 turns) that round 69 correctly tagged
+  `budget_progressing` but under-budgeted.
+- **Round-69's headline diagnosis ("budget mis-size, not a Rust gap")
+  was CORRECT — it just under-corrected the budget.** Round 69 sized
+  the cap to the *round-65 grid's* slowest decisive (turn 60). The
+  broad grid's bridge-filtered near-creatureless mirrors are
+  deck-out races that run to ~turn 108. The residual 23% is the
+  **same lever as round 69, applied once more.**
+
+### The honest verdict
+
+**The residual ~23% FAIL_TIMEOUT is 100% recoverable by a further
+parity-safe budget bump (`--max-turns` 60 → 120). It is NOT a
+permanent stalemate floor, and it is NOT the round-65 TOKEN_PRINTING_
+SUBSTRATE Phase-3/5 Rust ask. There is currently NO genuine permanent
+FAIL_TIMEOUT floor on the canonical broad grid — 60/60 reach a real
+parity verdict at cap-120.**
+
+The lever and its cost/benefit:
+
+- **Lever:** raise the bench `--max-turns` default 60 → 120 (one-line
+  argparse default, identical to round 69's change, same parity-safety
+  proof: `max_turns` is a pure upper bound on an otherwise-
+  deterministic loop — raising it can ONLY convert FAIL_TIMEOUT →
+  PASS/DIVERGENCE, proven here by 0 divergence/exception across all 60
+  games × 5 caps and the unchanged trajectory of every cap-60-completed
+  game).
+- **Benefit:** +23 points of broad-sweep parity-verdict density
+  (76.7% → 100%), recovering 14/14 residual games as clean PASS
+  signal.
+- **Cost:** ~negligible. The real
+  `bench_trajectory_parity.py --archetypes 0-29 --seeds 0,1
+  --max-turns 120` cross-check (below) ran the full canonical broad
+  grid at cap-120 in **84.3s** — only **+3s** over round-69's 81s
+  cap-60 broad sweep, and comfortably inside the campaign's
+  ≤3-min-per-sweep budget. The deck-out games converge by ~turn 108
+  (not the full 120) and the bench parallelizes the slow tail, so the
+  blanket cap raise is effectively free in wall terms — there is no
+  meaningful budget-vs-wall trade here.
+
+### Real-bench cross-check (not the scout — the production bench)
+
+Exactly as round 69 cross-checked its scout with the real
+`bench_trajectory_parity.py`: the canonical broad grid at the
+proposed cap recovers identically in the production bench —
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/bench_trajectory_parity.py \
+    --archetypes 0-29 --seeds 0,1 --max-turns 120
+```
+
+| Outcome | round-69 (cap 60) | round-70 (cap 120) |
+|---|---:|---:|
+| PASS | 46 | **60** |
+| **FAIL_TIMEOUT** | **14 (23.3%)** | **0 (0.0%)** |
+| FAIL_DIVERGENCE | 0 | **0** |
+| FAIL_EXCEPTION | 0 | 0 |
+| **Parity verdicts** | **46/60** | **60/60 (+30%)** |
+| Wall | 81s | **84.3s (+3s)** |
+
+All 14 residual converts went FAIL_TIMEOUT → **PASS** (0 →
+FAIL_DIVERGENCE — exactly the round-69 pattern one cap-doubling
+deeper: the timeouts were masking *clean* signal, not a hidden
+divergence). The production bench confirms the scout's ground-truth
+prediction byte-for-byte.
+
+**This slice does NOT itself bump the default to 120** (a separate
+mitigation slice / the orchestrator can apply the one-line change with
+the round-69-style pin now that the recoverability is proven; this
+slice's deliverable is the *characterization* — the honest "X% is
+recoverable, here is the exact lever and cost, it is NOT a Rust ask"
+verdict the campaign was missing). Forward flag: a smarter, wall-
+cheaper alternative to a blanket cap-120 is a **deck-out-aware early
+terminator** — the 12 deck-out games are decided the moment a library
+is provably unwinnable-by-damage and smaller than the turns remaining;
+detecting that (engine-agnostic, both engines model library size
+identically) would recover the same 12 games in far fewer turns than a
+blanket cap-120. That is a future parity-safe bench-harness lever, not
+this slice.
+
+### Relationship to round 65 / 69 (correction with data)
+
+Round 69 correctly *re-attributed* the cause from "Rust substrate"
+(round 65) to "budget mis-size" and recovered the 30 points that were
+never a substrate problem. This round closes the remaining gap: the
+*residual* 23% that round 69 explicitly handed back to the Phase-3/5
+Rust lever ("the Phase-3/5 substrate lever is still the right tool for
+THAT") is **also not a substrate problem** — it is the same budget
+lever, under-corrected by ~2×. Net: **the entire historical ~53%
+FAIL_TIMEOUT drag on the canonical broad grid is a turn-budget
+mis-size; none of it is a TOKEN_PRINTING_SUBSTRATE Phase-3/5 Rust
+ask.** Round 65's admitted-copy↔PASS correlation is real but its
+*causal* claim (`<3` copies → never converges) is refuted: `<3` copies
+→ deck-out race → converges slowly. `--require-creatures N` (round 66)
+remains a valid orthogonal reporting-honesty knob (it would still
+correctly relabel the 0-copy deck-out population as "filtered, slow
+signal" if a campaign prefers a smaller-but-faster sweep over the
+cap-120 full-signal sweep) — it is unaffected.
+
+### Gate
+
+1 read-only diagnostic (`scripts/scout_timeout_floor_recoverability.py`
+— reuses the bench's own primitives via import; modifies no
+production / `_SAFE_*` / bench-logic code; default-off, nothing
+imports it) + this docs entry. **No production / harness / `_SAFE_*` /
+bench-script / test code changed** — this slice characterizes the
+floor, it does not apply the mitigation (the one-line cap-120 default
+bump + pin is deferred to a follow-up mitigation slice now that
+recoverability is proven). As a scout+docs-only slice nothing is on
+the parity gate's path; the gate
+(`test_parity_smoke + test_cross_engine_etb_triggers +
+test_trajectory_parity + test_trajectory`, `--no-cov -n 4`) was run to
+**confirm clean / no regression** (see worklog for the pass count) —
+no pinned trajectory shifted (none could: no code on the gate path
+moved). No Rust touched → no `maturin` here.
