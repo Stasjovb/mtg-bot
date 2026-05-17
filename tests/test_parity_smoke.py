@@ -63257,25 +63257,24 @@ def test_cross_engine_real_eoe_seedship_agrarian_both_triggers_full_card_parity(
         f"landfall trigger; got {rust_seedship_snap[0]['counters']}"
     )
     assert rust_state.get_counters(rust_seedship_id) == 1
-    # NOTE on the P/T parity contract: Rust's ``effective_power`` /
-    # ``effective_toughness`` return the BASE P/T and expose the
-    # +1/+1 counter contribution SEPARATELY via
-    # ``power_bonus_from_counters`` / ``toughness_bonus_from_counters``
-    # (verified: a 3/3 with 1 counter -> effective_power()==3,
-    # power_bonus_from_counters()==1). Python's ``effective_power``
-    # FOLDS the counter bonus in (3/3 + 1 counter -> 5? no: ==4).
-    # The byte-equal cross-engine signal is therefore Rust's
-    # base+counter-bonus == Python's folded effective value.
-    rust_seed_eff_p = (
-        rust_state.effective_power(rust_seedship_id)
-        + rust_state.power_bonus_from_counters(rust_seedship_id)
-    )
-    rust_seed_eff_t = (
-        rust_state.effective_toughness(rust_seedship_id)
-        + rust_state.toughness_bonus_from_counters(rust_seedship_id)
-    )
+    # P/T parity contract — UPDATED by R74-1 / RUST_PARITY_GAPS I23
+    # (round-74 Rust slice ``feature/rust-i23-combat-counters``).
+    # Rust's ``effective_power`` / ``effective_toughness`` getters
+    # now FOLD ``obj.counters`` (CR 613 layer 7d) byte-equal with
+    # Python's ``_compute_effective_pt`` — the prior combat-side
+    # counter-omission asymmetry is closed. A 3/3 Seedship carrier
+    # with one +1/+1 counter is effective 4/4 directly on the Rust
+    # getter (was: getter returned base 3, counter exposed only via
+    # the SEPARATE ``power_bonus_from_counters`` accessor, which the
+    # old test added back manually — that manual add now
+    # double-counts). The byte-equal cross-engine signal is now the
+    # plain getter equality. The ``*_bonus_from_counters`` accessors
+    # are an INDEPENDENT API that still reports the counter
+    # contribution alone (still == 1) — unchanged by I23.
     assert rust_state.power_bonus_from_counters(rust_seedship_id) == 1
     assert rust_state.toughness_bonus_from_counters(rust_seedship_id) == 1
+    rust_seed_eff_p = rust_state.effective_power(rust_seedship_id)
+    rust_seed_eff_t = rust_state.effective_toughness(rust_seedship_id)
     assert rust_seed_eff_p == 4
     assert rust_seed_eff_t == 4
     assert py_seedship in py_state.battlefield, "Python: Seedship survives"
@@ -68464,6 +68463,119 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
     assert "Timeline Culler" in py_ex2 and py_ex2 == rs_ex2, (
         f"graveyard-warp-cast TLC must be warp-exiled byte-equal; "
         f"py_ex={py_ex2} rs_ex={rs_ex2}")
+
+
+def test_cross_engine_counter_attacker_combat_damage_folds_plus_one(
+    parity_smoke,
+):
+    """**R74-1 / RUST_PARITY_GAPS I23 byte-equal pin (CLOSED).**
+
+    A counter'd attacker deals counter-adjusted combat damage
+    byte-equal across engines. This is the genuine parity test that
+    empirically demanded the documented-scoped I23 combat-side
+    counter-omission asymmetry be promoted (round-74 bench sweep:
+    Biosynthic Burst put a combat-relevant +1/+1 counter on an
+    attacker; Python dealt counter-adjusted power, Rust dealt base
+    power → a 64/111 ``life_pX`` divergence).
+
+    Setup reuses the canonical ``slightly_bigger_deckspec`` +
+    ``combat_selector`` walk (Grizzly Bears, a 2/2, is the lone
+    unblocked attacker on p0's turns 11/13/15; p1 has no creatures so
+    combat is always unblocked). A thin selector wrapper side-channels
+    **one** +1/+1 counter onto the attacker on the FIRST
+    ``declare_attackers`` emission — on BOTH engines, via the
+    cross-engine analogue primitives ``add_plus_one_counters``
+    (Python: ``obj.plus_one_counters += 1``) and ``add_counters``
+    (Rust: the net ``obj.counters`` scalar ``+= 1``).
+
+    Biosynthic-Burst-shaped: a single combat-relevant +1/+1 counter
+    on the attacker, then unblocked combat damage. With the I23 fix
+    folding ``obj.counters`` into ``battlefield_creature_power`` /
+    ``battlefield_creature_toughness`` (byte-equal with Python's
+    ``_compute_effective_pt`` layer-7d fold), the Bears is effective
+    3/3 on BOTH engines, so the FIRST combat cycle drops p1's life by
+    **3** (20 → 17), not the bare 2 the pre-fix Rust combat reader
+    would have dealt (counter dropped). The two subsequent cycles
+    (counter persists; Bears not re-pumped) each drop 3 more
+    (17 → 14 → 11). Every ``life_p1`` value is asserted byte-equal
+    step-by-step. Pre-fix this test FAILS (Rust trajectory
+    20 → 18 → 16 → 14 vs Python 20 → 17 → 14 → 11); post-fix both
+    engines agree on 20 → 17 → 14 → 11.
+    """
+    from mtg_bot.game import add_plus_one_counters
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states,
+        combat_selector,
+        slightly_bigger_deckspec,
+        step_both,
+    )
+
+    py_state, rust_state = build_matched_states(slightly_bigger_deckspec())
+
+    counter_added = {"done": False}
+
+    def counter_attacker_selector(py_s, rust_s, step_index):
+        action = combat_selector(py_s, rust_s, step_index)
+        if (
+            not counter_added["done"]
+            and action.get("kind") == "declare_attackers"
+        ):
+            attacker_ids = action["attacker_ids"]
+            assert attacker_ids == [3], (
+                "expected the canonical Grizzly Bears id=3 as the lone "
+                f"unblocked attacker, got {attacker_ids}"
+            )
+            aid = attacker_ids[0]
+            # Python side: the SoT counter primitive.
+            py_obj = next(
+                o for o in py_s.battlefield if int(o.id) == aid
+            )
+            assert py_obj.printing.name == "Grizzly Bears"
+            assert py_obj.printing.power == 2 and py_obj.printing.toughness == 2
+            added = add_plus_one_counters(py_s, py_obj, 1)
+            assert added == 1
+            assert py_obj.plus_one_counters == 1
+            # Rust side: the cross-engine analogue (net counter scalar).
+            assert rust_s.add_counters(aid, 1) is True
+            assert rust_s.get_counters(aid) == 1
+            counter_added["done"] = True
+        return action
+
+    life_p1_trajectory: list[tuple[int, int]] = []
+    prev_life_p1 = 20
+    for i in range(200):
+        action = counter_attacker_selector(py_state, rust_state, i)
+        step = step_both(py_state, rust_state, action)
+        cur_py = step.py_view["life_p1"]
+        cur_rust = step.rust_view["life_p1"]
+        assert cur_py == cur_rust, (
+            f"life_p1 diverged at step {i} (R74-1/I23 regression — "
+            f"Rust combat-power must fold obj.counters byte-equal with "
+            f"Python): py={cur_py} rust={cur_rust} action={action}"
+        )
+        if cur_py != prev_life_p1:
+            life_p1_trajectory.append((i, cur_py))
+            prev_life_p1 = cur_py
+
+    # The counter MUST have been side-channelled (guards against a
+    # silent selector change that never emits declare_attackers).
+    assert counter_added["done"], (
+        "the +1/+1 counter was never added — the walk never emitted "
+        "declare_attackers, so this pin would vacuously pass"
+    )
+    # Three unblocked combat cycles, each dealing 3 (= 2 base + 1
+    # counter) with the I23 fix: 20 -> 17 -> 14 -> 11. Pre-fix Rust
+    # would have dealt 2 per cycle (counter dropped) → divergence.
+    assert [v for _, v in life_p1_trajectory] == [17, 14, 11], (
+        f"expected counter-adjusted p1 life trajectory 20->17->14->11 "
+        f"(Bears effective 3/3 via the I23 counter fold), got "
+        f"{life_p1_trajectory}"
+    )
+    assert py_state.players[1].life == 11
+    assert rust_state.get_life(1) == 11
+    # p0 untouched (Bears unblocked, no back-damage) on both engines.
+    assert py_state.players[0].life == 20
+    assert rust_state.get_life(0) == 20
 
 
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===

@@ -2600,6 +2600,27 @@ Closing the combat-side getter asymmetry is a separate, broader slice
 (it touches the whole combat/SBA power-read surface, not just this
 arm) and is out of scope here.
 
+> **UPDATE (R74-1 / RUST_PARITY_GAPS I23, round-74 Rust slice
+> `feature/rust-i23-combat-counters`).** The combat-side getter
+> asymmetry referenced above as "a separate, broader slice … out of
+> scope here" IS NOW CLOSED. `battlefield_creature_power` /
+> `battlefield_creature_toughness` (and the public
+> `effective_power` / `effective_toughness` getters that wrap them)
+> now fold `obj.counters` byte-equal with Python's
+> `_compute_effective_pt` (the round-74 bench sweep empirically
+> demanded the documented I23 promotion — Biosynthic Burst). So the
+> absolute cross-engine `effective_power` numbers now AGREE on a
+> counter-bearing creature (the "Rust 3→8 vs Python 5→10" stale
+> consequence above no longer holds — both are 5→10). The doubling
+> DELTA invariant the round-53 pins assert is unaffected (still
+> byte-equal). NOTE: `read_doubling_power` (this entry's helper) is
+> an INDEPENDENT private re-derivation that already folded
+> `obj.counters`; the R74-1 slice did not touch it — only the
+> combat/SBA-shared `state_ops_combat.rs` readers. The Fight-arm
+> `read_battlefield_creature_power` helper remains a distinct,
+> still-open documented asymmetry (see its own §2 entry); R74-1 was
+> scoped precisely to the bench-demonstrated combat-damage path.
+
 **Deliberate divergence — Mightform Harmonizer is NOT
 production-deck-loader-admitted.** Unchanged from the round-31/36
 position; restated here for completeness. Two independent gates,
@@ -4545,6 +4566,14 @@ the Lander) on a counter'd target. Pinned both directions (a
 appears → Lander; a +counters creature whose effective toughness
 grows → excess vanishes → NO Lander) on the Rust side, and via the
 genuine real-EoE probe's NEGATIVE-counters arm (printed toughness 8,
+<!-- R74-1 note: the parenthetical "Rust's combat-side
+effective_toughness getter does NOT fold counters" above is now
+STALE — the round-74 R74-1/I23 slice closed that combat-side
+asymmetry (the getter folds counters byte-equal with Python). This
+arm's PRIVATE file-isolated re-derivation is unaffected and stays
+correct (it never called the getter); per-arm file-isolation
+remains the right pattern. See the RUST_PARITY_GAPS I23 closure. -->
+
 −4 counters → effective 4 → excess 2 → Lander on BOTH; a
 counters-omitting bug → no Lander → divergence). Lifelink/deathtouch
 are NOT modeled on either side (the documented Python parity
@@ -4674,7 +4703,14 @@ the conditional reads POST-UEOT EFFECTIVE power. Python's
 `effective_power` (`game._compute_effective_pt`) folds the
 just-pushed UEOT bonus AND `+1/+1` counters (CR 613 layer 7c+7d).
 Rust's combat-side `effective_power` getter folds the UEOT bonus but
-NOT counters. To stay byte-equal with the Python SoT, this arm
+NOT counters.
+<!-- R74-1 note: the "Rust's combat-side effective_power getter folds
+UEOT but NOT counters" premise is now STALE — the round-74 R74-1/I23
+slice closed the combat-side getter asymmetry (it folds counters
+byte-equal with Python). This arm's PRIVATE file-isolated
+re-derivation below is unaffected and stays correct; per-arm
+file-isolation remains the right pattern. See RUST_PARITY_GAPS I23. -->
+To stay byte-equal with the Python SoT, this arm
 computes the effective power with the counters-INCLUSIVE formula
 re-derived privately (file-isolation) — `base =
 ueot_base_pt_override().p OR printed_power`, plus `obj.counters`,

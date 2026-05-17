@@ -980,13 +980,37 @@ refactor on either side that breaks the parity surfaces immediately.
     `effective_power(obj_id)`, `effective_toughness(obj_id)`,
     `has_keyword(obj_id, keyword)` (all on `GameState`,
     Python-callable, mirror Python's `mtg_bot.game.effective_*`).
-  - **Intentional asymmetry**: `battlefield_creature_toughness`
-    (combat-side) folds UEOT bonus but NOT `obj.counters`; SBA's
-    effective_toughness folds BOTH. This mirrors the pre-r27
-    asymmetry (combat math sized off printed P/T, SBA's lethal-
-    damage / zero-toughness keyed off printed + counters). Future
-    slice can promote combat to fold counters once a parity test
-    demands it.
+  - **Combat-side counter fold — CLOSED (R74-1, this slice).**
+    `battlefield_creature_power` / `battlefield_creature_toughness`
+    (combat-side, `state_ops_combat.rs`) now fold `obj.counters`
+    (the signed net +1/+1 / -1/-1 scalar, CR 613 layer 7d) on top
+    of base + `ueot_*_bonus()`, byte-equal with Python's
+    `_compute_effective_pt` (`game.py:2251-2252`,
+    `p/t += obj.plus_one_counters - obj.minus_one_counters`) and
+    matching the SBA-side recipe (`state_ops_sba.rs`:
+    `base_toughness + obj.counters + obj.ueot_toughness_bonus()`).
+    The public `effective_power` / `effective_toughness` getters
+    wrap the same private functions, so they fold counters too.
+    **History**: through round-73 this was a documented-scoped
+    *intentional asymmetry* (combat math sized off printed P/T;
+    SBA's lethal-damage / zero-toughness keyed off printed +
+    counters) with an explicit "promote once a parity test demands
+    it" trigger. The round-74 bench sweep empirically demanded it:
+    Biosynthic Burst (the first bench-admitted card placing a
+    combat-relevant +1/+1 counter on an attacker) produced a
+    64/111 spell-cast-game `life_pX` divergence — Python dealt
+    counter-adjusted combat power, Rust dealt base power. New code
+    is right (written against the Python SoT); Python untouched.
+    Pinned byte-equal by
+    `tests/test_parity_smoke.py::test_cross_engine_counter_attacker_combat_damage_folds_plus_one`
+    (a counter'd unblocked Bears attacker, Biosynthic-Burst-shaped;
+    negative-control-verified to fail pre-fix at the documented
+    step-139 `life_p1` divergence). The SEPARATE Fight-arm
+    `read_battlefield_creature_power` helper
+    (`state_ops_resolve.rs`) still omits `obj.counters` — that is a
+    DISTINCT documented `SEARCH_LIMITATIONS.md` §2 asymmetry, not
+    part of I23/R74-1, and is NOT exercised by the bench
+    combat-damage path; it stays as its own tracked entry.
   - **CR 514.3 firing point**:
     `cleanup_step_for_active_player` runs CR 514.1 (hand-size
     discard) → CR 514.2 (damage clear) → CR 514.3 (UEOT clear),
