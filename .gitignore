@@ -95,6 +95,14 @@ data/17lands/
 # .pyd lands in the venv's site-packages, not in the source tree.
 rust/target/
 
+# Per-worktree isolated-build scratch produced by
+# scripts/setup_rust_worktree_venv.ps1 (Mechanism A in
+# docs/RUST_PARALLELIZATION_FEASIBILITY.md). `.venv-wt` is already
+# covered by the `.venv-*/` glob above; `_wt_wheels/` is the
+# maturin-build wheel output dir — worktree-local scratch, never
+# committed.
+_wt_wheels/
+
 # Trained deck-belief model artifacts (Step 2 of the NN representation
 # roadmap). Built by scripts/train_deck_belief.py from the 17lands EoE
 # corpus. The .npz baseline + .pt NN are regenerable; the validation
