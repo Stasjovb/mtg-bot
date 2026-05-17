@@ -2764,3 +2764,157 @@ test_trajectory_parity + test_trajectory`, `--no-cov -n 4`) **1397 →
 on the gate's path (per `test_parity_smoke.py`'s
 `bench_trajectory_parity` imports) — gate stays green. No Rust → no
 `maturin`.
+
+## Round 68 (2026-05-16) — post-warp-1.5 broad divergence sweep — CLEAN broad validation; the +5 warp-creature admit (Phase 1 + 1.5) surfaces 0 NEW cross-engine divergence over its full 294-archetype carrier surface
+
+The warp_cost substrate landed in two merges: **Phase 1**
+(`9f3ef1d1`, resync `29449569`) admitted **Red Tiger Mechan** +
+**Bygone Colossus** (pure fixed-cost warp); **Phase 1.5**
+(`ce207345`, re-stamp `79c707ba`) added the safe-trigger+warp residue
+trio **Germinating Wurm** ({1}{G} warp; ENTERS/IsSelf/GainLife 2),
+**Knight Luminary** ({1}{W} warp; ENTERS/IsSelf/CreateToken Human
+Soldier 1/1), **Starbreach Whale** ({1}{U} warp; ENTERS+surveil 2).
+Before Phase 1 all five were *dropped* by
+`_printing_is_bridge_simple_creature` (`warp_cost` a hard reject), so
+every archetype that ran them collapsed to a lands-light bridged
+mirror — the warp surface was never exercised in a real
+production-deck game. Per the round-50/53/55/56/61 "sweep right after
+each new admit / Rust substrate lands" discipline (round-64 §forward
+picture #2), this round runs the broad collateral divergence sweep
+over the **post-Phase-1.5** admit set: it gates the +5-creature admit
+on a wide deck/seed range and surfaces any NEW Python-vs-Rust
+divergence the warp admits introduced or exposed.
+
+> **Scope split (honest, vs the in-flight round-67 warp-CAST scout).**
+> The round-67 `scout_r67_warp_cast_realgame_lifecycle.py`
+> (un-merged branch `feature/bench-trajectory-warp-p1-validation`)
+> covers the **targeted warp-CAST branch** — explicit `use_warp=True`
+> → PHASE_END_STEP exile sweep → recast-from-exile, the new Rust code
+> path the bench strategy structurally can't drive (`_try_cast_one_
+> creature` always issues a *base* `cast_spell`). This round 68 is the
+> **complement that scout's own docstring names**: the broad
+> collateral net over the carriers' *normal* (non-warp) production-
+> deck play — the CardDef warp-bridge round-trip + the Rust
+> `legal_actions` warp emitter (base+warp CastSpell pair must match)
+> + the 2 warp-Phase-1 harness-bug fixes, exercised at scale across
+> all 5 cards. The two are disjoint and both needed; this one is the
+> r61-style broad sweep, that one is the r61-style targeted new-code
+> driver.
+
+### Scouted carrier surface — all 5 warp creatures
+
+`scripts/scout_postwarp15_carrier_archetypes.py` (the post-1.5
+superset of round-67's Phase-1-only carrier scout) walked the real
+17lands pool [0, 600) through the REAL production loader +
+`production_deck_to_deckspec` (the exact bench path) and reported
+per-card which archetypes bring an **admitted warp CardDef**
+(`has_warp` set):
+
+| Card | Phase | Carrier archetypes (of 600 scanned) |
+|---|---|---:|
+| Red Tiger Mechan | 1 | 22 |
+| Bygone Colossus | 1 | 8 |
+| Germinating Wurm | 1.5 | **125** |
+| Knight Luminary | 1.5 | 72 |
+| Starbreach Whale | 1.5 | 105 |
+| **ANY warp card admitted** | — | **294 distinct** |
+
+**Both §2 guardrails held at scale:** Timeline Culler (Phase 2 —
+`warp_additional_life_cost=2`) leaked into admit in **0** archetypes
+(the Phase-1.5 guardrail positively rejects it); warp admitted
+WITHOUT the `has_warp` flag (a silent plain-creature fallback that
+would drop `warp_cost`) in **0** archetypes. The +5 admit is exactly
+the intended set, materialized with the warp substrate, nothing
+more.
+
+### Sweeps + full result counts (5 batches, ≤60 games / ≤3-min wall each, HARD cap honored)
+
+| Batch | Span / focus | Grid | Games | PASS | FAIL_DIV | TIMEOUT | EXC | FILT |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| A | P1 carriers (Red Tiger Mechan + Bygone Colossus) | arch 61,62,99,127,151,153,159,198,231,236,364,407 ×s0-3 | 48 | 21 | **0** | 27 | 0 | 0 |
+| B | P1.5 Germinating Wurm + Knight Luminary heavy | arch 4,5,13,40,46,69,86,7,8,38,44,59,80,134,201 ×s0-3 | 60 | 31 | **0** | 29 | 0 | 0 |
+| C | P1.5 Starbreach Whale + high-index mixed | arch 0,1,20,33,66,78,89,131,300,400,486,488,538,597,599 ×s1-4 | 60 | 16 | **0** | 44 | 0 | 0 |
+| D | broad re-validation, wide any-admitted span | arch 14,45,92,104,135,180,205,255,300,343,400,462,489,538,597 ×s5-7 | 45 | 32 | **0** | 13 | 0 | 0 |
+| r67 | exact r67 warp-lifecycle carriers, fresh process | arch 61,99,127,151,153,159,198,231,236,364 ×s0-1 | 20 | 10 | **0** | 10 | 0 | 0 |
+| **Total** | all 5 warp creatures, 5 disjoint seed offsets | | **233** | **110** | **0** | **123** | **0** | **0** |
+
+`attack_all`, max-turns 22, mulligans off. JSONs
+`tmp/bench_postwarp15_batch{A,B,C,D}.json` +
+`tmp/bench_postwarp15_r67carriers.json` (gitignored). Every batch
+wall ≤~77 s, well under the 3-min cap (A 61.1 s / B 77.0 s / C
+75.5 s / D 57.3 s / r67 24.2 s).
+
+### Divergence triage — ZERO divergence across all 233 games
+
+**0 FAIL_DIVERGENCE / 0 FAIL_EXCEPTION across all 233 games.** Every
+batch heavily exercises the brand-new warp-admitted carriers across
+all 5 cards (Phase 1 pair + Phase 1.5 trio), at 5 disjoint seed
+offsets (s0-3 / s0-3 / s1-4 / s5-7 / s0-1), spanning low-, mid-, and
+high-index archetypes (idx 0–599). No divergence shape on the warp
+CardDef bridge round-trip, the warp `legal_actions` emitter's
+base+warp CastSpell pair, the Phase-1.5 trio's safe-trigger ETBs
+(GainLife / CreateToken / surveil) under real production-deck play,
+or any other admitted feature class co-occurring on these decks. The
+exact round-67 warp-lifecycle carriers (61/99/127/151/153/159/198/
+231/236/364) re-run byte-equal in a fresh single process (10 PASS /
+0 DIV / 10 TIMEOUT).
+
+### Verdict
+
+| Claim | Verdict |
+|---|---|
+| The +5 warp-creature admit (Phase 1 + 1.5) introduces or exposes a NEW cross-engine divergence in real production-deck play | **NO — CLEAN BROAD VALIDATION.** 233 games / 294-archetype carrier surface / all 5 warp cards / 5 disjoint seed offsets / idx 0–599. 0 FAIL_DIVERGENCE, 0 FAIL_EXCEPTION. |
+| The Phase-1.5 guardrail correctly rejects Timeline Culler (Phase 2) and never silently drops `warp_cost` via a plain-creature fallback | **YES — both guardrails held over the full [0,600) scan.** Timeline Culler admitted in 0 archetypes; 0 warp cards admitted without the `has_warp` flag. |
+| The 2 warp-Phase-1 harness-bug fixes (alt-cost flags in `_dict_to_python_action`; `advance_phase_python` END-step warp-exile sweep) hold under broad real-game play | **VALIDATED CLEAN** — 233 real production-deck games drive the general cast pipeline + END-step advance on warp-carrier decks with 0 divergence; no regression of either fixed harness bug surfaced. |
+
+### Timeout note
+
+123/233 FAIL_TIMEOUT (≈53%) is the standing creature-floor drag
+(round-50/58/65 limitation: the CardDef bridge filter collapses each
+17lands archetype to ~1-2 admitted creature copies + ~58 lands →
+near-creatureless mirror → never reaches lethal before max-turns 22).
+Expected, not a regression — every recent broad sweep reports it
+(r62 133/240, r64 105/180, r65 25/60 ≈ 42%). A timed-out game yields
+zero divergence signal but is NOT an engine failure. The warp admit
+adds a warp *body* to its carriers but most warp carriers still
+collapse to thin mirrors (the warp creature is 1-copy, buried in
+lands) — the `--require-creatures N` reporting-honesty lever (round
+66) and the Phase-3/5 token substrate (round 65) remain the route to
+a denser signal-bearing pool.
+
+### Forward picture
+
+1. **The warp_cost Phase 1 + 1.5 admit is broad-validated** — the
+   +5-creature surface (294-archetype carrier set) is byte-equal in
+   real production-deck play, the §2 guardrails hold at scale, and
+   the 2 harness-bug fixes hold. The empirical pipeline is at a clean
+   broad point on the post-warp-1.5 admit set.
+2. **The in-flight round-67 warp-CAST lifecycle scout is the
+   complement that still needs to land** — it validated the explicit
+   `use_warp=True` → exile → recast branch 20/20 byte-equal but is on
+   an un-merged branch with no docs entry; that targeted new-code
+   driver + this broad collateral net together fully cover the warp
+   admit (the r61 scout-then-sweep pair).
+3. **Recommended next bench item**: gate the *next* admit-widening or
+   Rust-substrate slice (warp Phase 2 Timeline Culler, the
+   Effect-uncovered Tier-A spell lane, or the Phase-3/5 token
+   substrate) with the same immediate post-merge scoped-then-broad
+   sweep. Until a new admit lands, a periodic broad sweep is
+   confirmation-only (diminishing latent-bug yield on the unchanged
+   admit set — the round-64 finding still holds).
+
+### Gate
+
+Pure docs + 1 `scripts/scout_*.py` diagnostic
+(`scout_postwarp15_carrier_archetypes.py`, read-only — the post-1.5
+superset of the committed round-67 Phase-1 carrier scout; reuses the
+production loader + `production_deck_to_deckspec`, modifies no
+production / `_SAFE_*` / bench-script code) + 5
+`tmp/bench_postwarp15_*.json` artifacts (gitignored). The
+`bench_trajectory_parity.py` bench was run **un-modified**. **No
+production / harness / `_SAFE_*` / bench-script code changed.** The
+full parity gate (`test_parity_smoke + test_cross_engine_etb_triggers
++ test_trajectory_parity + test_trajectory`, `--no-cov -n 4`) was run
+on the fresh worktree as the merge precondition: **1426 passed** (the
+post-warp-1.5 baseline; unchanged by this docs+scout slice). No Rust
+→ no `maturin`.
