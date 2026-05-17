@@ -2765,6 +2765,121 @@ on the gate's path (per `test_parity_smoke.py`'s
 `bench_trajectory_parity` imports) — gate stays green. No Rust → no
 `maturin`.
 
+## Round 67 (2026-05-16) — TARGETED warp-CAST lifecycle driver — the explicit `use_warp=True` → END-step exile → recast-from-exile branch is byte-equal in a REAL production-deck game (20/20, re-validated on current main)
+
+> **Salvage note.** This entry was authored late: the round-67 work
+> (two committed scout scripts on the stalled branch
+> `feature/bench-trajectory-warp-p1-validation`) was real, complete,
+> and disjoint from round-68 but never got its docs entry or a merge
+> (a dead 0-byte agent left the branch un-landed). It was salvaged by
+> cherry-picking the two scout commits onto current `main` and
+> **re-validated from scratch** — the numbers below are the fresh
+> re-run on current `main`, NOT the stale claim copied forward.
+
+### Why this scout exists — the gap the broad bench sweep structurally leaves
+
+The warp_cost Phase-1 substrate (`9f3ef1d1`) admitted **Red Tiger
+Mechan** + **Bygone Colossus** through the post-Phase-1 CardDef
+bridge. The broad `bench_trajectory_parity.py` sweep exercises those
+carriers in real games, but the bench strategy's
+`_try_cast_one_creature` always issues a *base*
+`{"kind":"cast_spell"}` (pays `mana_cost`) — it **never emits
+`use_warp=True`**. So the broad sweep validates the warp CardDef
+bridge round-trip, the Rust `legal_actions` warp emitter (the
+base+warp `CastSpell` pair must match — the primary pre-Phase-1
+divergence shape), and the 2 warp-Phase-1 harness-bug fixes on the
+*general* cast pipeline, but it does **not itself drive the
+warp-CAST branch**: `Action::CastSpell{use_warp:true}` →
+`cast_creature_warp` → `PHASE_END_STEP` warp-exile sweep →
+recast-from-exile at normal cost. Before this scout, that branch was
+covered only by the in-test genuine probe on a *synthetic* 39-Forest
+library
+(`test_parity_smoke.py::test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal`).
+
+`scripts/scout_r67_warp_cast_realgame_lifecycle.py` closes that gap
+honestly: it loads an **actual 17lands carrier-archetype deck** via
+the real production loader (`trajectory.production_deck_to_deckspec`
+— the exact bench path), sets up the matched cross-engine game, walks
+the real game, and when the warp card is in hand at a p0 main phase
+with enough mana on the battlefield it drives the **explicit
+`use_warp=True` cast → the following end step (warp-exile sweep) → a
+later turn's recast-from-exile at normal cost** — all on BOTH engines
+via `step_both` / `advance_phase_python`, asserting **0 divergence at
+every step**. The companion `scout_r67_warp_p1_carrier_archetypes.py`
+enumerates which real 17lands archetypes carry an admitted Phase-1
+warp CardDef (the carrier index source for the lifecycle driver).
+
+### Relationship to the round-68 broad sweep (explicit, disjoint, both needed)
+
+This is the **targeted new-code-path driver**; round 68 is the
+**broad collateral net**. They are the r61 scout-then-sweep pair and
+are disjoint by construction:
+
+| | Round 67 (this entry) | Round 68 |
+|---|---|---|
+| What it drives | the **warp-CAST branch** itself: explicit `use_warp=True` → END-step exile → recast-from-exile | the carriers' **normal (non-warp) production-deck play** — base `cast_spell` only |
+| Surface | the new Rust `cast_creature_warp` path + the deterministic `PHASE_END_STEP` exile sweep + recast-from-exile | the CardDef warp-bridge round-trip + `legal_actions` base+warp pair + the 2 harness-bug fixes at scale across all 5 cards |
+| Shape | r61-style **targeted** driver (forces the branch the bench can't reach) | r61-style **broad** collateral sweep (233 games / 294-archetype carrier surface, 0 FAIL_DIV) |
+| Scope | Phase-1 pair only (Red Tiger Mechan + Bygone Colossus) | post-Phase-1.5 superset (all 5 warp creatures) |
+
+Round 68's own §"Scope split" and §"Forward picture #2" name this
+scout explicitly as the complement that "still needs to land". With
+this entry both halves are documented and merged; together they fully
+cover the warp Phase-1 admit.
+
+### Re-validation result (fresh re-run on current `main`)
+
+Re-ran `scout_r67_warp_cast_realgame_lifecycle.py` against current
+`main` (`9f107160` — round-68 + Seedship Impact in history; `.pyd`
+rebuilt `maturin develop --release` before the run) over the exact
+round-68-referenced r67 carrier set, **NOT** trusting the stale claim:
+
+```
+--archetypes 61,99,127,151,153,159,198,231,236,364 --seeds 0,1
+```
+
+| Metric | Result |
+|---|---:|
+| Games | 20 |
+| warp-cast driven (`use_warp=True` issued, both engines) | **20 / 20** |
+| recast-from-exile completed (END-step exile → later recast) | **20 / 20** |
+| FAIL_DIVERGENCE | **0** |
+| FAIL_EXCEPTION | **0** |
+| Carriers exercised | Red Tiger Mechan (61,99,127,151,159,231,236) + Bygone Colossus (153,198,364) |
+
+`VERDICT: VALIDATED byte-equal (0 FAIL)`. Every one of the 20 games
+reached `stage=recast_done` with `warp_cast=True exiled=True
+recast=True` and stayed byte-equal Python-vs-Rust at every
+`step_both` / `advance_phase_python` along the full lifecycle. JSON
+`tmp/scout_r67_warp_cast_revalidation.json` (gitignored). The stale
+"20/20 byte-equal" claim is **confirmed honest and reproducible on
+current main** — no divergence, no papering-over required.
+
+### Verdict
+
+| Claim | Verdict |
+|---|---|
+| The explicit warp-CAST branch (`use_warp=True` → `cast_creature_warp` → `PHASE_END_STEP` exile sweep → recast-from-exile at normal cost) is byte-equal Python-vs-Rust in a REAL production-deck game for the Phase-1 pair | **YES — 20/20, re-validated on current `main` (`9f107160`).** 0 FAIL_DIVERGENCE / 0 FAIL_EXCEPTION; all 20 reached `recast_done`. |
+| This targeted driver is disjoint from and complementary to the round-68 broad collateral sweep | **YES — by construction.** Round 68 drives only base `cast_spell` (its strategy can't emit `use_warp`); this scout forces the warp branch the bench structurally cannot reach. Together = the full warp Phase-1 admit cover (r61 scout-then-sweep pair). |
+
+### Gate
+
+Pure salvage: 2 `scripts/scout_*.py` diagnostics
+(`scout_r67_warp_cast_realgame_lifecycle.py` +
+`scout_r67_warp_p1_carrier_archetypes.py`, both read-only — they
+reuse the production loader + `production_deck_to_deckspec`, modify
+no production / `_SAFE_*` / bench-script code) + this docs entry + 1
+gitignored `tmp/scout_r67_warp_cast_revalidation.json` artifact. The
+`bench_trajectory_parity.py` bench was not modified. **No production
+/ harness / `_SAFE_*` / bench-script / Rust code changed** (Rust
+untouched → no `maturin` required for the merge itself; the `.pyd`
+was rebuilt only to re-validate against current `main`). The full
+parity gate
+(`test_parity_smoke + test_cross_engine_etb_triggers +
+test_trajectory_parity + test_trajectory`, `--no-cov -n 4`) was run
+on the salvage worktree as the merge precondition (see the round-68
+baseline; unchanged by this docs+scout-only slice).
+
 ## Round 68 (2026-05-16) — post-warp-1.5 broad divergence sweep — CLEAN broad validation; the +5 warp-creature admit (Phase 1 + 1.5) surfaces 0 NEW cross-engine divergence over its full 294-archetype carrier surface
 
 The warp_cost substrate landed in two merges: **Phase 1**
