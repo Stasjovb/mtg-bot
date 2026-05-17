@@ -97,13 +97,33 @@
 //! CastSpell emission site gates on it (folded into the same
 //! `*_payable` boolean so the `seen_castspell` ordering is
 //! preserved). Parity-NEUTRAL by the same §4 subset-preserving
-//! argument. Both axes' deliberate identity sub-simplifications
-//! (the `eff()` cost-reduction seam; the conservative
-//! trivially-satisfiable branch for non-admitted targeted shapes)
-//! are recorded in `docs/SEARCH_LIMITATIONS.md`. **Residual
-//! divergence (still deferred):** additional non-mana costs
-//! (Slice 3 — `_additional_costs_payable` analog) + the non-live
-//! alt-cost axes (below).
+//! argument.
+//!
+//! **Additional-cost check — CLOSED (legal_decisions
+//! mana-awareness Slice 3).** Python additionally gates each
+//! CastSpell emission on `_additional_costs_payable`
+//! (`legal.py:117-165`, CR 601.2f/601.2h — a spell whose cast-time
+//! additional non-mana cost is unpayable is never enumerated). The
+//! 3 `additional_cost_*` flags are now on the Rust `CardPrinting`
+//! (parsed from the registry dict, back-compat default false), and
+//! the non-destructive `additional_costs_payable` predicate gates
+//! every live CastSpell emission site (folded into the same
+//! non-mana precondition var so the `seen_castspell` ordering is
+//! preserved). Live incidence is ZERO (all 4 EoE additional-cost
+//! cards are bridge-DECLINED — design §5 prediction) ⇒
+//! parity-NEUTRAL by construction; the full predicate is the
+//! faithful Python mirror + the single named extension point.
+//! All three axes' deliberate identity sub-simplifications (the
+//! `eff()` cost-reduction seam; the conservative
+//! trivially-satisfiable branch for non-admitted targeted shapes;
+//! the conservative-true additional-cost branch for the
+//! zero-live-incidence flags) are recorded in
+//! `docs/SEARCH_LIMITATIONS.md`. **Residual divergence (still
+//! deferred):** ONLY the non-live alt-cost axes (kicker / impending
+//! / granted-warp / Room-half / X — no Rust emission site at all;
+//! below). Every Python prune axis with a live Rust CastSpell
+//! emission site (mana / target / additional-cost) is CLOSED — the
+//! C1 SoT-flip keystone at the legal-decision-set level.
 //!
 //! **Deferred alt-cost flags.** Python's CastSpell loop emits up to
 //! four extra dicts per card for `kicked=True`, `use_warp=True`,
@@ -917,6 +937,157 @@ fn spell_targets_satisfiable(
     true
 }
 
+/// **legal_decisions mana-awareness Slice 3 — additional-cost prune
+/// (CR 601.2f/601.2h).** Returns `true` iff casting the spell printed
+/// by `printing_id`, with the source controlled by `controller_idx`,
+/// has its cast-time additional NON-mana costs payable RIGHT NOW.
+/// Mirrors Python `mtg_bot.legal._additional_costs_payable`
+/// (`src/mtg_bot/legal.py:117-165`) — the SoT — for the live
+/// bridge-admitted CastSpell surface.
+///
+/// **Python parity contract (verify-first, file:line precise).**
+/// Python's gate (`legal.py:124-165`) returns `False` iff ANY of:
+///   - `additional_cost_sacrifice_creature_or_artifact` AND the
+///     caster controls NO creature-or-artifact (`:124-131`).
+///   - `additional_cost_sacrifice_creature_or_enchantment` AND the
+///     caster controls NO creature-or-Enchantment (`:132-147`; an
+///     Aura is an Enchantment subtype — `"Enchantment" in
+///     card_types` catches it).
+///   - `additional_cost_choose_your_creature` AND the caster
+///     controls NO battlefield creature AND owns NO warped creature
+///     card in exile (`:148-164`).
+/// Otherwise `True` (no additional cost, or it is payable).
+///
+/// **Live-surface incidence is ZERO (verify-first, evidence-bound —
+/// the design doc §5 prediction realized).** All 4 EoE printings
+/// carrying any additional-cost flag (Embrace Oblivion / Scrounge
+/// for Eternity — sac creature-or-artifact; Final Vengeance — sac
+/// creature-or-enchantment; Close Encounter — choose-your-creature)
+/// are bridge-DECLINED by BOTH `_printing_is_bridge_simple_spell`
+/// and `_printing_is_bridge_simple_creature`, so NO card on any of
+/// the 6 live Rust CastSpell emission axes carries one. The three
+/// `printing.additional_cost_*` fields are therefore `false` for
+/// every live-surface card ⇒ this predicate is `true` for every
+/// live-surface card ⇒ it NEVER prunes a live emission ⇒ it is
+/// **parity-NEUTRAL by construction** (never narrower than Python —
+/// the single-script-replay §4 subset-preserving property, same as
+/// Slices 1–2's conservative-branch arguments). The full predicate
+/// is implemented anyway (NOT a stub) so it is the faithful Python
+/// mirror AND the single named extension point that fires correctly
+/// the instant an additional-cost card becomes bridge-admitted —
+/// honest-frontier discipline, not a diverging stub. Documented in
+/// `docs/SEARCH_LIMITATIONS.md`.
+fn additional_costs_payable(
+    state: &crate::state::GameState,
+    printing_id: u32,
+    controller_idx: usize,
+) -> bool {
+    let Some(printing) = state.registry.lookup(printing_id) else {
+        // Unknown printing — conservative: don't prune (never
+        // narrower than Python).
+        return true;
+    };
+    let none_flag_set = !printing
+        .additional_cost_sacrifice_creature_or_artifact
+        && !printing.additional_cost_sacrifice_creature_or_enchantment
+        && !printing.additional_cost_choose_your_creature;
+    if none_flag_set {
+        // The dominant (in fact, on the live surface, the ONLY) case:
+        // no additional cost ⇒ trivially payable (Python's implicit
+        // `return True` fall-through). Fast-path before any bf scan.
+        return true;
+    }
+    // "creature or artifact you control" (Python `:124-131`).
+    if printing.additional_cost_sacrifice_creature_or_artifact {
+        let have = state.players[controller_idx]
+            .battlefield
+            .iter()
+            .any(|o| {
+                state
+                    .registry
+                    .lookup(o.printing_id)
+                    .map(|p| {
+                        p.card_types
+                            .iter()
+                            .any(|t| t == "Creature" || t == "Artifact")
+                    })
+                    .unwrap_or(false)
+            });
+        if !have {
+            return false;
+        }
+    }
+    // "creature or enchantment you control" (Python `:132-147`; Auras
+    // count — `"Enchantment" in card_types`).
+    if printing.additional_cost_sacrifice_creature_or_enchantment {
+        let have = state.players[controller_idx]
+            .battlefield
+            .iter()
+            .any(|o| {
+                state
+                    .registry
+                    .lookup(o.printing_id)
+                    .map(|p| {
+                        p.card_types.iter().any(|t| {
+                            t == "Creature" || t == "Enchantment"
+                        })
+                    })
+                    .unwrap_or(false)
+            });
+        if !have {
+            return false;
+        }
+    }
+    // "a creature you control OR a warped creature card you own in
+    // exile" — either source satisfies (Python `:148-164`).
+    if printing.additional_cost_choose_your_creature {
+        let have_bf = state.players[controller_idx]
+            .battlefield
+            .iter()
+            .any(|o| {
+                state
+                    .registry
+                    .lookup(o.printing_id)
+                    .map(|p| {
+                        p.card_types.iter().any(|t| t == "Creature")
+                    })
+                    .unwrap_or(false)
+            });
+        if !have_bf {
+            // Python checks the OWNER's exile for a warped creature
+            // card the player owns (`legal.py:155-163`:
+            // `o.owner_id == player_id and o.warped and
+            // o.printing.is_creature`). Rust models exile per-player
+            // (`state.players[idx].exile`), so iterating
+            // `players[controller_idx].exile` IS the
+            // `owner_id == player_id` scoping (the same structural
+            // owner-via-zone shape the warp exile-recast loop at the
+            // bottom of `legal_decisions` uses — no separate `owner`
+            // field on `GameObject`). Mirror `warped` +
+            // `is_creature`.
+            let have_exiled = state.players[controller_idx]
+                .exile
+                .iter()
+                .any(|o| {
+                    o.warped
+                        && state
+                            .registry
+                            .lookup(o.printing_id)
+                            .map(|p| {
+                                p.card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                            })
+                            .unwrap_or(false)
+                });
+            if !have_exiled {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Build a `{"kind": "declare_attackers", "attacker_ids": [...]}` dict.
 /// Mirrors `actions.rs:action_to_pydict`'s `Action::DeclareAttackers`
 /// arm so a dict produced here round-trips through `parse_action` and
@@ -1298,9 +1469,28 @@ impl GameState {
             // `seen_castspell` add-on-emit ordering VERBATIM (the
             // §3.5.2 load-bearing rule — the insert still happens only
             // on the path that actually pushes).
-            let targets_ok =
-                spell_targets_satisfiable(self, obj.printing_id, idx);
-            let base_payable = targets_ok
+            //
+            // **legal_decisions mana-awareness Slice 3 —
+            // additional-cost prune (CR 601.2f/601.2h).** Python
+            // gates each CastSpell on `_can_cast` AND
+            // `_targets_are_satisfiable` AND `_additional_costs_-
+            // payable` (`legal.py:252-254` instant / `:383-385`
+            // sorcery). The non-mana-precondition is the conjunction
+            // of the target + additional-cost gates (same spell body
+            // for base & warp). On the live surface
+            // `additional_costs_payable` is `true` for every card (the
+            // 4 EoE additional-cost cards are bridge-DECLINED — design
+            // §5 verified-zero-incidence), so this is parity-NEUTRAL
+            // by construction; folding it into the SAME precondition
+            // var preserves the Slice-1 `seen_castspell` ordering.
+            let nonmana_ok =
+                spell_targets_satisfiable(self, obj.printing_id, idx)
+                    && additional_costs_payable(
+                        self,
+                        obj.printing_id,
+                        idx,
+                    );
+            let base_payable = nonmana_ok
                 && crate::state_ops_mana::can_pay_cost(
                     self,
                     idx,
@@ -1314,12 +1504,13 @@ impl GameState {
             // boolean across base+warp). The warp life gate
             // (`life > warp_additional_life_cost`) is preserved
             // verbatim (warp Phase 2 landed it; mirrors
-            // `legal.py:269`). The Slice-2 `targets_ok` precondition
-            // applies identically (same spell body) — Python's warp
-            // arm also `&& _targets_are_satisfiable` (`legal.py:267`).
+            // `legal.py:269`). The Slice-2+3 `nonmana_ok`
+            // precondition applies identically (same spell body) —
+            // Python's warp arm also `&& _targets_are_satisfiable &&
+            // _additional_costs_payable` (`legal.py:267-268`).
             let warp_payable = match printing.warp_cost.as_ref() {
                 Some(wc) => {
-                    targets_ok
+                    nonmana_ok
                         && (self.players[idx].life as i64)
                             > (printing.warp_additional_life_cost
                                 as i64)
@@ -1474,11 +1665,20 @@ impl GameState {
             // the instant-speed pass above (mirrors Python's
             // sorcery-speed `_can_cast(...) and
             // _targets_are_satisfiable(...)` at `legal.py:382-385`
-            // base / `:394-397` warp). Preserves the Slice-1
-            // `seen_castspell` add-on-emit ordering verbatim.
-            let targets_ok =
-                spell_targets_satisfiable(self, obj.printing_id, idx);
-            let base_payable = targets_ok
+            // base / `:394-397` warp). Slice 3 adds the
+            // `_additional_costs_payable` conjunct (`legal.py:385`
+            // base / `:398` warp) into the SAME `nonmana_ok`
+            // precondition — parity-NEUTRAL on the live surface (the
+            // 4 EoE additional-cost cards are bridge-DECLINED). The
+            // Slice-1 `seen_castspell` add-on-emit ordering preserved.
+            let nonmana_ok =
+                spell_targets_satisfiable(self, obj.printing_id, idx)
+                    && additional_costs_payable(
+                        self,
+                        obj.printing_id,
+                        idx,
+                    );
+            let base_payable = nonmana_ok
                 && crate::state_ops_mana::can_pay_cost(
                     self,
                     idx,
@@ -1487,7 +1687,7 @@ impl GameState {
                 );
             let warp_payable = match printing.warp_cost.as_ref() {
                 Some(wc) => {
-                    targets_ok
+                    nonmana_ok
                         && (self.players[idx].life as i64)
                             > (printing.warp_additional_life_cost
                                 as i64)
@@ -1584,6 +1784,17 @@ impl GameState {
             if !spell_targets_satisfiable(self, obj.printing_id, idx) {
                 continue;
             }
+            // **legal_decisions mana-awareness Slice 3 —
+            // additional-cost prune (CR 601.2f/601.2h).** Python's
+            // graveyard-warp loop also gates on
+            // `_additional_costs_payable` (`legal.py:460`). No
+            // graveyard-warp-castable card carries an additional cost
+            // (the 4 EoE additional-cost cards are bridge-DECLINED) so
+            // this returns `true` trivially; the faithful Python
+            // mirror + the single named extension point.
+            if !additional_costs_payable(self, obj.printing_id, idx) {
+                continue;
+            }
             actions.push(cast_spell_warp_dict(py, obj.id)?);
         }
 
@@ -1629,6 +1840,17 @@ impl GameState {
             // faithful Python mirror + the single named extension
             // point.
             if !spell_targets_satisfiable(self, obj.printing_id, idx) {
+                continue;
+            }
+            // **legal_decisions mana-awareness Slice 3 —
+            // additional-cost prune (CR 601.2f/601.2h).** Python's
+            // exile-recast loop also gates on
+            // `_additional_costs_payable` (`legal.py:488`). Both
+            // Phase-1 warp-exile cards carry no additional cost (the
+            // 4 EoE additional-cost cards are bridge-DECLINED) so this
+            // returns `true` trivially; the faithful Python mirror +
+            // the single named extension point.
+            if !additional_costs_payable(self, obj.printing_id, idx) {
                 continue;
             }
             actions.push(cast_spell_dict(py, obj.id)?);

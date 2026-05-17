@@ -5691,11 +5691,19 @@ boundary and per-game evidence on record".
 
 ---
 
-## Cross-engine legal-decision-set mana-payability asymmetry (PARTIALLY CLOSED — the mana axis CLOSED Slice 1, the target axis CLOSED Slice 2; residual = additional-cost/alt-cost axes)
+## Cross-engine legal-decision-set mana-payability asymmetry (LIVE-SURFACE CLOSED — mana axis Slice 1, target axis Slice 2, additional-cost axis Slice 3; residual = the non-live alt-cost axes only, no Rust emission site)
 
-**Status**: **PARTIALLY CLOSED.** The **mana-payability axis on the
-live CastSpell sites is CLOSED** by legal_decisions mana-awareness
-Slice 1 (2026-05-17, `feature/rust-legal-decisions-mana-slice1`;
+**Status**: **LIVE-SURFACE CLOSED.** All THREE Python prune axes —
+mana-payability, target-satisfiability, and additional-cost — are now
+CLOSED on the 6 live Rust CastSpell emission sites; the ONLY residual
+is the non-live alt-cost axes (kicker / impending / granted-warp /
+Room-half / X), which Rust does not emit AT ALL yet (the separate
+`state_ops_legal.rs:90-101` "Deferred alt-cost flags" surface — there
+is no Rust emission site for them, so there is no SET asymmetry on
+the live cast surface). On the live cast surface `RustCastSpellSet
+== PythonCastSpellSet`. The **mana-payability axis is CLOSED** by
+legal_decisions mana-awareness Slice 1 (2026-05-17,
+`feature/rust-legal-decisions-mana-slice1`;
 `docs/RUST_LEGAL_DECISIONS_MANA_AWARENESS_DESIGN.md`): the
 non-destructive `state_ops_mana::can_pay_cost` predicate (composing
 the already-byte-equal-pinned `pool_can_cover` +
@@ -5718,19 +5726,42 @@ matching `state_ops_resolve.rs` resolve arm uses (single source of
 truth), so Rust no longer emits a `cast_spell` for a spell whose
 targeted effect has zero legal targets. On the live cast surface
 `RustCastSpellSet == PythonCastSpellSet` for BOTH the mana and the
-target axes; Rust no longer emits a structurally-legal-but-un-payable
-NOR a structurally-legal-but-target-unsatisfiable cast. Both changes
+target axes. **The additional-cost axis on the live CastSpell sites
+is ALSO CLOSED** by legal_decisions mana-awareness Slice 3
+(2026-05-17, `feature/rust-legal-decisions-addcost`): the 3
+`additional_cost_*` flags (`..._sacrifice_creature_or_artifact` /
+`..._creature_or_enchantment` / `..._choose_your_creature`) are
+added to the Rust `CardPrinting` (parsed from the registry dict with
+the same back-compat `match get_item { Some => extract, None =>
+false }` shape as `warp_castable_from_graveyard`), and the
+non-destructive `state_ops_legal::additional_costs_payable`
+predicate — the Rust analog of Python `_additional_costs_payable`
+(`legal.py:117-165`, CR 601.2f/601.2h) — gates the SAME 6 live
+CastSpell emission sites. **Verified-zero live incidence (the design
+§5 prediction realized):** all 4 EoE printings carrying any
+additional-cost flag (Embrace Oblivion, Scrounge for Eternity, Final
+Vengeance, Close Encounter) are bridge-DECLINED by BOTH
+`_printing_is_bridge_simple_spell` and
+`_printing_is_bridge_simple_creature`, so the predicate is `true`
+for every live-surface card — it NEVER prunes a live emission ⇒
+parity-NEUTRAL by construction. The full predicate is implemented
+anyway (NOT a stub) so it is the faithful Python mirror AND the
+single named extension point that fires correctly the instant an
+additional-cost card becomes bridge-admitted. All three changes
 are parity-NEUTRAL under the current single-script-replay harness
 (design-doc §4 proof: each predicate is at-least-as-permissive as its
 Python twin — Slice 1 via the same `auto_tap_headroom_pool`, Slice 2
-via the same resolve-arm object filter — so every Python-sourced
-replayed action is still emitted by post-fix Rust). **Residual
-divergence (still ACCEPTED, the separate deferred surface):**
-(a) additional non-mana costs (Slice 3 — the
-`_additional_costs_payable` analog), (b) the non-live alt-cost axes
-(kicker / impending / granted-warp / Room-half / X — the separate
-`state_ops_legal.rs:90-101` "Deferred alt-cost flags" surface, no
-Rust emission site yet). The earlier history: this entry originally
+via the same resolve-arm object filter, Slice 3 via the
+zero-live-incidence conservative-true property — so every
+Python-sourced replayed action is still emitted by post-fix Rust).
+**Residual divergence (still ACCEPTED, the separate deferred
+surface):** ONLY the non-live alt-cost axes (kicker / impending /
+granted-warp / Room-half / X — the separate
+`state_ops_legal.rs:90-101` "Deferred alt-cost flags" surface; Rust
+emits NONE of these dicts AT ALL, so there is no live SET asymmetry —
+when those axes become Rust emission sites the Slice-1/2/3 predicates
+already compose via the designed `can_pay_cost` extension points,
+design doc §2.4/§2.5). The earlier history: this entry originally
 existed because `rust/src/state_ops_legal.rs:77-88` *claimed* the
 divergence was "Documented in `docs/SEARCH_LIMITATIONS.md`" with no
 such entry; the characterization + canonicalization pin landed
@@ -5774,19 +5805,24 @@ CastSpell target-satisfiability axis is now CLOSED too** (Slice 2,
 above): `state_ops_legal.rs:legal_decisions` gates every live
 CastSpell emission site on `spell_targets_satisfiable`, so it no
 longer emits a `cast_spell` dict for a spell whose targeted effect
-has 0 legal targets (CR 601.2c). **What remains a divergence** (the
-residual, still ACCEPTED): Rust still does NOT apply Python's
-*additional non-mana cost* prune (`_additional_costs_payable` —
-Slice 3) at the CastSpell emission sites, and the non-live alt-cost
-axes (kicker / impending / granted-warp / Room-half / X) are not yet
-Rust emission sites at all (the separate "Deferred alt-cost flags"
-surface). At a priority point where a hand card is mana-payable and
-target-satisfiable but has an unpayable additional cost, the two
-engines still present different legal-decision SETS (Python omits,
-Rust includes). (Rust DOES filter several structural axes at
-enumeration — the post-CE17 defender keyword, the mana axis, and now
-the target-satisfiability axis — so the residual is specifically the
-*additional-cost / non-live-alt-cost* axes, not "Rust never prunes".)
+has 0 legal targets (CR 601.2c). **The CastSpell additional-cost
+axis is now CLOSED too** (Slice 3, above):
+`state_ops_legal.rs:legal_decisions` gates every live CastSpell
+emission site on `additional_costs_payable` (reading the 3 new
+`CardPrinting.additional_cost_*` fields), so it no longer emits a
+`cast_spell` dict for a spell whose cast-time additional non-mana
+cost is unpayable (CR 601.2f/601.2h). **What remains a divergence**
+(the residual, still ACCEPTED): ONLY the non-live alt-cost axes
+(kicker / impending / granted-warp / Room-half / X) — Rust emits
+NONE of these dicts AT ALL yet (the separate "Deferred alt-cost
+flags" surface), so there is no SET asymmetry for them on the live
+cast surface (you cannot over-emit a dict you never emit). All three
+Python prune axes that DO have a live Rust emission site
+(mana-payability, target-satisfiability, additional-cost) are CLOSED.
+(Rust filters every structural axis Python does at enumeration — the
+post-CE17 defender keyword, the mana axis, the target-satisfiability
+axis, and the additional-cost axis — so the residual is specifically
+the *non-live-alt-cost* axes, not "Rust never prunes".)
 
 **Why it's OK (parity-benign by construction — the
 canonicalization)**: every cross-engine harness uses the
@@ -5872,27 +5908,58 @@ out of scope of this entry.
   `can_pay_cost` says {1}{B} IS payable in the closed-contract
   state, so that test prunes on the TARGET axis, not a coincidental
   mana-unaffordability.
+- `tests/test_cross_engine_legal_set_addcost.py` — 3 tests on a
+  minimal synthetic state (a {0}-cost no-target Instant FLAGGED
+  `additional_cost_sacrifice_creature_or_artifact` in p0's hand —
+  {0} cost so the Slice-1 mana gate trivially passes, no
+  spell_effect so the Slice-2 target gate trivially passes — the
+  additional-cost axis is the only pruner), **the CLOSED
+  additional-cost contract**: (1)
+  `..._closed_both_omit_unpayable` — with NO sacrificeable
+  creature/artifact the caster controls, **BOTH** Python and Rust
+  now omit the additional-cost-unpayable CastSpell
+  (NEGATIVE-CONTROL-VERIFIED: against a pre-Slice-3 engine this test
+  FAILS at exactly the documented divergence — Rust modeled no
+  additional-cost flag so emitted the un-payable `cast_spell`,
+  Python omitted; LOUD on a Rust additional-cost-gate / field-parse
+  regression); (2) `..._negative_control_both_emit` — over-prune
+  guard: with a sacrificeable creature seated, BOTH engines emit
+  exactly the base cast (proves `additional_costs_payable` is
+  at-least-as-permissive as `_additional_costs_payable`); (3)
+  `..._only_axis_under_test` — isolation guard: asserts the {0}
+  cost is payable AND the spell has no spell_effect, so the
+  closed-contract test prunes on the ADDITIONAL-COST axis, not a
+  coincidental mana- or target-unsatisfiability.
 
-**Fix scope estimate**: the mana axis (Slice 1) and the
-target-satisfiability axis (Slice 2) are **DONE**. The residual is
-Slice 3 (`_additional_costs_payable` analog — gating the same sites)
-+ the bundled alt-cost axes (kicker/impending/granted-warp/
-Room-half/X/restricted-coin/convoke — composes via the designed
-`can_pay_cost` extension points, design doc §2.4/§2.5). ALL must
-land before any NN-drives-Rust (SoT-flip) milestone (design doc §6).
-This entry is RETIRED only when Slice 3 + the alt-cost surface also
-close.
+**Fix scope estimate**: the mana axis (Slice 1), the
+target-satisfiability axis (Slice 2), AND the additional-cost axis
+(Slice 3) are **ALL DONE** — every Python prune axis with a live
+Rust CastSpell emission site is CLOSED. The ONLY residual is the
+non-live alt-cost axes (kicker/impending/granted-warp/Room-half/X/
+restricted-coin/convoke) — there is no Rust emission site for them
+yet (the separate "Deferred alt-cost flags" surface), so there is no
+live SET asymmetry; the Slice-1/2/3 predicates already compose via
+the designed `can_pay_cost` extension points (design doc §2.4/§2.5)
+when those axes become emission sites. The C1 SoT-flip keystone (the
+legal-decision-set correctness gate, design doc §6) is satisfied at
+the live-cast-surface level: Slices 1–3 are all green. This entry is
+RETIRED outright only when the alt-cost surface ALSO becomes a Rust
+emission site AND is gated (at which point there is zero residual);
+until then it stays as the LIVE-SURFACE-CLOSED record + the
+forward-extension-point contract.
 
 **Impact estimate**: zero on cross-engine trajectory parity
 (parity-NEUTRAL by the §4 single-script-replay proof — the existing
 gate + probe modules stay byte-equal; the deliverable is the
 flip-readiness correctness fix). Within the Rust engine the mana-gate
-(Slice 1) + target-satisfiability-gate (Slice 2) tighten
-`legal_decisions` (fewer wasted search visits on un-payable /
-un-targetable casts — a strength gain) and, critically, make Rust's
-enumeration *correct* for when it becomes the authoritative decision
-source at the SoT flip (the policy head no longer scores / PUCT no
-longer expands illegal-by-mana NOR target-unsatisfiable actions). No
+(Slice 1) + target-satisfiability-gate (Slice 2) +
+additional-cost-gate (Slice 3) tighten `legal_decisions` (fewer
+wasted search visits on un-payable / un-targetable /
+additional-cost-unpayable casts — a strength gain) and, critically,
+make Rust's enumeration *correct* for when it becomes the
+authoritative decision source at the SoT flip (the policy head no
+longer scores / PUCT no longer expands illegal-by-mana NOR
+target-unsatisfiable NOR additional-cost-unpayable actions). No
 Effect / bridge / `_SAFE_*` change; no `cards.rs` touch; bench-admit
 set + POOL_PARITY/PROBED headline untouched.
 
