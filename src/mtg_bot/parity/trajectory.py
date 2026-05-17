@@ -1877,6 +1877,79 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # differs, and ``mill``'s resolve is strictly simpler (single
     # zone move, no scalar/keyword rider).
     ("enters", "land_enters_controlled_by_you", "mill"),
+    # Landfall + put_plus_one_counter_on_self extension (round-59 N1
+    # — the sole remaining Seedship Agrarian blocker). Adds a FIFTH
+    # safe leaf effect under the canonical landfall predicate
+    # sentinel: ``put_plus_one_counter_on_self`` (bare shape — single
+    # ``amount`` payload key, see :data:`_SAFE_EFFECT_KEYS`
+    # "put_plus_one_counter_on_self" docstring). Exactly the same
+    # one-line-widen shape as the round-48 ``landfall+mill`` slice
+    # (Icetill Explorer) — only the leaf effect differs.
+    #
+    # **Real-EoE consumer admitted today: Seedship Agrarian's
+    # TRIGGER-2.** Seedship Agrarian (3/3 {3}{G},
+    # Creature — Insect Scientist) parses to TWO TriggeredAbilities:
+    #   (1) ``BECOMES_TAPPED / IsSelf / CreateToken(Lander)`` — the
+    #       FIRST trigger, admitted round-58 N1 by the BECOMES_TAPPED
+    #       event bridge + the
+    #       ``("becomes_tapped","source_is_self","create_token")``
+    #       entry below; genuine real-EoE probe byte-equal.
+    #   (2) ``ENTERS / land_enters_controlled_by_you /
+    #       PutPlusOneCounterOnSelf(1)`` — "Landfall — Whenever a land
+    #       you control enters, put a +1/+1 counter on this creature".
+    #       This is the ORTHOGONAL trigger-2 leaf the round-58 resync
+    #       narrowed Seedship's ``non_effect_blocker`` to: its sole
+    #       remaining residual. This entry admits it. With BOTH
+    #       triggers now round-tripping, Seedship Agrarian's FULL card
+    #       is byte-equal-admittable (it carries no keywords, no
+    #       carrier-side activated/static abilities, no warp/ward/
+    #       dynamic-P-T — every gate in
+    #       :func:`_printing_is_bridge_simple_creature` passes once
+    #       both trigger leaves ride the safe set).
+    #
+    # **Cross-engine parity contract (bare-shape self-counter).**
+    # ``put_plus_one_counter_on_self`` is event-agnostic and has been
+    # byte-equal-proven under ATTACKS/ENTERS/DIES since round-22/23 —
+    # this slice confirms it round-trips IDENTICALLY under the
+    # landfall ENTERS-on-land predicate (the predicate axis is
+    # orthogonal to the effect's resolve; the recognizer collapses
+    # the parser's ``And(Subject(IsLand), Controlled(YOU))`` to the
+    # same ``land_enters_controlled_by_you`` sentinel the shipped
+    # gain_life / pump_self / draw_cards / mill landfall leaves use).
+    # Bridge support pre-existed (round-56 N2 confirmed both the live
+    # Rust variant AND the wired bridge arm):
+    #   * Rust ``Effect::PutPlusOneCounterOnSelf { amount: i32 }``
+    #     (cards.rs:487, parsed cards.rs:4653, serialized
+    #     cards.rs:7179-7181, resolved at
+    #     state_ops_resolve.rs reading the ability's source by
+    #     ``source_obj_id``). Source not on a battlefield zone ->
+    #     silent no-op (mirrors Python's ``source is None`` early
+    #     return).
+    #   * Python ``PutPlusOneCounterOnSelf(amount: int = 1)``
+    #     (effects/generic/counters.py:784) reads
+    #     ``state.resolving_source`` and calls
+    #     ``add_plus_one_counters(state, source, amount)`` — bit-equal
+    #     resolve to Rust's source-walk-then-add.
+    #   * Bridge arm ``cross_engine._ta_dict_to_python_effect``
+    #     "put_plus_one_counter_on_self" (cross_engine.py:3899,
+    #     shipped round-22) maps the dict's ``amount`` (optional,
+    #     defaults to 1, rejects negative — same contract as Rust's
+    #     parse_effect) -> ``PutPlusOneCounterOnSelf(amount=amount)``.
+    #     The ``amount`` field name is IDENTICAL on BOTH sides
+    #     (Rust to_dict emits ``{"kind":...,"amount":<i32>}``; no
+    #     ``count``/``amount`` spelling discrepancy unlike mill/scry/
+    #     surveil) — strictly the simplest bridge shape, single
+    #     scalar payload, NO rider the bridge would silently drop
+    #     (contrast Surveil's ``use_artifact_count`` / PumpSelf's
+    #     ``granted_keywords`` / CreateToken's token-registration).
+    # The landfall predicate path itself is the SAME one round-36's
+    # landfall+gain_life (Eumidian Terrabotanist), round-37's
+    # landfall+pump_self (Icecave Crasher), and round-48's
+    # landfall+mill (Icetill Explorer) all validated bit-equal on
+    # both engines under the ENTERS dispatch — only the leaf effect
+    # differs, and ``put_plus_one_counter_on_self``'s resolve is a
+    # single in-place counter add with no scalar/keyword/zone rider.
+    ("enters", "land_enters_controlled_by_you", "put_plus_one_counter_on_self"),
     # ENTERS + source_is_self + mill substrate (round-48, sister to
     # the landfall+mill entry above on the source_is_self predicate
     # axis — mirrors how round-1's ENTERS+IsSelf leaf set carries
@@ -2242,6 +2315,28 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # ``granted_keywords``). The recognizer in
     # :func:`_python_ta_to_safe_dict` gates this whitelist.
     "mill": frozenset({"kind", "count"}),
+    # PutPlusOneCounterOnSelf — single ``amount`` payload key
+    # (round-59 N1, the sole remaining Seedship Agrarian blocker).
+    # Rust's ``Effect::PutPlusOneCounterOnSelf { amount: i32 }``
+    # (cards.rs:487, parsed cards.rs:4653, serialized to the dict
+    # ``{"kind": "put_plus_one_counter_on_self", "amount": <i32>}``
+    # at cards.rs:7179-7181) is bare: it adds ``amount`` +1/+1
+    # counters to the ability's source ("this creature"), the
+    # recipient always being ``state.resolving_source`` / Rust's
+    # ``source_obj_id`` walk — there is NO target picker and NO rider
+    # field on either side. Python's
+    # ``PutPlusOneCounterOnSelf(amount: int = 1)``
+    # (effects/generic/counters.py:784) carries the SAME single
+    # ``amount`` field with the SAME default; the existing
+    # ``put_plus_one_counter_on_self`` bridge arm
+    # (cross_engine.py:3899, shipped round-22) round-trips it with
+    # the field name IDENTICAL on both sides (no ``count``/``amount``
+    # spelling discrepancy unlike mill/scry/surveil). The bare
+    # ``amount`` payload is the only field — no rider the bridge
+    # would silently drop (contrast Surveil's ``use_artifact_count``
+    # or PumpSelf's ``granted_keywords``). The recognizer in
+    # :func:`_python_ta_to_safe_dict` gates this whitelist.
+    "put_plus_one_counter_on_self": frozenset({"kind", "amount"}),
     # CreateToken (round-49 N1 token-printing substrate, Phase 1) —
     # payload keys ``count`` + ``token_printing_id``. This is the
     # POST-SEATING dict shape: the recognizer
@@ -2653,6 +2748,7 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         YOU,
     )
     from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
     from mtg_bot.effects.generic.draw_mill import DrawCards
     from mtg_bot.effects.generic.life import GainLife
     from mtg_bot.effects.generic.library_lookat import (
@@ -2853,16 +2949,21 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             "left": {"kind": "subject_is_land"},
             "right": {"kind": "controlled_by_you"},
         }
-        # Round-48 widens the landfall arm from
+        # Round-48 widened the landfall arm from
         # {gain_life, pump_self_until_eot, draw_cards} to also include
-        # ``mill`` — admits the real EoE card Icetill Explorer
-        # (2/4 {2}{G}{G}, "Landfall — Whenever a land you control
-        # enters, mill a card"). See the
-        # ``("enters", "land_enters_controlled_by_you", "mill")``
-        # entry in :data:`_SAFE_TRIGGERS` for the full
-        # cross-engine-parity provenance.
+        # ``mill`` (Icetill Explorer). Round-59 widens it again to
+        # also include ``put_plus_one_counter_on_self`` — admits the
+        # real EoE card Seedship Agrarian's TRIGGER-2 ("Landfall —
+        # Whenever a land you control enters, put a +1/+1 counter on
+        # this creature"), the sole remaining blocker after round-58
+        # N1 bridged its BECOMES_TAPPED trigger-1. See the
+        # ``("enters", "land_enters_controlled_by_you",
+        # "put_plus_one_counter_on_self")`` entry in
+        # :data:`_SAFE_TRIGGERS` for the full cross-engine-parity
+        # provenance.
         safe_effect_kinds = (
             "gain_life", "pump_self_until_eot", "draw_cards", "mill",
+            "put_plus_one_counter_on_self",
         )
     if pred_dict is None:
         return None
@@ -2942,6 +3043,36 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         # cross-engine parity contract.
         eff_kind = "mill"
         eff_dict = {"kind": "mill", "count": int(eff.amount)}
+    elif isinstance(eff, PutPlusOneCounterOnSelf):
+        # Bare-shape PutPlusOneCounterOnSelf (round-59 N1 — the sole
+        # remaining Seedship Agrarian blocker). Python's
+        # ``PutPlusOneCounterOnSelf`` class
+        # (effects/generic/counters.py:784) carries a SINGLE
+        # ``amount`` field (default 1) — no rider the bridge would
+        # silently drop (contrast Surveil's ``use_artifact_count`` or
+        # PumpSelf's ``granted_keywords``). The recipient is ALWAYS
+        # the ability's source ("this creature") — no target picker
+        # on either side. The dict shape uses the IDENTICAL spelling
+        # ``amount`` on both engines (Rust's
+        # ``Effect::PutPlusOneCounterOnSelf`` to_dict emits
+        # ``{"kind": "put_plus_one_counter_on_self",
+        # "amount": <i32>}`` at cards.rs:7179-7181 — no
+        # ``count``/``amount`` discrepancy unlike mill/scry/surveil),
+        # round-tripped by the ``put_plus_one_counter_on_self``
+        # cross_engine bridge arm (cross_engine.py:3899, shipped
+        # round-22; event-agnostic + byte-equal-proven under
+        # ATTACKS/ENTERS/DIES). Negative amount is rejected by the
+        # bridge arm (mirrors Rust parse_effect); amount==0 is a
+        # silent no-op on both engines. See the
+        # ``("enters", "land_enters_controlled_by_you",
+        # "put_plus_one_counter_on_self")`` entry in
+        # :data:`_SAFE_TRIGGERS` for the full cross-engine parity
+        # contract.
+        eff_kind = "put_plus_one_counter_on_self"
+        eff_dict = {
+            "kind": "put_plus_one_counter_on_self",
+            "amount": int(eff.amount),
+        }
     elif isinstance(eff, CreateToken):
         # Round-49 N1 token-printing substrate, Phase 1 (bare rider) +
         # Phase 4 (round 50, the ``tapped`` rider). Fixed-single-token

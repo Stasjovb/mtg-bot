@@ -2980,11 +2980,19 @@ intentionally NOT cross-asserted).
 
 ---
 
-## BECOMES_TAPPED event bridge SHIPPED (round 58) — Seedship Agrarian narrowed: BECOMES_TAPPED→CreateToken half byte-equal, residual is the orthogonal landfall+1/+1 leaf (NOT token-registration)
+## BECOMES_TAPPED event bridge SHIPPED (round 58) + landfall+put_plus_one_counter_on_self SHIPPED (round 59) — Seedship Agrarian FULLY CLOSED: both triggers byte-equal, whole card admittable
 
 **Status**: this is NOT a divergence — it is a **closed campaign
-landmine** plus an honest residual narrowing. Documented here per the
-"document deliberate scope boundaries at the time they land" rule.
+landmine** that is now **FULLY RESOLVED** as of round 59. Round 58
+bridged the BECOMES_TAPPED event (trigger-1) and narrowed Seedship's
+residual to the orthogonal landfall+1/+1 leaf; **round 59 N1 closed
+that sole remaining leaf** (`put_plus_one_counter_on_self` added to
+the landfall safe set). Seedship Agrarian's WHOLE card is now
+byte-equal-admittable — both triggers round-trip and a genuine
+real-EoE probe drives the actual parsed printing through BOTH
+triggers byte-equal. Documented here per the "document deliberate
+scope boundaries at the time they land" rule; retained as a closed-
+landmine narrative (no remaining scope boundary for this card).
 
 **What shipped (round 58 N1).** `Event::BECOMES_TAPPED` is now a
 fully-bridged cross-engine event, round-tripping the SAME way
@@ -3064,32 +3072,59 @@ sites stay raw `obj.tapped = true` with no dispatch.
     be a divergent invention. Honest §2 decline; will be wired
     when/if the Rust crew/station substrate lands.
 
-**Seedship Agrarian — the residual is now NARROWED and RE-CLASSIFIED.**
+**Seedship Agrarian — FULLY CLOSED (round 59 N1).**
 The `docs/residue_worklist.json` `SeedshipAgrarian-landfall-composer`
-entry's `non_effect_blocker` was
+entry's `non_effect_blocker` was originally
 *"Event.BECOMES_TAPPED unbridged (§2-declined, no cross_engine.py
 bridge arm) + Lander token-registration substrate"*. Round 58
-discharges the FIRST half entirely (BECOMES_TAPPED is now bridged)
-**and a verify-first re-walk of the live parser shows the SECOND half
-was mis-stated**: Seedship's two triggers are
-(1) `BECOMES_TAPPED / IsSelf / CreateToken(Lander)` — NOW byte-equal
-cross-engine (the genuine probe drives the real parsed printing and
-asserts the Lander spawn is byte-equal up to the token-registration
-boundary), and (2) `Landfall — Whenever a land you control enters,
-put a +1/+1 counter on this creature` =
-`ENTERS / land_enters_controlled_by_you / PutPlusOneCounterOnSelf`.
-The full-card admit still fails (the loader filter requires EVERY
-trigger to round-trip), but the blocker is now precisely **trigger 2's
-`put_plus_one_counter_on_self` landfall leaf** — which is NOT in the
-landfall safe-leaf set (today: gain_life / pump_self_until_eot /
-draw_cards / mill) — a SEPARATE, already-known substrate gap. It is
-**NOT** the BECOMES_TAPPED event (closed) and **NOT** Lander
-token-registration (the existing round-49/53 create_token +
-`_seat_token_printings` machinery already handles the Lander token
-for the BECOMES_TAPPED trigger — the genuine probe proves the spawn
-byte-equal). For orchestrator fold: the BECOMES_TAPPED half of
-`SeedshipAgrarian-landfall-composer` is byte-equal; the residual is
-narrowed and re-pointed to the landfall+PutPlusOneCounterOnSelf leaf.
+discharged the FIRST half entirely (BECOMES_TAPPED bridged) and a
+verify-first re-walk showed the SECOND half was mis-stated (the
+existing round-49/53 create_token + `_seat_token_printings`
+machinery already handles the Lander token); the round-58 resync
+narrowed the residual to the sole orthogonal trigger-2 leaf
+`ENTERS / land_enters_controlled_by_you / PutPlusOneCounterOnSelf`
+(`put_plus_one_counter_on_self` was NOT in the landfall safe-leaf
+set: gain_life / pump_self_until_eot / draw_cards / mill).
+
+**Round 59 N1 closes that sole remaining leaf.** Exactly the same
+one-line-widen shape as the round-48 `landfall+mill` slice:
+- `("enters","land_enters_controlled_by_you",
+  "put_plus_one_counter_on_self")` added to `_SAFE_TRIGGERS`
+  (`src/mtg_bot/parity/trajectory.py`).
+- `_SAFE_EFFECT_KEYS` gains `"put_plus_one_counter_on_self" →
+  {kind, amount}` (bare; mirrors Rust's
+  `Effect::PutPlusOneCounterOnSelf { amount: i32 }` to_dict at
+  `cards.rs:7179-7181` — the `amount` field name is IDENTICAL on
+  both sides, NO rider the bridge drops).
+- `_python_ta_to_safe_dict` recognizes `PutPlusOneCounterOnSelf` and
+  widens the landfall `safe_effect_kinds` tuple to include it.
+
+§2 bridge-correctness: `put_plus_one_counter_on_self` is event-
+agnostic, has a live Rust variant + a wired bridge arm shipped
+round-22 (`cross_engine.py:3899`), and was byte-equal-proven under
+ATTACKS/ENTERS/DIES; the recipient is always the ability's source
+("this creature") — no target picker, single in-place counter add,
+no scalar/keyword/zone rider. It round-trips IDENTICALLY under the
+landfall ENTERS-on-land predicate (the predicate axis is orthogonal
+to the effect resolve — same predicate path round-36 gain_life /
+round-37 pump_self / round-48 mill validated bit-equal).
+
+**Both Seedship triggers now round-trip byte-equal → the WHOLE card
+is byte-equal-admittable.** `_printing_is_bridge_simple_creature`
+returns True for the genuine parsed printing; the production-deck
+loader admits all copies + auto-seats both triggers + the Lander
+token CardDef. A genuine real-EoE probe
+(`tests/test_parity_smoke.py::test_cross_engine_real_eoe_seedship_agrarian_both_triggers_full_card_parity`)
+drives the ACTUAL parsed printing through BOTH triggers
+(trigger-1 tap→Lander; trigger-2 land-play→+1/+1 counter) and
+asserts byte-equal whole-card cross-engine state (bf delta +3,
+counter count == 1, effective P/T 4/4, Lander untapped controller-0,
+life unchanged) up to the documented Lander token-registration
+boundary. **For orchestrator fold:** `SeedshipAgrarian-landfall-
+composer` moves from `blocked_non_effect` to **closed/admitted** —
+both Effects shipped+bridged AND the card's blocking non-Effect
+safe-leaf gap is now closed (the residual is fully discharged; there
+is no remaining non-Effect gate).
 
 **Pinned by**: 6 Rust regression pins
 (`tests/test_cross_engine_etb_triggers.py::test_r58_becomes_tapped_*`
@@ -3110,6 +3145,24 @@ asserted Seedship's Lander trigger must NOT round-trip — it was
 pinning the bug (no bridge arm existed); now inverted to assert it
 round-trips byte-equal with the full-card decline re-pointed to the
 orthogonal landfall leaf.
+
+**Round 59 N1 adds** (closing the landfall leaf): 9 trajectory-level
+pins (`tests/test_trajectory.py` — `_SAFE_TRIGGERS` /
+`_SAFE_EFFECT_KEYS` membership, `_is_safe_trigger_dict` admit +
+reject [under-DIES / under-ENTERS+source_is_self / extra-payload-key],
+`_python_ta_to_safe_dict` landfall round-trip + non-default-amount
+fidelity, real-EoE Seedship Agrarian end-to-end filter-admit asserting
+BOTH triggers round-trip → `_printing_is_bridge_simple_creature`
+True, `_printing_to_card_def` both-triggers carry-through); 4
+cross-engine bridge pins
+(`tests/test_cross_engine_etb_triggers.py::test_bridge_ta_landfall_put_plus_one_counter_*`
+— full triggered-ability round-trip of the landfall-composed
+combination, genuine-parser byte-equality, amount-default-to-1,
+non-default-amount preserved); 1 genuine real-EoE whole-card probe
+(`tests/test_parity_smoke.py::test_cross_engine_real_eoe_seedship_agrarian_both_triggers_full_card_parity`
+— drives the ACTUAL parsed printing through BOTH triggers byte-equal,
+proving the whole card admittable; supersedes the round-58 trigger-1-
+only probe in coverage scope, both retained).
 
 ---
 

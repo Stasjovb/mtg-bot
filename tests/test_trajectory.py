@@ -4131,6 +4131,291 @@ def test_printing_to_card_def_carries_landfall_mill_through():
     )
 
 
+# ===== Round-59 N1 landfall+put_plus_one_counter_on_self pins =====
+# The sole remaining Seedship Agrarian blocker (round-58 resync
+# narrowed its non_effect_blocker to this one leaf). Mirrors the
+# round-48 landfall+mill pin family exactly.
+
+
+def test_safe_triggers_set_carries_landfall_put_plus_one_counter_shape():
+    """Pin the landfall+put_plus_one_counter_on_self extension entry —
+    a future shrink would silently regress production-deck coverage of
+    Seedship Agrarian's TRIGGER-2 (the real EoE consumer this slice
+    admits, closing its sole remaining blocker). Sister of
+    ``test_safe_triggers_set_carries_landfall_mill_shape``.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_TRIGGERS
+
+    assert (
+        ("enters", "land_enters_controlled_by_you",
+         "put_plus_one_counter_on_self")
+        in _SAFE_TRIGGERS
+    )
+
+
+def test_safe_effect_keys_carries_put_plus_one_counter_on_self():
+    """The effect-payload key whitelist gains the
+    ``put_plus_one_counter_on_self`` arm with the single ``amount``
+    key (mirrors Rust's bare
+    ``Effect::PutPlusOneCounterOnSelf { amount: i32 }`` to_dict at
+    cards.rs:7179-7181 — the ``amount`` field name is IDENTICAL on
+    both sides, no rider the bridge would silently drop). Sister of
+    ``test_safe_effect_keys_carries_mill``.
+    """
+    from mtg_bot.parity.trajectory import _SAFE_EFFECT_KEYS
+
+    assert "put_plus_one_counter_on_self" in _SAFE_EFFECT_KEYS
+    assert _SAFE_EFFECT_KEYS["put_plus_one_counter_on_self"] == frozenset(
+        {"kind", "amount"}
+    )
+
+
+def test_is_safe_trigger_dict_admits_landfall_put_plus_one_counter():
+    """The full trigger-dict checker accepts a
+    landfall+put_plus_one_counter_on_self trigger built from the
+    canonical compound predicate shape and the bare ``amount``
+    payload — Seedship Agrarian's parser-emitted trigger-2 shape
+    (amount=1). Sister of
+    ``test_is_safe_trigger_dict_admits_landfall_mill``.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "put_plus_one_counter_on_self", "amount": 1},
+    })
+
+
+def test_is_safe_trigger_dict_rejects_put_plus_one_counter_under_dies():
+    """put_plus_one_counter_on_self under DIES is NOT in the safe set
+    today — no EoE consumer carries it and no slice has shipped it.
+    Pins the predicate-effect / event product gate from the negative
+    direction: this slice admits the leaf ONLY under the landfall
+    predicate, NOT under bare source_is_self or any other event.
+    Sister of ``test_is_safe_trigger_dict_rejects_mill_under_dies``.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "dies",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "put_plus_one_counter_on_self", "amount": 1},
+    })
+    # Also rejected under ENTERS+source_is_self (only the landfall
+    # predicate admits this leaf this slice — the
+    # ``("enters","source_is_self","put_plus_one_counter_on_self")``
+    # triple is deliberately NOT in _SAFE_TRIGGERS).
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "put_plus_one_counter_on_self", "amount": 1},
+    })
+
+
+def test_is_safe_trigger_dict_rejects_put_plus_one_counter_extra_key():
+    """Schema-strict on the put_plus_one_counter_on_self payload — an
+    extra key beyond {kind, amount} is rejected so a future schema
+    extension riding the same effect kind doesn't silently slip
+    through with the rider dropped on the cross-engine round trip.
+    Sister of
+    ``test_is_safe_trigger_dict_rejects_mill_with_extra_payload_key``.
+    """
+    from mtg_bot.parity.trajectory import _is_safe_trigger_dict
+
+    assert not _is_safe_trigger_dict({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {
+            "kind": "put_plus_one_counter_on_self",
+            "amount": 1,
+            "ghost_field": "x",
+        },
+    })
+
+
+def test_python_ta_to_safe_dict_round_trips_landfall_put_plus_one_counter():
+    """A Python ``TriggeredAbility`` carrying the parser-emitted
+    landfall predicate (``And(Subject(IsLand), Controlled(YOU))``) +
+    bare ``PutPlusOneCounterOnSelf`` round-trips to the canonical
+    compound dict shape with an ``amount`` payload (the ``amount``
+    field name is IDENTICAL on both engines — no count/amount spelling
+    discrepancy unlike mill/scry/surveil). The result satisfies
+    :func:`_is_safe_trigger_dict`. Sister of
+    ``test_python_ta_to_safe_dict_round_trips_landfall_mill``.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import (
+        And,
+        Controlled,
+        Event,
+        Subject,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.trajectory import (
+        _is_safe_trigger_dict,
+        _python_ta_to_safe_dict,
+    )
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=And(
+            left=Subject(slot=None, inner=IsLand()),
+            right=Controlled(by=YOU, subject=None),
+        ),
+        effect=PutPlusOneCounterOnSelf(amount=1),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d is not None
+    assert d == {
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "put_plus_one_counter_on_self", "amount": 1},
+    }
+    assert _is_safe_trigger_dict(d)
+
+
+def test_python_ta_to_safe_dict_preserves_put_plus_one_counter_amount():
+    """The recognizer preserves a non-default ``amount`` (a future
+    "Landfall — put 2 +1/+1 counters on this creature" carrier would
+    round-trip the count, not silently collapse to 1). Pins the
+    scalar-fidelity contract independent of any EoE consumer.
+    """
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import (
+        And,
+        Controlled,
+        Event,
+        Subject,
+        YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    ta = TriggeredAbility(
+        event=Event.ENTERS,
+        predicate=And(
+            left=Subject(slot=None, inner=IsLand()),
+            right=Controlled(by=YOU, subject=None),
+        ),
+        effect=PutPlusOneCounterOnSelf(amount=2),
+    )
+    d = _python_ta_to_safe_dict(ta)
+    assert d is not None
+    assert d["effect"] == {
+        "kind": "put_plus_one_counter_on_self",
+        "amount": 2,
+    }
+
+
+def test_simple_creature_filter_admits_real_eoe_seedship_agrarian():
+    """End-to-end gate: the parser-emitted Seedship Agrarian printing
+    (3/3 {3}{G}, BECOMES_TAPPED->CreateToken(Lander) +
+    "Landfall — Whenever a land you control enters, put a +1/+1
+    counter on this creature") now passes
+    :func:`_printing_is_bridge_simple_creature`. The BECOMES_TAPPED
+    half was bridged round-58 N1; this slice closes the orthogonal
+    landfall+put_plus_one_counter_on_self trigger-2 leaf — with BOTH
+    triggers round-tripping the FULL card is byte-equal-admittable.
+    The real EoE card this slice closes (its sole remaining blocker).
+    Sister of ``test_simple_creature_filter_admits_real_eoe_icetill_explorer``.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_creature,
+        _python_ta_to_safe_dict,
+    )
+
+    src = OracleParserCardSource()
+    seedship = src.get_printings().get("Seedship Agrarian")
+    assert seedship is not None, (
+        "Seedship Agrarian not in OracleParserCardSource — the parser "
+        "dropped it; the landfall+put_plus_one_counter_on_self "
+        "extension test cannot verify the production-deck unblock."
+    )
+    assert len(seedship.triggered_abilities) == 2
+    # BOTH triggers must individually round-trip (the safe-trigger
+    # filter requires EVERY trigger to be safe — pre-r58 the
+    # BECOMES_TAPPED trigger dropped the card; pre-r59 the landfall
+    # trigger did).
+    by_event = {
+        t.event: t for t in seedship.triggered_abilities
+    }
+    assert Event.BECOMES_TAPPED in by_event
+    assert Event.ENTERS in by_event
+    assert _python_ta_to_safe_dict(by_event[Event.BECOMES_TAPPED]) is not None
+    landfall_d = _python_ta_to_safe_dict(by_event[Event.ENTERS])
+    assert landfall_d is not None
+    assert landfall_d["effect"] == {
+        "kind": "put_plus_one_counter_on_self",
+        "amount": 1,
+    }
+    assert _printing_is_bridge_simple_creature(seedship) is True
+
+
+def test_printing_to_card_def_carries_seedship_agrarian_both_triggers():
+    """Seedship Agrarian's parsed printing converts to a CardDef whose
+    ``triggered_abilities`` carries BOTH the BECOMES_TAPPED->create_token
+    trigger (round-58) AND the canonical compound landfall dict shape
+    with the bare ``put_plus_one_counter_on_self`` payload (this
+    slice). Sister of
+    ``test_printing_to_card_def_carries_landfall_mill_through``.
+    """
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    src = OracleParserCardSource()
+    seedship = src.get_printings().get("Seedship Agrarian")
+    if seedship is None:
+        return
+    cd = _printing_to_card_def(seedship)
+    assert cd.card_type == "Creature"
+    assert len(cd.triggered_abilities) == 2
+    landfall = [
+        t for t in cd.triggered_abilities
+        if t.get("effect", {}).get("kind")
+        == "put_plus_one_counter_on_self"
+    ]
+    assert len(landfall) == 1, (
+        "Seedship Agrarian CardDef must carry exactly one "
+        "landfall+put_plus_one_counter_on_self trigger"
+    )
+    assert landfall[0] == {
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "put_plus_one_counter_on_self", "amount": 1},
+    }
+    # The other trigger is the round-58 BECOMES_TAPPED->create_token
+    # half (post-seating it carries a numeric token_printing_id; pre-
+    # seating a symbolic _token_card_def — assert just the event/kind).
+    bt = [
+        t for t in cd.triggered_abilities
+        if t.get("event") == "becomes_tapped"
+    ]
+    assert len(bt) == 1
+    assert bt[0]["effect"]["kind"] == "create_token"
+
+
 # ===== Round-49 N1 token-printing substrate (Phase 1) helper pins =====
 
 
@@ -4426,34 +4711,25 @@ def test_phase3a_lander_cluster_residue_stays_declined():
         with no recognizer arm (the create_token recognizer only
         handles the bare ``IsSelf`` predicate). Declined at the
         recognizer (``_python_ta_to_safe_dict`` returns None).
-      * **Seedship Agrarian** (14,078 decks) — **ROUND-58 NARROWED.**
-        Its FIRST trigger ``BECOMES_TAPPED + IsSelf + CreateToken
-        (Lander)`` NOW round-trips byte-equal: round-58 N1 shipped
-        the BECOMES_TAPPED event bridge (Rust ``Event::BecomesTapped``
-        emitted at every production tap site that mirrors Python's
-        ``turn.tap_permanent``; cross_engine bridge arm +
-        ``("becomes_tapped","source_is_self","create_token")``
-        ``_SAFE_TRIGGERS`` entry). The campaign landmine is closed —
-        the event is no longer unbridged. The carrier's FULL-card
-        admit STILL fails, but for a DIFFERENT, ORTHOGONAL reason
-        than the (now-resolved) BECOMES_TAPPED gap: its SECOND
-        trigger is ``Landfall — Whenever a land you control enters,
-        put a +1/+1 counter on this creature`` = ``ENTERS /
-        land_enters_controlled_by_you / PutPlusOneCounterOnSelf``.
-        The landfall predicate IS recognized, but
-        ``put_plus_one_counter_on_self`` is NOT in the landfall
-        safe-leaf set (today: gain_life / pump_self_until_eot /
-        draw_cards / mill — see the
-        ``("enters","land_enters_controlled_by_you",...)`` entries in
-        ``_SAFE_TRIGGERS``). So the residual is now precisely the
-        **landfall+PutPlusOneCounterOnSelf leaf** (a separate,
-        already-known substrate — NOT token-registration, which the
-        round-49/53 create_token + ``_seat_token_printings`` machinery
-        already handles for the BECOMES_TAPPED trigger). Since the
-        loader filter requires EVERY trigger to round-trip, the full
-        card stays declined on that landfall leaf. See
-        ``docs/SEARCH_LIMITATIONS.md`` "BECOMES_TAPPED event bridge"
-        for the honest split.
+      * **Seedship Agrarian** (14,078 decks) — **ROUND-59 N1: FULLY
+        CLOSED, NO LONGER DECLINED (asserted ADMITTED below).** Its
+        FIRST trigger ``BECOMES_TAPPED + IsSelf + CreateToken(Lander)``
+        round-trips byte-equal (round-58 N1 BECOMES_TAPPED event
+        bridge). Its SECOND trigger ``Landfall — Whenever a land you
+        control enters, put a +1/+1 counter on this creature`` =
+        ``ENTERS / land_enters_controlled_by_you /
+        PutPlusOneCounterOnSelf`` NOW also round-trips: round-59 N1
+        added ``put_plus_one_counter_on_self`` to the landfall
+        safe-leaf set (the one-line-widen sister of the round-48
+        landfall+mill slice). With BOTH triggers round-tripping the
+        WHOLE card is byte-equal-admittable
+        (``_printing_is_bridge_simple_creature`` returns True). This
+        carrier is retained in this pin's body as an INVERTED
+        assertion (round-39/53/56/58 inversion precedent) — it now
+        pins the ADMIT, not a decline. See
+        ``docs/SEARCH_LIMITATIONS.md`` "BECOMES_TAPPED event bridge +
+        landfall+put_plus_one_counter_on_self" for the full closure
+        narrative.
       * **Biotech Specialist** (5,058 decks) — a SECOND trigger
         (``IS_SACRIFICED + And + DealDamageToTargetOpponent``) does
         not round-trip; the filter requires every trigger to. Declined
@@ -4483,17 +4759,24 @@ def test_phase3a_lander_cluster_residue_stays_declined():
 
     sa = pr.get("Seedship Agrarian")
     if sa is not None:
-        # ROUND-58: the FULL card still doesn't admit, but the
-        # blocker MOVED. Pre-r58 it was the unbridged BECOMES_TAPPED
-        # event (the Lander trigger); r58 closed that. The full-card
-        # decline is now the ORTHOGONAL landfall+PutPlusOneCounterOnSelf
-        # SECOND trigger (a separate, already-known substrate gap).
-        assert _printing_is_bridge_simple_creature(sa) is False
+        # ROUND-59 N1 FULLY CLOSES Seedship Agrarian — INVERTED from
+        # the pre-r59 decline (round-39/53/56/58 inversion precedent:
+        # a pin that asserted the BUG is inverted to assert correct
+        # behavior once the bug is fixed). Pre-r58 the blocker was the
+        # unbridged BECOMES_TAPPED event (r58 closed that, narrowing
+        # the residual to the orthogonal landfall+1/+1 leaf); r59 N1
+        # closes that sole remaining leaf (put_plus_one_counter_on_self
+        # added to the landfall safe set). BOTH triggers now round-trip
+        # byte-equal → the WHOLE card is admittable.
+        assert _printing_is_bridge_simple_creature(sa) is True, (
+            "ROUND-59 N1: Seedship Agrarian's BOTH triggers now "
+            "round-trip byte-equal (trigger-1 BECOMES_TAPPED->Lander "
+            "bridged r58; trigger-2 landfall->put_plus_one_counter_"
+            "on_self admitted r59) — the whole card is admittable"
+        )
         # Trigger 0: "Whenever this creature becomes tapped, create a
-        # Lander token" — BECOMES_TAPPED + IsSelf + CreateToken. This
-        # NOW round-trips byte-equal (round-58 BECOMES_TAPPED event
-        # bridge). This is the inversion of the pre-r58 assertion (it
-        # was pinning the bug — there was no bridge arm; now there is).
+        # Lander token" — BECOMES_TAPPED + IsSelf + CreateToken
+        # (round-58 event bridge).
         lander_ta = next(
             t for t in sa.triggered_abilities
             if getattr(getattr(t, "effect", None), "token_printing", None)
@@ -4502,10 +4785,9 @@ def test_phase3a_lander_cluster_residue_stays_declined():
         )
         lander_sd = _python_ta_to_safe_dict(lander_ta)
         assert lander_sd is not None, (
-            "ROUND-58: Seedship Agrarian's Lander trigger is "
-            "BECOMES_TAPPED+IsSelf+CreateToken — the round-58 event "
-            "bridge makes it round-trip byte-equal (was the "
-            "campaign-landmine §2 decline; now closed)"
+            "Seedship Agrarian's Lander trigger is "
+            "BECOMES_TAPPED+IsSelf+CreateToken — round-trips byte-"
+            "equal (round-58 BECOMES_TAPPED event bridge)"
         )
         assert lander_sd["event"] == "becomes_tapped"
         assert lander_sd["predicate"] == {"kind": "source_is_self"}
@@ -4513,22 +4795,33 @@ def test_phase3a_lander_cluster_residue_stays_declined():
         assert lander_sd["effect"]["_token_card_def"].name == "Lander"
         # Trigger 1: the landfall +1/+1 — ENTERS +
         # land_enters_controlled_by_you + PutPlusOneCounterOnSelf.
-        # ``put_plus_one_counter_on_self`` is NOT in the landfall
-        # safe-leaf set, so this trigger does NOT round-trip — and
-        # since the loader filter requires EVERY trigger to, the full
-        # card stays declined HERE (the orthogonal residual, NOT the
-        # now-resolved BECOMES_TAPPED event).
+        # ROUND-59 N1: ``put_plus_one_counter_on_self`` is NOW a
+        # landfall safe leaf, so this trigger round-trips to the
+        # canonical compound dict shape with a bare ``amount`` payload
+        # (inversion of the pre-r59 None assertion — it was pinning
+        # the residual gap; now the gap is closed).
         landfall_ta = next(
             t for t in sa.triggered_abilities
             if type(t.effect).__name__ == "PutPlusOneCounterOnSelf"
         )
-        assert _python_ta_to_safe_dict(landfall_ta) is None, (
-            "Seedship Agrarian's landfall+PutPlusOneCounterOnSelf "
-            "trigger is the post-r58 residual — put_plus_one_counter_"
-            "on_self is not a landfall safe leaf, so it must NOT "
-            "round-trip (a SEPARATE substrate from the now-closed "
-            "BECOMES_TAPPED event bridge)"
+        landfall_sd = _python_ta_to_safe_dict(landfall_ta)
+        assert landfall_sd is not None, (
+            "ROUND-59 N1: Seedship Agrarian's landfall+"
+            "PutPlusOneCounterOnSelf trigger NOW round-trips — "
+            "put_plus_one_counter_on_self is a landfall safe leaf "
+            "(closed the sole remaining Seedship blocker; was the "
+            "post-r58 residual)"
         )
+        assert landfall_sd["event"] == "enters"
+        assert landfall_sd["predicate"] == {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        }
+        assert landfall_sd["effect"] == {
+            "kind": "put_plus_one_counter_on_self",
+            "amount": 1,
+        }
 
     bs = pr.get("Biotech Specialist")
     if bs is not None:
