@@ -3033,3 +3033,147 @@ full parity gate (`test_parity_smoke + test_cross_engine_etb_triggers
 on the fresh worktree as the merge precondition: **1426 passed** (the
 post-warp-1.5 baseline; unchanged by this docs+scout slice). No Rust
 → no `maturin`.
+
+## Round 69 (2026-05-16) — FAIL_TIMEOUT stall-anatomy: the ~53% drag is a turn-BUDGET mis-size, NOT a Rust-substrate gap — `--max-turns` default 25 → 60, parity-safe, FAIL_TIMEOUT 35→0% / 53→23% on the round-65 grid / broad sweep
+
+The standing ~53% FAIL_TIMEOUT drag (r62 133/240, r68 123/233) has
+been the campaign's single biggest non-divergence signal loss. Round
+65 quantified it as an **admit-count** problem (`< 3` admitted
+creature copies → "structural never-converter") and concluded the
+only lever was a multi-round TOKEN_PRINTING_SUBSTRATE Phase-3/5 Rust
+campaign — i.e. *expensive, Rust-side, deferred*. Round 66 then shipped
+`--require-creatures N` as a reporting-honesty relabel on top of that
+diagnosis.
+
+**That diagnosis was incomplete.** Round 65 measured WHICH decks time
+out (admit-count) but never measured WHERE inside a game it stalls.
+This round instruments the missing dimension and finds the dominant
+cause is something far cheaper to fix.
+
+### The missing instrumentation — per-turn stall anatomy
+
+`scripts/scout_timeout_stall_anatomy.py` reuses
+`bench_trajectory_parity`'s EXACT per-step primitives + the REAL
+production loader (it imports and calls the bench's own helpers — same
+trajectory as a real bench run) and records a per-turn snapshot so a
+FAIL_TIMEOUT can be dissected: life trajectory over time, board
+creature counts/power per side at the cap, action tally, and a
+**timeout classification** round 65 never produced:
+
+- `budget_progressing` — life still dropping in the last ≤4 sampled
+  turns (the game WOULD end with a bigger budget; the cap is the
+  cause).
+- `frozen_stalemate` — life totals flat for the entire sampled tail
+  (≥6 turns no change; raising the cap converts nothing — a genuine
+  structural stalemate).
+- `no_board` — neither side ever had a creature at the cap.
+
+### The finding (round-65 grid, archetypes 0,1,2,3,4,5,7,8,9,10,11,12,13,40,42 × seeds 0-3, ≤3-min wall)
+
+At the old default cap **25**, of 21 FAIL_TIMEOUT games:
+
+| Timeout class | Count | % of timeouts |
+|---|---:|---:|
+| **`budget_progressing`** (life STILL dropping, board on both sides) | **14** | **66.7%** |
+| `no_board` (cap-25 never-cast) | 7 | 33.3% |
+
+`avg flat_life_tail = 0` for every `budget_progressing` game — **zero
+stalemate**: life is decreasing every turn, both engines agree, the
+game simply ran out of turns. And the 7 `no_board` games were a
+cap-25 artifact too: at cap-40, 6 of the 7 either PASS or become
+`budget_progressing` (they draw into a castable creature given more
+turns) — only **1 genuine `frozen_stalemate`** (a 1/1-vs-1/1 mirror)
+remained, and even that converts by cap-60. The bridge-filtered
+near-creatureless mirror is **slow, not frozen**: 35% of ALL DECISIVE
+games on this grid finish *after* turn 25, the slowest at turn 60.
+Cap-25 was silently discarding ~1/3 of the available parity signal as
+"FAIL_TIMEOUT".
+
+### The fix — raise the bench `--max-turns` default 25 → 60
+
+Sized directly to the measured bridge-filtered-mirror deck speed (the
+slowest decisive game on the round-65 grid lands at turn 60; 97% by
+turn 50). One-line argparse-default change in
+`scripts/bench_trajectory_parity.py` (+ a data-justified comment, the
+docstring example, and the FAIL_TIMEOUT prose). Applies IDENTICALLY to
+both engines (it is a single shared loop bound, not per-engine state).
+
+### Before → after (the REAL `bench_trajectory_parity.py`, not the scout)
+
+Round-65 grid (15 archetypes × seeds 0-3 = 60 games):
+
+| Outcome | BEFORE (`--max-turns 25`) | AFTER (default 60) |
+|---|---:|---:|
+| PASS | 39 | **60** |
+| **FAIL_TIMEOUT** | **21 (35.0%)** | **0 (0.0%)** |
+| FAIL_DIVERGENCE | 0 | 0 |
+| **Parity verdicts (PASS+DIV)** | **39/60** | **60/60 (+54%)** |
+| Wall | 76.5s | 76.3s (flat) |
+
+Broad sweep (archetypes 0-29 × seeds 0-1 = 60 games — the canonical
+~53% drag grid):
+
+| Outcome | BEFORE (cap 25) | AFTER (cap 60) |
+|---|---:|---:|
+| PASS | 28 | **46** |
+| **FAIL_TIMEOUT** | **32 (53.3%)** | **14 (23.3%)** |
+| FAIL_DIVERGENCE | 0 | 0 |
+| **Parity verdicts** | **28/60** | **46/60 (+64%)** |
+| Wall | 78s | 81s (+4%, well under the ≤3-min budget) |
+
+All 18 broad converts went FAIL_TIMEOUT → **PASS** (0 →
+FAIL_DIVERGENCE — the timeouts were masking *clean* signal, not a
+hidden divergence). The residual 14 broad timeouts **all hit exactly
+turn 61** (the cap) — these are the genuine deep structural floor
+(frozen 1/1 mirrors / empty-board never-cast needing even more turns):
+the *true* round-65 residue, now an honest **23%** instead of a
+54%-polluted 53%.
+
+### Parity-safety — proven, not asserted
+
+`max_turns` is a pure upper bound on an otherwise-deterministic loop
+(checked only as `if py_state.turn_number > max_turns: FAIL_TIMEOUT;
+break`). Raising it can ONLY convert FAIL_TIMEOUT → PASS/DIVERGENCE; it
+**cannot** alter a game that already ended before the old cap.
+Verified empirically per-game on BOTH grids: of every game that
+COMPLETED (non-timeout) at cap-25 — 39 on the round-65 grid, 28 on the
+broad grid — **0 trajectory-shift violations** at caps 40 and 60
+(status, winner, win_reason, turns_played, actions_played,
+divergence_kind all byte-identical). **No pinned trajectory shifted**:
+every gate test calls `drive_one_game` with `max_turns` passed
+EXPLICITLY (the `MT` local constant / per-test value), so the argparse
+default is consumed only by the CLI `main()` — changing it is
+structurally invisible to the pinned suite (confirmed: full gate
+green, see Gate below). The new
+`test_r69_max_turns_raise_is_parity_safe_and_recovers_timeout_signal`
+pin locks the cap-invariance invariant (a RED-FLAG assertion if a
+completed game's trajectory ever shifts on a cap change) + the
+timeout→verdict recovery.
+
+### Relationship to round 65 / 66 (correction, not contradiction)
+
+Round 65's data was correct *as far as it measured* — the admitted-
+copy↔PASS correlation is real and the deep structural floor (now ~23%)
+IS the multi-round-substrate residue. What round 65 mis-attributed was
+the **magnitude**: it folded the slow-but-progressing 2/3 of timeouts
+into the "structural, needs Rust" bucket because it never measured the
+life trajectory. The Phase-3/5 substrate lever is still the right tool
+for the *residual* 23%; this round recovers the 30 points that were
+never a substrate problem at all. `--require-creatures N` (round 66)
+remains a valid orthogonal reporting-honesty knob; it is unaffected
+(default-off, passes `max_turns` explicitly in its own pin).
+
+### Gate
+
+1 bench-script change (`scripts/bench_trajectory_parity.py` —
+argparse `--max-turns` default 25 → 60 + justifying comment +
+docstring/prose sync; no logic change) + 1 read-only diagnostic
+(`scripts/scout_timeout_stall_anatomy.py`, reuses the bench's own
+primitives, modifies no production / `_SAFE_*` / bench-logic code) + 1
+regression pin
+(`test_parity_smoke.py::test_r69_max_turns_raise_is_parity_safe_and_recovers_timeout_signal`,
+above the `PHASE5_PROBES` sentinel) + this docs entry. Full parity
+gate (`test_parity_smoke + test_cross_engine_etb_triggers +
+test_trajectory_parity + test_trajectory`, `--no-cov -n 4`) **1449 →
+1450** (+1, the new pin; no regression — no pinned trajectory
+shifted). No Rust → no `maturin`.
