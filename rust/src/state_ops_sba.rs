@@ -116,6 +116,79 @@ use std::sync::Arc;
 // share these via a common module once the parallel-slice constraint
 // relaxes).
 const ZONE_GRAVEYARD: u8 = 3;
+const ZONE_BATTLEFIELD: u8 = 2;
+
+/// **BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner granted
+/// dies-rider honoring (module-private, re-derived here per the
+/// per-slice file-isolation rule rather than cross-calling the
+/// resolve module).**
+///
+/// Called from `apply_sbas` AFTER a freshly-destroyed creature has
+/// been moved to its owner's graveyard and its DIES/LEAVES dispatches
+/// have fired. If the dying object (now in the graveyard) carried a
+/// `UeotModifier::GrantedDiesReturnTapped` marker, move it back to
+/// its OWNER's battlefield, TAPPED, with its UEOT modifiers cleared
+/// (CR 603 granted delayed trigger + CR 400.7 new-object semantics —
+/// the returned permanent is a NEW object with no memory of the UEOT
+/// grant, so a second death this turn does not re-fire the rider).
+///
+/// Mirrors Python's `PerigeeBeckonerDiesReturnTappedEffect.resolve`
+/// (`effects/bespoke.py:2107`): the dying creature sits in its
+/// owner's graveyard; remove it, drop the layer-6 grant (Rust
+/// analogue: clear `ueot_modifiers`), put it back on the OWNER's
+/// battlefield (oracle: "under its owner's control", NOT the spell
+/// controller's), set `tapped = true`. Tokens cease to exist on
+/// death (CR 111.7) — the round-55 token-cease path already removed
+/// them, and this helper's graveyard-membership lookup makes the
+/// token case a natural no-op (the id is no longer in any graveyard).
+///
+/// `owner_id` is the controller the SBA loop pushed the dead object
+/// to its graveyard under (first-slice owner==controller
+/// convention, matching the bare SBA destroy path's CR 400.6
+/// note). Returns `true` iff a return-tapped actually happened.
+fn perigee_return_tapped_if_marked(
+    state: &mut GameState,
+    owner_id: u8,
+    obj_id: u32,
+) -> bool {
+    let oidx = owner_id as usize;
+    let pos = match state.players[oidx]
+        .graveyard
+        .iter()
+        .position(|o| o.id == obj_id)
+    {
+        Some(p) => p,
+        None => return false, // moved elsewhere / token-ceased → no-op
+    };
+    let carries_marker = state.players[oidx].graveyard[pos]
+        .ueot_modifiers
+        .iter()
+        .any(|m| matches!(
+            m,
+            crate::state::UeotModifier::GrantedDiesReturnTapped
+        ));
+    if !carries_marker {
+        return false;
+    }
+    let gy: &mut Vec<GameObject> =
+        Arc::make_mut(&mut state.players[oidx].graveyard);
+    let mut obj = gy.remove(pos);
+    // New-object semantics on the return (CR 400.7): clear the UEOT
+    // grant + every other UEOT modifier (the +P/+T pump rode WITH the
+    // marker; both are gone on the new object — mirrors Python's
+    // layer-6 grant-clear in PerigeeBeckonerDiesReturnTappedEffect +
+    // the returned object being a fresh GameObject with no UEOT push).
+    obj.ueot_modifiers.clear();
+    obj.zone = ZONE_BATTLEFIELD;
+    obj.controller = owner_id; // "under its owner's control"
+    obj.tapped = true; // "tapped"
+    obj.damage = 0;
+    obj.attached_to = None;
+    obj.exiled_with_source = None;
+    obj.etb_timestamp = crate::state::reserve_etb_timestamp(state);
+    Arc::make_mut(&mut state.players[oidx].battlefield).push(obj);
+    true
+}
 
 impl GameState {
     /// Read-only enumeration of creatures that should be destroyed by
@@ -270,6 +343,16 @@ impl GameState {
         }
         let victims = self.collect_sba_victims();
         let count = victims.len();
+        // BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner.
+        // Collect (owner, id) for every SBA-destroyed creature that
+        // carried the `UeotModifier::GrantedDiesReturnTapped` rider so
+        // it can be returned to its owner's battlefield TAPPED after
+        // the DIES/LEAVES dispatches fire (CR 603 granted delayed
+        // trigger — the dying creature is still an observer for its
+        // own dies/leaves trigger first, then the rider returns it,
+        // mirroring Python's by-reference move_off_battlefield ordering
+        // followed by the granted-trigger resolution).
+        let mut perigee_return_ids: Vec<(u8, u32)> = Vec::new();
         for (controller, obj_id) in victims {
             // Take the object out of its current battlefield. Search
             // both players (a creature's controller can differ from
@@ -317,6 +400,27 @@ impl GameState {
             obj.attached_to = None;
             let printing_id = obj.printing_id;
             let dying_obj_id = obj.id;
+            // BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner.
+            // Read the granted dies-rider marker BEFORE the object
+            // moves to the graveyard (the CR 400.7 reset above zeroes
+            // damage/tapped/attached but deliberately leaves
+            // `ueot_modifiers` intact — same as the bare pump arm;
+            // Python clears the layer-6 grant inside the bespoke
+            // dies-effect, not on move_off_battlefield). A non-token
+            // carrier is queued for return-tapped; tokens cease to
+            // exist (CR 111.7) so they're never returned (the round-55
+            // token-cease path + the helper's graveyard-membership
+            // check both make that a natural no-op).
+            let carries_perigee_rider = obj
+                .ueot_modifiers
+                .iter()
+                .any(|m| matches!(
+                    m,
+                    crate::state::UeotModifier::GrantedDiesReturnTapped
+                ));
+            if carries_perigee_rider {
+                perigee_return_ids.push((controller, dying_obj_id));
+            }
             // Push onto the controller's graveyard.
             let target = &mut self.players[controller as usize];
             Arc::make_mut(&mut target.graveyard).push(obj);
@@ -386,6 +490,21 @@ impl GameState {
         // Idempotent: if the LEAVES drain already emptied the queue
         // this is a zero-cost no-op.
         crate::state_ops_zones::drain_pending_token_cease(self);
+        // BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner.
+        // AFTER the DIES + LEAVES dispatches (the dying creature was an
+        // observer for its own dies/leaves trigger, and any OTHER
+        // creature's dies trigger that referenced it has already
+        // resolved) + the token-cease sweep, return each marked
+        // carrier to its owner's battlefield TAPPED. Order: post-drain
+        // so the rider acts on the fully-settled post-death state,
+        // mirroring Python's granted-trigger resolving off the stack
+        // after the death is processed. Tokens already token-ceased
+        // are a natural no-op (id no longer in any graveyard).
+        for (owner_id, dead_id) in
+            std::mem::take(&mut perigee_return_ids)
+        {
+            perigee_return_tapped_if_marked(self, owner_id, dead_id);
+        }
         Ok(count)
     }
 

@@ -247,6 +247,32 @@ pub enum UeotModifier {
     /// additive bonuses (`PowerToughnessBonus`) stack ON TOP of the
     /// set base, matching CR 613.7c.
     SetBasePT { power: i32, toughness: i32 },
+    /// **BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner's
+    /// granted dies-rider marker.** A UEOT-granted triggered ability
+    /// of the fixed shape "When this creature dies, return it to the
+    /// battlefield tapped under its owner's control" (CR 603 — a
+    /// granted delayed-ish DIES trigger). Pushed onto the pumped
+    /// target by `Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped`
+    /// alongside the `PowerToughnessBonus`.
+    ///
+    /// Rust has no general layer-6 grant-triggered-ability registry
+    /// (Python's `continuous_effects` `grant_triggered_ability` /
+    /// `game.effective_triggered_abilities`). Rather than building
+    /// that whole subsystem, this marker variant models exactly the
+    /// Perigee shape — a payload-free flag the SBA destroy path
+    /// (`state_ops_sba.rs`) honors: a creature carrying this marker
+    /// that is destroyed via SBA is returned from its owner's
+    /// graveyard back to its OWNER's battlefield, tapped, with its
+    /// UEOT modifiers cleared (new-object semantics — mirrors
+    /// Python's `PerigeeBeckonerDiesReturnTappedEffect.resolve` +
+    /// the layer-6 grant clear in `effects/bespoke.py:2147`). The
+    /// general nested-trigger-grant subsystem stays the loader-gated
+    /// multi-round half (see docs/SEARCH_LIMITATIONS.md round-60).
+    /// Auto-expires at the next CR 514.3 UEOT-clear pass like every
+    /// other `UeotModifier` — so a creature that survives the turn
+    /// loses the rider at cleanup, exactly as Python's EndOfTurn-
+    /// bounded `ApplyEffect(GrantTriggeredAbility(...))` does.
+    GrantedDiesReturnTapped,
 }
 
 /// **CE4 closure — reserve the next monotonic ETB timestamp.**
@@ -326,6 +352,9 @@ impl GameObject {
                 UeotModifier::BecomesLandCreature { .. } => {}
                 UeotModifier::GrantKeyword { .. } => {}
                 UeotModifier::SetBasePT { .. } => {}
+                // Round-60 Perigee dies-rider marker: no P/T effect
+                // (it only changes what happens on death).
+                UeotModifier::GrantedDiesReturnTapped => {}
             }
         }
         sum
@@ -341,6 +370,8 @@ impl GameObject {
                 UeotModifier::BecomesLandCreature { .. } => {}
                 UeotModifier::GrantKeyword { .. } => {}
                 UeotModifier::SetBasePT { .. } => {}
+                // Round-60 Perigee dies-rider marker: no P/T effect.
+                UeotModifier::GrantedDiesReturnTapped => {}
             }
         }
         sum

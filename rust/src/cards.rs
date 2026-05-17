@@ -1308,6 +1308,59 @@ pub enum Effect {
     /// modifier auto-expires at the next cleanup step via the r27
     /// CR 514.3 UEOT-clear pass.
     PumpTargetCreatureUntilEOT { power_bonus: i32, toughness_bonus: i32 },
+    /// **BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner ETB.**
+    /// "When this creature enters, until end of turn, ANOTHER target
+    /// creature you control gets +power/+toughness and gains 'When
+    /// this creature dies, return it to the battlefield tapped under
+    /// its owner's control.'" (~21,131 17lands decks.)
+    ///
+    /// This is the `granted_triggered_ability`-carrying shape of
+    /// `PumpTargetCreatureUntilEOT` that the bare round-28 arm
+    /// explicitly does NOT carry (see that variant's "Schema
+    /// simplification vs Python" doc-comment — the
+    /// `granted_triggered_ability` rider was deferred to a follow-up
+    /// slice; this IS that slice for the Perigee shape). Mirrors
+    /// Python's
+    /// `PumpTargetCreatureUntilEOT(power_bonus=2, you_control_only=
+    /// True, exclude_self=True, granted_triggered_ability=
+    /// TriggeredAbility(effect=PerigeeBeckonerDiesReturnTappedEffect(),
+    /// event=Event.DIES, predicate=IsSelf()))`.
+    ///
+    /// **Target semantics — first-slice deterministic, ANOTHER /
+    /// you-control.** Recipient = the FIRST creature on the source-
+    /// controller's battlefield (smallest Vec index) that is NOT the
+    /// source object itself (Perigee's "ANOTHER target creature you
+    /// control"). Empty / only-self → silent fizzle (mirrors Python's
+    /// `optional`-free `if not legal_targets: return`). Same
+    /// first-creature-on-own-bf scan `PumpTargetCreatureUntilEOT`
+    /// uses, plus the source-id exclusion.
+    ///
+    /// **Mechanism.** Pushes BOTH a `UeotModifier::PowerToughnessBonus
+    /// { power: power_bonus, toughness: toughness_bonus }` AND a
+    /// `UeotModifier::GrantedDiesReturnTapped` marker onto the chosen
+    /// target. The marker is honored by the SBA destroy path
+    /// (`state_ops_sba.rs`): if the carrier is destroyed via SBA it
+    /// is returned from its owner's graveyard to its OWNER's
+    /// battlefield, tapped, with UEOT modifiers cleared (CR 603 +
+    /// new-object semantics — mirrors Python's
+    /// `PerigeeBeckonerDiesReturnTappedEffect.resolve`). Both
+    /// modifiers auto-expire at the next CR 514.3 UEOT-clear pass, so
+    /// a target that survives the turn loses the rider at cleanup
+    /// exactly as Python's `EndOfTurn`-bounded grant does.
+    ///
+    /// **Honest split (round 60).** This closes the Effect half
+    /// byte-equal (pump + the fixed Perigee dies-return-tapped
+    /// rider). The GENERAL nested-trigger-grant subsystem (an
+    /// arbitrary granted triggered ability via a Rust layer-6
+    /// registry analogous to Python's `continuous_effects`
+    /// `grant_triggered_ability`) is the deferred multi-round half;
+    /// the full Perigee Beckoner card stays loader-gated (also
+    /// `warp_cost`, a §2-declined cost-mechanic). See
+    /// docs/SEARCH_LIMITATIONS.md round-60.
+    PumpTargetCreatureUntilEotGrantDiesReturnTapped {
+        power_bonus: i32,
+        toughness_bonus: i32,
+    },
     /// **BLOCKED-RUST-EFFECT slice — Fight effect arm.** "Target
     /// creature you control fights target creature an opponent
     /// controls" (CR 701.12). Both fighters deal damage equal to
@@ -5051,6 +5104,40 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             };
             Ok(Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus })
         }
+        "pump_target_creature_until_eot_grant_dies_return_tapped" => {
+            // BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner
+            // ETB. Same `power_bonus` / `toughness_bonus` schema as
+            // `pump_target_creature_until_eot` (both default to 0;
+            // negatives allowed for symmetry, though Perigee is +2/+0).
+            // The "another / you-control" target restriction and the
+            // granted dies-return-tapped rider are baked into the
+            // variant identity — no extra dict fields (the rider is
+            // the fixed Perigee shape, not a generic ability payload;
+            // the general nested-trigger-grant subsystem is the
+            // deferred half — see the variant doc-comment + round-60
+            // SEARCH_LIMITATIONS). Extra keys silently ignored for
+            // round-trip dict-shape consistency.
+            let power_bonus: i32 = match dict.get_item("power_bonus")? {
+                Some(p) => p.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "pump_target_creature_until_eot_grant_dies_return_tapped.power_bonus must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            let toughness_bonus: i32 = match dict.get_item("toughness_bonus")? {
+                Some(t) => t.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "pump_target_creature_until_eot_grant_dies_return_tapped.toughness_bonus must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 0,
+            };
+            Ok(Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped {
+                power_bonus,
+                toughness_bonus,
+            })
+        }
         "fight_target_creature_with_target_creature" => {
             // BLOCKED-RUST-EFFECT slice — Fight effect arm. Unit
             // variant; the bilateral source-creature-fights-opponent-
@@ -7313,6 +7400,21 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::PumpTargetCreatureUntilEOT { power_bonus, toughness_bonus } => {
             d.set_item("kind", "pump_target_creature_until_eot")?;
+            d.set_item("power_bonus", *power_bonus)?;
+            d.set_item("toughness_bonus", *toughness_bonus)?;
+        }
+        Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped {
+            power_bonus,
+            toughness_bonus,
+        } => {
+            // BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner.
+            // Round-trips the same two fields the parse arm reads; the
+            // another/you-control restriction + dies-return-tapped
+            // rider are variant-intrinsic (no extra keys).
+            d.set_item(
+                "kind",
+                "pump_target_creature_until_eot_grant_dies_return_tapped",
+            )?;
             d.set_item("power_bonus", *power_bonus)?;
             d.set_item("toughness_bonus", *toughness_bonus)?;
         }
