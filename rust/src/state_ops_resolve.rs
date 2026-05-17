@@ -6117,6 +6117,152 @@ fn apply_effect(
                 // early on empty legal_targets / non-creature).
             }
         }
+        // FocusFireEffect (Effect-uncovered Tier-A — Focus Fire). The
+        // FIRST effect-resolve arm to READ combat-declaration state.
+        // Mirrors Python's `FocusFireEffect.resolve` /
+        // `FocusFireEffect._amount` (`effects/bespoke.py:1784/1792`):
+        // deal `(base + |source-controller's creatures∪Spacecraft|)`
+        // damage to the first attacking-or-blocking creature.
+        //
+        // **The set-union denominator (the §2 subtle-divergence
+        // pin).** Walk the source-controller's bf ONCE; +1 for each
+        // obj whose `printing.card_types` contains "Creature" OR
+        // "Spacecraft". A dual-typed Artifact Creature Spacecraft is
+        // ONE `Vec` element → counts ONCE. This is NOT a sum of a
+        // creature-count and a spacecraft-count (that double-counts
+        // dual-typed permanents). BIT-FOR-BIT mirrors Python's
+        // `base + sum(1 for o in state.battlefield if o.controller_id
+        // == controller_id and (o.printing.is_creature or
+        // o.printing.is_spacecraft))` — the `or` is on the object.
+        //
+        // **The combat predicate (verify-first-confirmed byte-equal
+        // Python↔Rust).** A creature is attacking iff its id is in
+        // `state.attackers` (`Vec<u32>`); blocking iff its id appears
+        // as a `blocker_id` in `state.blockers` (`Vec<(attacker_id,
+        // blocker_id)>`). This is the EXACT pair `declare_attacker`
+        // (`state_ops_combat.rs:681`) / `declare_blocker` (`:772`)
+        // push and the multi-blocker cross-engine probes have proven
+        // byte-equal vs Python's `obj.attacking` /
+        // `obj.blocking is not None`. Python re-checks
+        // `_slot_target_still_legal` at resolve (CR 608.2b); if no
+        // creature is attacking-or-blocking the spell still resolves
+        // and the damage fizzles (silent no-op).
+        //
+        // **Target scan = deterministic-first across BOTH bfs in
+        // ETB-timestamp order** (Python's filter is NOT controller-
+        // restricted — `IsCreature ∧ (IsAttacking ∨ IsBlocking)`,
+        // ANY creature; the same `bf_iter_etb_sorted` +
+        // deterministic-first convention `DepressurizeEffect` `:5889`
+        // uses, the cross-engine spell-card-bridge `_PickFirstLegal
+        // TargetAgent` mirrors it). Damage applied via
+        // `obj.damage.saturating_add` (the `DealDamageAnyTarget`
+        // shape).
+        Effect::FocusFireEffect { base } => {
+            // Source-controller resolution (5-zone walk + stack scan;
+            // the established sister shape — `DealDamageToOpponent
+            // CreatureByCreaturesYouControl` `:7065`,
+            // `BiosynthicBurstEffect` `:6040`).
+            let mut src_controller: Option<u8> = None;
+            'ff_outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) =
+                        zone.iter().find(|o| o.id == source_obj_id)
+                    {
+                        src_controller = Some(obj.controller);
+                        break 'ff_outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source not found: silent fizzle
+            };
+            // Set-union denominator: ONE pass over the source-
+            // controller's bf; +1 if Creature OR Spacecraft (the `||`
+            // is on the object — a dual-typed obj is one Vec element,
+            // counts ONCE; NOT a two-scan sum).
+            let cidx = controller as usize;
+            let mut x: i32 = *base;
+            for obj in state.players[cidx].battlefield.iter() {
+                let Some(printing) = state
+                    .registry
+                    .printings
+                    .get(obj.printing_id as usize)
+                else {
+                    continue;
+                };
+                if printing
+                    .card_types
+                    .iter()
+                    .any(|t| t == "Creature" || t == "Spacecraft")
+                {
+                    x = x.saturating_add(1);
+                }
+            }
+            // Target = first attacking-or-blocking creature in ETB-
+            // timestamp order across BOTH bfs (NOT controller-
+            // restricted — Python's filter is ANY creature). Combat
+            // predicate: id in `state.attackers` OR id is a
+            // `blocker_id` in `state.blockers`.
+            let target: Option<(usize, u32)> = {
+                let attackers = &state.attackers;
+                let blockers = &state.blockers;
+                let registry = &state.registry;
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find_map(|obj| {
+                        let printing =
+                            registry.lookup(obj.printing_id)?;
+                        if !printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            return None; // not a creature
+                        }
+                        let is_attacking =
+                            attackers.contains(&obj.id);
+                        let is_blocking = blockers
+                            .iter()
+                            .any(|(_att, blk)| *blk == obj.id);
+                        if is_attacking || is_blocking {
+                            Some((obj.controller as usize, obj.id))
+                        } else {
+                            None
+                        }
+                    })
+            };
+            if let Some((pidx, target_id)) = target {
+                let amount_i16 = x.min(i16::MAX as i32) as i16;
+                let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                    &mut state.players[pidx].battlefield,
+                );
+                for obj in bf_mut.iter_mut() {
+                    if obj.id == target_id {
+                        obj.damage =
+                            obj.damage.saturating_add(amount_i16);
+                        break;
+                    }
+                }
+            }
+            // else: no attacking/blocking creature → silent fizzle
+            // (CR 608.2b — the spell resolves, damage is not dealt;
+            // Python's `_slot_target_still_legal` returns early).
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared
