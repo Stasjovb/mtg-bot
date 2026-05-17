@@ -1218,6 +1218,188 @@ def test_real_worklist_has_round56_reclassification():
         )
 
 
+# --------------- round-63 cross-entry card-status consistency
+#
+# These pin the round-63 guard: the first CROSS-entry arm. The
+# round-54/55/56 arms each judge one entry in isolation, leaving a
+# structurally-silent class — the same card carried `genuinely_missing`
+# in one row AND reclassified-out (`closed`/`blocked_non_effect`) in
+# another (the internal self-contradiction the round-54 re-walk had to
+# hand-fix: the audit's Mightform §2.6-vs-line-586 split). It recurs via
+# a same-round fold (close a card, forget to flip its still-gm row →
+# inflated load-bearing count). The guard must catch exactly that and
+# must NOT false-flag the legitimate same-status multi-row patterns the
+# worklist already uses. Same additive never-blocking hook contract.
+
+
+def test_card_status_conflict_gm_plus_closed_is_flagged():
+    """THE round-63 proof: a card carried `genuinely_missing` in one
+    row AND `closed` in another is internally self-contradictory —
+    flagged ``residue_card_status_conflict`` (the Mightform
+    §2.6-vs-line-586 split, recurring via a same-round fold)."""
+    mod = _load_tool()
+    entries = [
+        {
+            "card": "Foo Card",
+            "status": "genuinely_missing",
+            "entry": "foo-gm",
+        },
+        {
+            "card": "Foo Card",
+            "status": "closed",
+            "entry": "foo-closed",
+        },
+    ]
+    drifts = mod.compute_card_status_consistency(entries)
+    assert len(drifts) == 1
+    d = drifts[0]
+    assert d.key == "residue_card_status_conflict::Foo Card"
+    assert "Foo Card" in d.label
+    assert "CONFLICTING" in d.label
+    assert "foo-gm" in d.hint and "foo-closed(closed)" in d.hint
+    assert "load-bearing" in d.hint
+    # Renders as a plain CONFLICT line, not the numeric form.
+    assert d.line().startswith("  - CONFLICT:")
+    assert "doc-claimed" not in d.line()
+
+
+def test_card_status_conflict_gm_plus_blocked_non_effect_is_flagged():
+    """The same contradiction with the round-56
+    ``blocked_non_effect`` status (a fold reclassified one row to
+    blocked_non_effect but left the genuinely_missing row)."""
+    mod = _load_tool()
+    entries = [
+        {
+            "card": "Bar Card",
+            "status": "genuinely_missing",
+            "entry": "bar-gm",
+        },
+        {
+            "card": "Bar Card",
+            "status": "blocked_non_effect",
+            "entry": "bar-bne",
+        },
+    ]
+    drifts = mod.compute_card_status_consistency(entries)
+    assert [d.key for d in drifts] == [
+        "residue_card_status_conflict::Bar Card"
+    ]
+    assert "bar-bne(blocked_non_effect)" in drifts[0].hint
+
+
+def test_card_status_two_genuinely_missing_rows_not_flagged():
+    """The legitimate Lightstall-Inquisitor shape — two
+    ``genuinely_missing`` rows for one card = two distinct unshipped
+    arms — is NOT flagged (same status, not a contradiction)."""
+    mod = _load_tool()
+    entries = [
+        {
+            "card": "Lightstall Inquisitor",
+            "status": "genuinely_missing",
+            "entry": "CastFromExileWithCostHike",
+        },
+        {
+            "card": "Lightstall Inquisitor",
+            "status": "genuinely_missing",
+            "entry": "EachOpponentExilesFromHand",
+        },
+    ]
+    assert mod.compute_card_status_consistency(entries) == []
+
+
+def test_card_status_two_closed_rows_not_flagged():
+    """The legitimate kept-cron-regression-duplicate shape — two
+    ``closed`` rows for one card — is NOT flagged."""
+    mod = _load_tool()
+    entries = [
+        {
+            "card": "Monoist Circuit-Feeder",
+            "status": "closed",
+            "entry": "TwoMobileSubjects",
+        },
+        {
+            "card": "Monoist Circuit-Feeder",
+            "status": "closed",
+            "entry": "TwoMobileSubjects-residual",
+        },
+    ]
+    assert mod.compute_card_status_consistency(entries) == []
+
+
+def test_card_status_closed_plus_bne_no_gm_not_flagged():
+    """``closed`` + ``blocked_non_effect`` for one card WITHOUT any
+    ``genuinely_missing`` row is a legitimate progression artifact
+    (Seedship-style bne→closed), NOT the load-bearing contradiction —
+    the guard is tight and does not fire here."""
+    mod = _load_tool()
+    entries = [
+        {"card": "H Card", "status": "closed", "entry": "h-cl"},
+        {
+            "card": "H Card",
+            "status": "blocked_non_effect",
+            "entry": "h-bne",
+        },
+    ]
+    assert mod.compute_card_status_consistency(entries) == []
+
+
+def test_card_status_single_row_card_not_flagged():
+    """A card with a single row of any status cannot contradict
+    itself — not flagged."""
+    mod = _load_tool()
+    for st in ("genuinely_missing", "closed", "blocked_non_effect"):
+        entries = [{"card": "Solo", "status": st, "entry": "s"}]
+        assert mod.compute_card_status_consistency(entries) == []
+
+
+def test_card_status_three_way_conflict_one_row_per_card():
+    """Multiple distinct cards each independently in conflict each get
+    their own row (sorted by card for determinism); cards that are
+    consistent in the same batch are untouched."""
+    mod = _load_tool()
+    entries = [
+        {"card": "Zeta", "status": "genuinely_missing", "entry": "z1"},
+        {"card": "Zeta", "status": "closed", "entry": "z2"},
+        {"card": "Alpha", "status": "genuinely_missing", "entry": "a1"},
+        {
+            "card": "Alpha",
+            "status": "blocked_non_effect",
+            "entry": "a2",
+        },
+        # Consistent control — two gm rows, must NOT appear.
+        {"card": "Clean", "status": "genuinely_missing", "entry": "c1"},
+        {"card": "Clean", "status": "genuinely_missing", "entry": "c2"},
+    ]
+    drifts = mod.compute_card_status_consistency(entries)
+    keys = [d.key for d in drifts]
+    assert keys == [
+        "residue_card_status_conflict::Alpha",
+        "residue_card_status_conflict::Zeta",
+    ]
+    assert not any("Clean" in k for k in keys)
+
+
+def test_real_worklist_has_no_card_status_conflict():
+    """Structural-regression guard on the committed worklist: it is
+    internally consistent — no card mixes ``genuinely_missing`` with a
+    reclassified-out status (so the round-63 arm keeps the cron exit-0
+    in-sync on the real tree). The legitimate Lightstall double-gm and
+    the two Monoist closures must NOT trip it."""
+    mod = _load_tool()
+    entries = mod.parse_residue_worklist()
+    assert mod.compute_card_status_consistency(entries) == []
+
+
+def test_run_against_real_tree_in_sync_with_round63(capsys):
+    """End-to-end: the committed branch state keeps the cron exit-0
+    in-sync WITH the round-63 cross-entry arm wired into ``run()``."""
+    mod = _load_tool()
+    rc = mod.run()
+    out = capsys.readouterr().out
+    assert rc == 0, f"expected in-sync exit 0; report:\n{out}"
+    assert "in sync" in out
+
+
 # ------------------------------------------------------ drift + report
 
 
