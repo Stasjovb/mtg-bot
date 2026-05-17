@@ -304,31 +304,39 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main f881e1cd (continuous-pipeline cycle 2 — 4
-     Tier-A Effect-uncovered closes: Radiant Strike, Seedship
-     Impact, Orbital Plunge, Depressurize). Counts MOVED
-     +4/+4/0/0/0: rust_effect_variants 112->116
-     (DestroyTargetArtifactOrTappedCreature, SeedshipImpactEffect,
-     DealDamageToTargetCreatureWithExcessLanderRider,
-     DepressurizeEffect); bridge_arms 114->118 (the four
-     _ta_dict_to_python_effect kind arms). _SAFE_* UNCHANGED —
-     Tier-A closes are Effect+bridge, not trigger/keyword
-     allowlist moves. The 4 closes touched cards.rs/
+     Measured at main c44dfeb4 (continuous-pipeline cycle 3 —
+     spell-card-bridge lever Phase 1 REALIZED). Counts
+     UNCHANGED (116/118/21/12/9): Phase 1 is a single-target
+     Instant/Sorcery BENCH-ADMIT CARRIER (new cast_spell_-
+     noncreature + StackItem.target_obj_id + Gate A/B/B'/B''
+     + bidirectional bridge) reusing EXISTING Effect:: variants
+     — NOT a new Effect:: variant / _ta_dict kind arm / _SAFE_*
+     entry (cron confirmed no count drift; same shape as the
+     warp Phase 1 carrier precedent). It touched cards.rs/
      cross_engine.py -> cadence re-verify fired; the 7 still-
      genuinely-missing entries re-stamped
-     verified_absent_at_commit=f881e1cd (the 4 shipped Effects
-     are disjoint from all 7 residue Effect signatures —
-     absence preserved, no close). Honest residue still 6
-     distinct cards; Sothera-the-Supervoid flagged for the
-     next residue re-walk cadence (genuinely_missing-shaped,
-     2,108 decks, no planned substrate reaches it — NOT yet
-     a worklist entry). Pool-parity 298/475 -> 302/475
-     (62.7% -> 63.6%); PROBED 56 -> 60 (the 4 new genuine
-     real-EoE Tier-A probes); Effect-uncovered Tier-A bucket
-     drains 4 cards (31 -> 27). The full Instant/Sorcery of
-     each stays loader-gated — no spell-card-bridge yet;
-     Phase 1 is now ship-eligible, the dominant ~60k-deck
-     Rust lever. -->
+     verified_absent_at_commit=c44dfeb4 (Phase 1's live admit
+     set is EXACTLY {Radiant Strike, Depressurize} — disjoint
+     from all 7 residue Effect signatures; absence preserved,
+     no close). Honest residue still 6 distinct cards;
+     Sothera-the-Supervoid still flagged for the next residue
+     re-walk cadence (genuinely_missing-shaped, 2,108 decks,
+     NOT yet a worklist entry). Pool-parity UNCHANGED
+     302/475 (63.6%), PROBED 60 — the Phase 1 flip is
+     BENCH-ADMIT / loader-real-game-coverage dimension
+     (Radiant Strike + Depressurize loader-drop -> bench-
+     admit), NOT an Effect+bridge-metric move (same dimension
+     caveat as the warp admit / round-60 shockland; correctly
+     NOT double-counted). Seedship Impact / Orbital Plunge
+     positively DECLINED at the bridge (covered+bridged but
+     Rust parse_effect needs a Lander token_printing_id the
+     loader's spell path cannot seat — round-trip-or-bail
+     tooth, SEARCH_LIMITATIONS seam): a Lander-spell-token-
+     seating sub-substrate is the next dominant Rust lever
+     (~42,537 decks: Seedship 13,908 + Orbital 28,629).
+     Close Encounter DECLINED via the covered-set gate
+     (verify-first found the spec ADDENDUM stale: live
+     warp_cost is None, not "not None"). -->
 rust_effect_variants = 116
 bridge_arms = 118
 safe_triggers = 21

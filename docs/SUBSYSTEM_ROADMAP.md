@@ -301,6 +301,64 @@ second:
    >     re-walk cadence (genuinely_missing-shaped, 2,108 decks,
    >     no planned substrate reaches it — NOT yet a worklist
    >     entry; honest-residue discipline).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 3 —
+   >   spell-card-bridge Phase 1 REALIZED; resync @ `c44dfeb4`,
+   >   counts UNCHANGED 116/118/21/12/9, parity UNCHANGED
+   >   302/475).**
+   >   - **spell-card-bridge Phase 1 SHIPPED** (`c44dfeb4`, gate
+   >     1484 + 568 Rust tests) as ONE large Rust slice: a
+   >     single-target Instant/Sorcery BENCH-ADMIT CARRIER
+   >     (`cast_spell_noncreature` + `StackItem.target_obj_id` +
+   >     Gate A/B/B'/B'' + bidirectional bridge), reusing
+   >     existing Effect:: variants — bench-admit/loader-coverage
+   >     dimension, NOT an Effect+bridge-metric move (parity
+   >     correctly stays 302/475, same caveat as warp/round-60
+   >     shockland — not double-counted). **Live admit set =
+   >     EXACTLY `{Radiant Strike, Depressurize}`**; the guardrail
+   >     queries the live covered set so it AUTO-GROWS as Focus
+   >     Fire / Biosynthic Burst close. The lever-doc /
+   >     PHASE1_DESIGN are now REALIZED-history.
+   >   - **NEW DOMINANT Rust lever: a Lander-spell-token-seating
+   >     sub-substrate (~42,537 decks).** Phase 1 verify-first
+   >     positively DECLINED Seedship Impact (13,908) + Orbital
+   >     Plunge (28,629): both covered+bridged, but their Rust
+   >     `parse_effect` needs a Lander `token_printing_id` the
+   >     loader's spell path cannot seat (`_seat_token_printings`
+   >     only walks `triggered_abilities`) — declined via a
+   >     round-trip-or-bail tooth (no-fallback-hybrid avoided),
+   >     scoped as a SEARCH_LIMITATIONS seam. Seating that token
+   >     on the spell path flips both to bench-admit. **This is
+   >     now the highest-leverage Rust slice** — bigger than warp
+   >     Phase 2 (8,986) and Tier-C target-seating (18,855).
+   >   - **Close Encounter DECLINED** via the covered-set gate;
+   >     verify-first found the PHASE1 spec ADDENDUM stale (live
+   >     `warp_cost is None`, not "not None") — the robust gate
+   >     is "not covered+bridged", pinned.
+   >   - **Phantom lever STRUCK:** the round-65
+   >     `TOKEN_PRINTING_SUBSTRATE Phase-3/5` was carried as the
+   >     remedy for the ~53% broad-grid FAIL_TIMEOUT drag. The
+   >     round-70 per-game characterization REFUTES this — the
+   >     entire drag is a turn-budget mis-size (deck-out races
+   >     converging ~turn 108), 100% recoverable via
+   >     `--max-turns 120`, NONE of it a Rust-substrate ask. Do
+   >     NOT sequence any Rust round for FAIL_TIMEOUT. (Distinct
+   >     from the genuine Lander-SPELL-token-seating substrate
+   >     above — that is a bridge-admit unlock for Seedship/
+   >     Orbital, NOT a timeout remedy; do not conflate.)
+   >   - **Revised Rust sequencing (highest leverage first):**
+   >     (a) **Lander-spell-token-seating sub-substrate** (~42.5k,
+   >     NEW dominant); (b) Tier-A #5 Focus Fire / #6 Biosynthic
+   >     Burst (cheap, auto-join the now-built bridge admit set
+   >     on close; #5 mini-spec mandates verify-first of the Rust
+   >     attacking/blocking combat predicate); (c) warp Phase 2
+   >     (Timeline Culler, +8,986); (d) Tier-C target-seating
+   >     (2 cards/18,855); (e) Phase 2 Diplomatic Relations.
+   >     Aura remains struck.
+   >   - Carry-forward: Sothera-the-Supervoid still flagged for
+   >     the next residue re-walk; the SEARCH_LIMITATIONS
+   >     doc-wide "Headline counts" summary lags cycle-2/3 (a
+   >     resync/refresh-cadence bookkeeping line, per the cycle-2
+   >     SL audit — per-entry anchors are clean).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
