@@ -257,13 +257,25 @@ fn read_creature_status(state: &GameState, obj_id: u32) -> Option<(bool, bool)> 
 
 /// Read effective power for a battlefield creature, returning 0 for
 /// non-creatures or unknown ids. "Effective" =
-/// `printed_power + ueot_power_bonus` per CR 613 layer 7c additive
-/// stacking (round-27 UEOT framework). Counters do not yet feed into
-/// the power side (round-2's net-counter model is toughness-only —
-/// `state_ops_sba.rs` adds `obj.counters` to effective toughness,
-/// not to effective power; that asymmetry is intentional, mirroring
-/// Python's `effective_power` shape). Used by `deal_combat_damage`
-/// to size each side's contribution to the symmetric exchange.
+/// `base + ueot_power_bonus + obj.counters` per CR 613 layer 7c
+/// (UEOT additive bonuses) + 7d (the signed net +1/+1 / -1/-1
+/// counter scalar), byte-equal with the Python source of truth
+/// `mtg_bot.game._compute_effective_pt` (`p += obj.plus_one_counters
+/// - obj.minus_one_counters` at `game.py:2251`). Used by
+/// `deal_combat_damage` to size each side's contribution to the
+/// symmetric exchange.
+///
+/// **R74-1 / RUST_PARITY_GAPS I23 (closed).** Counters now feed the
+/// power side, matching `state_ops_sba.rs`'s `base_toughness +
+/// obj.counters + obj.ueot_toughness_bonus()` recipe and Python's
+/// layer-7d fold. The prior combat-side counter-omission asymmetry
+/// (documented-scoped under I23 with a "promote once a parity test
+/// demands it" trigger) was empirically demanded by the round-74
+/// bench sweep: Biosynthic Burst (the first bench-admitted card
+/// placing a combat-relevant +1/+1 counter) produced a 64/111
+/// `life_pX` divergence — Python dealt counter-adjusted power, Rust
+/// dealt base power. New code is right (written against the Python
+/// SoT); Python untouched.
 fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
         return 0;
@@ -295,7 +307,12 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
         .or_else(|| obj.and_then(|o| o.ueot_becomes_land_creature_pt()).map(|(p, _)| p))
         .unwrap_or(printed_base);
     let bonus = obj.map(|o| o.ueot_power_bonus()).unwrap_or(0);
-    let effective = base + bonus;
+    // CR 613 layer 7d: the signed net +1/+1 / -1/-1 counter scalar
+    // (`GameObject.counters`) folds equally into power and toughness
+    // (Python `_compute_effective_pt`, game.py:2251). Matches the
+    // SBA-side `base + obj.counters + ueot_toughness_bonus()` recipe.
+    let net_counters = obj.map(|o| o.counters).unwrap_or(0);
+    let effective = base + bonus + net_counters;
     // Saturate into i16 to match the existing return-shape contract;
     // a 32k+ effective power is unreachable on any real card.
     effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
@@ -346,21 +363,23 @@ pub(crate) fn battlefield_has_keyword(state: &GameState, obj_id: u32, keyword: &
 
 /// Read effective toughness for a battlefield creature, returning 0
 /// for non-creatures or unknown ids. "Effective" =
-/// `printed_toughness + ueot_toughness_bonus` per CR 613 layer 7c
-/// additive stacking (round-27 UEOT framework). Used by
+/// `base + ueot_toughness_bonus + obj.counters` per CR 613 layer 7c
+/// (UEOT additive bonuses) + 7d (the signed net counter scalar),
+/// byte-equal with the Python source of truth
+/// `mtg_bot.game._compute_effective_pt` (`t += obj.plus_one_counters
+/// - obj.minus_one_counters` at `game.py:2252`). Used by
 /// `deal_combat_damage` to size the deathtouch upgrade (the
 /// recipient's damage is bumped to at least this value).
 ///
-/// **Asymmetry note (intentional, pinned by test_combat.py).** This
-/// reader does NOT fold `obj.counters` into effective toughness, even
-/// though `state_ops_sba.rs::collect_sba_victims` DOES. Combat math
-/// in the round-5 + round-13 slices was sized off printed toughness;
-/// the counters-affect-combat path is deferred until a parity test
-/// explicitly demands it. UEOT bonuses fold in here because they
-/// otherwise have no consumer at combat time, defeating the
-/// PumpTargetCreatureUntilEOT proof (a +2/+2 attacker NEEDS the
-/// toughness math to size the deathtouch upgrade off the bumped
-/// value).
+/// **R74-1 / RUST_PARITY_GAPS I23 (closed).** This reader now folds
+/// `obj.counters` into effective toughness, matching
+/// `state_ops_sba.rs::collect_sba_victims`' `base_toughness +
+/// obj.counters + obj.ueot_toughness_bonus()` recipe and Python's
+/// layer-7d fold. The prior combat-side counter-omission asymmetry
+/// (documented-scoped under I23, "promote once a parity test demands
+/// it") was empirically demanded by the round-74 bench sweep — see
+/// `battlefield_creature_power` above. New code is right (Python
+/// SoT); Python untouched.
 fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
     let Some((player_idx, printing_id)) = locate_battlefield_obj(state, obj_id) else {
         return 0;
@@ -384,7 +403,11 @@ fn battlefield_creature_toughness(state: &GameState, obj_id: u32) -> i16 {
         .or_else(|| obj.and_then(|o| o.ueot_becomes_land_creature_pt()).map(|(_, t)| t))
         .unwrap_or(printed_base);
     let ueot_bonus = obj.map(|o| o.ueot_toughness_bonus()).unwrap_or(0);
-    let effective = base + ueot_bonus;
+    // CR 613 layer 7d: signed net +1/+1 / -1/-1 counter scalar folds
+    // equally into power and toughness (Python `_compute_effective_pt`,
+    // game.py:2252); matches the SBA-side recipe.
+    let net_counters = obj.map(|o| o.counters).unwrap_or(0);
+    let effective = base + ueot_bonus + net_counters;
     effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 
@@ -502,11 +525,12 @@ fn battlefield_creature_alive(state: &GameState, obj_id: u32) -> bool {
 impl GameState {
     /// **Round-27 UEOT framework: effective-power getter.** Returns
     /// the current effective power of a battlefield creature
-    /// (printing.power.unwrap_or(0) + sum of
-    /// `UeotModifier::PowerToughnessBonus.power` on the object's
-    /// `ueot_modifiers` Vec). Saturates into i16 to match the
-    /// combat-side return shape; `None` if the object isn't on a
-    /// battlefield or its printing has no `power` (non-creature).
+    /// (base + sum of `UeotModifier::PowerToughnessBonus.power` on
+    /// the object's `ueot_modifiers` Vec + the signed net
+    /// `obj.counters` scalar, CR 613 layer 7d — R74-1/I23 closed).
+    /// Saturates into i16 to match the combat-side return shape;
+    /// `None` if the object isn't on a battlefield or its printing
+    /// has no `power` (non-creature).
     ///
     /// Mirrors Python's `mtg_bot.game.effective_power(state, obj)`
     /// for tests + the parity-smoke harness. Combat readers
@@ -540,20 +564,22 @@ impl GameState {
 
     /// **Round-27 UEOT framework: effective-toughness getter.**
     /// Returns the current effective toughness of a battlefield
-    /// creature (printing.toughness + sum of
-    /// `UeotModifier::PowerToughnessBonus.toughness`). Saturates
-    /// into i16; `None` if the object isn't on a battlefield or
-    /// its printing has no `toughness` (non-creature).
+    /// creature (base + sum of
+    /// `UeotModifier::PowerToughnessBonus.toughness` + the signed
+    /// net `obj.counters` scalar, CR 613 layer 7d — R74-1/I23
+    /// closed). Saturates into i16; `None` if the object isn't on a
+    /// battlefield or its printing has no `toughness` (non-creature).
     ///
     /// Mirrors Python's `mtg_bot.game.effective_toughness(state,
     /// obj)`. The combat-side `battlefield_creature_toughness`
     /// returns the same number; this public getter wraps it.
-    /// NOTE: this getter does NOT fold in `obj.counters` (the
-    /// signed +1/+1 / -1/-1 net-counter contribution) — the
-    /// asymmetry matches `battlefield_creature_toughness`'s
-    /// combat-side shape and is pinned by `test_combat.py`. The
-    /// SBA-side `is_lethal` predicate DOES fold counters in; use
-    /// that for the lethal-damage view.
+    /// **R74-1 / I23 (closed):** this getter now folds in
+    /// `obj.counters` (the signed +1/+1 / -1/-1 net-counter
+    /// contribution, CR 613 layer 7d) byte-equal with Python's
+    /// `_compute_effective_pt` and the SBA-side `is_lethal`
+    /// predicate — the prior combat-side counter-omission asymmetry
+    /// is removed (empirically demanded by the round-74 bench
+    /// sweep; see `battlefield_creature_power`).
     fn effective_toughness(&self, obj_id: u32) -> Option<i16> {
         let (player_idx, printing_id) = locate_battlefield_obj(self, obj_id)?;
         let printing = self.registry.lookup(printing_id)?;

@@ -17330,13 +17330,18 @@ def test_bridge_double_target_creatures_power_reads_effective_power_with_counter
     effective_power_before``) is byte-equal cross-engine — i.e. both
     engines doubled the SAME snapshot (effective power 5, NOT base 3).
 
-    NOTE on the absolute getter: Rust's public ``effective_power``
-    getter has a SEPARATE, pre-existing, separately-documented
-    combat-side asymmetry (omits ``obj.counters`` from the displayed
-    value), so absolute numbers differ by the counter amount (Rust
-    3->8, Python 5->10). That is NOT the doubling mistranslation. The
-    §2-load-bearing invariant is the DELTA: +5 on BOTH engines.
-    Documented in docs/SEARCH_LIMITATIONS.md.
+    NOTE on the absolute getter: this test asserts only the DELTA
+    (``effective_power_after - effective_power_before``), which is +5
+    on BOTH engines regardless of the absolute-getter shape. (Stale
+    historical note, kept for context: pre-R74-1 Rust's public
+    ``effective_power`` getter omitted ``obj.counters`` so absolute
+    numbers differed by the counter amount — Rust 3->8, Python 5->10.
+    The round-74 R74-1 / RUST_PARITY_GAPS I23 slice CLOSED that
+    combat-side asymmetry: the getter now folds counters byte-equal
+    with Python, so absolute numbers AGREE — Rust 5->10, Python 5->10.
+    The delta invariant this test pins is unaffected either way; the
+    private ``read_doubling_power`` re-derivation was always
+    counter-inclusive.) Documented in docs/SEARCH_LIMITATIONS.md.
 
     Pre-round-53 this pin would FAIL: Rust's delta was +3 (base) while
     Python's was +5 (effective). The round-53 ``read_doubling_power``
@@ -18042,10 +18047,13 @@ def test_rust_famished_worldsire_greedy_all_lands_enter_tapped():
     # land's counter seed without the loader-gated Devour rider) so
     # ``read_famished_source_power`` reads base(0) + counters(3) = X=3
     # at resolve. This directly exercises the §2 counter-fold path
-    # (the round-53 Mightform `read_doubling_power` precedent —
-    # Rust's absolute `effective_power` getter omits counters; the
-    # Famished arm's private read folds them in to MATCH Python's
-    # `effective_power`/`_compute_effective_pt`).
+    # (the round-53 Mightform `read_doubling_power` precedent — the
+    # Famished arm's private read folds counters in to MATCH Python's
+    # `effective_power`/`_compute_effective_pt`). NOTE: the
+    # "Rust's absolute effective_power getter omits counters" premise
+    # was true pre-R74-1; the round-74 I23 slice closed that
+    # combat-side asymmetry (getter now folds counters). This private
+    # re-derivation is unaffected and stays correct.
     assert st.get_counters(fw_id) == 0
     assert st.set_counters(fw_id, 3) is True
     assert st.get_counters(fw_id) == 3
