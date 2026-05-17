@@ -5700,3 +5700,174 @@ def test_r57_real_cross_shape_multi_archetype_no_registry_conflict():
         )
     finally:
         clear_token_printings()
+
+
+# ===========================================================================
+# Phase-6 non-basic-land substrate — PHASE 1 (round-60 N1)
+# Spec: docs/NONBASIC_LAND_SUBSTRATE_PLAN.md §2/§3 (round-59 N2).
+# Admit the 5 EoE pay-life shocklands as untapped dual-mana lands; the
+# guardrail predicate MUST reject the other 18 non-basic-land-gated cards.
+# These are the §2 Class-1 guardrail's teeth — the negative pins are the
+# anti-count-chasing contract (round-38-E5 anti-pattern §2 prevents).
+# ===========================================================================
+
+# The 5 pay-life shocklands the live parser flattens to untapped dual
+# `produces` (verified round-60 against OracleParserCardSource). Each maps
+# to its sorted dual mana_produced tuple.
+_R60_NONBASIC_SHOCKLANDS = {
+    "Breeding Pool": ("G", "U"),
+    "Watery Grave": ("B", "U"),
+    "Stomping Ground": ("G", "R"),
+    "Godless Shrine": ("B", "W"),
+    "Sacred Foundry": ("R", "W"),
+}
+
+# The other 18 non-basic-land-gated cards the §2 guardrail MUST decline:
+#  - 5 Planet lands: enters_tapped=True + Station + activated ability
+#  - Secluded Starforge: no produces + 3 activated abilities
+#  - Cathedral of War: enters_tapped=True + Exalted static + no mana
+#  - Echoing Deeps: optional_copy_land_from_graveyard clone
+#  - 10 conditional painlands: enters_tapped_unless_any_player_life_at_most=13
+_R60_NONBASIC_DECLINE_18 = [
+    "Kavaron, Memorial World",
+    "Adagia, Windswept Bastion",
+    "Susur Secundi, Void Altar",
+    "Evendo, Waking Haven",
+    "Uthros, Titanic Godcore",
+    "Secluded Starforge",
+    "Cathedral of War",
+    "Echoing Deeps",
+    "Abandoned Campground",
+    "Bleeding Woods",
+    "Etched Cornfield",
+    "Lakeside Shack",
+    "Murky Sewer",
+    "Neglected Manor",
+    "Peculiar Lighthouse",
+    "Raucous Carnival",
+    "Razortrap Gorge",
+    "Strangled Cemetery",
+]
+
+
+@pytest.mark.parametrize("name", sorted(_R60_NONBASIC_SHOCKLANDS))
+def test_r60_nonbasic_mana_land_admits_each_shockland(name):
+    """`_printing_is_bridge_nonbasic_mana_land` accepts each of the 5
+    EoE pay-life shocklands — the live parser flattens "pay 2 life or
+    enter tapped" to a vanilla untapped dual, which the bridge carries
+    byte-equal on both engines (round-39 Ward precedent; documented
+    deliberate simplification in SEARCH_LIMITATIONS.md)."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_nonbasic_mana_land,
+    )
+
+    by = OracleParserCardSource().get_printings()
+    printing = by[name]
+    assert _printing_is_bridge_nonbasic_mana_land(printing) is True
+    # And it is genuinely non-basic (not double-counted by the basic arm).
+    assert "Basic" not in printing.supertypes
+
+
+@pytest.mark.parametrize("name", _R60_NONBASIC_DECLINE_18)
+def test_r60_nonbasic_mana_land_declines_the_other_18(name):
+    """The §2 guardrail's teeth: the predicate MUST reject every other
+    non-basic-land-gated card — Planet lands (real `enters_tapped`
+    inter-engine divergence + Station/AA §2 decline), Secluded
+    Starforge (no produces + activated abilities), Cathedral of War
+    (tapped + Exalted + no mana), Echoing Deeps (clone replacement),
+    and the 10 Duskmourn-shape conditional painlands
+    (`enters_tapped_unless_any_player_life_at_most`). Admitting any via
+    a bare supertype-gate widen would ship silent mistranslation."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_nonbasic_mana_land,
+    )
+
+    by = OracleParserCardSource().get_printings()
+    assert _printing_is_bridge_nonbasic_mana_land(by[name]) is False
+
+
+def test_r60_nonbasic_mana_land_exactly_five_pool_wide():
+    """No OTHER non-basic land in the entire merged parser pool passes
+    the guardrail — exactly the 5 shocklands, zero spillover. This pins
+    the §2-Phase-2 "the guardrail's negative set is exhaustive" claim
+    so a future pool regen that introduces a new mana-only nonbasic
+    fails loudly here rather than silently widening the admit set."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_nonbasic_mana_land,
+    )
+
+    by = OracleParserCardSource().get_printings()
+    passers = sorted(
+        nm for nm, p in by.items()
+        if _printing_is_bridge_nonbasic_mana_land(p)
+    )
+    assert passers == sorted(_R60_NONBASIC_SHOCKLANDS), passers
+
+
+@pytest.mark.parametrize(
+    "name,expected_mana", sorted(_R60_NONBASIC_SHOCKLANDS.items()),
+)
+def test_r60_printing_to_card_def_shockland_is_untapped_dual(
+    name, expected_mana,
+):
+    """`_printing_to_card_def(<shockland>)` → the EXACT shape the
+    basic-land arm produces (a "Land" CardDef whose `mana_produced` is
+    the sorted dual), just without the "Basic" supertype requirement.
+    No CardDef field change, no Rust change — the per-color mana-ability
+    auto-wire materializes two `{T}: Add <c>` on Python and a 2-element
+    `mana_produced` Vec on Rust, byte-equal."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    by = OracleParserCardSource().get_printings()
+    cd = _printing_to_card_def(by[name])
+    assert cd.name == name
+    assert cd.card_type == "Land"
+    assert cd.mana_produced == expected_mana
+    # The shockland CardDef carries no creature/ability fields — it is
+    # a pure mana source, structurally identical to a basic-land CardDef.
+    assert cd.power is None and cd.toughness is None
+    assert cd.triggered_abilities == ()
+    assert cd.keywords == ()
+
+
+def test_r60_nonbasic_shockland_admitted_by_production_loader():
+    """End-to-end EoE-pool delta pin: the production-deck filter
+    (`_filter_deck_to_bridge_supported`) now ADMITS all 5 shocklands
+    where `main` dropped them — the drop→admit flip that unblocks
+    +5 cards / +18,065 cumulative 17lands decks into the bench."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
+
+    by = OracleParserCardSource().get_printings()
+    deck = list(_R60_NONBASIC_SHOCKLANDS) + ["Forest", "Island"]
+    filtered, defs = _filter_deck_to_bridge_supported(deck, by)
+    for nm in _R60_NONBASIC_SHOCKLANDS:
+        assert nm in filtered, (
+            f"{nm} must be admitted by the production-deck loader "
+            f"(round-60 phase-1 unblock); got {filtered}"
+        )
+    by_name = {d.name: d for d in defs}
+    for nm, mana in _R60_NONBASIC_SHOCKLANDS.items():
+        assert by_name[nm].card_type == "Land"
+        assert by_name[nm].mana_produced == mana
+
+
+def test_r60_nonbasic_decline_traps_not_admitted_by_loader():
+    """The two highest-deck-count traps — Secluded Starforge (7,570
+    decks, activated abilities) and Kavaron (2,493 decks,
+    enters_tapped) — must NOT survive the production-deck filter. This
+    is the loader-level §2 anti-count-chasing pin (the highest-value
+    silent-mistranslation traps)."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
+
+    by = OracleParserCardSource().get_printings()
+    deck = ["Secluded Starforge", "Kavaron, Memorial World", "Forest"]
+    filtered, _ = _filter_deck_to_bridge_supported(deck, by)
+    assert "Secluded Starforge" not in filtered
+    assert "Kavaron, Memorial World" not in filtered
+    assert "Forest" in filtered  # control: a real basic still admits
