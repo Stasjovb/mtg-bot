@@ -3586,7 +3586,7 @@ battlefield divergence count drops to 0 — verified round-39).
 
 ---
 
-## 5 EoE pay-life shocklands admitted as plain untapped dual lands — `enters_tapped` / `pay-2-life` replacement dropped on BOTH engines (round-60 phase 1)
+## 5 EoE pay-life shocklands admitted as plain untapped dual lands — `enters_tapped` / `pay-2-life` replacement dropped on BOTH engines (round-60 phase 1; activated-mana-ability cross-engine divergence CLOSED round-62)
 
 **Where**: `src/mtg_bot/parity/trajectory.py:_printing_is_bridge_nonbasic_mana_land`
 (the new predicate, wired into `_filter_deck_to_bridge_supported` +
@@ -3611,46 +3611,80 @@ dual on BOTH engines — no pay-life decision, no tapped-entry, ever.
 
 **Why it's OK**: the drop is **symmetric** — the parser flattens the
 printing identically before either engine sees it, so Python and Rust
-materialize the *same* untapped dual and round-trip **byte-equal**
-(pinned: 3 cross-engine bridge pins build the real Stomping Ground /
-Watery Grave / Breeding Pool CardDefs and assert
-`compare_fields() == []`; 1 genuine real-EoE probe drives real
-17lands archetype 30 — which runs Stomping Ground + Watery Grave —
-through `attack_all` for ~10 turns divergence-free). The bench's
-`attack_all` strategy never makes the pay-life choice and never reads
-a land's tapped-state for a decision, so the simplification is inert
-under the coverage it unlocks. This is the **round-39 Ward
+materialize the *same* untapped dual and round-trip **byte-equal**.
+Pinned at two levels: (1) static — 3 cross-engine bridge pins build
+the real Stomping Ground / Watery Grave / Breeding Pool CardDefs and
+assert `compare_fields() == []`; (2) **activated** (round-62 N1, the
+level round-61 N3 showed was missing) — an activated-mana-ability
+cross-engine pin drives `activate_ability` for EACH color index of
+all 5 real shocklands on BOTH engines and asserts a byte-equal pool
+(see the ✅ CLOSED round-62 block below); plus 1 genuine real-EoE
+probe drives real 17lands archetype 30 (Stomping Ground + Watery
+Grave) through `attack_all` divergence-free. The bench's `attack_all`
+strategy never makes the pay-life choice and never reads a land's
+tapped-state for a decision, so the *replacement* simplification is
+inert under the coverage it unlocks. This is the **round-39 Ward
 precedent** exactly (`CardDef bridge filter drops creatures with
 dynamic_pt_formula / ward_cost`, this doc above): a rider the bridge
 drops symmetrically, bit-equal under the bench play strategy, shipped
 blocked-at-fidelity rather than as a latent inter-engine divergence.
+(The activated-mana-ability path itself was a real latent divergence
+until round-62 fixed it — see the CLOSED block below.)
 
-> **⚠ ROUND-61 N3 CORRECTION — the "byte-equal / it's OK" claim
-> above is FALSE on the activated mana-ability path; the round-60
-> admit currently ships a LATENT real-game cross-engine
-> divergence.** The round-60 byte-equality evidence was a STATIC
-> `compare_fields()` CardDef compare + an `attack_all` probe that
-> never activates a 2-color land's mana ability in a way that
-> exposes it. Round-61 N3's post-admit production-deck sweep (112
-> games over real shockland-bearing archetypes) found **4
-> FAIL_DIVERGENCE**, all the identical shape: the two
-> `mana_produced` mana-ability *bridges disagree* for a multi-color
-> land — Python's `_card_def_to_python_printing` builds **one mana
-> ability per color** (idx0=Add c1, idx1=Add c2); Rust's
-> `apply_mana_produced_bridge` (`rust/src/cards.rs`) builds **one
-> ability adding ALL colors** (`Sequence(Add c1, Add c2)`). So
-> `activate_ability(land, ability_index=0)` makes Python add 1
-> color while Rust adds BOTH → a spurious extra mana in the Rust
-> pool. Invisible before round-60 because basics are single-color
-> (the bridges agreed) and the round-60 pins were static-CardDef-
-> compare only. The shockland admit is therefore **NOT byte-equal-
-> validated at scale**; it is a real divergence pending the
-> **round-62 Rust fix** (make `apply_mana_produced_bridge` emit one
-> `is_mana_ability` ability per color — CR-correct + matches
-> Python; re-run round-61 N3 Sweep A → must reach 0 FAIL_DIVERGENCE
-> + add an activated-mana-ability cross-engine pin here). See
-> `docs/bench_trajectory_parity_smoke.md` round-61 entry for the
-> precise capture.
+> **✅ CLOSED round-62 (N1) — the activated-mana-ability path is
+> now BYTE-EQUAL-validated; the shockland admit no longer ships a
+> latent cross-engine divergence.** Round-61 N3 found the round-60
+> admit was NOT byte-equal on the activated mana-ability path: its
+> byte-equality evidence was only a STATIC `compare_fields()`
+> CardDef compare + an `attack_all` probe that never activated a
+> 2-color land's mana ability deep enough to expose it. N3's
+> post-admit production sweep (112 games) found **4 FAIL_DIVERGENCE**
+> of one shape: the two `mana_produced` mana-ability bridges
+> disagreed for a multi-color land — Python's
+> `_card_def_to_python_printing` builds **one mana ability per
+> color** (idx0=Add c1, idx1=Add c2); Rust's
+> `apply_mana_produced_bridge` (`rust/src/cards.rs`) built **one
+> ability adding ALL colors** (`Sequence(Add c1, Add c2)`), so
+> `activate_ability(land, 0)` made Python add 1 color while Rust
+> added BOTH → a spurious extra mana in the Rust pool. Invisible
+> before round-60 because every basic is single-color (the bridges
+> agreed) and the round-60 pins were static-CardDef-compare only.
+>
+> **Round-62 N1 fix**: rewrote `apply_mana_produced_bridge`
+> (`rust/src/cards.rs`) to emit **one `is_mana_ability`
+> `ActivatedAbility` per produced color**, in the SAME input order
+> Python iterates `mana_produced` (for shocklands that is the
+> `tuple(sorted(printing.produces))` alphabetical order
+> `trajectory._printing_to_card_def` builds), so
+> `activate_ability(land, k)` adds exactly the k-th color on BOTH
+> engines (CR-correct — the player chooses the color via the
+> ability index; Python was already correct). Single-color lands
+> (every basic) stay bit-identical (one ability, one color).
+>
+> **Validation (round-62 N1)**: round-61 N3's exact Sweep A
+> (arch 30,37,43,46,54,57,58,61,62,63,67,69,86,88 ×s0-3 = 56 games,
+> `attack_all`, max-turns 22) re-run post-fix → **4 → 0
+> FAIL_DIVERGENCE** (31 PASS / 0 DIV / 25 FAIL_TIMEOUT; the 3
+> ex-divergent Sweep-A games arch 37/s3, 46/s0, 69/s0 converted
+> DIV→PASS; the timeouts are the standing creatureless-mirror
+> limitation, unchanged — not a regression). Pinned by an
+> **activated-mana-ability cross-engine byte-equal pin**
+> (`tests/test_parity_smoke.py::test_r62_shockland_activate_ability_per_color_byte_equal_both_engines`,
+> parametrized over all 5 shocklands — drives `activate_ability`
+> for EACH color index on both engines and asserts byte-equal pool
+> + exactly the k-th single color, no spurious second color) plus a
+> direct byte-diff regression
+> (`test_r62_shockland_activate_idx0_no_spurious_second_color_rust`)
+> and 5 Rust per-color-shape regression pins
+> (`tests/test_cross_engine_etb_triggers.py::test_r62_rust_bridge_*`).
+> The shockland admit's activated-mana-ability path is therefore now
+> byte-equal-validated at scale. (The pay-life / tapped-entry
+> *replacement* drop remains a separate, symmetric shared
+> CR-incompleteness — see "Failure mode" / "Fix-scope" below, still
+> deferred to the Phase-3 `enters_tapped` substrate; the round-62
+> fix closes the cross-engine divergence, not the CR-fidelity gap.)
+> See `docs/bench_trajectory_parity_smoke.md` round-61 entry for the
+> original precise capture.
 
 The guardrail predicate POSITIVELY asserts the parser-flattened
 mana-only profile (non-basic Land, 1-2 produce colors, NO

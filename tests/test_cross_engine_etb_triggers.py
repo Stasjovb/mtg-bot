@@ -19601,5 +19601,193 @@ def test_bridge_perigee_pump_grant_dies_return_tapped_dies_return_parity():
         f"byte-equal Python's {py_back_pow}")
 
 
+# ===========================================================================
+# Round-62 N1 — Rust `apply_mana_produced_bridge` per-color-shape
+# regression pins. The bridge now emits ONE `is_mana_ability`
+# ActivatedAbility PER produced color (input order), matching Python's
+# `_card_def_to_python_printing`, instead of the pre-r62 ONE ability
+# adding ALL colors (`Sequence(Add c1, Add c2)`). Behavior-pinned via
+# `register_and_inject_object` + `activate_ability` (the Rust Registry
+# exposes no `printing_to_dict` introspection; observable pool state
+# after a per-index activate is the contract that matters and is the
+# exact axis round-61 N3's bench sweep diverged on).
+# ===========================================================================
+
+
+def _r62_rust_inject_land(rust_state, name, mana_produced):
+    """Inject one untapped Land with ``mana_produced`` onto p0's Rust
+    battlefield via the dict-input registry path (parse_printing ->
+    apply_mana_produced_bridge). Returns the obj id."""
+    ZONE_BATTLEFIELD = 2
+    return int(rust_state.register_and_inject_object(
+        {
+            "name": name,
+            "card_types": ["Land"],
+            "mana_cost": {},
+            "effects": [],
+            "mana_produced": list(mana_produced),
+            "supertypes": [],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    ))
+
+
+def _r62_fresh_rust_state():
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+    return build_rust_state(DeckSpec(card_defs=(), p0_library=(),
+                                     p1_library=()))
+
+
+def test_r62_rust_bridge_single_color_land_unchanged():
+    """Single-color land (every basic) stays bit-identical to pre-r62:
+    exactly ONE auto-wired mana ability at index 0 that adds the one
+    color. ``activate_ability(forest, 0)`` -> pool {G:1}; index 1
+    must NOT exist (no second per-color ability). Pins the
+    "no regression for basics" guarantee."""
+    import pytest as _pytest
+
+    rs = _r62_fresh_rust_state()
+    fid = _r62_rust_inject_land(rs, "Forest", ["G"])
+    rs.empty_mana_pool(0)
+    rs.apply_action({"kind": "activate_ability",
+                     "source_id": fid, "ability_index": 0})
+    pool = dict(rs.get_mana_pool(0))
+    assert pool.get("G", 0) == 1 and sum(pool.values()) == 1, pool
+    # A second per-color ability must NOT have been synthesized for a
+    # single-color land — the printing has EXACTLY ONE activated
+    # ability, so index 1 is out of range and Rust raises loudly
+    # (this is the strong proof the bridge didn't over-synthesize:
+    # a basic must never gain a phantom second mana ability).
+    fid2 = _r62_rust_inject_land(rs, "Forest", ["G"])
+    rs.empty_mana_pool(0)
+    with _pytest.raises(ValueError, match="no ability at index 1"):
+        rs.apply_action({"kind": "activate_ability",
+                         "source_id": fid2, "ability_index": 1})
+
+
+def test_r62_rust_bridge_two_color_land_one_ability_per_color_in_order():
+    """A 2-color land (Watery Grave B/U) gets TWO per-color mana
+    abilities in input order: index 0 adds ONLY B, index 1 adds ONLY
+    U — never the aggregate. This is the direct inversion of the
+    pre-r62 `Sequence(Add B, Add U)`-at-index-0 bug."""
+    rs = _r62_fresh_rust_state()
+    # index 0 -> only B
+    a = _r62_rust_inject_land(rs, "Watery Grave", ["B", "U"])
+    rs.empty_mana_pool(0)
+    rs.apply_action({"kind": "activate_ability",
+                     "source_id": a, "ability_index": 0})
+    p0 = dict(rs.get_mana_pool(0))
+    assert p0.get("B", 0) == 1 and p0.get("U", 0) == 0 \
+        and sum(p0.values()) == 1, (
+        f"idx0 must add ONLY B (not the Sequence); got {p0}")
+    # index 1 -> only U
+    b = _r62_rust_inject_land(rs, "Watery Grave", ["B", "U"])
+    rs.empty_mana_pool(0)
+    rs.apply_action({"kind": "activate_ability",
+                     "source_id": b, "ability_index": 1})
+    p1 = dict(rs.get_mana_pool(0))
+    assert p1.get("U", 0) == 1 and p1.get("B", 0) == 0 \
+        and sum(p1.values()) == 1, (
+        f"idx1 must add ONLY U; got {p1}")
+
+
+def test_r62_rust_bridge_order_follows_input_not_wubrgc():
+    """The per-color abilities follow the INPUT ``mana_produced``
+    order (= Python's `for color in card.mana_produced`), NOT a fixed
+    W/U/B/R/G/C slot order (which the pre-r62 aggregate code used
+    internally). Inject a land with ``mana_produced=["G","B"]`` (NOT
+    alphabetical): index 0 must add G (the first input symbol), index
+    1 must add B — proving order tracks the input list, so it stays
+    locked to whatever order Python iterates."""
+    rs = _r62_fresh_rust_state()
+    a = _r62_rust_inject_land(rs, "OrderProbe", ["G", "B"])
+    rs.empty_mana_pool(0)
+    rs.apply_action({"kind": "activate_ability",
+                     "source_id": a, "ability_index": 0})
+    assert dict(rs.get_mana_pool(0)).get("G", 0) == 1, "idx0 -> G"
+    b = _r62_rust_inject_land(rs, "OrderProbe", ["G", "B"])
+    rs.empty_mana_pool(0)
+    rs.apply_action({"kind": "activate_ability",
+                     "source_id": b, "ability_index": 1})
+    assert dict(rs.get_mana_pool(0)).get("B", 0) == 1, "idx1 -> B"
+
+
+def test_r62_rust_bridge_three_color_land_three_per_color_abilities():
+    """Generalizes past 2 colors: a hypothetical 3-color
+    ``mana_produced=["U","B","R"]`` land yields THREE per-color
+    abilities, each adding exactly its one color at its index — the
+    bridge is uniformly per-color, not special-cased to duals."""
+    rs = _r62_fresh_rust_state()
+    for idx, col in enumerate(("U", "B", "R")):
+        oid = _r62_rust_inject_land(rs, "TriProbe", ["U", "B", "R"])
+        rs.empty_mana_pool(0)
+        rs.apply_action({"kind": "activate_ability",
+                         "source_id": oid, "ability_index": idx})
+        pool = dict(rs.get_mana_pool(0))
+        assert pool.get(col, 0) == 1 and sum(pool.values()) == 1, (
+            f"idx{idx} must add ONLY {col}; got {pool}")
+
+
+def test_r62_rust_bridge_explicit_abilities_follow_per_color_entries():
+    """Explicit registry-supplied ``activated_abilities`` still land
+    AFTER the synthesized per-color mana abilities (the prepend
+    contract is preserved, just widened from 1 prepended entry to N).
+    A 2-color land with one extra explicit ability: indices 0,1 are
+    the per-color mana abilities (B then U); the explicit ability is
+    at index 2."""
+    ZONE_BATTLEFIELD = 2
+    rs = _r62_fresh_rust_state()
+    oid = int(rs.register_and_inject_object(
+        {
+            "name": "DualWithExtra",
+            "card_types": ["Land"],
+            "mana_cost": {},
+            "effects": [],
+            "mana_produced": ["B", "U"],
+            "supertypes": [],
+            "activated_abilities": [
+                {
+                    "cost": {"mana": {}, "tap_self": True},
+                    "effect": {"kind": "draw_cards", "count": 1},
+                    "is_mana_ability": False,
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    ))
+    # idx0 -> B (first per-color mana ability), idx1 -> U.
+    rs.empty_mana_pool(0)
+    rs.apply_action({"kind": "activate_ability",
+                     "source_id": oid, "ability_index": 0})
+    assert dict(rs.get_mana_pool(0)).get("B", 0) == 1
+    oid2 = int(rs.register_and_inject_object(
+        {
+            "name": "DualWithExtra",
+            "card_types": ["Land"],
+            "mana_cost": {},
+            "effects": [],
+            "mana_produced": ["B", "U"],
+            "supertypes": [],
+            "activated_abilities": [
+                {
+                    "cost": {"mana": {}, "tap_self": True},
+                    "effect": {"kind": "draw_cards", "count": 1},
+                    "is_mana_ability": False,
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    ))
+    rs.empty_mana_pool(0)
+    rs.apply_action({"kind": "activate_ability",
+                     "source_id": oid2, "ability_index": 1})
+    assert dict(rs.get_mana_pool(0)).get("U", 0) == 1, (
+        "idx1 must be the second per-color mana ability (U), proving "
+        "the explicit non-mana ability sits at idx2, not idx1")
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
