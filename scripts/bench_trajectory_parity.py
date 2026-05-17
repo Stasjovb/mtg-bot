@@ -372,6 +372,178 @@ def _advance_phase_with_compare(py_state, rust_state) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Round-59 N3 — review-gated Lander sac-activation harness step
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS (the round-55→58 standing question). The round-55 N2
+# Rust token-cease-to-exist SBA (CR 111.7 — a token leaving the
+# battlefield ceases to exist) is byte-pinned by the round-53 GENUINE
+# in-test probe
+# (``test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation``)
+# but has NEVER been validated in a real production-deck bench game.
+# Round-58 N3's 240-game sweep proved why: the EoE ``Lander`` token is
+# a NON-creature ``Token Artifact`` whose ONLY battlefield-exit is its
+# ``{2}, Sacrifice: SearchLibraryForBasicLandTapped`` activated
+# ability, and the bench emits ``activate_ability`` ONLY for mana-
+# tapping lands — so a Lander structurally NEVER leaves the
+# battlefield in a bench game (token-LEFT-bf 0/240) and the SBA never
+# fires. Round-58 N3 specified the exact minimal unlock: a review-
+# gated Lander ``{2},Sac`` activation harness step. This is it.
+#
+# SCOPING DISCIPLINE (deliberately narrow, NOT a general activator):
+#
+#   * It activates ONLY a ``Lander`` token's ability_index=0 (the
+#     ``{2},Sac:SearchLibraryForBasicLandTapped``). It is NOT a
+#     general "bench activates arbitrary abilities" change — that
+#     would alter bench combat/mana semantics broadly and is out of
+#     scope per round-58 N3's spec + the standing bridge-correctness
+#     discipline.
+#   * It is GATED behind an explicit opt-in (the ``activate_lander_sac``
+#     parameter / ``--activate-lander-sac`` CLI flag), DEFAULT-OFF, so
+#     the default bench / production self-play is byte-for-byte
+#     unchanged. This is a *validation* harness, not a behavior change.
+#   * It drives the IDENTICAL activation on BOTH engines via
+#     ``step_both`` (same source id, same ability index, no target —
+#     ``SearchLibraryForBasicLandTapped`` is untargeted; the search
+#     picks the topmost basic on both engines), exactly mirroring the
+#     proven in-test probe's recipe so the post-sac state is a FAIR
+#     cross-engine comparison:
+#       - ONE shared ``random.Random`` threaded into both engines
+#         (``py_state.rng`` + ``rust_state.set_external_rng``) so the
+#         round-54 post-search shuffle is byte-equal cross-engine
+#         (SEARCH_LIMITATIONS #15 closure recipe). Installed ONCE per
+#         game, lazily, only when the first Lander activation happens
+#         (so it never perturbs games that never see a Lander).
+#       - ``{2}`` colorless mana seeded SYMMETRICALLY into both pools
+#         (deterministic — not dependent on which lands auto-tap), the
+#         exact recipe
+#         ``test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation``
+#         proves produces a byte-equal post-state.
+#   * The Lander's ability goes on the stack (it is NOT a mana
+#     ability), so after ``step_both`` BOTH stacks are drained to the
+#     pre-activation floor (``resolve_top_of_stack_python`` /
+#     ``_rust``) and the field views re-compared — a divergence raises
+#     ``_DivergenceError`` exactly like every other bench step.
+
+
+# Per-game one-shot guard for the shared-rng install (the round-54
+# byte-equal post-search-shuffle recipe). Keyed by id(py_state) so a
+# fresh game (fresh state object) re-installs; we never want to leak a
+# shared stream across games.
+_LANDER_SAC_RNG_SEED = 0x5EED59  # round-59 fresh shared MT position
+
+
+def _try_activate_lander_sac(py_state, rust_state, _rng_installed: set) -> Optional[dict]:
+    """Round-59 N3 review-gated harness step (default-off; caller gates).
+
+    If the active player controls a ``Lander`` token on the
+    battlefield, deterministically drive its
+    ``{2},Sac:SearchLibraryForBasicLandTapped`` activation on BOTH
+    engines (identical action via ``step_both``), so the token leaves
+    the battlefield and the round-55 token-cease-to-exist SBA actually
+    fires in a real game. Returns the activation action dict on
+    success, or None when there is no Lander to sac / preconditions
+    aren't met.
+
+    Cross-engine fairness (mirrors the proven in-test probe):
+      * a single shared ``random.Random`` is installed into both
+        engines (once per game, lazily) so the post-search shuffle is
+        byte-equal (round-54 SEARCH_LIMITATIONS #15 recipe);
+      * ``{2}`` colorless mana is seeded symmetrically into both pools
+        so the cost payment is deterministic and identical (not
+        dependent on which lands auto-tap).
+
+    Raises ``_DivergenceError`` if the post-activation field views
+    diverge — the high-value find this harness exists to surface.
+    """
+    import random as _random
+
+    from mtg_bot.game import ManaCoin
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view,
+        compare_fields,
+        parity_smoke,
+        resolve_top_of_stack_python,
+        resolve_top_of_stack_rust,
+        step_both,
+    )
+
+    active = py_state.active_player_idx
+    lander = next(
+        (
+            o for o in py_state.battlefield
+            if o.controller_id == active
+            and o.printing.name == "Lander"
+            and getattr(o.printing, "is_token", False)
+            and not o.tapped
+        ),
+        None,
+    )
+    if lander is None:
+        return None
+    # The Lander's ability is untargeted (library search). Only drive
+    # it when a basic land actually exists to be searched on BOTH
+    # sides (no-match silently no-ops in the resolve, but driving it
+    # then is pointless noise; the byte-equal validation wants the
+    # full cost+search+shuffle+token-cease path exercised).
+    if not any(
+        getattr(c.printing, "is_basic_land", False)
+        for c in py_state.players[active].library
+    ):
+        return None
+
+    # Install the shared post-search-shuffle stream ONCE per game,
+    # lazily (only now that a real Lander activation is about to
+    # happen) so games that never see a Lander are byte-for-byte
+    # unaffected. Two ``random.Random(seed)`` at the same fresh MT
+    # position consume the identical ``_randbelow`` sequence -> byte-
+    # identical post-search library order (round-54 #15 closure).
+    key = id(py_state)
+    if key not in _rng_installed:
+        py_state.rng = _random.Random(_LANDER_SAC_RNG_SEED)
+        rust_state.set_external_rng(_random.Random(_LANDER_SAC_RNG_SEED))
+        _rng_installed.add(key)
+
+    # Seed {2} colorless mana symmetrically on both engines — the
+    # exact deterministic recipe the in-test probe proves byte-equal.
+    py_state.players[active].mana_pool.clear()
+    py_state.players[active].mana_pool.append(ManaCoin(color="C"))
+    py_state.players[active].mana_pool.append(ManaCoin(color="C"))
+    rust_state.empty_all_mana_pools()
+    rust_state.add_mana(active, "C", 2)
+
+    lander_id = int(lander.id)
+    py_stack_floor = len(getattr(py_state, "stack", ()))
+    rust_stack_floor = rust_state.stack_size()
+    action = {
+        "kind": "activate_ability",
+        "source_id": lander_id,
+        "ability_index": 0,
+    }
+    s = step_both(py_state, rust_state, action)
+    if s.divergences:
+        raise _DivergenceError(action, s.divergences)
+    # The Lander's ability is NOT a mana ability — it went on the
+    # stack. Drain BOTH engines down to the pre-activation floor and
+    # re-compare (the in-test probe's drain pattern; the round-55
+    # token-cease-to-exist SBA fires during/after this drain on Rust).
+    resolve_top_of_stack_python(py_state, floor=py_stack_floor)
+    resolve_top_of_stack_rust(rust_state, floor=rust_stack_floor)
+    ps = parity_smoke()
+    post_divs = compare_fields(
+        build_python_field_view(py_state),
+        ps._build_field_view(rust_state),
+    )
+    if post_divs:
+        raise _DivergenceError(
+            {"kind": "lander_sac_post_resolve",
+             "source_id": lander_id, "ability_index": 0},
+            post_divs,
+        )
+    return action
+
+
 def drive_one_game(
     archetype: int,
     seed: int,
@@ -379,13 +551,28 @@ def drive_one_game(
     combat_strategy: str,
     mulligans: int,
     verbose: bool = False,
+    activate_lander_sac: bool = False,
 ) -> GameResult:
-    """Drive one (archetype, seed) mirror game end-to-end on both engines."""
+    """Drive one (archetype, seed) mirror game end-to-end on both engines.
+
+    ``activate_lander_sac`` (round-59 N3, default-off, review-gated):
+    when True, the PRECOMBAT_MAIN driver additionally activates any
+    active-player ``Lander`` token's ``{2},Sac`` ability (see
+    :func:`_try_activate_lander_sac`). Default-off: the bench /
+    production self-play is byte-for-byte unchanged unless explicitly
+    opted in (``--activate-lander-sac``). This is the round-58 N3-
+    specified minimal unlock for REAL-GAME-validating the round-55
+    token-cease-to-exist SBA.
+    """
     from mtg_bot.parity import trajectory
     from mtg_bot.turn import Step
 
     result = GameResult(archetype=archetype, seed=seed, status="PASS")
     t0 = time.perf_counter()
+    # Per-game guard set for the lazy shared-rng install (see
+    # _try_activate_lander_sac). Local to this game so it never leaks
+    # the shared stream across games.
+    _lander_rng_installed: set = set()
 
     # ---- Setup ------------------------------------------------------------
     try:
@@ -462,6 +649,21 @@ def drive_one_game(
                     if cast is None:
                         break
                     action_index += 1
+                # Round-59 N3 review-gated harness step (default-off).
+                # Sac-activate any active-player Lander token so the
+                # round-55 token-cease-to-exist SBA fires in a real
+                # game. Loops in case multiple Landers are on the bf
+                # (one activation per Lander; each search refreshes
+                # the library so a subsequent Lander still has a
+                # basic to find). No-op when the flag is off.
+                if activate_lander_sac:
+                    while (
+                        _try_activate_lander_sac(
+                            py_state, rust_state, _lander_rng_installed,
+                        )
+                        is not None
+                    ):
+                        action_index += 1
                 _advance_phase_with_compare(py_state, rust_state)  # → BoC
                 continue
 
@@ -669,6 +871,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="N: mulligan to (7 - N). 0 means keep openers.",
     )
     p.add_argument(
+        "--activate-lander-sac", action="store_true",
+        help=(
+            "ROUND-59 N3 review-gated VALIDATION harness step "
+            "(DEFAULT-OFF). When set, the PRECOMBAT_MAIN driver "
+            "additionally sac-activates any active-player Lander "
+            "token's {2},Sac:SearchLibraryForBasicLandTapped ability "
+            "(identical action on BOTH engines, shared post-search "
+            "shuffle rng, {2} seeded symmetrically) so the round-55 "
+            "token-cease-to-exist SBA (CR 111.7) actually fires in a "
+            "real production-deck game. NARROW: only the Lander sac "
+            "ability, NOT a general bench activator. Off by default — "
+            "the bench / production self-play is byte-for-byte "
+            "unchanged unless this is explicitly passed."
+        ),
+    )
+    p.add_argument(
         "--json-out", default=None,
         help="Optional path to dump structured results as JSON.",
     )
@@ -702,7 +920,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         f"[bench] driving {len(archetypes)} archetype(s) x {len(seeds)} "
         f"seed(s) = {len(archetypes) * len(seeds)} games; strategy="
         f"{args.combat_strategy}, max_turns={args.max_turns}, "
-        f"mulligans={args.mulligans}\n"
+        f"mulligans={args.mulligans}, "
+        f"activate_lander_sac={args.activate_lander_sac}\n"
     )
 
     results: list[GameResult] = []
@@ -718,6 +937,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 combat_strategy=args.combat_strategy,
                 mulligans=args.mulligans,
                 verbose=args.verbose,
+                activate_lander_sac=args.activate_lander_sac,
             )
             results.append(r)
             if args.verbose:
@@ -748,6 +968,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "max_turns": args.max_turns,
                 "combat_strategy": args.combat_strategy,
                 "mulligans": args.mulligans,
+                "activate_lander_sac": args.activate_lander_sac,
             },
             "summary": asdict(summary),
             "games": [asdict(r) for r in results],
