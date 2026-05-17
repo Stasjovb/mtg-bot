@@ -74,6 +74,10 @@ __all__ = [
     "drive_combat_phase",
     "load_production_deck",
     "production_deck_to_deckspec",
+    "production_deck_to_deckspec_instrumented",
+    "LoaderAdmitReport",
+    "LoaderAdmitPolicy",
+    "NonAdmittedCardError",
     "DEFAULT_PRODUCTION_DECK_POOL",
 ]
 
@@ -4597,6 +4601,145 @@ def load_production_deck(
     return list(data[archetype]["cards"])
 
 
+# ---------------------------------------------------------------------------
+# C6 — the loader-admit gate as the enforced soundness boundary.
+#
+# `docs/SOT_FLIP_CUTOVER_PLAN.md` C6 / blocker B2 / Step 2: the loader
+# admit gate (`_filter_deck_to_bridge_supported`'s 5-disjunct chokepoint
+# + the `production_deck_to_deckspec` Forest-pad) is the SoT-flip
+# soundness boundary. A card the loader does NOT admit MUST be unable to
+# silently enter a flipped (Rust-sourced) game.
+#
+# TODAY (Python is SoT, single-script-replay) the silent drop +
+# Forest-pad is the CORRECT, parity-required behavior — the bench plays
+# the admitted residue of real decks, Forest-padded, and that is benign
+# because Python drives. AT/AFTER the flip it becomes a SILENT
+# CORRECTNESS HOLE: the Rust-sourced bot would quietly play a different
+# (reduced, Forest-padded) deck than intended with no signal.
+#
+# C6 makes that boundary EXPLICIT + INSTRUMENTED + FAIL-LOUD without
+# changing what gets admitted (that is C1 / the substrates' job):
+#
+#   * ``LoaderAdmitReport`` is the OBSERVABLE — exactly which names were
+#     dropped (unresolved vs resolved-but-not-bridged) and how many
+#     Forest-pad slots each side received. It is opt-in: the default
+#     loader path (``production_deck_to_deckspec``) produces NO report
+#     and is bit-identical to the pre-C6 behavior (parity-neutral by
+#     construction).
+#   * ``LoaderAdmitPolicy.RAISE`` is the post-flip FAIL-LOUD enforcement
+#     — a non-admitted name raises ``NonAdmittedCardError`` instead of
+#     being silently dropped. The Rust-sourced path (Step 3/4) sets
+#     this; the Python-SoT parity path keeps the default ``DROP``.
+#
+# This is the §2 Step-2 / B2 pin substrate: the EXISTING boundary made
+# enforced, non-silent, and pinned — NOT a change to the admit set.
+# ---------------------------------------------------------------------------
+
+
+class LoaderAdmitPolicy:
+    """Policy for a card-name the loader-admit gate does NOT admit.
+
+    ``DROP`` (default) — the pre-C6, parity-required behavior: a
+    non-admitted name is silently dropped from the per-player library
+    and the slot is later Forest-padded. Correct WHILE Python is the
+    source of truth (single-script-replay; the bench plays the admitted
+    residue and the drop is benign because Python drives both engines).
+
+    ``RAISE`` — the post-flip FAIL-LOUD soundness boundary: a
+    non-admitted name raises :class:`NonAdmittedCardError` rather than
+    silently degrading the deck. The Rust-sourced decision path
+    (`SOT_FLIP_CUTOVER_PLAN` Step 3/4) MUST use this so a card the
+    loader cannot bridge can never quietly enter a Rust-authoritative
+    game as a Forest.
+    """
+
+    DROP = "drop"
+    RAISE = "raise"
+
+
+class NonAdmittedCardError(ValueError):
+    """A non-loader-admitted card hit the gate under ``RAISE`` policy.
+
+    Raised by :func:`_filter_deck_to_bridge_supported` (and therefore
+    :func:`production_deck_to_deckspec_instrumented`) when
+    ``on_non_admitted`` is :data:`LoaderAdmitPolicy.RAISE` and a deck
+    name either does not resolve in the active CardSource OR resolves
+    but passes none of the five bridge-admit disjuncts. This is the C6
+    enforced boundary — it must be unraisable on the Python-SoT parity
+    path (which always uses the default ``DROP``) and the hard fence on
+    the Rust-sourced path.
+    """
+
+    def __init__(self, name: str, *, resolved: bool):
+        self.card_name = name
+        self.resolved = resolved
+        reason = (
+            "resolves in the active CardSource but passes none of the "
+            "five bridge-admit disjuncts (basic_land / "
+            "nonbasic_mana_land / pure_warp_creature / simple_creature "
+            "/ simple_spell)"
+            if resolved
+            else "does not resolve in the active CardSource"
+        )
+        super().__init__(
+            f"loader-admit boundary (C6): card {name!r} {reason}; it "
+            f"cannot enter a Rust-sourced game. The Python-SoT parity "
+            f"path tolerates this (silent drop + Forest-pad); the "
+            f"post-flip Rust-sourced path does not — admit it via a "
+            f"C1/substrate close or fence the deck out upstream."
+        )
+
+
+@dataclass(frozen=True)
+class LoaderAdmitReport:
+    """Observable record of what the loader-admit gate dropped + padded.
+
+    Returned by :func:`production_deck_to_deckspec_instrumented` (the
+    C6 observable wrapper). Makes the loader-admit boundary an explicit
+    artifact instead of a silent mutation, so the post-flip soundness
+    fence (`SOT_FLIP_CUTOVER_PLAN` C6) is auditable.
+
+    Fields are per-side (p0 / p1). ``*_unresolved`` are deck names that
+    did not resolve in the active CardSource at all; ``*_not_bridged``
+    are names that resolved but passed NONE of the five admit
+    disjuncts. ``*_pad_count`` is the number of Forest (or configured
+    ``pad_with``) slots appended to reach ``pad_to_size``. Lists
+    preserve input order and multiplicity (a 4x non-admitted card
+    appears 4x), so a caller can reconstruct exactly which deck slots
+    were lost.
+    """
+
+    p0_unresolved: tuple[str, ...]
+    p0_not_bridged: tuple[str, ...]
+    p1_unresolved: tuple[str, ...]
+    p1_not_bridged: tuple[str, ...]
+    p0_pad_count: int
+    p1_pad_count: int
+    pad_with: str
+
+    @property
+    def any_dropped(self) -> bool:
+        """True iff ANY name was dropped on either side (the boundary
+        was crossed — under ``RAISE`` this state is unreachable)."""
+        return bool(
+            self.p0_unresolved
+            or self.p0_not_bridged
+            or self.p1_unresolved
+            or self.p1_not_bridged
+        )
+
+    @property
+    def total_dropped(self) -> int:
+        """Total dropped deck slots across both sides (with
+        multiplicity) — the bounded reduced-universe magnitude."""
+        return (
+            len(self.p0_unresolved)
+            + len(self.p0_not_bridged)
+            + len(self.p1_unresolved)
+            + len(self.p1_not_bridged)
+        )
+
+
 def production_deck_to_deckspec(
     p0_card_names: list[str],
     p1_card_names: Optional[list[str]] = None,
@@ -4654,10 +4797,84 @@ def production_deck_to_deckspec(
 
     Notes
     -----
-    Cards filtered out are NOT logged here — the loader's job is to
-    produce a clean DeckSpec, not to audit the filter. To inspect
-    which cards a particular EoE deck loses to the filter, use
-    :func:`_filter_deck_to_bridge_supported` directly.
+    Cards filtered out are NOT logged on this path — the default
+    loader's job is to produce a clean DeckSpec, not to audit the
+    filter, and this path stays bit-identical to the pre-C6 behavior
+    (parity-neutral). To OBSERVE which cards a deck loses to the gate,
+    or to enforce the fail-loud post-flip soundness boundary, use
+    :func:`production_deck_to_deckspec_instrumented` (the C6 wrapper)
+    or :func:`_filter_deck_to_bridge_supported` directly.
+    """
+    spec, _report = _production_deck_to_deckspec_core(
+        p0_card_names,
+        p1_card_names,
+        shared_rng_seed=shared_rng_seed,
+        pad_to_size=pad_to_size,
+        pad_with=pad_with,
+        on_non_admitted=LoaderAdmitPolicy.DROP,
+        observe=False,
+    )
+    return spec
+
+
+def production_deck_to_deckspec_instrumented(
+    p0_card_names: list[str],
+    p1_card_names: Optional[list[str]] = None,
+    *,
+    shared_rng_seed: Optional[int] = None,
+    pad_to_size: int = 60,
+    pad_with: str = "Forest",
+    on_non_admitted: str = LoaderAdmitPolicy.DROP,
+) -> tuple[DeckSpec, LoaderAdmitReport]:
+    """C6 observable wrapper: build a DeckSpec AND record what was lost.
+
+    Same DeckSpec contract as :func:`production_deck_to_deckspec`, but
+    additionally returns a :class:`LoaderAdmitReport` that names every
+    deck slot the loader-admit gate dropped (unresolved vs
+    resolved-but-not-bridged, per side, with multiplicity) and the
+    Forest-pad count per side. This is the C6 OBSERVABLE — the loader
+    boundary as an explicit, auditable artifact instead of a silent
+    mutation (`SOT_FLIP_CUTOVER_PLAN` C6 / B2 / Step 2).
+
+    ``on_non_admitted``
+        :data:`LoaderAdmitPolicy.DROP` (default) keeps the
+        parity-required silent-drop behavior but surfaces it in the
+        returned report. :data:`LoaderAdmitPolicy.RAISE` is the
+        post-flip FAIL-LOUD boundary — the first non-admitted name
+        raises :class:`NonAdmittedCardError` (the Rust-sourced path
+        sets this so a non-bridgeable card can never quietly enter a
+        Rust-authoritative game as a Forest). Under ``RAISE`` a
+        successful return is the proof the deck is fully admitted
+        (``report.any_dropped is False``).
+    """
+    return _production_deck_to_deckspec_core(
+        p0_card_names,
+        p1_card_names,
+        shared_rng_seed=shared_rng_seed,
+        pad_to_size=pad_to_size,
+        pad_with=pad_with,
+        on_non_admitted=on_non_admitted,
+        observe=True,
+    )
+
+
+def _production_deck_to_deckspec_core(
+    p0_card_names: list[str],
+    p1_card_names: Optional[list[str]] = None,
+    *,
+    shared_rng_seed: Optional[int] = None,
+    pad_to_size: int = 60,
+    pad_with: str = "Forest",
+    on_non_admitted: str = LoaderAdmitPolicy.DROP,
+    observe: bool = False,
+) -> tuple[DeckSpec, LoaderAdmitReport]:
+    """Shared body for the public + instrumented loader entrypoints.
+
+    With ``on_non_admitted=DROP`` and ``observe=False`` (the
+    :func:`production_deck_to_deckspec` defaults) the DeckSpec produced
+    is bit-identical to the pre-C6 implementation — the sinks are
+    ``None`` so no name is recorded and no policy branch fires. The C6
+    observable/fail-loud behavior is strictly opt-in.
     """
     from mtg_bot.cards.source import get_active_source
     src = get_active_source()
@@ -4674,27 +4891,45 @@ def production_deck_to_deckspec(
         )
     pad_card_def = _printing_to_card_def(pad_printing)
 
+    # C6 observable sinks — only allocated when observing; otherwise
+    # left None so the filter takes the exact pre-C6 code path.
+    p0_unresolved: Optional[list] = [] if observe else None
+    p0_not_bridged: Optional[list] = [] if observe else None
+    p1_unresolved: Optional[list] = [] if observe else None
+    p1_not_bridged: Optional[list] = [] if observe else None
+
     p0_filtered, p0_card_defs = _filter_deck_to_bridge_supported(
         p0_card_names, printings,
+        on_non_admitted=on_non_admitted,
+        unresolved_sink=p0_unresolved,
+        not_bridged_sink=p0_not_bridged,
     )
     if p1_card_names is None:
         p1_filtered = list(p0_filtered)
         p1_card_defs = list(p0_card_defs)
+        # Mirror match: p1 IS p0's filtered library — its drop record
+        # is identical to p0's by construction.
+        if observe:
+            p1_unresolved = list(p0_unresolved or [])
+            p1_not_bridged = list(p0_not_bridged or [])
     else:
         p1_filtered, p1_card_defs = _filter_deck_to_bridge_supported(
             p1_card_names, printings,
+            on_non_admitted=on_non_admitted,
+            unresolved_sink=p1_unresolved,
+            not_bridged_sink=p1_not_bridged,
         )
 
     # Pad each side to pad_to_size with copies of pad_with.
+    p0_pad_count = 0
+    p1_pad_count = 0
     if pad_to_size > 0:
         if len(p0_filtered) < pad_to_size:
-            p0_filtered.extend(
-                [pad_with] * (pad_to_size - len(p0_filtered))
-            )
+            p0_pad_count = pad_to_size - len(p0_filtered)
+            p0_filtered.extend([pad_with] * p0_pad_count)
         if len(p1_filtered) < pad_to_size:
-            p1_filtered.extend(
-                [pad_with] * (pad_to_size - len(p1_filtered))
-            )
+            p1_pad_count = pad_to_size - len(p1_filtered)
+            p1_filtered.extend([pad_with] * p1_pad_count)
 
     # Refuse zero-card libraries even if both filters dropped everything.
     if not p0_filtered or not p1_filtered:
@@ -4727,12 +4962,22 @@ def production_deck_to_deckspec(
         list(union_card_defs.values())
     )
 
-    return DeckSpec(
+    spec = DeckSpec(
         card_defs=tuple(card_defs_ordered),
         p0_library=tuple(p0_filtered),
         p1_library=tuple(p1_filtered),
         shared_rng_seed=shared_rng_seed,
     )
+    report = LoaderAdmitReport(
+        p0_unresolved=tuple(p0_unresolved or ()),
+        p0_not_bridged=tuple(p0_not_bridged or ()),
+        p1_unresolved=tuple(p1_unresolved or ()),
+        p1_not_bridged=tuple(p1_not_bridged or ()),
+        p0_pad_count=p0_pad_count,
+        p1_pad_count=p1_pad_count,
+        pad_with=pad_with,
+    )
+    return spec, report
 
 
 def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
@@ -5003,7 +5248,12 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
 
 
 def _filter_deck_to_bridge_supported(
-    card_names: list[str], printings: dict,
+    card_names: list[str],
+    printings: dict,
+    *,
+    on_non_admitted: str = LoaderAdmitPolicy.DROP,
+    unresolved_sink: Optional[list] = None,
+    not_bridged_sink: Optional[list] = None,
 ) -> tuple[list[str], list[CardDef]]:
     """Filter a card-name list to bridge-supported names + CardDefs.
 
@@ -5016,12 +5266,35 @@ def _filter_deck_to_bridge_supported(
         filtered names reference.
 
     Internal helper for :func:`production_deck_to_deckspec`.
+
+    C6 instrumentation (parity-neutral — all three keyword params
+    default to the pre-C6 behavior; with the defaults this function is
+    bit-identical to before the C6 slice):
+
+    ``on_non_admitted``
+        :data:`LoaderAdmitPolicy.DROP` (default) silently drops a
+        non-admitted name exactly as before — the Python-SoT
+        parity-required behavior. :data:`LoaderAdmitPolicy.RAISE`
+        raises :class:`NonAdmittedCardError` instead — the post-flip
+        fail-loud soundness boundary (`SOT_FLIP_CUTOVER_PLAN` C6).
+    ``unresolved_sink`` / ``not_bridged_sink``
+        Optional lists; when provided, each dropped name is appended
+        (preserving order + multiplicity) to the matching sink —
+        ``unresolved_sink`` for names absent from ``printings``,
+        ``not_bridged_sink`` for names that resolve but pass none of
+        the five disjuncts. The OBSERVABLE half of C6 (the loader no
+        longer silently mutates — it records what it removed).
     """
     filtered_names: list[str] = []
     seen_card_defs: dict[str, CardDef] = {}
     for name in card_names:
         printing = printings.get(name)
         if printing is None:
+            # Unresolved: name not in the active CardSource at all.
+            if on_non_admitted == LoaderAdmitPolicy.RAISE:
+                raise NonAdmittedCardError(name, resolved=False)
+            if unresolved_sink is not None:
+                unresolved_sink.append(name)
             continue
         if not (
             _printing_is_bridge_basic_land(printing)
@@ -5035,6 +5308,11 @@ def _filter_deck_to_bridge_supported(
             # exactly like the round-63 pure-warp-creature predicate.
             or _printing_is_bridge_simple_spell(printing)
         ):
+            # Resolved but passes none of the 5 bridge-admit disjuncts.
+            if on_non_admitted == LoaderAdmitPolicy.RAISE:
+                raise NonAdmittedCardError(name, resolved=True)
+            if not_bridged_sink is not None:
+                not_bridged_sink.append(name)
             continue
         if name not in seen_card_defs:
             seen_card_defs[name] = _printing_to_card_def(printing)
