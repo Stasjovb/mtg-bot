@@ -1294,3 +1294,291 @@ def test_depressurize_destroying_dies_trigger_creature_fires_token_r74_2():
         f"(the dies-trigger's Robot token fires on BOTH engines); "
         f"diffs={diffs}"
     )
+
+
+# ---------------------------------------------------------------------------
+# **Interaction 5 — Radiant Strike destroying a tapped ``DIES``-trigger
+# creature MUST fire the dies-trigger byte-equal (round-76 bench-resweep
+# discovery R76-2; Rust-side, Python ``src/mtg_bot/`` is SoT; SAME
+# class as R74-2, a DIFFERENT Effect arm).**
+#
+# **The divergence (R76-2 — NEW, now FIXED Rust-side).** Rust's
+# ``Effect::DestroyTargetArtifactOrTappedCreature`` (Radiant Strike's
+# destroy half — ``{3}{W}`` Instant: *"Destroy target artifact or
+# tapped creature. You gain 3 life."*; ``spell_effect`` =
+# ``Sequence(DestroyTargetArtifactOrTappedCreature, GainLife(3))``) is
+# ANOTHER HAND-ROLLED destroy structurally identical to the R74-2
+# DepressurizeEffect anti-pattern: it ``bf.remove``s the object,
+# graveyards it, ``mark_left_battlefield_if_nonland``, pushed ONLY
+# ``pending_leaves_dispatches`` (+ ``queue_token_cease``) — and NEVER
+# ``pending_dies_dispatches``. So a destroyed tapped dies-trigger
+# creature (e.g. Gravpack Monoist → Robot) silently never fired its
+# trigger. Python's ``DestroyTargetArtifactOrTappedCreature.resolve``
+# (``effects/generic/destroy.py``) calls ``turn.destroy`` → fires the
+# DIES trigger (CR 603 / 700.4). R74-2's fix (``f38df833``) added the
+# DIES drain at the 4 resolution sites + the dies-push at the
+# ``DepressurizeEffect`` arm ONLY — it did NOT touch this distinct
+# Effect arm, so the round-74 coarse ``cast_spell::battlefield``
+# bucket had CONFLATED this with R74-2; the R74-2 fix un-masked it as
+# the standalone R76-2 (round-76 re-sweep). Repro
+# ``bench_trajectory_parity --archetype 52021 --seed 7``; full
+# diagnosis in ``docs/bench_trajectory_parity_smoke.md`` round-76.
+#
+# **Fix (this slice, Rust-side, new-code-is-right).** The
+# ``DestroyTargetArtifactOrTappedCreature`` destroy arm now pushes
+# ``pending_dies_dispatches`` (creature-gated — so the OR-filter's
+# *artifact* leg does NOT fire a spurious DIES; CR 700.4) BEFORE the
+# existing ``pending_leaves_dispatches`` push, exactly the R74-2
+# ``f38df833`` shape transplanted to this arm. The 4 resolution sites
+# already drain ``pending_dies_dispatches`` DIES-before-LEAVES (R74-2
+# added those drains globally), so NO resolution-site change is
+# needed. The verbatim-clone sibling — Seedship Impact's destroy-half
+# (its own comment says it clones this body) — got the SAME
+# creature-gated dies-push (a dual-typed Artifact Creature is
+# admissible under Seedship's Artifact-OR-Enchantment filter AND is a
+# creature, so Python's generic ``destroy`` would fire its DIES
+# trigger). Python untouched (SoT, correct). A faithful parity fix
+# aligning the Rust outliers to Python + Rust's own generic SBA
+# destroy path — NOT a shortcut, so no ``SEARCH_LIMITATIONS.md``
+# entry is warranted (the R74-2 / CFI-1 precedent).
+#
+# **Disjointness.** A distinct cross-feature dimension from Interaction
+# 4: a SEQUENCE-composed removal spell (destroy-then-gain-life) whose
+# FIRST sub-effect destroys a TAPPED creature whose own ``DIES``
+# trigger then resolves — exercising a different hand-rolled destroy
+# arm AND the Sequence combinator AND the tapped-leg of the OR-filter.
+# ---------------------------------------------------------------------------
+
+
+def _seat_tapped_dies_trigger_creature(py, rs, *, robot_pid):
+    """Sibling of :func:`_seat_dies_trigger_creature` that seats the
+    Gravpack-shaped DIES→CreateToken(Robot) creature **TAPPED** on
+    BOTH engines (Radiant Strike's destroy filter is *artifact OR
+    TAPPED creature* — an untapped non-artifact creature is NOT a
+    legal target, so the probe creature must be tapped to be hit).
+    Returns ``(py_obj, rs_id)``."""
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings, register_token_printing,
+    )
+
+    ZONE_BATTLEFIELD = 2
+    trig_dict = _gravpack_dies_token_trigger_dict(robot_pid)
+
+    # ---- Rust: inject the tapped DIES-trigger creature on p0's bf. ----
+    rs_creature_dict = {
+        "name": "Gravpack R76-2 Probe",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 1,
+        "effects": [],
+        "triggered_abilities": [trig_dict],
+    }
+    rs_id = rs.register_and_inject_object(
+        rs_creature_dict, 0, ZONE_BATTLEFIELD)
+    # Tap it so Radiant Strike's "tapped creature" OR-leg admits it.
+    assert rs.tap_object(rs_id) is True, (
+        "probe setup: the seated R76-2 creature must tap")
+
+    # ---- Python: matching tapped DIES-trigger creature. ----
+    py_robot_token = make_token_creature(
+        name="Robot R76-2 Probe",
+        power=2,
+        toughness=2,
+        subtypes=("Robot",),
+        artifact=True,
+    )
+    clear_token_printings()
+    register_token_printing(robot_pid, py_robot_token)
+    py_trig = _ta_dict_to_python_triggered_ability(trig_dict)
+    py_printing = CardPrinting(
+        name="Gravpack R76-2 Probe",
+        mana_cost_str="", mana_cost=ManaCost(generic=0),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=2, toughness=1, produces=frozenset(),
+        triggered_abilities=(py_trig,),
+    )
+    py_obj = py.new_object(
+        py_printing, owner_id=0, zone=Zone.BATTLEFIELD)
+    py_obj.summoning_sick = False
+    py_obj.tapped = True
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py.next_timestamp
+    py.next_timestamp += 1
+    py.battlefield.append(py_obj)
+    return py_obj, rs_id
+
+
+def _cast_radiant_strike_then_drain(py, rs, py_obj, rs_id):
+    """Cast genuine Radiant Strike (Python: the ACTUAL parsed EoE
+    ``spell_effect`` — ``Sequence(DestroyTargetArtifactOrTapped
+    Creature, GainLife(3))`` — on a ``StackItem``; Rust: the bridged
+    ``sequence`` synthetic Instant carrying the same two-leaf dict)
+    targeting the seated tapped creature, then FULLY drain both stacks
+    (Radiant Strike resolves → destroys → the creature's DIES trigger
+    lands on the stack → resolves → Robot token; +3 life), run SBA on
+    both. Returns the post-drain FULL ``compare_fields`` diff list."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.turn import state_based_actions as py_sba
+
+    rsp = get_active_source().get_printings().get("Radiant Strike")
+    if rsp is None:
+        pytest.skip("Radiant Strike absent from CardSource")
+    assert isinstance(rsp.spell_effect, Sequence), (
+        f"genuine Radiant Strike spell_effect must be a Sequence; "
+        f"got {type(rsp.spell_effect).__name__}"
+    )
+
+    # ---- Python: genuine Radiant Strike as a real spell_effect. ----
+    py_spell = py.new_object(rsp, owner_id=0, zone=Zone.STACK)
+    py_spell.summoning_sick = False
+    py.stack.append(
+        StackItem(source=py_spell, controller_id=0,
+                  targets=(("creature", py_obj.id),))
+    )
+    while py.stack:
+        resolve_top_of_stack(py)
+    py_sba(py)
+    assert len(py.stack) == 0
+
+    # ---- Rust: bridged Sequence synthetic Instant (the EXACT
+    # reverse-serializer dict the spell-card-bridge produces for the
+    # real Radiant Strike printing). ----
+    rs_spell_id = rs.register_and_inject_object(
+        {"name": "Radiant Strike", "card_types": ["Instant"],
+         "effects": [{
+             "kind": "sequence",
+             "effects": [
+                 {"kind": "destroy_target_artifact_or_tapped_creature"},
+                 {"kind": "gain_life", "amount": 3},
+             ],
+         }]}, 0, 0)
+    rs.push_to_stack(rs_spell_id, 0)
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert rs.stack_size() == 0
+
+    return compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+
+
+def test_radiant_strike_destroying_dies_trigger_creature_fires_token_r76_2():
+    """**Interaction 5 — Radiant Strike destroying a tapped ``DIES``-
+    trigger creature MUST fire the dies-trigger byte-equal (R76-2
+    closed).**
+
+    p0 controls a TAPPED 2/1 carrying the genuine Gravpack-Monoist-
+    shaped ``Event.DIES / IsSelf → CreateToken(Robot)`` trigger. p0
+    casts the genuine Radiant Strike (``Sequence(DestroyTarget
+    ArtifactOrTappedCreature, GainLife(3))``) on it: the tapped
+    creature is destroyed (OR-filter's tapped-creature leg) → Python's
+    generic ``destroy`` fires the DIES trigger → a Robot token enters
+    under p0's control; +3 life. Pre-R76-2 Rust's hand-rolled
+    ``DestroyTargetArtifactOrTappedCreature`` destroy arm pushed only
+    ``pending_leaves_dispatches`` and NEVER
+    ``pending_dies_dispatches``, so the Robot token NEVER appeared on
+    Rust — a single-field ``battlefield`` divergence (the round-76
+    bench-resweep R76-2 discovery; same class as R74-2, different
+    Effect arm).
+
+    Post-fix the Rust arm pushes ``pending_dies_dispatches`` (creature-
+    gated, so the OR-filter's artifact leg does NOT fire a spurious
+    DIES) BEFORE ``pending_leaves_dispatches``; the resolution sites
+    already drain DIES-before-LEAVES (R74-2 global drains). Asserts:
+
+      * the original creature is DEAD on BOTH;
+      * exactly ONE Robot token on p0's battlefield on BOTH (the
+        dies-trigger fired — the R76-2 observable; pre-fix Rust = 0);
+      * FULL ``compare_fields`` == [] over the WHOLE cross-engine
+        field view (a missing dies-trigger token, wrong life total
+        from the GainLife leg, or wrong post-destroy zone flips this
+        and FAILs loudly).
+
+    Permanent regression pin for the CLOSED Rust-side divergence
+    R76-2. Distinct from Interaction 4 (R74-2 — Depressurize, an
+    UNtapped creature, a single-effect spell): this is a SEQUENCE-
+    composed spell destroying a TAPPED creature via a DIFFERENT
+    hand-rolled destroy arm.
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    robot_carddef = CardDef(
+        name="Robot R76-2 Probe",
+        card_type="Creature",
+        extra_card_types=("Artifact",),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(robot_carddef,), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    assert rs.registry_size == 1, (
+        f"probe pre-condition: Robot must be the only registered "
+        f"printing (pid 0); got registry_size={rs.registry_size}"
+    )
+    robot_pid = 0
+
+    py_obj, rs_id = _seat_tapped_dies_trigger_creature(
+        py, rs, robot_pid=robot_pid)
+    diffs = _cast_radiant_strike_then_drain(py, rs, py_obj, rs_id)
+
+    # The original creature is dead on BOTH (destroy succeeded).
+    py_alive = any(o.id == py_obj.id for o in py.battlefield)
+    rs_alive = any(e["id"] == rs_id
+                   for e in rs.battlefield_snapshot())
+    assert py_alive is False and rs_alive is False, (
+        f"Radiant Strike on a tapped 2/1 → DestroyTargetArtifactOr"
+        f"TappedCreature destroys it on BOTH; "
+        f"py_alive={py_alive} rs_alive={rs_alive}"
+    )
+
+    # Exactly one Robot token on p0's bf on BOTH (the DIES trigger
+    # fired). This is the R76-2 observable: pre-fix Rust had ZERO.
+    py_robots = [
+        o for o in py.battlefield
+        if o.controller_id == 0
+        and o.printing.name == "Robot R76-2 Probe"
+    ]
+    rs_robots = [
+        e for e in rs.battlefield_snapshot()
+        if e.get("printing_name") == "Robot R76-2 Probe"
+    ]
+    assert len(py_robots) == 1, (
+        f"Python: Radiant-Strike-destroyed Gravpack's DIES trigger "
+        f"must create exactly 1 Robot token; got {len(py_robots)}"
+    )
+    assert len(rs_robots) == 1, (
+        f"R76-2 regression — Rust: the Radiant-Strike-destroyed "
+        f"tapped DIES-trigger creature's token MUST fire (the "
+        f"DestroyTargetArtifactOrTappedCreature hand-rolled destroy "
+        f"arm now pushes pending_dies_dispatches); got "
+        f"{len(rs_robots)} Robot tokens (pre-fix bug = 0)"
+    )
+
+    # FULL cross-engine field view byte-equal — no carve-out (the
+    # GainLife(3) leg's life delta + the dies-trigger token are all
+    # in-scope).
+    assert diffs == [], (
+        f"R76-2 regression — a Radiant-Strike-destroyed tapped "
+        f"DIES-trigger creature must be byte-equal across the WHOLE "
+        f"field view (the dies-trigger's Robot token fires + the "
+        f"Sequence's GainLife(3) applies on BOTH engines); "
+        f"diffs={diffs}"
+    )

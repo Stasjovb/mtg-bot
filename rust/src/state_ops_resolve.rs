@@ -5616,6 +5616,49 @@ fn apply_effect(
                 // Round-29 Void LTB: target may be an artifact land or
                 // a creature; helper gates on the printing.
                 mark_left_battlefield_if_nonland(state, printing_id);
+                // R76-2: a "destroy" of a CREATURE is a death (CR
+                // 700.4) — its `Event.DIES` triggered abilities MUST
+                // fire, exactly as the generic SBA destroy path does
+                // (`state_ops_sba.rs`) and as Python's
+                // `DestroyTargetArtifactOrTappedCreature.resolve` ->
+                // `turn.destroy` -> `move_off_battlefield` does
+                // (`_fire_dies_triggers` + the predicate-path
+                // `dispatch_event(DIES)` BEFORE
+                // `_fire_leaves_battlefield_triggers`). This
+                // hand-rolled destroy arm (Radiant Strike's destroy
+                // half) previously pushed ONLY
+                // `pending_leaves_dispatches`, so a destroyed
+                // dies-trigger creature (e.g. Gravpack Monoist ->
+                // Robot token) silently never fired its trigger — the
+                // round-76 bench-resweep R76-2 divergence (same class
+                // as R74-2 `f38df833`, a DIFFERENT Effect arm; that
+                // fix added the DIES drain at the 4 resolution sites
+                // but did NOT touch this arm). Python (SoT) correct;
+                // Rust was wrong. Push order mirrors the SBA path +
+                // the `Event::LeavesBattlefield` cards.rs doc-comment
+                // contract (DIES first via `pending_dies_dispatches`,
+                // LEAVES second via `pending_leaves_dispatches`); the
+                // matching resolution-path drain order (DIES drained
+                // then LEAVES; LIFO -> LEAVES resolves first)
+                // preserves Python's `move_off_battlefield` sequence.
+                // Creature-gated like the SBA path / the R74-2
+                // DepressurizeEffect fix so a destroyed ARTIFACT (the
+                // OR-filter's other leg) does NOT fire a spurious DIES
+                // (CR 700.4 — only a creature death fires DIES).
+                let victim_is_creature = state
+                    .registry
+                    .lookup(printing_id)
+                    .map(|p| {
+                        p.card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                    })
+                    .unwrap_or(false);
+                if victim_is_creature {
+                    state
+                        .pending_dies_dispatches
+                        .push(leaving_obj_id);
+                }
                 // Slice 10: LTB fan-out at the Effect arm — same
                 // deferred-drain rationale as the artifact arm above
                 // (bf-exit bypasses move_object; queue the leaving id,
@@ -5743,6 +5786,39 @@ fn apply_effect(
                 // Round-29 Void LTB: target is artifact/enchantment;
                 // helper gates on the printing.
                 mark_left_battlefield_if_nonland(state, printing_id);
+                // R76-2 (audit of the verbatim-clone sibling — the
+                // bench-resweep explicitly flagged this destroy-half
+                // for the same omission). Python's `SeedshipImpact
+                // Effect.resolve` calls the generic `turn.destroy`,
+                // which fires `Event.DIES` for a CREATURE death (CR
+                // 603 / 700.4). Seedship's filter is Artifact OR
+                // Enchantment, but a dual-typed **Artifact Creature**
+                // is admissible AND a creature — destroying it IS a
+                // creature death and MUST fire its DIES trigger
+                // byte-equal with Python. The verbatim destroy-clone
+                // previously pushed ONLY LEAVES (same R76-2 class as
+                // the Radiant Strike `DestroyTargetArtifactOrTapped
+                // Creature` arm above). Creature-gated so a pure
+                // (non-creature) artifact/enchantment does NOT fire a
+                // spurious DIES. DIES pushed BEFORE LEAVES (the SBA /
+                // R74-2 push order; LIFO -> LEAVES resolves first),
+                // drained by the existing R74-2
+                // `drain_pending_dies_dispatches` at the 4 resolution
+                // sites.
+                let victim_is_creature = state
+                    .registry
+                    .lookup(printing_id)
+                    .map(|p| {
+                        p.card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                    })
+                    .unwrap_or(false);
+                if victim_is_creature {
+                    state
+                        .pending_dies_dispatches
+                        .push(leaving_obj_id);
+                }
                 // Slice 10: LTB fan-out at the Effect arm.
                 state.pending_leaves_dispatches.push(leaving_obj_id);
                 // Round-55: token-cease sibling of the LEAVES push.
