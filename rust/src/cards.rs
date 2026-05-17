@@ -1341,9 +1341,13 @@ pub enum Effect {
     /// target. The marker is honored by the SBA destroy path
     /// (`state_ops_sba.rs`): if the carrier is destroyed via SBA it
     /// is returned from its owner's graveyard to its OWNER's
-    /// battlefield, tapped, with UEOT modifiers cleared (CR 603 +
-    /// new-object semantics — mirrors Python's
-    /// `PerigeeBeckonerDiesReturnTappedEffect.resolve`). Both
+    /// battlefield, tapped, dropping ONLY the
+    /// `GrantedDiesReturnTapped` marker (no re-fire on a 2nd death)
+    /// while KEEPING the `PowerToughnessBonus` — Python's
+    /// source-of-truth behavior, since its
+    /// `PerigeeBeckonerDiesReturnTappedEffect` re-uses the same object
+    /// and `put_into_battlefield` leaves `temp_power_bonus` intact
+    /// (round-53 effective-state lesson; see state_ops_sba.rs). Both
     /// modifiers auto-expire at the next CR 514.3 UEOT-clear pass, so
     /// a target that survives the turn loses the rider at cleanup
     /// exactly as Python's `EndOfTurn`-bounded grant does.

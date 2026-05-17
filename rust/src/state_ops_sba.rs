@@ -127,15 +127,18 @@ const ZONE_BATTLEFIELD: u8 = 2;
 /// been moved to its owner's graveyard and its DIES/LEAVES dispatches
 /// have fired. If the dying object (now in the graveyard) carried a
 /// `UeotModifier::GrantedDiesReturnTapped` marker, move it back to
-/// its OWNER's battlefield, TAPPED, with its UEOT modifiers cleared
-/// (CR 603 granted delayed trigger + CR 400.7 new-object semantics —
-/// the returned permanent is a NEW object with no memory of the UEOT
-/// grant, so a second death this turn does not re-fire the rider).
+/// its OWNER's battlefield, TAPPED, dropping ONLY the
+/// `GrantedDiesReturnTapped` marker (so a second death this turn does
+/// NOT re-fire the rider) while KEEPING any `PowerToughnessBonus`
+/// (Python's source-of-truth behavior — see the in-body round-53
+/// effective-state note).
 ///
 /// Mirrors Python's `PerigeeBeckonerDiesReturnTappedEffect.resolve`
 /// (`effects/bespoke.py:2107`): the dying creature sits in its
 /// owner's graveyard; remove it, drop the layer-6 grant (Rust
-/// analogue: clear `ueot_modifiers`), put it back on the OWNER's
+/// analogue: remove the marker — NOT a full UEOT clear, because
+/// Python re-uses the same object and `put_into_battlefield` leaves
+/// `temp_power_bonus` intact), put it back on the OWNER's
 /// battlefield (oracle: "under its owner's control", NOT the spell
 /// controller's), set `tapped = true`. Tokens cease to exist on
 /// death (CR 111.7) — the round-55 token-cease path already removed
@@ -173,12 +176,28 @@ fn perigee_return_tapped_if_marked(
     let gy: &mut Vec<GameObject> =
         Arc::make_mut(&mut state.players[oidx].graveyard);
     let mut obj = gy.remove(pos);
-    // New-object semantics on the return (CR 400.7): clear the UEOT
-    // grant + every other UEOT modifier (the +P/+T pump rode WITH the
-    // marker; both are gone on the new object — mirrors Python's
-    // layer-6 grant-clear in PerigeeBeckonerDiesReturnTappedEffect +
-    // the returned object being a fresh GameObject with no UEOT push).
-    obj.ueot_modifiers.clear();
+    // **Round-53 effective-state lesson applied — Python is the
+    // source of truth.** Python's `PerigeeBeckonerDiesReturnTappedEffect`
+    // RE-USES the same `GameObject` (`put_into_battlefield(state,
+    // source, ...)`), and `put_into_battlefield` does NOT reset the
+    // per-object `temp_power_bonus` — only the bespoke effect's
+    // layer-6 grant-clear runs. So Python's returned creature KEEPS
+    // the +P/+T pump (verified: effective power stays 4 after the
+    // return; loses the rider so a 2nd death does NOT re-return).
+    // To stay byte-equal with that source-of-truth behavior, Rust
+    // drops ONLY the `GrantedDiesReturnTapped` marker (mirrors the
+    // layer-6 grant-clear → no re-fire on a 2nd death) and KEEPS the
+    // `PowerToughnessBonus` (mirrors `temp_power_bonus` surviving the
+    // same-object return). A naive "clear all UEOT (clean CR 400.7
+    // new-object)" would make Rust 2/2 vs Python 4/2 — a real §2
+    // divergence the round-53 directive says to resolve by matching
+    // Python, NOT by copying a textbook rule the source engine does
+    // not implement here.
+    obj.ueot_modifiers
+        .retain(|m| !matches!(
+            m,
+            crate::state::UeotModifier::GrantedDiesReturnTapped
+        ));
     obj.zone = ZONE_BATTLEFIELD;
     obj.controller = owner_id; // "under its owner's control"
     obj.tapped = true; // "tapped"
