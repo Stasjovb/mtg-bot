@@ -721,8 +721,24 @@ def render_markdown(res: PoolParityResult) -> str:
     L.append("")
     L.append(
         "The long blocked tail (not itemised in the residue "
-        "worklist). First 60 shown for auditability; the full set is "
-        "regenerable from the script:"
+        "worklist). Round-58 N2 broke this **opaque single bucket** out "
+        "by gating subsystem so it is the data-driven \"which subsystem "
+        "next\" instrument, not one number — see "
+        "`docs/SUBSYSTEM_ROADMAP.md` for the leverage analysis + "
+        "recommended sequencing. A card may be **multi-gated** (counted "
+        "under every gate it trips, so `#cards` does NOT sum to the "
+        "tier total); `1gate` is the single-gated count (closing that "
+        "one subsystem flips the card) and reconciles exactly. "
+        "`decks(1g)` is the cumulative 17lands deck-count of the "
+        "single-gated members — the honest leverage signal."
+    )
+    L.append("")
+    L.extend(_render_subsystem_breakout(res))
+    L.append("")
+    L.append(
+        "Full card list (first 60 shown for auditability; the full "
+        "set + per-card gate attribution is regenerable from "
+        "`scripts/scout_r58_subsystem_attribution.py`):"
     )
     L.append("")
     for nm in sorted(res.tiers[TIER_BLOCKED_SUBSYSTEM])[:60]:
@@ -732,6 +748,91 @@ def render_markdown(res: PoolParityResult) -> str:
     L.append("")
 
     return "\n".join(L) + "\n"
+
+
+def _subsystem_breakout_rows() -> tuple[list[dict], dict] | tuple[None, None]:
+    """Reuse ``scout_r58_subsystem_attribution``'s attribution +
+    leverage table verbatim (the subsystem taxonomy is defined ONCE,
+    there — this metric never re-derives it, the same discipline as
+    reusing ``measure_effect_coverage``'s parser). Returns
+    ``(leverage_rows, attribution)`` or ``(None, None)`` if the scout
+    is unimportable (defensive: the doc still renders, just without the
+    breakout, never blocking the cron)."""
+    try:
+        import scout_r58_subsystem_attribution as scout  # noqa: E402
+
+        attr = scout.subsystem_attribution()
+        dc = scout._deck_counts(set(attr["cards"]))
+        rows = scout.leverage_table(attr, dc)
+        return rows, attr
+    except Exception:  # pragma: no cover - defensive, never blocks
+        return None, None
+
+
+def _render_subsystem_breakout(res: PoolParityResult) -> list[str]:
+    """The per-subsystem markdown table for the BLOCKED-subsystem
+    section. Honest: it carries the single-gate reconciliation inline
+    so a reader can verify the breakout partitions exactly the same
+    cards the old opaque count reported."""
+    rows, attr = _subsystem_breakout_rows()
+    L: list[str] = []
+    if rows is None or attr is None:
+        L.append(
+            "_(subsystem breakout unavailable — "
+            "`scout_r58_subsystem_attribution` not importable; the "
+            "opaque tier count above is still authoritative.)_"
+        )
+        return L
+    n_total = attr["n_subsystem_gated"]
+    n_single = sum(
+        1 for cd in attr["cards"].values() if not cd["multi_gated"]
+    )
+    n_multi = n_total - n_single
+    L.append(
+        "| Subsystem | #cards | 1gate | multi | decks(tot) | "
+        "decks(1g) | Tractability |"
+    )
+    L.append("|---|---:|---:|---:|---:|---:|---|")
+    for r in rows:
+        L.append(
+            f"| {r['label']} | {r['n_cards']} | {r['n_single_gate']} "
+            f"| {r['n_multi_gated']} | {r['deck_count_total']:,} | "
+            f"{r['deck_count_single_gate']:,} | {r['tractability']} |"
+        )
+    L.append("")
+    sum_single = sum(len(v) for v in attr["single_gate"].values())
+    L.append(
+        f"**Reconciliation:** {n_total} subsystem-gated = "
+        f"{n_single} single-gated + {n_multi} multi-gated; the per-"
+        f"subsystem `1gate` column sums to {sum_single} "
+        f"(== single-gated total). The breakout partitions exactly the "
+        f"same {n_total} cards the opaque tier count above reports "
+        f"(this metric reuses `classify_pool` verbatim — same tier, "
+        f"same pool); the headline is unchanged, only the BLOCKED-tail "
+        f"detail is itemised."
+    )
+    unclass = attr["by_subsystem"].get(scout_unclassified_key(), [])
+    if unclass:
+        L.append("")
+        L.append(
+            f"**Honest unclassified bucket ({len(unclass)}):** "
+            + ", ".join(f"`{u}`" for u in sorted(unclass))
+            + " — no taxonomy gate fired; flagged for a hand re-walk "
+            "rather than force-guessed (see `docs/SUBSYSTEM_ROADMAP.md`)."
+        )
+    return L
+
+
+def scout_unclassified_key() -> str:
+    """The scout's ``SUB_UNCLASSIFIED`` key, resolved without a
+    top-level import (the scout imports this module — keep the
+    dependency lazy / one-directional)."""
+    try:
+        import scout_r58_subsystem_attribution as scout  # noqa: E402
+
+        return scout.SUB_UNCLASSIFIED
+    except Exception:  # pragma: no cover - defensive
+        return "unclassified"
 
 
 # ------------------------------------------------- headline (one-liner)
@@ -748,6 +849,27 @@ def headline_line(res: PoolParityResult) -> str:
     suffix = (
         f" ⚠ {viol} residue-consistency violation(s)" if viol else ""
     )
+    # Round-58: surface the subsystem-gated single/multi split inline
+    # so the headline is no longer one opaque number — but stay ONE
+    # line and NEVER block (the scout import is defensive; if it fails
+    # the headline degrades to the plain count, same cron contract).
+    sub_detail = f"{c[TIER_BLOCKED_SUBSYSTEM]} subsystem-gated"
+    try:
+        _rows, _attr = _subsystem_breakout_rows()
+        if _attr is not None:
+            _ns = sum(
+                1
+                for cd in _attr["cards"].values()
+                if not cd["multi_gated"]
+            )
+            _nm = _attr["n_subsystem_gated"] - _ns
+            sub_detail = (
+                f"{c[TIER_BLOCKED_SUBSYSTEM]} subsystem-gated "
+                f"({_ns} single-gate / {_nm} multi-gated; "
+                f"see docs/SUBSYSTEM_ROADMAP.md)"
+            )
+    except Exception:  # pragma: no cover - defensive, never blocks
+        pass
     return (
         f"[pool-parity] {be}/{n} EoE cards "
         f"({_pct(be, n):.1f}%) byte-equal at the Effect+bridge level "
@@ -755,7 +877,7 @@ def headline_line(res: PoolParityResult) -> str:
         f"{c[TIER_ADMITTED]} bench-exercised; "
         f"{c[TIER_BLOCKED_MISSING]} genuinely_missing / "
         f"{c[TIER_BLOCKED_NON_EFFECT]} blocked_non_effect / "
-        f"{c[TIER_BLOCKED_SUBSYSTEM]} subsystem-gated. "
+        f"{sub_detail}. "
         f"NOT full-game-trajectory parity (caveat in "
         f"docs/POOL_PARITY.md).{suffix}"
     )

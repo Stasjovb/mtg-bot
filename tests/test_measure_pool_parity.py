@@ -459,3 +459,165 @@ def test_main_writes_doc_with_generated_header(mod):
         r"Effect\+bridge level\*\*",
         text,
     )
+    # Round-58: the BLOCKED-subsystem tier is no longer one opaque
+    # number — the per-subsystem breakout table + reconciliation must
+    # render into the regenerated doc.
+    assert "| Subsystem | #cards | 1gate | multi |" in text
+    assert "**Reconciliation:**" in text
+    assert "docs/SUBSYSTEM_ROADMAP.md" in text
+
+
+# --------------------------- round-58: subsystem attribution breakout
+#
+# The scout owns the subsystem taxonomy ONCE; this metric + these tests
+# import it (the same reuse discipline as ``measure_effect_coverage``'s
+# parser). These tests pin: a card maps to its expected subsystem;
+# multi-gated cards are handled; the per-subsystem counts reconcile
+# with the old single ``subsystem-gated`` bucket AND the residue
+# worklist.
+
+
+@pytest.fixture(scope="module")
+def scout():
+    import importlib.util as _ilu
+
+    sp = REPO_ROOT / "scripts" / "scout_r58_subsystem_attribution.py"
+    spec = _ilu.spec_from_file_location("_scout_r58_under_test", sp)
+    assert spec is not None and spec.loader is not None
+    m = _ilu.module_from_spec(spec)
+    sys.modules[spec.name] = m
+    spec.loader.exec_module(m)
+    return m
+
+
+@pytest.fixture(scope="module")
+def attr(scout):
+    return scout.subsystem_attribution()
+
+
+def test_attribution_total_reconciles_with_old_single_bucket(
+    scout, attr, result, mod
+):
+    """The per-subsystem breakout must partition EXACTLY the same cards
+    the opaque ``blocked_subsystem_gated`` tier reported (no card
+    gained/lost in the itemisation) — the headline stays honest."""
+    old_bucket = set(result.tiers[mod.TIER_BLOCKED_SUBSYSTEM])
+    assert set(attr["cards"].keys()) == old_bucket
+    assert attr["n_subsystem_gated"] == len(old_bucket)
+
+
+def test_single_gate_counts_sum_to_single_gated_total(scout, attr):
+    """Reconciliation invariant: every subsystem-gated card is either
+    single-gated (credited to its ONE gate) or multi-gated; the
+    per-subsystem ``single_gate`` lists sum to the single-gated total
+    with no double-count, and every card carries >=1 gate."""
+    n = attr["n_subsystem_gated"]
+    n_single = sum(
+        1 for c in attr["cards"].values() if not c["multi_gated"]
+    )
+    n_multi = n - n_single
+    assert n_single + n_multi == n
+    summed = sum(len(v) for v in attr["single_gate"].values())
+    assert summed == n_single
+    # Single-gate lists are disjoint (a single-gated card has exactly
+    # one owning subsystem).
+    seen: set[str] = set()
+    for names in attr["single_gate"].values():
+        for nm in names:
+            assert nm not in seen, f"{nm} double-counted single-gate"
+            seen.add(nm)
+    # Every card has at least one gate; a multi-gated card has >=2.
+    for nm, cd in attr["cards"].items():
+        assert len(cd["gates"]) >= 1
+        if cd["multi_gated"]:
+            assert len(cd["gates"]) >= 2
+            assert cd["last_mile"] is None
+        else:
+            assert len(cd["gates"]) == 1
+            assert cd["last_mile"] == cd["gates"][0]
+
+
+def test_known_card_subsystem_attribution(scout, attr):
+    """A card maps to the expected gating subsystem. Non-basic lands
+    are single-gated on the non-basic-land substrate; a warp creature
+    trips the warp gate; the honest unclassified residual is the two
+    documented rule-static enchantments."""
+    cards = attr["cards"]
+    # Breeding Pool: zero-Effect non-basic dual land — single-gated on
+    # the non-basic-land substrate.
+    bp = cards["Breeding Pool"]
+    assert bp["gates"] == [scout.SUB_NONBASIC_LAND]
+    assert bp["last_mile"] == scout.SUB_NONBASIC_LAND
+    assert bp["multi_gated"] is False
+    # Bygone Colossus: warp_cost-gated.
+    assert scout.SUB_WARP in cards["Bygone Colossus"]["gates"]
+    # The honest unclassified bucket is exactly the two documented
+    # rule-static enchantments (no force-guess).
+    unclass = set(attr["by_subsystem"].get(scout.SUB_UNCLASSIFIED, []))
+    assert unclass == {"Deafening Silence", "Leyline of Mutation"}
+    for u in unclass:
+        assert cards[u]["gates"] == [scout.SUB_UNCLASSIFIED]
+
+
+def test_multi_gated_card_recorded_under_every_gate(scout, attr):
+    """A multi-gated card appears under EVERY gate it trips in
+    ``by_subsystem`` and under NO subsystem's ``single_gate`` list."""
+    multi = [
+        nm for nm, c in attr["cards"].items() if c["multi_gated"]
+    ]
+    assert multi, "expected at least one multi-gated card"
+    for nm in multi:
+        gates = attr["cards"][nm]["gates"]
+        assert len(gates) >= 2
+        for g in gates:
+            assert nm in attr["by_subsystem"][g]
+        for sg_names in attr["single_gate"].values():
+            assert nm not in sg_names
+
+
+def test_residue_blocked_non_effect_not_in_subsystem_breakout(
+    scout, attr, mod
+):
+    """Cross-check vs the residue worklist: the 3 ``blocked_non_effect``
+    cards are in their OWN residue tier, NOT the subsystem-gated tier,
+    so they must be absent from the subsystem attribution set — the
+    breakout never double-counts a residue card. Their
+    ``non_effect_blocker`` subsystems (BECOMES_TAPPED / Aura) must
+    nonetheless be expressible keys in the taxonomy (consistency of
+    the named-subsystem vocabulary with the residue worklist)."""
+    _, non_effect = mod.residue_blocked_cards(RESIDUE_WORKLIST)
+    for card in non_effect:
+        assert card not in attr["cards"], (
+            f"{card!r} is residue blocked_non_effect but leaked into "
+            f"the subsystem-gated breakout"
+        )
+    # The residue non_effect_blocker vocabulary (BECOMES_TAPPED, Aura)
+    # must be representable in the taxonomy.
+    assert scout.SUB_BECOMES_TAPPED in scout._SUB_LABEL
+    assert scout.SUB_AURA in scout._SUB_LABEL
+
+
+def test_leverage_table_sorted_and_complete(scout, attr):
+    """Every occurring subsystem has a leverage row with a label,
+    tractability bucket and (possibly zero) deck-count; the table is
+    tractability-then-single-gate sorted (contained first)."""
+    dc = {n: 0 for n in attr["cards"]}  # zero deck pool is fine here
+    rows = scout.leverage_table(attr, dc)
+    assert {r["subsystem"] for r in rows} == set(attr["order"])
+    for r in rows:
+        assert r["label"]
+        assert r["tractability"] in (
+            scout.TRACT_CONTAINED,
+            scout.TRACT_MEDIUM,
+            scout.TRACT_SPRAWLING,
+            scout.TRACT_DIFFUSE,
+        )
+        assert r["n_cards"] == r["n_single_gate"] + r["n_multi_gated"]
+    tract_rank = {
+        scout.TRACT_CONTAINED: 0,
+        scout.TRACT_MEDIUM: 1,
+        scout.TRACT_SPRAWLING: 2,
+        scout.TRACT_DIFFUSE: 3,
+    }
+    ranks = [tract_rank[r["tractability"]] for r in rows]
+    assert ranks == sorted(ranks)
