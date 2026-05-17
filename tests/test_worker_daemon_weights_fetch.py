@@ -731,4 +731,7 @@ def test_claim_loop_delegates_and_returns_version_dir(tmp_path):
     )
     assert out == tmp_path / "vD"
     assert (out / "weights.pt").read_bytes() == b"W"
-    assert len(http.calls) == 2
+    # Post-merge fetch_weights_if_missing runs the coherency algorithm
+    # + reuses _InterProcessLock directly (no longer delegates to
+    # fetch_weights_atomic). Invariant: exactly ONE weights-blob GET.
+    assert len([c for c in http.calls if not c.endswith("/metadata")]) == 1

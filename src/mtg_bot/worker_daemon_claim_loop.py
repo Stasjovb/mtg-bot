@@ -25,10 +25,13 @@ default to ``socket.gethostname()``. Documented in :func:`resolve_worker_id`.
 from __future__ import annotations
 
 import abc
+import hashlib
 import json
 import logging
 import os
+import shutil
 import socket
+import tempfile
 import threading
 import time
 import traceback
@@ -235,8 +238,172 @@ def _http_post_multipart(
 # ---------------------------------------------------------------------------
 
 
+# Sidecar that records the fingerprint of the (metadata.json,
+# weights.pt) PAIR that is currently cached for a version. Its
+# presence is the "this version dir is coherent" signal — a version
+# dir without it (or with a stale one) is treated as poisoned and
+# re-fetched atomically.
+CACHE_FINGERPRINT_FILE = ".cache_fingerprint.json"
+
+
+class PoisonedWeightsCacheError(RuntimeError):
+    """The cached ``(metadata.json, weights.pt)`` pair for a version is
+    incoherent — the metadata describes one architecture but the
+    ``weights.pt`` state_dict is for a different one.
+
+    Raised LOUDLY (with the offending version + both sides' identities)
+    instead of letting ``NNEvaluator.__init__ -> load_state_dict`` blow
+    up with an opaque torch state_dict stack trace that crashes every
+    game at evaluator init. This is the true cluster "stale node"
+    failure mode: a ``v6/metadata.json`` from the old MLP era (no
+    ``architecture`` field) paired with a ``v6/weights.pt`` that is the
+    structured/transformer checkpoint.
+    """
+
+
 def _weights_dir(weights_root: Path, version: str) -> Path:
     return Path(weights_root) / version
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _read_fingerprint(version_dir: Path) -> Optional[dict[str, Any]]:
+    """Return the cached pair fingerprint sidecar, or ``None`` if it is
+    absent / unreadable / malformed (all of which mean "treat the cache
+    as un-trustworthy and re-fetch")."""
+    fp_path = version_dir / CACHE_FINGERPRINT_FILE
+    if not fp_path.is_file():
+        return None
+    try:
+        with fp_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None
+        return data
+    except (OSError, ValueError):
+        return None
+
+
+def _is_cache_coherent(
+    version_dir: Path, server_metadata_sha: str
+) -> bool:
+    """A cached version dir is coherent iff:
+
+    1. both ``metadata.json`` and ``weights.pt`` exist, AND
+    2. a fingerprint sidecar exists recording the SHA of the pair that
+       was atomically written, AND
+    3. the sidecar's ``metadata_sha256`` equals the SHA the coordinator
+       is serving NOW (so a re-trained checkpoint — which changes
+       ``metadata.json``, e.g. its ``git_commit`` — forces a re-fetch),
+       AND
+    4. the on-disk ``metadata.json`` / ``weights.pt`` still hash to the
+       fingerprint's recorded values (so a half-written or tampered
+       file is caught even if the metadata SHA happens to match).
+
+    Any failure means "poisoned / stale — re-fetch the pair".
+    """
+    meta_path = version_dir / "metadata.json"
+    weights_path = version_dir / "weights.pt"
+    if not (meta_path.is_file() and weights_path.is_file()):
+        return False
+    fp = _read_fingerprint(version_dir)
+    if fp is None:
+        return False
+    if fp.get("metadata_sha256") != server_metadata_sha:
+        return False
+    try:
+        disk_meta_sha = _sha256(meta_path.read_bytes())
+        disk_weights_sha = _sha256(weights_path.read_bytes())
+    except OSError:
+        return False
+    return (
+        fp.get("metadata_sha256") == disk_meta_sha
+        and fp.get("weights_sha256") == disk_weights_sha
+    )
+
+
+def _os_replace_retry(src: Path, dst: Path, *, attempts: int = 5) -> None:
+    """``os.replace`` with a bounded retry on Windows ``PermissionError``.
+
+    On Windows a directory/file rename can transiently fail with
+    ``PermissionError`` (winerror 5 / 32) when another handle is open
+    (e.g. a peer subprocess mid ``torch.load``, or AV scanning the
+    freshly written ``weights.pt``). The rename itself stays atomic —
+    we just retry the whole atomic op a few times with a short backoff
+    rather than fall back to a non-atomic copy. Mirrors the trainer's
+    documented Windows ``os.replace`` retry loop.
+    """
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.2 * (i + 1))
+
+
+def _atomic_write_pair(
+    weights_root: Path,
+    version: str,
+    metadata_bytes: bytes,
+    weights_bytes: bytes,
+) -> Path:
+    """Write the ``(metadata.json, weights.pt)`` pair + its fingerprint
+    sidecar as ONE atomic unit.
+
+    Strategy: stage all three files into a sibling temp dir under the
+    same ``weights_root`` (so the final move is a same-filesystem
+    rename, which is atomic), then ``os.replace`` the staged dir into
+    the version-dir slot. A reader can therefore only ever see either
+    the OLD complete pair or the NEW complete pair — never a
+    half-updated mix (old metadata + new weights), which is exactly the
+    poisoning the daemon used to crash on.
+    """
+    weights_root = Path(weights_root)
+    weights_root.mkdir(parents=True, exist_ok=True)
+    target_dir = _weights_dir(weights_root, version)
+
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{version}.staging.", dir=str(weights_root)
+        )
+    )
+    try:
+        (staging / "metadata.json").write_bytes(metadata_bytes)
+        (staging / "weights.pt").write_bytes(weights_bytes)
+        fingerprint = {
+            "metadata_sha256": _sha256(metadata_bytes),
+            "weights_sha256": _sha256(weights_bytes),
+            "version": version,
+            "written_at": time.time(),
+        }
+        (staging / CACHE_FINGERPRINT_FILE).write_text(
+            json.dumps(fingerprint, indent=2), encoding="utf-8"
+        )
+        # Replace the slot atomically. ``os.replace`` onto an existing
+        # directory fails on every OS, so swap the old dir out first.
+        if target_dir.exists():
+            trash = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{version}.trash.", dir=str(weights_root)
+                )
+            )
+            trash_inner = trash / "old"
+            _os_replace_retry(target_dir, trash_inner)
+            try:
+                _os_replace_retry(staging, target_dir)
+            finally:
+                shutil.rmtree(trash, ignore_errors=True)
+        else:
+            _os_replace_retry(staging, target_dir)
+        staging = None  # consumed by os.replace; don't rmtree it
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+    return target_dir
 
 
 def fetch_weights_if_missing(
@@ -245,40 +412,211 @@ def fetch_weights_if_missing(
     weights_root: Path,
     *,
     http_get: Callable[..., tuple[int, bytes, dict[str, str]]] = _http_get,
+    verify_coherent: bool = True,
 ) -> Path:
-    """Ensure ``trained_weights/<version>/weights.pt`` and
-    ``metadata.json`` exist locally. Fetch from
-    ``<coordinator_url>/v2/weights/<version>`` (+ ``/metadata``) on
-    cache miss. Returns the version dir.
+    """Ensure a COHERENT ``<weights_root>/<version>/{metadata.json,
+    weights.pt}`` pair exists locally, fetching from
+    ``<coordinator_url>/v2/weights/<version>`` (+ ``/metadata``) when
+    the cache is missing OR poisoned. Returns the version dir.
 
-    The two GETs go through the supplied ``http_get`` so the test
-    suite can monkeypatch it to count cache hits vs misses.
+    Coherency model (the core of the fix for the cluster "stale node"
+    100%-crash): the two files for a version label can become
+    MISMATCHED when one is re-fetched without the other. Observed on a
+    real node: ``v6/metadata.json`` from the old MLP era (no
+    ``architecture`` field) paired with ``v6/weights.pt`` that is the
+    structured checkpoint -> the daemon builds the wrong model class ->
+    ``load_state_dict`` raises and every game crashes at evaluator
+    init. Fix: the metadata sidecar is the cheap, always-current
+    source of truth -- we ALWAYS fetch ``/metadata`` first, hash it,
+    and compare against a fingerprint sidecar written when the pair
+    was last published; on miss / fingerprint-absent / server-SHA-
+    changed / on-disk-drift we re-fetch BOTH and publish via a temp
+    dir + atomic rename so a reader never sees a half-updated pair.
 
-    Concurrency: the v2 worker daemon runs games in a
-    ``ProcessPoolExecutor`` of ``--n-workers`` subprocesses that all
-    share this on-disk cache. On a cold cache, N subprocesses hit
-    this function simultaneously on their first claim. The fetch is
-    therefore **atomic + inter-process locked** (see
-    :func:`mtg_bot.worker_daemon_weights_fetch.fetch_weights_atomic`):
-    the download is staged to a temp file and ``os.replace``d into
-    place so a reader never observes a partial ``weights.pt``, and a
-    per-version lock collapses the N redundant cold fetches into one.
+    ``verify_coherent`` (default True) also runs the defensive load-
+    time check :func:`assert_metadata_weights_coherent` so a structural
+    disagreement that slipped through (or a coordinator serving a
+    poisoned pair) fails LOUDLY with
+    :class:`PoisonedWeightsCacheError`, not an opaque torch state_dict
+    trace inside ``NNEvaluator``.
 
-    This closes the TOCTOU that surfaced on the AWS c7i.8xlarge
-    economics bench (``--n-workers 30``): 72/100 games crashed
-    instantly at game start (``torch.load`` of a 0-byte / partially
-    written checkpoint) while 28 ran normally — the bimodal
-    "instant-crash or fully-normal" signature of a startup race.
+    Concurrency: the cold-fetch path is serialized by a per-version
+    inter-process lock
+    (:class:`mtg_bot.worker_daemon_weights_fetch._InterProcessLock`),
+    so the N ``--n-workers`` subprocesses that hit a cold cache on
+    their first claim collapse into exactly ONE fetch -- closing the
+    TOCTOU torn-read that crashed 72/100 games at game start on the
+    c7i.8xlarge (``--n-workers 30``) bench, while the atomic
+    ``_atomic_write_pair`` publish keeps the pair coherent. The lock
+    file lives in ``weights_root`` (NOT the version dir, which
+    ``_atomic_write_pair`` swaps wholesale).
     """
-    from mtg_bot.worker_daemon_weights_fetch import fetch_weights_atomic
+    from mtg_bot.worker_daemon_weights_fetch import _InterProcessLock
 
+    weights_root = Path(weights_root)
+    weights_root.mkdir(parents=True, exist_ok=True)
     target_dir = _weights_dir(weights_root, version)
-    return fetch_weights_atomic(
-        coordinator_url=coordinator_url,
-        version=version,
-        weights_dir=target_dir,
-        http_get=http_get,
-        http_timeout_s=WEIGHTS_HTTP_TIMEOUT_S,
+    base = coordinator_url.rstrip("/")
+
+    def _server_meta_and_coherent() -> "tuple[bytes, bool]":
+        status, metadata_bytes, _ = http_get(
+            f"{base}/v2/weights/{version}/metadata",
+            timeout=WEIGHTS_HTTP_TIMEOUT_S,
+        )
+        if status != 200:
+            raise RuntimeError(
+                f"GET /v2/weights/{version}/metadata failed: "
+                f"status={status}"
+            )
+        return metadata_bytes, _is_cache_coherent(
+            target_dir, _sha256(metadata_bytes)
+        )
+
+    # Lock-free fast path: pair already coherent w.r.t. live metadata.
+    _metadata_bytes, coherent = _server_meta_and_coherent()
+    if coherent:
+        if verify_coherent:
+            assert_metadata_weights_coherent(target_dir)
+        return target_dir
+
+    # Cold / poisoned: serialize concurrent cold fetches across the
+    # box-local subprocess pool; first writer publishes the coherent
+    # pair atomically, peers re-check under the lock and return it.
+    lock_path = weights_root / f".{version}.fetch.lock"
+    with _InterProcessLock(lock_path):
+        metadata_bytes, coherent = _server_meta_and_coherent()
+        if not coherent:
+            status, weights_bytes, _ = http_get(
+                f"{base}/v2/weights/{version}",
+                timeout=WEIGHTS_HTTP_TIMEOUT_S,
+            )
+            if status != 200:
+                raise RuntimeError(
+                    f"GET /v2/weights/{version} failed: status={status}"
+                )
+            target_dir = _atomic_write_pair(
+                weights_root, version, metadata_bytes, weights_bytes
+            )
+    if verify_coherent:
+        assert_metadata_weights_coherent(target_dir)
+    return target_dir
+
+
+# ---------------------------------------------------------------------------
+# Defensive load-time coherency check (defense-in-depth)
+# ---------------------------------------------------------------------------
+
+
+# state_dict key fragments that uniquely identify the structured
+# transformer checkpoint (``StructuredModel``). None of these appear in
+# the flat-feature MLP dual-head models (``_ValuePolicyMLP`` /
+# ``_ValuePolicyMLPSeparate``), whose trunk keys look like
+# ``trunk.0.weight``. We don't import torch here (the claim-loop module
+# is deliberately torch-free); ``weights.pt`` is a zip whose member
+# names embed the state_dict keys, so a cheap substring scan over the
+# raw bytes is enough to tell the two architectures apart without
+# materializing tensors.
+_STRUCTURED_STATE_DICT_MARKERS: tuple[bytes, ...] = (
+    b"cls_token",
+    b"printing_embed",
+    b"trunk.layers.0.self_attn",
+)
+_MLP_STATE_DICT_MARKERS: tuple[bytes, ...] = (
+    b"trunk.0.weight",
+)
+
+
+def _weights_pt_looks_structured(weights_path: Path) -> Optional[bool]:
+    """Best-effort architecture sniff of a ``weights.pt`` zip.
+
+    Returns ``True`` if it carries structured-model markers, ``False``
+    if it carries flat-MLP markers, ``None`` if indeterminate (an
+    unreadable / tiny / synthetic test blob — callers treat ``None`` as
+    "can't tell, don't block").
+    """
+    try:
+        raw = weights_path.read_bytes()
+    except OSError:
+        return None
+    if any(m in raw for m in _STRUCTURED_STATE_DICT_MARKERS):
+        return True
+    if any(m in raw for m in _MLP_STATE_DICT_MARKERS):
+        return False
+    return None
+
+
+def assert_metadata_weights_coherent(version_dir: Path) -> None:
+    """Raise :class:`PoisonedWeightsCacheError` if the cached
+    ``metadata.json`` and ``weights.pt`` disagree about the model
+    architecture, BEFORE the opaque torch ``load_state_dict`` does.
+
+    The disagreement we catch is exactly the production failure: the
+    metadata says (or back-compat-defaults to) the flat-feature MLP
+    dual-head model, but ``weights.pt`` is the structured/transformer
+    checkpoint (or vice versa). The MLP path is what the loader builds
+    when ``architecture`` is absent, so an OLD metadata.json next to a
+    NEW structured weights.pt is the poisoned case.
+
+    Indeterminate inputs (synthetic test blobs, missing files) are NOT
+    flagged — this is a targeted defense against the known poisoning,
+    not a general weight validator. The structural fix
+    (atomic coherent caching) is primary; this is defense-in-depth so a
+    poisoned pair — even one a misconfigured coordinator serves — fails
+    with a clear diagnostic instead of a 100%-crash.
+    """
+    version_dir = Path(version_dir)
+    meta_path = version_dir / "metadata.json"
+    weights_path = version_dir / "weights.pt"
+    if not (meta_path.is_file() and weights_path.is_file()):
+        return
+
+    try:
+        with meta_path.open("r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        if not isinstance(metadata, dict):
+            metadata = {}
+    except (OSError, ValueError):
+        # Unreadable metadata is its own failure mode handled
+        # elsewhere; don't double-report here.
+        return
+
+    training = metadata.get("training") if isinstance(
+        metadata.get("training"), dict
+    ) else {}
+    declared_arch = metadata.get("architecture") or training.get(
+        "architecture"
+    )
+    # The loader back-compat-defaults a MISSING architecture to the
+    # flat-MLP dual-head path (``_ValuePolicyMLP``) — that's precisely
+    # what builds the wrong class for a structured weights.pt.
+    effective_arch = declared_arch or "shared"
+
+    weights_is_structured = _weights_pt_looks_structured(weights_path)
+    if weights_is_structured is None:
+        return  # can't tell — don't block (synthetic test blob etc.)
+
+    metadata_is_structured = effective_arch == "structured"
+    if weights_is_structured == metadata_is_structured:
+        return  # coherent
+
+    weights_desc = (
+        "structured/transformer checkpoint"
+        if weights_is_structured
+        else "flat-feature MLP checkpoint"
+    )
+    meta_desc = (
+        "structured"
+        if metadata_is_structured
+        else f"{effective_arch!r} (flat-feature MLP)"
+        + ("" if declared_arch else " [architecture field ABSENT]")
+    )
+    raise PoisonedWeightsCacheError(
+        f"poisoned weights cache for {version_dir.name!r}: "
+        f"metadata says architecture={meta_desc} but weights.pt is a "
+        f"{weights_desc}. The cached (metadata.json, weights.pt) pair "
+        f"is incoherent — delete {version_dir} and let the daemon "
+        f"re-fetch a coherent pair, or fix the coordinator's served "
+        f"pair for this version."
     )
 
 

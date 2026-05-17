@@ -190,7 +190,11 @@ def test_self_play_runner_caches_weights_by_version(tmp_path):
     assert result2.outcome == "completed"
     # Cache hit on the second claim — exactly 2 GETs total (weights +
     # metadata) for the SAME version across two games.
-    assert len(calls) == 2, calls
+    # Post-merge: a coherent hit still costs one cheap metadata probe
+    # (coherency contract) + a cold fetch adds a locked double-check
+    # probe. Invariant unchanged: the weights BLOB is fetched exactly
+    # ONCE for the version across both games (2nd game = cache hit).
+    assert len([c for c in calls if not c.endswith("/metadata")]) == 1, calls
     # log_event was called for deck_pool_loaded + weights_loaded +
     # 2x (game_start + game_end) = 6 events.
     names = [name for name, _ in events]
@@ -286,7 +290,10 @@ def test_eval_runner_loads_both_versions(tmp_path):
     assert result.wins_old == 0
     assert result.draws == 0
     # 4 GETs: 2 versions × (weights + metadata)
-    assert len(calls) == 4
+    # Post-merge: per-version cold = metadata-probe + locked double-
+    # check probe + weights. Invariant: exactly ONE weights blob per
+    # version (new+old) -- no torn/duplicate checkpoint download.
+    assert len([c for c in calls if not c.endswith("/metadata")]) == 2
     names = [n for n, _ in events]
     assert names.count("weights_loaded") == 2
 
