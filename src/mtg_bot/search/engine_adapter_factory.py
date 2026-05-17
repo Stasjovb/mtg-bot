@@ -100,13 +100,18 @@ def make_game_state_adapter(
     if src in ("rust", "rust_shadow"):
         raise NotImplementedError(
             f"decision_source={src!r} requested at a Python-engine "
-            f"construction site. The Rust-state loader wiring at the "
-            f"production self-play sites is sequenced into B3-S3/S4 "
-            f"(the build_matched_states loader path + the rust_shadow "
-            f"shadow-checker). Construct the Rust provider directly "
-            f"from a Rust GameState via "
-            f"make_rust_game_state_adapter(...) until then. NO silent "
-            f"fallback to Python (feedback_no_fallback_hybrids)."
+            f"construction site. A Rust-sourced game is built from a "
+            f"DeckSpec via the surviving matched-state loader path, "
+            f"NOT from a pre-built Python `engine` (the production "
+            f"self-play sites pass a Python engine here). Build the "
+            f"Rust-sourced provider from the spec instead: "
+            f"make_rust_game_state_adapter(rust_state, spec=spec) for "
+            f"`rust`, or build_shadow_checked_adapter(spec) for "
+            f"`rust_shadow` (the B3-S4 bake-in). Enabling these at the "
+            f"production construction sites is the orchestrator-"
+            f"sequenced atomic flip (B3-S5) — explicitly NOT done by "
+            f"B3-S1..S4. NO silent fallback to Python "
+            f"(feedback_no_fallback_hybrids)."
         )
 
     raise ValueError(f"unknown decision_source: {src!r}")
@@ -161,3 +166,18 @@ def make_rust_game_state_adapter(
         expose_combat_decisions=expose_combat_decisions,
         printing_resolver=printing_resolver,
     )
+
+
+def build_shadow_checked_adapter(spec: Any):
+    """B3-S4 ``rust_shadow`` bake-in entry point: build a
+    ``ShadowCheckedRustAdapter`` from a ``cross_engine.DeckSpec`` (Rust
+    drives, Python checks in lock-step; the 4-assertion tripwire
+    fires every step, raising loudly on any divergence — the umbrella's
+    bad-flip detection, ``SOT_FLIP_CUTOVER_PLAN.md`` §3). The
+    Step-0 C4 post-R76 scaled re-sweep + one real ``mtg_bot iterate``
+    iteration run through this; enabling it at the production
+    construction sites is the orchestrator-sequenced atomic flip
+    (B3-S5), NOT done by B3-S1..S4."""
+    from mtg_bot.search.rust_shadow import build_shadow_checked_adapter as _b
+
+    return _b(spec)

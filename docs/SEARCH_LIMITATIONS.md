@@ -6152,7 +6152,90 @@ regression.
 
 ---
 
-## Adding a new entry
+## B3-S4 G4 — the I20 mana-empty-timing asymmetry diverges the legal CAST SET under the role-swapped (Rust-driven / Python-shadow) contract
+
+**Where.** `src/mtg_bot/search/rust_shadow.py`
+(`ShadowCheckedRustAdapter`); root cause in `src/mtg_bot/turn.py:
+1081-1083` (the Python simplified mana model) ∧
+`rust/src/state_ops_steps.rs:advance_phase` (the Rust CR-106.4
+model); the underlying engine asymmetry is `RUST_PARITY_GAPS.md
+§I20`. Surfaced by the B3-S4 `rust_shadow` bake-in (the harness
+working as designed — this is the spec's "surface the hidden gap
+BEFORE the flip", exactly as the B3 audit surfaced G1).
+
+**What it is (the precisely-scoped NEW pre-flip blocker — G4, the
+C1/G1-analog for the I20 axis).** Rust's `advance_phase` empties
+both players' mana pools on EVERY phase tick (CR 106.4 — the
+CR-correct rule). The Python engine DELIBERATELY holds mana across
+phases within a turn and clears only at cleanup (a documented
+simplification, `turn.py:1081-1083`). The existing
+`cross_engine.step_both` harness reconciles this by replaying a
+**Python-derived** action script on both engines AND driving
+`advance_phase_python` (the Python mana-empty mirror) in lockstep
+with `rust.advance_phase()`. **At the SoT flip the contract inverts**
+(Rust drives, Python shadows): the Python checker is the vanilla
+`MtgGameStateAdapter` priority loop, which uses Python's native
+hold-until-cleanup model. Consequently Python's mana-aware
+`legal.legal_actions` (`_can_cast` → `can_pay_cost`) sees held-over
+floating mana Rust has already emptied, so it **enumerates a
+`CastSpell` that Rust's CR-correct per-phase-empty model correctly
+prunes** — a legal-CAST-SET divergence, not merely a `mana_pool`
+field divergence. Verified live: `tiny_synthetic_deckspec`, turn 7
+POSTCOMBAT_MAIN — Python p0 holds 1 G (floated an earlier phase) +
+1 untapped Forest ⟹ Python offers `CastSpell(Grizzly Bears {1}{G})`;
+Rust (0 floating after per-phase empty + 1 Forest = 1 mana) prunes
+it. (The bare `mana_pool_p0/p1` field divergence is the documented-
+accepted I20 sub-case, reconciled in `_assert_state_eq`'s
+`_DOCUMENTED_ACCEPTED_FIELDS` exactly as `compare_fields`' own
+`known_gap` filter handles documented gaps; the load-bearing item is
+the cast-SET divergence, which the LEGAL_SET_EQ tripwire raises
+loudly on.)
+
+**Why it's OK as a B3-S4 deliverable (honest scope).** B3-S4's
+deliverable is the `rust_shadow` bake-in HARNESS + the four-assertion
+tripwire + the canon machinery + the negative-control proofs that the
+tripwire fires loudly — ALL delivered and green. The harness is
+working CORRECTLY: it surfaced G4 as a precisely-scoped, evidenced
+blocker (the bake-in's entire purpose, per spec §4 / the directive's
+"do NOT paper over: honest-stop with precise scoped evidence as a new
+C1/G1-analog blocker"). G4 is NOT papered over — it is pinned by
+`tests/test_rust_shadow_bakein.py::test_g4_i20_cast_set_blocker_is_
+surfaced` (asserts the tripwire raises LEGAL_SET_EQ naming the
+cast_spell) + the divergence-clean-over-the-valid-prefix pin.
+`decision_source="python"` (the default) is entirely untouched —
+the Python engine runs its normal hold-until-cleanup model as the
+SoT; G4 only exists under the not-yet-enabled Rust-driven contract.
+
+**Failure mode.** If B3-S5 flipped to `rust` (Rust-only) WITHOUT
+closing G4, a Rust-sourced self-play game would (correctly, per CR)
+prune casts the Python-trained policy expected to be legal — a
+behavior shift, not a crash. Under `rust_shadow` (the bake-in) it is
+a loud LEGAL_SET_EQ raise = an automatic no-flip signal. So G4 is a
+**hard input to the orchestrator's flip go/no-go** — the flip
+(B3-S5) MUST NOT proceed until G4 is closed (or explicitly accepted
+with the reduced-universe rationale + C6 fence, an umbrella
+judgment).
+
+**Fix scope.** Drive the Python checker's phase advancement through
+the existing `cross_engine.advance_phase_python` I20-mirror in
+lockstep with the Rust provider's `advance_phase` (so the Python
+checker's mana matches Rust's CR-correct per-phase empty, exactly as
+the migration-era `step_both` harness already does — the spec §4.3
+"reuses the existing step_both machinery"). This is a bounded,
+well-shaped follow-up — the I20 mirror already exists and is pinned;
+the work is wiring the shadow-checker's Python side to drive it at
+phase boundaries instead of the vanilla `MtgGameStateAdapter`
+priority loop. It is an orchestrator-sequenced bake-in-scaling
+refinement (it precedes the Step-0 C4 scaled re-sweep running
+through the bake-in), explicitly NOT a B3-S4 deliverable
+(`feedback_no_fallback_hybrids` honest-stop: B3-S4 ships the
+harness + the honest G4 evidence, not a wrapper that hides it).
+
+**Impact.** Zero on `decision_source="python"` (the SoT path is
+untouched — the Python engine's documented hold-until-cleanup model
+is unchanged). Under `rust_shadow` it is the load-bearing pre-flip
+gate signal (correctly loud). The proper closure is parity-positive
+(it aligns the bake-in to the CR-correct Rust model the flip targets).
 
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
