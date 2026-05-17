@@ -4310,7 +4310,7 @@ token. **This is a deliberate deviation from the mini-spec's
 field-free-unit-variant sketch, taken because it is the only
 bridge-correct option**: Rust's registry has NO intrinsic Lander
 concept (`RegistryData::is_token` is purely supertype-derived;
-`cards.rs:4482`), so a bespoke token-minting arm MUST carry the pid
+`cards.rs:4584`), so a bespoke token-minting arm MUST carry the pid
 exactly as `Effect::CreateToken { count, token_printing_id }` does
 (the round-49/56 `TOKEN_PRINTING_SUBSTRATE`). The pid is a Rust-side
 registry-index carrier ONLY; the bridge **drops** it and constructs
@@ -4535,9 +4535,12 @@ cross-engine probe
 (`tests/test_parity_smoke.py::test_cross_engine_real_eoe_orbital_plunge_excess_conditional_lander_parity`
 — drives the actual parsed Orbital Plunge `spell_effect`
 cross-engine, POSITIVE excess + NEGATIVE-counters excess (the §2
-pin) + NO-excess arms, WHOLE field byte-equal modulo the documented
-comparator counters-blindness; the spell-card bench-admit lever
-intentionally NOT exercised).
+pin) + NO-excess arms, WHOLE field byte-equal with a strict
+`compare_fields == []` (the r70 `_net_counters` comparator fix
+closed the former counters-blindness — no targeted-delta carve-out;
+verified live: the `_is_known_counters_blind_gy_diff` filter is
+deleted and the probe asserts strict `compare_fields == []`); the
+spell-card bench-admit lever intentionally NOT exercised).
 
 ---
 
