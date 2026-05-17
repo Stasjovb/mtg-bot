@@ -117,7 +117,6 @@ from __future__ import annotations
 import io
 import re
 import sys
-from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -161,66 +160,34 @@ _TIER_LABEL = {
 
 
 # ------------------------------------------------- reuse the coverage parser
+#
+# Round-66 covered-set extraction precursor: ``covered_python_class_set``
+# and ``card_effect_classes`` were factored OUT of this script into the
+# production-importable ``mtg_bot.parity.effect_coverage`` module so the
+# spell-card-bridge Phase 1 guardrail
+# (``trajectory._spell_effect_is_covered_and_bridged``) can query the
+# live covered set without a ``scripts/`` import (a layering inversion).
+# This script RE-EXPORTS them (unchanged names + signatures) so its own
+# consumers (``tests/test_measure_pool_parity.py``, the two
+# ``scout_r58`` / ``scout_r63`` scouts, the staleness cron) and the
+# test's ``monkeypatch.setattr(mod, "covered_python_class_set", ...)``
+# continue to work verbatim. Exactly ONE definition of "covered" — the
+# §2-teeth requirement (the parse rule is NOT duplicated here).
 
+if str(REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+# Keep ``scripts/`` on ``sys.path`` for the lazy ``scout_r58`` /
+# ``scout_r63`` imports below — previously ensured as a side effect of
+# the now-removed ``_coverage_module()`` (it inserted ``SCRIPTS_DIR``);
+# the scout breakout must keep rendering into ``docs/POOL_PARITY.md``
+# exactly as before this refactor.
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
-def _coverage_module():
-    """Import ``scripts/measure_effect_coverage`` so its EoE-pool
-    walker + Rust parser + name-mapping are reused verbatim (the parse
-    rule is NOT duplicated here — the round-19 cron's same discipline).
-    """
-    if str(SCRIPTS_DIR) not in sys.path:
-        sys.path.insert(0, str(SCRIPTS_DIR))
-    import measure_effect_coverage as mec  # noqa: E402
-
-    return mec
-
-
-def covered_python_class_set() -> set[str]:
-    """The set of Python ``Effect`` class names that have a live Rust
-    ``Effect::`` variant + (by the coverage script's mapping) a
-    counterpart — i.e. ``py_class_set ∩ rust_py_name_set``. This is the
-    EXACT "covered" relation ``measure_effect_coverage`` reports as its
-    class-count headline; reused so the two metrics can never disagree
-    on what "covered" means."""
-    mec = _coverage_module()
-    py_classes, _examples, _n = mec.collect_python_effect_vocab()
-    rust_variants = mec.collect_rust_effect_variants()
-    rust_py_name_set = {mec.map_rust_to_python(v) for v in rust_variants}
-    return set(py_classes.keys()) & rust_py_name_set
-
-
-# ------------------------------------------------- per-card Effect classes
-
-
-def card_effect_classes(printing) -> set[str]:
-    """The distinct Python ``Effect`` class names a single printing
-    emits, using ``measure_effect_coverage``'s exact recursive walker
-    (``_maybe_walk`` over ``spell_effect`` + ``triggered_abilities`` +
-    ``activated_abilities`` + ``static_abilities``). Returns an empty
-    set for a pure-vanilla / keyword-only card."""
-    mec = _coverage_module()
-    from collections import Counter
-
-    classes: Counter[str] = Counter()
-    examples: dict[str, set[str]] = defaultdict(set)
-    seen_ids: set[int] = set()
-    name = getattr(printing, "name", "?")
-    try:
-        mec._maybe_walk(
-            printing.spell_effect, classes, examples, name, seen_ids
-        )
-        for ta in printing.triggered_abilities:
-            mec._maybe_walk(ta, classes, examples, name, seen_ids)
-        for aa in getattr(printing, "activated_abilities", ()) or ():
-            mec._maybe_walk(aa, classes, examples, name, seen_ids)
-        for sa in getattr(printing, "static_abilities", ()) or ():
-            mec._maybe_walk(sa, classes, examples, name, seen_ids)
-    except Exception:
-        # Mirror the coverage walker's defensive contract: a card the
-        # walker can't introspect contributes no classes (it then
-        # falls to a BLOCKED tier — never spuriously "covered").
-        return set()
-    return set(classes.keys())
+from mtg_bot.parity.effect_coverage import (  # noqa: E402,F401
+    card_effect_classes,
+    covered_python_class_set,
+)
 
 
 # ------------------------------------------------- genuine-probe inventory
