@@ -171,6 +171,37 @@ This module is that check. It:
    subsystem on a different lane. Same never-blocking hook contract:
    the rows only add to the report + flip the standalone/CI exit.
 
+7. **Cross-entry card-status consistency (round-63 extension).** The
+   round-54 lexical / round-55 structural / round-56
+   ``blocked_non_effect`` arms each judge ONE entry in isolation —
+   none looks ACROSS entries. That leaves a structurally-silent class
+   the audit's own round-54 section names as the historical pain: an
+   *internally self-contradictory* worklist where the same card is
+   carried as ``genuinely_missing`` in one row AND reclassified-out
+   (``closed`` / ``blocked_non_effect``) in another. The audit was
+   exactly this for Mightform Harmonizer (§2.6 line ~80 recorded its
+   round-31 closure while lines ~586/598/984/1048 still said "no Rust
+   arm"); the round-54 re-walk fixed the *instances* but no guard was
+   ever added against the *class* recurring — and it recurs precisely
+   via a same-round fold: an agent closes a residue card but forgets
+   to flip the card's still-``genuinely_missing`` row, so the card is
+   simultaneously counted in the load-bearing "how far from parity"
+   number (= # ``genuinely_missing`` entries) AND recorded as
+   reclassified-out, each row passing its own in-isolation arm. The
+   round-63 guard (``compute_card_status_consistency``) is the first
+   cross-entry arm: it groups every entry by its printed ``card`` and
+   flags any card whose rows MIX ``genuinely_missing`` with a
+   reclassified-out status (one ``residue_card_status_conflict`` row
+   per such card). It is deliberately tight — it does NOT flag the
+   *legitimate* same-status multi-row patterns this worklist already
+   uses (two ``genuinely_missing`` rows = two distinct unshipped arms,
+   e.g. Lightstall Inquisitor's CastFromExile + EachOpponentExiles;
+   two ``closed`` rows = a kept cron-regression duplicate). Only the
+   load-bearing contradiction surfaces. Pure — one pass over the
+   parsed worklist, no live tree / no git. Same additive
+   never-blocking post-commit-hook contract as the round-54/55/56
+   rows.
+
 Standalone use::
 
     PYTHONPATH=src \\
@@ -674,6 +705,122 @@ def compute_blocked_non_effect_staleness(
     return drifts
 
 
+# --------------------------- round-63 cross-entry card-status consistency
+#
+# The round-54 lexical / round-55 structural / round-56 blocked_non_effect
+# arms each evaluate ONE entry against the live tree in isolation. None of
+# them looks ACROSS entries. That leaves a structurally-silent class the
+# audit's own round-54 section names as the historical pain: a worklist
+# that is *internally self-contradictory* — the same card carried as
+# `genuinely_missing` in one row AND reclassified-out (`closed` /
+# `blocked_non_effect`) in another. The audit was exactly this for
+# Mightform (§2.6 line ~80 recorded its round-31 closure while lines
+# ~586/598/984/1048 still said "no Rust arm"); the round-54 re-walk fixed
+# the *instances* but no guard was ever added against the *class*
+# recurring. It recurs precisely via a same-round fold: an agent closes a
+# residue card (adds/flips a `closed` row) but forgets to flip the card's
+# still-`genuinely_missing` row — so the card is simultaneously counted in
+# the load-bearing "how far from parity" number (= # genuinely_missing
+# entries) AND recorded as reclassified-out. Each row passes its own
+# in-isolation arm; the contradiction is invisible. This is the exact
+# same-round-drift hazard a concurrent Rust-fold round (e.g. a warp
+# Phase-1 closing a card) creates.
+#
+# The guard is the inverse-of-isolation cross-check: group every entry by
+# its printed `card` and flag any card whose rows MIX `genuinely_missing`
+# with a reclassified-out status (`closed` or `blocked_non_effect`). It is
+# deliberately tight — it does NOT flag the *legitimate* multi-row
+# patterns this worklist already uses:
+#   * two `genuinely_missing` rows for one card = two distinct unshipped
+#     arms (Lightstall Inquisitor's CastFromExile + EachOpponentExiles);
+#   * two `closed` rows for one card = a kept cron-regression duplicate
+#     (Monoist Circuit-Feeder's two closures — and those even differ on
+#     the `card` string so they don't collide here anyway).
+# Only the load-bearing contradiction — a card asserted BOTH a TRUE
+# new-Rust-Effect ask AND reclassified-out — surfaces. Same additive,
+# never-blocking post-commit-hook contract as every round-54/55/56 row.
+
+
+def compute_card_status_consistency(
+    entries: list[dict],
+) -> list["Drift"]:
+    """Round-63. Cross-entry guard: a card whose worklist rows MIX
+    ``genuinely_missing`` with a reclassified-out status (``closed`` or
+    ``blocked_non_effect``) is internally self-contradictory — it is
+    simultaneously counted in the load-bearing honest "how far from
+    parity" number AND recorded as reclassified-out. Emits one
+    ``residue_card_status_conflict`` row per such card.
+
+    Pure — no live tree, no git, no engine import; a single pass over
+    the parsed worklist. Legitimate same-status multi-row cards (two
+    genuine arms, two closed rows) are NOT flagged: the guard fires
+    ONLY on the genuinely_missing-vs-reclassified-out mix, which is the
+    exact internal contradiction the round-54 re-walk had to hand-fix
+    and which a same-round fold re-introduces.
+    """
+    from collections import defaultdict
+
+    rows_by_card: dict[str, list[dict]] = defaultdict(list)
+    for e in entries:
+        card = e.get("card", "?")
+        rows_by_card[card].append(e)
+
+    drifts: list[Drift] = []
+    for card, rows in sorted(rows_by_card.items()):
+        statuses = {r.get("status") for r in rows}
+        if "genuinely_missing" in statuses and statuses & {
+            "closed",
+            "blocked_non_effect",
+        }:
+            gm = sorted(
+                r.get("entry", "?")
+                for r in rows
+                if r.get("status") == "genuinely_missing"
+            )
+            other = sorted(
+                f"{r.get('entry', '?')}({r.get('status')})"
+                for r in rows
+                if r.get("status")
+                in ("closed", "blocked_non_effect")
+            )
+            drifts.append(
+                Drift(
+                    key=f"residue_card_status_conflict::{card}",
+                    label=(
+                        f"residue worklist card '{card}' has "
+                        f"CONFLICTING entry statuses"
+                    ),
+                    claimed=1,
+                    actual=0,
+                    hint=(
+                        f"it is carried as `genuinely_missing` in "
+                        f"{gm} AND as reclassified-out in {other}. A "
+                        f"card cannot be BOTH a TRUE new-Rust-Effect "
+                        f"ask (counted in the load-bearing 'how far "
+                        f"from parity' number) AND closed / "
+                        f"blocked_non_effect at the same time — this "
+                        f"is the internal self-contradiction the "
+                        f"round-54 re-walk had to hand-fix (the audit's "
+                        f"Mightform §2.6-vs-line-586 split), recurring "
+                        f"via a same-round fold that closed the card "
+                        f"but forgot to flip its still-genuinely_"
+                        f"missing row (inflating the honest count). "
+                        f"Re-walk this card and reconcile its rows in "
+                        f"docs/residue_worklist.json: either flip the "
+                        f"genuinely_missing row(s) to match the "
+                        f"closure, or (if a distinct arm really is "
+                        f"still unshipped) correct the over-eager "
+                        f"closure. Never-blocking, but a "
+                        f"self-contradictory worklist can no longer "
+                        f"pass silently. (Two SAME-status rows — two "
+                        f"genuine arms, two closed rows — are "
+                        f"legitimate and NOT flagged.)"
+                    ),
+                )
+            )
+    return drifts
+
+
 # ---------------------------------------- round-55 structural anti-staleness
 #
 # The round-54 resolver above is purely *lexical* (an alias must
@@ -1161,6 +1308,8 @@ class Drift:
             "residue_blocked_non_effect_regressed::"
         ):
             return f"  - REGRESSED: {self.label} — {self.hint}"
+        if self.key.startswith("residue_card_status_conflict::"):
+            return f"  - CONFLICT: {self.label} — {self.hint}"
         if self.key.startswith(
             (
                 "residue_suspect_needs_reverify::",
@@ -1227,6 +1376,7 @@ def build_report(drifts: list[Drift]) -> str:
         "residue_unverified::",
         "residue_blocked_non_effect_regressed::",
         "residue_blocked_non_effect_underspecified::",
+        "residue_card_status_conflict::",
     )
     count_drifts = [
         d
@@ -1245,10 +1395,15 @@ def build_report(drifts: list[Drift]) -> str:
         lines.append(
             "  Per-entry residue staleness "
             "(round-54 lexical check + round-55 structural hardening "
-            "+ round-56 blocked_non_effect inverse-invariant — the "
+            "+ round-56 blocked_non_effect inverse-invariant + "
+            "round-63 cross-entry card-status consistency — the "
             "sub-class the count-only cron could not catch, plus the "
             "non-lexical Pulsar-shape catch, plus the shipped-Effect "
-            "regression catch for blocked_non_effect entries):"
+            "regression catch for blocked_non_effect entries, plus the "
+            "internal-self-contradiction catch (a card both "
+            "genuinely_missing AND reclassified-out — the round-54 "
+            "Mightform §2.6-vs-line-586 split, recurring via a "
+            "same-round fold):"
         )
         lines.extend(d.line() for d in residue_drifts)
     lines.append(
@@ -1323,6 +1478,20 @@ def run(*, write_stream=None) -> int:
         compute_blocked_non_effect_staleness(
             residue_entries, rust_variants
         )
+    )
+    # Round-63 cross-entry card-status consistency — additive, same
+    # never-blocking-hook contract. The round-54/55/56 arms each judge
+    # ONE entry in isolation; this is the first cross-entry arm. It
+    # flags a card carried as `genuinely_missing` in one row AND
+    # reclassified-out (`closed` / `blocked_non_effect`) in another —
+    # the internal self-contradiction the round-54 re-walk had to
+    # hand-fix (the audit's Mightform §2.6-vs-line-586 split), which a
+    # same-round fold (closing a card but forgetting to flip its
+    # still-genuinely_missing row) silently re-introduces, inflating
+    # the load-bearing honest count. Pure — one pass over the parsed
+    # worklist; no live tree, no git.
+    drifts.extend(
+        compute_card_status_consistency(residue_entries)
     )
     print(build_report(drifts), file=stream)
     return 1 if drifts else 0
