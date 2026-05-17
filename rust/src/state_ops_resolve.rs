@@ -5992,6 +5992,47 @@ fn apply_effect(
                     mark_left_battlefield_if_nonland(
                         state, printing_id,
                     );
+                    // R74-2: a "destroy" of a creature is a death (CR
+                    // 700.4) — its `Event.DIES` triggered abilities
+                    // MUST fire, exactly as the generic SBA destroy
+                    // path does (`state_ops_sba.rs` ~:467-482) and as
+                    // Python's `turn.destroy` -> `move_off_battlefield`
+                    // does (`turn.py:253-283`: `_fire_dies_triggers` +
+                    // the predicate-path `dispatch_event(DIES)` BEFORE
+                    // `_fire_leaves_battlefield_triggers`). The prior
+                    // hand-rolled arm pushed ONLY
+                    // `pending_leaves_dispatches`, so a destroyed
+                    // dies-trigger creature (e.g. Gravpack Monoist ->
+                    // Robot token) silently never fired its trigger —
+                    // a Rust-side divergence from the Python SoT
+                    // surfaced by the round-74 post-spell-admit bench
+                    // sweep. Push order mirrors the SBA path + the
+                    // `Event::LeavesBattlefield` cards.rs doc-comment
+                    // contract (DIES first via
+                    // `pending_dies_dispatches`, LEAVES second via
+                    // `pending_leaves_dispatches`); the matching
+                    // resolution-path drain order (DIES drained then
+                    // LEAVES; LIFO -> LEAVES resolves first) preserves
+                    // Python's `move_off_battlefield` sequence.
+                    // Creature-gated like the SBA path so a
+                    // type-changed non-creature does not fire a
+                    // spurious DIES (CR 700.4 — Depressurize's scan
+                    // already filters to creatures, but the gate keeps
+                    // the SBA-path invariant byte-equal).
+                    let victim_is_creature = state
+                        .registry
+                        .lookup(printing_id)
+                        .map(|p| {
+                            p.card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                        })
+                        .unwrap_or(false);
+                    if victim_is_creature {
+                        state
+                            .pending_dies_dispatches
+                            .push(leaving_obj_id);
+                    }
                     state
                         .pending_leaves_dispatches
                         .push(leaving_obj_id);
@@ -11455,6 +11496,17 @@ impl GameState {
             // queue; we fan out the events now that the resolving
             // trigger slot has been popped.
             drain_pending_etb_dispatches(self)?;
+            // R74-2 — drain any DIES dispatches a trigger's effect
+            // may have queued (a trigger whose Effect destroys a
+            // creature via the DepressurizeEffect hand-rolled arm).
+            // Drained BEFORE LEAVES so the stack-push order is DIES
+            // then LEAVES (LIFO -> LEAVES resolves first), byte-equal
+            // to the SBA destroy path (`state_ops_sba.rs` :497/:503)
+            // and Python's `move_off_battlefield` (turn.py:253-289).
+            // Outside `apply_sbas` the only producer of this queue is
+            // the DepressurizeEffect arm, so this drain is a no-op
+            // (empty queue) for every pre-R74-2 trigger resolution.
+            drain_pending_dies_dispatches(self)?;
             // Slice 10 — drain any LEAVES dispatches a trigger's
             // effect may have queued (e.g. a trigger that destroys
             // / bounces / exiles another bf permanent via an Effect
@@ -11580,6 +11632,19 @@ impl GameState {
         // the resolving slot, regardless of how many permanents
         // entered during the effect pass.
         drain_pending_etb_dispatches(self)?;
+        // R74-2 — drain any DIES dispatches the spell's Effect arms
+        // deferred via `pending_dies_dispatches`. Today the only
+        // producer outside `apply_sbas` (which self-drains) is the
+        // DepressurizeEffect hand-rolled destroy arm — its destroyed
+        // creature's `Event.DIES` triggered ability (e.g. Gravpack
+        // Monoist -> Robot token) MUST fire to match Python's
+        // `turn.destroy` -> `move_off_battlefield`. Drained BEFORE
+        // LEAVES so the stack-push order is DIES then LEAVES (LIFO
+        // -> LEAVES resolves first), byte-equal to the SBA destroy
+        // path (`state_ops_sba.rs` :497/:503) and Python's
+        // `move_off_battlefield` (turn.py:253-289). No-op (empty
+        // queue) for every pre-R74-2 spell resolution.
+        drain_pending_dies_dispatches(self)?;
         // Slice 10 — drain any LEAVES dispatches the spell's Effect
         // arms deferred via `pending_leaves_dispatches` (bounce /
         // destroy / exile / sacrifice-as-effect at the 13 bf-exit
@@ -11651,6 +11716,9 @@ impl GameState {
                 .expect("peeked top but pop returned None — stack invariant broken");
             // Slice 2: drain any RS-site deferred dispatches.
             drain_pending_etb_dispatches(self)?;
+            // R74-2: drain DIES before LEAVES — see the matching
+            // comment in `resolve_top_of_stack`'s trigger branch.
+            drain_pending_dies_dispatches(self)?;
             // Slice 10: drain LEAVES sibling — see the matching
             // comment in `resolve_top_of_stack`'s trigger branch.
             drain_pending_leaves_dispatches(self)?;
@@ -11710,6 +11778,9 @@ impl GameState {
         // drain — the `_pause` variant just skips the
         // auto-resolve-pending step, not the ETB fan-out.
         drain_pending_etb_dispatches(self)?;
+        // R74-2: drain DIES before LEAVES — see the matching
+        // comment in `resolve_top_of_stack`'s spell branch.
+        drain_pending_dies_dispatches(self)?;
         // Slice 10: drain LEAVES sibling — see the matching
         // comment in `resolve_top_of_stack`'s spell branch.
         drain_pending_leaves_dispatches(self)?;
