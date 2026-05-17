@@ -6362,28 +6362,56 @@ fn parse_mana_produced(any: Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     Ok(out)
 }
 
-/// CE20 follow-up — bridge legacy `mana_produced` into a synthesized
-/// `ActivatedAbility` entry on the printing's `activated_abilities`
-/// Vec. When `mana_produced.is_some()`, prepend one synthesized
-/// entry equivalent to the pre-bridge free-mana-ability:
+/// CE20 follow-up — bridge legacy `mana_produced` into synthesized
+/// `ActivatedAbility` entries on the printing's `activated_abilities`
+/// Vec. When `mana_produced.is_some()`, prepend **one synthesized
+/// `is_mana_ability` entry PER produced color**, in the SAME order
+/// the symbols appear in `mana_produced`:
 ///
 ///   cost:   ManaCost::default() (free) + tap_self=true
-///   effect: AddManaToPool (single-color) or Sequence of AddManaToPool
-///           per color (multi-color hybrid). Aggregated by color so
-///           `mana_produced=["G","G"]` yields one AddManaToPool with
-///           amount=2.
+///   effect: AddManaToPool { color: <c>, amount: 1 } — one entry per
+///           color symbol, NOT aggregated.
 ///   is_mana_ability: true (CR 605.1 — produces mana, doesn't target).
 ///
-/// The synthesized entry is PREPENDED — `ability_index=0` continues
-/// to refer to "the free mana ability". Explicit registry-supplied
-/// `activated_abilities` entries get bumped to indices >= 1. Every
-/// pre-bridge caller of `ActivateAbility(forest_id, 0)` keeps
-/// working bit-equal.
+/// `ability_index=0` = first color, `ability_index=1` = second, …
+/// (then any explicit registry-supplied entries at indices >= N).
+///
+/// **Round-62 N1 — per-color shape (the cross-engine fix).** Before
+/// round-62 this synthesized ONE ability whose effect aggregated ALL
+/// colors (a flat `AddManaToPool` for a single color, a
+/// `Sequence(Add c1, Add c2, …)` for multi-color). That disagreed
+/// with the Python bridge `cross_engine._card_def_to_python_printing`,
+/// which builds **one `ActivatedAbility` per color** in
+/// `mana_produced` order (idx0=Add c1, idx1=Add c2). For a
+/// single-color land (every basic) the two shapes were bit-equal
+/// (one ability adding the one color), so the divergence was
+/// invisible — until round-60 admitted the 5 EoE pay-life shocklands
+/// (2-color `mana_produced`) into the production bench. Round-61 N3's
+/// post-admit sweep caught it: `activate_ability(dual_land, 0)` made
+/// Python add 1 color but Rust add BOTH (the whole `Sequence`) → a
+/// spurious extra mana in the Rust pool (4 FAIL_DIVERGENCE / 112
+/// games, every divergent land a 2-color shockland including U). The
+/// CR-correct shape is one mana ability per color (the player chooses
+/// which color by picking the ability index); Python was already
+/// correct. This rewrite makes Rust emit the same per-color shape so
+/// `activate_ability(land, k)` adds exactly the k-th color on BOTH
+/// engines. Documented: `SEARCH_LIMITATIONS.md` shockland entry
+/// (CLOSED round-62). Single-color lands stay bit-identical (one
+/// ability, one color) — verified by the Forest/Llanowar synthetic
+/// callers in `state.rs` and the round-62 Rust regression pins.
+///
+/// Note: `mana_produced=["G","G"]` now yields TWO `{T}: Add G`
+/// abilities (one per entry — matches Python's
+/// `for color in card.mana_produced`), not one `Add G amount=2`.
+/// No real bridge printing carries a duplicate-color `mana_produced`
+/// (`_printing_to_card_def` builds it from a `frozenset.produces`,
+/// so entries are distinct), but per-entry emission is the
+/// Python-exact shape and is the contract both engines now share.
 ///
 /// Shared between `parse_printing` (dict-input registry path) and
 /// `make_synthetic_state` (the test-fixture path in `state.rs`) so
 /// both surfaces get the same bridge synthesis without duplicating
-/// the field-counting logic.
+/// the per-color logic.
 pub fn apply_mana_produced_bridge(
     mana_produced: &Option<Vec<String>>,
     existing: Vec<ActivatedAbility>,
@@ -6391,18 +6419,19 @@ pub fn apply_mana_produced_bridge(
     let Some(symbols) = mana_produced else {
         return Ok(existing);
     };
-    // Build per-color amount totals in W/U/B/R/G/C order.
-    let mut counts: [(&str, i32); 6] = [
-        ("W", 0), ("U", 0), ("B", 0), ("R", 0), ("G", 0), ("C", 0),
-    ];
+    // One synthesized is_mana_ability ability PER color symbol, in
+    // input order — matching Python's
+    // `_card_def_to_python_printing` `for color in card.mana_produced`
+    // loop exactly (idx0=Add c1, idx1=Add c2, …). For shocklands
+    // `trajectory._printing_to_card_def` passes
+    // `tuple(sorted(printing.produces))`, so both engines iterate the
+    // alphabetically-sorted dual (Watery Grave → idx0=Add B,
+    // idx1=Add U); the order parity is the input-order parity.
+    let mut bridge_abilities: Vec<ActivatedAbility> =
+        Vec::with_capacity(symbols.len());
     for sym in symbols {
-        let slot = match sym.as_str() {
-            "W" => &mut counts[0].1,
-            "U" => &mut counts[1].1,
-            "B" => &mut counts[2].1,
-            "R" => &mut counts[3].1,
-            "G" => &mut counts[4].1,
-            "C" => &mut counts[5].1,
+        match sym.as_str() {
+            "W" | "U" | "B" | "R" | "G" | "C" => {}
             other => {
                 // `parse_mana_produced` already rejected unknown
                 // symbols at parse time; raise loud as a paranoid
@@ -6413,49 +6442,36 @@ pub fn apply_mana_produced_bridge(
                      {other:?}; expected W/U/B/R/G/C"
                 )));
             }
-        };
-        *slot += 1;
-    }
-    let mut bridge_effects: Vec<Effect> = Vec::new();
-    for (color, amount) in counts.iter() {
-        if *amount > 0 {
-            bridge_effects.push(Effect::AddManaToPool {
-                color: (*color).to_string(),
-                amount: *amount,
-            });
         }
+        bridge_abilities.push(ActivatedAbility {
+            cost: ActivationCost {
+                mana: ManaCost::default(),
+                tap_self: true,
+                sacrifice_self: false,
+                requires_target_creature_you_control: false,
+                sacrifice_another_creature_or_artifact: false,
+                sacrifice_a_land: false,
+                sacrifice_another_artifact: false,
+                sacrifice_food: false,
+                sacrifice_a_desert: false,
+                loyalty: 0,
+            },
+            effect: Effect::AddManaToPool {
+                color: sym.clone(),
+                amount: 1,
+            },
+            is_mana_ability: true,
+            tier_threshold: 0,
+        });
     }
-    let bridge_effect = if bridge_effects.len() == 1 {
-        // Single-color shape (Forest, Mountain, ...) — flat
-        // AddManaToPool matches the existing apply path 1:1.
-        bridge_effects.into_iter().next().unwrap()
-    } else {
-        // Multi-color or multi-pip shape (hybrid producers).
-        // Wrap in Sequence so apply_effect fires each entry.
-        Effect::Sequence { effects: bridge_effects }
-    };
-    let bridge_ability = ActivatedAbility {
-        cost: ActivationCost {
-            mana: ManaCost::default(),
-            tap_self: true,
-            sacrifice_self: false,
-            requires_target_creature_you_control: false,
-            sacrifice_another_creature_or_artifact: false,
-            sacrifice_a_land: false,
-            sacrifice_another_artifact: false,
-            sacrifice_food: false,
-            sacrifice_a_desert: false,
-            loyalty: 0,
-        },
-        effect: bridge_effect,
-        is_mana_ability: true,
-        tier_threshold: 0,
-    };
-    // Prepend so ability_index=0 still refers to the bridged mana
-    // ability — every pre-bridge ActivateAbility(forest, 0) caller
-    // keeps working.
-    let mut bridged = Vec::with_capacity(existing.len() + 1);
-    bridged.push(bridge_ability);
+    // Prepend so ability_index=0..N-1 refer to the per-color bridged
+    // mana abilities (Python's idx0/idx1 ordering); any explicit
+    // registry-supplied entries follow at indices >= N. Every
+    // pre-bridge ActivateAbility(forest, 0) caller keeps working
+    // bit-equal (single-color → exactly one ability at index 0).
+    let mut bridged =
+        Vec::with_capacity(existing.len() + bridge_abilities.len());
+    bridged.append(&mut bridge_abilities);
     let mut existing = existing;
     bridged.append(&mut existing);
     Ok(bridged)
