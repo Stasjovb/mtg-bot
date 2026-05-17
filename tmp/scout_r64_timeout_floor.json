@@ -1,0 +1,1280 @@
+{
+  "config": {
+    "archetypes": "0,1,2,3,4,5,7,8,9,10,11,12,13,40,42",
+    "seeds": "0-3",
+    "max_turns": 22,
+    "combat_strategy": "attack_all"
+  },
+  "status_counts": {
+    "PASS": 35,
+    "FAIL_TIMEOUT": 25
+  },
+  "timeout_cause_counts": {
+    "cast_but_stalled": 16,
+    "never_cast_creature": 9
+  },
+  "copies_distribution": {
+    "1": 16,
+    "2": 20,
+    "3": 16,
+    "5": 8
+  },
+  "games": [
+    {
+      "archetype": 0,
+      "seed": 0,
+      "status": "PASS",
+      "turns": 21,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 7,
+      "final_life": [
+        20,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 0.8582505001686513
+    },
+    {
+      "archetype": 0,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 17,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 9,
+      "final_life": [
+        8,
+        0
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3005146998912096
+    },
+    {
+      "archetype": 0,
+      "seed": 2,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 3,
+      "final_life": [
+        11,
+        20
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3310813000425696
+    },
+    {
+      "archetype": 0,
+      "seed": 3,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        20,
+        5
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3209479001816362
+    },
+    {
+      "archetype": 1,
+      "seed": 0,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 0,
+      "attack_eligible_turns": 0,
+      "final_life": [
+        20,
+        20
+      ],
+      "timeout_cause": "never_cast_creature",
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3003716999664903
+    },
+    {
+      "archetype": 1,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 17,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        20,
+        0
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3092094000894576
+    },
+    {
+      "archetype": 1,
+      "seed": 2,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 6,
+      "final_life": [
+        8,
+        14
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3078101000282913
+    },
+    {
+      "archetype": 1,
+      "seed": 3,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 2,
+      "final_life": [
+        14,
+        20
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3182494998909533
+    },
+    {
+      "archetype": 2,
+      "seed": 0,
+      "status": "PASS",
+      "turns": 18,
+      "creatures_cast": 4,
+      "attack_eligible_turns": 8,
+      "final_life": [
+        -1,
+        12
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 8,
+      "admitted_creature_copies": 5,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icetill Explorer",
+        "Tapestry Warden"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.3523041000589728
+    },
+    {
+      "archetype": 2,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 16,
+      "creatures_cast": 4,
+      "attack_eligible_turns": 8,
+      "final_life": [
+        -1,
+        8
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 8,
+      "admitted_creature_copies": 5,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icetill Explorer",
+        "Tapestry Warden"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.301331700058654
+    },
+    {
+      "archetype": 2,
+      "seed": 2,
+      "status": "PASS",
+      "turns": 21,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 12,
+      "final_life": [
+        2,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 8,
+      "admitted_creature_copies": 5,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icetill Explorer",
+        "Tapestry Warden"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.324925099965185
+    },
+    {
+      "archetype": 2,
+      "seed": 3,
+      "status": "PASS",
+      "turns": 15,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 6,
+      "final_life": [
+        16,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 8,
+      "admitted_creature_copies": 5,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icetill Explorer",
+        "Tapestry Warden"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.2817780999466777
+    },
+    {
+      "archetype": 3,
+      "seed": 0,
+      "status": "PASS",
+      "turns": 18,
+      "creatures_cast": 5,
+      "attack_eligible_turns": 8,
+      "final_life": [
+        -5,
+        12
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 8,
+      "admitted_creature_copies": 5,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icetill Explorer",
+        "Tapestry Warden"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.300026400014758
+    },
+    {
+      "archetype": 3,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 15,
+      "creatures_cast": 5,
+      "attack_eligible_turns": 7,
+      "final_life": [
+        8,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 8,
+      "admitted_creature_copies": 5,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icetill Explorer",
+        "Tapestry Warden"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.2914925999939442
+    },
+    {
+      "archetype": 3,
+      "seed": 2,
+      "status": "PASS",
+      "turns": 21,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 12,
+      "final_life": [
+        2,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 8,
+      "admitted_creature_copies": 5,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icetill Explorer",
+        "Tapestry Warden"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.3333582000341266
+    },
+    {
+      "archetype": 3,
+      "seed": 3,
+      "status": "PASS",
+      "turns": 15,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 6,
+      "final_life": [
+        16,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 8,
+      "admitted_creature_copies": 5,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icetill Explorer",
+        "Tapestry Warden"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.2819360999856144
+    },
+    {
+      "archetype": 4,
+      "seed": 0,
+      "status": "PASS",
+      "turns": 18,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 4,
+      "final_life": [
+        -4,
+        20
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 9,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icecave Crasher"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2847519998904318
+    },
+    {
+      "archetype": 4,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 19,
+      "creatures_cast": 4,
+      "attack_eligible_turns": 10,
+      "final_life": [
+        4,
+        -6
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 9,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icecave Crasher"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2800073001999408
+    },
+    {
+      "archetype": 4,
+      "seed": 2,
+      "status": "PASS",
+      "turns": 20,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 11,
+      "final_life": [
+        0,
+        2
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 9,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icecave Crasher"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3004330000840127
+    },
+    {
+      "archetype": 4,
+      "seed": 3,
+      "status": "PASS",
+      "turns": 19,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 9,
+      "final_life": [
+        4,
+        0
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 9,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Icecave Crasher"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2970823000650853
+    },
+    {
+      "archetype": 5,
+      "seed": 0,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 0,
+      "attack_eligible_turns": 0,
+      "final_life": [
+        20,
+        20
+      ],
+      "timeout_cause": "never_cast_creature",
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Icecave Crasher",
+        "Seedship Agrarian"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2960414998233318
+    },
+    {
+      "archetype": 5,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 19,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 6,
+      "final_life": [
+        16,
+        -4
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Icecave Crasher",
+        "Seedship Agrarian"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2887747001368552
+    },
+    {
+      "archetype": 5,
+      "seed": 2,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 6,
+      "final_life": [
+        4,
+        12
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Icecave Crasher",
+        "Seedship Agrarian"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3123621998820454
+    },
+    {
+      "archetype": 5,
+      "seed": 3,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 2,
+      "final_life": [
+        12,
+        20
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Icecave Crasher",
+        "Seedship Agrarian"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2836084000300616
+    },
+    {
+      "archetype": 7,
+      "seed": 0,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 0,
+      "attack_eligible_turns": 0,
+      "final_life": [
+        20,
+        20
+      ],
+      "timeout_cause": "never_cast_creature",
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.2788067001383752
+    },
+    {
+      "archetype": 7,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 21,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 7,
+      "final_life": [
+        20,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.2990287998691201
+    },
+    {
+      "archetype": 7,
+      "seed": 2,
+      "status": "PASS",
+      "turns": 21,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 7,
+      "final_life": [
+        20,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.310356399975717
+    },
+    {
+      "archetype": 7,
+      "seed": 3,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 0,
+      "attack_eligible_turns": 0,
+      "final_life": [
+        20,
+        20
+      ],
+      "timeout_cause": "never_cast_creature",
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.2822296998929232
+    },
+    {
+      "archetype": 8,
+      "seed": 0,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 0,
+      "attack_eligible_turns": 0,
+      "final_life": [
+        20,
+        20
+      ],
+      "timeout_cause": "never_cast_creature",
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.2880033000838012
+    },
+    {
+      "archetype": 8,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 21,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 7,
+      "final_life": [
+        20,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.3084015999920666
+    },
+    {
+      "archetype": 8,
+      "seed": 2,
+      "status": "PASS",
+      "turns": 21,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 7,
+      "final_life": [
+        20,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.3150671999901533
+    },
+    {
+      "archetype": 8,
+      "seed": 3,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 0,
+      "attack_eligible_turns": 0,
+      "final_life": [
+        20,
+        20
+      ],
+      "timeout_cause": "never_cast_creature",
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.2869482999667525
+    },
+    {
+      "archetype": 9,
+      "seed": 0,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        10,
+        20
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 9,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Gravpack Monoist"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.3249234999530017
+    },
+    {
+      "archetype": 9,
+      "seed": 1,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 0,
+      "attack_eligible_turns": 0,
+      "final_life": [
+        20,
+        20
+      ],
+      "timeout_cause": "never_cast_creature",
+      "raw_distinct_creatures": 9,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Gravpack Monoist"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.3023051000200212
+    },
+    {
+      "archetype": 9,
+      "seed": 2,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 4,
+      "final_life": [
+        12,
+        20
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 9,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Gravpack Monoist"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.2973169998731464
+    },
+    {
+      "archetype": 9,
+      "seed": 3,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 0,
+      "attack_eligible_turns": 0,
+      "final_life": [
+        20,
+        20
+      ],
+      "timeout_cause": "never_cast_creature",
+      "raw_distinct_creatures": 9,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Gravpack Monoist"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.296478800009936
+    },
+    {
+      "archetype": 10,
+      "seed": 0,
+      "status": "PASS",
+      "turns": 18,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        0,
+        20
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2721946998499334
+    },
+    {
+      "archetype": 10,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 18,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        -2,
+        20
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.287197700003162
+    },
+    {
+      "archetype": 10,
+      "seed": 2,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 6,
+      "final_life": [
+        12,
+        16
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3018778001423925
+    },
+    {
+      "archetype": 10,
+      "seed": 3,
+      "status": "PASS",
+      "turns": 17,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        20,
+        0
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2847877999302
+    },
+    {
+      "archetype": 11,
+      "seed": 0,
+      "status": "PASS",
+      "turns": 18,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        0,
+        20
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2735217998269945
+    },
+    {
+      "archetype": 11,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 18,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        -2,
+        20
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2923825001344085
+    },
+    {
+      "archetype": 11,
+      "seed": 2,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 6,
+      "final_life": [
+        12,
+        16
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2948956999462098
+    },
+    {
+      "archetype": 11,
+      "seed": 3,
+      "status": "PASS",
+      "turns": 17,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        20,
+        0
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2831534000579268
+    },
+    {
+      "archetype": 12,
+      "seed": 0,
+      "status": "PASS",
+      "turns": 18,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        0,
+        20
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2935646001715213
+    },
+    {
+      "archetype": 12,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 18,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        -2,
+        20
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2804827000945807
+    },
+    {
+      "archetype": 12,
+      "seed": 2,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 6,
+      "final_life": [
+        12,
+        16
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2888896998483688
+    },
+    {
+      "archetype": 12,
+      "seed": 3,
+      "status": "PASS",
+      "turns": 17,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        20,
+        0
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 14,
+      "admitted_creature_copies": 2,
+      "admitted_creature_names": [
+        "Icetill Explorer",
+        "Thawbringer"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3021664000116289
+    },
+    {
+      "archetype": 13,
+      "seed": 0,
+      "status": "PASS",
+      "turns": 21,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 14,
+      "final_life": [
+        6,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 13,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Eumidian Terrabotanist",
+        "Galactic Wayfarer",
+        "Hullcarver"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.3158578998409212
+    },
+    {
+      "archetype": 13,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 20,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 6,
+      "final_life": [
+        0,
+        20
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 13,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Eumidian Terrabotanist",
+        "Galactic Wayfarer",
+        "Hullcarver"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.2878471999429166
+    },
+    {
+      "archetype": 13,
+      "seed": 2,
+      "status": "PASS",
+      "turns": 20,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 8,
+      "final_life": [
+        0,
+        19
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 13,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Eumidian Terrabotanist",
+        "Galactic Wayfarer",
+        "Hullcarver"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.2842923998832703
+    },
+    {
+      "archetype": 13,
+      "seed": 3,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 2,
+      "attack_eligible_turns": 7,
+      "final_life": [
+        18,
+        5
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 13,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Eumidian Terrabotanist",
+        "Galactic Wayfarer",
+        "Hullcarver"
+      ],
+      "n_admitted_distinct": 3,
+      "elapsed": 1.2595432000234723
+    },
+    {
+      "archetype": 40,
+      "seed": 0,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 0,
+      "attack_eligible_turns": 0,
+      "final_life": [
+        20,
+        20
+      ],
+      "timeout_cause": "never_cast_creature",
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Seedship Agrarian"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2977686999365687
+    },
+    {
+      "archetype": 40,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 19,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 6,
+      "final_life": [
+        17,
+        -4
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Seedship Agrarian"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2638018999714404
+    },
+    {
+      "archetype": 40,
+      "seed": 2,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 3,
+      "attack_eligible_turns": 6,
+      "final_life": [
+        8,
+        14
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Seedship Agrarian"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.2854243000037968
+    },
+    {
+      "archetype": 40,
+      "seed": 3,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 2,
+      "final_life": [
+        14,
+        20
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 12,
+      "admitted_creature_copies": 3,
+      "admitted_creature_names": [
+        "Galactic Wayfarer",
+        "Seedship Agrarian"
+      ],
+      "n_admitted_distinct": 2,
+      "elapsed": 1.3212329999078065
+    },
+    {
+      "archetype": 42,
+      "seed": 0,
+      "status": "PASS",
+      "turns": 21,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 7,
+      "final_life": [
+        20,
+        -1
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.298958000028506
+    },
+    {
+      "archetype": 42,
+      "seed": 1,
+      "status": "PASS",
+      "turns": 22,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 7,
+      "final_life": [
+        -1,
+        20
+      ],
+      "timeout_cause": null,
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.283864000113681
+    },
+    {
+      "archetype": 42,
+      "seed": 2,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 3,
+      "final_life": [
+        11,
+        20
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.2850802999455482
+    },
+    {
+      "archetype": 42,
+      "seed": 3,
+      "status": "FAIL_TIMEOUT",
+      "turns": 23,
+      "creatures_cast": 1,
+      "attack_eligible_turns": 5,
+      "final_life": [
+        20,
+        5
+      ],
+      "timeout_cause": "cast_but_stalled",
+      "raw_distinct_creatures": 10,
+      "admitted_creature_copies": 1,
+      "admitted_creature_names": [
+        "Galactic Wayfarer"
+      ],
+      "n_admitted_distinct": 1,
+      "elapsed": 1.2891614001709968
+    }
+  ]
+}
