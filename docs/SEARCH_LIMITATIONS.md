@@ -1024,6 +1024,25 @@ the *activation* byte-equal for the SEARCH effect's full output
 (searched-land identity + post-shuffle library order), leaving only
 the orthogonal Rust token-SBA graveyard view.
 
+**ROUND-59 N3 — REAL-GAME VALIDATED (caveat folded → validated).**
+The round-53/55 token-cease-to-exist byte-equality was in-test-pinned
+only because the bench never sac-activated the Lander (so the SBA
+never fired in a real game — round-58 N3 proved it structurally
+un-exercisable by the default move set). Round-59 N3 added a
+narrowly-scoped, default-off, review-gated Lander `{2},Sac` activation
+harness step (`bench_trajectory_parity.py::_try_activate_lander_sac`,
+gated behind `--activate-lander-sac`; identical activation driven on
+BOTH engines via the shared-RNG round-54 recipe). A 72-game real-game
+sweep: on **6/6** token-created games the Lander left the battlefield,
+the cease-to-exist SBA fired, and the whole post-sac field view was
+**byte-equal cross-engine — 0 FAIL_DIVERGENCE**, no latent bug on the
+first real-game exercise of the full sac→search→shuffle→token-cease
+path. The token-cease-to-exist SBA + the full Lander sac-activation
+are therefore **real-game validated**, not merely synthetic-in-test-
+pinned. (The default bench remains byte-for-byte unchanged — the
+harness is a validation lever, not a production-self-play behavior
+change.)
+
 **Impact estimate:** strength-neutral (the library is hidden
 information; the search picks the topmost basic on both engines
 regardless of post-search order). The value is pure cross-engine

@@ -1149,21 +1149,26 @@ def test_parse_residue_worklist_accepts_blocked_non_effect(tmp_path):
 
 
 def test_real_worklist_has_round56_reclassification():
-    """Structural-regression guard on the committed worklist: it
-    carries the round-56 reclassifications and every
+    """Structural-regression guard on the committed worklist: the
+    round-56→59 reclassification PROGRESSION holds, every
     ``blocked_non_effect`` entry's declared shipped variants ARE live
-    Rust variants (so the cron stays exit-0 in-sync on the real tree);
-    every genuinely_missing entry is a TRUE new-Rust-Effect ask (none
-    resolve to a live variant).
+    Rust variants (so the cron stays exit-0 in-sync on the real tree),
+    and every genuinely_missing entry is a TRUE new-Rust-Effect ask.
 
-    Round-56 settled state: Seedship Agrarian (reclassified by N2 in
-    the round-56 slice) AND Dauntless Scrapbot (folded at the round-56
-    post-N1-merge resync, exactly as N2 queued, once N1 shipped
-    ``ExileEachOpponentsGraveyard``) are both ``blocked_non_effect``.
-    The guard asserts the structural invariant for EVERY bne entry
-    rather than a brittle hardcoded count/index — pinning an exact
-    count is the snapshot-pin anti-pattern this campaign exists to
-    eliminate (a legitimate post-merge fold must not turn it red)."""
+    Progression (NOT a static snapshot — the campaign's success
+    metric is cards advancing through the buckets):
+    - Seedship Agrarian: reclassified OUT of genuinely_missing in
+      round 56, then PROGRESSED blocked_non_effect → ``closed`` at the
+      round-59 fold (first non-Effect-gate fully closed — both its
+      triggers bridged). It must NOT be genuinely_missing and is now
+      ``closed``.
+    - Dauntless Scrapbot: folded to ``blocked_non_effect`` at the
+      round-56 post-N1 resync; still there (its CreateToken-Sequence
+      Lander leaf remains token-registration-gated).
+    The guard asserts the generic structural invariant for EVERY bne
+    entry rather than brittle per-card/bucket pins — naming exact
+    card→bucket is the snapshot-pin anti-pattern this campaign exists
+    to eliminate; a legitimate post-merge fold must not turn it red."""
     mod = _load_tool()
     entries = mod.parse_residue_worklist()
     statuses = {e["status"] for e in entries}
@@ -1172,18 +1177,16 @@ def test_real_worklist_has_round56_reclassification():
         "blocked_non_effect",
         "closed",
     }
+    by_card_all = {e["card"]: e for e in entries}
     bne = [
         e for e in entries if e["status"] == "blocked_non_effect"
     ]
     by_card = {e["card"]: e for e in bne}
-    # The two known round-56 reclassifications must both be present.
-    assert "Seedship Agrarian" in by_card
+    # Seedship progressed past blocked_non_effect to closed (round-59);
+    # it must never regress to genuinely_missing.
+    assert by_card_all["Seedship Agrarian"]["status"] == "closed"
+    # Dauntless Scrapbot remains blocked_non_effect.
     assert "Dauntless Scrapbot" in by_card
-    seed = by_card["Seedship Agrarian"]
-    assert seed["shipped_variants"] == [
-        "CreateToken",
-        "PutPlusOneCounterOnSelf",
-    ]
     daunt = by_card["Dauntless Scrapbot"]
     assert "ExileEachOpponentsGraveyard" in daunt["shipped_variants"]
     # Generic structural invariant for EVERY blocked_non_effect entry

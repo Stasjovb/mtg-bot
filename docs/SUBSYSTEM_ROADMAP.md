@@ -85,6 +85,22 @@ second:
    single-gate leverage: Secluded Starforge (7,570), Breeding Pool
    (4,712), Watery Grave (4,226), Stomping Ground (3,859).
 
+   > **⚠ Round-59 N2 §2 correction — the 23 / 34,575 headline is the
+   > *attribution* count, NOT the bridge-correct *realizable* yield.**
+   > The attribution model is parser-structure-based; the parser
+   > silently flattens `enters_tapped` / drops Station / activated-
+   > ability / Exalted, so cards that are actually tapped-entry or
+   > AA-gated still read "single-gated by the Basic-supertype gate".
+   > The round-59 scoping audit (`docs/NONBASIC_LAND_SUBSTRATE_PLAN.md`
+   > §2) found only **5 cards / 18,065 decks** are bridge-correct to
+   > admit (sub-shape A: pay-life shocklands, as a documented
+   > round-39-Ward-precedent simplification — parser flattens them to
+   > untapped duals, bit-equal both engines). The other 18 DECLINE
+   > (real tapped-entry divergence Rust ignores / activated-ability /
+   > clone / Station). Round-60 phase-1 = sub-shape A only
+   > (+5 cards / +18,065 decks). Do NOT act on the headline number —
+   > read the PLAN §2 audit first.
+
 2. **Cost-reduction substrate — 5 cards, ALL 5 single-gated, 53,648
    cumulative decks, medium tractability.** Fewer cards than non-basic
    land but the *highest single-gate deck-count of any tractable named
