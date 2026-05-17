@@ -36,12 +36,19 @@ stacks before the field-view compare) + full ``compare_fields``. It is
 NOT the older Effect-half StackItem-push pattern — every spell here is
 genuinely CAST through the production carrier the lever delivers.
 
-**Verify-first.** ``test_phase1_admit_set_is_exactly_radiant_strike_
-and_depressurize`` re-derives the live admit set from
-``_printing_is_bridge_simple_spell`` at THIS HEAD before any probe
-relies on it (drop+replace honestly if the set drifts — the lever
-auto-grows the set as Focus Fire / Biosynthic Burst close, so a
-future routine inheriting this module must re-verify, not assume).
+**Verify-first.**
+``test_phase1_admit_set_is_exactly_the_covered_bridged_seatable_set``
+re-derives the live admit set from ``_printing_is_bridge_simple_spell``
+at THIS HEAD before any probe relies on it (drop+replace honestly if
+the set drifts — the lever auto-grows the set as each per-card Tier-A
+Effect closes, so a future routine inheriting this module must
+re-verify, not assume). It has done so: at the round-70 Phase-1
+landing the set was {Depressurize, Radiant Strike}; round-73 grew it
+to {Depressurize, Orbital Plunge, Radiant Strike, Seedship Impact}
+(Lander-spell-token-seating sub-substrate); the cycle-5..8 Tier-A
+folds closed Focus Fire + Biosynthic Burst so the live set is now the
+EXACT 6 {Biosynthic Burst, Depressurize, Focus Fire, Orbital Plunge,
+Radiant Strike, Seedship Impact} (re-anchored at HEAD ``921d759a``).
 
 This module is append-additive: it does NOT touch
 ``tests/test_trajectory_parity.py``, the probe ``batch_a`` /
@@ -74,23 +81,38 @@ pytestmark = pytest.mark.skipif(
 # implement HEAD that set was EXACTLY {Depressurize, Radiant Strike};
 # the round-73 Lander-spell-token-seating sub-substrate grew it to
 # {Depressurize, Orbital Plunge, Radiant Strike, Seedship Impact}
-# (Seedship/Orbital flipped DECLINE→SEATED — new-code-is-right). It
-# auto-grows further as each subsequent per-card Tier-A Effect closes.
-# This module's carrier-sweep probes drive Depressurize / Radiant
-# Strike explicitly (Seedship/Orbital have their own dedicated
-# loader-admit + cast→resolve real-EoE probes in
-# ``test_parity_smoke.py``); the test below fails loudly (rather than
-# letting a probe silently drift onto a non-admitted card) if the set
-# changes — the honest "re-verify, don't assume" discipline a future
-# re-orienting routine MUST inherit.
+# (Seedship/Orbital flipped DECLINE→SEATED — new-code-is-right); the
+# cycle-5..8 Tier-A folds then closed #6 Biosynthic Burst and #5 Focus
+# Fire (pid-free single-target {W}/{W} Instants, covered+bridged), which
+# AUTO-JOINED via the §2 auto-grow teeth (the guardrail queries the LIVE
+# covered set, NOT a hardcoded list). The live set is now the EXACT 6
+# {Biosynthic Burst, Depressurize, Focus Fire, Orbital Plunge, Radiant
+# Strike, Seedship Impact}. It auto-grows further as each remaining
+# per-card Tier-A Effect closes. This module's carrier-sweep probes
+# drive Depressurize / Radiant Strike explicitly (Seedship / Orbital
+# have their own dedicated loader-admit + cast→resolve real-EoE probes
+# in ``test_parity_smoke.py``; Focus Fire / Biosynthic Burst are pinned
+# admitted here + carry their own canonical Effect-close probes); the
+# test below fails loudly (rather than letting a probe silently drift
+# onto a non-admitted card) if the set changes — the honest "re-verify,
+# don't assume" discipline a future re-orienting routine MUST inherit.
 # ---------------------------------------------------------------------------
 
 
+# Re-anchored at HEAD ``921d759a`` (cycle-8 fold) — the cycle-5..8
+# Tier-A folds closed Focus Fire + Biosynthic Burst, auto-growing the
+# live guardrail's admit set from the round-73 4-card set to this exact
+# 6. This stays an EXACT-set pin: a future legitimate grow (or any
+# regression that admits an un-covered spell) must fail loudly here and
+# be re-anchored honestly, never weakened to a superset/subset check.
 _PHASE1_ADMITTED_AT_THIS_HEAD = [
-    "Depressurize", "Orbital Plunge", "Radiant Strike", "Seedship Impact",
+    "Biosynthic Burst", "Depressurize", "Focus Fire",
+    "Orbital Plunge", "Radiant Strike", "Seedship Impact",
 ]
 # The two members this module's carrier-sweep probes drive directly
-# (Seedship/Orbital are covered by their dedicated probes elsewhere).
+# through the full Phase-1 carrier path (Seedship / Orbital and Focus
+# Fire / Biosynthic Burst are covered by their dedicated probes
+# elsewhere; this pid-free pair is the carrier-sweep vehicle).
 _CARRIER_SWEEP_PROBED = ["Depressurize", "Radiant Strike"]
 
 
@@ -98,21 +120,37 @@ def test_phase1_admit_set_is_exactly_the_covered_bridged_seatable_set():
     """Verify-first guard: the live spell-card-bridge admit set (the
     set of EoE printings passing the production-deck loader's
     ``_printing_is_bridge_simple_spell`` guardrail) is EXACTLY
-    ``{Depressurize, Orbital Plunge, Radiant Strike, Seedship Impact}``
-    at this HEAD (round-73 — the Lander-spell-token-seating
-    sub-substrate flipped Seedship Impact / Orbital Plunge
-    DECLINE→SEATED; was {Depressurize, Radiant Strike} at the round-70
-    Phase-1 landing).
+    ``{Biosynthic Burst, Depressurize, Focus Fire, Orbital Plunge,
+    Radiant Strike, Seedship Impact}`` at this HEAD (re-anchored at
+    ``921d759a``, cycle-8 fold — the cycle-5..8 Tier-A folds closed
+    #6 Biosynthic Burst and #5 Focus Fire, which AUTO-JOINED the
+    guardrail's live covered-set query; the set was {Depressurize,
+    Orbital Plunge, Radiant Strike, Seedship Impact} after the round-73
+    Lander-spell-token-seating sub-substrate flipped Seedship Impact /
+    Orbital Plunge DECLINE→SEATED, and {Depressurize, Radiant Strike}
+    at the round-70 Phase-1 landing).
 
     This module's carrier-sweep probes drive ``_CARRIER_SWEEP_PROBED``
     (Depressurize / Radiant Strike) through the full Phase-1 carrier;
     Seedship Impact / Orbital Plunge have their own dedicated genuine
     real-EoE loader-admit + cast→resolve probes
-    (``test_cross_engine_real_eoe_{seedship_impact,orbital_plunge}_loader_admit_and_cast_resolve_parity``).
-    If this assertion fails the lever's admit set has drifted further
-    (it auto-grows as Focus Fire / Biosynthic Burst close): a
-    re-orienting routine must drop+replace the probe set honestly
-    against the NEW live set, not assume the old one.
+    (``test_cross_engine_real_eoe_{seedship_impact,orbital_plunge}_loader_admit_and_cast_resolve_parity``),
+    and Focus Fire / Biosynthic Burst carry their own canonical
+    per-card Effect-close cross-engine probes (their close landed in
+    the cycle-5..8 Tier-A folds). This is a re-anchor of a
+    correctly-functioning guard that legitimately fired on the admit
+    set's expected growth — NOT a bug in the guardrail.
+
+    The assertion stays an EXACT-set equality (not a superset/subset
+    check): if it fails the lever's admit set has drifted further (it
+    auto-grows as each remaining per-card Tier-A Effect closes), and a
+    re-orienting routine must DROP+REPLACE the pinned set honestly
+    against the NEW live set (re-derive it from
+    ``_printing_is_bridge_simple_spell`` over the live pool — the
+    guardrail is SoT, not the roadmap prose), re-anchor the comment to
+    the new HEAD, and keep the exact-set pin so the next legitimate
+    growth is again caught loudly. Never assume the old set; never
+    weaken the assertion into a no-op.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
