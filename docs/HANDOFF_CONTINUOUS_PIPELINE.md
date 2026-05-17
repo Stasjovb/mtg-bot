@@ -142,11 +142,22 @@ The campaign **no longer runs synchronized rounds**:
 
 - **≤5 concurrent background agents.** The orchestrator keeps the pool
   filled with disjoint slices; an agent finishing frees a slot.
-- **≤1 Rust agent at any time** (the `.pyd`-race rule). Rust slices
-  serialize through `maturin develop --release -m rust/Cargo.toml`.
-  Python / docs / bench slices parallelize freely. **A Rust agent is
-  currently in flight on warp Phase 2 — the Rust slot is OCCUPIED
-  until it lands.**
+- **Rust concurrency — STAGED ROLLOUT to ≤2 Rust (user-decided
+  cycle-8).** The old blanket `≤1-Rust` rule was verify-first-proven
+  over-broad: the only genuine race is the *install* into the shared
+  `.venv-py313` (the per-worktree cargo build is already isolated; see
+  `docs/RUST_PARALLELIZATION_FEASIBILITY.md`). Mechanism A
+  (`scripts/setup_rust_worktree_venv.ps1` — per-worktree
+  `--system-site-packages` venv + local engine wheel) eliminates that
+  race and is empirically validated end-to-end (~1.7-2× on the serial
+  Rust queue; rollback-free/opt-in). **Current gate state: still
+  ≤1 Rust until the dogfood lands.** The NEXT Rust dispatch MUST use
+  the helper + gate via `PYTHONPATH=src .venv-wt\Scripts\python.exe`
+  (the dogfood, still ≤1). After that dogfood slice lands green via
+  the isolated venv → **flip to ≤2 Rust** (each Rust agent on its own
+  isolated venv; merges + the orchestrator post-merge resync still
+  serialize on `main`). Python / docs / bench slices parallelize
+  freely as before.
 - **Agents auto-merge when green** — no end-of-round merge barrier. The
   agent runs the gate, rebases cleanly on `origin/main`, merges
   `--no-ff`, pushes immediately, cleans its worktree, deletes its

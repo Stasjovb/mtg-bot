@@ -304,9 +304,23 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 85d51879 (continuous-pipeline cycle 7 —
+     Measured at main f1f09bbb (continuous-pipeline cycle 8 —
+     R74-2 Depressurize-destroy dies-trigger FIXED (f456ec20) +
+     legal_decisions Slice 1 IMPLEMENTED (f1f09bbb, the SoT-flip
+     C1 decision-sourcing keystone, parity-neutral) + the
+     Rust-concurrency operating rule changed to a user-decided
+     staged ≤1->≤2 rollout (Mechanism A,
+     scripts/setup_rust_worktree_venv.ps1). Counts UNCHANGED
+     (118/120/21/12/9), parity 304/475 / PROBED 104 UNCHANGED,
+     NO resync owed: both merges are state_ops_*.rs-only
+     (no Effect/bridge/_SAFE_*; cards.rs/cross_engine.py
+     untouched) so the residue cadence verify-first did NOT
+     fire (cron exit-0 confirmed; CFI-1 precedent). POOL_PARITY
+     cycle-7-catch-up only (Sothera reclassified diffuse-
+     Effect-uncovered -> explicit residue: BLOCKED 163->162;
+     byte-equal/PROBED unchanged). PRIOR cycle 7 (@ 85d51879 —
      CFI-1 fix + warp Phase 2 / Timeline Culler + Sothera
-     residue entry added). Counts UNCHANGED (118/120/21/12/9):
+     residue entry added): Counts UNCHANGED (118/120/21/12/9):
      NEITHER count-shifting merge added an Effect:: variant /
      bridge arm / _SAFE_* entry. CFI-1 (8a2a8d84) deleted a
      stray `obj.counters=0` in Effect::DepressurizeEffect's

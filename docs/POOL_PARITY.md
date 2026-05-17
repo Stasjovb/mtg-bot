@@ -19,9 +19,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 | PROBED byte-equal | 104 | 21.9% |
 | Effect+bridge covered (not individually probed) | 200 | 42.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
-| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 6 | 1.3% |
+| BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
-| BLOCKED — subsystem-gated / Effect-uncovered | 163 | 34.3% |
+| BLOCKED — subsystem-gated / Effect-uncovered | 162 | 34.1% |
 | **Pool total** | **475** | **100.0%** |
 
 ### Tier definitions
@@ -154,7 +154,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Wurmwall Sweeper
 - Zealous Display
 
-## BLOCKED — genuinely_missing (new-Rust-Effect ask) (6)
+## BLOCKED — genuinely_missing (new-Rust-Effect ask) (7)
 
 - Astelli Reclaimer
 - Command Bridge
@@ -162,13 +162,14 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Meltstrider's Resolve
 - Pain for All
 - Roving Actuator
+- Sothera, the Supervoid
 
 ## BLOCKED — blocked_non_effect (non-Effect gate) (2)
 
 - Dauntless Scrapbot
 - Tractor Beam
 
-## BLOCKED — subsystem-gated / Effect-uncovered (163)
+## BLOCKED — subsystem-gated / Effect-uncovered (162)
 
 The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke this **opaque single bucket** out by gating subsystem so it is the data-driven "which subsystem next" instrument, not one number — see `docs/SUBSYSTEM_ROADMAP.md` for the leverage analysis + recommended sequencing. A card may be **multi-gated** (counted under every gate it trips, so `#cards` does NOT sum to the tier total); `1gate` is the single-gated count (closing that one subsystem flips the card) and reconciles exactly. `decks(1g)` is the cumulative 17lands deck-count of the single-gated members — the honest leverage signal.
 
@@ -187,11 +188,11 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Rooms / doors | 3 | 0 | 3 | 0 | 0 | sprawling |
 | Planeswalker loyalty | 1 | 0 | 1 | 2,311 | 0 | sprawling |
 | Carrier activated abilities | 35 | 0 | 35 | 53,689 | 0 | sprawling |
-| Effect-uncovered (no covered Rust counterpart) | 109 | 25 | 84 | 386,408 | 133,167 | diffuse |
+| Effect-uncovered (no covered Rust counterpart) | 108 | 25 | 83 | 384,300 | 133,167 | diffuse |
 | Unclassified (honest residual — needs hand re-walk) | 2 | 2 | 0 | 12 | 12 | diffuse |
-| Non-safe triggered ability (unbridged event/shape) | 54 | 0 | 54 | 194,640 | 0 | diffuse |
+| Non-safe triggered ability (unbridged event/shape) | 53 | 0 | 53 | 192,532 | 0 | diffuse |
 
-**Reconciliation:** 163 subsystem-gated = 73 single-gated + 90 multi-gated; the per-subsystem `1gate` column sums to 73 (== single-gated total). The breakout partitions exactly the same 163 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
+**Reconciliation:** 162 subsystem-gated = 73 single-gated + 89 multi-gated; the per-subsystem `1gate` column sums to 73 (== single-gated total). The breakout partitions exactly the same 162 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
 
 **Honest unclassified bucket (2):** `Deafening Silence`, `Leyline of Mutation` — no taxonomy gate fired; flagged for a hand re-walk rather than force-guessed (see `docs/SUBSYSTEM_ROADMAP.md`).
 
@@ -257,5 +258,5 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Galvanizing Sawship
 - Genemorph Imago
 - Ghost Vacuum
-- … and 103 more
+- … and 102 more
 

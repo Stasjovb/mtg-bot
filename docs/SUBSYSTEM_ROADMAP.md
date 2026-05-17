@@ -541,6 +541,66 @@ second:
    >     (pinned strict-delta @ Selfcraft Mechan). Aura struck.
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 8 —
+   >   R74-2 fixed + legal_decisions Slice 1 IMPLEMENTED +
+   >   Rust-concurrency operating-rule changed; @ `f1f09bbb`,
+   >   counts UNCHANGED 118/120, parity 304/475 / PROBED 104
+   >   UNCHANGED, NO resync owed).**
+   >   - **R74-2 FIXED** (`f456ec20`): Rust
+   >     Effect::DepressurizeEffect's hand-rolled destroy arm now
+   >     pushes `pending_dies_dispatches` (was leaves-only) +
+   >     closed a structural gap (DIES dispatch only drained from
+   >     apply_sbas, not the spell/trigger resolution path).
+   >     Byte-equal pin added (interaction-4). One of the
+   >     round-74 trio resolved (R74-3 harness in flight; R74-1/
+   >     I23 = next Rust). Non-count-shifting (state_ops_resolve
+   >     .rs only; CFI-1 precedent — residue cadence did NOT
+   >     fire, cron exit-0 verified).
+   >   - **legal_decisions Slice 1 IMPLEMENTED** (`f1f09bbb`):
+   >     the SoT-flip decision-sourcing **C1 keystone is now
+   >     CODE, not just spec** — `can_pay_cost` added to
+   >     state_ops_mana.rs, all 6 live CastSpell sites gated
+   >     (verify-first caught spec drift: warp Phase 2 added a
+   >     6th site). Parity-neutral by the single-script-replay
+   >     proof; non-count-shifting. Unblocks the NN↔Rust
+   >     decision-sourcing boundary spec (was hard-blocked on
+   >     this) for a future design slice. SEARCH_LIMITATIONS
+   >     ACCEPTED→PARTIALLY-CLOSED.
+   >   - **Rust-concurrency operating rule CHANGED (user-decided
+   >     staged rollout):** the blanket `≤1-Rust` rule was
+   >     verify-first-proven over-broad (only the shared-venv
+   >     *install* races; per-worktree cargo build already
+   >     isolated — `docs/RUST_PARALLELIZATION_FEASIBILITY.md`).
+   >     Mechanism A (`scripts/setup_rust_worktree_venv.ps1`,
+   >     opt-in, rollback-free) eliminates it, ~1.7-2× on the
+   >     serial Rust queue. STAGED: next Rust dispatch DOGFOODS
+   >     the isolated venv still under ≤1; on green → flip to
+   >     **≤2 Rust** (own venv each; merges + orchestrator
+   >     resync still serialize on main). HANDOFF operating-rules
+   >     section updated to match.
+   >   - **POOL_PARITY catch-up (honest, not a parity move):**
+   >     cycle-7 ran the regen BEFORE adding the Sothera residue
+   >     entry, so the committed POOL_PARITY lagged; cycle-8
+   >     regen reclassifies Sothera diffuse-Effect-uncovered →
+   >     explicit residue (BLOCKED 163→162, diffuse 109→108);
+   >     byte-equal 304/475 + PROBED 104 UNCHANGED.
+   >   - **Revised Rust queue:** (a) **R74-1/I23** — the
+   >     64/111-divergence documented-scoped combat-power-omits-
+   >     +1/+1-counter asymmetry, now empirically demanded; the
+   >     NEXT Rust dispatch + the Mechanism-A DOGFOOD slice;
+   >     (b) Tier-C target-seating (still no lever-a consumer —
+   >     honest-stopped twice; needs a per-card lever-a Effect
+   >     round first); (c) the I73 bare-add_counters blind-bf[0]
+   >     gap (pinned strict-delta @ Selfcraft Mechan). Aura
+   >     struck.
+   >   - **Pre-existing outside-gate red flagged:**
+   >     `tests/test_probe_spell_card_bridge_admitted.py::
+   >     test_phase1_admit_set_is_exactly_...` is stale (admit
+   >     set auto-grew to 6; `_PHASE1_ADMITTED_AT_THIS_HEAD`
+   >     not updated) — a genuine honest-fix lane (drop+replace
+   >     per the test's own docstring), NOT in the 4-file gate.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
