@@ -212,15 +212,19 @@ class CardDef:
     # later slices flip that). See ``docs/TOKEN_PRINTING_SUBSTRATE.md``
     # §6 for the remaining Phase-3 steps.
     token_activated_abilities: tuple[dict, ...] = ()
-    # warp_cost substrate (Phase 1, round-63). Pure fixed-`ManaCost`
-    # warp alt-cost (EoE — Red Tiger Mechan {1}{R}, Bygone Colossus
-    # {3}). Reuses the SAME (generic, colored) codec as
+    # warp_cost substrate (Phase 1, round-63; Phase 1.5, round-65).
+    # Pure fixed-`ManaCost` warp alt-cost (EoE — Red Tiger Mechan
+    # {1}{R}, Bygone Colossus {3}) PLUS the Phase-1.5 safe-trigger+warp
+    # residue trio (Germinating Wurm {1}{G}, Knight Luminary {1}{W},
+    # Starbreach Whale {1}{U}), each carrying one SAFE ETB trigger on
+    # the independent ``triggered_abilities`` field. Reuses the SAME
+    # (generic, colored) codec as
     # ``mana_cost_generic`` / ``mana_cost_colored`` — frozen, bridge-
     # serializable. ``has_warp=False`` = no warp (back-compat default;
     # every pre-Phase-1 CardDef omits it, the registry-dict builder
     # then omits the ``warp_cost`` key and the Rust parser maps that
-    # absence to ``None``). Phase 1 carries ONLY the pure fixed-cost
-    # shape; the filter guardrail
+    # absence to ``None``). Phase 1/1.5 carries the pure fixed-cost
+    # shape +/- a safe ETB trigger; the filter guardrail
     # ``trajectory._printing_is_bridge_pure_warp_creature`` positively
     # rejects ``warp_additional_life_cost != 0`` /
     # ``warp_castable_from_graveyard`` (those are Phase 2). The

@@ -64300,6 +64300,254 @@ def test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
         f"{card_name}: recast must be back on the Rust bf")
 
 
+import pytest as _pytest_r65_warp_p15  # noqa: E402
+
+
+@_pytest_r65_warp_p15.mark.parametrize(
+    "card_name,color,warp_str,normal_str",
+    [
+        ("Germinating Wurm", "G", "{1}{G}", "{4}{G}"),
+        ("Starbreach Whale", "U", "{1}{U}", "{4}{U}"),
+    ],
+)
+def test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal(
+    card_name, color, warp_str, normal_str,
+):
+    """**GENUINE real-EoE cross-engine probe — Phase 1.5 (round-65):
+    an ACTUAL parsed safe-trigger+warp residue trio printing driven
+    through the FULL warp lifecycle on BOTH engines, with the
+    load-bearing new assertion that the ETB trigger fires BYTE-EQUAL
+    UNDER the warp-cast path (+3 cards; the Phase-1 agent's
+    deliberately-scoped-out follow-up).**
+
+    Resolves the printing via the live ``OracleParserCardSource``
+    (NOT a synthetic CardDef — the round-46 real-EoE-signal
+    discipline), converts it through the production-deck bridge
+    (``production_deck_to_deckspec`` — the SAME path the bench's
+    ``setup_matched_game_from_real_decks`` uses; it seats any token
+    printing the ETB needs), then drives, on BOTH engines via
+    ``step_both`` (byte-equal at every step):
+
+      1. the warp creature becomes castable — both engines'
+         ``legal_actions`` offer the SAME base+warp CastSpell pair;
+      2. the warp cast itself (``CastSpell{use_warp:True}``) — pays
+         the cheaper warp cost, ``spell_warped_this_turn`` set, AND
+         **the SAFE ETB trigger fires byte-equal under the warp-cast
+         path** (the NEW assertion vs the Phase-1 pure-fixed-cost
+         probe — Germinating Wurm: +2 life on BOTH; warp-cast is a
+         new cast path the ETB had never fired through);
+      3. the following end step — the warp-exile fires; the permanent
+         is in exile with the warp marker on BOTH, byte-equal;
+      4. a later turn's recast from exile at NORMAL cost — byte-equal
+         (the ETB fires AGAIN, this time under the normal-cost recast
+         path, +2 more life on BOTH).
+
+    This is the Phase-1.5 acceptance gate: "did a real EoE
+    safe-trigger+warp deck just get admitted and stay bit-equal
+    across the full warp lifecycle INCLUDING the ETB firing
+    byte-equal under both the warp-cast and the exile-recast paths".
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, step_both, advance_phase_python,
+        compare_fields,
+    )
+    from mtg_bot.legal import legal_actions
+    from tests.test_trajectory_parity import _step_views
+    from mtg_bot.cards.source import get_active_source
+
+    src = get_active_source().get_printings()
+    real = src.get(card_name)
+    if real is None:
+        _pytest_r65_warp_p15.skip(
+            f"{card_name} absent from active CardSource")
+    # Verify-against-live: genuinely the safe-trigger+warp shape.
+    assert real.warp_cost is not None
+    assert real.warp_cost_str == warp_str
+    assert real.mana_cost_str == normal_str
+    assert getattr(real, "warp_additional_life_cost", 0) == 0
+    assert getattr(real, "warp_castable_from_graveyard", False) is False
+    assert len(real.triggered_abilities) == 1
+    assert trajectory._printing_is_bridge_pure_warp_creature(real), (
+        f"{card_name} must pass the Phase-1.5 guardrail")
+
+    spec = trajectory.production_deck_to_deckspec(
+        [card_name] + ["Forest"] * 39, ["Forest"] * 40,
+        pad_to_size=40)
+    newdefs = tuple(
+        CardDef(name="Forest", card_type="Land",
+                mana_produced=(color,))
+        if c.name == "Forest" else c
+        for c in spec.card_defs
+    )
+    spec = DeckSpec(card_defs=newdefs,
+                    p0_library=spec.p0_library,
+                    p1_library=spec.p1_library)
+    py, rs = trajectory.setup_matched_game(spec)
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+            pv, rv = _step_views(py, rs)
+            d = compare_fields(pv, rv)
+            assert not d, (
+                f"{card_name}: phase advance ({pv['step']}, turn "
+                f"{pv['turn']}) diverged: "
+                f"{[(x.field, x.py_value, x.rust_value) for x in d]}")
+
+    adv(3)  # turn 1 MAIN1
+    n_lands = 10
+    for _ in range(n_lands):
+        hand_forest = [
+            o for o in py.players[py.active_player_idx].hand
+            if o.printing.name == "Forest"
+        ]
+        if hand_forest:
+            assert not step_both(
+                py, rs,
+                {"kind": "play_land",
+                 "card_id": int(hand_forest[0].id)}).divergences
+        adv(24)  # +2 turns (back to p0 MAIN1)
+    ai = py.active_player_idx
+    import re as _re
+    warp_total = sum(
+        int(x) if x.isdigit() else 1
+        for x in _re.findall(r"\{([^}]+)\}", warp_str)
+    )
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == ai and o.printing.is_land
+                and not o.tapped and not o.summoning_sick
+                and taps < warp_total):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    assert taps == warp_total, (
+        f"need {warp_total} mana for warp {warp_str}; tapped {taps}")
+    card_obj = next(o for o in py.players[ai].hand
+                    if o.printing.name == card_name)
+    life_before = py.players[ai].life
+    assert rs.get_life(ai) == life_before
+
+    # (1) Both engines offer the SAME base+warp CastSpell pair.
+    py_pair = sorted(
+        a.use_warp for a in legal_actions(py, ai)
+        if getattr(a, "card_id", None) == card_obj.id
+    )
+    rs_pair = sorted(
+        a["use_warp"] for a in rs.legal_decisions(ai)
+        if a.get("kind") == "cast_spell"
+        and a.get("card_id") == card_obj.id
+    )
+    assert py_pair == rs_pair == [False, True], (
+        f"{card_name}: legal base+warp pair mismatch — "
+        f"py={py_pair} rs={rs_pair}")
+
+    # (2) The warp cast — byte-equal post-cast AND the ETB fired
+    # byte-equal under the warp-cast path (the load-bearing new pin).
+    s = step_both(
+        py, rs,
+        {"kind": "cast_spell", "card_id": int(card_obj.id),
+         "use_warp": True},
+    )
+    assert not s.divergences, (
+        f"{card_name}: warp cast diverged: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+    assert py.spell_warped_this_turn is True
+    assert rs.spell_warped_this_turn is True
+    # Germinating Wurm / Starbreach Whale ETB: GainLife 2 / Surveil 2.
+    # GainLife is observable; Surveil's no-public-side reorder is
+    # proved byte-equal by the zero-divergence above. Assert the
+    # observable ETB fired byte-equal where it has a public effect.
+    if card_name == "Germinating Wurm":
+        assert py.players[ai].life == life_before + 2, (
+            f"Germinating Wurm ETB GainLife 2 must fire under "
+            f"warp-cast on Python; {life_before}→"
+            f"{py.players[ai].life}")
+        assert rs.get_life(ai) == life_before + 2, (
+            f"Germinating Wurm ETB GainLife 2 must fire under "
+            f"warp-cast on Rust; {life_before}→{rs.get_life(ai)}")
+    life_after_cast = py.players[ai].life
+
+    # (3) The following end step — warp-exile, byte-equal at END.
+    adv(7)  # MAIN1 → END (the exile sweep fires on both)
+    py_ex = sorted(o.printing.name for o in py.players[ai].exile)
+    rs_ex = sorted(o["printing_name"] for o in rs.exile_snapshot(ai))
+    assert py_ex == rs_ex == [card_name], (
+        f"{card_name}: must be warp-exiled on BOTH; "
+        f"py={py_ex} rs={rs_ex}")
+    assert not [o for o in py.battlefield
+                if o.printing.name == card_name], (
+        f"{card_name}: must have left the Python battlefield")
+    assert not [o for o in rs.battlefield_snapshot()
+                if o["printing_name"] == card_name], (
+        f"{card_name}: must have left the Rust battlefield")
+
+    # (4) A later turn's recast from exile at NORMAL cost — the ETB
+    # fires AGAIN under the normal-cost recast path, byte-equal.
+    for _ in range(120):
+        pv, _rv = _step_views(py, rs)
+        if (py.active_player_idx == ai
+                and pv["step"] == "PRECOMBAT_MAIN"
+                and py.players[ai].lands_played_this_turn == 0):
+            break
+        adv(1)
+    fhand = [o for o in py.players[ai].hand
+             if o.printing.name == "Forest"]
+    if fhand:
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land",
+             "card_id": int(fhand[0].id)}).divergences
+    normal_total = sum(
+        int(x) if x.isdigit() else 1
+        for x in _re.findall(r"\{([^}]+)\}", normal_str)
+    )
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == ai and o.printing.is_land
+                and not o.tapped and not o.summoning_sick
+                and taps < normal_total):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    assert taps == normal_total, (
+        f"need {normal_total} mana for normal recast {normal_str}; "
+        f"tapped {taps}")
+    life_before_recast = py.players[ai].life
+    assert rs.get_life(ai) == life_before_recast
+    exiled = next(o for o in py.players[ai].exile
+                  if o.printing.name == card_name)
+    s = step_both(
+        py, rs,
+        {"kind": "cast_spell", "card_id": int(exiled.id),
+         "use_warp": False},
+    )
+    assert not s.divergences, (
+        f"{card_name}: warp exile-recast diverged: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+    assert any(o.printing.name == card_name
+               for o in py.battlefield), (
+        f"{card_name}: recast must be back on the Python bf")
+    assert any(o["printing_name"] == card_name
+               for o in rs.battlefield_snapshot()), (
+        f"{card_name}: recast must be back on the Rust bf")
+    if card_name == "Germinating Wurm":
+        assert py.players[ai].life == life_before_recast + 2, (
+            "Germinating Wurm ETB must fire AGAIN under the "
+            "normal-cost exile-recast on Python")
+        assert rs.get_life(ai) == life_before_recast + 2, (
+            "Germinating Wurm ETB must fire AGAIN under the "
+            "normal-cost exile-recast on Rust")
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

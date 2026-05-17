@@ -20235,5 +20235,243 @@ def test_r63_warp_bridge_end_step_exile_and_recast_byte_equal():
         f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
 
 
+import pytest as _pytest_warp_p15  # noqa: E402
+
+
+@_pytest_warp_p15.mark.parametrize(
+    "card_name,color,etb_check",
+    [
+        ("Germinating Wurm", "G", "gain_life"),
+        ("Knight Luminary", "W", "create_token"),
+        ("Starbreach Whale", "U", "surveil"),
+    ],
+)
+def test_r65_warp_p15_trio_etb_fires_byte_equal_under_warp_cast(
+    card_name, color, etb_check,
+):
+    """**Phase 1.5 cross-engine bridge pin (round-65) — the
+    load-bearing assertion: the trio's SAFE ETB trigger fires
+    BYTE-EQUAL on BOTH engines UNDER the warp-cast path.**
+
+    warp-cast is a NEW cast path the ETB had never fired through
+    pre-Phase-1.5. This pin drives the ACTUAL parsed trio printing
+    via the production-deck loader (``production_deck_to_deckspec`` —
+    the SAME path the bench uses; it seats the Knight-Luminary token
+    printing via ``_seat_token_printings`` so the create_token ETB
+    bridges) and asserts ``CastSpell{use_warp:True}`` via
+    ``step_both`` surfaces ZERO field-view divergences AND the ETB
+    observably resolved identically on both engines (Germinating Wurm
+    +2 life; Knight Luminary a ``Human Soldier`` token on the
+    battlefield; Starbreach Whale on the battlefield with the Surveil
+    having resolved — zero divergence is the byte-equal proof for the
+    no-observable-side library/graveyard reorder of Surveil)."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, step_both, advance_phase_python,
+    )
+
+    from mtg_bot.cards.source import get_active_source
+    src = get_active_source().get_printings()
+    real = src.get(card_name)
+    if real is None:
+        _pytest_warp_p15.skip(
+            f"{card_name} absent from active CardSource")
+    # Verify-against-live: genuinely a safe-trigger+warp creature
+    # whose ONLY gate WAS warp (the Phase-1.5 boundary).
+    assert real.warp_cost is not None
+    assert getattr(real, "warp_additional_life_cost", 0) == 0
+    assert getattr(real, "warp_castable_from_graveyard", False) is False
+    assert len(real.triggered_abilities) == 1
+    assert trajectory._printing_is_bridge_pure_warp_creature(real), (
+        f"{card_name} must pass the Phase-1.5 guardrail")
+
+    # Production loader path (seats token printings). Swap the pad
+    # land to one tapping the trio member's warp colored pip so both
+    # engines can afford {1}{<color>}.
+    spec = trajectory.production_deck_to_deckspec(
+        [card_name] + ["Forest"] * 59, ["Forest"] * 60)
+    newdefs = tuple(
+        CardDef(name="Forest", card_type="Land",
+                mana_produced=(color,))
+        if c.name == "Forest" else c
+        for c in spec.card_defs
+    )
+    spec = DeckSpec(card_defs=newdefs,
+                    p0_library=spec.p0_library,
+                    p1_library=spec.p1_library)
+    py, rs = trajectory.setup_matched_game(spec)
+
+    def adv(n):
+        from mtg_bot.parity.cross_engine import compare_fields
+        from tests.test_trajectory_parity import _step_views
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+            pv, rv = _step_views(py, rs)
+            d = compare_fields(pv, rv)
+            assert not d, (
+                f"{card_name}: phase advance ({pv['step']}, turn "
+                f"{pv['turn']}) diverged: "
+                f"{[(x.field, x.py_value, x.rust_value) for x in d]}")
+
+    adv(3)
+    for _ in range(2):
+        f = next(o for o in py.players[py.active_player_idx].hand
+                 if o.printing.name == "Forest")
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land", "card_id": int(f.id)}).divergences
+        adv(24)
+    f = next(o for o in py.players[py.active_player_idx].hand
+             if o.printing.name == "Forest")
+    assert not step_both(
+        py, rs, {"kind": "play_land", "card_id": int(f.id)}).divergences
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == py.active_player_idx
+                and o.printing.is_land and not o.tapped
+                and not o.summoning_sick and taps < 2):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    ai = py.active_player_idx
+    obj = next(o for o in py.players[ai].hand
+               if o.printing.name == card_name)
+    life_before = py.players[ai].life
+    assert rs.get_life(ai) == life_before
+
+    # The warp cast — the ETB fires through cast_creature_warp's
+    # move_from_hand_to_battlefield → drain_pending_etb_dispatches
+    # (the SAME ENTERS dispatch as cast_creature). Zero divergence is
+    # the byte-equal proof.
+    s = step_both(
+        py, rs,
+        {"kind": "cast_spell", "card_id": int(obj.id),
+         "use_warp": True},
+    )
+    assert not s.divergences, (
+        f"{card_name}: warp-cast (ETB under warp path) diverged: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+    assert py.spell_warped_this_turn is True
+    assert rs.spell_warped_this_turn is True
+
+    # ETB observably resolved identically on BOTH engines.
+    if etb_check == "gain_life":
+        assert py.players[ai].life == life_before + 2, (
+            f"{card_name}: Python ETB GainLife 2 must fire under "
+            f"warp-cast; life {life_before}→{py.players[ai].life}")
+        assert rs.get_life(ai) == life_before + 2, (
+            f"{card_name}: Rust ETB GainLife 2 must fire under "
+            f"warp-cast; life {life_before}→{rs.get_life(ai)}")
+    elif etb_check == "create_token":
+        py_tok = [o for o in py.battlefield
+                  if o.controller_id == ai
+                  and o.printing.name == "Human Soldier"]
+        rs_tok = [o for o in rs.battlefield_snapshot()
+                  if o["printing_name"] == "Human Soldier"]
+        assert len(py_tok) == 1, (
+            f"{card_name}: Python ETB must spawn 1 Human Soldier "
+            f"token under warp-cast; got {len(py_tok)}")
+        assert len(rs_tok) == 1, (
+            f"{card_name}: Rust ETB must spawn 1 Human Soldier "
+            f"token under warp-cast; got {len(rs_tok)}")
+    else:  # surveil — zero divergence already proved byte-equality;
+        # assert the permanent itself arrived on both bf.
+        assert any(o.printing.name == card_name
+                   for o in py.battlefield), (
+            f"{card_name}: must be on the Python battlefield")
+        assert any(o["printing_name"] == card_name
+                   for o in rs.battlefield_snapshot()), (
+            f"{card_name}: must be on the Rust battlefield")
+
+
+def test_r65_warp_p15_trio_bridge_offers_same_base_warp_castspell_pair():
+    """Phase 1.5 cross-engine bridge pin — once the warp cost is
+    payable, BOTH engines' legal action sets offer the SAME
+    ``{use_warp:False, use_warp:True}`` CastSpell pair for a
+    safe-trigger+warp trio card (Germinating Wurm, the simplest of
+    the three — GainLife ETB, no token-seating needed). The
+    Phase-1.5 widen does not perturb the legal-emitter parity the
+    Phase-1 substrate established."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, step_both, advance_phase_python,
+    )
+    from mtg_bot.legal import legal_actions
+
+    from mtg_bot.cards.source import get_active_source
+    src = get_active_source().get_printings()
+    real = src.get("Germinating Wurm")
+    if real is None:
+        _pytest_warp_p15.skip("Germinating Wurm absent")
+    spec = trajectory.production_deck_to_deckspec(
+        ["Germinating Wurm"] + ["Forest"] * 59, ["Forest"] * 60)
+    newdefs = tuple(
+        CardDef(name="Forest", card_type="Land",
+                mana_produced=("G",))
+        if c.name == "Forest" else c
+        for c in spec.card_defs
+    )
+    spec = DeckSpec(card_defs=newdefs,
+                    p0_library=spec.p0_library,
+                    p1_library=spec.p1_library)
+    py, rs = trajectory.setup_matched_game(spec)
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+
+    # Build a big enough mana base that Python can afford the NORMAL
+    # cost too ({4}{G} = 5 mana) — Python gates BOTH base + warp on
+    # _can_cast (the documented pre-existing Rust-no-_can_cast
+    # asymmetry, Phase-1 spec §2.2 caveat 1); with only the warp cost
+    # ({1}{G}=2) payable Python emits ONLY [True]. With ≥5 mana both
+    # base+warp are payable and the two engines' pairs match — which
+    # is what this pin asserts (the Phase-1.5 widen does not perturb
+    # the legal-emitter parity).
+    adv(3)
+    for _ in range(6):
+        hand_f = [o for o in py.players[py.active_player_idx].hand
+                  if o.printing.name == "Forest"]
+        if hand_f:
+            assert not step_both(
+                py, rs,
+                {"kind": "play_land",
+                 "card_id": int(hand_f[0].id)}).divergences
+        adv(24)
+    ai = py.active_player_idx
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == ai
+                and o.printing.is_land and not o.tapped
+                and not o.summoning_sick and taps < 5):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    assert taps == 5, (
+        f"need 5 mana so Python can afford the {{4}}{{G}} normal "
+        f"cost (the base cast's _can_cast gate); tapped {taps}")
+    gw = next(o for o in py.players[ai].hand
+              if o.printing.name == "Germinating Wurm")
+    py_pair = sorted(
+        a.use_warp for a in legal_actions(py, ai)
+        if getattr(a, "card_id", None) == gw.id
+    )
+    rs_pair = sorted(
+        a["use_warp"] for a in rs.legal_decisions(ai)
+        if a.get("kind") == "cast_spell" and a.get("card_id") == gw.id
+    )
+    assert py_pair == rs_pair == [False, True], (
+        f"Germinating Wurm: base+warp CastSpell pair mismatch — "
+        f"py={py_pair} rs={rs_pair}")
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
