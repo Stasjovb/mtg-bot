@@ -6092,6 +6092,66 @@ the rest" discipline (C1 precedent), not a strength regression.
 
 ---
 
+## B3-S3 rust_determinize — `publicly_known_to` not modeled in Rust
+
+**Where.** `src/mtg_bot/search/rust_determinize.py`
+(`_rust_viewer_knows`); the Python source-of-truth is
+`src/mtg_bot/search/determinize.py:viewer_knows` (`:37-61`). The
+Rust `GameObject` (`rust/src/state.rs`) has no `publicly_known_to`
+field; the `*_snapshot` per-object dicts carry `zone` +
+`controller_id` but no reveal-tracking set.
+
+**What the shortcut is.** When `decision_source` is `rust` /
+`rust_shadow` the search determinizes the **Rust** state's
+hidden-zone printings via `rust_determinize`. Python's
+`viewer_knows` has 3 conditions: (1) `viewer in
+card.publicly_known_to` (explicit reveal tracking — e.g. a card
+revealed by a scry/look effect), (2) `card.zone` is a public zone
+(battlefield/graveyard/exile/stack), (3) the card is in the viewer's
+own hand. `_rust_viewer_knows` implements (2)+(3) exactly (from the
+snapshot `zone` int + the per-player snapshot identifying the owner)
+but OMITS (1) — Rust does not model `publicly_known_to`.
+
+**Why it's OK (admitted-surface-exact).** `publicly_known_to` is
+populated ONLY by explicit reveal mechanics (reveal-a-card, look-at-
+top-then-reveal, etc.). Those carriers are non-bridge-expressible
+and loader-DECLINED on the bridge-admitted population (the same
+C1 §1.4 / "Deferred alt-cost flags" / non-bridge-predicate scoping).
+On the loader-admitted / C6-fenced flip population `publicly_known_to`
+is always empty, so `viewer_knows` reduces to exactly (2)+(3) — and
+`_rust_viewer_knows` is then byte-identical to the Python policy.
+C6 (`66485d6d`, `LoaderAdmitPolicy.RAISE`) makes a non-admitted card
+unable to enter a Rust-sourced game, so a reveal-tracked card is
+unreachable on the flip population by construction.
+`decision_source="python"` does not touch this path (the Python
+determinizer + Python `viewer_knows` are unchanged) — parity-neutral.
+
+**Failure mode.** If a reveal-tracking carrier ever became
+loader-admitted AND it revealed an opponent's hand/library card, the
+Rust determinizer would (incorrectly) still permute that revealed
+card's printing — i.e. the determinization would be *under-informed*
+(it would sample over a card the viewer actually knows). Direction:
+*under-informed, never misinformed* — the same soundness direction
+the Python determinizer guarantees (it would just lose a known-card
+constraint, sampling a wider-than-true world; the search measures
+slightly weaker, never illegal). Unreachable today (C6-fenced).
+
+**Fix scope.** A small Rust extension: add a `publicly_known_to`
+field to `GameObject` + emit it in `object_to_pydict`, then
+`_rust_viewer_knows` reads it (the B3-pre-EXT read-extraction
+shape). Sequenced ONLY when a reveal-tracking carrier becomes
+loader-admitted (no earlier value — unreachable until then). The
+epistemic policy itself stays Python either way (it is the
+hidden-info model, not engine rules — spec §3.4).
+
+**Impact.** Zero on the admitted flip population (byte-identical
+`viewer_knows`). Zero on `decision_source="python"` (Python
+determinizer untouched). Staged-flip "scope to the live surface,
+forward-note the rest" discipline (C1 precedent), not a strength
+regression.
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,

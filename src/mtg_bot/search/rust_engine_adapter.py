@@ -328,7 +328,51 @@ class RustGameStateAdapter:
             dicts = [
                 d for d in dicts if d.get("kind") != "play_land"
             ]
+        # B3-S3: refresh the factored-combat-phase bookkeeping from
+        # the current Rust emission so the codec's combat-slot path
+        # (_combat_phase(state) / state._pending_attackers /
+        # _attacking_creatures) encodes correctly. G1 made Rust
+        # legal_decisions emit the factored per-creature dicts AND
+        # the apply arms accumulate the declared set internally —
+        # so the provider does NOT re-implement the Python adapter's
+        # _chosen_attackers accumulation (engine_adapter.py:1080-1144);
+        # it only mirrors the phase + pending-HEAD bookkeeping the
+        # codec reads. Stateless-Rust / stateful-codec-view split, per
+        # the G1 emission docstring.
+        self._refresh_combat_phase(dicts)
         return [rust_dict_to_decision(d) for d in dicts]
+
+    def _refresh_combat_phase(self, dicts: list[dict]) -> None:
+        """Set ``_combat_phase`` + the pending-head list from the
+        current Rust factored emission. The codec reads
+        ``getattr(state, "combat_phase", None)`` and
+        ``state._pending_attackers[0]`` / ``_pending_blockers[0]``
+        (``action_encoding.py:973-1012``) to encode the implicit-head
+        ATTACKER/BLOCKER slots; we expose exactly the head Rust is
+        emitting a factored decision for (its ``attacker_id`` /
+        ``blocker_id``)."""
+        atk_heads = [
+            int(d["attacker_id"]) for d in dicts
+            if d.get("kind") == "attacker_decision"
+        ]
+        blk_heads = [
+            int(d["blocker_id"]) for d in dicts
+            if d.get("kind") == "blocker_decision"
+        ]
+        if atk_heads:
+            self._combat_phase = _COMBAT_ATTACKERS
+            # G1 emits exactly two attacker_decision dicts for ONE
+            # head (attack True/False); the head is that attacker_id.
+            self._pending_attackers = [atk_heads[0]]
+            self._pending_blockers = []
+        elif blk_heads:
+            self._combat_phase = _COMBAT_BLOCKERS
+            self._pending_blockers = [blk_heads[0]]
+            self._pending_attackers = []
+        else:
+            self._combat_phase = _COMBAT_NONE
+            self._pending_attackers = []
+            self._pending_blockers = []
 
     def chance_outcomes(self) -> list[tuple[Decision, float]]:
         # Unchanged from MtgGameStateAdapter — no chance nodes;
