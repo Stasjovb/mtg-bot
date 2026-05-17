@@ -68578,7 +68578,7 @@ def test_cross_engine_counter_attacker_combat_damage_folds_plus_one(
     assert rust_state.get_life(0) == 20
 
 
-def test_cross_engine_real_eoe_sunset_saboteur_attacks_seats_first_opponent_creature(
+def test_cross_engine_real_eoe_sunset_saboteur_attacks_seats_first_opponent_creature_parity(
     parity_smoke,
 ):
     """**GENUINE real-EoE probe — Tier-C target-seating sub-substrate,
@@ -68848,7 +68848,7 @@ def test_cross_engine_real_eoe_sunset_saboteur_attacks_seats_first_opponent_crea
     assert py_sab2.plus_one_counters == 0
 
 
-def test_cross_engine_real_eoe_exosuit_savior_etb_seats_first_own_permanent(
+def test_cross_engine_real_eoe_exosuit_savior_etb_seats_first_own_permanent_parity(
     parity_smoke,
 ):
     """**GENUINE real-EoE probe — Tier-C target-seating sub-substrate,

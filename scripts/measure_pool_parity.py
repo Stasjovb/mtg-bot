@@ -167,6 +167,51 @@ RESIDUE_WORKLIST = REPO_ROOT / "docs" / "residue_worklist.json"
 #     keeping exactly ONE inclusion predicate at exactly the
 #     established bar — the "match the established bar; if unsure,
 #     undercount rather than inflate" discipline.
+#
+# CYCLE-10 HONEST-ATTRIBUTION RECONCILIATION (the recurring
+# measurement-attribution gap the cycle-10 fold flagged: ``PROBED=104``
+# understated real probe coverage by the Tier-C target-seating cards).
+# The Tier-C lever-a slices (Sunset Saboteur ``5e05cbaa`` / Exosuit
+# Savior ``fa3d17b4``) each landed a GENUINE real-EoE cross-engine
+# byte-equal firing-parity probe — drives the live parsed printing
+# (``get_active_source().get_printings().get("Sunset Saboteur" /
+# "Exosuit Savior")``) end-to-end through the production ATTACKS / ETB
+# path on BOTH engines and asserts byte-equal state (the SAME idiom +
+# the SAME strength bar as the 60+ cards already credited). The probes
+# were authored IN ``tests/test_parity_smoke.py`` (already scanned) but
+# their function names ended ``_attacks_seats_first_opponent_creature``
+# / ``_etb_seats_first_own_permanent`` instead of the established
+# ``..._parity`` convention, so the unchanged single inclusion
+# predicate (``_smoke_probed_cards`` / ``_probe_module_probed_cards``
+# both require the ``_parity`` suffix) silently UNDERCOUNTED them — the
+# SAME class of bug the cycle-4 batch-module flag tracked, surfacing
+# again. RESOLUTION (the established discipline — conform the deviating
+# probes to the convention, do NOT loosen the bar / add a second
+# looser predicate): the two functions were renamed to append
+# ``_parity`` (``feature/probe-modules-tierc-registration``), so the
+# UNCHANGED smoke detector now credits them at EXACTLY the established
+# bar. PROBED 104 → 106 (+Sunset Saboteur, +Exosuit Savior; both move
+# covered-by-construction → the stronger PROBED tier — the byte-equal
+# headline total is unchanged, only the evidence tier strengthens).
+#
+# HONESTLY EXCLUDED (the bar cuts both ways — NOT an oversight):
+#
+#   * **Diplomatic Relations** (spell-card-bridge Phase 2,
+#     ``c2f8170c``). Its only dedicated test
+#     (``tests/test_diplomatic_relations.py``) is a SINGLE-ENGINE
+#     Python-only rider test (drives ``mtg_bot.actions`` only — NO
+#     ``build_rust_state`` / NO cross-engine byte-equality assertion);
+#     its ``tests/test_cross_engine_etb_triggers.py`` entries are
+#     ``test_bridge_*_bidirectional_round_trip`` materialization pins
+#     (Python→dict→Python / dict→Rust), NOT a genuine real-EoE
+#     cross-engine firing-parity probe on the live printing. It does
+#     NOT meet the established PROBED bar (a controlled real-EoE state
+#     driven end-to-end on BOTH engines with full ``compare_fields``
+#     byte-equality) and is NOT credited — it stays
+#     covered-by-construction (its Effects ARE shipped+bridged) until a
+#     genuine real-EoE ``..._parity`` probe lands. Same integrity
+#     discipline as the cycle-4 batch-module exclusions: undercount
+#     rather than inflate.
 PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_a.py",
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_b.py",

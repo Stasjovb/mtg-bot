@@ -310,21 +310,136 @@ def test_genuine_probed_cards_union_is_superset_of_smoke_only(mod):
     )
 
 
+# ------------------- CYCLE-10 honest-attribution reconciliation: the
+# Tier-C target-seating lever-a cards (Sunset Saboteur / Exosuit
+# Savior) each carry a GENUINE real-EoE cross-engine byte-equal
+# firing-parity probe in ``tests/test_parity_smoke.py``. Their function
+# names were renamed to the established ``..._parity`` convention so the
+# UNCHANGED single inclusion predicate credits them at EXACTLY the
+# established bar (covered-by-construction → the stronger PROBED tier).
+# The integrity guard cuts BOTH ways — these genuine probes ARE
+# counted; a synthetic non-bar Tier-C-shaped probe is NOT.
+
+
+def test_tierc_target_seating_cards_credited_probed(mod):
+    """The two Tier-C target-seating cards (Sunset Saboteur / Exosuit
+    Savior) are credited PROBED via the genuine real-EoE
+    cross-engine byte-equal probes in ``tests/test_parity_smoke.py``
+    (the cycle-10 honest-attribution reconciliation: their probe
+    functions were renamed to the established ``..._parity`` convention
+    so the unchanged smoke detector credits them).
+
+    Each card is verified to be a live pool printing so the assertion
+    cannot pass on a stale fixture, and is asserted to land in the
+    PROBED tier of the full classification (NOT merely
+    covered-by-construction) — pins the +2 the reconciliation surfaces
+    (PROBED 104 → 106) and fails directly if a future rebase reverts
+    the naming convention."""
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+
+    pool = set(OracleParserCardSource().get_printings().keys())
+    union = mod.genuine_probed_cards(pool)
+    for nm in ("Sunset Saboteur", "Exosuit Savior"):
+        assert nm in pool, f"{nm!r} drifted out of the live pool — re-pin"
+        assert nm in union, (
+            f"{nm!r} has a genuine real-EoE cross-engine byte-equal "
+            f"firing-parity probe in tests/test_parity_smoke.py but is "
+            f"NOT credited PROBED — the cycle-10 honest-attribution "
+            f"reconciliation (the ``..._parity`` rename) has regressed"
+        )
+    # And the full classification places them in the PROBED tier (not
+    # covered-by-construction) — neither is a residue BLOCKED entry, so
+    # the strongest-evidence tier wins.
+    res = mod.classify_pool()
+    probed = set(res.tiers[mod.TIER_PROBED])
+    for nm in ("Sunset Saboteur", "Exosuit Savior"):
+        assert nm in probed, (
+            f"{nm!r} must classify into the PROBED tier (genuine "
+            f"real-EoE probe); got "
+            f"{[k for k, v in res.tiers.items() if nm in v]}"
+        )
+
+
+def test_tierc_synthetic_nonbar_probe_is_not_counted(mod, tmp_path):
+    """**The integrity guard (the bar cuts BOTH ways).** A
+    Tier-C-shaped function that does NOT meet the established bar must
+    NOT be credited, even though it binds a real pool card via the
+    genuine ``get_printings().get(...)`` idiom:
+
+      * a function whose name keeps the original Tier-C
+        ``..._seats_first_...`` suffix (NOT renamed to ``..._parity``)
+        — the unchanged single inclusion predicate must NOT credit it
+        (this is precisely the undercount the cycle-10 reconciliation
+        fixed by RENAMING, not by loosening the predicate — proving the
+        bar was never weakened);
+      * a ``*_divergence_pin`` Tier-C function (pins a KNOWN
+        divergence, the opposite of byte-equality) — NOT counted.
+
+    Only a genuine ``..._parity`` function binding a real pool card is
+    credited — the SAME bar the smoke-file + batch-module PROBED cards
+    meet. This asserts the reconciliation did not introduce a second,
+    looser inclusion rule."""
+    fake_mod = tmp_path / "test_probe_tierc_fake.py"
+    fake_mod.write_text(
+        # (1) genuine ..._parity binding a REAL pool card -> CREDITED.
+        "def test_cross_engine_real_eoe_honor_seats_parity():\n"
+        '    real = get_active_source().get_printings().get("Honor")\n'
+        "    assert real\n"
+        # (2) the ORIGINAL un-renamed Tier-C suffix binding a real pool
+        # card -> NOT counted (the exact undercount the rename fixed;
+        # proves the predicate itself was never loosened).
+        "def test_cross_engine_real_eoe_bombard_attacks_seats_"
+        "first_opponent_creature():\n"
+        '    r = get_active_source().get_printings().get("Bombard")\n'
+        "    assert r\n"
+        # (3) a Tier-C *_divergence_pin binding a real pool card -> NOT.
+        "def test_cross_engine_real_eoe_gravkill_seats_"
+        "divergence_pin():\n"
+        '    g = get_printings().get("Gravkill")\n'
+        "    assert g\n",
+        encoding="utf-8",
+    )
+    pool = {"Honor", "Bombard", "Gravkill"}
+    got = mod._probe_module_probed_cards(pool, fake_mod)
+    assert got == {"Honor"}, (
+        f"only the genuine ..._parity probe of a REAL pool card may be "
+        f"credited; got {sorted(got)} (the un-renamed Tier-C suffix and "
+        f"the divergence_pin must both be excluded — the bar was not "
+        f"loosened, the deviating probes were conformed to it)"
+    )
+    # The smoke detector (the actual path that credits Sunset Saboteur /
+    # Exosuit Savior) enforces the SAME ``_parity``-suffix bar — a
+    # ``..._seats_first_...`` name is invisible to it.
+    smoke_pool = {"Bombard"}
+    no_credit = mod._smoke_probed_cards(smoke_pool, fake_mod)
+    assert "Bombard" not in no_credit, (
+        "the smoke detector must NOT credit the un-renamed Tier-C "
+        "suffix — the established bar is the ``_parity`` convention"
+    )
+
+
 # --------------------------------------------- residue worklist parsing
 
 
 def test_residue_blocked_cards_split_and_normalised(mod):
     missing, non_effect = mod.residue_blocked_cards(RESIDUE_WORKLIST)
-    # The honest residue, settled at round-60 (the load-bearing "how
-    # far from parity" number). This named-set is a per-round snapshot
-    # the orchestrator post-merge fold updates — pinning exact names is
-    # an intentional tracked snapshot, NOT a brittle gate: the durable
-    # assertions are the structural ones below (disjoint, no qualified
-    # names) which a legitimate fold must never break. Round-60 fold:
-    # Perigee Beckoner genuinely_missing -> closed (Effect-half shipped
+    # The honest residue (the load-bearing "how far from parity"
+    # number). This named-set is a per-round snapshot the orchestrator
+    # post-merge fold updates — pinning exact names is an intentional
+    # tracked snapshot, NOT a brittle gate: the durable assertions are
+    # the structural ones below (disjoint, no qualified names) which a
+    # legitimate fold must never break. Round-60 fold: Perigee Beckoner
+    # genuinely_missing -> closed (Effect-half shipped
     # `PumpTargetCreatureUntilEotGrantDiesReturnTapped` + genuine
-    # probe; full card stays nested-trigger-grant/warp_cost gated) ⇒
-    # `missing` drops to 6 distinct genuine new-Rust-Effect asks.
+    # probe; full card stays nested-trigger-grant/warp_cost gated).
+    # CYCLE-10 fold (re-anchored here — the orchestrator's cycle-10
+    # consolidated resync `005192f5` added **Sothera, the Supervoid**
+    # to `genuinely_missing` via the residue re-walk it had been flagged
+    # for, re-stamping all 8 entries to `fa3d17b4`; this snapshot lagged
+    # the live worklist — re-anchored to the live source of truth per
+    # the "new-code-is-right" parity discipline). `missing` is now 7
+    # distinct genuine new-Rust-Effect asks (Lightstall Inquisitor
+    # appears twice in the worklist; the set dedupes it).
     assert missing == {
         "Astelli Reclaimer",
         "Command Bridge",
@@ -332,6 +447,7 @@ def test_residue_blocked_cards_split_and_normalised(mod):
         "Meltstrider's Resolve",
         "Pain for All",
         "Roving Actuator",
+        "Sothera, the Supervoid",
     }
     assert non_effect == {
         "Dauntless Scrapbot",
