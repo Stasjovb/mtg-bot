@@ -1,4 +1,4 @@
-# Cross-engine parity handoff — CONTINUOUS-PIPELINE phase (cycle ~2, main `f2526960`)
+# Cross-engine parity handoff — CONTINUOUS-PIPELINE phase (cycle ~2, main `49c0dfaa`+)
 
 **This is the canonical "read this first" doc for the current phase.**
 It supersedes `docs/HANDOFF_2026_05_16.md` (that doc was written ~round
@@ -13,21 +13,24 @@ source of truth for what landed this cycle), then act.
 
 ## 0. TL;DR for the impatient
 
-- **Current main HEAD: `f2526960`** (Tier-C Rung-1 implement-ready spec
-  merge). **The pipeline gate is GREEN** — verify-against-`git log`: the
-  latest code merges (Radiant Strike `0c795e8c`, Seedship `9f107160`)
-  each passed the gate (1438 / 1449) before auto-merge; everything since
-  is docs/bench (no gate regression possible).
+- **Current main HEAD: `49c0dfaa`+** (Tier-A #3 Orbital Plunge merge;
+  the handoff-refresh docs merge `88f54a17` sits on top of it). **The
+  pipeline gate is GREEN** — verify-against-`git log`: the latest code
+  merges (Radiant Strike `0c795e8c` / Seedship `9f107160` / Orbital
+  Plunge `49c0dfaa`) each passed the gate (1438 / 1449 / 1460) before
+  auto-merge; everything since is docs/bench (no gate regression
+  possible).
 - **Tracked parity: ~298 / 475 EoE cards (62.7%) byte-equal at the
   Effect+bridge level** (`docs/POOL_PARITY.md` — NOT yet regenerated
-  for the two Tier-A Effect closes; the orchestrator resync owns that —
-  see §3a). Each closed Tier-A card leaves the Effect-uncovered bucket.
-  This is NOT full-game-trajectory parity (see §1 caveat).
+  for the three Tier-A Effect closes; the orchestrator resync owns that
+  — see §3a). Each closed Tier-A card leaves the Effect-uncovered
+  bucket. This is NOT full-game-trajectory parity (see §1 caveat).
 - **Parity status (verify-against-git-log):** Effect-uncovered **Tier-A
-  #1 Radiant Strike CLOSED** (`0c795e8c`) and **#2 Seedship Impact
-  CLOSED** (`9f107160`) — Rust queue items 1-2 done, byte-equal with
-  genuine real-EoE probes. The Rust agent is **draining the round-64
-  queue**, continuing at **#3 Orbital Plunge** and onward.
+  #1 Radiant Strike CLOSED** (`0c795e8c`), **#2 Seedship Impact CLOSED**
+  (`9f107160`), and **#3 Orbital Plunge CLOSED** (`49c0dfaa`) — Rust
+  queue items 1-3 done, byte-equal with genuine real-EoE probes. The
+  Rust agent is **draining the round-64 queue**, continuing at **#4
+  Depressurize** and onward.
 - **Honest residue: 6 distinct genuine-Rust-Effect cards** + 2
   `blocked_non_effect` + 11 `closed` (unchanged by the Tier-A closes —
   those are pool-coverage drains, not residue entries). The 169-card
@@ -37,7 +40,7 @@ source of truth for what landed this cycle), then act.
   end-of-round barrier), worktree-per-feature, orchestrator does
   post-merge cron-resync/fold and refills the pool. Unchanged.
 - **The corrected leverage map (§3):** the cheap single-card Tier-A
-  lane is **near-exhausted** (queue draining #3-7, then `_BATCH3` §4
+  lane is **near-exhausted** (queue draining #4-7, then `_BATCH3` §4
   confirms the lane ends); the **Tier-C ladder is the next substrate**
   but **verify-first KEEPS trimming the optimistic estimates** — rung 1
   was corrected to **2 cards / 6,375 decks / bench delta +0** (was 4 /
@@ -45,10 +48,11 @@ source of truth for what landed this cycle), then act.
   promoted** as the lowest-risk first close. warp Phase 2 = **Timeline
   Culler spec ready** (+1 card / +8,986 decks). **Aura is
   DEPRIORITIZED** (0 real-bench-deck leverage — a parity-distance-metric
-  drain only). The **spell-card-bridge Phase-1 lever is approaching its
-  3-5-Tier-A-close ship threshold (currently at 2)**. The **covered-set
-  extraction precursor LANDED** (`326023b4`, hardened to 100% at
-  `02bf16bf`).
+  drain only). The **spell-card-bridge Phase-1 lever is now IN its
+  3-5-Tier-A-close ship window (at 3 — Radiant Strike + Seedship +
+  Orbital Plunge); the next 1-2 closes are well inside the threshold —
+  sequence the lever soon**. The **covered-set extraction precursor
+  LANDED** (`326023b4`, hardened to 100% at `02bf16bf`).
 - **The orchestrator OWES a consolidated post-merge cron resync (§3a)** —
   spanning the Rust Effect merges + a batched roadmap fold + the Sothera
   residue note, deferred until the Rust agent's queue run ends to avoid
@@ -222,8 +226,8 @@ bridge arm + pins + genuine real-EoE probe are new). Ordered
 |--:|---|---:|---|---|
 | 1 | ~~Radiant Strike~~ ★ | 17,744 | **CLOSED `0c795e8c`** | `Sequence`+`GainLife` shell live; typed-OR destroy filter shipped + probed |
 | 2 | ~~Seedship Impact~~ ★ | 13,908 | **CLOSED `9f107160`** | Lander-rider; destroy + Lander-pid arm shipped + probed |
-| 3 | **Orbital Plunge** ★ | 28,629 | **NEXT** | Lander-rider; largest single deck-count clean drain; new = the excess-damage clamp + `excess>0` rider |
-| 4 | **Depressurize** | 28,346 | ready | first pure-bespoke composite, no new substrate (UEOT-debuff → if eff_power≤0 destroy) |
+| 3 | ~~Orbital Plunge~~ ★ | 28,629 | **CLOSED `49c0dfaa`** | Lander-rider; excess-damage clamp + `excess>0` rider shipped; §2 counters-asymmetry resolved Python-SoT (counters-inclusive SBA-side excess) + probed (gate 1460) |
+| 4 | **Depressurize** | 28,346 | **NEXT** | first pure-bespoke composite, no new substrate (UEOT-debuff → if eff_power≤0 destroy) |
 | 5 | **Focus Fire** | 23,211 | ready | X-from-count family; new (creatures ∪ Spacecraft) set-union denominator; *verify the Rust attacking/blocking combat predicate first* |
 | 6 | **Biosynthic Burst** | 22,799 | ready | counter + 3-keyword-UEOT + untap composite, all primitives shipped |
 | 7 | **Diplomatic Relations** | 29,818 | ready | highest deck-count but LARGEST new surface (2-independent-target slot grammar) — last despite top decks |
@@ -243,9 +247,10 @@ single-card Tier-A lane is exhausted once this queue drains.**
 > `CardDef` spell shape. That shared lever is ~2 Rust+bridge rounds
 > (incremental, NOT all-31-at-once — all 7 Tier-A are targeted; see
 > `docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md`). **Sequence it once 3-5
-> Tier-A Effects are closed.** Currently at **2** (Radiant Strike +
-> Seedship) — **the lever is approaching its ship threshold; the next
-> 1-3 Tier-A closes trip it.** Its critical-path Python precursor LANDED
+> Tier-A Effects are closed.** Currently at **3** (Radiant Strike +
+> Seedship + Orbital Plunge) — **the lever is now IN its ship window;
+> sequence it soon (the next 1-2 closes are comfortably inside the
+> threshold).** Its critical-path Python precursor LANDED
 > (covered-set extraction `326023b4`, hardened to 100% coverage at
 > `02bf16bf`, verified byte-identical through both paths).
 
@@ -310,25 +315,37 @@ single-card Tier-A lane is exhausted once this queue drains.**
 
 ### 3a. The orchestrator's OWED deferred work (consolidated resync)
 
-**This is OWED, not lost.** The Rust agent's Radiant Strike + Seedship
-merges each flagged that the orchestrator owes a post-merge cron resync,
-and the warp/Tier-C/Aura docs slices flagged batched folds. To avoid the
-`.pyd`-rebuild race with the in-flight Rust queue agent, **these are
-deliberately CONSOLIDATED into ONE resync pass, deferred until the Rust
-agent's round-64-queue run ends.** That single pass owes:
+**This is OWED, not lost.** The Rust agent's Radiant Strike + Seedship +
+Orbital Plunge merges each flagged that the orchestrator owes a
+post-merge cron resync, and the warp/Tier-C/Aura docs slices flagged
+batched folds. To avoid the `.pyd`-rebuild race with the in-flight Rust
+queue agent, **these are deliberately CONSOLIDATED into ONE resync pass,
+deferred until the Rust agent's round-64-queue run ends.** That single
+pass owes:
 
 1. **The consolidated post-merge cron resync spanning the Rust Effect
    merges** — `0c795e8c` (Radiant Strike) + `9f107160` (Seedship
-   Impact) + any later Tier-A closes the queue lands before the resync
-   fires. Rebuild the `.pyd` on `main`, re-run the gate, run
-   `scripts/check_audit_coverage_staleness.py`, bump the sentinel
-   counts (`rust_effect_variants` 112→114+, `bridge_arms` +2+),
-   regenerate `RUST_EFFECT_COVERAGE.md` / `POOL_PARITY.md` (credits the
-   Tier-A Effect-uncovered drains), and **re-stamp every still-
-   genuinely-missing residue entry's `verified_absent_at_commit` to the
-   new HEAD** (currently `ce207345` — the structural-arm cadence
-   requirement; the merges touched both `cards.rs` and
-   `cross_engine.py`).
+   Impact) + `49c0dfaa` (Orbital Plunge) + any later Tier-A closes the
+   queue lands before the resync fires. Rebuild the `.pyd` on `main`,
+   re-run the gate, run `scripts/check_audit_coverage_staleness.py`,
+   bump the sentinel counts (**`rust_effect_variants` 112→115+**:
+   `DestroyTargetArtifactOrTappedCreature`, `SeedshipImpactEffect`,
+   `DealDamageToTargetCreatureWithExcessLanderRider`; **`bridge_arms`
+   +3+** — the three `_ta_dict_to_python_effect` arms), regenerate
+   `RUST_EFFECT_COVERAGE.md` / `POOL_PARITY.md` (credits the Tier-A
+   Effect-uncovered drains: Radiant Strike −17,744 / Seedship −13,908 /
+   Orbital Plunge −28,629 deck-attribution — bench-admit stays gated on
+   the unbuilt spell-card-bridge lever; honest Effect-half split), and
+   **re-stamp every still-genuinely-missing residue entry's
+   `verified_absent_at_commit` to the new HEAD** (currently `ce207345`
+   — the structural-arm cadence requirement; the merges touched both
+   `cards.rs` and `cross_engine.py`). Forward-flagged by the Orbital
+   Plunge slice: a pre-existing comparator limitation surfaced —
+   Python `_zone_signature` is counters-blind on Python GameObjects
+   (`getattr(obj,'counters',0)` but Python objects carry only
+   `plus/minus_one_counters` ints) — orthogonal to Orbital Plunge
+   (which uses a private counters-inclusive excess), worth a future
+   tooling fix.
 2. **The batched SUBSYSTEM_ROADMAP leverage-resequencing fold** — the
    Aura-DEPRIORITIZED verdict, the warp Phase 2 (Timeline Culler,
    +8,986) row, the Tier-C ladder rung-1 correction (2 cards / 6,375 /
@@ -424,8 +441,10 @@ Two durable scheduled routines re-orient autonomously and self-prioritize:
 
 Because they self-prioritize off this doc, **keeping §3's queue order +
 §3a's owed-work map accurate is the load-bearing reason this doc
-exists.** A stale handoff makes them mis-prioritize — e.g. chase the
-near-exhausted single-card lane past #7, re-derive an implement-ready
+exists.** A stale handoff makes them mis-prioritize — e.g. re-pick an
+already-closed Tier-A card (#1-3 are DONE; start #4 Depressurize),
+chase the near-exhausted single-card lane past #7, re-derive an
+implement-ready
 spec, re-derive the stale Tier-C rung-1 tag (4 cards / 11,825 instead of
 the corrected 2 / 6,375), chase the DEPRIORITIZED Aura lane, or
 duplicate the orchestrator's owed resync inside a slice and trip the
@@ -453,7 +472,7 @@ VIRTUAL_ENV=../../mtg-bot/.venv-py313 \
 
 Windows-native is canonical; the WSL2 `~/projects/mtg-bot` checkout is
 stale and on hold. The gate pass count grows monotonically (213 at
-start → 1449 at the Seedship merge); a green gate is the merge
+start → 1460 at the Orbital Plunge merge); a green gate is the merge
 precondition for code slices. Docs-only slices need **no gate run**.
 
 ### Sentinel discipline
