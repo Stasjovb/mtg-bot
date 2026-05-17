@@ -304,14 +304,14 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 9f3ef1d1 (post warp_cost Phase 1, continuous-
+     Measured at main ce207345 (post warp_cost Phase 1.5, continuous-
      pipeline cycle). Counts UNCHANGED (112/114/21/12/9) — warp
      Phase 1 is a CardDef `warp_cost` field + Action::CastSpell
      branch + admit guardrail, NOT a new Effect:: variant /
      _ta_dict kind arm / _SAFE_* entry (cron confirmed no count
      drift). warp Phase 1 touched cards.rs/cross_engine.py ->
      cadence re-verify fired; the 7 still-genuinely-missing
-     entries re-stamped verified_absent_at_commit=9f3ef1d1
+     entries re-stamped verified_absent_at_commit=ce207345
      (cron structural check re-confirmed absence — no hard-stale).
      No residue fold (warp-gated cards are loader-gated, not in
      the residue worklist; warp P1 added its own 3 SEARCH_-
