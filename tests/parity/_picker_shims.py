@@ -362,3 +362,104 @@ class _PickBottomLibraryAgent(Agent):
         # Return 1 to mirror Rust's first-slice deterministic bottom
         # pick (cards.rs:1151-1158 docstring + state_ops_resolve.rs:5266).
         return 1
+
+
+class _PayOptionalSacFirstAgent(Agent):
+    """The OPTIONAL-COST MIRROR shim: drive ``Optional…ForEffect``'s
+    agent-decision leg IDENTICALLY to Rust's deterministic resolve so
+    the optional-cost wrapper is byte-equal cross-engine.
+
+    THE CROSS-ENGINE ASYMMETRY THIS NEUTRALISES
+    -------------------------------------------
+    ``Effect::OptionalSacArtifactForEffect`` (Selfcraft-Mechan shape:
+    "When this enters, you may sacrifice an artifact. If you do,
+    [inner]") resolves the may-leg with NO agent ambiguity on the Rust
+    side: ``state_ops_resolve.rs:5551-5630`` auto-says-YES and picks
+    the FIRST artifact on the source-controller's battlefield
+    (insertion / Vec order — no PendingDecision, no pause). Python's
+    ``OptionalSacArtifactForEffect.resolve``
+    (``effects/combinators.py:299``) instead asks the controller's
+    ``Agent.choose_yes_no`` and, on yes, ``Agent.choose_sacrifice``.
+    Left to the default base ``Agent``, ``choose_sacrifice`` raises
+    ``NotImplementedError`` — so a cross-engine probe of any real
+    ``OptionalSacArtifactForEffect`` card cannot even run, let alone be
+    byte-equal. This shim makes Python take the EXACT branch Rust takes
+    deterministically:
+
+      * ``choose_yes_no`` → ``True`` (Rust always pays the optional
+        sacrifice when ≥1 artifact is available — there is no
+        "decline" path in its resolve arm).
+      * ``choose_sacrifice`` → ``legal_object_ids[0]`` — the FIRST
+        offered id. The probe seats the artifacts so that the
+        battlefield-insertion order on BOTH engines makes ``[0]`` the
+        SAME object (the established ``_SacrificeFirstAgent`` /
+        ``OptionalSacArtifact`` bridge-docstring convention at
+        ``cross_engine.py:3567-3578``: seat the intended sacrifice
+        FIRST so Rust's bf-iter-first pick and Python's offered-[0]
+        pick coincide).
+
+    BYTE-EQUAL-SAFETY (no Python-vs-Rust asymmetry introduced)
+    ----------------------------------------------------------
+    This shim does NOT make a choice Rust wouldn't — it forces Python
+    onto Rust's single deterministic branch (yes + first), exactly the
+    canon the ``_PickFirst*`` / ``_SacrificeFirstAgent`` shims follow
+    (force the Python agent onto Rust's lone at-resolve path). It adds
+    NO degree of freedom: Rust has exactly one behaviour here and this
+    shim reproduces it. The optional-cost WRAPPER is therefore
+    byte-equal by construction — the sacrificed artifact leaves the
+    battlefield to its owner's graveyard on BOTH engines (verified:
+    a synthetic ``OptionalSacArtifactForEffect(draw_cards{1})`` carrier
+    yields ``compare_fields == []``; the focused self-test
+    ``test_optional_cost_mirror_idiom_self_test_byte_equal`` pins this).
+
+    WHAT THIS SHIM DELIBERATELY DOES NOT CLAIM (honest scope)
+    ---------------------------------------------------------
+    It mirrors the optional-cost WRAPPER only. If the wrapped inner
+    effect itself carries a SEPARATE, pre-documented Python/Rust
+    asymmetry, that asymmetry is NOT this shim's to launder and the
+    probe must document it as a targeted-delta — never paper it over.
+    Concretely: Selfcraft Mechan's real inner is
+    ``Sequence([PutPlusOneCounterOnTargetCreature, DrawCards])``; the
+    ``PutPlusOneCounterOnTargetCreature`` leg has the
+    independently-documented bare-``add_counters`` target-filter
+    asymmetry (``cross_engine.py:6722-6732``: Rust's first-slice
+    ``AnyCreature`` picker takes ``bf[0]`` blindly while Python's
+    ``IsCreature()`` slot filter narrows — divergent when a non-creature
+    artifact precedes a creature on the bf, which the sacrifice setup
+    necessarily creates). The genuine Selfcraft Mechan probe asserts
+    the WRAPPER observable byte-equal (the sacrificed artifact → owner
+    graveyard on BOTH) and carries a strict, precisely-scoped
+    targeted-delta for ONLY those inner-leg fields, FAIL-loud on any
+    other divergence (regression detection preserved). The
+    ``OptionalManaCostThenEffect`` cards (Oreplate Pangolin / Kavaron
+    Harrier) need no agent at all — their byte-equal mirror is the
+    no-mana DECLINE branch (a deterministic both-engines-no-op; see the
+    probe module docstring).
+
+    Used by: the genuine real-EoE optional-cost-mirror probe batch
+    (``tests/test_probe_idiom_unlocked_optional_cost_mirror.py``):
+    Selfcraft Mechan (the ``OptionalSacArtifactForEffect`` consumer).
+    """
+
+    def choose_yes_no(self, state, player_id, prompt):
+        # Rust's OptionalSacArtifactForEffect resolve has no decline
+        # path — it always pays when ≥1 artifact exists. Mirror that.
+        return True
+
+    def choose_sacrifice(self, state, player_id, legal_object_ids):
+        assert legal_object_ids, (
+            "optional-cost mirror: agent called with empty legal "
+            "sacrifice pool — the probe must seat ≥1 artifact"
+        )
+        # Rust picks the FIRST artifact in bf-insertion order; the
+        # probe seats the intended sacrifice FIRST so offered-[0]
+        # coincides with Rust's bf-iter-first pick.
+        return legal_object_ids[0]
+
+    def choose_target(self, state, player_id, legal_targets):
+        # Forwarded inner-effect targeting (e.g. the Selfcraft Mechan
+        # inner Sequence's PutPlusOneCounterOnTargetCreature leg). Pick
+        # the first legal target — deterministic; the inner-leg
+        # filter-asymmetry (if any) is documented as a targeted-delta
+        # by the consuming probe, NOT hidden here.
+        return legal_targets[0] if legal_targets else None
