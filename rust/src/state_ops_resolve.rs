@@ -5966,7 +5966,21 @@ fn apply_effect(
                     obj.tapped = false;
                     // CE13: summoning_sick NOT reset (CR 302.1, I35).
                     obj.damage = 0;
-                    obj.counters = 0;
+                    // CFI-1: counters are NOT cleared on the dead
+                    // object. Python's `turn.move_off_battlefield`
+                    // (turn.py) clears combat marks (damage / tapped /
+                    // attached_to) but deliberately leaves `+1/+1`
+                    // counters intact; the SBA destroy path
+                    // (`state_ops_sba.rs` ~:417) follows that observable
+                    // ("counters retained on the dead object" — the
+                    // established byte-equal contract, pinned by the
+                    // Orbital Plunge probe). A prior stray
+                    // `obj.counters = 0;` here diverged from BOTH Python
+                    // (SoT) and Rust's own SBA destroy path; removed so
+                    // a counter'd creature destroyed by Depressurize
+                    // carries its counters into the graveyard byte-equal
+                    // (CFI-1 closed; see the FINDINGS NOTE in
+                    // tests/test_probe_cross_feature_interaction.py).
                     obj.attached_to = None;
                     obj.exiled_with_source = None;
                     let (printing_id, leaving_obj_id) =
