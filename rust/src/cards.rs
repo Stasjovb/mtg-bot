@@ -4769,6 +4769,46 @@ pub struct CardPrinting {
     /// `legal.py:447-476`); the cast pipeline routes it through the
     /// graveyard fall-through in `cast_creature_warp`.
     pub warp_castable_from_graveyard: bool,
+    /// **legal_decisions mana-awareness Slice 3 — cast-time
+    /// additional-cost flags.** Mirror Python's
+    /// `CardPrinting.additional_cost_sacrifice_creature_or_artifact`
+    /// / `..._creature_or_enchantment` / `..._choose_your_creature`
+    /// (the 3 flags `legal._additional_costs_payable`,
+    /// `src/mtg_bot/legal.py:117-165`, gates every CastSpell emission
+    /// on — CR 601.2f/601.2h: a player can't begin to cast a spell
+    /// unless they can pay its additional non-mana costs). `false` =
+    /// no such additional cost (the back-compat default — every
+    /// pre-Slice-3 registry dict omits these keys; same
+    /// `match get_item { Some => extract, None => false }` parse
+    /// shape as `warp_castable_from_graveyard`).
+    ///
+    /// **Live-surface incidence is ZERO (verify-first,
+    /// evidence-bound).** All 4 EoE printings carrying any of these
+    /// flags — Embrace Oblivion, Scrounge for Eternity (Sorcery,
+    /// sac creature-or-artifact), Final Vengeance (Sorcery, sac
+    /// creature-or-enchantment), Close Encounter (Instant,
+    /// choose-your-creature) — are bridge-DECLINED by BOTH
+    /// `_printing_is_bridge_simple_spell` and
+    /// `_printing_is_bridge_simple_creature`, so NO card on any of
+    /// the 6 live Rust CastSpell emission axes carries one. The
+    /// design doc (`RUST_LEGAL_DECISIONS_MANA_AWARENESS_DESIGN.md`
+    /// §5) predicted exactly this ("the smallest — lowest
+    /// live-surface incidence"). The Slice-3 gate is therefore
+    /// parity-NEUTRAL by construction (the predicate is `true` for
+    /// every live-surface card — never prunes, never narrower than
+    /// Python) AND the faithful Python mirror + the single named
+    /// extension point if an additional-cost card ever becomes
+    /// bridge-admitted. Documented in `docs/SEARCH_LIMITATIONS.md`.
+    pub additional_cost_sacrifice_creature_or_artifact: bool,
+    /// Final Vengeance shape — "sacrifice a creature or enchantment"
+    /// (an Aura is an Enchantment subtype; same controller filter).
+    /// See `additional_cost_sacrifice_creature_or_artifact`.
+    pub additional_cost_sacrifice_creature_or_enchantment: bool,
+    /// Close Encounter shape — "choose a creature you control or a
+    /// warped creature card you own in exile" (either source
+    /// satisfies the cost). See
+    /// `additional_cost_sacrifice_creature_or_artifact`.
+    pub additional_cost_choose_your_creature: bool,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -7011,6 +7051,33 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         Some(v) => v.extract::<bool>()?,
         None => false,
     };
+    // legal_decisions mana-awareness Slice 3 — cast-time
+    // additional-cost flags (Python `_additional_costs_payable`,
+    // `legal.py:117-165`). Same back-compat
+    // `match get_item { Some => extract, None => false }` shape as
+    // `warp_castable_from_graveyard`. Missing key -> false (every
+    // pre-Slice-3 registry dict omits these; the 4 EoE
+    // additional-cost cards are all bridge-DECLINED so build_rust_state
+    // never emits the keys on the live cast surface — the design
+    // doc §5 verified-zero-incidence prediction).
+    let additional_cost_sacrifice_creature_or_artifact = match dict
+        .get_item("additional_cost_sacrifice_creature_or_artifact")?
+    {
+        Some(v) => v.extract::<bool>()?,
+        None => false,
+    };
+    let additional_cost_sacrifice_creature_or_enchantment = match dict
+        .get_item("additional_cost_sacrifice_creature_or_enchantment")?
+    {
+        Some(v) => v.extract::<bool>()?,
+        None => false,
+    };
+    let additional_cost_choose_your_creature = match dict
+        .get_item("additional_cost_choose_your_creature")?
+    {
+        Some(v) => v.extract::<bool>()?,
+        None => false,
+    };
     let effects = match dict.get_item("effects")? {
         Some(eff_any) => {
             let mut out = Vec::new();
@@ -7242,6 +7309,9 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         warp_cost,
         warp_additional_life_cost,
         warp_castable_from_graveyard,
+        additional_cost_sacrifice_creature_or_artifact,
+        additional_cost_sacrifice_creature_or_enchantment,
+        additional_cost_choose_your_creature,
     })
 }
 
