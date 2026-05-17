@@ -78,7 +78,30 @@
   `.venv-py313/Scripts/python.exe -m pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu128`
   Smoke check:
   `.venv-py313/Scripts/python.exe -c "import torch; print(torch.__version__, torch.cuda.is_available())"`
-  Network scale (1024-1024-512 trunk, ~10M params, dual-head AlphaZero — v13 / v15 / v16) is now large enough that GPU inference dominates CPU on every host that has a GPU. As of `feature/eval-gpu-auto-device`: (1) `auto_device()` falls back to `mps` when CUDA isn't available (Apple Silicon remote), and (2) the four NNPimcConfig construction sites in `src/mtg_bot/training/distributed.py` (run_shard_local self-play, run_shard_pull self-play, run_shard_eval_pull new+old) explicitly pass `device=auto_device()`. Each call resolves locally on the host where the shard runs — master picks CUDA, Mac picks MPS, Win10 picks CUDA. `NNPimcConfig.device` default stays `None` (which maps to NNEvaluator's CPU default) so direct test construction `NNPimcConfig(...)` continues to use CPU — needed because tests spawn multiprocessing pools and per-worker CUDA-context init on Windows-spawn semantics deadlocks. The earlier "workers stay CPU-only / Python↔CUDA round-trip overhead beats tiny matmuls" guidance was correct for the v2/v3 25k-65k-param scale and is now stale for production paths.
+  **Production network (2026-05-17): the small structured trunk** —
+  `emb_dim 128, n_layers 2, hidden_dim 256`, v-chain `v1`–`v10`
+  (`current_best: v5`, `architecture: structured`) — **not** the
+  legacy 1024-1024-512 `_ValuePolicyMLP` (the old `v13`/`v15`/`v16`
+  are archived at `trained_weights/archived_pre_structured/`).
+  `auto_device()` (in `trainer.py`) still picks `cuda`, falling back
+  to `mps` then `cpu`. **The v2 cutover deleted the `run_shard_*`
+  SSH path** — production self-play now runs through
+  `worker_daemon_production_runner._build_nn_pimc_config`, which
+  **hardcodes `device=None` (CPU) by design**; GPU eval is **opt-in
+  per worker** via `--nn-device {auto,cpu,cuda}` (default `cpu`,
+  byte-identical to prior behavior — `feature/worker-daemon-gpu-device`;
+  see [`deploy/README.md`](deploy/README.md)). `NNPimcConfig.device`
+  default stays `None` so direct test construction stays CPU —
+  required because tests spawn multiprocessing pools and per-worker
+  CUDA-context init under Windows-spawn semantics deadlocks.
+  **Validated device numbers live in
+  [`docs/BENCHMARKING_FINDINGS.md`](docs/BENCHMARKING_FINDINGS.md)
+  §4/§2A** (per-process `cuda` ≈ ~2× `cpu` per NN-eval even at this
+  small structured trunk — measured, depth-invariant; do not cite a
+  multiplier that is not a dated row in that doc). The earlier
+  "1024-trunk / GPU dominates on every host" and "workers stay
+  CPU-only at 25–65k params" framings are both **stale** —
+  superseded by the structured cutover and the §4/§2A measurements.
 - Run a game: `.venv/Scripts/python.exe -m mtg_bot`
 - Run the UI (localhost): `.venv/Scripts/python.exe -m mtg_bot.ui`
 - Run the UI over Tailscale (reachable from phone/laptop on the tailnet):
@@ -341,24 +364,36 @@ prior lookups use the matching slot mapping.
 
 ## NN representation roadmap
 
-The 51-dim hand-engineered featurizer at `src/mtg_bot/features.py` is
-the current input to the value+policy network and is information-lossy
-by construction (no card identity, no mana colors, no structured stack
-contents, no game history). The committed four-step plan for replacing
-it with a structured representation is in
+**Status (2026-05-17 — verified against `trained_weights/`): Steps 1
+& 3 have LANDED.** The production v-chain is `architecture:
+structured` for every registered version `v1`–`v10` (`current_best:
+v5`); the NN input is built by `mtg_bot.training.state_tokenizer` →
+`StructuredModel` (per-object tokens, learned printing embeddings,
+last-32 action history, viewer-relative redaction). The 51-dim
+hand-engineered featurizer at `src/mtg_bot/features.py` + flat
+`_ValuePolicyMLP` is the **legacy pre-structured path** — those
+weights (`v11`–`v16`, 1024-1024-512 trunk) are **archived** at
+`trained_weights/archived_pre_structured/`, not production. The
+committed four-step plan and its dated implementation status are in
 **[`docs/NN_REPRESENTATION_ROADMAP.md`](docs/NN_REPRESENTATION_ROADMAP.md)**.
 
 Summary:
 
-1. **Step 1** — per-object transformer/GNN input with learned printing
-   embeddings, INCLUDING last-N action tokens. Single architectural
-   rewrite, single v-chain break.
-2. **Step 2** — offline deck-belief model trained on 17lands data;
-   independent of the main NN, runs in parallel with Step 1.
-3. **Step 3** — folded into Step 1 (action tokens land with the
-   structured input rewrite).
-4. **Step 4** — hand-belief auxiliary head on Step 1's trunk,
-   conditioned on Step 2's deck-belief.
+1. **Step 1 — LANDED** — per-object transformer input with learned
+   printing embeddings, INCLUDING last-N action tokens. Single
+   architectural rewrite, single v-chain break.
+2. **Step 2 — NOT landed** — offline deck-belief model trained on
+   17lands data; independent of the main NN. Hidden info is still
+   handled by PIMC determinization (opponent hand = anonymous slots).
+3. **Step 3 — LANDED** — folded into Step 1 (last-32 action tokens
+   shipped with the structured input rewrite).
+4. **Step 4 — NOT landed** — hand-belief auxiliary head on Step 1's
+   trunk, conditioned on Step 2's deck-belief.
+
+Net-scale caveat: the shipped structured trunk is **small** (`emb_dim
+128, n_layers 2, hidden_dim 256`); structured-input-landed ≠
+large-trunk. Trunk capacity / depth-vs-data is open — see
+`docs/BENCHMARKING_FINDINGS.md` §2A.
 
 Both belief outputs feed importance-sampled PIMC determinizations
 (ReBeL / DeepStack pattern).
