@@ -255,6 +255,106 @@ def test_ismcts_terminal_state_returns_empty_visits():
     assert ismcts.choose_with_visits(adapter, 0) == {}
 
 
+# ---------- choose_with_full_stats ------------------------------------------
+#
+# This method had zero test references — it's the replay-viewer
+# annotation path (per-root-child q / prior / leaf_value). The four
+# branches below mirror choose_with_visits' contract exactly:
+# non-adapter TypeError, terminal (None, []), forced-move synthetic
+# singleton, and the populated-candidates multi-action path.
+
+
+def test_full_stats_rejects_non_adapter_state():
+    ismcts = _make_ismcts(nodes=10)
+
+    class NotAnAdapter:
+        def is_terminal(self):
+            return False
+
+    with pytest.raises(TypeError, match="MtgGameStateAdapter"):
+        ismcts.choose_with_full_stats(NotAnAdapter(), 0)
+
+
+def test_full_stats_terminal_returns_none_and_empty_list():
+    adapter = _adapter(seed=42)
+    from mtg_bot.turn import state_based_actions
+    for p in adapter.engine_state.players:
+        p.life = 0
+    state_based_actions(adapter.engine_state)
+    assert adapter.is_terminal()
+    chosen, candidates = _make_ismcts(nodes=20).choose_with_full_stats(
+        adapter, 0,
+    )
+    assert chosen is None
+    assert candidates == []
+
+
+def test_full_stats_forced_move_returns_synthetic_singleton():
+    adapter = _adapter(seed=42)
+    assert len(adapter.legal_decisions()) == 1
+    only = adapter.legal_decisions()[0]
+    chosen, candidates = _make_ismcts(nodes=1000).choose_with_full_stats(
+        adapter, adapter.active_player(),
+    )
+    assert chosen == only
+    assert len(candidates) == 1
+    c = candidates[0]
+    assert c["decision"] == only
+    assert c["visits"] == 1
+    assert c["q"] is None
+    assert c["prior"] is None
+    assert c["leaf_value"] is None
+
+
+def test_full_stats_multi_action_populates_candidates():
+    """At a real multi-decision moment the returned candidates list
+    carries one entry per root child with a visit count, and the
+    chosen decision is the max-visits child — same selection rule as
+    choose_with_visits."""
+    adapter = _adapter(seed=3)
+    if not _advance_to_multi_action(adapter):
+        import pytest as _pt
+        _pt.skip("seed 3 ended before a multi-action moment")
+    actor = adapter.active_player()
+    legal = set(adapter.legal_decisions())
+    assert len(legal) > 1
+    ismcts = _make_ismcts(nodes=400, rng_seed=9)
+    chosen, candidates = ismcts.choose_with_full_stats(adapter, actor)
+    assert chosen in legal
+    assert candidates
+    total_visits = 0
+    for c in candidates:
+        assert c["decision"] in legal
+        assert c["visits"] >= 0
+        total_visits += c["visits"]
+        # q is None only when a child was never visited.
+        if c["visits"] > 0:
+            assert c["q"] is not None
+        # Non-PUCT search: prior is always None.
+        assert c["prior"] is None
+    assert total_visits > 0
+    # The chosen decision is the max-visits candidate.
+    best = max(candidates, key=lambda c: c["visits"])
+    assert chosen == best["decision"]
+
+
+def test_full_stats_puct_populates_prior():
+    """Under PUCT the candidates carry a non-None union-mask prior."""
+    adapter = _adapter(seed=3)
+    if not _advance_to_multi_action(adapter):
+        import pytest as _pt
+        _pt.skip("seed 3 ended before a multi-action moment")
+    actor = adapter.active_player()
+    ismcts = _make_ismcts(
+        nodes=300, rng_seed=5, puct=True,
+        evaluator=_StubPolicyEvaluator(value=0.1),
+    )
+    chosen, candidates = ismcts.choose_with_full_stats(adapter, actor)
+    assert chosen is not None
+    assert candidates
+    assert any(c["prior"] is not None for c in candidates)
+
+
 # ---------- reproducibility -------------------------------------------------
 
 

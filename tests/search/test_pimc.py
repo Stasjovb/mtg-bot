@@ -495,3 +495,135 @@ def test_pimc_with_real_mcts_does_not_mutate_caller_adapter():
     ]
     assert post_hand == pre_hand
     assert post_library == pre_library
+
+
+# ---------- choose_with_full_stats ------------------------------------------
+#
+# The replay-viewer aggregation path: K determinized sub-searches,
+# per-root-child q/prior/leaf_value visit-weighted means. Untested
+# before this — the visits-fallback branch (inner without
+# choose_with_full_stats), the richer-inner branch, the forced-move
+# singleton, non-adapter rejection, and the empty-aggregate guard.
+
+
+class _FullStatsInner:
+    """Inner exposing ``choose_with_full_stats`` returning scripted
+    candidate dicts (decision/visits/q/prior/leaf_value)."""
+
+    def __init__(self, candidates: list[dict]) -> None:
+        self._candidates = candidates
+
+    def choose_with_full_stats(self, state, player_id):
+        if not self._candidates:
+            return (None, [])
+        chosen = max(self._candidates, key=lambda c: c["visits"])
+        return (chosen["decision"], list(self._candidates))
+
+
+def _advance_to_multi(adapter) -> bool:
+    while (
+        len(adapter.legal_decisions()) == 1
+        and not adapter.is_terminal()
+    ):
+        adapter.apply(adapter.legal_decisions()[0])
+    return not adapter.is_terminal()
+
+
+def test_full_stats_rejects_non_adapter_state():
+    pimc = PIMC(inner_factory=lambda: _ScriptedInner([]), samples=2)
+
+    class NotAnAdapter:
+        pass
+
+    import pytest
+    with pytest.raises(TypeError, match="MtgGameStateAdapter"):
+        pimc.choose_with_full_stats(NotAnAdapter(), 0)
+
+
+def test_full_stats_forced_move_returns_singleton():
+    adapter = _fresh_adapter()
+    assert len(adapter.legal_decisions()) == 1
+    only = adapter.legal_decisions()[0]
+    pimc = PIMC(inner_factory=lambda: _ScriptedInner([]), samples=4)
+    chosen, candidates = pimc.choose_with_full_stats(
+        adapter, adapter.active_player(),
+    )
+    assert chosen == only
+    assert candidates == [{
+        "decision": only, "visits": 1, "q": None,
+        "prior": None, "leaf_value": None,
+    }]
+
+
+def test_full_stats_visits_fallback_aggregates_across_worlds():
+    """Inner without choose_with_full_stats → PIMC synthesizes
+    candidates from choose_with_visits and sums visits across the K
+    sub-searches (q/prior/leaf_value stay None)."""
+    adapter = _fresh_adapter()
+    if not _advance_to_multi(adapter):
+        return
+    legal = adapter.legal_decisions()
+    a, b = legal[0], legal[1]
+
+    pimc = PIMC(
+        inner_factory=lambda: _ScriptedInner([{a: 4, b: 6}]),
+        samples=3, rng=random.Random(0),
+    )
+    chosen, candidates = pimc.choose_with_full_stats(
+        adapter, adapter.active_player(),
+    )
+    by_dec = {c["decision"]: c for c in candidates}
+    assert by_dec[a]["visits"] == 12   # 3 worlds × 4
+    assert by_dec[b]["visits"] == 18   # 3 worlds × 6
+    assert by_dec[a]["q"] is None
+    assert by_dec[a]["prior"] is None
+    assert chosen == b                 # max visits
+
+
+def test_full_stats_rich_inner_visit_weighted_means():
+    """Inner exposing choose_with_full_stats → q/prior/leaf_value are
+    visit-weighted means across worlds."""
+    adapter = _fresh_adapter()
+    if not _advance_to_multi(adapter):
+        return
+    legal = adapter.legal_decisions()
+    a, b = legal[0], legal[1]
+    scripted = [
+        {"decision": a, "visits": 10, "q": 0.5,
+         "prior": 0.2, "leaf_value": 0.3},
+        {"decision": b, "visits": 5, "q": -0.5,
+         "prior": 0.8, "leaf_value": None},
+    ]
+
+    pimc = PIMC(
+        inner_factory=lambda: _FullStatsInner(scripted),
+        samples=2, rng=random.Random(1),
+    )
+    chosen, candidates = pimc.choose_with_full_stats(
+        adapter, adapter.active_player(),
+    )
+    by_dec = {c["decision"]: c for c in candidates}
+    # 2 identical sub-searches → visits double, means unchanged.
+    assert by_dec[a]["visits"] == 20
+    assert by_dec[a]["q"] == 0.5
+    assert by_dec[a]["prior"] == 0.2
+    assert by_dec[a]["leaf_value"] == 0.3
+    assert by_dec[b]["visits"] == 10
+    assert by_dec[b]["leaf_value"] is None  # no sub-search reported one
+    assert chosen == a
+
+
+def test_full_stats_all_empty_sub_searches_returns_none():
+    """Every sub-search returns no candidates → (None, [])."""
+    adapter = _fresh_adapter()
+    if not _advance_to_multi(adapter):
+        return
+    pimc = PIMC(
+        inner_factory=lambda: _FullStatsInner([]),
+        samples=3, rng=random.Random(2),
+    )
+    chosen, candidates = pimc.choose_with_full_stats(
+        adapter, adapter.active_player(),
+    )
+    assert chosen is None
+    assert candidates == []
