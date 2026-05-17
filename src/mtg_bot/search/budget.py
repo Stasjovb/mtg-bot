@@ -15,6 +15,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from mtg_bot.search import eval_counters
+
 
 @dataclass
 class Budget:
@@ -42,6 +44,11 @@ class Budget:
     def consume_node(self) -> None:
         """Record that one more node was expanded."""
         self._nodes_expanded += 1
+        # Process-global search-work telemetry. Fires once per
+        # expanded node in every search path that honours the Budget
+        # contract (serial MCTS, batched MCTS, ISMCTS). See
+        # ``eval_counters`` for the depth-invariant-unit rationale.
+        eval_counters.record_node()
 
     def nodes_expanded(self) -> int:
         """Diagnostic: how many nodes consumed so far in this call."""

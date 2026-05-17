@@ -83,6 +83,7 @@ if TYPE_CHECKING:  # pragma: no cover
 # duplicate the NN definition. Pull in extract_features + Evaluator
 # base + action-encoding helpers to mirror NNEvalClient's API exactly.
 from mtg_bot.features import FEATURE_DIM, extract_features
+from mtg_bot.search import eval_counters
 from mtg_bot.search.evaluator import Evaluator
 from mtg_bot.search.nn_evaluator import (
     ARCHITECTURE_SHARED,
@@ -1277,6 +1278,11 @@ class SharedTensorNNEvalClient(Evaluator):
         circuit; this method only ever sees non-terminal states.
         Server batches across worker-process boundaries already; the
         slot round-trip is the unit of work."""
+        # Base ``Evaluator.evaluate`` filtered terminals; this is one
+        # non-terminal state submitted to the network. Counted client-
+        # side: the game's eval count is the same regardless of where
+        # the server physically runs the matmul.
+        eval_counters.record_nn_eval(1)
         if self._is_structured:
             # The structured server always has a policy head; route
             # through the with-policy path and discard the policy
@@ -1321,6 +1327,9 @@ class SharedTensorNNEvalClient(Evaluator):
             else:
                 value = 1.0 if winner == player_id else -1.0
             return value, np.zeros(vocab_size, dtype=np.float32)
+        # Past the terminal short-circuit: one non-terminal
+        # (value, policy) submit.
+        eval_counters.record_nn_eval(1)
         if self._is_structured:
             mask = ae.legal_action_mask(state, player_id)
             tokens = self._tokenize_state(state, player_id)
@@ -1398,6 +1407,10 @@ class SharedTensorNNEvalClient(Evaluator):
         if not nonterminal_indices:
             return out
 
+        # One logical batched value-only submit over the non-terminal
+        # subset (the client may internally chunk to slot-pool size;
+        # still one logical evaluator invocation).
+        eval_counters.record_nn_eval(len(nonterminal_indices))
         if self._is_structured:
             values, _ = self._call_chunked_structured(
                 token_dicts=nonterminal_token_dicts,
@@ -1470,6 +1483,9 @@ class SharedTensorNNEvalClient(Evaluator):
         if not nonterminal_indices:
             return out
 
+        # One logical batched (value, policy) submit over the
+        # non-terminal subset.
+        eval_counters.record_nn_eval(len(nonterminal_indices))
         if self._is_structured:
             values, policies = self._call_chunked_structured(
                 token_dicts=nonterminal_token_dicts,
