@@ -138,7 +138,7 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 14, @ `92fc03d3` — READ FIRST.**
+> **⚠ SoT-FLIP PATH — cycle 15, @ `3dde090e` — READ FIRST.**
 > The cycle-11 phase-transition decision is RESOLVED: the user chose
 > **pivot to the SoT-flip path** (deliberate sequenced flip-execution,
 > NOT continuous cheap-refill). The continuous cheap-parallel-refill
@@ -184,16 +184,27 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   Python, `rust_shadow.py` only; the mana_pool carve-out REMOVED →
 >   STATE_EQ strengthened to full byte-equality). **The flip IMPROVES
 >   CR-correctness** — Python's hold-until-cleanup simplification is
->   the retired side. A SEPARATE pre-existing Rust-driver
->   priority-port follow-up (NOT G4, NOT the mana axis;
->   post-deck-out tail) was honestly unmasked + flagged for the
->   orchestrator (see the `SOT_FLIP_CUTOVER_PLAN.md` ledger G4
->   entry). (S2/S3 scoped non-blocking C6-fenced follow-ups noted.)
-> - **NEXT (the single genuine flip lane): G4 is CLOSED →** the
->   orchestrator sequences the SEPARATE unmasked priority-port
->   follow-up (small, in `rust_engine_adapter.py` — out of the G4
->   lane scope) before running the **C4 post-R76 scaled re-sweep
->   THROUGH the rust_shadow bake-in** (equivalence evidence) →
+>   the retired side. The G4-strengthened tripwire then honestly
+>   unmasked a SEPARATE pre-existing Rust-driver priority-port gap
+>   (NOT G4, NOT the mana axis; post-deck-out degenerate tail) —
+>   now formalized as its own blocker **G5** with a dedicated
+>   `SOT_FLIP_CUTOVER_PLAN.md` ledger row. (S2/S3 scoped
+>   non-blocking C6-fenced follow-ups noted.)
+> - **G5 — OPEN, the single genuine flip lane now.**
+>   `RustGameStateAdapter._reset_priority_to_active`
+>   (`rust_engine_adapter.py`) sets priority/active to a
+>   decked-out active player vs Python's CR-aware alive-skipping
+>   `_next_alive`, in the degenerate both-players-decked-out
+>   3-card-synthetic tail (~turn 6-8). The bake-in now STOPS on
+>   it, so it MUST land before the C4 re-sweep. Small
+>   Rust-driver-port slice (port the alive-skipping selection to
+>   match the Python SoT). Pinned
+>   `::test_post_player_loss_priority_port_divergence_is_surfaced`;
+>   todo `3ed036fc`. **Orchestrator dispatched the G5-closure
+>   single deliberate flip lane this cycle.**
+> - **NEXT: G5 closes →** the orchestrator runs the **C4 post-R76
+>   scaled re-sweep THROUGH the rust_shadow bake-in** (equivalence
+>   evidence) →
 >   **the atomic SoT-flip (B3-S5) is an ORCHESTRATOR+USER go/no-go
 >   on that evidence — explicitly NOT autonomous** (the single
 >   least-reversible action in the campaign) → bake-in period →

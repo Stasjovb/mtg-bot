@@ -883,6 +883,56 @@ second:
    >     hidden gaps beyond G4 (which is scoped + reconcilable).
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 15 —
+   >   SoT-FLIP G4 CLOSED-by-lockstep + bake-in tripwire
+   >   STRENGTHENED + new blocker G5 unmasked; @ `3dde090e`,
+   >   counts UNCHANGED, parity 307/475 / PROBED 106 UNCHANGED).**
+   >   - **G4 CLOSED via path A** (`3dde090e`, closure
+   >     `5a0b966f`): `ShadowCheckedRustAdapter.`
+   >     `_install_i20_phase_exit_mana_mirror` drives the Python
+   >     shadow's per-phase-exit mana empty in lockstep with the
+   >     Rust driver's CR-106.4 empty (mirrors ONLY
+   >     `advance_phase_python`'s divergent step-1 mana-clear at
+   >     the single shadow phase-tick — NOT the wholesale call,
+   >     avoiding a double-tick; re-installed on `clone`). The
+   >     `_DOCUMENTED_ACCEPTED_FIELDS` mana_pool carve-out is
+   >     **REMOVED** → STATE_EQ asserts FULL mana-pool
+   >     byte-equality (tripwire strictly STRENGTHENED;
+   >     green-with-carve-out-removed IS the closure proof).
+   >     Pure Python (`rust_shadow.py` only) — no Rust/`cards.rs`/
+   >     `cross_engine.py`/`.pyd`; `decision_source=python`
+   >     byte-unchanged; residue cadence did NOT fire (cron
+   >     exit-0); NO count drift; POOL_PARITY/PROBED UNCHANGED.
+   >     Ledger: G4 row in `SOT_FLIP_CUTOVER_PLAN.md` =
+   >     CLOSED-by-lockstep (C6 fence unchanged, framed as a flip
+   >     CR-correctness IMPROVEMENT not a regression);
+   >     `SEARCH_LIMITATIONS.md` G4 DONE/closed-by-`5a0b966f`.
+   >     Gate: 4-file core 1532 UNMOVED; rust_shadow 12 passed;
+   >     broader rust-adapter 48 passed/1 skip; negative
+   >     controls intact.
+   >   - **NEW pre-flip blocker G5 (the strengthened tripwire's
+   >     honest find — distinct, pre-existing, NOT the I20 axis,
+   >     NOT introduced by the mana mirror).**
+   >     `RustGameStateAdapter._reset_priority_to_active`
+   >     (`rust_engine_adapter.py`) sets priority/active to a
+   >     decked-out active player vs Python's CR-aware
+   >     alive-skipping `_next_alive`, in the degenerate
+   >     both-players-decked-out 3-card-synthetic tail (~turn
+   >     6-8). Honestly pinned `test_rust_shadow_bakein.py::`
+   >     `test_post_player_loss_priority_port_divergence_is_`
+   >     `surfaced`; own ledger row G5; todo `3ed036fc`. Small
+   >     Rust-driver-port slice; the bake-in now STOPS on it so
+   >     it MUST land before the C4 re-sweep.
+   >   - **Flip endgame is now: G5 closure (single deliberate
+   >     flip lane, dispatched this cycle) → run the C4 post-R76
+   >     scaled re-sweep THROUGH the rust_shadow bake-in
+   >     (equivalence evidence) → ORCHESTRATOR+USER go/no-go on
+   >     the atomic SoT-flip (B3-S5) — explicitly NOT autonomous
+   >     (the single least-reversible action) → bake-in period →
+   >     bridge-vestigialization cleanup.** No known hidden gaps
+   >     beyond G5 (scoped + reconcilable).
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
