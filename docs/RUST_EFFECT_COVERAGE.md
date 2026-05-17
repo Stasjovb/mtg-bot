@@ -6,9 +6,9 @@ This page is the rolling-progress snapshot for the Rust engine port's `Effect` e
 
 ## Headline numbers
 
-- **89 of 228 Python Effect classes covered (39.0%)** — by distinct-class count.
-- **551 of 690 per-card emissions covered (79.9%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
-- **116 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
+- **90 of 228 Python Effect classes covered (39.5%)** — by distinct-class count.
+- **552 of 690 per-card emissions covered (80.0%)** — weighted by how many cards each class appears on. This is the more load-bearing metric: high-frequency classes pull the bulk of cards into Rust even at low class-count coverage.
+- **117 Rust `Effect` variants** in `rust/src/cards.rs` today; 475 parser-claimed printings across the loaded pools.
 - **0 Rust variants without a Python counterpart** — the bridge is in sync with the Python vocabulary.
 - **17 Rust variant(s) built ahead of the pool** (allowlisted in `RUST_AHEAD_OF_POOL`): `DealDamageToOpponentCreatureByCardsInGraveyard`, `DealDamageToOpponentCreatureByCreaturesYouControl`, `DealDamageToOpponentCreatureByLandsControlled`, `DealDamageToOpponentCreatureByLifeTotal`, `EachOpponentLosesLifeEqualToArtifactCount`, `EachOpponentLosesLifeEqualToYourLifeTotal`, `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves`, `FightTargetCreatureWithTargetCreature`, `GainLifeEqualToArtifactCount`, `GainLifeEqualToYourLifeTotal`, `GrantKeywordsToTargetCreatureUntilEOT`, `PumpCreaturesOpponentsControlUntilCasterNextTurn`, `ReturnEnchantmentOrCreatureFromYourGraveyardToBattlefield`, `ReturnEnchantmentOrCreatureFromYourGraveyardToHand`, `ScryN`, `SetBasePTUntilEOT`, `TwoSubjectPumpAndDebuffByArtifactCount`. These have no pool card exercising them today and are NOT counted as orphans.
 
@@ -43,7 +43,7 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 
 ### Frequency 1 (161 singletons)
 
-- Covered by Rust: **22 / 161** (13.7%)
+- Covered by Rust: **23 / 161** (14.3%)
 - The long tail is dominated by bespoke per-card classes; porting these to Rust before the generic vocabulary fills out would be poor return on investment.
 
 ## Rust variants and their Python counterparts
@@ -96,74 +96,75 @@ Python Effect classes are split by how many cards they appear on. The Rust port 
 | 44 | `Effect::SeedshipImpactEffect` | `SeedshipImpactEffect` | 1 |
 | 45 | `Effect::DealDamageToTargetCreatureWithExcessLanderRider` | `DealDamageToTargetCreatureWithExcessLanderRider` | 1 |
 | 46 | `Effect::DepressurizeEffect` | `DepressurizeEffect` | 1 |
-| 47 | `Effect::DealDamageAnyTarget` | `DealDamageAnyTarget` | 7 |
-| 48 | `Effect::PumpSelfUntilEOT` | `PumpSelfUntilEOT` | 12 |
-| 49 | `Effect::PumpTargetCreatureUntilEOT` | `PumpTargetCreatureUntilEOT` | 26 |
-| 50 | `Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped` | `PumpTargetCreatureUntilEOT` | 26 |
-| 51 | `Effect::FightTargetCreatureWithTargetCreature` | `FightTargetCreatureWithTargetCreature` | 0 |
-| 52 | `Effect::DoubleTargetCreaturesPowerUEOT` | `DoubleTargetCreaturesPowerUEOT` | 1 |
-| 53 | `Effect::DealDamageToOpponentCreatureByArtifactCount` | `DealDamageToOpponentCreatureByArtifactCount` | 1 |
-| 54 | `Effect::TwoSubjectPumpAndDebuffByArtifactCount` | `TwoSubjectPumpAndDebuffByArtifactCount` | 0 |
-| 55 | `Effect::DealDamageToOpponentCreatureByCardsInHand` | `DealDamageToOpponentCreatureByCardsInHand` | 1 |
-| 56 | `Effect::DealDamageToOpponentCreatureByLandsControlled` | `DealDamageToOpponentCreatureByLandsControlled` | 0 |
-| 57 | `Effect::DealDamageToOpponentCreatureByCreaturesYouControl` | `DealDamageToOpponentCreatureByCreaturesYouControl` | 0 |
-| 58 | `Effect::DealDamageToOpponentCreatureByCardsInGraveyard` | `DealDamageToOpponentCreatureByCardsInGraveyard` | 0 |
-| 59 | `Effect::DealDamageToOpponentCreatureByLifeTotal` | `DealDamageToOpponentCreatureByLifeTotal` | 0 |
-| 60 | `Effect::PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact` | `PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact` | 1 |
-| 61 | `Effect::SurveilXEqualToArtifactCount` | `Surveil` | 16 |
-| 62 | `Effect::Sequence` | `Sequence` | 54 |
-| 63 | `Effect::PumpCreaturesYouControlUntilEOT` | `PumpCreaturesYouControlUntilEOT` | 6 |
-| 64 | `Effect::ReturnCreatureFromYourGraveyardToHand` | `ReturnCreatureFromYourGraveyardToHand` | 3 |
-| 65 | `Effect::ReturnArtifactOrCreatureFromYourGraveyardToHand` | `ReturnCreatureFromYourGraveyardToHand` | 3 |
-| 66 | `Effect::ReturnCreatureOrSpacecraftFromYourGraveyardToHand` | `ReturnCreatureFromYourGraveyardToHand` | 3 |
-| 67 | `Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToHand` | `ReturnEnchantmentOrCreatureFromYourGraveyardToHand` | 0 |
-| 68 | `Effect::PutPlusOneCounterOnEachCreatureYouControl` | `PutPlusOneCounterOnEachCreatureYouControl` | 3 |
-| 69 | `Effect::PutPlusOneCounterOnCreatureYouControl` | `PutPlusOneCounterOnCreatureYouControl` | 3 |
-| 70 | `Effect::AddNManaOfChosenColor` | `AddNManaOfChosenColor` | 4 |
-| 71 | `Effect::SearchLibraryForCard` | `SearchLibraryForCard` | 9 |
-| 72 | `Effect::PumpCreaturesOpponentsControlUntilEOT` | `PumpCreaturesOpponentsControlUntilEOT` | 2 |
-| 73 | `Effect::PumpCreaturesOpponentsControlUntilCasterNextTurn` | `PumpCreaturesOpponentsControlUntilCasterNextTurn` | 0 |
-| 74 | `Effect::PutCardFromGraveyardOnBottomOfLibrary` | `PutCardFromGraveyardOnBottomOfLibrary` | 2 |
-| 75 | `Effect::MoveSelfCountersToTargetCreatureYouControl` | `MoveSelfCountersToTargetCreatureYouControl` | 2 |
-| 76 | `Effect::DealDamageEqualToSourcePowerAnyTarget` | `DealDamageEqualToSourcePowerAnyTarget` | 2 |
-| 77 | `Effect::TapTargetArtifactOrCreature` | `TapTargetArtifactOrCreature` | 2 |
-| 78 | `Effect::ConditionalOnTappedCreatures` | `ConditionalOnTappedCreatures` | 6 |
-| 79 | `Effect::PutPlusOneCounterOnEachOfUpToNTargetCreatures` | `PutPlusOneCounterOnEachOfUpToNTargetCreatures` | 2 |
-| 80 | `Effect::PutChargeCountersOnSelf` | `PutChargeCountersOnSelf` | 2 |
-| 81 | `Effect::CreateTokenCopyOfTargetCreatureYouControl` | `CreateTokenCopyOfTargetCreatureYouControl` | 2 |
-| 82 | `Effect::OptionalSacArtifactForEffect` | `OptionalSacArtifactForEffect` | 2 |
-| 83 | `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary` | `OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary` | 2 |
-| 84 | `Effect::AttachToTargetCreatureYouControl` | `AttachToTargetCreatureYouControl` | 5 |
-| 85 | `Effect::EquipToTargetCreatureYouControl` | `EquipToTargetCreatureYouControl` | 14 |
-| 86 | `Effect::DestroyEnchantedPermanent` | `DestroyEnchantedPermanent` | 4 |
-| 87 | `Effect::TapEnchantedPermanent` | `TapEnchantedPermanent` | 2 |
-| 88 | `Effect::PutStunCounterOnTappedCreature` | `PutStunCounterOnTappedCreature` | 1 |
-| 89 | `Effect::TapTargetOpponentPermanentAndStunIt` | `TapTargetOpponentPermanentAndStunIt` | 1 |
-| 90 | `Effect::ExileTargetCreatureUntilSourceLeaves` | `ExileTargetCreatureUntilSourceLeaves` | 3 |
-| 91 | `Effect::ExileOpponentsNonlandPermanentUntilLeaves` | `ExileOpponentsNonlandPermanentUntilLeaves` | 4 |
-| 92 | `Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves` | `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves` | 0 |
-| 93 | `Effect::MayDo` | `MayDo` | 4 |
-| 94 | `Effect::LookTopNPutOneInHandRestToGraveyard` | `LookTopNPutOneInHandRestToGraveyard` | 1 |
-| 95 | `Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped` | `FamishedWorldsireETBEffect` | 1 |
-| 96 | `Effect::ChooseOneMode` | `ModalChooseOne` | 13 |
-| 97 | `Effect::IfYouDo` | `IfYouDo` | 4 |
-| 98 | `Effect::EachOpponentMillsCards` | `EachOpponentMillsCards` | 1 |
-| 99 | `Effect::ExileEachOpponentsGraveyard` | `ExileEachOpponentsGraveyard` | 1 |
-| 100 | `Effect::PumpTargetArtifactOrCreatureUntilEOT` | `PumpTargetArtifactOrCreatureUntilEOT` | 1 |
-| 101 | `Effect::EachOpponentSacrificesCreature` | `EachOpponentSacrificesCreature` | 1 |
-| 102 | `Effect::GrantKeywordToTargetCreatureUntilEOT` | `GrantUnblockableUEOT` | 3 |
-| 103 | `Effect::GrantKeywordsToTargetCreatureUntilEOT` | `GrantKeywordsToTargetCreatureUntilEOT` | 0 |
-| 104 | `Effect::UntapTargetOtherPermanent` | `UntapTargetOtherPermanent` | 1 |
-| 105 | `Effect::TapAnotherTargetCreature` | `TapAnotherTargetCreature` | 1 |
-| 106 | `Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield` | `ReturnAllCreaturesFromYourGraveyardToBattlefield` | 1 |
-| 107 | `Effect::SetBasePTUntilEOT` | `SetBasePTUntilEOT` | 0 |
-| 108 | `Effect::ManifestDread` | `ManifestDread` | 10 |
-| 109 | `Effect::ManifestDreadThenAttachSelf` | `ManifestDreadThenAttachSelf` | 3 |
-| 110 | `Effect::ManifestDreadThenPutPlusOneCountersOnIt` | `ManifestDreadThenPutPlusOneCountersOnIt` | 2 |
-| 111 | `Effect::ConditionalIfVoid` | `ConditionalIfVoid` | 4 |
-| 112 | `Effect::DealDamageToOpponentCreature` | `DealDamageToOpponentCreature` | 2 |
-| 113 | `Effect::LookAtTopNRevealOrCounter` | `LookAtTopNRevealOrCounter` | 2 |
-| 114 | `Effect::BecomeLandCreatureUEOT` | `BecomeLandCreatureUEOT` | 13 |
-| 115 | `Effect::OptionalManaCostThenEffect` | `OptionalManaCostThenEffect` | 2 |
-| 116 | `Effect::DrawCardsEqualToResolvingCombatDamage` | `DrawCardsEqualToResolvingCombatDamage` | 2 |
+| 47 | `Effect::BiosynthicBurstEffect` | `BiosynthicBurstEffect` | 1 |
+| 48 | `Effect::DealDamageAnyTarget` | `DealDamageAnyTarget` | 7 |
+| 49 | `Effect::PumpSelfUntilEOT` | `PumpSelfUntilEOT` | 12 |
+| 50 | `Effect::PumpTargetCreatureUntilEOT` | `PumpTargetCreatureUntilEOT` | 26 |
+| 51 | `Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped` | `PumpTargetCreatureUntilEOT` | 26 |
+| 52 | `Effect::FightTargetCreatureWithTargetCreature` | `FightTargetCreatureWithTargetCreature` | 0 |
+| 53 | `Effect::DoubleTargetCreaturesPowerUEOT` | `DoubleTargetCreaturesPowerUEOT` | 1 |
+| 54 | `Effect::DealDamageToOpponentCreatureByArtifactCount` | `DealDamageToOpponentCreatureByArtifactCount` | 1 |
+| 55 | `Effect::TwoSubjectPumpAndDebuffByArtifactCount` | `TwoSubjectPumpAndDebuffByArtifactCount` | 0 |
+| 56 | `Effect::DealDamageToOpponentCreatureByCardsInHand` | `DealDamageToOpponentCreatureByCardsInHand` | 1 |
+| 57 | `Effect::DealDamageToOpponentCreatureByLandsControlled` | `DealDamageToOpponentCreatureByLandsControlled` | 0 |
+| 58 | `Effect::DealDamageToOpponentCreatureByCreaturesYouControl` | `DealDamageToOpponentCreatureByCreaturesYouControl` | 0 |
+| 59 | `Effect::DealDamageToOpponentCreatureByCardsInGraveyard` | `DealDamageToOpponentCreatureByCardsInGraveyard` | 0 |
+| 60 | `Effect::DealDamageToOpponentCreatureByLifeTotal` | `DealDamageToOpponentCreatureByLifeTotal` | 0 |
+| 61 | `Effect::PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact` | `PutPlusOneCountersOnSelfPerOtherCreatureOrArtifact` | 1 |
+| 62 | `Effect::SurveilXEqualToArtifactCount` | `Surveil` | 16 |
+| 63 | `Effect::Sequence` | `Sequence` | 54 |
+| 64 | `Effect::PumpCreaturesYouControlUntilEOT` | `PumpCreaturesYouControlUntilEOT` | 6 |
+| 65 | `Effect::ReturnCreatureFromYourGraveyardToHand` | `ReturnCreatureFromYourGraveyardToHand` | 3 |
+| 66 | `Effect::ReturnArtifactOrCreatureFromYourGraveyardToHand` | `ReturnCreatureFromYourGraveyardToHand` | 3 |
+| 67 | `Effect::ReturnCreatureOrSpacecraftFromYourGraveyardToHand` | `ReturnCreatureFromYourGraveyardToHand` | 3 |
+| 68 | `Effect::ReturnEnchantmentOrCreatureFromYourGraveyardToHand` | `ReturnEnchantmentOrCreatureFromYourGraveyardToHand` | 0 |
+| 69 | `Effect::PutPlusOneCounterOnEachCreatureYouControl` | `PutPlusOneCounterOnEachCreatureYouControl` | 3 |
+| 70 | `Effect::PutPlusOneCounterOnCreatureYouControl` | `PutPlusOneCounterOnCreatureYouControl` | 3 |
+| 71 | `Effect::AddNManaOfChosenColor` | `AddNManaOfChosenColor` | 4 |
+| 72 | `Effect::SearchLibraryForCard` | `SearchLibraryForCard` | 9 |
+| 73 | `Effect::PumpCreaturesOpponentsControlUntilEOT` | `PumpCreaturesOpponentsControlUntilEOT` | 2 |
+| 74 | `Effect::PumpCreaturesOpponentsControlUntilCasterNextTurn` | `PumpCreaturesOpponentsControlUntilCasterNextTurn` | 0 |
+| 75 | `Effect::PutCardFromGraveyardOnBottomOfLibrary` | `PutCardFromGraveyardOnBottomOfLibrary` | 2 |
+| 76 | `Effect::MoveSelfCountersToTargetCreatureYouControl` | `MoveSelfCountersToTargetCreatureYouControl` | 2 |
+| 77 | `Effect::DealDamageEqualToSourcePowerAnyTarget` | `DealDamageEqualToSourcePowerAnyTarget` | 2 |
+| 78 | `Effect::TapTargetArtifactOrCreature` | `TapTargetArtifactOrCreature` | 2 |
+| 79 | `Effect::ConditionalOnTappedCreatures` | `ConditionalOnTappedCreatures` | 6 |
+| 80 | `Effect::PutPlusOneCounterOnEachOfUpToNTargetCreatures` | `PutPlusOneCounterOnEachOfUpToNTargetCreatures` | 2 |
+| 81 | `Effect::PutChargeCountersOnSelf` | `PutChargeCountersOnSelf` | 2 |
+| 82 | `Effect::CreateTokenCopyOfTargetCreatureYouControl` | `CreateTokenCopyOfTargetCreatureYouControl` | 2 |
+| 83 | `Effect::OptionalSacArtifactForEffect` | `OptionalSacArtifactForEffect` | 2 |
+| 84 | `Effect::OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary` | `OwnerPutsTargetArtifactOrCreatureOnTopOrBottomOfLibrary` | 2 |
+| 85 | `Effect::AttachToTargetCreatureYouControl` | `AttachToTargetCreatureYouControl` | 5 |
+| 86 | `Effect::EquipToTargetCreatureYouControl` | `EquipToTargetCreatureYouControl` | 14 |
+| 87 | `Effect::DestroyEnchantedPermanent` | `DestroyEnchantedPermanent` | 4 |
+| 88 | `Effect::TapEnchantedPermanent` | `TapEnchantedPermanent` | 2 |
+| 89 | `Effect::PutStunCounterOnTappedCreature` | `PutStunCounterOnTappedCreature` | 1 |
+| 90 | `Effect::TapTargetOpponentPermanentAndStunIt` | `TapTargetOpponentPermanentAndStunIt` | 1 |
+| 91 | `Effect::ExileTargetCreatureUntilSourceLeaves` | `ExileTargetCreatureUntilSourceLeaves` | 3 |
+| 92 | `Effect::ExileOpponentsNonlandPermanentUntilLeaves` | `ExileOpponentsNonlandPermanentUntilLeaves` | 4 |
+| 93 | `Effect::ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves` | `ExileOpponentsNonlandPermanentWithMaxMvUntilLeaves` | 0 |
+| 94 | `Effect::MayDo` | `MayDo` | 4 |
+| 95 | `Effect::LookTopNPutOneInHandRestToGraveyard` | `LookTopNPutOneInHandRestToGraveyard` | 1 |
+| 96 | `Effect::FamishedWorldsireLookTopXByPowerPutLandsTapped` | `FamishedWorldsireETBEffect` | 1 |
+| 97 | `Effect::ChooseOneMode` | `ModalChooseOne` | 13 |
+| 98 | `Effect::IfYouDo` | `IfYouDo` | 4 |
+| 99 | `Effect::EachOpponentMillsCards` | `EachOpponentMillsCards` | 1 |
+| 100 | `Effect::ExileEachOpponentsGraveyard` | `ExileEachOpponentsGraveyard` | 1 |
+| 101 | `Effect::PumpTargetArtifactOrCreatureUntilEOT` | `PumpTargetArtifactOrCreatureUntilEOT` | 1 |
+| 102 | `Effect::EachOpponentSacrificesCreature` | `EachOpponentSacrificesCreature` | 1 |
+| 103 | `Effect::GrantKeywordToTargetCreatureUntilEOT` | `GrantUnblockableUEOT` | 3 |
+| 104 | `Effect::GrantKeywordsToTargetCreatureUntilEOT` | `GrantKeywordsToTargetCreatureUntilEOT` | 0 |
+| 105 | `Effect::UntapTargetOtherPermanent` | `UntapTargetOtherPermanent` | 1 |
+| 106 | `Effect::TapAnotherTargetCreature` | `TapAnotherTargetCreature` | 1 |
+| 107 | `Effect::ReturnAllCreaturesFromYourGraveyardToBattlefield` | `ReturnAllCreaturesFromYourGraveyardToBattlefield` | 1 |
+| 108 | `Effect::SetBasePTUntilEOT` | `SetBasePTUntilEOT` | 0 |
+| 109 | `Effect::ManifestDread` | `ManifestDread` | 10 |
+| 110 | `Effect::ManifestDreadThenAttachSelf` | `ManifestDreadThenAttachSelf` | 3 |
+| 111 | `Effect::ManifestDreadThenPutPlusOneCountersOnIt` | `ManifestDreadThenPutPlusOneCountersOnIt` | 2 |
+| 112 | `Effect::ConditionalIfVoid` | `ConditionalIfVoid` | 4 |
+| 113 | `Effect::DealDamageToOpponentCreature` | `DealDamageToOpponentCreature` | 2 |
+| 114 | `Effect::LookAtTopNRevealOrCounter` | `LookAtTopNRevealOrCounter` | 2 |
+| 115 | `Effect::BecomeLandCreatureUEOT` | `BecomeLandCreatureUEOT` | 13 |
+| 116 | `Effect::OptionalManaCostThenEffect` | `OptionalManaCostThenEffect` | 2 |
+| 117 | `Effect::DrawCardsEqualToResolvingCombatDamage` | `DrawCardsEqualToResolvingCombatDamage` | 2 |
 

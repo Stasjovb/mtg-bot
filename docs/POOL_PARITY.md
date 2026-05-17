@@ -6,9 +6,9 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **302 / 475 EoE cards (63.6%) are byte-equal at the Effect+bridge level**; of those, **60 (12.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 242 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **303 / 475 EoE cards (63.8%) are byte-equal at the Effect+bridge level**; of those, **61 (12.8% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 242 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
-- **173 (36.4%)** are BLOCKED, broken out below.
+- **172 (36.2%)** are BLOCKED, broken out below.
 
 > **CAVEAT — what this measures vs. what it does NOT.** This is **Effect+bridge-level byte-equality evidence**, NOT full-game-trajectory parity. The PROBED tier asserts byte-equality on a *controlled* cross-engine state (a real EoE printing driven end-to-end), not over a full random multi-turn game. The covered-by-construction tier only proves the card's Effect *primitives* all exist + bridge — it does **not** prove the card plays byte-equal in a real game. The bench tier is the empirical full-trajectory signal but is **capped at ~22-25 turns** (see `docs/bench_trajectory_parity_smoke.md`) and only over the loader-admitted subset. **No tier here claims the whole pool is byte-equal in real full-game trajectories** — that remains out of scope and is the campaign's open frontier.
 
@@ -16,12 +16,12 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 60 | 12.6% |
+| PROBED byte-equal | 61 | 12.8% |
 | Effect+bridge covered (not individually probed) | 242 | 50.9% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 6 | 1.3% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
-| BLOCKED — subsystem-gated / Effect-uncovered | 165 | 34.7% |
+| BLOCKED — subsystem-gated / Effect-uncovered | 164 | 34.5% |
 | **Pool total** | **475** | **100.0%** |
 
 ### Tier definitions
@@ -55,6 +55,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Banishing Light
 - Bioengineered Future
 - Biomechan Engineer
+- Biosynthic Burst
 - Biotech Specialist
 - Blooming Stinger
 - Cryogen Relic
@@ -124,7 +125,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Dauntless Scrapbot
 - Tractor Beam
 
-## BLOCKED — subsystem-gated / Effect-uncovered (165)
+## BLOCKED — subsystem-gated / Effect-uncovered (164)
 
 The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke this **opaque single bucket** out by gating subsystem so it is the data-driven "which subsystem next" instrument, not one number — see `docs/SUBSYSTEM_ROADMAP.md` for the leverage analysis + recommended sequencing. A card may be **multi-gated** (counted under every gate it trips, so `#cards` does NOT sum to the tier total); `1gate` is the single-gated count (closing that one subsystem flips the card) and reconciles exactly. `decks(1g)` is the cumulative 17lands deck-count of the single-gated members — the honest leverage signal.
 
@@ -143,11 +144,11 @@ The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke 
 | Rooms / doors | 3 | 0 | 3 | 0 | 0 | sprawling |
 | Planeswalker loyalty | 1 | 0 | 1 | 2,311 | 0 | sprawling |
 | Carrier activated abilities | 35 | 0 | 35 | 53,689 | 0 | sprawling |
-| Effect-uncovered (no covered Rust counterpart) | 111 | 27 | 84 | 432,418 | 179,177 | diffuse |
+| Effect-uncovered (no covered Rust counterpart) | 110 | 26 | 84 | 409,619 | 156,378 | diffuse |
 | Unclassified (honest residual — needs hand re-walk) | 2 | 2 | 0 | 12 | 12 | diffuse |
 | Non-safe triggered ability (unbridged event/shape) | 54 | 0 | 54 | 194,640 | 0 | diffuse |
 
-**Reconciliation:** 165 subsystem-gated = 75 single-gated + 90 multi-gated; the per-subsystem `1gate` column sums to 75 (== single-gated total). The breakout partitions exactly the same 165 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
+**Reconciliation:** 164 subsystem-gated = 74 single-gated + 90 multi-gated; the per-subsystem `1gate` column sums to 74 (== single-gated total). The breakout partitions exactly the same 164 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
 
 **Honest unclassified bucket (2):** `Deafening Silence`, `Leyline of Mutation` — no taxonomy gate fired; flagged for a hand re-walk rather than force-guessed (see `docs/SUBSYSTEM_ROADMAP.md`).
 
@@ -166,7 +167,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Auxiliary Boosters
 - Baseball Bat
 - Beyond the Quiet
-- Biosynthic Burst
 - Blade of the Swarm
 - Blast Zone
 - Bleeding Woods
@@ -213,5 +213,6 @@ Full card list (first 60 shown for auditability; the full set + per-card gate at
 - Friendly Teddy
 - Fungal Colossus
 - Galvanizing Sawship
-- … and 105 more
+- Genemorph Imago
+- … and 104 more
 

@@ -304,47 +304,46 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 30783b57 (continuous-pipeline cycle 4 —
-     Lander-spell-token-seating sub-substrate REALIZED).
-     Counts UNCHANGED (116/118/21/12/9): this slice is
-     trajectory.py + cross_engine.py Python (loader spell-path
-     Lander-token seating) reusing the Rust parse_effect /
-     bridge arms that ALREADY existed at c44dfeb4 — rust/src/
-     UNCHANGED this slice, NOT a new Effect:: variant /
-     _ta_dict kind arm / _SAFE_* entry (cron confirmed no
-     count drift; structural-arm cadence fired only because
-     cross_engine.py was touched — the Pulsar guard). The 7
+     Measured at main ad9832ac (continuous-pipeline cycle 5 —
+     Tier-A #6 Biosynthic Burst Effect close). Counts MOVED
+     +1/+1/0/0/0: rust_effect_variants 116->117 (new
+     Effect::BiosynthicBurstEffect), bridge_arms 118->119
+     (new biosynthic_burst_effect arm); _SAFE_* UNCHANGED.
+     Unlike the cycle-3/4 carrier flips, THIS is a genuine
+     Effect+bridge close (new variant + bridge arm + a genuine
+     real-EoE probe) so it DOES move the canonical metric.
+     cards.rs + state_ops_resolve.rs + cross_engine.py +
+     trajectory.py touched -> structural-arm cadence; the 7
      still-genuinely-missing entries re-stamped
-     verified_absent_at_commit=30783b57 (the Lander-seating
-     unlock is disjoint from all 7 residue Effect signatures;
-     absence preserved, no close). Honest residue still 6
-     distinct cards; Sothera-the-Supervoid still flagged for
-     the next residue re-walk cadence (genuinely_missing-
-     shaped, 2,108 decks, NOT yet a worklist entry).
-     Pool-parity UNCHANGED 302/475 (63.6%), PROBED 60 — the
-     spell-card-bridge admit set flipped {Depressurize,
-     Radiant Strike} -> {Depressurize, Orbital Plunge,
-     Radiant Strike, Seedship Impact} (+Seedship 13,908 +
-     Orbital 28,629 = ~42,537 decks), but that is BENCH-ADMIT
-     / loader-real-game-coverage dimension, NOT an Effect+
-     bridge-metric move (same caveat as warp / round-60
-     shockland; correctly NOT double-counted). HONEST
-     MEASUREMENT FLAG: the genuine real-EoE probe batches
-     landed this cycle (covered-unprobed batch A/B + spell-
-     card-bridge-admitted sweep, ~21 cards) did NOT move the
-     PROBED tier — measure_pool_parity.py's PROBED detection
-     does not credit the new probe-module style, so PROBED=60
-     UNDERSTATES actual probe coverage. NOT inflated here; a
-     measurement-tooling reconciliation is flagged in
-     SUBSYSTEM_ROADMAP for a future slice. Verify-first this
-     slice surfaced + fixed 2 pre-existing latent harness
-     bugs BYTE-EQUAL (resolve_top_of_stack_rust missing
-     apply_sbas(); bench agent missing choose_surveil) —
-     new-code-is-right, r72 fixture NOT relaxed. Close
-     Encounter still positively DECLINED via the covered-set
-     gate; Diplomatic Relations declined (Phase 2). -->
-rust_effect_variants = 116
-bridge_arms = 118
+     verified_absent_at_commit=ad9832ac (Biosynthic Burst is
+     disjoint from all 7 residue Effect signatures; absence
+     preserved, no close). Honest residue still 6 distinct
+     cards; Sothera-the-Supervoid still flagged for the next
+     residue re-walk cadence (NOT yet a worklist entry).
+     Pool-parity 302/475 -> 303/475 (63.6% -> 63.8%); PROBED
+     60 -> 61 (Biosynthic Burst's own canonical probe);
+     Effect-uncovered (no covered Rust counterpart) 111 -> 110
+     cards, Tier-A 27 -> 26. The spell-card-bridge admit set
+     also grew to 5 — {Depressurize, Orbital Plunge, Radiant
+     Strike, Seedship Impact, Biosynthic Burst} (+~22,799
+     decks bench-admit dimension, correctly NOT double-counted
+     into the +1 Effect-metric move). HONEST MEASUREMENT FLAG
+     STILL OPEN: the ~60 genuine real-EoE batch probes (cycles
+     3-5: covered-unprobed A-D + spell-card-bridge-admitted +
+     warp-admitted + warp-combat) STILL do not move PROBED
+     (only +1 here = Biosynthic Burst's canonical-style probe)
+     — measure_pool_parity.py's PROBED detector does not
+     credit the test_probe_*.py module style; PROBED=61
+     UNDERSTATES real coverage. A measurement-tooling
+     reconciliation slice is IN FLIGHT (not hand-inflated).
+     Tier-A #5 Focus Fire re-scoped by verify-first: NOT
+     Tier-C — a substantial-but-bounded ~1.5-round Rust slice
+     (first effect-resolve arm to read combat-declaration
+     state + the Creature∪Spacecraft set-union denominator);
+     clean to do next. Close Encounter / Diplomatic Relations
+     still positively DECLINED. -->
+rust_effect_variants = 117
+bridge_arms = 119
 safe_triggers = 21
 safe_keywords = 12
 safe_effect_keys = 9

@@ -409,6 +409,41 @@ second:
    >   - Carry-forward: Sothera residue re-walk; the SL doc-wide
    >     "Headline counts" summary still lags (resync/refresh
    >     cadence owns it).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 5 —
+   >   Tier-A #6 Biosynthic Burst REALIZED; resync @ `ad9832ac`,
+   >   counts 116/118 -> 117/119, parity 302 -> 303/475).**
+   >   - **Tier-A #6 Biosynthic Burst SHIPPED** (`ad9832ac`, gate
+   >     1497) — a GENUINE Effect+bridge close (new
+   >     `Effect::BiosynthicBurstEffect` + bridge arm + canonical
+   >     probe), so unlike the cycle-3/4 carrier flips it DOES
+   >     move the headline: **302 -> 303/475 (63.8%), PROBED
+   >     60 -> 61, Effect-uncovered Tier-A 27 -> 26**. It ALSO
+   >     auto-joined the spell-card-bridge admit set -> now 5
+   >     cards {Depressurize, Orbital Plunge, Radiant Strike,
+   >     Seedship Impact, Biosynthic Burst} (+~22,799 decks,
+   >     bench-admit dimension, correctly NOT double-counted).
+   >   - **Tier-A #5 Focus Fire RE-SCOPED by verify-first — NOT
+   >     Tier-C** (the cycle-4 "maybe Tier-C-like" fear did NOT
+   >     materialize). The Rust combat-declaration model is
+   >     fully tracked (`GameState.attackers`/`blockers`,
+   >     byte-equal-proven by the multi-blocker probes). #5 is a
+   >     **substantial-but-bounded ~1.5-round** slice: the first
+   >     effect-resolve arm to read combat-declaration state +
+   >     the Creature∪Spacecraft set-union denominator (dual-typed
+   >     counts once). Clean to do next.
+   >   - **Revised Rust sequencing:** (a) Tier-A #5 Focus Fire
+   >     (~1.5-round, combat-declaration-reading); (b) warp
+   >     Phase 2 (Timeline Culler, +8,986); (c) Tier-C target-
+   >     seating (2 cards/18,855). Aura struck.
+   >   - **PROBED-attribution measurement-tooling slice IN
+   >     FLIGHT** — the ~60 genuine real-EoE batch probes still
+   >     uncredited (PROBED moved only +1 = Biosynthic Burst's
+   >     canonical probe); the in-flight reconciliation will make
+   >     measure_pool_parity credit the test_probe_*.py modules,
+   >     surfacing the true (much higher) PROBED count at a
+   >     future resync. PROBED=61 is a FLOOR.
+   >   - Carry-forward: Sothera residue re-walk; SL doc-wide
+   >     "Headline counts" lag (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
