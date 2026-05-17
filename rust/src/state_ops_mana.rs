@@ -366,6 +366,30 @@ impl GameState {
         }
         let slot = slot_mut(&mut player.mana_pool, &produced_color)?;
         *slot = slot.saturating_add(1);
+        // Round-58 BECOMES_TAPPED event bridge — tap-for-mana site.
+        // Python's `auto_tap_for_cost` (`src/mtg_bot/actions.py:
+        // 981-985`) routes every land it taps through
+        // `turn.tap_permanent`, which fires `Event.BECOMES_TAPPED`
+        // (the docstring there explicitly cites Chrome Companion /
+        // Grove of the Burnwillows becomes-tapped mana triggers).
+        // The flip is already committed above (the pool credit needs
+        // the `player` mut-borrow held); dispatch the event now that
+        // the borrow is released. We pass `dispatch_only=true` to the
+        // chokepoint via the inline form below: the flip happened
+        // here (mana-credit ordering), so re-flipping through
+        // `tap_permanent_and_dispatch` would see an already-tapped
+        // permanent and no-op the EVENT too. Instead emit the
+        // dispatch directly — the no-op-if-already-tapped gate is
+        // moot here because we only reach this line when the
+        // immutable Phase-1 scan proved the permanent was UNTAPPED
+        // (it `return Ok(None)`s on `obj.tapped`), so this is exactly
+        // the "state actually changed" branch Python's
+        // `tap_permanent` dispatches on.
+        crate::state_ops_resolve::dispatch_event(
+            self,
+            crate::cards::Event::BecomesTapped,
+            obj_id,
+        )?;
         Ok(Some(produced_color))
     }
 }

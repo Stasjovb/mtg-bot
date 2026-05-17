@@ -654,18 +654,29 @@ impl GameState {
         let has_vigilance = battlefield_has_vigilance(self, obj_id);
         // Eligible. Tap the creature (CR 508.1c — attacking taps the
         // attacker, modulo vigilance) and record it on the attackers
-        // Vec. The tap goes through Arc::make_mut so the CoW invariant
-        // survives. Vigilance creatures skip the tap step entirely.
+        // Vec. Vigilance creatures skip the tap step entirely.
+        //
+        // **Round-58 BECOMES_TAPPED ordering parity.** Python's
+        // `combat.declare_attackers` (`src/mtg_bot/combat.py:100-115`)
+        // sets `obj.attacking = True`, then calls
+        // `turn.tap_permanent(state, obj)` (which fires
+        // `Event.BECOMES_TAPPED` for the freshly-tapped attacker),
+        // and ONLY THEN calls `_fire_attacks_triggers` (which fires
+        // `Event.ATTACKS`). So per attacker the BECOMES_TAPPED
+        // triggers are pushed onto the stack BEFORE the ATTACKS
+        // triggers. Route the tap through
+        // `tap_permanent_and_dispatch` (the centralized chokepoint)
+        // so the BECOMES_TAPPED dispatch lands here — before the
+        // `Event::Attacks` dispatch below — matching Python's
+        // stack-push order exactly. A non-vigilance attacker that is
+        // somehow already tapped (shouldn't happen — declare gating
+        // rejects tapped creatures upstream) is the no-op path: no
+        // double BECOMES_TAPPED, mirroring Python's
+        // already-tapped early-return.
         if !has_vigilance {
-            let tapped_ok = mutate_battlefield_obj(self, obj_id, |obj| {
-                obj.tapped = true;
-            });
-            if !tapped_ok {
-                // Should be unreachable — read_creature_status already
-                // located it. Defensive: if a clone race or other
-                // instability removed it, undo nothing.
-                return Ok(false);
-            }
+            crate::state_ops_resolve::tap_permanent_and_dispatch(
+                self, obj_id,
+            )?;
         }
         self.attackers.push(obj_id);
         // Slice 7: dispatch Event::Attacks for the just-declared

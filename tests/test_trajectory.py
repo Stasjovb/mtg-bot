@@ -4426,10 +4426,34 @@ def test_phase3a_lander_cluster_residue_stays_declined():
         with no recognizer arm (the create_token recognizer only
         handles the bare ``IsSelf`` predicate). Declined at the
         recognizer (``_python_ta_to_safe_dict`` returns None).
-      * **Seedship Agrarian** (14,078 decks) — its Lander trigger
-        event is ``BECOMES_TAPPED``, which has no bridge arm (a known
-        campaign landmine — would silently mistranslate). Declined at
-        the recognizer.
+      * **Seedship Agrarian** (14,078 decks) — **ROUND-58 NARROWED.**
+        Its FIRST trigger ``BECOMES_TAPPED + IsSelf + CreateToken
+        (Lander)`` NOW round-trips byte-equal: round-58 N1 shipped
+        the BECOMES_TAPPED event bridge (Rust ``Event::BecomesTapped``
+        emitted at every production tap site that mirrors Python's
+        ``turn.tap_permanent``; cross_engine bridge arm +
+        ``("becomes_tapped","source_is_self","create_token")``
+        ``_SAFE_TRIGGERS`` entry). The campaign landmine is closed —
+        the event is no longer unbridged. The carrier's FULL-card
+        admit STILL fails, but for a DIFFERENT, ORTHOGONAL reason
+        than the (now-resolved) BECOMES_TAPPED gap: its SECOND
+        trigger is ``Landfall — Whenever a land you control enters,
+        put a +1/+1 counter on this creature`` = ``ENTERS /
+        land_enters_controlled_by_you / PutPlusOneCounterOnSelf``.
+        The landfall predicate IS recognized, but
+        ``put_plus_one_counter_on_self`` is NOT in the landfall
+        safe-leaf set (today: gain_life / pump_self_until_eot /
+        draw_cards / mill — see the
+        ``("enters","land_enters_controlled_by_you",...)`` entries in
+        ``_SAFE_TRIGGERS``). So the residual is now precisely the
+        **landfall+PutPlusOneCounterOnSelf leaf** (a separate,
+        already-known substrate — NOT token-registration, which the
+        round-49/53 create_token + ``_seat_token_printings`` machinery
+        already handles for the BECOMES_TAPPED trigger). Since the
+        loader filter requires EVERY trigger to round-trip, the full
+        card stays declined on that landfall leaf. See
+        ``docs/SEARCH_LIMITATIONS.md`` "BECOMES_TAPPED event bridge"
+        for the honest split.
       * **Biotech Specialist** (5,058 decks) — a SECOND trigger
         (``IS_SACRIFICED + And + DealDamageToTargetOpponent``) does
         not round-trip; the filter requires every trigger to. Declined
@@ -4459,17 +4483,51 @@ def test_phase3a_lander_cluster_residue_stays_declined():
 
     sa = pr.get("Seedship Agrarian")
     if sa is not None:
+        # ROUND-58: the FULL card still doesn't admit, but the
+        # blocker MOVED. Pre-r58 it was the unbridged BECOMES_TAPPED
+        # event (the Lander trigger); r58 closed that. The full-card
+        # decline is now the ORTHOGONAL landfall+PutPlusOneCounterOnSelf
+        # SECOND trigger (a separate, already-known substrate gap).
         assert _printing_is_bridge_simple_creature(sa) is False
-        # The Lander trigger's BECOMES_TAPPED event is unbridged.
+        # Trigger 0: "Whenever this creature becomes tapped, create a
+        # Lander token" — BECOMES_TAPPED + IsSelf + CreateToken. This
+        # NOW round-trips byte-equal (round-58 BECOMES_TAPPED event
+        # bridge). This is the inversion of the pre-r58 assertion (it
+        # was pinning the bug — there was no bridge arm; now there is).
         lander_ta = next(
             t for t in sa.triggered_abilities
             if getattr(getattr(t, "effect", None), "token_printing", None)
             is not None
             and t.effect.token_printing.name == "Lander"
         )
-        assert _python_ta_to_safe_dict(lander_ta) is None, (
-            "Seedship Agrarian's Lander trigger is BECOMES_TAPPED "
-            "(no bridge arm) — must NOT round-trip"
+        lander_sd = _python_ta_to_safe_dict(lander_ta)
+        assert lander_sd is not None, (
+            "ROUND-58: Seedship Agrarian's Lander trigger is "
+            "BECOMES_TAPPED+IsSelf+CreateToken — the round-58 event "
+            "bridge makes it round-trip byte-equal (was the "
+            "campaign-landmine §2 decline; now closed)"
+        )
+        assert lander_sd["event"] == "becomes_tapped"
+        assert lander_sd["predicate"] == {"kind": "source_is_self"}
+        assert lander_sd["effect"]["kind"] == "create_token"
+        assert lander_sd["effect"]["_token_card_def"].name == "Lander"
+        # Trigger 1: the landfall +1/+1 — ENTERS +
+        # land_enters_controlled_by_you + PutPlusOneCounterOnSelf.
+        # ``put_plus_one_counter_on_self`` is NOT in the landfall
+        # safe-leaf set, so this trigger does NOT round-trip — and
+        # since the loader filter requires EVERY trigger to, the full
+        # card stays declined HERE (the orthogonal residual, NOT the
+        # now-resolved BECOMES_TAPPED event).
+        landfall_ta = next(
+            t for t in sa.triggered_abilities
+            if type(t.effect).__name__ == "PutPlusOneCounterOnSelf"
+        )
+        assert _python_ta_to_safe_dict(landfall_ta) is None, (
+            "Seedship Agrarian's landfall+PutPlusOneCounterOnSelf "
+            "trigger is the post-r58 residual — put_plus_one_counter_"
+            "on_self is not a landfall safe leaf, so it must NOT "
+            "round-trip (a SEPARATE substrate from the now-closed "
+            "BECOMES_TAPPED event bridge)"
         )
 
     bs = pr.get("Biotech Specialist")

@@ -927,11 +927,35 @@ impl GameState {
                 }
                 // Phase 5: commit tap_self (if applicable). The mana
                 // cost is already debited above.
+                //
+                // **Round-58 BECOMES_TAPPED event bridge — `{T}`
+                // tap-self activated-ability-cost site.** Python's
+                // `_activate_ability` (`src/mtg_bot/actions.py:
+                // 1997-2000`) pays the `tap_self` cost via
+                // `turn.tap_permanent(state, source)`, which fires
+                // `Event.BECOMES_TAPPED` for the source — and it does
+                // so AFTER the mana cost is paid but BEFORE any
+                // sacrifice cost / target selection / effect push.
+                // The Phase-3 precheck above already raised if the
+                // source was tapped, so reaching here means the
+                // source was UNTAPPED — the "state actually changed"
+                // branch Python's `tap_permanent` dispatches on
+                // (no-op-if-already-tapped is unreachable here).
+                // Dispatch right after the flip and before Phase 5b
+                // (sacrifice_self), matching Python's cost-payment
+                // order so the becomes-tapped trigger lands on the
+                // stack ahead of anything the rest of activation
+                // pushes.
                 if resolved.tap_self {
                     let bf_mut = Arc::make_mut(
                         &mut state.players[controller_idx].battlefield,
                     );
                     bf_mut[bf_pos].tapped = true;
+                    crate::state_ops_resolve::dispatch_event(
+                        state,
+                        crate::cards::Event::BecomesTapped,
+                        source_id,
+                    )?;
                 }
                 // Phase 5b: commit sacrifice_self (CE20 follow-up
                 // Slice 2). Costs pay BEFORE effect resolves (CR

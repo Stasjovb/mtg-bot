@@ -62175,6 +62175,338 @@ def test_cross_engine_real_eoe_fallers_faithful_etb_destroy_then_draw_if_undamag
     assert rust_state.get_life(1) == py_state.players[1].life
 
 
+def test_cross_engine_real_eoe_seedship_agrarian_becomes_tapped_create_lander_parity(
+    parity_smoke,
+):
+    """GENUINE real-EoE probe (round-58 N1 — the BECOMES_TAPPED event
+    bridge). Drives the **real parsed Seedship Agrarian printing**
+    (``get_active_source().get_printings()["Seedship Agrarian"]``) and
+    asserts byte-equality Python<->Rust for its
+    ``Whenever this creature becomes tapped, create a Lander token``
+    trigger — up to the documented Lander token-registration boundary.
+
+    Real EoE oracle (``data/edge_of_eternities.json``, eoe/204):
+
+        "Whenever this creature becomes tapped, create a Lander token.
+         (It's an artifact with '{2}, {T}, Sacrifice this token:
+         Search your library for a basic land card, put it onto the
+         battlefield tapped, then shuffle.')
+         Landfall — Whenever a land you control enters, put a +1/+1
+         counter on this creature."
+
+    The parser produces TWO TriggeredAbilities; this probe exercises
+    EXACTLY the FIRST: ``Event.BECOMES_TAPPED + IsSelf +
+    CreateToken(Lander)``. The SECOND (landfall +1/+1 =
+    ``ENTERS / land_enters_controlled_by_you /
+    PutPlusOneCounterOnSelf``) is OUT OF SCOPE — it is a SEPARATE,
+    already-known substrate gap (``put_plus_one_counter_on_self`` is
+    not a landfall safe leaf), NOT the BECOMES_TAPPED event and NOT
+    token-registration. See ``docs/SEARCH_LIMITATIONS.md``
+    "BECOMES_TAPPED event bridge" for the honest split.
+
+    **Why this is a GENUINE probe, not synthetic.** The Python side
+    uses the literally-parsed Seedship Agrarian ``CardPrinting`` from
+    the active CardSource (the same object the loader / bench would
+    see), asserting first that it parses to the exact
+    ``BECOMES_TAPPED / IsSelf / CreateToken`` shape (the §2 source of
+    truth). The Rust side carries the bridge-dict equivalent. Both
+    are driven through a PRODUCTION tap path (Python:
+    ``turn.tap_permanent`` — the canonical BECOMES_TAPPED chokepoint;
+    Rust: ``declare_attacker`` — routes through
+    ``state_ops_resolve::tap_permanent_and_dispatch``, the Rust
+    analogue of ``turn.tap_permanent``). Both production paths fire
+    BECOMES_TAPPED at the SAME logical point (a non-already-tapped
+    permanent becomes tapped) and resolve the SAME CreateToken
+    payload.
+
+    **Token-registration boundary (the documented residual).** The
+    Lander token carries a ``{2}, Sac: SearchLibraryForBasicLand
+    Tapped`` activated ability on its printing. This probe asserts
+    the SPAWN is byte-equal (carrier + Lander on the controller's
+    battlefield, controller id, printing name, tapped flag) but does
+    NOT exercise the Lander's activation — that activated-cost +
+    tutor substrate is the SEPARATE token-registration residual
+    (same boundary Galactic Wayfarer / Beamsaw Prospector probes
+    stop at). The Python ``CardPrinting`` registered against Rust's
+    pid via ``register_token_printing`` carries the Lander's
+    activated ability for round-trip fidelity, but no activation is
+    driven.
+
+    Probe shape (inject-and-tap, same-controller):
+
+      1. active_player=P0 (P0 is also the source's controller, so
+         ``current_resolve_source_controller`` resolves to Some(0)
+         AND the back-compat ``active_player`` fallback agrees — the
+         same-controller surface; cross-controller is pinned by the
+         I81 create_token sister probes).
+      2. Register the Lander token printing on Rust (pid via
+         ``registry_size``); register the matching Python
+         ``CardPrinting`` (built from the REAL parsed Lander
+         printing the genuine Seedship trigger carries) against that
+         pid via ``register_token_printing``.
+      3. Inject Seedship Agrarian onto P0's bf (controller=0),
+         summoning-sickness cleared so it is a legal attacker.
+         ENTERS does NOT fire BECOMES_TAPPED (CR 701.21a — entering
+         is not "becoming tapped"); both stacks empty post-inject.
+      4. Tap it via a production path (Python: tap_permanent; Rust:
+         declare_attacker). BECOMES_TAPPED fires; the CreateToken
+         trigger lands on the stack on BOTH engines.
+      5. Drain both stacks; assert byte-equal post-resolve:
+         - P0's bf grew by exactly +1 (the Lander token; Seedship
+           itself stays).
+         - P1's bf unchanged.
+         - The fresh Lander token's controller is 0 on both engines.
+         - The fresh Lander token's printing name matches.
+         - The Lander enters UNTAPPED (the real trigger's
+           CreateToken has ``tapped=False``) on both engines.
+         - Life totals unchanged on both seats.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import Zone
+    from mtg_bot.turn import tap_permanent
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings, register_token_printing,
+    )
+
+    real = get_active_source().get_printings().get("Seedship Agrarian")
+    if real is None:
+        import pytest
+        pytest.skip("Seedship Agrarian absent from active CardSource")
+
+    # §2 source-of-truth assertions: the GENUINE parsed printing must
+    # carry exactly the BECOMES_TAPPED / IsSelf / CreateToken(Lander)
+    # first trigger this probe pins.
+    assert real.is_creature and (real.power, real.toughness) == (3, 3)
+    bt_trigs = [
+        t for t in real.triggered_abilities
+        if t.event is Event.BECOMES_TAPPED
+    ]
+    assert len(bt_trigs) == 1, (
+        "genuine Seedship Agrarian must parse exactly one "
+        f"BECOMES_TAPPED trigger; got {len(bt_trigs)}"
+    )
+    bt = bt_trigs[0]
+    assert isinstance(bt.predicate, IsSelf) and bt.predicate.subject is None
+    assert isinstance(bt.effect, CreateToken), (
+        f"genuine Seedship BECOMES_TAPPED effect must be CreateToken; "
+        f"got {type(bt.effect).__name__}"
+    )
+    real_lander = bt.effect.token_printing
+    assert real_lander.name == "Lander"
+    assert real_lander.card_types == ("Artifact",)
+    assert "Lander" in real_lander.subtypes
+    assert int(bt.effect.count) == 1
+    # The real trigger creates an UNTAPPED Lander (no tapped rider).
+    assert getattr(bt.effect, "tapped", False) is False
+    assert getattr(bt.effect, "each_player", False) is False
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+    ZONE_BATTLEFIELD = 2
+
+    # ---- Rust side: register the Lander token, build the bridge-dict
+    # Seedship carrier driving the SAME trigger shape, inject onto
+    # P0's bf, then tap via declare_attacker (production path). ----
+    rust_lander_dict = {
+        "name": "Lander",
+        "card_types": ["Artifact"],
+        "subtypes": ["Lander"],
+    }
+    rust_token_pid = rust_state.registry_size
+    rust_state.register_and_inject_object(
+        rust_lander_dict, 1, 1,  # ZONE_LIBRARY, ownerless filler slot
+    )
+    rust_seedship_trigger = {
+        "event": "becomes_tapped",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token",
+            "count": 1,
+            "token_printing_id": rust_token_pid,
+        },
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_bf_p0_before = rust_state.battlefield_sizes[0]
+    rust_bf_p1_before = rust_state.battlefield_sizes[1]
+    rust_seedship_id = rust_state.register_and_inject_object(
+        {
+            "name": "Seedship Agrarian",
+            "card_types": ["Creature"],
+            "subtypes": ["Insect", "Scientist"],
+            "mana_cost": {"generic": 3, "G": 1},
+            "power": 3,
+            "toughness": 3,
+            "effects": [],
+            "triggered_abilities": [rust_seedship_trigger],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    # ETB does NOT fire BECOMES_TAPPED (CR 701.21a).
+    assert rust_state.stack_size() == 0, (
+        "Rust: Seedship's arrival must NOT fire BECOMES_TAPPED "
+        "(entering is not 'becoming tapped'); stack must be empty"
+    )
+    rust_state.clear_summoning_sick_for_player(0)
+    # Tap it via a production path: declare_attacker routes through
+    # tap_permanent_and_dispatch -> Event::BecomesTapped.
+    assert rust_state.declare_attacker(rust_seedship_id) is True
+    assert rust_state.stack_size() == 1, (
+        "Rust: tapping Seedship to attack must fire BECOMES_TAPPED -> "
+        "the CreateToken trigger lands on the stack"
+    )
+
+    # ---- Python side: GENUINE parsed Seedship printing, register the
+    # Lander token (built from the real parsed Lander) against Rust's
+    # pid, inject onto P0's bf, tap via tap_permanent. ----
+    py_lander = CardPrinting(
+        name=real_lander.name,
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line=real_lander.type_line,
+        supertypes=real_lander.supertypes,
+        card_types=real_lander.card_types,
+        subtypes=real_lander.subtypes,
+        power=real_lander.power,
+        toughness=real_lander.toughness,
+        produces=frozenset(),
+        triggered_abilities=(),
+        activated_abilities=getattr(
+            real_lander, "activated_abilities", ()
+        ),
+    )
+    clear_token_printings()
+    register_token_printing(rust_token_pid, py_lander)
+    try:
+        # Sanity: the bridge round-trips Rust's dict back to the SAME
+        # Python shape the genuine printing parses to.
+        bridged = _ta_dict_to_python_triggered_ability(
+            rust_seedship_trigger
+        )
+        assert bridged.event is Event.BECOMES_TAPPED
+        assert isinstance(bridged.predicate, IsSelf)
+        assert isinstance(bridged.effect, CreateToken)
+        assert bridged.effect.token_printing.name == "Lander"
+
+        py_p0_life_before = py_state.players[0].life
+        py_p1_life_before = py_state.players[1].life
+        py_bf_p0_before = len(
+            [o for o in py_state.battlefield if o.controller_id == 0]
+        )
+        py_bf_p1_before = len(
+            [o for o in py_state.battlefield if o.controller_id == 1]
+        )
+        # Inject the GENUINE parsed Seedship printing.
+        py_seedship = py_state.new_object(
+            real, owner_id=0, zone=Zone.BATTLEFIELD,
+        )
+        py_seedship.summoning_sick = False
+        py_seedship.tapped = False
+        py_seedship.damage = 0
+        py_seedship.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(py_seedship)
+        assert len(py_state.stack) == 0, (
+            "Python: Seedship's arrival must NOT fire BECOMES_TAPPED"
+        )
+        # Tap via the canonical BECOMES_TAPPED chokepoint.
+        tap_permanent(py_state, py_seedship)
+        assert len(py_state.stack) == 1, (
+            "Python: tap_permanent on Seedship must fire "
+            "BECOMES_TAPPED -> CreateToken on the stack"
+        )
+
+        _drain_stack_both(py_state, rust_state)
+    finally:
+        clear_token_printings()
+
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Cross-engine byte-equal assertions (up to the documented
+    # token-registration boundary). ----
+    # Baselines were captured BEFORE injecting Seedship, so the
+    # post-resolve delta on P0's seat is +2 (Seedship carrier itself
+    # + the freshly-spawned Lander token). Mirrors the Galactic
+    # Wayfarer create-Lander sister probe's +2 contract.
+    rust_bf_p0_after = rust_state.battlefield_sizes[0]
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p0_after == rust_bf_p0_before + 2, (
+        f"Rust: P0's bf should gain Seedship + 1 Lander token = +2. "
+        f"before={rust_bf_p0_before} after={rust_bf_p0_after}"
+    )
+    assert rust_bf_p1_after == rust_bf_p1_before, (
+        f"Rust: P1's bf unchanged. before={rust_bf_p1_before} "
+        f"after={rust_bf_p1_after}"
+    )
+    py_bf_p0_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert py_bf_p0_after == py_bf_p0_before + 2, (
+        f"Python: P0's bf should gain Seedship + 1 Lander token = +2. "
+        f"before={py_bf_p0_before} after={py_bf_p0_after}"
+    )
+    assert py_bf_p1_after == py_bf_p1_before
+    # Cross-engine: identical bf-size delta on the controller's seat.
+    assert (rust_bf_p0_after - rust_bf_p0_before) == (
+        py_bf_p0_after - py_bf_p0_before
+    ) == 2
+
+    # The fresh Lander token: controller 0, name "Lander", UNTAPPED
+    # — byte-equal on both engines.
+    rust_landers = [
+        d for d in rust_state.battlefield_snapshot()
+        if d["printing_name"] == "Lander"
+    ]
+    assert len(rust_landers) == 1, (
+        f"Rust: exactly 1 Lander token expected; got "
+        f"{len(rust_landers)}"
+    )
+    rust_lander = rust_landers[0]
+    py_landers = [
+        o for o in py_state.battlefield
+        if o.printing.name == "Lander"
+    ]
+    assert len(py_landers) == 1, (
+        f"Python: exactly 1 Lander token expected; got "
+        f"{len(py_landers)}"
+    )
+    py_lander_obj = py_landers[0]
+    assert rust_lander["controller_id"] == 0
+    assert py_lander_obj.controller_id == 0
+    assert rust_lander["tapped"] is False, (
+        "Rust: the real Seedship trigger creates an UNTAPPED Lander "
+        "(no tapped rider)"
+    )
+    assert py_lander_obj.tapped is False, (
+        "Python: the real Seedship trigger creates an UNTAPPED Lander"
+    )
+    # Carrier survived on both seats.
+    assert any(
+        d["id"] == rust_seedship_id
+        for d in rust_state.battlefield_snapshot()
+    )
+    assert any(
+        o.id == py_seedship.id for o in py_state.battlefield
+    )
+    # Life totals unchanged on both engines (no life rider).
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

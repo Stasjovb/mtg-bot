@@ -3554,6 +3554,36 @@ pub enum Event {
     /// invokes both `dispatch_event(DIES)` and
     /// `_fire_leaves_battlefield_triggers` in sequence.
     LeavesBattlefield,
+    /// "Whenever X becomes tapped". Fires from
+    /// `dispatch_event(Event::BecomesTapped, tapped_id)` at every
+    /// production tap-the-permanent site that mirrors Python's
+    /// `turn.tap_permanent` callers — round-58 BECOMES_TAPPED event
+    /// bridge. Mirrors Python's `Event.BECOMES_TAPPED` enum member
+    /// (`src/mtg_bot/effects/predicates.py:60` — string value
+    /// `"becomes_tapped"`) and its single firing chokepoint
+    /// `turn.tap_permanent` (`src/mtg_bot/turn.py:542-571`).
+    ///
+    /// **Firing-set parity (CR 701.21a + §2 bridge-correctness).**
+    /// Python fires this ONLY through `tap_permanent` (the no-op-if-
+    /// already-tapped chokepoint), which is called from: tap-for-mana
+    /// (`actions.py:auto_tap_for_cost`), the `{T}` activated-ability
+    /// `tap_self` cost (`actions.py:_activate_ability`),
+    /// `tap_permanent_you_control` activated cost
+    /// (`actions.py:2258`), convoke (`actions.py:673`), crew
+    /// (`actions.py:2402`), attack-tap of a non-vigilance attacker
+    /// (`combat.py:104`, fired BEFORE the per-attacker ATTACKS
+    /// dispatch at `combat.py:115`), and the tapper-effect family
+    /// (`effects/generic/tap.py`, `effects/combinators.py:163`,
+    /// `effects/bespoke.py:496`). Python deliberately does NOT fire
+    /// it for permanents that ENTER tapped (`_play_land`'s
+    /// `card.tapped = True`, search-land-tapped, reanimate-tapped,
+    /// token-created-tapped) nor for regeneration's replacement tap
+    /// (`turn.py:1268`) — those are direct `obj.tapped = True`
+    /// assignments, not `tap_permanent` calls (CR 701.21a: a
+    /// permanent entering tapped never "becomes tapped"). Rust's
+    /// emission set matches this exactly; the entering-tapped /
+    /// regeneration-tap Rust sites stay raw `obj.tapped = true`.
+    BecomesTapped,
 }
 
 /// Predicate algebra over the trigger subject (the GameObject the
@@ -6809,19 +6839,29 @@ fn parse_triggered_ability(
         "attacks" => Event::Attacks,
         "blocks" => Event::Blocks,
         "leaves_battlefield" => Event::LeavesBattlefield,
+        // Round-58 BECOMES_TAPPED event bridge: "becomes_tapped"
+        // round-trips the SAME way enters/dies/attacks do. Python's
+        // `Event.BECOMES_TAPPED` string value is `"becomes_tapped"`
+        // (`src/mtg_bot/effects/predicates.py:60`); the dispatcher
+        // (`state_ops_resolve::dispatch_event`) and every production
+        // tap site emit it in lockstep with Python's `tap_permanent`
+        // chokepoint.
+        "becomes_tapped" => Event::BecomesTapped,
         // Out-of-scope events stay raise-on-register. Each lands
         // alongside its dispatch fan-out so the parser surface stays
         // consistent with the dispatcher's coverage.
         "deals_damage" => {
             return Err(PyValueError::new_err(format!(
                 "triggered_ability.event {event_str:?} is not yet wired in Slice 9; \
-                 only \"enters\", \"dies\", \"cast\", \"attacks\", \"blocks\", and \"leaves_battlefield\" dispatch today"
+                 only \"enters\", \"dies\", \"cast\", \"attacks\", \"blocks\", \
+                 \"leaves_battlefield\", and \"becomes_tapped\" dispatch today"
             )));
         }
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown triggered_ability.event {other:?}; \
-                 valid: enters, dies, cast, attacks, blocks, leaves_battlefield (Slice 9)"
+                 valid: enters, dies, cast, attacks, blocks, \
+                 leaves_battlefield, becomes_tapped (Slice 9 + r58)"
             )));
         }
     };
