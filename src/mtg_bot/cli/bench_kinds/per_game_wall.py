@@ -4,6 +4,23 @@ One-off characterization tool — run a moderately-sized pool with v6
 weights matching iter_001's config, time every game, print percentiles.
 Goal: pick a sensible ``--per-game-timeout-sec`` for iterate.
 
+.. WARNING::
+   This tool builds the **legacy flat ``_ValuePolicyMLP``** evaluator
+   config — it does NOT thread ``architecture=`` from the version's
+   ``metadata.json``. It therefore **cannot load structured (v5+)
+   checkpoints**: every game crashes instantly with
+   ``RuntimeError: Error(s) in loading state_dict for _ValuePolicyMLP``
+   (missing ``trunk.0.weight`` / unexpected ``cls_token`` …). The
+   ``enable_mulligans`` kwarg removal and the ``--device`` flag in this
+   change fix *unrelated* breakage; they do **not** make this usable
+   for the current (structured) network, and any GPU-vs-CPU figure this
+   tool produced against v5+ weights was timing crashed games and is
+   invalid. To benchmark the real network, construct the config via
+   ``worker_daemon_production_runner._build_nn_pimc_config`` (which
+   reads ``architecture`` from metadata). Properly fixing this tool =
+   thread architecture/policy metadata into the ``NNPimcConfig`` it
+   builds — a separate, larger change, deliberately NOT done here.
+
 Usage::
 
     PYTHONPATH=src .venv-py313/Scripts/python.exe scripts/bench_per_game_wall.py \\
@@ -74,7 +91,6 @@ def _run_one(args):
             decision_cap=4000,
             sample_every=1,
             deck_pool=_DECK_POOL,
-            enable_mulligans=True,
             per_game_timeout_sec=None,  # let everything run to completion
         )
         wall = time.perf_counter() - start
@@ -124,6 +140,17 @@ def main(argv=None) -> None:  # pragma: no cover
             "``notes`` field so the run is identifiable in the UI."
         ),
     )
+    parser.add_argument(
+        "--device", choices=("auto", "cpu", "cuda"), default="auto",
+        help=(
+            "Force the NN eval device for every worker. Default "
+            "\"auto\" preserves the per-worker auto_device() "
+            "resolution; \"cpu\"/\"cuda\" force it (for "
+            "controlled CPU-vs-GPU A/B benches). Passing an "
+            "explicit string keeps the parent CUDA-clean exactly "
+            "like the \"auto\" sentinel does."
+        ),
+    )
     args = parser.parse_args(argv)
 
     registry = Registry(args.registry_root)
@@ -138,7 +165,7 @@ def main(argv=None) -> None:  # pragma: no cover
     # doesn't crash the mp.Pool below with "Cannot re-initialize CUDA
     # in forked subprocess". Calling auto_device() here would prime
     # the parent's CUDA context before pool.fork(). See PR #36 / #37.
-    device = "auto"
+    device = args.device
 
     # Stage the BenchProgress tracker if --progress-dir was set. This
     # is purely additive — stdout output below is unchanged.
