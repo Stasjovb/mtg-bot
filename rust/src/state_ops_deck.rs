@@ -129,6 +129,10 @@ impl GameState {
                 // on battlefield; default 0 is correct.
                 etb_timestamp: 0,
                 ueot_modifiers: Vec::new(),
+                // warp_cost substrate (Phase 1, round-63): deck-loaded
+                // library cards are never warp-pending/warp-exiled.
+                warp_exile_pending: false,
+                warped: false,
             });
             next_id += 1;
         }

@@ -5871,3 +5871,113 @@ def test_r60_nonbasic_decline_traps_not_admitted_by_loader():
     assert "Secluded Starforge" not in filtered
     assert "Kavaron, Memorial World" not in filtered
     assert "Forest" in filtered  # control: a real basic still admits
+
+
+# ---------------------------------------------------------------------------
+# warp_cost Phase 1 (round-63) — §2 guardrail's-teeth negative pins.
+# Spec: docs/WARP_COST_PHASE1_DESIGN.md §4 pins 9-12.
+# ---------------------------------------------------------------------------
+
+
+import pytest as _pytest_warp  # noqa: E402
+
+
+@_pytest_warp.mark.parametrize(
+    "card_name,expected",
+    [
+        # Pin 9 — the two Phase-1 cards ADMIT.
+        ("Red Tiger Mechan", True),
+        ("Bygone Colossus", True),
+        # Pin 10 — Timeline Culler REJECTED (Phase 2: it carries
+        # warp_additional_life_cost=2 AND warp_castable_from_graveyard).
+        ("Timeline Culler", False),
+        # Pin 11 — the two highest-deck-count multi-gated traps stay
+        # filtered: Starfield Vocalist (static-ability gate),
+        # Codecracker Hound (Effect-uncovered + nonsafe trigger).
+        ("Starfield Vocalist", False),
+        ("Codecracker Hound", False),
+    ],
+)
+def test_r63_warp_phase1_guardrail_admits_exactly_the_two_pure_cards(
+    card_name, expected,
+):
+    """``_printing_is_bridge_pure_warp_creature`` admits ONLY the two
+    pure fixed-cost Phase-1 warp creatures and positively rejects
+    Timeline Culler (Phase-2 life/graveyard riders) + the multi-gated
+    traps (the §2 guardrail's teeth — spec §4 pins 9-11)."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_pure_warp_creature,
+    )
+
+    by = OracleParserCardSource().get_printings()
+    pr = by.get(card_name)
+    if pr is None:
+        _pytest_warp.skip(f"{card_name} absent from active CardSource")
+    assert _printing_is_bridge_pure_warp_creature(pr) is expected, (
+        f"{card_name}: guardrail returned "
+        f"{_printing_is_bridge_pure_warp_creature(pr)!r}, "
+        f"expected {expected!r}. warp_cost={pr.warp_cost}, "
+        f"life={getattr(pr, 'warp_additional_life_cost', 0)}, "
+        f"gy={getattr(pr, 'warp_castable_from_graveyard', False)}, "
+        f"ta={len(pr.triggered_abilities)}, "
+        f"static={bool(getattr(pr, 'static_abilities', None))}"
+    )
+
+
+def test_r63_warp_phase1_guardrail_positive_set_is_exactly_two():
+    """Spec §4 pin 12 — the guardrail's positive set is EXHAUSTIVE for
+    Phase 1: EXACTLY two EoE printings pass
+    ``_printing_is_bridge_pure_warp_creature`` (Red Tiger Mechan +
+    Bygone Colossus). Regenerable companion to the round-58 scout;
+    this is the anti-count-chasing pin that caught the round-63
+    live-tree drift (the safe-trigger+warp residue trio —
+    Germinating Wurm / Knight Luminary / Starbreach Whale — must
+    NOT leak into Phase 1; they are residue-tier follow-ups)."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_pure_warp_creature,
+    )
+
+    by = OracleParserCardSource().get_printings()
+    passing = sorted(
+        n for n, pr in by.items()
+        if _printing_is_bridge_pure_warp_creature(pr)
+    )
+    assert passing == ["Bygone Colossus", "Red Tiger Mechan"], (
+        f"Phase-1 guardrail must admit EXACTLY Red Tiger Mechan + "
+        f"Bygone Colossus; got {passing}. If a new warp creature "
+        f"parses without triggered_abilities and a strictly-cheaper "
+        f"fixed warp cost, it belongs to a costed follow-up slice, "
+        f"not a silent Phase-1 expansion (see "
+        f"_printing_is_bridge_pure_warp_creature's live-tree-drift "
+        f"note + docs/SEARCH_LIMITATIONS.md)."
+    )
+
+
+def test_r63_warp_phase1_residue_trio_stays_filtered():
+    """The safe-trigger+warp residue trio (Germinating Wurm /
+    Knight Luminary / Starbreach Whale — each warp_cost + a single
+    SAFE ETB trigger) must NOT be admitted by Phase 1's loader gate.
+    Pins the round-63 live-tree-drift handling: these are
+    residue-tier warp-gated cards whose trigger half already ships,
+    deferred to a clean follow-up (NOT folded silently into
+    Phase 1's +2/+6,450 attribution)."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
+
+    by = OracleParserCardSource().get_printings()
+    trio = ["Germinating Wurm", "Knight Luminary", "Starbreach Whale"]
+    present = [n for n in trio if n in by]
+    if not present:
+        _pytest_warp.skip("residue trio absent from active CardSource")
+    deck = present + ["Forest"]
+    filtered, _ = _filter_deck_to_bridge_supported(deck, by)
+    for nm in present:
+        assert nm not in filtered, (
+            f"{nm} is a residue-tier safe-trigger+warp card; it must "
+            f"NOT be admitted by Phase 1's loader gate (Phase-1 "
+            f"boundary is triggered_abilities==()). It's a clean "
+            f"follow-up, not a silent Phase-1 expansion."
+        )
+    assert "Forest" in filtered  # control: a real basic still admits

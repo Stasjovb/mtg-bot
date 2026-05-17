@@ -212,6 +212,28 @@ class CardDef:
     # later slices flip that). See ``docs/TOKEN_PRINTING_SUBSTRATE.md``
     # §6 for the remaining Phase-3 steps.
     token_activated_abilities: tuple[dict, ...] = ()
+    # warp_cost substrate (Phase 1, round-63). Pure fixed-`ManaCost`
+    # warp alt-cost (EoE — Red Tiger Mechan {1}{R}, Bygone Colossus
+    # {3}). Reuses the SAME (generic, colored) codec as
+    # ``mana_cost_generic`` / ``mana_cost_colored`` — frozen, bridge-
+    # serializable. ``has_warp=False`` = no warp (back-compat default;
+    # every pre-Phase-1 CardDef omits it, the registry-dict builder
+    # then omits the ``warp_cost`` key and the Rust parser maps that
+    # absence to ``None``). Phase 1 carries ONLY the pure fixed-cost
+    # shape; the filter guardrail
+    # ``trajectory._printing_is_bridge_pure_warp_creature`` positively
+    # rejects ``warp_additional_life_cost != 0`` /
+    # ``warp_castable_from_graveyard`` (those are Phase 2). The
+    # ``(generic, colored)`` tuple shape, not a ``ManaCost`` object,
+    # keeps CardDef frozen-hashable and matches the existing mana-cost
+    # field convention. The separate ``has_warp`` flag disambiguates
+    # "no warp" from "warp cost {0}" (a free warp — no EoE card has
+    # one today, but the explicit flag matches Python's
+    # ``warp_cost is not None`` semantics, which a ``(0, ())`` tuple
+    # alone could not express).
+    warp_cost_generic: int = 0
+    warp_cost_colored: tuple[tuple[str, int], ...] = ()
+    has_warp: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -8639,6 +8661,20 @@ def build_rust_state(spec: DeckSpec):
             printing_dict["activated_abilities"] = [
                 dict(aa) for aa in card.token_activated_abilities
             ]
+        # warp_cost substrate (Phase 1, round-63): emit the warp_cost
+        # key when the CardDef carries the pure fixed-cost warp shape.
+        # Same mana-dict shape as the base ``mana_cost`` above
+        # (``{"generic":N,"R":1}`` etc.) — exactly what Rust's
+        # ``parse_mana_cost`` consumes. A ``{3}`` warp ->
+        # ``{"generic":3}``; a ``{1}{R}`` warp ->
+        # ``{"generic":1,"R":1}``. ``has_warp=False`` (every pre-
+        # Phase-1 CardDef) omits the key; Rust's parser maps the
+        # absence to ``None`` (back-compat).
+        if card.has_warp:
+            printing_dict["warp_cost"] = dict(
+                (("generic", card.warp_cost_generic),)
+                if card.warp_cost_generic else ()
+            ) | {color: n for color, n in card.warp_cost_colored}
         pid = reg.register_printing(printing_dict)
         name_to_pid[card.name] = pid
 
@@ -8867,6 +8903,21 @@ def _card_def_to_python_printing(card: "CardDef"):
         generic=card.mana_cost_generic,
         colored=tuple(sorted(card.mana_cost_colored)),
     )
+    # warp_cost substrate (Phase 1, round-63): materialize the Python
+    # ``CardPrinting.warp_cost`` from the CardDef warp fields so the
+    # Python side of the bridge produces the warp printing identically
+    # to what the live parser yields. ``warp_cost_str`` is left ""
+    # (cosmetic — the cast path reads ``warp_cost`` (the ManaCost) via
+    # ``effective_warp_cost``, never ``warp_cost_str``; "" is bit-equal
+    # for the bench and matches the existing ``mana_cost_str=""``
+    # convention on every CardDef-materialized printing below).
+    warp_cost = None
+    warp_cost_str = ""
+    if card.has_warp:
+        warp_cost = ManaCost(
+            generic=card.warp_cost_generic,
+            colored=tuple(sorted(card.warp_cost_colored)),
+        )
     # Type-line is reconstructed from card_type + a basic-land
     # subtype heuristic; this is cosmetic for the engine but keeps
     # the printing well-formed.
@@ -8968,6 +9019,11 @@ def _card_def_to_python_printing(card: "CardDef"):
         activated_abilities=activated_abilities,
         triggered_abilities=triggered_abilities,
         keywords=frozenset(card.keywords),
+        # warp_cost substrate (Phase 1, round-63). None for every
+        # non-warp CardDef (back-compat default). Phase-1 guardrail
+        # rejects the life / graveyard riders so they default here.
+        warp_cost=warp_cost,
+        warp_cost_str=warp_cost_str,
     )
 
 
@@ -9501,7 +9557,33 @@ def _dict_to_python_action(action_dict: dict):
     if kind == "play_land":
         return PlayLand(card_id=_resolve_id_with_alias(action_dict, kind))
     if kind == "cast_spell":
-        return CastSpell(card_id=_resolve_id_with_alias(action_dict, kind))
+        # warp_cost substrate (Phase 1, round-63) — PRE-EXISTING
+        # HARNESS BUG FIX. This arm previously passed ONLY
+        # ``card_id``, silently dropping the four alt-cost / mode
+        # flags Rust's ``parse_action`` reads (``actions.rs`` —
+        # ``use_warp`` / ``kicked`` / ``cast_for_free`` /
+        # ``use_impending`` / ``cast_room_half``). No pre-Phase-1
+        # slice drove a non-default flag through ``step_both``
+        # (every prior cross-engine cast was a vanilla
+        # ``use_warp=False`` creature), so the gap was latent: a
+        # ``{"kind":"cast_spell","use_warp":true}`` dict cast at
+        # NORMAL cost on the Python side (CastSpell defaults
+        # ``use_warp=False``) while Rust honored the warp flag —
+        # producing a guaranteed cross-engine divergence on the
+        # FIRST warp cast driven through the harness. Threading all
+        # five flags makes the Python side honor the same alt-cost
+        # the Rust side does (Rust's ``parse_action`` already reads
+        # them; this aligns the bridge's Python decode). Defaults
+        # match the ``CastSpell`` dataclass so every existing
+        # vanilla-cast caller is bit-identical.
+        return CastSpell(
+            card_id=_resolve_id_with_alias(action_dict, kind),
+            use_warp=bool(action_dict.get("use_warp", False)),
+            kicked=bool(action_dict.get("kicked", False)),
+            cast_for_free=bool(action_dict.get("cast_for_free", False)),
+            use_impending=bool(action_dict.get("use_impending", False)),
+            cast_room_half=action_dict.get("cast_room_half", None),
+        )
     if kind == "activate_ability":
         return ActivateAbility(
             source_id=_resolve_id_with_alias(action_dict, kind),
@@ -10041,6 +10123,52 @@ def advance_phase_python(py_state) -> int:
         from mtg_bot.turn import draw_card as _py_draw_card
 
         _py_draw_card(py_state, py_state.active_player_idx)
+
+    if new_step == Step.END:
+        # 5b. **warp_cost substrate (Phase 1, round-63).** Mirror
+        #     Rust's ``state_ops_steps.rs::warp_exile_sweep_on_end_step``
+        #     (the new PHASE_END_STEP-entry hook). Production Python
+        #     schedules ``WarpExileSelf`` as a CR-603.7 delayed
+        #     trigger fired by ``turn.run_delayed_end_step_triggers``;
+        #     this harness primitive deliberately restricts itself to
+        #     the SAME composition Rust's ``advance_phase`` does (see
+        #     this function's docstring — it is NOT the production
+        #     engine entrypoint), so it inlines the deterministic
+        #     observable of ``WarpExileSelf`` exactly as it inlines
+        #     the CR-514 cleanup hooks below: every battlefield
+        #     permanent the ACTIVE player controls that was warp-cast
+        #     (``cast_via_warp``) moves to its owner's exile with the
+        #     CR-400.7 reset Python's ``turn.move_off_battlefield``
+        #     applies (damage / tapped / attached_to), gets
+        #     ``warped=True`` (non-token — mirrors
+        #     ``effects/generic/exile.py::WarpExileSelf``), and
+        #     ``cast_via_warp`` cleared. Active player here is the
+        #     player whose turn it is (the turn wrap is on the
+        #     CLEANUP->UNTAP advance, not END entry) — matches Rust's
+        #     ``active_player`` read and Python's ``offset=0`` for
+        #     sorcery-speed warps cast on the caster's own turn.
+        #     Byte-equal with Rust's sweep for the Phase-1 cards
+        #     (no LEAVES/DIES trigger fires — exile is not a graveyard
+        #     transit, and the bridge-admitted warp cards carry
+        #     ``triggered_abilities=()``; documented Phase-1
+        #     simplification, ``docs/SEARCH_LIMITATIONS.md``).
+        from mtg_bot.game import Zone
+
+        ai = py_state.active_player_idx
+        warp_pending = [
+            o for o in list(py_state.battlefield)
+            if o.controller_id == ai and getattr(o, "cast_via_warp", False)
+        ]
+        for obj in warp_pending:
+            py_state.battlefield.remove(obj)
+            obj.damage = 0
+            obj.tapped = False
+            obj.attached_to = None
+            obj.zone = Zone.EXILE
+            if not obj.printing.is_token:
+                obj.warped = True
+            obj.cast_via_warp = False
+            py_state.player_by_id(obj.owner_id).exile.append(obj)
 
     if new_step == Step.CLEANUP:
         # 6. CR 514.1 hand-size discard + CR 514.2 damage clear.

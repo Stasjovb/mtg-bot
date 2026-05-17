@@ -1577,30 +1577,50 @@ matters when those specific cards resolve.
 
 ---
 
-## Rust port — warp alt-cost cast pipeline absent; `state.spell_warped_this_turn` substrate-only
+## Rust port — warp alt-cost cast pipeline: PHASE 1 SHIPPED (pure fixed-cost); life/graveyard riders + full delayed-trigger modeling remain Phase 2+
 
-**Location**: `rust/src/state.rs:758-762` (field declaration),
-`rust/src/state_ops_resolve.rs:4986-4998`
-(`Effect::ConditionalIfVoid` resolver — sole consumer),
-`rust/src/state_ops_actions.rs:245-292` (`Action::CastSpell` arm —
-parses `use_warp` flag but ignores it),
-`rust/src/state_ops_cast.rs:285-355`
-(`GameState::cast_creature` primitive — hand-only, normal mana_cost),
-`rust/src/cards.rs:1855-1898` (`CardPrinting` struct — no
-`warp_cost` / `warp_castable_from_graveyard` /
-`warp_additional_life_cost` fields).
+**Round-63 update (Phase 1 closure for the pure fixed-cost shape).**
+Phase 1 (`docs/WARP_COST_PHASE1_DESIGN.md`) shipped the
+pure-fixed-`ManaCost` warp path on Rust for **Red Tiger Mechan
+({1}{R} warp / {3}{R} normal) + Bygone Colossus ({3} warp / {9}
+normal)**. The round-61 SL claim "**NO production code path in Rust
+sets the flag**" is now FALSE for the pure-fixed-cost shape: Phase 1
+wires the production write at
+`rust/src/state_ops_cast.rs::cast_creature_warp` (mirrors Python
+`actions.py:1427`). The stale line refs in this pin are corrected
+below (`state.rs:758-762`→`state.rs:1102`,
+`cards.rs:1855-1898`→`cards.rs:4225-4419`,
+`state_ops_actions.rs:245-292`→`:287-352`,
+`state_ops_cast.rs:285-355`→`:343-+`). What REMAINS Phase 2+:
+Timeline Culler's `warp_additional_life_cost` life payment + the
+`warp_castable_from_graveyard` cast-from-graveyard zone arm + the
+full CR-603.7 delayed-trigger modeling (Rust uses a deterministic
+PHASE_END_STEP-entry sweep instead — see the dedicated SL entry
+below).
 
-**What we do today**: the `state.spell_warped_this_turn` field
-exists on Rust's `GameState`, is reset on entry to PHASE_CLEANUP
-(state_ops_steps.rs:294), and is read by the
-`Effect::ConditionalIfVoid` resolver via `is_void_active`
-(LTB-half OR warp-half). But **NO production code path in Rust sets
-the flag**. The only writer is the test-only `set_void_flags`
-pymethod (state.rs:971-979). The `Action::CastSpell` dispatch arm
-parses the `use_warp` payload field and round-trips it through the
-bridge, then explicitly ignores it (state_ops_actions.rs:247
-`use_warp: _`) and routes to `cast_creature` — which only consumes
-cards from hand and pays the printing's normal `mana_cost`.
+**Location**: `rust/src/state.rs:1102` (`spell_warped_this_turn`
+field), `rust/src/state_ops_resolve.rs` (`Effect::ConditionalIfVoid`
+resolver — consumer), `rust/src/state_ops_actions.rs:287-352`
+(`Action::CastSpell` arm — Phase 1 routes `use_warp=true` to
+`cast_creature_warp`), `rust/src/state_ops_cast.rs:343-+`
+(`cast_creature` + the new `cast_creature_warp` / exile-recast
+branch), `rust/src/cards.rs:4225-4419` (`CardPrinting` struct — now
+HAS `warp_cost: Option<ManaCost>`; `warp_castable_from_graveyard` /
+`warp_additional_life_cost` remain Phase-2 fields, NOT yet present).
+
+**What we do today (post-Phase-1)**: the
+`state.spell_warped_this_turn` field exists on Rust's `GameState`,
+is reset on entry to PHASE_CLEANUP, and is read by the
+`Effect::ConditionalIfVoid` resolver via `is_void_active` (LTB-half
+OR warp-half). Phase 1 ADDS the production write at
+`cast_creature_warp` (pure-fixed-cost warp from hand). The
+`Action::CastSpell` dispatch arm now branches on `use_warp`: `true`
+→ `cast_creature_warp` (pays `warp_cost`, sets the flag, stamps the
+end-step exile); `false` → `cast_creature` (also serves the
+warp-exile recast at normal `mana_cost`). The remaining gap is the
+Phase-2 riders (life / graveyard zone) — Timeline Culler's warp-cast
+still does not set the flag because it carries those riders and is
+filtered out (`_printing_is_bridge_pure_warp_creature` rejects it).
 
 **Why this diverges from Python**: Python's
 `src/mtg_bot/actions.py:1426-1436,1457` flips
@@ -1704,6 +1724,116 @@ warp-half divergence — common in mid-game). The strength cost is
 proportional to "warp-cast turns with a ConditionalIfVoid rider
 resolving after but no concurrent LTB" — a tiny slice of the
 gameplay surface. Perf neutral.
+
+---
+
+## Rust port — warp end-step exile is a PHASE_END_STEP-entry sweep, NOT a CR-603.7 delayed trigger (Phase 1, round-63)
+
+**Location**:
+`rust/src/state_ops_steps.rs::warp_exile_sweep_on_end_step`
+(the new `PHASE_END_STEP`-entry hook wired in `advance_phase`,
+mirroring the `PHASE_CLEANUP`-entry hook shape) +
+`src/mtg_bot/parity/cross_engine.py::advance_phase_python`
+(the harness mirror, `Step.END` branch).
+
+**Shortcut**: Python schedules the warp permanent's exile as a
+CR-603.7 **delayed triggered ability** (`WarpExileSelf` appended to
+`state.delayed_triggers` at warp-cast time; fired by
+`turn.run_delayed_end_step_triggers` (turn.py:773) which pushes it
+onto the stack so players can respond before it resolves). Rust's
+no-stack cast model has no `delayed_triggers` Vec and fuses
+cast→resolve, so Phase 1 exiles every battlefield permanent the
+active player controls with `warp_exile_pending` via a
+**deterministic mutation on entry to PHASE_END_STEP** — no
+stack-pushed trigger, no response window. The CardDef-bridge harness
+primitive `advance_phase_python` mirrors the SAME deterministic
+sweep (it deliberately restricts itself to Rust's `advance_phase`
+composition, exactly as it inlines the CR-514 cleanup hooks rather
+than calling `run_cleanup_step`).
+
+**Why it's OK**: bit-equal end state for the bench's `attack_all`
+strategy and the Phase-1 card set. No card in the bridge-admitted
+EoE pool responds to the warp-exile trigger: the two Phase-1 cards
+(Red Tiger Mechan, Bygone Colossus) carry `triggered_abilities=()`,
+exile is not a graveyard transit (no DIES per CR), and
+`trajectory._SAFE_TRIGGERS` has no `leaves_battlefield` event — so
+no LEAVES/DIES observer fires off the warp-exile. The bench's
+`attack_all` never holds priority to cast an instant-speed response
+at the end step. The full real Red Tiger Mechan / Bygone Colossus
+warp lifecycle (cast → end-step exile → recast-from-exile) is
+asserted byte-equal across both engines by the genuine real-EoE
+probe `tests/test_parity_smoke.py::
+test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal`.
+
+**Failure mode**: a future probe that puts an instant-speed spell
+on the stack IN RESPONSE to the warp-exile trigger would see Python
+allow the response window (the delayed trigger sits on the stack)
+and Rust not (the sweep is an atomic phase-entry mutation). No such
+card/scenario exists in the EoE pool's bridge-admitted set today.
+
+**Fix scope**: port Python's `state.delayed_triggers` Vec +
+`run_delayed_end_step_triggers` + a stack-pushed `WarpExileSelf`
+analog to Rust (a larger follow-on; the cost-mechanic family's
+later slices — Phase 2 Timeline Culler — may motivate it).
+
+**Impact estimate**: +2 cards / +6,450 17lands decks admitted with
+0 strength cost (the simplification is bit-equal for every
+bench-reachable state). Perf neutral (one extra phase-entry scan
+gated on a cheap `warp_exile_pending` any()-check that short-
+circuits when no permanent is warp-pending).
+
+---
+
+## Bridge — Artifact-Creature type cosmetically dropped to Creature on both sides; + two pre-existing harness bugs Phase-1 exposed (round-63)
+
+**Location**:
+`src/mtg_bot/parity/trajectory.py::_printing_to_card_def`
+(the Phase-1 pure-warp arm) +
+`src/mtg_bot/parity/cross_engine.py::_dict_to_python_action`
+(the `cast_spell` arm) +
+`src/mtg_bot/parity/cross_engine.py::advance_phase_python`
+(the `Step.END` branch).
+
+**Shortcut 1 — Artifact-Creature → Creature symmetric drop.** Red
+Tiger Mechan and Bygone Colossus are `('Artifact','Creature')`. The
+CardDef warp arm sets `card_type='Creature'` with no
+`extra_card_types`, dropping the Artifact type on BOTH engines
+(symmetric — the round-59 non-basic-land symmetric-drop precedent;
+bit-equal). Rust's `cast_creature` / `cast_creature_warp`
+Creature-gate passes on `('Creature',)` alone. **Why OK**: no
+warp/combat behavior keys off the Artifact type for these two
+cards; the drop is symmetric so the per-object fingerprint is
+byte-equal. **Failure mode**: a future artifact-count / affinity /
+artifact-removal probe would undercount these two. **Fix scope**:
+thread `extra_card_types=('Artifact',)` (the round-49 token-printing
+substrate already supports the field). **Impact**: 0 today.
+
+**Shortcut 2 — two PRE-EXISTING cross-engine-harness bugs Phase 1
+is the first to exercise (fixed this slice, recorded for the
+audit trail).** No pre-Phase-1 slice drove a non-default
+`use_warp` cast or a warp-style delayed-end-step effect through the
+`step_both` harness, so two latent harness gaps were dormant:
+(a) `_dict_to_python_action`'s `cast_spell` arm passed ONLY
+`card_id`, silently dropping the four alt-cost / mode flags Rust's
+`parse_action` reads (`use_warp` / `kicked` / `cast_for_free` /
+`use_impending` / `cast_room_half`) — a `use_warp=true` dict cast
+at NORMAL cost on the Python side while Rust honored the flag;
+(b) `advance_phase_python` (the harness phase mirror) did not
+mirror Rust's new PHASE_END_STEP warp-exile sweep, so the Python
+side kept the warp permanent on the battlefield while Rust exiled
+it. Both are HARNESS-side bridge bugs, not production-engine
+divergences (production Python's `apply_action` reads the real
+`CastSpell` dataclass and `turn.run_delayed_end_step_triggers`
+fires `WarpExileSelf` correctly). **Why recorded here**: per the
+"document deliberate divergences / workarounds at the time they
+land" rule — these were silent harness mistranslations that any
+future non-default-flag or delayed-end-step cross-engine slice
+would have hit; the fixes are general (all five flags threaded;
+the END-step mirror added). **Failure mode if regressed**: every
+`use_warp`/`kicked`/`impending`/room-half cross-engine cast would
+silently cast at the wrong cost on the Python side. **Fix scope**:
+done this slice. **Impact**: unblocks all future alt-cost
+cross-engine driving; 0 production impact.
 
 ---
 

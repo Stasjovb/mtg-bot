@@ -2756,6 +2756,11 @@ fn apply_effect(
                     stun_counters: 0,
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
                     ueot_modifiers: Vec::new(),
+                    // warp_cost substrate (Phase 1, round-63): tokens
+                    // are never warp-cast (no warp_cost on a token
+                    // printing). Back-compat default.
+                    warp_exile_pending: false,
+                    warped: false,
                 });
                 token_ids.push(next_id);
                 next_id += 1;
@@ -2907,6 +2912,11 @@ fn apply_effect(
                         stun_counters: 0,
                         etb_timestamp: bf_etb_base.saturating_add(global_token_idx),
                         ueot_modifiers: Vec::new(),
+                        // warp_cost substrate (Phase 1, round-63):
+                        // tokens are never warp-cast. Back-compat
+                        // default.
+                        warp_exile_pending: false,
+                        warped: false,
                     });
                     token_ids.push(next_id);
                     next_id += 1;
@@ -3021,6 +3031,9 @@ fn apply_effect(
                     zone: ZONE_BATTLEFIELD,
                     // The Phase-4 byte difference vs the sister
                     // `CreateToken` arm: the token enters TAPPED.
+                    // (warp_cost substrate marker — see the
+                    // warp_exile_pending/warped defaults at this
+                    // literal's tail; tokens are never warp-cast.)
                     tapped: true,
                     summoning_sick: true,
                     damage: 0,
@@ -3032,6 +3045,11 @@ fn apply_effect(
                     stun_counters: 0,
                     etb_timestamp: bf_etb_base.saturating_add(i as u32),
                     ueot_modifiers: Vec::new(),
+                    // warp_cost substrate (Phase 1, round-63): tapped
+                    // token enters; never warp-cast. Back-compat
+                    // default.
+                    warp_exile_pending: false,
+                    warped: false,
                 });
                 token_ids.push(next_id);
                 next_id += 1;
@@ -8045,6 +8063,10 @@ fn apply_effect(
                 stun_counters: 0,
                 etb_timestamp: etb_ts,
                 ueot_modifiers: Vec::new(),
+                // warp_cost substrate (Phase 1, round-63): cloned
+                // tokens are never warp-cast. Back-compat default.
+                warp_exile_pending: false,
+                warped: false,
             };
             Arc::make_mut(&mut state.players[cidx].battlefield).push(new_obj);
             // ETB-trigger Slice 2 (RS5): queue ENTERS dispatch for
@@ -10886,6 +10908,10 @@ impl GameState {
             stun_counters: 0,
             etb_timestamp: etb_ts,
             ueot_modifiers: Vec::new(),
+            // warp_cost substrate (Phase 1, round-63): caller-
+            // injected objects default to not-warp. Back-compat.
+            warp_exile_pending: false,
+            warped: false,
         };
 
         let player = &mut self.players[controller as usize];

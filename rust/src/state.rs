@@ -192,6 +192,30 @@ pub struct GameObject {
     /// brief: BecomesLandCreature (Blinkmoth Nexus shape, layer
     /// 4+6+7b combined).
     pub ueot_modifiers: Vec<UeotModifier>,
+    /// **warp_cost substrate (Phase 1, round-63).** Set `true` on a
+    /// permanent the moment it enters the battlefield via a warp-cast
+    /// (`cast_creature_warp`). The `PHASE_END_STEP`-entry sweep
+    /// (`state_ops_steps.rs::warp_exile_sweep_on_end_step`) exiles
+    /// every battlefield permanent with this flag at the beginning of
+    /// the next end step, then clears it. Mirrors the role of
+    /// Python's `GameObject.cast_via_warp` (set at warp-cast,
+    /// scheduled for `WarpExileSelf`). Defaults to `false` for every
+    /// freshly-allocated object (back-compat — the per-object
+    /// fingerprint 8-tuple does NOT carry this slot, so pre-Phase-1
+    /// pinned baselines stay byte-equal; only the zone membership the
+    /// sweep changes is observable).
+    pub warp_exile_pending: bool,
+    /// **warp_cost substrate (Phase 1, round-63).** Set `true` when
+    /// the `PHASE_END_STEP` sweep moves a warp-cast permanent to
+    /// exile. The legal emitter (`state_ops_legal.rs`) offers a BASE
+    /// `cast_spell_dict` (use_warp=false) recast at NORMAL
+    /// `mana_cost` for every exile object with this flag; the
+    /// `cast_creature` exile branch clears it on recast. Mirrors
+    /// Python's `GameObject.warped` exile marker
+    /// (`effects/generic/exile.py::WarpExileSelf` sets `obj.warped`).
+    /// Defaults to `false`; not in the per-object fingerprint tuple
+    /// (same back-compat rationale as `warp_exile_pending`).
+    pub warped: bool,
 }
 
 /// A single CR 613 / CR 514.3 "until end of turn" modifier on a
@@ -1758,6 +1782,11 @@ fn make_object(id: u32, controller: u8, printing_id: u32) -> GameObject {
         // stay bit-equal.
         etb_timestamp: 0,
         ueot_modifiers: Vec::new(),
+        // warp_cost substrate (Phase 1, round-63): no object is
+        // warp-pending or warp-exiled at allocation. Back-compat
+        // default; not in the per-object fingerprint tuple.
+        warp_exile_pending: false,
+        warped: false,
     }
 }
 
@@ -1870,6 +1899,9 @@ pub fn make_synthetic_state(
         triggered_abilities: Vec::new(),
         activated_abilities: forest_activated,
         starting_loyalty: 0,
+        // warp_cost substrate (Phase 1, round-63): synthetic-state
+        // printings have no warp. Back-compat default.
+        warp_cost: None,
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -1897,6 +1929,9 @@ pub fn make_synthetic_state(
         triggered_abilities: Vec::new(),
         activated_abilities: Vec::new(),
         starting_loyalty: 0,
+        // warp_cost substrate (Phase 1, round-63): synthetic-state
+        // printings have no warp. Back-compat default.
+        warp_cost: None,
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -1937,6 +1972,9 @@ pub fn make_synthetic_state(
         triggered_abilities: Vec::new(),
         activated_abilities: elves_activated,
         starting_loyalty: 0,
+        // warp_cost substrate (Phase 1, round-63): synthetic-state
+        // printings have no warp. Back-compat default.
+        warp_cost: None,
     });
     let registry = builder.snapshot();
 

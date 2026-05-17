@@ -3330,6 +3330,111 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
     return True
 
 
+def _printing_is_bridge_pure_warp_creature(printing) -> bool:
+    """True iff a CardPrinting is a PURE fixed-`ManaCost` warp creature
+    the Phase-1 warp substrate round-trips byte-equal across engines.
+
+    Phase-6 warp_cost substrate, **phase 1** (round-63; spec at
+    ``docs/WARP_COST_PHASE1_DESIGN.md`` §3, written round-62 N2).
+
+    Motivating set: Red Tiger Mechan ({1}{R} warp, {3}{R} normal),
+    Bygone Colossus ({3} warp, {9} normal) — both Artifact Creatures,
+    warp is the ONLY blocking feature, no life rider, hand-only, no
+    graveyard recursion. The §2 Class-1 guardrail: it admits ONLY the
+    pure fixed-cost profile and MUST reject Timeline Culler
+    (``warp_additional_life_cost=2``, ``warp_castable_from_graveyard``
+    — Phase 2) and every multi-gated warp card (static / Effect-
+    uncovered — never flips on warp alone).
+
+    The exclusion set is the SAME as
+    :func:`_printing_is_bridge_simple_creature` (so the 7 multi-gated
+    warp cards trip one of these and stay filtered) MINUS the
+    ``printing.warp_cost`` rejection (which is the whole point — this
+    predicate REQUIRES it) PLUS the two Phase-2-rider positive
+    rejections that are the §2 guardrail's teeth.
+
+    **Live-tree drift caught (round-63, the round-60-N1-class catch).**
+    The round-62 design doc (``WARP_COST_PHASE1_DESIGN.md`` §1)
+    enumerated Phase-1's set as exactly Red Tiger Mechan + Bygone
+    Colossus, both with ``triggered_abilities=()``. Verifying the
+    spec's §3.7 predicate against the LIVE ``OracleParserCardSource``
+    showed THREE more warp creatures now parse with a SINGLE SAFE
+    ETB trigger (Germinating Wurm — ENTERS/IsSelf/GainLife;
+    Knight Luminary — ENTERS/IsSelf/CreateToken; Starbreach Whale —
+    ENTERS/IsSelf/Surveil), so the §3.7 ``_python_ta_to_safe_dict``
+    branch would have admitted FIVE, not 2 — a different card set
+    than the spec authorized (and a Phase-1-boundary expansion the
+    round-62 scout did not cost / pin). These three are the
+    *residue-tier warp-gated cards* the spec §6 explicitly carves
+    out ("warp-gated cards whose Effect/trigger arm already shipped
+    — they live in the residue tier, NOT the 10-card roadmap row").
+    Per the spec's §1 Phase-1 boundary ("the ONLY blocking feature
+    on the two Phase-1 cards is ``warp_cost``;
+    ``triggered_abilities=()``") and the round-59 sub-shape-split
+    discipline (front-load the smallest self-contained slice),
+    Phase 1 is tightened to ``triggered_abilities == ()`` so it
+    admits EXACTLY the 2 spec'd cards. The safe-trigger+warp residue
+    trio is a clean follow-up (their trigger half is already
+    bridge-correct; they just need the warp substrate THIS slice
+    ships + a pin verifying the trigger fires byte-equal under a
+    warp-cast — a Phase-1.5 / Phase-2-sibling slice, not silently
+    folded in here). This keeps the spec's pin #12 ("exactly 2 EoE
+    printings pass") honest.
+    """
+    if "Creature" not in printing.card_types:
+        return False
+    if printing.power is None or printing.toughness is None:
+        return False
+    if printing.warp_cost is None:
+        return False
+    # Phase-2 riders — positively rejected (the §2 guardrail teeth):
+    if getattr(printing, "warp_additional_life_cost", 0):
+        return False
+    if getattr(printing, "warp_castable_from_graveyard", False):
+        return False
+    # Phase-1 boundary (spec §1): the ONLY blocking feature is
+    # warp_cost — NO triggered abilities at all. The
+    # safe-trigger+warp residue trio (Germinating Wurm /
+    # Knight Luminary / Starbreach Whale) is a clean follow-up
+    # slice, not folded into Phase 1 (see the docstring's
+    # live-tree-drift note + SEARCH_LIMITATIONS.md).
+    if printing.triggered_abilities:
+        return False
+    # No OTHER blocking feature — same exclusion set as
+    # _printing_is_bridge_simple_creature (the 7 multi-gated warp
+    # cards trip one of these and stay filtered):
+    if printing.keywords and not printing.keywords.issubset(_SAFE_KEYWORDS):
+        return False
+    if printing.activated_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    if printing.spell_effect is not None:
+        return False
+    # NOTE: unlike _printing_is_bridge_simple_creature, warp_cost is
+    # REQUIRED above (not rejected) — kicker / impending still reject.
+    if printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    if printing.loyalty is not None:
+        return False
+    if printing.cost_reductions or printing.external_cost_reductions:
+        return False
+    if printing.station_threshold:
+        return False
+    if getattr(printing, "dynamic_pt_formula", None) is not None:
+        return False
+    if getattr(printing, "ward_cost", None) is not None:
+        return False
+    try:
+        _parse_mana_cost_string(printing.mana_cost_str or "")
+        _parse_mana_cost_string(printing.warp_cost_str or "")
+    except ValueError:
+        return False
+    return True
+
+
 def _printing_is_bridge_basic_land(printing) -> bool:
     """True if a CardPrinting is a basic Land the harness can model.
 
@@ -3475,6 +3580,36 @@ def _printing_to_card_def(printing) -> CardDef:
             name=printing.name,
             card_type="Land",
             mana_produced=tuple(sorted(printing.produces)),
+        )
+    if _printing_is_bridge_pure_warp_creature(printing):
+        # Phase-1 warp substrate (round-63): a pure fixed-cost warp
+        # creature routes to the warp-aware CardDef BEFORE the plain
+        # simple-creature arm (which would drop ``warp_cost``). Both
+        # Phase-1 cards are ('Artifact','Creature') — the Artifact
+        # type is cosmetically dropped on BOTH bridge sides
+        # (card_type="Creature", no extra_card_types), symmetric +
+        # bit-equal (round-59 non-basic-land symmetric-drop
+        # precedent; SEARCH_LIMITATIONS.md). Rust's ``cast_creature``
+        # / ``cast_creature_warp`` Creature-gate passes on
+        # ('Creature',) alone. ``warp_cost_str`` is parsed into the
+        # (generic, colored) codec the bridge carries.
+        # Phase-1 boundary: the guardrail guarantees
+        # ``triggered_abilities == ()`` (the safe-trigger+warp residue
+        # trio is a follow-up), so no trigger threading is needed —
+        # the CardDef gets the default empty ``triggered_abilities``.
+        generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
+        wgen, wcol = _parse_mana_cost_string(printing.warp_cost_str or "")
+        return CardDef(
+            name=printing.name,
+            card_type="Creature",
+            mana_cost_generic=generic,
+            mana_cost_colored=colored,
+            power=printing.power,
+            toughness=printing.toughness,
+            keywords=tuple(sorted(printing.keywords)),
+            warp_cost_generic=wgen,
+            warp_cost_colored=wcol,
+            has_warp=True,
         )
     if _printing_is_bridge_simple_creature(printing):
         generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
@@ -3945,6 +4080,7 @@ def _filter_deck_to_bridge_supported(
         if not (
             _printing_is_bridge_basic_land(printing)
             or _printing_is_bridge_nonbasic_mana_land(printing)
+            or _printing_is_bridge_pure_warp_creature(printing)
             or _printing_is_bridge_simple_creature(printing)
         ):
             continue

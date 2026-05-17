@@ -267,6 +267,57 @@ fn move_from_hand_to_battlefield(
     Ok(Some(snapshot))
 }
 
+/// **Phase-1 warp exile-recast (round-63).** Sibling of
+/// `move_from_hand_to_battlefield` for the warp exile-recast path: a
+/// `warped` object in `player.exile` moves to the battlefield (CR
+/// 400.7 — new object; the caller clears `warped`/
+/// `warp_exile_pending`). Mirrors the hand helper's CE4 timestamp
+/// reservation + walker-loyalty seed + ENTERS drain so the recast
+/// permanent is byte-identical to a hand-cast one (modulo the
+/// origin zone). Returns the pushed-object snapshot, or `None` if
+/// the id isn't a live exile object for `idx`.
+fn move_from_exile_to_battlefield(
+    state: &mut GameState,
+    idx: usize,
+    obj_id: u32,
+) -> PyResult<Option<GameObject>> {
+    let Some(pos) = state.players[idx]
+        .exile
+        .iter()
+        .position(|o| o.id == obj_id)
+    else {
+        return Ok(None);
+    };
+    let etb_ts = state.next_etb_timestamp;
+    state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(1);
+    let starting_loyalty: i32 = {
+        let pid = state.players[idx].exile[pos].printing_id;
+        match state.registry.lookup(pid) {
+            Some(printing)
+                if printing.card_types.iter().any(|t| t == "Planeswalker") =>
+            {
+                printing.starting_loyalty
+            }
+            _ => 0,
+        }
+    };
+    let player = &mut state.players[idx];
+    let exile = Arc::make_mut(&mut player.exile);
+    let mut obj = exile.remove(pos);
+    obj.zone = ZONE_BATTLEFIELD;
+    obj.etb_timestamp = etb_ts;
+    if starting_loyalty != 0 {
+        obj.loyalty_counters = starting_loyalty;
+    }
+    let snapshot = obj.clone();
+    let entered_id = obj.id;
+    let bf = Arc::make_mut(&mut player.battlefield);
+    bf.push(obj);
+    state.pending_etb_dispatches.push(entered_id);
+    crate::state_ops_resolve::drain_pending_etb_dispatches(state)?;
+    Ok(Some(snapshot))
+}
+
 #[pymethods]
 impl GameState {
     /// Read the `summoning_sick` flag for the battlefield permanent
@@ -347,14 +398,46 @@ impl GameState {
         // any step fails. The type check happens here (pre-mutation)
         // so a non-creature spell never has its mana speculatively
         // debited.
-        let printing_id = match self.players[idx]
+        //
+        // **Phase-1 warp exile-recast (round-63):** if the object is
+        // NOT in hand but IS a `warped` object in this player's
+        // exile, this is a warp exile-recast — pay the NORMAL
+        // `mana_cost` (legal.py:478-489 / actions.py:1476-1510), move
+        // exile->bf, clear `warped`. The hand path is tried first
+        // (the common case); the exile fallback only fires for a
+        // `warped` exile object. Both pay `mana_cost` (the recast is
+        // at full cost — `use_warp=false`).
+        let in_hand = self.players[idx]
             .hand
             .iter()
-            .find(|o| o.id == obj_id)
-            .map(|o| o.printing_id)
-        {
-            Some(pid) => pid,
-            None => return Ok(false),
+            .any(|o| o.id == obj_id);
+        let from_exile_warped = !in_hand
+            && self.players[idx]
+                .exile
+                .iter()
+                .any(|o| o.id == obj_id && o.warped);
+        let printing_id = if in_hand {
+            match self.players[idx]
+                .hand
+                .iter()
+                .find(|o| o.id == obj_id)
+                .map(|o| o.printing_id)
+            {
+                Some(pid) => pid,
+                None => return Ok(false),
+            }
+        } else if from_exile_warped {
+            match self.players[idx]
+                .exile
+                .iter()
+                .find(|o| o.id == obj_id && o.warped)
+                .map(|o| o.printing_id)
+            {
+                Some(pid) => pid,
+                None => return Ok(false),
+            }
+        } else {
+            return Ok(false);
         };
         let cost = match self.registry.lookup(printing_id) {
             Some(p) => {
@@ -392,12 +475,23 @@ impl GameState {
         // Phase 3: move the card. Stamp summoning sickness AFTER the
         // push (stamp on the in-place battlefield slot, since
         // `move_from_hand_to_battlefield` returns the snapshot at
-        // push time).
-        let _ = move_from_hand_to_battlefield(self, idx, obj_id)?;
+        // push time). The warp exile-recast moves exile->bf via the
+        // sibling helper and clears the `warped` marker (the recast
+        // is a fresh permanent — CR 400.7 — mirroring Python
+        // actions.py:1502 `card.warped = False`).
+        if from_exile_warped {
+            let _ = move_from_exile_to_battlefield(self, idx, obj_id)?;
+        } else {
+            let _ = move_from_hand_to_battlefield(self, idx, obj_id)?;
+        }
         let player = &mut self.players[idx];
         let bf = Arc::make_mut(&mut player.battlefield);
         if let Some(obj) = bf.iter_mut().find(|o| o.id == obj_id) {
             obj.summoning_sick = true;
+            if from_exile_warped {
+                obj.warped = false;
+                obj.warp_exile_pending = false;
+            }
         }
         // Round-27 G4 closure: CR 117.1c — the active player gets
         // priority after a spell is cast (or after an ability
@@ -411,6 +505,98 @@ impl GameState {
         // makes "after the primitive succeeds" the only well-defined
         // moment. Also reset `consecutive_passes` — a successful
         // cast is a non-pass mutation that breaks any pass streak.
+        self.priority_player = self.active_player;
+        self.consecutive_passes = 0;
+        Ok(true)
+    }
+
+    /// **Phase-1 warp substrate (round-63).** Warp-cast a creature
+    /// from `player_id`'s hand: identical to `cast_creature` with
+    /// four deltas (verified against the live `cast_creature` body):
+    ///
+    /// 1. **Cost source:** pays `printing.warp_cost` (unwrapped —
+    ///    the legal emitter only offered `use_warp=true` when this
+    ///    is `Some`) instead of `printing.mana_cost`. Mirrors
+    ///    Python's `effective_warp_cost(...)` element `[0]`
+    ///    (`actions.py:1399-1400`); Phase 1 carries only the innate
+    ///    fixed-cost warp (no battlefield-granted warp / life rider
+    ///    — the filter guardrail rejects those).
+    /// 2. **`spell_warped_this_turn`:** set `true` after the mana
+    ///    spend commits, mirroring Python `actions.py:1427`. This is
+    ///    the production write site the round-61 SL pin says
+    ///    "follows trivially at the warp-cast site" (the field is a
+    ///    plain `bool` on `GameState` at `state.rs`; no Arc dance).
+    /// 3. **`warp_exile_pending`:** stamp `true` on the just-cast
+    ///    permanent (alongside the `summoning_sick = true` stamp) so
+    ///    the `PHASE_END_STEP`-entry sweep
+    ///    (`state_ops_steps.rs::warp_exile_sweep_on_end_step`)
+    ///    exiles it at the next end step (Rust's no-stack model: a
+    ///    deterministic phase-entry sweep, NOT Python's stack-pushed
+    ///    `WarpExileSelf` delayed trigger — documented simplification
+    ///    in `SEARCH_LIMITATIONS.md`).
+    /// 4. **Type gate / priority tail:** unchanged from
+    ///    `cast_creature` (the `Creature`-type gate passes on
+    ///    `Artifact Creature`; the priority/passes reset is verbatim).
+    ///
+    /// The `Creature`-type gate (CR — both Phase-1 cards are
+    /// `Artifact Creature`) stays. Returns `true` on success,
+    /// `false` on the same precondition failures as `cast_creature`
+    /// plus "the printing has no `warp_cost`" (defensive — the legal
+    /// emitter never offers `use_warp=true` without it).
+    fn cast_creature_warp(
+        &mut self,
+        obj_id: u32,
+        player_id: u8,
+    ) -> PyResult<bool> {
+        let idx = check_player_id(player_id)?;
+        let printing_id = match self.players[idx]
+            .hand
+            .iter()
+            .find(|o| o.id == obj_id)
+            .map(|o| o.printing_id)
+        {
+            Some(pid) => pid,
+            None => return Ok(false),
+        };
+        // Delta 1: pay `warp_cost` (not `mana_cost`). Bail if the
+        // printing has no warp (defensive) or isn't a creature.
+        let cost = match self.registry.lookup(printing_id) {
+            Some(p) => {
+                if !p.card_types.iter().any(|t| t == "Creature") {
+                    return Ok(false);
+                }
+                match &p.warp_cost {
+                    Some(wc) => wc.clone(),
+                    None => return Ok(false),
+                }
+            }
+            None => return Ok(false),
+        };
+        let mut pool_copy = self.players[idx].mana_pool;
+        if !pay_mana_cost(&mut pool_copy, &cost) {
+            return Ok(false);
+        }
+        self.players[idx].mana_pool = pool_copy;
+        // Delta 2: production write of `spell_warped_this_turn`
+        // (mirrors Python actions.py:1427). Plain bool on GameState,
+        // no CoW. Set after the mana spend commits.
+        self.spell_warped_this_turn = true;
+        // CAST event before ENTERS, same ordering as `cast_creature`.
+        crate::state_ops_resolve::dispatch_event(
+            self,
+            crate::cards::Event::Cast,
+            obj_id,
+        )?;
+        let _ = move_from_hand_to_battlefield(self, idx, obj_id)?;
+        let player = &mut self.players[idx];
+        let bf = Arc::make_mut(&mut player.battlefield);
+        if let Some(obj) = bf.iter_mut().find(|o| o.id == obj_id) {
+            obj.summoning_sick = true;
+            // Delta 3: stamp the end-step warp-exile schedule.
+            obj.warp_exile_pending = true;
+        }
+        // Delta 4: priority/passes reset, verbatim from
+        // `cast_creature`.
         self.priority_player = self.active_player;
         self.consecutive_passes = 0;
         Ok(true)

@@ -64078,6 +64078,228 @@ def test_r66_require_creatures_precondition_default_off_and_reclassifies():
     )
 
 
+import pytest as _pytest_r63_warp  # noqa: E402
+
+
+@_pytest_r63_warp.mark.parametrize(
+    "card_name,warp_str,normal_str",
+    [
+        ("Red Tiger Mechan", "{1}{R}", "{3}{R}"),
+        ("Bygone Colossus", "{3}", "{9}"),
+    ],
+)
+def test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
+    card_name, warp_str, normal_str,
+):
+    """**GENUINE real-EoE cross-engine probe — the ACTUAL parsed
+    Red Tiger Mechan / Bygone Colossus printings driven through the
+    full warp lifecycle on BOTH engines (+2 cards / +6,450 17lands
+    decks; spec docs/WARP_COST_PHASE1_DESIGN.md §5).**
+
+    Resolves the printing via the live ``OracleParserCardSource``
+    (NOT a synthetic CardDef — the round-46 real-EoE-signal
+    discipline), converts it through the production-deck bridge
+    (``trajectory._printing_to_card_def`` — the SAME path the bench's
+    ``setup_matched_game_from_real_decks`` uses), then drives, on
+    BOTH engines via ``step_both`` (byte-equal at every step):
+
+      1. the warp creature becomes castable — both engines'
+         ``legal_actions`` offer the SAME base+warp CastSpell pair;
+      2. the warp cast itself (``CastSpell{use_warp:True}``) — pays
+         the cheaper warp cost, ``spell_warped_this_turn`` set,
+         post-cast field-view byte-equal;
+      3. the following end step — the warp-exile is the SECOND path
+         that diverged pre-Phase-1; assert the permanent is in exile
+         with the warp marker on BOTH, field-view byte-equal at the
+         END phase boundary;
+      4. a later turn's recast from exile at NORMAL cost — byte-equal.
+
+    This is the Phase-1 acceptance gate: "did a real EoE warp deck
+    just get admitted and stay bit-equal across the FULL warp
+    lifecycle". Sanity-asserts the genuinely-parsed warp shape first
+    (the round-60-N1 verify-against-live discipline).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, step_both, advance_phase_python,
+        compare_fields,
+    )
+    from mtg_bot.legal import legal_actions
+    from tests.test_trajectory_parity import _step_views
+
+    src = get_active_source().get_printings()
+    real = src.get(card_name)
+    if real is None:
+        _pytest_r63_warp.skip(
+            f"{card_name} absent from active CardSource")
+    # Verify-against-live: the genuine printing IS the pure
+    # fixed-cost Phase-1 shape (no life / graveyard / trigger rider).
+    assert real.warp_cost is not None
+    assert real.warp_cost_str == warp_str
+    assert real.mana_cost_str == normal_str
+    assert getattr(real, "warp_additional_life_cost", 0) == 0
+    assert getattr(real, "warp_castable_from_graveyard", False) is False
+    assert real.triggered_abilities == ()
+    assert trajectory._printing_is_bridge_pure_warp_creature(real), (
+        f"{card_name} must pass the Phase-1 guardrail")
+
+    cd = trajectory._printing_to_card_def(real)
+    assert cd.has_warp is True
+    # A Forest that taps {R} so both engines can afford the warp /
+    # normal cost regardless of the card's colored pip.
+    forest = CardDef(name="Forest", card_type="Land",
+                     mana_produced=("R",))
+    lib = (card_name,) + ("Forest",) * 39
+    spec = DeckSpec(
+        card_defs=(cd, forest),
+        p0_library=lib,
+        p1_library=("Forest",) * 40,
+    )
+    py, rs = trajectory.setup_matched_game(spec)
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+            pv, rv = _step_views(py, rs)
+            d = compare_fields(pv, rv)
+            assert not d, (
+                f"{card_name}: phase advance ({pv['step']}, turn "
+                f"{pv['turn']}) diverged: "
+                f"{[(x.field, x.py_value, x.rust_value) for x in d]}")
+
+    # Walk to a turn with enough R mana. Bygone Colossus is {3} warp
+    # / {9} normal — need up to 9 mana for the recast, so build a big
+    # mana base over several p0 turns.
+    adv(3)  # turn 1 MAIN1
+    n_lands = 10
+    for _ in range(n_lands):
+        hand_forest = [
+            o for o in py.players[py.active_player_idx].hand
+            if o.printing.name == "Forest"
+        ]
+        if hand_forest:
+            assert not step_both(
+                py, rs,
+                {"kind": "play_land",
+                 "card_id": int(hand_forest[0].id)}).divergences
+        adv(24)  # +2 turns (back to p0 MAIN1)
+    # We're at a p0 MAIN1 with ~10 Forests on bf.
+    ai = py.active_player_idx
+    # Tap enough unsick Forests to cover the warp cost.
+    import re as _re
+    warp_total = sum(
+        int(x) if x.isdigit() else 1
+        for x in _re.findall(r"\{([^}]+)\}", warp_str)
+    )
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == ai and o.printing.is_land
+                and not o.tapped and not o.summoning_sick
+                and taps < warp_total):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    assert taps == warp_total, (
+        f"need {warp_total} mana for warp {warp_str}; tapped {taps}")
+    card_obj = next(o for o in py.players[ai].hand
+                    if o.printing.name == card_name)
+
+    # (1) Both engines offer the SAME base+warp CastSpell pair.
+    py_pair = sorted(
+        a.use_warp for a in legal_actions(py, ai)
+        if getattr(a, "card_id", None) == card_obj.id
+    )
+    rs_pair = sorted(
+        a["use_warp"] for a in rs.legal_decisions(ai)
+        if a.get("kind") == "cast_spell"
+        and a.get("card_id") == card_obj.id
+    )
+    assert py_pair == rs_pair == [False, True], (
+        f"{card_name}: legal base+warp pair mismatch — "
+        f"py={py_pair} rs={rs_pair}")
+
+    # (2) The warp cast — byte-equal post-cast.
+    s = step_both(
+        py, rs,
+        {"kind": "cast_spell", "card_id": int(card_obj.id),
+         "use_warp": True},
+    )
+    assert not s.divergences, (
+        f"{card_name}: warp cast diverged: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+    assert py.spell_warped_this_turn is True
+    assert rs.spell_warped_this_turn is True
+
+    # (3) The following end step — warp-exile, byte-equal at END.
+    adv(7)  # MAIN1 → END (the exile sweep fires on both)
+    py_ex = sorted(o.printing.name for o in py.players[ai].exile)
+    rs_ex = sorted(o["printing_name"] for o in rs.exile_snapshot(ai))
+    assert py_ex == rs_ex == [card_name], (
+        f"{card_name}: must be warp-exiled on BOTH; "
+        f"py={py_ex} rs={rs_ex}")
+    assert not [o for o in py.battlefield
+                if o.printing.name == card_name], (
+        f"{card_name}: must have left the Python battlefield")
+    assert not [o for o in rs.battlefield_snapshot()
+                if o["printing_name"] == card_name], (
+        f"{card_name}: must have left the Rust battlefield")
+
+    # (4) A later turn's recast from exile at NORMAL cost — byte-equal.
+    for _ in range(120):
+        pv, _rv = _step_views(py, rs)
+        if (py.active_player_idx == ai
+                and pv["step"] == "PRECOMBAT_MAIN"
+                and py.players[ai].lands_played_this_turn == 0):
+            break
+        adv(1)
+    fhand = [o for o in py.players[ai].hand
+             if o.printing.name == "Forest"]
+    if fhand:
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land",
+             "card_id": int(fhand[0].id)}).divergences
+    normal_total = sum(
+        int(x) if x.isdigit() else 1
+        for x in _re.findall(r"\{([^}]+)\}", normal_str)
+    )
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == ai and o.printing.is_land
+                and not o.tapped and not o.summoning_sick
+                and taps < normal_total):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    assert taps == normal_total, (
+        f"need {normal_total} mana for normal recast {normal_str}; "
+        f"tapped {taps}")
+    exiled = next(o for o in py.players[ai].exile
+                  if o.printing.name == card_name)
+    s = step_both(
+        py, rs,
+        {"kind": "cast_spell", "card_id": int(exiled.id),
+         "use_warp": False},
+    )
+    assert not s.divergences, (
+        f"{card_name}: warp exile-recast diverged: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+    assert any(o.printing.name == card_name
+               for o in py.battlefield), (
+        f"{card_name}: recast must be back on the Python bf")
+    assert any(o["printing_name"] == card_name
+               for o in rs.battlefield_snapshot()), (
+        f"{card_name}: recast must be back on the Rust bf")
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
