@@ -314,3 +314,97 @@ carry-forward is now discharged into the machine-readable worklist
 shape; the sentinel narrative line ("still flagged for the next residue
 re-walk, NOT yet a worklist entry") can be retired by the orchestrator
 when it applies this entry.
+
+---
+
+## 10. Continued: verify-first re-walk of the other 7 entries'
+`verified_absent_at_commit` semantics (the sentinel "the cadence
+machinery held" claim)
+
+The continuous-pipeline task also asks for a verify-first re-walk of
+the other residue entries' `verified_absent_at_commit` semantics — a
+carried honest-residue obligation in the sentinel narrative
+(`docs/HANDOFF_CONTINUOUS_PIPELINE.md` and the cycle-2…6
+`SUBSYSTEM_ROADMAP` folds repeatedly assert *"the cadence machinery
+held"* without re-checking it at the moving HEAD). Verified at live
+HEAD `8a2a8d84`, NOT trusted from prose.
+
+### The carried claim
+
+The 7 `genuinely_missing` entries are all stamped
+`verified_absent_at_commit = 770d4a04` (the cycle-6 post-Focus-Fire
+resync). Live HEAD is now `8a2a8d84` — five commits ahead of
+`770d4a04`, including the CFI-1 merge `8a2a8d84` /
+commit `8b375eb3`, whose worklog title is *"delete the stray
+obj.counters=0 in **Rust** DepressurizeEffect destroy arm"*. A Rust
+change after the stamp is exactly the round-55 cadence trigger; on its
+face this should stale all 7 stamps and emit
+`residue_needs_reverify` ×7.
+
+### Verify-first finding (the apparent contradiction resolved)
+
+Ran the cron's own cadence function against the live tree:
+
+- `commits_touching_trigger_paths_since("770d4a04")` → **`0`** for all
+  7 entries.
+- `git rev-list --count 770d4a04..HEAD -- rust/src/cards.rs
+  src/mtg_bot/parity/cross_engine.py` → **`0`**.
+- `git show --stat 8b375eb3` → the CFI-1 Rust change touched
+  **`rust/src/state_ops_resolve.rs`** (16 lines) +
+  `tests/test_probe_cross_feature_interaction.py` — **NOT
+  `rust/src/cards.rs`**, NOT `cross_engine.py`.
+
+The round-55 cadence trigger paths are *exactly and only*
+`rust/src/cards.rs` and `src/mtg_bot/parity/cross_engine.py` — the two
+files whose changes can *ship a new `Effect::` variant or wire a bridge
+arm*. `state_ops_resolve.rs` is the effect **runtime-resolution
+implementation** (an existing effect's behavior), not the `Effect::`
+enum *surface* nor the Python↔Rust bridge. A behavior fix to an
+already-shipped effect's resolve body cannot turn a *genuinely-absent*
+residue effect into a present one — so it correctly does **not** trip
+the cadence. This is the cadence design working precisely as intended
+(the round-55 docstring's "the only two files whose changes can
+ship/bridge an Effect" is the load-bearing scoping, and it holds).
+
+### Independent ground-truth re-verify (not just the cadence)
+
+Cadence freshness alone is a *necessary* signal, not *sufficient* — so
+I also re-resolved each of the 7 against the live 118-variant Rust enum
++ 128 bridge arms at HEAD (the same deep verify the round-63 re-walk
+did, not just the lexical alias check):
+
+| Entry | resolves to live Rust variant? | bridged? |
+|---|---|---|
+| CastFromExileWithCostHike | None | False |
+| EachOpponentExilesFromHand | None | False |
+| SacUnlessYouTap | None | False |
+| ReturnPermanentCardWithMVXorLessFromGY | None | False |
+| EnchantedDealsDamageThenPropagate | None | False |
+| AuraShapeFight-MeltstridersResolve | None | False |
+| RovingActuator-cast-copy-half | None | False |
+
+All 7 are **still genuinely absent at `8a2a8d84`**. Full cron run over
+the live worklist (no Sothera): `compute_residue_staleness` = **[]**,
+`compute_blocked_non_effect_staleness` = **[]**,
+`compute_card_status_consistency` = **[]** — **zero drift**, the cron
+is EXIT-0 in-sync at live HEAD.
+
+### Verdict for the second item
+
+The carried sentinel claim *"the cadence machinery held; the 7 stamps
+at `770d4a04` need no re-stamp"* is **honest and verified-true at live
+HEAD `8a2a8d84`** — not by trusting the prose but by (a) confirming the
+only Rust change since (`state_ops_resolve.rs`) is not a
+cadence-trigger path, and (b) independently re-resolving all 7 as still
+genuinely absent. **No re-stamp is owed; no findings-doc recommendation
+to change any of the 7.** The honest-residue frontier for the
+`verified_absent_at_commit` semantics is discharged: the only
+outstanding honest-residue obligation in the sentinel narrative was
+Sothera (§0–§9) plus this cadence re-check; both are now resolved.
+(Forward note for the orchestrator, NOT applied here: when the next
+*`cards.rs`/`cross_engine.py`*-touching Rust merge — e.g. the in-flight
+spell-card-bridge Phase 1 — lands, the cadence WILL legitimately fire
+and the consolidated resync should re-stamp all then-live
+`genuinely_missing` entries, Sothera included if applied, to that new
+HEAD.)
+
