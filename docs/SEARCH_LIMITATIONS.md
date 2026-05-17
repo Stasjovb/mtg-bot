@@ -6176,18 +6176,31 @@ regression.
 > divergence). This is a flip **CR-correctness IMPROVEMENT** — the
 > Python hold-mana-until-cleanup simplification is the retired
 > known-wrong side, not a regression. **SEPARATE unmasked
-> follow-up (NOT G4):** the strengthened tripwire now correctly
-> surfaces a distinct pre-existing Rust-driver priority-port gap
-> (`RustGameStateAdapter._reset_priority_to_active` ignores a
-> decked-out active player vs Python's alive-aware `_next_alive`)
-> in the degenerate 3-card-synthetic post-deck-out tail (~turn
-> 6-8). NOT the I20 mana axis, NOT introduced by the mana mirror,
-> in `rust_engine_adapter.py` (out of the G4 lane scope). Honestly
-> pinned `::test_post_player_loss_priority_port_divergence_is_
-> surfaced`, flagged in the `SOT_FLIP_CUTOVER_PLAN.md` ledger G4
-> entry for the orchestrator to sequence before the C4 re-sweep /
-> B3-S5 flip go/no-go. The prose below is the original
-> surfacing/diagnosis evidence, retained for the record.
+> follow-up (NOT G4) — G5 now CLOSED, G6 now OPEN:** the
+> strengthened tripwire surfaced a distinct pre-existing
+> Rust-driver priority-port gap
+> (`RustGameStateAdapter._reset_priority_to_active` ignored a
+> decked-out active player vs Python's alive-aware `_next_alive`),
+> tracked as blocker **G5**. **G5 is CLOSED-by-`86411a99`** (path:
+> pure-Python alive-skip port — `RustGameStateAdapter.
+> _next_alive_idx`, a byte-exact mirror of `simulate._next_alive`
+> using Rust's pre-existing `losers()` `#[pymethods]`, applied at
+> `_reset_priority_to_active` + the sibling "no-loss model" sites;
+> no Rust pymethod, no `.pyd`; `decision_source="python"`
+> byte-unchanged; 4-file 1532 UNMOVED). Pin **flipped**
+> `::test_post_player_loss_priority_port_divergence_is_surfaced`
+> → `::test_post_player_loss_priority_port_is_closed`. Closing G5
+> honestly UNMASKED a further distinct pre-existing
+> game-over-detection-TIMING gap (`is_over`/`winner_id` lag because
+> the Rust-driver port does not `apply_sbas()` on the step-end /
+> auto-advance path vs Python's `state_based_actions`-at-
+> `_enter_step`; step ~151), tracked as blocker **G6 — OPEN**,
+> honestly pinned `::test_post_player_loss_is_over_timing_
+> divergence_is_surfaced` (the dedicated SL section for G5/G6 is
+> below this G4 block; `SOT_FLIP_CUTOVER_PLAN.md` ledger rows G5
+> CLOSED / G6 OPEN). Orchestrator to sequence G6 before the C4
+> re-sweep / B3-S5 flip go/no-go. The prose below is the original
+> G4 surfacing/diagnosis evidence, retained for the record.
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 (`ShadowCheckedRustAdapter`); root cause in `src/mtg_bot/turn.py:
