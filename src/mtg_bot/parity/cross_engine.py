@@ -8439,6 +8439,56 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # bench-admit; the guardrail auto-grows, no hardcoded list).
         from mtg_bot.effects.bespoke import BiosynthicBurstEffect
         return BiosynthicBurstEffect()
+    if kind == "focus_fire_effect":
+        # **Effect-uncovered Tier-A — Focus Fire.**
+        # Rust substrate ``Effect::FocusFireEffect { base: i32 }``
+        # (cards.rs single-int-field variant; parser
+        # ``"focus_fire_effect"`` — the ``deal_damage_any_target``
+        # single-int-field idiom; resolve in state_ops_resolve.rs
+        # beside the Biosynthic Burst / Depressurize Tier-A arms).
+        #
+        # **Field shape.** One ``base`` int (Focus Fire's printed
+        # ``2`` — "X is 2 plus the number of ..."). Python's
+        # ``FocusFireEffect(base=N)`` (effects/bespoke.py:1753) — the
+        # dynamic ``+|creatures∪Spacecraft you control|`` is computed
+        # at resolve, NOT carried in the dict. ``base`` defaults to
+        # ``2`` on both sides (Rust parse + here) so a key-elided
+        # round-trip is clean.
+        #
+        # **Resolve semantics (parity-relevant — the FIRST
+        # effect-resolve arm to READ combat-declaration state).** Rust
+        # locates the source controller (5-zone walk + stack scan),
+        # computes ``x = base + |{objs the controller controls that
+        # are Creature OR Spacecraft}|`` as a SINGLE bf pass (set-
+        # union — a dual-typed Artifact Creature Spacecraft counts
+        # ONCE, NOT a two-scan sum; the §2 subtle-divergence pin),
+        # then picks the FIRST attacking-or-blocking creature in
+        # ETB-timestamp order across BOTH bfs (Python's
+        # ``IsCreature ∧ (IsAttacking ∨ IsBlocking)`` filter is NOT
+        # controller-restricted — the ``DepressurizeEffect``
+        # ANY-creature ``bf_iter_etb_sorted`` shape, NOT the
+        # controller-only Biosynthic Burst scan), and applies ``x``
+        # via ``obj.damage.saturating_add``. Combat predicate:
+        # attacking iff id ∈ ``state.attackers`` (Vec<u32>); blocking
+        # iff id is a ``blocker_id`` in ``state.blockers``
+        # (Vec<(attacker_id, blocker_id)>) — the EXACT pair
+        # ``declare_attacker``/``declare_blocker`` push, proven
+        # byte-equal vs Python's ``obj.attacking`` /
+        # ``obj.blocking is not None`` by the multi-blocker probes.
+        # No attacking/blocking creature → silent fizzle (CR 608.2b;
+        # Python's ``_slot_target_still_legal`` returns early).
+        #
+        # **Honest Effect-half split (§2).** The Effect closes + is
+        # genuinely probed (a real combat phase is DRIVEN — attackers
+        # declared byte-equal via the multi-blocker-proven path —
+        # before the genuine Focus Fire is cast + resolved). The full
+        # Focus Fire **Instant** auto-joins the spell-card-bridge
+        # admit set (the lever's guardrail queries the LIVE covered
+        # set — adding this Effect + bridge + the Python→dict reverse
+        # serializer leaf flips ``_printing_is_bridge_simple_spell``
+        # to bench-admit; auto-grow, no hardcoded list).
+        from mtg_bot.effects.bespoke import FocusFireEffect
+        return FocusFireEffect(base=int(eff_dict.get("base", 2)))
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

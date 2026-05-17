@@ -3589,6 +3589,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
     from mtg_bot.effects.bespoke import (
         BiosynthicBurstEffect,
         DepressurizeEffect,
+        FocusFireEffect,
         SeedshipImpactEffect,
     )
     from mtg_bot.effects.generic.damage import (
@@ -3627,6 +3628,22 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         # list — the §2 teeth).
         if isinstance(eff, BiosynthicBurstEffect):
             return {"kind": "biosynthic_burst_effect"}
+        # Focus Fire (Effect-uncovered Tier-A #5; round-75). Single
+        # ``base`` int leaf — Rust's ``parse_effect``
+        # ``"focus_fire_effect"`` arm + the dict→Python bridge arm
+        # (cross_engine.py ``focus_fire_effect``) both carry ``base``
+        # and both default it to ``2`` (Focus Fire's printed base).
+        # Pid-FREE (no token) — no :func:`_seat_token_printings`
+        # dependency; the round-trip is the clean
+        # ``depressurize_effect`` single-int-field idiom. Adding this
+        # leaf is what flips Focus Fire into the spell-card-bridge
+        # admit set: with the Rust variant + bridge arm landed it is
+        # now covered+bridged AND round-trips here, so
+        # :func:`_printing_is_bridge_simple_spell` admits the ``{W}``
+        # single-target Instant (auto-grow, no hardcoded list — the
+        # §2 teeth).
+        if isinstance(eff, FocusFireEffect):
+            return {"kind": "focus_fire_effect", "base": int(eff.base)}
         # Lander-pid spell effects (Seedship Impact / Orbital Plunge) —
         # the Lander-spell-token-seating sub-substrate (round-73; the
         # follow-on the round-70 SEARCH_LIMITATIONS seam scoped). Their

@@ -1372,6 +1372,44 @@ pub enum Effect {
     /// pool). This arm follows that identical, already-cross-engine-
     /// proven shape; documented in `docs/SEARCH_LIMITATIONS.md`.
     BiosynthicBurstEffect,
+    /// **Effect-uncovered Tier-A — Focus Fire.**
+    /// Deal `(base + |{objects the source-controller controls that
+    /// are Creature OR Spacecraft}|)` damage to the first attacking-
+    /// or-blocking creature, scanned in ETB-timestamp order across
+    /// BOTH battlefields (Python's `legal_targets` filter is
+    /// `IsCreature ∧ (IsAttacking ∨ IsBlocking)` — NOT controller-
+    /// restricted, like `DepressurizeEffect`'s ANY-creature scan, NOT
+    /// the controller-only `BiosynthicBurstEffect` scan).
+    ///
+    /// **The set-union denominator (the §2 subtle-divergence pin).**
+    /// `x = base + state.players[controller].battlefield.iter()
+    /// .filter(|o| p.card_types ∋ "Creature" || p.card_types ∋
+    /// "Spacecraft").count()` — a SINGLE pass over the battlefield
+    /// `Vec`; an object that is BOTH a Creature and a Spacecraft
+    /// counts ONCE (it is one `Vec` element, the `||` is on the
+    /// object, NOT a sum of a creature-count and a spacecraft-count —
+    /// a two-scan sum silently over-counts a dual-typed permanent).
+    /// Mirrors Python's `FocusFireEffect._amount`
+    /// (`effects/bespoke.py:1784`): `base + sum(1 for o in
+    /// state.battlefield if o.controller_id == controller_id and
+    /// (o.printing.is_creature or o.printing.is_spacecraft))`.
+    ///
+    /// **The combat-declaration predicate (the first effect-resolve
+    /// arm to READ combat state).** A creature is attacking iff its
+    /// id is in `state.attackers` (`Vec<u32>`); blocking iff its id
+    /// appears as a `blocker_id` in `state.blockers`
+    /// (`Vec<(attacker_id, blocker_id)>`). This is the EXACT pair the
+    /// `declare_attacker` (`:681`) / `declare_blocker` (`:772`)
+    /// primitives push and the multi-blocker cross-engine probes have
+    /// proven byte-equal Python↔Rust. Python re-checks
+    /// `_slot_target_still_legal` at resolve (CR 608.2b fizzle); if
+    /// no creature is attacking-or-blocking the spell still resolves
+    /// and the damage fizzles (silent no-op). Damage is applied via
+    /// `obj.damage.saturating_add` (the `DealDamageAnyTarget` shape).
+    /// X-from-count substrate family (round-32..49); NEW denominator
+    /// (creatures∪Spacecraft set-union, +`base` offset) + the
+    /// attacking/blocking target filter only — no new substrate kind.
+    FocusFireEffect { base: i32 },
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -5261,6 +5299,22 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // Python's `BiosynthicBurstEffect()` carries no fields.
             Ok(Effect::BiosynthicBurstEffect)
         }
+        "focus_fire_effect" => {
+            // Effect-uncovered Tier-A — Focus Fire. Single `base`
+            // field (the printed `2` — "X is 2 plus ..."); the
+            // dynamic +creatures-and-Spacecraft count is read at
+            // resolve time. Mirrors `FocusFireEffect(base=N)`
+            // (`effects/bespoke.py:1753`); copies the
+            // `deal_damage_any_target` single-int-field parse shape.
+            // Default 2 (Focus Fire's printed base) when absent — the
+            // bridge arm uses the same default, so the round-trip is
+            // clean even on a key-elided dict.
+            let base: i32 = match dict.get_item("base")? {
+                Some(v) => v.extract()?,
+                None => 2,
+            };
+            Ok(Effect::FocusFireEffect { base })
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -6567,7 +6621,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard"
         ))),
     }
 }
@@ -7690,6 +7744,14 @@ pub(crate) fn effect_to_pydict<'py>(
             // Unit variant — `kind` only (mirrors
             // `each_opponent_sacrifices_creature`).
             d.set_item("kind", "biosynthic_burst_effect")?;
+        }
+        Effect::FocusFireEffect { base } => {
+            // Single `base` int field (the `deal_damage_any_target`
+            // single-int-field to_dict shape). Bidirectional with the
+            // `focus_fire_effect` parse arm + the cross_engine.py
+            // bridge arm + the trajectory.py reverse-serializer leaf.
+            d.set_item("kind", "focus_fire_effect")?;
+            d.set_item("base", *base)?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;

@@ -67709,6 +67709,449 @@ def test_cross_engine_real_eoe_seedship_impact_loader_admit_and_cast_resolve_par
     )
 
 
+# ============================================================
+# Effect-uncovered Tier-A queue #5 — Focus Fire (~23,211 17lands
+# decks). ``{W}`` Instant: "Focus Fire deals X damage to target
+# attacking or blocking creature, where X is 2 plus the number of
+# creatures and/or Spacecraft you control."
+#
+# The FIRST effect-resolve arm to READ combat-declaration state
+# (``GameState.attackers`` / ``GameState.blockers``). New variant
+# ``Effect::FocusFireEffect { base: i32 }`` + ``focus_fire_effect``
+# parse/to_dict + the cross_engine.py bridge arm + the trajectory.py
+# reverse-serializer leaf flip the printing into the spell-card-bridge
+# admit set (the guardrail queries the LIVE covered set + round-trips
+# the reverse serializer — auto-grow, no hardcoded list).
+# ============================================================
+
+
+def _build_rust_focus_fire_state(
+    *,
+    n_creatures: int = 0,
+    n_spacecraft: int = 0,
+    n_dual_artifact_creature_spacecraft: int = 0,
+    base: int = 2,
+    attacker_power: int = 5,
+    attacker_toughness: int = 5,
+    declare_attacker: bool = True,
+    declare_blocker: bool = False,
+):
+    """Build a Rust state: p0 controls ``n_creatures`` plain creatures
+    + ``n_spacecraft`` plain Spacecraft + ``n_dual...`` dual-typed
+    Artifact Creature Spacecraft permanents, plus a genuine Focus Fire
+    Instant on the stack. p1 has one creature that is (optionally)
+    declared as an attacker, and (optionally) a p0 blocker.
+
+    Returns ``(rs, opp_atk_id, blocker_id_or_None)``.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    for i in range(n_creatures):
+        rs.register_and_inject_object(
+            {"name": f"FF Creature {i}", "card_types": ["Creature"],
+             "power": 1, "toughness": 1},
+            0, ZB,
+        )
+    for i in range(n_spacecraft):
+        rs.register_and_inject_object(
+            {"name": f"FF Spacecraft {i}",
+             "card_types": ["Spacecraft"],
+             "power": 0, "toughness": 4},
+            0, ZB,
+        )
+    for i in range(n_dual_artifact_creature_spacecraft):
+        rs.register_and_inject_object(
+            {"name": f"FF Dual {i}",
+             "card_types": ["Artifact", "Creature", "Spacecraft"],
+             "power": 2, "toughness": 2},
+            0, ZB,
+        )
+    blocker_id = None
+    if declare_blocker:
+        blocker_id = rs.register_and_inject_object(
+            {"name": "FF Blocker", "card_types": ["Creature"],
+             "power": 2, "toughness": 4},
+            0, ZB,
+        )
+    opp_atk_id = rs.register_and_inject_object(
+        {"name": "FF Opp Attacker", "card_types": ["Creature"],
+         "power": attacker_power, "toughness": attacker_toughness},
+        1, ZB,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Focus Fire", "card_types": ["Instant"],
+         "effects": [{"kind": "focus_fire_effect", "base": base}]},
+        0, 0,
+    )
+    if declare_attacker:
+        assert rs.declare_attacker(opp_atk_id) is True
+    if declare_blocker:
+        assert rs.declare_blocker(blocker_id, opp_atk_id) is True
+    rs.push_to_stack(spell_id, 0)
+    return rs, opp_atk_id, blocker_id
+
+
+def test_rust_focus_fire_base_plus_count_lethal_to_attacker():
+    """Rust pin (a): p0 controls 3 creatures + 1 Spacecraft → X =
+    base(2)+4 = 6. The opponent's attacking 5/5 takes 6 → lethal
+    (SBA-destroyed). The X-from-count denominator + the combat
+    predicate + the damage-apply, end to end."""
+    rs, opp, _ = _build_rust_focus_fire_state(
+        n_creatures=3, n_spacecraft=1,
+        attacker_power=5, attacker_toughness=5,
+    )
+    rs.resolve_top_of_stack()
+    e = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == opp
+    )
+    assert e["damage"] == 6, (
+        f"X must be base(2) + |3 creatures ∪ 1 Spacecraft|(4) = 6; "
+        f"got damage={e['damage']}"
+    )
+    rs.apply_sbas()
+    assert not any(
+        x["id"] == opp for x in rs.battlefield_snapshot()
+    ), "6 damage to a 5/5 is lethal — SBA destroys it"
+
+
+def test_rust_focus_fire_dual_typed_counts_once_set_union():
+    """Rust pin (b) — **the §2 subtle-divergence pin (set-union, NOT
+    a two-scan sum).** p0 controls exactly ONE dual-typed Artifact
+    Creature Spacecraft permanent. The denominator is a SINGLE bf
+    pass — that one Vec element counts ONCE, so X = base(2)+1 = 3,
+    NOT base(2)+2 = 4 (a two-scan creature-count + spacecraft-count
+    sum would over-count it). Mirrors Python's ``sum(1 for o ... if
+    o.printing.is_creature or o.printing.is_spacecraft)`` — the ``or``
+    is on the object."""
+    rs, opp, _ = _build_rust_focus_fire_state(
+        n_dual_artifact_creature_spacecraft=1,
+        attacker_power=5, attacker_toughness=5,
+    )
+    rs.resolve_top_of_stack()
+    e = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == opp
+    )
+    assert e["damage"] == 3, (
+        f"a dual-typed Artifact Creature Spacecraft counts ONCE "
+        f"(set-union): X = base(2)+1 = 3, NOT 4; got {e['damage']}"
+    )
+
+
+def test_rust_focus_fire_targets_a_blocking_creature():
+    """Rust pin (c) — the combat predicate accepts a BLOCKING
+    creature too (Python's filter is ``IsCreature ∧ (IsAttacking ∨
+    IsBlocking)``). p0's blocker (registered ETB-first, so it is the
+    deterministic-first attacking-or-blocking creature) is declared
+    blocking the opponent's attacker; Focus Fire hits the blocker. X
+    = base(2) + |p0 creatures: the blocker itself|(1) = 3."""
+    rs, _opp, blk = _build_rust_focus_fire_state(
+        declare_blocker=True, attacker_power=3, attacker_toughness=3,
+    )
+    rs.resolve_top_of_stack()
+    e = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == blk
+    )
+    assert e["damage"] == 3, (
+        f"the blocking creature is a legal target; X = base(2) + "
+        f"|p0 creatures: the blocker|(1) = 3; got {e['damage']}"
+    )
+
+
+def test_rust_focus_fire_no_attacker_or_blocker_silent_fizzle():
+    """Rust pin (d) — CR 608.2b fizzle. The opponent's creature is on
+    the battlefield but NOT declared attacking or blocking → no legal
+    target → the spell resolves and the damage fizzles (silent
+    no-op). Mirrors Python's ``_slot_target_still_legal`` early
+    return."""
+    rs, opp, _ = _build_rust_focus_fire_state(
+        n_creatures=2, declare_attacker=False,
+        attacker_power=5, attacker_toughness=5,
+    )
+    rs.resolve_top_of_stack()
+    e = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == opp
+    )
+    assert e["damage"] == 0, (
+        f"no attacking/blocking creature → silent fizzle; the idle "
+        f"creature must take 0 damage; got {e['damage']}"
+    )
+
+
+def test_rust_focus_fire_base_offset_present_with_zero_creatures():
+    """Rust pin (e) — the ``base`` offset is present even with ZERO
+    creatures/Spacecraft on the source-controller's bf. p0 controls
+    NOTHING; the opponent's attacking 4/4 takes exactly base(2)."""
+    rs, opp, _ = _build_rust_focus_fire_state(
+        n_creatures=0, n_spacecraft=0,
+        attacker_power=4, attacker_toughness=4,
+    )
+    rs.resolve_top_of_stack()
+    e = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == opp
+    )
+    assert e["damage"] == 2, (
+        f"with 0 creatures the damage is exactly base(2); got "
+        f"{e['damage']}"
+    )
+
+
+def test_rust_focus_fire_denominator_is_source_controllers_board():
+    """Rust pin (f) — cross-controller. The denominator counts the
+    SOURCE-CONTROLLER's (p0's) creatures/Spacecraft, NOT the active
+    player's or the opponent's. p0 has 1 creature; p1 (the opponent)
+    has 5 creatures + the attacker. X must be base(2)+1 = 3 (p0's
+    board), NOT base+6."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    rs.register_and_inject_object(
+        {"name": "FF P0 Creature", "card_types": ["Creature"],
+         "power": 1, "toughness": 1}, 0, ZB,
+    )
+    for i in range(5):
+        rs.register_and_inject_object(
+            {"name": f"FF P1 Creature {i}",
+             "card_types": ["Creature"], "power": 1, "toughness": 1},
+            1, ZB,
+        )
+    opp_atk = rs.register_and_inject_object(
+        {"name": "FF P1 Attacker", "card_types": ["Creature"],
+         "power": 5, "toughness": 5}, 1, ZB,
+    )
+    spell = rs.register_and_inject_object(
+        {"name": "Focus Fire", "card_types": ["Instant"],
+         "effects": [{"kind": "focus_fire_effect", "base": 2}]},
+        0, 0,
+    )
+    assert rs.declare_attacker(opp_atk) is True
+    rs.push_to_stack(spell, 0)
+    rs.resolve_top_of_stack()
+    e = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == opp_atk
+    )
+    assert e["damage"] == 3, (
+        f"denominator is the SOURCE-controller's (p0's) board: X = "
+        f"base(2) + |p0: 1 creature|(1) = 3 (NOT p1's 6); got "
+        f"{e['damage']}"
+    )
+
+
+def test_focus_fire_auto_joins_spell_card_bridge_admit_set():
+    """The auto-grow §2 tooth. With the Effect + bridge arm + the
+    ``trajectory._python_spell_effect_to_dict`` reverse-serializer
+    leaf landed, the genuine ``{W}`` Focus Fire Instant is now
+    covered+bridged AND round-trips the reverse serializer, so
+    ``_printing_is_bridge_simple_spell`` admits it into the
+    spell-card-bridge bench-admit set (the guardrail queries the LIVE
+    covered set — no hardcoded card list; this is the lever's
+    auto-grow §2 teeth firing on the Tier-A close having LANDED)."""
+    import pytest
+
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.effect_coverage import covered_python_class_set
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_spell,
+        _python_spell_effect_to_dict,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+    from mtg_bot.effects.bespoke import FocusFireEffect
+
+    real = get_active_source().get_printings().get("Focus Fire")
+    if real is None:
+        pytest.skip("Focus Fire absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, FocusFireEffect), (
+        f"genuine Focus Fire spell_effect must be FocusFireEffect; "
+        f"got {type(se).__name__}"
+    )
+    assert se.base == 2, (
+        f"Focus Fire's printed base is 2; parser gave {se.base}"
+    )
+    assert "FocusFireEffect" in covered_python_class_set(), (
+        "the Rust Effect::FocusFireEffect variant makes the Python "
+        "class covered (identity Rust→Python name map)"
+    )
+    rt = _python_spell_effect_to_dict(se)
+    assert rt == {"kind": "focus_fire_effect", "base": 2}, (
+        f"reverse serializer must emit the base-carrying dict; "
+        f"got {rt}"
+    )
+    back = _ta_dict_to_python_effect(rt)
+    assert isinstance(back, FocusFireEffect) and back.base == 2, (
+        f"dict→Python bridge must round-trip to FocusFireEffect"
+        f"(base=2); got {type(back).__name__}"
+    )
+    assert _printing_is_bridge_simple_spell(real) is True, (
+        "Focus Fire must auto-join the spell-card-bridge admit set "
+        "now that its Effect is covered+bridged + round-trips"
+    )
+
+
+def test_cross_engine_real_eoe_focus_fire_drives_combat_then_casts_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Focus Fire (~23,211
+    17lands decks). Effect-uncovered Tier-A queue #5.**
+
+    Focus Fire is the FIRST effect-resolve arm to READ combat-
+    declaration state, so its genuine probe DRIVES a real combat
+    phase via the established :func:`multi_blocker_deckspec` +
+    :func:`multi_block_combat_selector` walk (the byte-equal-proven
+    multi-blocker combat-declaration vehicle: at step 193 p0 declares
+    its Bears id 5 as the sole attacker; at step 195 p1 declares its
+    two Bears ids 9/11 as blockers — both ``step_both``-applied with
+    ZERO divergences, so ``GameState.attackers`` / ``blockers`` are
+    byte-equal Python↔Rust). THEN, while combat is still live (the
+    COMBAT_DAMAGE step, before combat clears), the **ACTUAL parsed
+    Focus Fire printing** is cast on Python (real ``spell_effect`` =
+    ``FocusFireEffect(base=2)`` on a ``StackItem``) and the bridged
+    synthetic Instant on Rust, resolved, and the WHOLE field view is
+    asserted byte-equal.
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Instant] {W} — Focus Fire deals X damage to target
+         attacking or blocking creature, where X is 2 plus the number
+         of creatures and/or Spacecraft you control."
+
+    At the cast point p0 controls exactly ONE creature (its attacking
+    Bears id 5); X = base(2) + 1 = 3. The deterministic-first
+    attacking-or-blocking creature in ETB order is p1's blocking
+    Bears id 9 (Python's centralized ``state.battlefield`` walk and
+    Rust's ``bf_iter_etb_sorted`` agree — the established
+    deterministic-first convention the spell-card-bridge
+    ``_PickFirstLegalTargetAgent`` mirrors). 3 damage to a 2/2 →
+    lethal → SBA-destroyed → in p1's graveyard on BOTH engines;
+    WHOLE field view byte-equal.
+
+    **Honest split (§2 — Effect-half closes byte-equal; the full
+    Instant auto-joins the spell-card-bridge admit set, pinned in
+    ``test_focus_fire_auto_joins_spell_card_bridge_admit_set``).**
+    The combat predicate's byte-equality is established by the
+    multi-blocker probes (``attackers`` / ``blockers`` declared
+    via the same ``step_both`` ``declare_attackers`` /
+    ``declare_blockers`` path); the set-union denominator's byte-
+    equality is pinned by ``test_rust_focus_fire_dual_typed_counts_
+    once_set_union``.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        build_matched_states, multi_block_combat_selector,
+        multi_blocker_deckspec, step_both,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba, Step
+    from mtg_bot.effects.bespoke import FocusFireEffect
+
+    real = get_active_source().get_printings().get("Focus Fire")
+    if real is None:
+        pytest.skip("Focus Fire absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, FocusFireEffect) and se.base == 2, (
+        f"genuine Focus Fire spell_effect must be "
+        f"FocusFireEffect(base=2); got {type(se).__name__}"
+    )
+
+    # ---- DRIVE the real multi-blocker combat (the established
+    # byte-equal combat-declaration vehicle). Steps 0..195: p0
+    # attacks with Bears id 5 (step 193), p1 blocks with Bears
+    # ids 9/11 (step 195). step_both surfaces ANY divergence.
+    py, rs = build_matched_states(multi_blocker_deckspec())
+    for i in range(196):
+        s = step_both(py, rs, multi_block_combat_selector(py, rs, i))
+        assert s.divergences == [], (
+            f"combat-drive step {i} surfaced divergences: "
+            f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
+        )
+    # Combat is LIVE byte-equal: attackers=[5], blockers=[(5,11),(5,9)].
+    assert py.step == Step.COMBAT_DAMAGE
+    assert rs.get_attackers() == [5]
+    assert sorted(rs.get_blockers()) == sorted([(5, 11), (5, 9)])
+    py_atk_blk = [
+        o for o in py.battlefield
+        if "Creature" in o.printing.card_types
+        and (getattr(o, "attacking", False)
+             or getattr(o, "blocking", None) is not None)
+    ]
+    assert {o.id for o in py_atk_blk} == {5, 9, 11}, (
+        f"py combat creatures must be {{5,9,11}}; got "
+        f"{[o.id for o in py_atk_blk]}"
+    )
+
+    # ---- Cast the genuine Focus Fire mid-combat. Python: the REAL
+    # spell_effect on a StackItem targeting the deterministic-first
+    # attacking-or-blocking creature (Python's centralized
+    # battlefield-order walk = the SoT). Rust: the bridged synthetic
+    # Instant (the loader/bridge round-trips FocusFireEffect).
+    target = py_atk_blk[0]  # deterministic-first (py bf order)
+    assert target.id == 9, (
+        f"deterministic-first att/blk creature must be id 9 (p1's "
+        f"first blocking Bears in centralized bf order); got "
+        f"{target.id}"
+    )
+    py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+    py_spell.summoning_sick = False
+    py.stack.append(
+        StackItem(source=py_spell, controller_id=0,
+                  targets=(("creature", target.id),))
+    )
+    resolve_top_of_stack(py)
+    py_sba(py)
+    assert len(py.stack) == 0
+
+    rs_spell = rs.register_and_inject_object(
+        {"name": "Focus Fire", "card_types": ["Instant"],
+         "effects": [{"kind": "focus_fire_effect", "base": 2}]},
+        0, 0,
+    )
+    rs.push_to_stack(rs_spell, 0)
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert rs.stack_size() == 0
+
+    # ---- WHOLE field view byte-equal (the strongest tier — full
+    # compare_fields, post-_net_counters ecc5f680). X = base(2) +
+    # |p0 creatures∪Spacecraft: Bears id 5|(1) = 3 → lethal to the
+    # 2/2 id 9 → destroyed → p1's graveyard, byte-equal on BOTH.
+    diffs = compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+    assert diffs == [], (
+        f"Focus Fire post-resolve must be byte-equal across the "
+        f"WHOLE field view on BOTH engines (combat-state-reading + "
+        f"set-union denominator + damage-apply); diffs={diffs}"
+    )
+    # Observable cross-checks (defense-in-depth on the full compare).
+    assert not [o for o in py.battlefield if o.id == 9], (
+        "Python: targeted blocking Bears id 9 took 3 (lethal to "
+        "2/2) → destroyed"
+    )
+    assert not any(
+        e["id"] == 9 for e in rs.battlefield_snapshot()
+    ), "Rust: targeted blocking Bears id 9 destroyed (byte-equal)"
+    assert any(
+        o.id == 9 for o in py.players[1].graveyard
+    ), "Python: Bears id 9 in p1's graveyard"
+    assert any(
+        e["id"] == 9 for e in rs.graveyard_snapshot(1)
+    ), "Rust: Bears id 9 in p1's graveyard (byte-equal)"
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

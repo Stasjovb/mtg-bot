@@ -21139,25 +21139,27 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # card-name list). Post-Lander-spell-token-seating sub-substrate
     # (round-73) the set was {Depressurize, Orbital Plunge, Radiant
     # Strike, Seedship Impact}; round-74 closed Tier-A #6 Biosynthic
-    # Burst (``BiosynthicBurstEffect`` unit variant + bridge +
-    # reverse-serializer leaf — pid-free, single-target, covered),
-    # which AUTO-JOINED via the §2 auto-grow teeth (the lever queries
-    # the LIVE covered set, NOT a hardcoded list — new-code-is-right
-    # per ``feedback_parity_new_code_is_right.md``; this guard's
-    # purpose is to be updated when a Tier-A close lands, NOT to
-    # forbid the growth it explicitly anticipates).
+    # Burst (+1 → 5); round-75 closed Tier-A #5 Focus Fire
+    # (``FocusFireEffect { base }`` single-int variant + bridge +
+    # reverse-serializer leaf — pid-free, single-target ``{W}``
+    # Instant, covered), which AUTO-JOINED via the §2 auto-grow teeth
+    # (the lever queries the LIVE covered set, NOT a hardcoded list —
+    # new-code-is-right per ``feedback_parity_new_code_is_right.md``;
+    # this guard's purpose is to be updated when a Tier-A close lands,
+    # NOT to forbid the growth it explicitly anticipates).
     admitted = sorted(
         n for n in src
         if trajectory._printing_is_bridge_simple_spell(src[n])
     )
     assert admitted == [
-        "Biosynthic Burst", "Depressurize", "Orbital Plunge",
-        "Radiant Strike", "Seedship Impact",
+        "Biosynthic Burst", "Depressurize", "Focus Fire",
+        "Orbital Plunge", "Radiant Strike", "Seedship Impact",
     ], (
         f"Phase-1 admit set drifted: {admitted} (expected exactly the "
-        f"5 covered+bridged single-target Tier-A spells whose Effect "
-        f"close landed + whose Lander pid is now seatable; the set "
-        f"auto-grows further as Focus Fire closes)")
+        f"6 covered+bridged single-target Tier-A spells whose Effect "
+        f"close landed + whose Lander pid (if any) is now seatable; "
+        f"the set auto-grows further as the remaining Tier-A spells "
+        f"close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():
@@ -21293,6 +21295,83 @@ def test_bridge_biosynthic_burst_bidirectional_round_trip():
     back = _ta_dict_to_python_effect(fwd)
     assert isinstance(back, BiosynthicBurstEffect)
     assert back == BiosynthicBurstEffect()
+
+
+def test_bridge_focus_fire_basic_translation():
+    """Effect-uncovered Tier-A queue #5 — Focus Fire. Rust
+    ``{"kind": "focus_fire_effect", "base": 2}`` translates to Python
+    ``FocusFireEffect(base=2)``.
+    """
+    from mtg_bot.effects.bespoke import FocusFireEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "focus_fire_effect", "base": 2}
+    )
+    assert isinstance(e, FocusFireEffect)
+    assert e.base == 2
+
+
+def test_bridge_focus_fire_base_defaults_to_two_when_elided():
+    """The ``base`` key is optional both directions and defaults to
+    ``2`` (Focus Fire's printed base) — Rust's ``parse_effect``
+    ``focus_fire_effect`` arm and this bridge arm agree on the
+    default, so a key-elided round-trip is clean.
+    """
+    from mtg_bot.effects.bespoke import FocusFireEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "focus_fire_effect"})
+    assert isinstance(e, FocusFireEffect)
+    assert e.base == 2
+
+
+def test_bridge_focus_fire_composable_in_sequence():
+    """Round-trip the single-field bespoke arm through the recursive
+    Sequence translator (forward-compat with any Sequence-wrapped
+    consumer).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.bespoke import FocusFireEffect
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "focus_fire_effect", "base": 2},
+                {"kind": "gain_life", "amount": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], FocusFireEffect)
+    assert e.effects[0].base == 2
+    assert isinstance(e.effects[1], GainLife)
+
+
+def test_bridge_focus_fire_bidirectional_round_trip():
+    """Bridge pin: BOTH directions. The reverse serializer
+    ``trajectory._python_spell_effect_to_dict`` emits the
+    ``{"kind": "focus_fire_effect", "base": N}`` dict for a
+    ``FocusFireEffect``; that dict round-trips back through
+    ``_ta_dict_to_python_effect`` to an equal ``FocusFireEffect``.
+    The bidirectional arm is what lets the spell-card-bridge lever's
+    ``_printing_to_card_def`` reuse the Python→dict sibling — a card
+    flips to bench-admit only if its per-card round shipped BOTH
+    directions.
+    """
+    from mtg_bot.effects.bespoke import FocusFireEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+    from mtg_bot.parity.trajectory import _python_spell_effect_to_dict
+
+    fwd = _python_spell_effect_to_dict(FocusFireEffect(base=2))
+    assert fwd == {"kind": "focus_fire_effect", "base": 2}
+    back = _ta_dict_to_python_effect(fwd)
+    assert isinstance(back, FocusFireEffect)
+    assert back.base == 2
 
 
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===

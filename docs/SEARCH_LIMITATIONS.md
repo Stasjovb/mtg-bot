@@ -4782,6 +4782,124 @@ targeted-delta carve-out).
 
 ---
 
+## Focus Fire — `FocusFireEffect { base }` Effect half shipped byte-equal (the FIRST effect-resolve arm to READ combat-declaration state); full Instant AUTO-JOINS the spell-card-bridge admit set; combat predicate byte-equal-by-construction via the proven declare-attacker/blocker primitives
+
+**Location**: `rust/src/cards.rs`
+(`Effect::FocusFireEffect { base: i32 }` single-int-field variant +
+`parse_effect` arm `focus_fire_effect` + `effect_to_pydict` arm) +
+`rust/src/state_ops_resolve.rs` (the resolve match arm beside the
+Biosynthic Burst / Depressurize Tier-A arms — 5-zone source-
+controller resolution; the set-union denominator single-bf-pass;
+the `state.attackers` / `state.blockers` combat predicate; the
+`bf_iter_etb_sorted` deterministic-first ANY-creature target scan;
+`obj.damage.saturating_add`). Bridge arm
+`src/mtg_bot/parity/cross_engine.py` (`focus_fire_effect`,
+immediately above the `PHASE5_BRIDGE_ARMS` sentinel). Python→dict
+reverse-serializer leaf `src/mtg_bot/parity/trajectory.py`
+(`_python_spell_effect_to_dict` `_leaf`). Python class
+(pre-existing, NOT new): `FocusFireEffect`
+(`src/mtg_bot/effects/bespoke.py:1753`).
+
+**What the shortcut is**: Focus Fire (~23,211 17lands decks) is an
+`[Instant] {W}` printing "Focus Fire deals X damage to target
+attacking or blocking creature, where X is 2 plus the number of
+creatures and/or Spacecraft you control." The genuine parsed
+printing's `spell_effect` is `FocusFireEffect(base=2)`. Python's
+`_amount` is `base + sum(1 for o in state.battlefield if
+o.controller_id == controller_id and (o.printing.is_creature or
+o.printing.is_spacecraft))`; `resolve` re-checks
+`_slot_target_still_legal` (CR 608.2b) then `_apply_damage`. The
+shipped Rust arm is the FIRST effect-resolve arm to READ
+combat-declaration state. The Effect half closes byte-equal; like
+Biosynthic Burst (and unlike Depressurize) the **full Focus Fire
+Instant AUTO-JOINS the spell-card-bridge bench-admit set** — the
+lever's `_printing_is_bridge_simple_spell` guardrail queries the
+LIVE covered set + round-trips the reverse serializer, so adding
+the Effect + bridge + the reverse-serializer leaf flips the
+printing in (no hardcoded card list — the §2 auto-grow teeth).
+
+**The set-union denominator (the §2 subtle-divergence pin, NOT a
+shortcut — a correctness invariant)**: the denominator is computed
+as a SINGLE pass over the source-controller's battlefield, +1 per
+object whose `card_types` contains "Creature" OR "Spacecraft". A
+dual-typed Artifact Creature Spacecraft is ONE Vec element →
+counts ONCE (the `||` is on the object), bit-for-bit Python's `sum`
+with the `or` on `o.printing`. A two-scan creature-count +
+spacecraft-count sum would silently over-count a dual-typed
+permanent; the Rust arm deliberately does NOT do that. Pinned by
+`test_rust_focus_fire_dual_typed_counts_once_set_union`.
+
+**The combat predicate — byte-equal BY CONSTRUCTION (verify-first
+confirmed)**: a creature is attacking iff its id is in
+`state.attackers` (`Vec<u32>`); blocking iff its id appears as a
+`blocker_id` in `state.blockers` (`Vec<(attacker_id,
+blocker_id)>`). This is the EXACT pair the `declare_attacker`
+(`state_ops_combat.rs:681`) / `declare_blocker` (`:772`)
+primitives push — the SAME primitives the cross-engine
+`step_both` `declare_attackers` / `declare_blockers` path drives,
+proven byte-equal vs Python's `obj.attacking` /
+`obj.blocking is not None` by the long-standing multi-blocker
+cross-engine probes (`multi_blocker_deckspec` /
+`multi_block_combat_selector`). The genuine real-EoE probe DRIVES
+that real multi-blocker combat (steps 0..195, zero divergences)
+and casts the actual Focus Fire while combat is live, so the
+predicate's equivalence is genuinely exercised end-to-end, not
+asserted. **Why it's OK**: no engine-side combat-state divergence
+exists (the multi-blocker probes are the standing evidence; this
+slice adds a direct mid-combat cast that re-proves it for the
+Focus Fire path). **Failure mode**: if a future change made
+Python's `obj.attacking`/`obj.blocking` and Rust's
+`attackers`/`blockers` diverge, the multi-blocker probes AND the
+Focus Fire genuine probe would BOTH fail loudly (no silent
+masking). **Fix-scope / impact**: n/a — no divergence; this is a
+correctness-preserving reuse of an already-proven byte-equal pair.
+
+**Target scan is NOT controller-restricted (verified, the
+Depressurize shape NOT the Biosynthic Burst shape)**: Python's
+`FocusFireEffect` target filter is `IsCreature ∧ (IsAttacking ∨
+IsBlocking)` — ANY creature, NOT `o.controller_id ==
+controller_id`. So the Rust arm scans BOTH bfs via
+`bf_iter_etb_sorted` (the `DepressurizeEffect` ANY-creature
+deterministic-first shape), NOT the controller-only Biosynthic
+Burst scan. The spell-card-bridge `_PickFirstLegalTargetAgent` /
+Python's centralized `state.battlefield` walk pick the SAME
+deterministic-first attacking-or-blocking creature — the
+established convention, pinned by the genuine probe (target = the
+first att/blk creature in centralized bf order on BOTH engines).
+No-attacking-or-blocking-creature → silent fizzle (CR 608.2b;
+Python's `_slot_target_still_legal` early return), pinned by
+`test_rust_focus_fire_no_attacker_or_blocker_silent_fizzle`.
+
+**Honest split (§2)**: the Effect half closes + is genuinely
+probed (a real combat phase is DRIVEN — attackers/blockers
+declared byte-equal via the multi-blocker-proven path — then the
+actual parsed Focus Fire is cast + resolved, WHOLE field
+`compare_fields == []`). The full `{W}` Instant auto-joins the
+spell-card-bridge admit set (pinned). Mirrors the r51..r74
+Effect-half precedent + the round-73/74 spell-card-bridge
+auto-grow precedent.
+
+**Pinned by**: 6 Rust regression pins
+(`tests/test_parity_smoke.py::test_rust_focus_fire_*` —
+base+count lethal-to-attacker; the dual-typed set-union pin;
+targets a blocking creature; no-attacker/blocker silent fizzle;
+base offset present with zero creatures; denominator is the
+source-controller's board not the active player's) + 4 bridge
+pins (`tests/test_cross_engine_etb_triggers.py::test_bridge_focus_
+fire_*` — basic translation; base defaults to 2 when elided;
+Sequence-composable; bidirectional reverse-serializer round-trip)
++ 1 admit-set auto-grow pin
+(`test_focus_fire_auto_joins_spell_card_bridge_admit_set`) + 1
+genuine real-EoE cross-engine probe
+(`test_cross_engine_real_eoe_focus_fire_drives_combat_then_casts_parity`
+— drives the real multi-blocker combat to a LIVE
+attackers=[5]/blockers=[(5,11),(5,9)] state byte-equal, casts the
+actual parsed Focus Fire `spell_effect` mid-combat, WHOLE field
+`compare_fields == []` post-resolve incl. the lethal SBA on the
+targeted blocking Bears — no targeted-delta carve-out).
+
+---
+
 ## Cross-engine probe harness — `_zone_signature` counters-blindness FIXED + the symmetric-filler pattern for full `compare_fields` (round-r70)
 
 **Location**: `scripts/parity_smoke.py` `_zone_signature` /
