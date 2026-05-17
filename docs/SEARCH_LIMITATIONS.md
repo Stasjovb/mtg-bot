@@ -1577,7 +1577,24 @@ matters when those specific cards resolve.
 
 ---
 
-## Rust port — warp alt-cost cast pipeline: PHASE 1 SHIPPED (pure fixed-cost); life/graveyard riders + full delayed-trigger modeling remain Phase 2+
+## Rust port — warp alt-cost cast pipeline: PHASE 1 + 1.5 SHIPPED (pure fixed-cost + safe-trigger+warp trio); life/graveyard riders + full delayed-trigger modeling remain Phase 2+
+
+**Round-65 update (Phase 1.5 — safe-trigger+warp residue trio).**
+Phase 1.5 widens `_printing_is_bridge_pure_warp_creature`'s Phase-1
+`triggered_abilities == ()` boundary to a safe-trigger gate,
+admitting **exactly +3** cards (Germinating Wurm, Knight Luminary,
+Starbreach Whale — each warp_cost + one SAFE ETB trigger). NO Rust
+change: the landed Phase-1 substrate (`cast_creature_warp` + the
+PHASE_END_STEP exile sweep + the exile-recast) fires the ETB
+generically via the same `move_from_hand_to_battlefield` →
+`drain_pending_etb_dispatches` path as `cast_creature`, so the ETB
+fires byte-equal under the warp-cast path (the load-bearing new
+assertion, pinned). The §2 teeth are preserved (Timeline Culler,
+Codecracker Hound / Mechanozoa, Quantum Riddler all stay declined).
+Details + the byte-equal-under-warp-cast pins are in the dedicated
+"warp end-step exile is a PHASE_END_STEP-entry sweep" entry below
+(Phase 1.5 sub-section). The Phase-1 substrate description below is
+unchanged and still accurate.
 
 **Round-63 update (Phase 1 closure for the pure fixed-cost shape).**
 Phase 1 (`docs/WARP_COST_PHASE1_DESIGN.md`) shipped the
@@ -1727,7 +1744,46 @@ gameplay surface. Perf neutral.
 
 ---
 
-## Rust port — warp end-step exile is a PHASE_END_STEP-entry sweep, NOT a CR-603.7 delayed trigger (Phase 1, round-63)
+## Rust port — warp end-step exile is a PHASE_END_STEP-entry sweep, NOT a CR-603.7 delayed trigger (Phase 1, round-63; Phase 1.5, round-65)
+
+**Phase 1.5 (round-65) — the safe-trigger+warp residue trio
+admitted.** Phase 1's `_printing_is_bridge_pure_warp_creature`
+guardrail was deliberately tightened to `triggered_abilities == ()`
+to exclude **Germinating Wurm** ({1}{G} warp; ENTERS/IsSelf/GainLife
+2), **Knight Luminary** ({1}{W} warp; ENTERS/IsSelf/CreateToken Human
+Soldier 1/1), and **Starbreach Whale** ({1}{U} warp, Flying;
+ENTERS/IsSelf/Surveil 2) — NOT because their trigger was wrong, but
+because admitting them was a Phase-1-boundary expansion the round-62
+scout had not cost/pinned and warp-cast was a NEW cast path the ETB
+had never fired through. Phase 1.5 widens the guardrail's
+`triggered_abilities == ()` hard-reject to a **safe-trigger gate**
+(every TA must round-trip `_python_ta_to_safe_dict` — IDENTICAL to
+`_printing_is_bridge_simple_creature`'s gate), threads
+`triggered_abilities` through the CardDef warp arm, and admits
+**exactly the +3 trio**. No Rust change: the landed Phase-1 substrate
+fires the ETB generically — Rust's `cast_creature_warp` routes the
+freshly-arrived permanent through the SAME
+`move_from_hand_to_battlefield` → `drain_pending_etb_dispatches`
+ENTERS dispatch as `cast_creature`, so the ETB fires byte-equal under
+the warp-cast path. The §2 teeth are PRESERVED: Timeline Culler
+(Phase-2 life/gy riders), Codecracker Hound / Mechanozoa (NON-safe
+trigger), and **Quantum Riddler** ({1}{U} warp, safe ETB DrawCards 1
+but a `HandSizeAtMost(1)` draw-replacement **static**) all stay
+correctly DECLINED — the guardrail is NOT widened beyond the 3 (a
+safe trigger is necessary but not sufficient; a static / non-safe gate
+still declines). The ETB-fires-byte-equal-under-warp-cast assertion
+(the load-bearing new pin) is pinned by
+`tests/test_cross_engine_etb_triggers.py::
+test_r65_warp_p15_trio_etb_fires_byte_equal_under_warp_cast` and the
+genuine real-EoE probe
+`tests/test_parity_smoke.py::
+test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal`
+(the actual parsed Germinating Wurm / Starbreach Whale printing
+driven through warp-cast → ETB byte-equal → END-step exile →
+normal-cost recast → ETB fires again byte-equal). The trio's triggers
+are all `ENTERS` (not `LEAVES`/`DIES`), so the no-response-to-the-
+warp-exile claim below is UNCHANGED — the ETB resolves at cast time,
+not at the warp-exile.
 
 **Location**:
 `rust/src/state_ops_steps.rs::warp_exile_sweep_on_end_step`
@@ -1752,18 +1808,28 @@ composition, exactly as it inlines the CR-514 cleanup hooks rather
 than calling `run_cleanup_step`).
 
 **Why it's OK**: bit-equal end state for the bench's `attack_all`
-strategy and the Phase-1 card set. No card in the bridge-admitted
-EoE pool responds to the warp-exile trigger: the two Phase-1 cards
-(Red Tiger Mechan, Bygone Colossus) carry `triggered_abilities=()`,
-exile is not a graveyard transit (no DIES per CR), and
-`trajectory._SAFE_TRIGGERS` has no `leaves_battlefield` event — so
-no LEAVES/DIES observer fires off the warp-exile. The bench's
-`attack_all` never holds priority to cast an instant-speed response
-at the end step. The full real Red Tiger Mechan / Bygone Colossus
-warp lifecycle (cast → end-step exile → recast-from-exile) is
-asserted byte-equal across both engines by the genuine real-EoE
-probe `tests/test_parity_smoke.py::
-test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal`.
+strategy and the Phase-1 + Phase-1.5 card set. No card in the
+bridge-admitted EoE pool responds to the warp-exile trigger: the two
+Phase-1 cards (Red Tiger Mechan, Bygone Colossus) carry
+`triggered_abilities=()`; the Phase-1.5 trio (Germinating Wurm,
+Knight Luminary, Starbreach Whale) carry exactly one **`ENTERS`**
+trigger each (GainLife / CreateToken / Surveil) which resolves at
+**cast time** (under `move_from_hand_to_battlefield` →
+`drain_pending_etb_dispatches`), NOT at the warp-exile — none is a
+`LEAVES`/`DIES` observer, exile is not a graveyard transit (no DIES
+per CR), and `trajectory._SAFE_TRIGGERS` has no
+`leaves_battlefield` event. The bench's `attack_all` never holds
+priority to cast an instant-speed response at the end step. The full
+real Red Tiger Mechan / Bygone Colossus warp lifecycle (cast →
+end-step exile → recast-from-exile) is asserted byte-equal across
+both engines by the genuine real-EoE probe
+`tests/test_parity_smoke.py::
+test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal`;
+the Phase-1.5 trio's full lifecycle INCLUDING the ETB firing
+byte-equal under BOTH the warp-cast and the normal-cost
+exile-recast paths is asserted by
+`tests/test_parity_smoke.py::
+test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal`.
 
 **Failure mode**: a future probe that puts an instant-speed spell
 on the stack IN RESPONSE to the warp-exile trigger would see Python
@@ -1776,11 +1842,16 @@ card/scenario exists in the EoE pool's bridge-admitted set today.
 analog to Rust (a larger follow-on; the cost-mechanic family's
 later slices — Phase 2 Timeline Culler — may motivate it).
 
-**Impact estimate**: +2 cards / +6,450 17lands decks admitted with
-0 strength cost (the simplification is bit-equal for every
-bench-reachable state). Perf neutral (one extra phase-entry scan
-gated on a cheap `warp_exile_pending` any()-check that short-
-circuits when no permanent is warp-pending).
+**Impact estimate**: Phase 1 = +2 cards / +6,450 17lands decks;
+Phase 1.5 = **+3 cards** (Germinating Wurm, Knight Luminary,
+Starbreach Whale) on top — all admitted with 0 strength cost (the
+simplification is bit-equal for every bench-reachable state; the
+trio's ETB fires byte-equal under the warp-cast path, pinned). Perf
+neutral (one extra phase-entry scan gated on a cheap
+`warp_exile_pending` any()-check that short-circuits when no
+permanent is warp-pending; the trio adds no new Rust code path —
+the ETB dispatch is the same generic
+`drain_pending_etb_dispatches`).
 
 ---
 
