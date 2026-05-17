@@ -251,44 +251,35 @@ def fetch_weights_if_missing(
     ``<coordinator_url>/v2/weights/<version>`` (+ ``/metadata``) on
     cache miss. Returns the version dir.
 
-    The function is intentionally a thin wrapper around two GETs so
-    the test suite can monkeypatch ``http_get`` to count cache hits
-    vs misses.
+    The two GETs go through the supplied ``http_get`` so the test
+    suite can monkeypatch it to count cache hits vs misses.
 
-    Concurrency note: we don't gate concurrent fetches across daemon
-    processes. Workers don't share a filesystem in production; the
-    master-worker is the only place a race could occur, and it's a
-    documented known limitation (see commit message).
+    Concurrency: the v2 worker daemon runs games in a
+    ``ProcessPoolExecutor`` of ``--n-workers`` subprocesses that all
+    share this on-disk cache. On a cold cache, N subprocesses hit
+    this function simultaneously on their first claim. The fetch is
+    therefore **atomic + inter-process locked** (see
+    :func:`mtg_bot.worker_daemon_weights_fetch.fetch_weights_atomic`):
+    the download is staged to a temp file and ``os.replace``d into
+    place so a reader never observes a partial ``weights.pt``, and a
+    per-version lock collapses the N redundant cold fetches into one.
+
+    This closes the TOCTOU that surfaced on the AWS c7i.8xlarge
+    economics bench (``--n-workers 30``): 72/100 games crashed
+    instantly at game start (``torch.load`` of a 0-byte / partially
+    written checkpoint) while 28 ran normally — the bimodal
+    "instant-crash or fully-normal" signature of a startup race.
     """
-    target_dir = _weights_dir(weights_root, version)
-    weights_path = target_dir / "weights.pt"
-    metadata_path = target_dir / "metadata.json"
-    if weights_path.is_file() and metadata_path.is_file():
-        return target_dir
+    from mtg_bot.worker_daemon_weights_fetch import fetch_weights_atomic
 
-    target_dir.mkdir(parents=True, exist_ok=True)
-    base = coordinator_url.rstrip("/")
-    if not weights_path.is_file():
-        status, body, _ = http_get(
-            f"{base}/v2/weights/{version}",
-            timeout=WEIGHTS_HTTP_TIMEOUT_S,
-        )
-        if status != 200:
-            raise RuntimeError(
-                f"GET /v2/weights/{version} failed: status={status}"
-            )
-        weights_path.write_bytes(body)
-    if not metadata_path.is_file():
-        status, body, _ = http_get(
-            f"{base}/v2/weights/{version}/metadata",
-            timeout=WEIGHTS_HTTP_TIMEOUT_S,
-        )
-        if status != 200:
-            raise RuntimeError(
-                f"GET /v2/weights/{version}/metadata failed: status={status}"
-            )
-        metadata_path.write_bytes(body)
-    return target_dir
+    target_dir = _weights_dir(weights_root, version)
+    return fetch_weights_atomic(
+        coordinator_url=coordinator_url,
+        version=version,
+        weights_dir=target_dir,
+        http_get=http_get,
+        http_timeout_s=WEIGHTS_HTTP_TIMEOUT_S,
+    )
 
 
 # ---------------------------------------------------------------------------
