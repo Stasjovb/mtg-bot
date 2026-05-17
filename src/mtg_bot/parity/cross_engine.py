@@ -8075,6 +8075,73 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             optional=True,
             exclude_self=True,
         )
+    if kind == "pump_target_creature_until_eot_grant_dies_return_tapped":
+        # BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner ETB
+        # (~21,131 17lands decks). Rust's
+        # ``Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped {
+        # power_bonus, toughness_bonus }`` (cards.rs) is the
+        # ``granted_triggered_ability``-carrying sibling of the bare
+        # round-28 ``pump_target_creature_until_eot`` arm (whose
+        # "Schema simplification vs Python" doc-comment explicitly
+        # deferred the ``granted_triggered_ability`` rider to a
+        # follow-up slice — THIS is that slice for the Perigee shape).
+        # Its resolve arm picks the FIRST creature on the SOURCE
+        # controller's battlefield whose id is NOT the source object
+        # (Perigee's "ANOTHER target creature you control" — CR 115.4),
+        # pushes a ``UeotModifier::PowerToughnessBonus`` AND a
+        # ``UeotModifier::GrantedDiesReturnTapped`` marker; the SBA
+        # destroy path returns a marked carrier to its OWNER's
+        # battlefield TAPPED with UEOT modifiers cleared.
+        #
+        # Maps to the EXACT class+params the genuine Perigee Beckoner
+        # printing parses to (verified live against
+        # ``get_active_source().get_printings()["Perigee Beckoner"]``):
+        # ``PumpTargetCreatureUntilEOT(power_bonus=2,
+        # you_control_only=True, exclude_self=True,
+        # granted_triggered_ability=TriggeredAbility(
+        #     trigger="", effect=PerigeeBeckonerDiesReturnTappedEffect(),
+        #     event=Event.DIES, predicate=IsSelf()))``.
+        # ``you_control_only`` mirrors the oracle "another target
+        # creature YOU CONTROL"; ``exclude_self`` mirrors "ANOTHER"
+        # (Rust's resolve arm enforces both structurally via the
+        # source-controller bf scan + the source-id exclusion).
+        #
+        # **Effect-half / nested-trigger-grant split (§2 — see
+        # docs/SEARCH_LIMITATIONS.md round-60 entry).** This closes
+        # the Effect half byte-equal (pump + the FIXED Perigee
+        # dies-return-tapped rider, observable on both engines: the
+        # pumped creature dies → returns tapped under its owner's
+        # control). The GENERAL nested-trigger-grant subsystem (an
+        # arbitrary granted triggered ability via a Rust layer-6
+        # registry analogous to Python's ``continuous_effects``
+        # ``grant_triggered_ability``) is the deferred multi-round
+        # half; the full Perigee Beckoner card is NOT added to the
+        # production-deck loader ``_SAFE_*`` allowlist (also
+        # ``warp_cost`` — a §2-declined cost-mechanic — gates it
+        # independently). Mirrors the r51 Monoist / r52 Extinguisher /
+        # r53 Mightform / r54 Famished / r56 Dauntless / r57 Faller's
+        # Effect-half-closes-card-stays-gated precedent.
+        from mtg_bot.effects.generic.pump import (
+            PumpTargetCreatureUntilEOT,
+        )
+        from mtg_bot.effects.base import TriggeredAbility
+        from mtg_bot.effects.bespoke import (
+            PerigeeBeckonerDiesReturnTappedEffect,
+        )
+        from mtg_bot.effects.predicates import Event, IsSelf
+
+        return PumpTargetCreatureUntilEOT(
+            power_bonus=eff_dict.get("power_bonus", 0),
+            toughness_bonus=eff_dict.get("toughness_bonus", 0),
+            you_control_only=True,
+            exclude_self=True,
+            granted_triggered_ability=TriggeredAbility(
+                trigger="",
+                effect=PerigeeBeckonerDiesReturnTappedEffect(),
+                event=Event.DIES,
+                predicate=IsSelf(),
+            ),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
