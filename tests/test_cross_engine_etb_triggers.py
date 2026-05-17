@@ -19092,5 +19092,145 @@ def test_r58_becomes_tapped_safe_trigger_dict_admits_seedship_shape():
     ) is False
 
 
+# ===== Round-59 N1 landfall+put_plus_one_counter_on_self bridge pins
+# (the sole remaining Seedship Agrarian blocker — closes its
+# trigger-2 leaf; trigger-1 BECOMES_TAPPED->create_token was bridged
+# round-58 N1). These pin the FULL triggered-ability round-trip of
+# the NEW combination this slice admits, not just the bare effect arm
+# (already pinned by the round-22 put_plus_one_counter_on_self tests
+# above). =====
+
+
+def test_bridge_ta_landfall_put_plus_one_counter_on_self_round_trip():
+    """The canonical landfall trigger dict
+    ``{event:enters, predicate:And(subject_is_land, controlled_by_you),
+       effect:put_plus_one_counter_on_self(amount=1)}`` round-trips
+    through ``_ta_dict_to_python_triggered_ability`` to the EXACT
+    Python shape the genuine Seedship Agrarian parser emits for its
+    trigger-2: ``Event.ENTERS / And(Subject(IsLand),
+    Controlled(YOU)) / PutPlusOneCounterOnSelf(amount=1)``.
+
+    This is the §2 bridge-correctness proof for the new admit: the
+    predicate axis (landfall) is orthogonal to the effect resolve, so
+    the same already-byte-equal put_plus_one_counter_on_self arm
+    round-trips identically under the landfall ENTERS-on-land
+    predicate.
+    """
+    from mtg_bot.effects.predicates import (
+        And, Controlled, Event, Subject, YOU,
+    )
+    from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+    )
+
+    ta = _ta_dict_to_python_triggered_ability({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "put_plus_one_counter_on_self", "amount": 1},
+    })
+    assert ta.event is Event.ENTERS
+    assert isinstance(ta.predicate, And)
+    assert isinstance(ta.predicate.left, Subject)
+    assert isinstance(ta.predicate.left.inner, IsLand)
+    assert ta.predicate.left.slot is None
+    assert isinstance(ta.predicate.right, Controlled)
+    assert ta.predicate.right.by is YOU
+    assert ta.predicate.right.subject is None
+    assert isinstance(ta.effect, PutPlusOneCounterOnSelf)
+    assert ta.effect.amount == 1
+
+
+def test_bridge_ta_landfall_put_plus_one_counter_matches_genuine_parser():
+    """The bridge round-trip of Seedship Agrarian's trigger-2 dict
+    reconstructs an object byte-equal to what the LIVE parser produces
+    for the real EoE printing. Drives the genuine card so a parser
+    shape change OR a bridge regression both surface here.
+    """
+    import pytest
+
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+    )
+
+    real = get_active_source().get_printings().get("Seedship Agrarian")
+    if real is None:
+        pytest.skip("Seedship Agrarian absent from active CardSource")
+    landfall = [
+        t for t in real.triggered_abilities
+        if t.event is Event.ENTERS
+    ]
+    assert len(landfall) == 1
+    genuine = landfall[0]
+    assert isinstance(genuine.effect, PutPlusOneCounterOnSelf)
+    # Recognizer emits the canonical dict; bridge reconstructs it.
+    d = _python_ta_to_safe_dict(genuine)
+    assert d is not None
+    assert d["effect"] == {
+        "kind": "put_plus_one_counter_on_self",
+        "amount": genuine.effect.amount,
+    }
+    bridged = _ta_dict_to_python_triggered_ability(d)
+    assert bridged.event is genuine.event
+    assert type(bridged.predicate) is type(genuine.predicate)
+    assert isinstance(bridged.effect, PutPlusOneCounterOnSelf)
+    assert bridged.effect.amount == genuine.effect.amount
+
+
+def test_bridge_ta_landfall_put_plus_one_counter_amount_default():
+    """The landfall trigger dict with ``amount`` omitted defaults to 1
+    on round-trip (same default-handling contract as the bare
+    put_plus_one_counter_on_self arm). Pins that the predicate
+    composition does not perturb the effect-arm default semantics.
+    """
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+    )
+
+    ta = _ta_dict_to_python_triggered_ability({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "put_plus_one_counter_on_self"},
+    })
+    assert isinstance(ta.effect, PutPlusOneCounterOnSelf)
+    assert ta.effect.amount == 1
+
+
+def test_bridge_ta_landfall_put_plus_one_counter_amount_preserved():
+    """A non-default amount survives the landfall-composed round-trip
+    (a future "Landfall — put 2 +1/+1 counters on this creature"
+    carrier would round-trip the count, not collapse to 1).
+    """
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+    )
+
+    ta = _ta_dict_to_python_triggered_ability({
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "put_plus_one_counter_on_self", "amount": 3},
+    })
+    assert ta.effect == PutPlusOneCounterOnSelf(amount=3)
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
