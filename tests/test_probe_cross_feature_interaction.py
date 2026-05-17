@@ -82,12 +82,13 @@ compare honestly on BOTH engines) PLUS the interaction observable
 (survives/dies; graveyard-vs-exile destination; the warp sweep no-op
 vs fire). The negative control surfaced a genuine RUST-SIDE
 divergence (CFI-1 — see the FINDINGS NOTE above
-``_negative_control_diffs``): it hard-asserts the byte-equal
-interaction observable + a precisely-scoped field check (the single
-documented CFI-1 slot filtered, with a strict guard that ANY other
-divergence FAILs loudly), and the full-field byte-equality is pinned
-strict-xfail by the CFI-1 closure tracker — the divergence is named,
-scoped, and pinned, NOT papered over.
+``_negative_control_diffs``) which has since been **CLOSED**
+Rust-side: the negative control now hard-asserts the byte-equal
+interaction observable AND a FULL field-view byte-equality with no
+carve-out, and the former strict-xfail tracker is now a normal
+passing pin (``test_depressurize_kills_counter_creature_full_field_
+cfi1_closed``) — a permanent regression guard for the closed
+divergence.
 
 **Verify-first.** Each probe re-resolves the live printing(s),
 asserts the genuine ``spell_effect`` / warp shape, and asserts the
@@ -97,13 +98,13 @@ skipping) on live-tree drift. **A genuine RUST-SIDE divergence WAS
 surfaced — the cross-feature interaction work SUCCEEDING** (the
 negative control: a +1/+1-counter'd creature killed by Depressurize).
 Diagnosed (Python is SoT, read-only Rust inspection): Rust's
-``Effect::DepressurizeEffect`` destroy arm has a stray
-``obj.counters = 0;`` that diverges from Python AND Rust's own
-generic destroy path (the established byte-equal contract — counters
-retained on the dead object — is pinned by the Orbital Plunge probe).
-Recorded as a precise FINDINGS NOTE for the Rust agent (do NOT edit
-``rust/src/``) + a strict-xfail closure tracker, never papered over —
-see the RUST-SIDE FINDINGS NOTE above ``_negative_control_diffs``.
+``Effect::DepressurizeEffect`` destroy arm had a stray
+``obj.counters = 0;`` that diverged from Python AND Rust's own SBA
+destroy path (the established byte-equal contract — counters retained
+on the dead object — is pinned by the Orbital Plunge probe). This was
+**FIXED Rust-side** in the slice that closed CFI-1 (the stray line
+deleted; new-code-is-right, Python untouched) — see the RUST-SIDE
+FINDINGS NOTE above ``_negative_control_diffs``.
 Separately, during development a ``mana_pool_p0`` divergence was
 surfaced and diagnosed as a probe-fixture artifact (a dual-color
 basic letting the two engines make different mana-color choices for
@@ -111,8 +112,9 @@ an ambiguous dual-producer — NOT an engine bug); resolved
 new-code-is-right by normalising to single-color basics, the
 documented warp / spell-card-bridge harness idiom. No
 ``docs/SEARCH_LIMITATIONS.md`` entry — the byte-equal interactions
-are pure evidence-strengthening; the one real divergence is a
-Rust-side gap tracked for the Rust agent, not a Python shortcut.
+are pure evidence-strengthening; the one real divergence (CFI-1) was
+a Rust-side bug since FIXED (the stray ``obj.counters = 0;`` deleted),
+not a Python shortcut.
 
 **Disjointness.** A distinct dimension (cross-feature interaction)
 from every isolated single-feature probe and a disjoint card-USE from
@@ -353,56 +355,50 @@ def test_biosynthic_indestructible_grant_fizzles_depressurize_destroy():
 
 
 # ---------------------------------------------------------------------------
-# RUST-SIDE FINDINGS NOTE (for the Rust agent — this is a non-Rust
-# slice; ``rust/src/`` was NOT edited).
+# RUST-SIDE FINDINGS NOTE — Divergence CFI-1: **CLOSED**.
 #
 # **Divergence CFI-1 — Rust's ``Effect::DepressurizeEffect`` destroy
-# arm spuriously zeroes ``GameObject.counters`` on the dying creature;
-# Rust's GENERIC destroy path (and Python, the SoT) does NOT.**
+# arm spuriously zeroed ``GameObject.counters`` on the dying creature;
+# Python (the SoT) and Rust's own SBA destroy path do NOT.** This was
+# surfaced by the negative-control interaction below (a +1/+1-counter'd
+# creature killed by Depressurize → graveyard) and has now been FIXED
+# Rust-side.
 #
-# Surfaced by the negative-control interaction below (a +1/+1-counter'd
-# creature killed by Depressurize → graveyard). Precisely isolated to
-# ONE field-view slot: ``graveyard_p0`` — the dead creature's counter
-# component is ``+1`` on Python, ``0`` on Rust. Everything else
-# (including the dies observable) is byte-equal; the divergence count
-# is exactly 1.
-#
-# Root cause (read-only Rust inspection): ``rust/src/state_ops_resolve
-# .rs`` ``Effect::DepressurizeEffect`` resolve, the conditional-destroy
-# branch, has an explicit ``obj.counters = 0;`` (≈ line 5969) when it
-# moves the creature to the graveyard. Rust's generic destroy path
-# (used by Orbital Plunge / Radiant Strike / Vote Out) does NOT zero
-# counters, and Python's ``move_off_battlefield`` (``turn.py``) clears
-# combat state but never the +1/+1 counters — so a counter'd creature
-# RETAINS its counters on the graveyard object on BOTH the Python side
-# and Rust's generic destroy path. The campaign's byte-equal contract
-# is "counters retained on the dead object" and is EXPLICITLY pinned by
-# the isolated Orbital Plunge probe
+# History: the cross-feature interaction probe's negative control
+# isolated the divergence to ONE field-view slot (``graveyard_p0`` —
+# the dead creature's counter component was ``+1`` on Python, ``0`` on
+# Rust). Root cause: ``rust/src/state_ops_resolve.rs``
+# ``Effect::DepressurizeEffect`` resolve's conditional-destroy branch
+# had a stray ``obj.counters = 0;`` (≈ line 5969) when moving the
+# creature to the graveyard. Python's ``move_off_battlefield``
+# (``turn.py``) clears combat state (damage / tapped / attached_to) but
+# never the +1/+1 counters, and Rust's SBA destroy path
+# (``state_ops_sba.rs`` ~:417) follows that same observable — so a
+# counter'd creature RETAINS its counters on the graveyard object on
+# BOTH Python and Rust's SBA destroy path. The campaign's byte-equal
+# contract is "counters retained on the dead object" and is EXPLICITLY
+# pinned by the isolated Orbital Plunge probe
 # ``test_cross_engine_real_eoe_orbital_plunge_excess_conditional_lander_parity``
-# (which asserts the dead −4-counter creature's ``graveyard``
-# signature carries ``−4`` byte-equal on BOTH). Rust's
-# Depressurize-specific ``obj.counters = 0;`` therefore diverges from
-# (a) Python (SoT) AND (b) Rust's own generic destroy path. The fix is
-# Rust-side: DELETE the stray ``obj.counters = 0;`` in the
-# ``Effect::DepressurizeEffect`` destroy branch so it matches the
-# generic destroy path + Python. (Aside: CR 700.4 says counters cease
-# on zone change, so the rules-correct end state is 0; but the
-# CAMPAIGN parity contract — Python is SoT — is "retained", and
-# changing Python's ``move_off_battlefield`` to clear them was VERIFIED
-# to break the established Orbital Plunge byte-equal pin. Honest
-# new-code-is-right: align the outlier Rust arm to Python + Rust's own
-# generic path; do NOT churn Python.)
+# (the dead −4-counter creature's ``graveyard`` signature carries
+# ``−4`` byte-equal on BOTH). The Depressurize-specific
+# ``obj.counters = 0;`` was the outlier; it diverged from (a) Python
+# (SoT) AND (b) Rust's own SBA destroy path.
 #
-# This is NOT papered over: the byte-equal interaction observable
-# (creature dies on BOTH) is hard-asserted in the negative control
-# below; the divergence is precisely scoped (a strict guard FAILs
-# loudly if ANYTHING beyond the single documented ``graveyard_p0``
-# counter slot diverges, so a regression elsewhere still surfaces);
-# and the full-field byte-equality is pinned by the strict-xfail probe
-# ``test_depressurize_kills_counter_creature_full_field_xfail_cfi1``
-# (``xfail(strict=True)`` → XPASS-fails loudly the moment the Rust
-# agent deletes the stray ``obj.counters = 0;``, prompting both the
-# xfail removal AND the negative control's filter removal).
+# Fix (this slice, Rust-side, new-code-is-right): the stray
+# ``obj.counters = 0;`` in the ``Effect::DepressurizeEffect`` destroy
+# branch was DELETED so it matches Python + Rust's SBA destroy path.
+# (Aside: CR 700.4 says counters cease on zone change, so the
+# rules-correct end state is 0; but the CAMPAIGN parity contract —
+# Python is SoT — is "retained", and changing Python's
+# ``move_off_battlefield`` to clear them was VERIFIED to break the
+# established Orbital Plunge byte-equal pin. Aligned the outlier Rust
+# arm to Python + Rust's own SBA path; Python untouched.)
+#
+# CFI-1 is CLOSED: the negative control below now asserts FULL
+# ``compare_fields`` == [] with NO carve-out (the ``graveyard_p0``
+# filter + the strict-xfail tracker were removed when the fix landed —
+# the gap is closed, so the scaffolding is gone and the negative
+# control is a permanent full-field regression pin).
 # ---------------------------------------------------------------------------
 
 
@@ -462,23 +458,27 @@ def test_depressurize_kills_counter_creature_without_the_indestructible_grant():
     granted.
 
     **The byte-equal interaction observable is hard-asserted** (the
-    creature dies on BOTH). The field-view compare is precisely scoped:
-    it filters the SINGLE documented Rust-side divergence CFI-1 (see
-    the RUST-SIDE FINDINGS NOTE above — Rust's Depressurize destroy arm
-    spuriously zeroes ``GameObject.counters`` on the dead creature; the
-    dead-creature ``graveyard_p0`` counter slot is ``+1`` on Python /
-    ``0`` on Rust) and STRICT-guards that NOTHING ELSE diverges (a
-    regression in any other slot still FAILs loudly here — this is a
-    named, scoped, pinned gap, NOT a blanket carve-out). The full-field
-    byte-equality is separately pinned strict-xfail by
-    ``test_depressurize_kills_counter_creature_full_field_xfail_cfi1``.
+    creature dies on BOTH) AND the full cross-engine field view is
+    asserted byte-equal with NO carve-out. The Rust-side divergence
+    CFI-1 (Rust's ``Effect::DepressurizeEffect`` destroy arm spuriously
+    zeroed ``GameObject.counters`` on the dead creature) has been
+    CLOSED: the stray ``obj.counters = 0;`` was deleted from
+    ``rust/src/state_ops_resolve.rs`` so the Depressurize destroy arm
+    now matches Python (SoT) AND Rust's own SBA destroy path (the
+    established "counters retained on the dead object" byte-equal
+    contract, pinned by the Orbital Plunge probe). The earlier
+    ``graveyard_p0`` filter + the strict-xfail tracker were removed
+    with the fix — this is now a plain full-field byte-equality
+    assertion: the dead creature's counter slot must compare byte-equal
+    (Python retains the +1, Rust now also retains it).
 
     Distinct from the isolated Depressurize §2 COUNTERS arm (printed
     2/2 + **2** net counters → eff power 1 > 0 → SURVIVES — that pins
     the counter-fold keeping power positive AND the SURVIVING creature's
     counter slot, so it never exercises a counter'd creature DYING via
     Depressurize). This negative control is the path that surfaced
-    CFI-1 — exactly the cross-feature interaction work succeeding.
+    CFI-1 — exactly the cross-feature interaction work succeeding, now
+    a permanent full-field regression pin for the closed divergence.
     """
     diffs, py_alive, rs_alive = _negative_control_diffs()
     assert py_alive is False and rs_alive is False, (
@@ -486,74 +486,43 @@ def test_depressurize_kills_counter_creature_without_the_indestructible_grant():
         f"power 2+1-3 = 0 <= 0 → destroy() SUCCEEDS → dies on BOTH; "
         f"py_alive={py_alive} rs_alive={rs_alive}"
     )
-    # Precisely scope the single known Rust-side divergence CFI-1. ANY
-    # other divergence FAILs loudly (regression detection preserved).
-    unexpected = [
-        d for d in diffs if d.field != "graveyard_p0"
-    ]
-    assert unexpected == [], (
-        f"the ONLY tolerated divergence is the documented Rust-side "
-        f"CFI-1 graveyard_p0 dead-creature counter slot (see the "
-        f"RUST-SIDE FINDINGS NOTE); a divergence in any OTHER field is "
-        f"a real regression: {unexpected}"
+    # CFI-1 CLOSED: the full cross-engine field view must be byte-equal
+    # (no carve-out). A Depressurize-killed +1/+1-counter'd creature
+    # carries its counters into the graveyard byte-equal on BOTH
+    # engines now that the stray Rust ``obj.counters = 0;`` is deleted.
+    assert diffs == [], (
+        f"CFI-1 regression — a Depressurize-killed +1/+1-counter'd "
+        f"creature must be byte-equal across the WHOLE field view "
+        f"(counters retained on the dead object on BOTH engines, the "
+        f"established contract); diffs={diffs}"
     )
-    if diffs:
-        # If graveyard_p0 diverged, it MUST be exactly the CFI-1
-        # counter-slot shape (py retains the +1, rust zeroed it) — a
-        # different graveyard_p0 shape is a NEW divergence, fail loudly.
-        gy = next(d for d in diffs if d.field == "graveyard_p0")
-        assert len(diffs) == 1, (
-            f"CFI-1 is a SINGLE-slot divergence; got {len(diffs)} "
-            f"diffs: {diffs}"
-        )
-        # The dead "CFI Subject" net-counter component: py=1, rust=0.
-        py_vic = next(t for t in gy.py_value if t[0] == "CFI Subject")
-        rs_vic = next(t for t in gy.rust_value if t[0] == "CFI Subject")
-        assert py_vic[4] == 1 and rs_vic[4] == 0, (
-            f"CFI-1 must be exactly py-retains-+1 / rust-zeroed on the "
-            f"dead creature's counter slot; got py={py_vic} "
-            f"rust={rs_vic} — NEW divergence shape, fail loudly"
-        )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "RUST-SIDE divergence CFI-1 (see the FINDINGS NOTE in "
-        "tests/test_probe_cross_feature_interaction.py): Rust's "
-        "Effect::DepressurizeEffect destroy arm spuriously zeroes "
-        "GameObject.counters on the dead creature "
-        "(rust/src/state_ops_resolve.rs ~5969), diverging from Python "
-        "(SoT) AND Rust's own generic destroy path (pinned byte-equal "
-        "by the Orbital Plunge probe). FULL field-view byte-equality "
-        "for a Depressurize-killed +1/+1-counter'd creature therefore "
-        "fails ONLY on the graveyard_p0 dead-creature counter slot. "
-        "When the Rust agent deletes the stray obj.counters = 0; this "
-        "xfail flips to XPASS and FAILs loudly — at which point remove "
-        "BOTH this strict-xfail probe AND the graveyard_p0 filter in "
-        "test_depressurize_kills_counter_creature_without_the_"
-        "indestructible_grant (the gap is then closed)."
-    ),
-)
-def test_depressurize_kills_counter_creature_full_field_xfail_cfi1():
-    """**Interaction 1 — the strict-xfail closure tracker for the
+def test_depressurize_kills_counter_creature_full_field_cfi1_closed():
+    """**Interaction 1 — the permanent regression pin for the CLOSED
     Rust-side divergence CFI-1.**
 
     The EXACT negative-control scenario, asserting FULL
     ``compare_fields`` == [] over the WHOLE cross-engine field view.
-    Today this fails on precisely one slot (the documented CFI-1
-    graveyard_p0 dead-creature counter slot). ``xfail(strict=True)``
-    keeps the gap visible without a green-washing skip: the moment the
-    Rust agent deletes the stray ``obj.counters = 0;`` in
-    ``Effect::DepressurizeEffect``'s destroy branch this XPASSes and
-    FAILs the suite loudly, the canonical "the gap is closed — remove
-    the tracking + the filter" signal (never paper over).
+    This was previously ``xfail(strict=True)`` while CFI-1 was open
+    (Rust's ``Effect::DepressurizeEffect`` destroy arm spuriously
+    zeroed ``GameObject.counters`` on the dead creature). The stray
+    ``obj.counters = 0;`` has been DELETED from
+    ``rust/src/state_ops_resolve.rs`` (new-code-is-right: aligned the
+    outlier Rust arm to Python (SoT) + Rust's own SBA destroy path),
+    so the full field view is now byte-equal. The xfail was flipped to
+    this normal passing pin (and the ``graveyard_p0`` filter in the
+    negative control removed) — CFI-1 is closed and this is a
+    permanent byte-equality regression guard.
     """
     diffs, py_alive, rs_alive = _negative_control_diffs()
     assert py_alive is False and rs_alive is False
     assert diffs == [], (
-        f"CFI-1 (Rust Depressurize destroy spuriously zeroes counters "
-        f"on the dead creature) — full field view: {diffs}"
+        f"CFI-1 regression — a Depressurize-killed +1/+1-counter'd "
+        f"creature must be byte-equal across the WHOLE field view "
+        f"(counters retained on the dead object, the established "
+        f"contract — the stray Rust obj.counters=0 is deleted): "
+        f"{diffs}"
     )
 
 
