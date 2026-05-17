@@ -184,6 +184,54 @@ RUST_TO_PYTHON_OVERRIDES: dict[str, str] = {
     # exists but has 0 in-pool consumers — the opposite case).
     "FamishedWorldsireLookTopXByPowerPutLandsTapped":
         "FamishedWorldsireETBEffect",
+    # --- Faller's Faithful + Perigee Beckoner override-fold (the same
+    # round-56 Famished-Worldsire-precedent class: a 1:1-identity-rule
+    # variant whose SAME-named Python class does NOT exist, but whose
+    # bridge arm genuinely round-trips through a real, differently-
+    # spelled, pool-walked Python class — so the override is the
+    # CORRECT relationship, NOT a suppression, and NOT a
+    # ``RUST_AHEAD_OF_POOL`` allowlist, which is reserved for variants
+    # whose same-named class EXISTS but has 0 in-pool consumers — the
+    # opposite case).
+    #
+    #   * ``Effect::DestroyTargetCreatureThenDrawIfUndamaged
+    #     { draw_amount }`` (round-era commit ``1ee30e1e``, Faller's
+    #     Faithful ETB half, ~14,108 17lands decks). The bridge arm
+    #     ``cross_engine.py`` ``destroy_target_creature_then_draw_if_
+    #     undamaged`` constructs Python ``DestroyTargetCreature(
+    #     draw_if_undamaged_amount=draw_amount, optional=True,
+    #     exclude_self=True)`` (``effects/generic/destroy.py:94``). The
+    #     GENUINE parsed Faller's Faithful printing parses to that EXACT
+    #     class (verified: ``DestroyTargetCreature`` in-pool freq 9, and
+    #     the ``Faller's Faithful`` printing itself is in its
+    #     pool-walked example set). The "BLOCKED-RUST-EFFECT /
+    #     card-stays-gated" note in the bridge arm refers to the
+    #     FULL-CARD loader gate (Faller's Faithful is not on the
+    #     production-deck ``_SAFE_*`` allowlist — the residue-worklist
+    #     ``closed`` entry), NOT the Effect-level orphan question: the
+    #     Effect half closes byte-equal and round-trips through the real
+    #     pool-walked class, which is exactly the override case.
+    #   * ``Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped
+    #     { power_bonus, toughness_bonus }`` (round-60 commit
+    #     ``18d6b6cb``, Perigee Beckoner ETB, ~21,131 17lands decks).
+    #     The bridge arm ``cross_engine.py`` ``pump_target_creature_
+    #     until_eot_grant_dies_return_tapped`` constructs Python
+    #     ``PumpTargetCreatureUntilEOT(power_bonus=..., toughness_bonus
+    #     =..., you_control_only=True, exclude_self=True,
+    #     granted_triggered_ability=TriggeredAbility(...,
+    #     effect=PerigeeBeckonerDiesReturnTappedEffect(), ...))``
+    #     (``effects/generic/pump.py:258``). The GENUINE parsed Perigee
+    #     Beckoner printing parses to that EXACT class+params (verified:
+    #     ``PumpTargetCreatureUntilEOT`` in-pool freq 26, and the
+    #     ``Perigee Beckoner`` printing itself is in its pool-walked
+    #     example set). Same FULL-CARD loader gate (Perigee Beckoner is
+    #     not on ``_SAFE_*`` — the residue-worklist ``closed`` entry,
+    #     also independently ``warp_cost``-gated) vs Effect-half-closes
+    #     split as Faller's; the Effect round-trips through the real
+    #     pool-walked class → override, not allowlist.
+    "DestroyTargetCreatureThenDrawIfUndamaged": "DestroyTargetCreature",
+    "PumpTargetCreatureUntilEotGrantDiesReturnTapped":
+        "PumpTargetCreatureUntilEOT",
 }
 
 # Rust variants that have NO direct Python counterpart in the current
