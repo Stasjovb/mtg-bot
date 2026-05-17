@@ -5123,6 +5123,140 @@ boundary and per-game evidence on record".
 
 ---
 
+## Cross-engine legal-decision-set mana-payability asymmetry (ACCEPTED — parity-benign by the single-script-replay contract)
+
+**Status**: ACCEPTED divergence with rationale. Characterized +
+regression-pinned 2026-05-17 (`feature/cross-engine-legal-set-asymmetry`).
+This entry exists because `rust/src/state_ops_legal.rs:77-88`
+("Deferred mana-affordability check") *claims* the divergence is
+"Documented in `docs/SEARCH_LIMITATIONS.md` alongside the
+one-land-per-turn gate" — but no such entry existed. This closes
+that documentation gap and records WHY the asymmetry cannot affect
+cross-engine trajectory parity.
+
+**Location**:
+- Python (source of truth): `src/mtg_bot/legal.py` —
+  `_can_cast` (`:60-76`) → `mtg_bot.cards.can_pay_cost`, called at
+  every CastSpell site (`:252-254` instant-speed, `:383-385`
+  sorcery-speed, plus the kicker/warp/impending/granted-warp/
+  Room-half variants `:256-301` / `:387-460`) and every
+  ActivateAbility site (`:631-657`). Also gates target
+  satisfiability (`_targets_are_satisfiable`, `:79-114`) and
+  additional non-mana costs (`_additional_costs_payable`,
+  `:117-165`).
+- Rust: `rust/src/state_ops_legal.rs:legal_decisions` — the
+  CastSpell emission loop (~`:1040-1099`); module docstring
+  `:77-88` ("Deferred mana-affordability check") + `:90-101`
+  ("Deferred alt-cost flags"). The ActivateAbility approximation is
+  separately tracked in the "`legal_decisions` ActivateAbility
+  approximated to mana producers" entry above.
+
+**What the asymmetry is**: Python `legal_actions` is **mana-aware**
+— it never enumerates a CastSpell / ActivateAbility whose cost the
+player cannot currently pay (it calls the non-destructive
+`can_pay_cost` predicate, which auto-taps available lands/mana
+creatures hypothetically). Rust `legal_decisions` enumerates
+**structurally** — Rust has no non-destructive `can_pay_cost`
+predicate yet (only the destructive `pay_mana_cost`), so the
+first-slice CastSpell loop emits a `cast_spell` dict for **every**
+non-Land, non-Instant card in hand (plus a warp variant whenever
+`warp_cost.is_some()`) regardless of available mana. At a priority
+point where a hand card's cost is un-payable, the two engines
+present **different legal-decision SETS**: Python omits the cast,
+Rust includes it. The breadth is **not** confined to the
+un-payable-normal-cost case — it spans the entire cast surface
+(normal / kicked / warp / impending / granted-warp / Room-half) and
+the activated-ability surface; it also includes Python-only
+target-satisfiability and additional-cost pruning. (Rust DOES
+filter some structural axes at enumeration — e.g. the post-CE17
+defender keyword — so this is specifically the *cost/target
+payability* axis, not "Rust never prunes".)
+
+**Why it's OK (parity-benign by construction — the
+canonicalization)**: every cross-engine harness uses the
+**observation-driven single-script-replay** contract. The action is
+computed from the **Python** state (the source of truth) — e.g. a
+deterministic agent reading Python's hand/board, or
+`RealGameCombatAgent`, or the bench's `_try_cast_one_creature`
+which does its own Python-side mana counting — and the SAME
+`action_dict` is then applied to BOTH engines via
+`cross_engine.step_both`. **No cross-engine code path calls
+`rust_state.legal_decisions(pid)` to source an agent choice, and no
+field-view divergence check ever compares the two emission sets**
+(`step_both` / `walk_both` compare post-step *field views*, never
+emission sets; the harness docstring at
+`cross_engine.py:~10135` states PassPriority is the only
+enumeration-parity-free action and that emission differences are
+"the next slice's parity surface" — i.e. deliberately out of the
+compared view). Because the Python (pruned) set is the SOLE script
+source, the Rust-only structural superset is **unreachable as an
+agent choice in any cross-engine context**. The warp-admitted
+probe's development-time `py=[True] vs rs=[False,True]`
+observation was an *un-masked direct-probe* of the two enumerators
+(not a trajectory divergence — every `step_both` there was
+byte-equal); it was resolved idiom-faithfully by ramping mana so
+both enumerators agree, and that masking is exactly what the
+negative-control test below reproduces.
+
+**Failure mode**: NONE for cross-engine trajectory parity (proven
+by construction + the regression pins). The only way this becomes
+observable is if a future change wires a Rust-side
+`legal_decisions`-enumerated agent into a cross-engine
+choice/compare path (instead of the Python-derived replay). In that
+hypothetical, an agent could pick the Rust-only structural cast and
+the engines would then be asked to apply an action Python's engine
+considers illegal — `step_both` would raise on the Python side (its
+`apply_action` invariants are stricter), surfacing loudly rather
+than silently diverging. The regression module FAILS LOUDLY if (a)
+Python's mana-aware prune regresses (it would start offering the
+un-payable cast), (b) Rust's structural emission regresses (the
+asymmetry would vanish — at which point this entry must be
+RETIRED), or (c) the single-script-replay canonicalization breaks
+(replayed PassPriority would no longer be byte-equal). Single-engine
+search is unaffected: Python's MCTS uses Python `legal_actions`;
+Rust's `legal_decisions` superset is a documented search-side
+over-enumeration tracked in the sibling Rust-port entries (e.g. the
+ActivateAbility-approximation entry) — that is a *strength* concern
+within the Rust engine, NOT a cross-engine parity concern, and is
+out of scope of this entry.
+
+**Regression pin**:
+`tests/test_cross_engine_legal_set_asymmetry.py` — 3 tests on a
+minimal real-EoE state (the genuine `Slavering Branchsnapper`
+{4}{G}{G} 7/6 printing in p0's hand at turn-1 PRECOMBAT_MAIN):
+(1) `..._mana_payability_asymmetry_characterized` — with 0 mana,
+Python emits no CastSpell, Rust emits the structural one (pins the
+asymmetry + is LOUD on Rust closure); (2)
+`..._is_parity_benign_under_replay` — the same divergent point
+driven by the Python-derived single-script replay stays byte-equal
+every step (pins the canonicalization); (3)
+`..._collapses_with_sufficient_mana` — negative control: with 6 G
+sources both engines emit exactly the base cast (proves the
+divergence is the `can_pay_cost` prune alone, and reproduces the
+warp probe's ramp-to-affordable masking).
+
+**Fix scope estimate**: medium (Rust-side; tracked, not on a
+deadline). Port a non-destructive `can_pay_cost` /
+`try_pay_mana_cost`-with-rollback predicate to
+`rust/src/state_ops_mana.rs`, then gate the `legal_decisions`
+CastSpell + ActivateAbility loops on it (the docstring's promised
+follow-up slice). Lands the alt-cost flag detector at the same time
+for the kicker/warp/impending variants. Closing it RETIRES this
+entry and FLIPS test (1) (Rust would stop emitting the un-payable
+cast) — that test failure is the intended closure signal, not a
+regression to suppress.
+
+**Impact estimate**: zero on cross-engine trajectory parity (the
+deliverable is the characterization + the canonicalization pin —
+it converts an asserted-but-undocumented "documented in
+SEARCH_LIMITATIONS" claim into an actually-documented,
+regression-pinned accepted divergence). Within the Rust engine,
+closing it would tighten `legal_decisions` (fewer wasted search
+visits on un-payable casts) — a strength gain tracked under the
+sibling Rust-port entries, not here.
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,
