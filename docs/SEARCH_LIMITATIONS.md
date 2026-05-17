@@ -4679,6 +4679,109 @@ the spell-card bench-admit lever intentionally NOT exercised).
 
 ---
 
+## Biosynthic Burst — `BiosynthicBurstEffect` (unit) Effect half shipped byte-equal; full Instant AUTO-JOINS the spell-card-bridge admit set; counter-doubling / Terrasymbiosis fan-out NOT replicated (mirrors the proven `PutPlusOneCounterOnCreatureYouControl` sibling)
+
+**Location**: `rust/src/cards.rs`
+(`Effect::BiosynthicBurstEffect` field-free UNIT variant +
+`parse_effect` arm `biosynthic_burst_effect` + `effect_to_pydict`
+arm) + `rust/src/state_ops_resolve.rs` (the resolve match arm beside
+the Depressurize arm — controller-restricted first-creature scan;
+`obj.counters.saturating_add(1)`; the
+`UeotModifier::GrantKeyword { keyword }` push for
+{reach, trample, indestructible}; `obj.tapped = false`). Bridge arm
+`src/mtg_bot/parity/cross_engine.py` (`biosynthic_burst_effect`,
+immediately above the `PHASE5_BRIDGE_ARMS` sentinel). Python→dict
+reverse-serializer leaf
+`src/mtg_bot/parity/trajectory.py` (`_python_spell_effect_to_dict`
+`_leaf`). Python class (pre-existing, NOT new):
+`BiosynthicBurstEffect` (`src/mtg_bot/effects/bespoke.py:1466`).
+
+**What the shortcut is**: Biosynthic Burst (~22,799 17lands decks)
+is an `[Instant] {1}{G}` printing "Put a +1/+1 counter on target
+creature you control. It gains reach, trample, and indestructible
+until end of turn. Untap it." The genuine parsed printing's
+`spell_effect` is `BiosynthicBurstEffect()` (field-free). Python's
+`resolve` does `add_plus_one_counters(state, obj, 1)` then
+`ApplyEffect(GrantKeywords({reach,trample,indestructible}),
+EndOfTurn()).resolve(...)` then `obj.tapped = False`. The shipped
+Rust unit variant fuses the three on one own target. The Effect
+half closes byte-equal; UNLIKE Depressurize (which stayed
+loader-gated), the **full Biosynthic Burst Instant AUTO-JOINS the
+spell-card-bridge bench-admit set** — the lever's
+`_printing_is_bridge_simple_spell` guardrail queries the LIVE
+covered set + round-trips the reverse serializer, so adding the
+Effect + bridge + the reverse-serializer leaf flips the printing in
+(no hardcoded card list — the §2 auto-grow teeth).
+
+**Verified deviation from Depressurize (pinned)**: Python's
+`BiosynthicBurstEffect.legal_targets` IS controller-restricted
+(`o.controller_id == controller_id`,
+`effects/bespoke.py:1483-1485`) — UNLIKE `DepressurizeEffect` whose
+`legal_targets` is ANY creature. So the Rust arm walks ONLY the
+source-controller's battlefield (the same controller-only
+first-creature scan `PutPlusOneCounterOnCreatureYouControl`
+`:7721` and `GrantKeywordsToTargetCreatureUntilEOT` `:10509` use),
+NOT both bfs via `bf_iter_etb_sorted`. Pinned by a Rust regression
+that confirms an opponent's creature is NOT a legal pick (silent
+no-op).
+
+**§2 simplification — counter-doubling / Terrasymbiosis NOT
+replicated (mirrors the already-cross-engine-proven sibling, NOT
+new debt)**: Python's `add_plus_one_counters`
+(`src/mtg_bot/game.py:2023`) (1) applies counter-doubling
+replacement effects via `_counter_doubling_factor` and (2) fires
+`fire_counters_added_to_your_creature_triggers` (Terrasymbiosis
+"whenever you put one or more +1/+1 counters on a creature you
+control" observer triggers). The Rust arm — EXACTLY like its
+already-cross-engine-proven sibling
+`PutPlusOneCounterOnCreatureYouControl`
+(`rust/src/state_ops_resolve.rs:7780`, plain
+`obj.counters.saturating_add(delta)`) — does a plain
+`saturating_add(1)` only, replicating neither. **Why it's OK**: no
+counter-doubling replacement permanent and no "counters added to
+your creature" observer trigger exists in the EoE pool, so on the
+real pool the simplification is bit-equal Python↔Rust (the proven
+sibling arm ships under exactly this rationale). The Python
+`obj.plus_one_counters` ↔ Rust signed-scalar `obj.counters` mapping
+is the established byte-equal cross-engine relation
+(`cross_engine.py` ~:1276). **Failure mode**: if a future
+EoE-superset pool ever adds a +1/+1-counter doubler or a
+counters-added trigger, this arm (and the sibling) would underwrite
+counters / skip the observer trigger vs Python — a divergence.
+**Fix-scope**: port `_counter_doubling_factor` +
+`fire_counters_added_to_your_creature_triggers` into the Rust
+counter-add path (shared with the sibling — one change covers both
+arms); ~1 Rust round. **Impact estimate**: zero production strength
+cost (no doubler / no counters-added trigger in EoE; identical to
+the long-shipped sibling's accepted scope).
+
+**Honest split (§2)**: the Effect half closes + is genuinely probed
+(counter + 3-keyword-UEOT + untap composite, byte-equal incl. the
+cleanup-step UEOT keyword expiry — the round-39 SBA-on-0/0 class).
+The full `{1}{G}` Instant auto-joins the spell-card-bridge admit set
+(pinned). Mirrors the r51..r73 Effect-half precedent + the round-73
+spell-card-bridge auto-grow precedent.
+
+**Pinned by**: 5 Rust regression pins
+(`tests/test_parity_smoke.py::test_rust_biosynthic_burst_*` —
+counter+keywords+untap composite; keywords expire at cleanup while
+the +1/+1 counter is permanent (UEOT-drain / round-39 SBA-on-0/0
+class); controller-restricted scan (opponent creature NOT picked,
+the verified deviation); no-own-creature silent no-op) + 1 admit-set
+auto-grow pin
+(`test_biosynthic_burst_auto_joins_spell_card_bridge_admit_set` —
+covered+bridged + reverse-serializer round-trip ⇒
+`_printing_is_bridge_simple_spell` True, no hardcoded list) + 1
+genuine real-EoE cross-engine probe
+(`test_cross_engine_real_eoe_biosynthic_burst_counter_kw_untap_parity`
+— drives the actual parsed Biosynthic Burst `spell_effect`
+cross-engine on a tapped own 2/2 + an untouched opponent 5/5, WHOLE
+field byte-equal with a strict `compare_fields == []` both
+post-resolve AND after the cleanup-step UEOT drain — no
+targeted-delta carve-out).
+
+---
+
 ## Cross-engine probe harness — `_zone_signature` counters-blindness FIXED + the symmetric-filler pattern for full `compare_fields` (round-r70)
 
 **Location**: `scripts/parity_smoke.py` `_zone_signature` /
