@@ -848,42 +848,112 @@ impl GameState {
             crate::cards::Event::Cast,
             obj_id,
         )?;
-        // Delta 5: bind the deterministic-first legal target. Phase-1
-        // scope is the `target_slot_kinds()==()` single-creature/
-        // permanent slot; the same `bf_iter_etb_sorted` first-creature
-        // scan the per-card bespoke Effect resolve arms use (Python's
-        // centralized `state.battlefield` walk + the deterministic-
-        // first convention). Bound at cast time so the chosen target
-        // is fixed when the spell goes on the stack (matching Python's
-        // separate `_select_spell_targets` decision producing one
-        // bound target on the StackItem). The closed Tier-A spell
-        // arms self-scan and ignore this; it is the forward substrate
-        // for payload-target-reading arms (pin #4 / #6).
-        let bound_target: Option<u32> =
-            crate::bf_iter::bf_iter_etb_sorted(self)
-                .into_iter()
-                .find_map(|o| {
-                    let printing =
-                        self.registry.lookup(o.printing_id)?;
-                    if printing
-                        .card_types
-                        .iter()
-                        .any(|t| t == "Creature")
-                    {
-                        Some(o.id)
-                    } else {
-                        None
+        // Delta 5: bind the deterministic-first legal target(s).
+        //
+        // **Phase 1 (single-target, `target_slot_kinds()==()`):** the
+        // first creature on EITHER battlefield in `bf_iter_etb_sorted`
+        // order (Python's centralized `state.battlefield` walk + the
+        // deterministic-first convention). The closed Tier-A spell
+        // arms self-scan and ignore it; it is the forward substrate
+        // for payload-target-reading arms.
+        //
+        // **Phase 2 (2-slot heterogeneous grammar — Diplomatic
+        // Relations):** the printing's `effects[0]` is the 2-slot
+        // effect. Python's `_select_spell_targets` iterates
+        // `target_slot_kinds()` and, per slot, filters the flat
+        // `legal_targets` to the slot's kind and picks the
+        // first-legal (the `_PickFirstLegalTargetAgent` bench/probe
+        // convention). For Diplomatic Relations the kinds are
+        // `("my_creature","creature")` and `legal_targets` is
+        // `mine ++ theirs` in `state.battlefield` order, so:
+        //   slot 0 = first creature the caster controls,
+        //   slot 1 = first creature a NON-caster controls.
+        // We re-derive that EXACT pair here off `bf_iter_etb_sorted`
+        // (the cross-engine-proven equivalent of Python's
+        // `state.battlefield` ordering — the same equivalence the
+        // Phase-1 Depressurize/Focus-Fire real-EoE probes pinned),
+        // partitioned by `o.controller == player_id`. Bound at cast
+        // time so the picks are fixed on the StackItem (matching
+        // Python binding two targets onto the StackItem at cast
+        // time). The bare-single-target detection stays the default:
+        // a 2-slot effect is detected structurally via
+        // `Effect::DiplomaticRelationsEffect` (the ONLY 2-slot
+        // grammar admitted today; the guardrail
+        // `_printing_is_bridge_simple_spell` Phase-2 widening only
+        // lets this exact shape through).
+        let is_two_slot = self
+            .registry
+            .lookup(printing_id)
+            .map(|p| {
+                matches!(
+                    p.effects.first(),
+                    Some(crate::cards::Effect::DiplomaticRelationsEffect)
+                )
+            })
+            .unwrap_or(false);
+        let (bound_target, bound_target_2): (Option<u32>, Option<u32>) =
+            if is_two_slot {
+                // 2-slot: slot 0 = first caster-controlled creature,
+                // slot 1 = first non-caster-controlled creature, both
+                // in `bf_iter_etb_sorted` order.
+                let mut slot0: Option<u32> = None;
+                let mut slot1: Option<u32> = None;
+                for o in crate::bf_iter::bf_iter_etb_sorted(self) {
+                    let is_creature = self
+                        .registry
+                        .lookup(o.printing_id)
+                        .map(|p| {
+                            p.card_types.iter().any(|t| t == "Creature")
+                        })
+                        .unwrap_or(false);
+                    if !is_creature {
+                        continue;
                     }
-                });
+                    if o.controller == player_id {
+                        if slot0.is_none() {
+                            slot0 = Some(o.id);
+                        }
+                    } else if slot1.is_none() {
+                        slot1 = Some(o.id);
+                    }
+                    if slot0.is_some() && slot1.is_some() {
+                        break;
+                    }
+                }
+                (slot0, slot1)
+            } else {
+                // Phase-1 single-target: first creature on EITHER bf.
+                let t = crate::bf_iter::bf_iter_etb_sorted(self)
+                    .into_iter()
+                    .find_map(|o| {
+                        let printing =
+                            self.registry.lookup(o.printing_id)?;
+                        if printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            Some(o.id)
+                        } else {
+                            None
+                        }
+                    });
+                (t, None)
+            };
         // Delta 4: push the spell StackItem (card stays in hand —
         // Rust's pre-existing spell-stack model). The existing
         // `resolve_top_of_stack` drains it: applies `printing.effects`
-        // with the target swapped in, then `move_source_post_resolve`
-        // sends the spell hand → graveyard (FREE — CR 608.2m).
-        self.stack.push(crate::state::StackItem::new_spell_with_target(
+        // with the target(s) swapped in, then
+        // `move_source_post_resolve` sends the spell hand → graveyard
+        // (FREE — CR 608.2m). `new_spell_with_targets` carries both
+        // slots; `target_obj_id_2` is `None` for Phase-1 single-target
+        // pushes (back-compat — byte-identical to the prior
+        // single-slot push the Phase-2 unified constructor subsumed).
+        self.stack.push(crate::state::StackItem::new_spell_with_targets(
             obj_id,
             player_id,
             bound_target,
+            bound_target_2,
         ));
         // Delta 7: priority/passes reset, verbatim from
         // `cast_creature` / `cast_creature_warp`.

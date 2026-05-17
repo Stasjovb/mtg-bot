@@ -8554,6 +8554,65 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return PutPlusOneCounterOnOpponentsCreature(
             amount=eff_dict.get("amount", 1),
         )
+    if kind == "diplomatic_relations_effect":
+        # **Effect-uncovered Tier-A #7 — Diplomatic Relations
+        # (spell-card-bridge Phase 2 — the 2-slot heterogeneous-
+        # target grammar).**
+        # Rust substrate ``Effect::DiplomaticRelationsEffect`` (a
+        # field-free unit variant — the ``biosynthic_burst_effect``
+        # idiom; parser ``"diplomatic_relations_effect"``; resolve in
+        # state_ops_resolve.rs beside the Focus Fire / Biosynthic
+        # Burst / Depressurize Tier-A arms).
+        #
+        # **Field shape.** No fields — Python's
+        # ``DiplomaticRelationsEffect()`` (effects/bespoke.py:1884)
+        # carries none; the +1/+0, the vigilance grant, and the
+        # power-equal-to-effective-power damage are all intrinsic.
+        # The 2-slot targets (``("my_creature",id)`` slot 0 +
+        # ``("creature",id)`` slot 1) ride on the spell StackItem
+        # (``target_obj_id`` / ``target_obj_id_2``), NOT in this
+        # dict — exactly the Phase-1 single-target convention,
+        # generalized to two slots.
+        #
+        # **Resolve semantics (parity-relevant — the FIRST 2-slot
+        # heterogeneous-target spell arm).** Rust resolves the source
+        # controller (5-zone walk + stack scan), reads slot 0
+        # (friendly pumped creature) off
+        # ``current_resolve_payload_target_id`` and slot 1
+        # (opponent's damaged creature) off
+        # ``current_resolve_payload_target_id_2`` (both swapped in by
+        # BOTH resolve entry points from the StackItem). Slot-0
+        # re-validation (CR 608.2b): still on a battlefield AND still
+        # caster-controlled, else the WHOLE effect is a silent no-op
+        # (Python's ``my_obj = None`` short-circuits before damage
+        # too). Pump = the proven ``DepressurizeEffect``
+        # PowerToughnessBonus(+1/0) push + the proven
+        # ``BiosynthicBurstEffect`` GrantKeyword("vigilance",
+        # lowercase) push (both drain at cleanup byte-equal). Slot-1
+        # re-validation: on a battlefield AND non-caster-controlled,
+        # else the pump applied but damage skipped (Python early
+        # return). Damage = slot-0's POST-PUMP counters-INCLUSIVE
+        # effective power (the EXACT ``DepressurizeEffect``
+        # counters-inclusive re-derived formula, the Python-SoT
+        # ``effective_power`` view — unclamped, applied via
+        # ``obj.damage.saturating_add`` exactly like
+        # ``FocusFireEffect``/``DealDamageAnyTarget``).
+        #
+        # **Honest Effect-half split (§2).** The Effect closes + is
+        # genuinely probed (a 2-slot real cast→resolve is DRIVEN —
+        # both targets bound at cast time byte-equal via the
+        # first-legal convention — pump + vigilance + power-equal
+        # damage byte-equal incl. the cleanup UEOT expiry). The full
+        # Diplomatic Relations **Instant** auto-joins the
+        # spell-card-bridge admit set (the lever's guardrail queries
+        # the LIVE covered set — adding this Effect + bridge + the
+        # Python→dict reverse-serializer leaf + the guardrail's
+        # Phase-2 2-slot widening flips
+        # ``_printing_is_bridge_simple_spell`` to bench-admit; the
+        # admit set grows 6→7, auto-grow, no hardcoded list — the §2
+        # teeth).
+        from mtg_bot.effects.bespoke import DiplomaticRelationsEffect
+        return DiplomaticRelationsEffect()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

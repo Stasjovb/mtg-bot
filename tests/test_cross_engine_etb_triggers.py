@@ -21047,16 +21047,20 @@ def test_bridge_spell_card_lever_phase1_real_eoe_cast_resolve_parity():
 
 def test_spell_card_lever_phase1_negative_pins_decline_set():
     """**Spell-card-bridge lever Phase 1 (round-70) + Lander-spell-
-    token-seating sub-substrate (round-73) — pins #10-#13 (the §2
-    guardrail's teeth).** Table-driven assertions that the decline set
-    stays filtered and the admit set is EXACTLY the covered+bridged
-    single-target Tier-A spells whose Effect close landed AND whose
-    token (if any) the loader can seat (NOT a static card-name list —
-    the lever is the multiplier; the set auto-grows as each per-card
-    Tier-A close lands; the round-73 sub-substrate added the two
-    Lander-pid spells once their token became seatable on the spell
-    axis — Pin #12b flipped from DECLINE to SEATED, new-code-is-
-    right)."""
+    token-seating sub-substrate (round-73) + Phase 2 (round-76) —
+    pins #10-#13 (the §2 guardrail's teeth).** Table-driven
+    assertions that the decline set stays filtered and the admit set
+    is EXACTLY the covered+bridged Tier-A spells whose Effect close
+    landed, whose token (if any) the loader can seat, AND whose
+    target grammar is implemented (Phase-1 single-target OR Phase-2
+    the one 2-slot ``('my_creature','creature')`` pair) — NOT a
+    static card-name list; the lever is the multiplier; the set
+    auto-grows as each per-card Tier-A close lands. The round-73
+    sub-substrate added the two Lander-pid spells once their token
+    became seatable on the spell axis (Pin #12b flipped DECLINE →
+    SEATED); round-76 Phase 2 flipped Diplomatic Relations DECLINE →
+    ADMITTED via the 2-slot grammar (Pin #12 — new-code-is-right per
+    ``feedback_parity_new_code_is_right.md``)."""
     from mtg_bot.parity import trajectory
     from mtg_bot.cards.source import get_active_source
 
@@ -21093,16 +21097,61 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
             is False
         ), "CloseEncounterEffect must NOT be covered+bridged (Tier-C)"
 
-    # Pin #12: Diplomatic Relations stays DECLINED in Phase 1 — it is
-    # Phase 2 of THIS lever (the 2-slot grammar). Pin BOTH rejection
-    # reasons fire: (2,2) target_count_range AND non-empty
-    # target_slot_kinds.
+    # Pin #12 (round-76 Phase 2 — FLIPPED from DECLINE to ADMITTED;
+    # new-code-is-right per feedback_parity_new_code_is_right). In
+    # Phase 1 Diplomatic Relations was DECLINED (2-slot grammar
+    # unimplemented). Phase 2 ships the 2-slot StackItem binding +
+    # double resolve-swap + the DiplomaticRelationsEffect Rust
+    # variant/bridge/reverse-leaf, so it now passes the guardrail.
+    # Pin the EXACT shape that flipped (the surgical 2-slot widening,
+    # NOT a blanket multi-target widen): (2,2) target_count_range AND
+    # the disjoint friendly/opponent slot pair — AND that it is now
+    # covered+bridged + round-trips the reverse serializer.
     dr = src.get("Diplomatic Relations")
     if dr is not None:
-        assert trajectory._printing_is_bridge_simple_spell(dr) is False
         se = dr.spell_effect
         assert se.target_count_range() == (2, 2)
         assert se.target_slot_kinds() == ("my_creature", "creature")
+        assert trajectory._printing_is_bridge_simple_spell(dr) is True, (
+            "Diplomatic Relations must be ADMITTED post-Phase-2 (the "
+            "2-slot grammar is implemented + pinned byte-equal)")
+        assert (
+            trajectory._spell_effect_is_covered_and_bridged(dr) is True
+        ), "DiplomaticRelationsEffect must be covered+bridged (#7)"
+        assert trajectory._python_spell_effect_to_dict(
+            dr.spell_effect
+        ) == {"kind": "diplomatic_relations_effect"}, (
+            "DR reverse serializer must emit the field-free kind-only "
+            "dict (the 2-slot targets ride on the StackItem, NOT the "
+            "effect dict)")
+        # Negative control — the surgical Phase-2 widening admits ONLY
+        # this exact 2-slot pair, NOT any 2-target shape. A synthetic
+        # (2,2) effect with a DIFFERENT slot tuple stays declined
+        # (proves the widening is the documented one heterogeneous
+        # pair, not a count-chasing blanket — the §2 teeth).
+        class _FakeOtherTwoSlot:
+            def target_count_range(self):
+                return (2, 2)
+
+            def target_slot_kinds(self):
+                return ("creature", "creature")
+
+        class _FakePrinting:
+            card_types = ("Instant",)
+            spell_effect = _FakeOtherTwoSlot()
+            warp_cost = None
+            kicker_cost = None
+            impending_cost = None
+            room_halves = ()
+            mana_cost = None
+            additional_cost_choice = None
+
+        assert (
+            trajectory._printing_is_bridge_simple_spell(_FakePrinting())
+            is False
+        ), ("the Phase-2 widening must admit ONLY the documented "
+            "('my_creature','creature') pair — a different 2-slot "
+            "kind-tuple stays declined (the surgical-widen §2 teeth)")
 
     # Pin #12b (Lander-spell-token-seating sub-substrate, round-73 —
     # FLIPPED from DECLINE to SEATED; new-code-is-right per
@@ -21185,14 +21234,16 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         if trajectory._printing_is_bridge_simple_spell(src[n])
     )
     assert admitted == [
-        "Biosynthic Burst", "Depressurize", "Focus Fire",
-        "Orbital Plunge", "Radiant Strike", "Seedship Impact",
+        "Biosynthic Burst", "Depressurize", "Diplomatic Relations",
+        "Focus Fire", "Orbital Plunge", "Radiant Strike",
+        "Seedship Impact",
     ], (
-        f"Phase-1 admit set drifted: {admitted} (expected exactly the "
-        f"6 covered+bridged single-target Tier-A spells whose Effect "
-        f"close landed + whose Lander pid (if any) is now seatable; "
-        f"the set auto-grows further as the remaining Tier-A spells "
-        f"close)")
+        f"spell-card-bridge admit set drifted: {admitted} (expected "
+        f"exactly the 7 covered+bridged Tier-A spells: the 6 "
+        f"single-target Phase-1 cards + Diplomatic Relations, the "
+        f"Phase-2 2-slot card the round-76 grammar widening admitted "
+        f"— the set grew 6→7; it auto-grows further as the remaining "
+        f"Tier-A spells close)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():
@@ -22087,6 +22138,292 @@ def test_bridge_put_plus_one_counter_on_opponents_creature_bidirectional_round_t
         }
     )
     assert pid == 0, "Rust must register the Sunset Saboteur trigger dict"
+
+
+def test_bridge_spell_card_lever_phase2_diplomatic_relations_materialize_byte_equal():
+    """**Spell-card-bridge lever Phase 2 (round-76) — bridge pin #15
+    (the bidirectional 2-slot materialize round-trip).** Sibling of
+    pin #7 for the Phase-2 2-slot card. The real Diplomatic Relations
+    printing routed through ``_printing_to_card_def`` materializes the
+    SAME printing on both engines:
+
+      * Rust registry-dict side: the spell CardDef's ``spell_effect``
+        is the FIELD-FREE ``{"kind": "diplomatic_relations_effect"}``
+        dict (the 2-slot targets ride on the StackItem, NOT the effect
+        dict — exactly the Phase-1 convention generalized to 2 slots);
+      * Python side: ``_card_def_to_python_printing`` re-materializes
+        the field-free ``DiplomaticRelationsEffect`` byte-equal to the
+        live-parsed effect type, with the (2,2) /
+        ('my_creature','creature') target grammar intact.
+
+    Proves Gate A (the Phase-2 guardrail widening admits) + Gate B
+    (CardDef.spell_effect + the bidirectional bridge arm + the
+    reverse-serializer leaf) round-trip from ONE source — the
+    no-fallback-hybrid discipline.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import _card_def_to_python_printing
+    from mtg_bot.cards.source import get_active_source
+
+    src = get_active_source().get_printings()
+    real = src.get("Diplomatic Relations")
+    if real is None:
+        import pytest
+        pytest.skip("Diplomatic Relations absent from active CardSource")
+    # Verify-against-live: genuinely the Phase-2 2-slot admit shape.
+    assert trajectory._printing_is_bridge_simple_spell(real), (
+        "Diplomatic Relations must pass the Phase-2 spell guardrail")
+    se = real.spell_effect
+    assert se.target_count_range() == (2, 2)
+    assert se.target_slot_kinds() == ("my_creature", "creature")
+    cd = trajectory._printing_to_card_def(real)
+    assert cd.card_type == "Instant"
+    # Rust registry-dict side: the field-free 2-slot effect dict.
+    assert cd.spell_effect == {"kind": "diplomatic_relations_effect"}
+    # Python side: round-trips byte-equal to the live-parsed effect.
+    rt = _card_def_to_python_printing(cd)
+    assert rt.spell_effect is not None
+    assert type(rt.spell_effect) is type(real.spell_effect)
+    assert rt.spell_effect.target_count_range() == (2, 2)
+    assert rt.spell_effect.target_slot_kinds() == (
+        "my_creature", "creature")
+    assert rt.card_types == ("Instant",)
+    assert rt.is_instant is True
+
+
+def test_bridge_spell_card_lever_phase2_diplomatic_relations_real_eoe_cast_resolve_parity():
+    """**Spell-card-bridge lever Phase 2 (round-76) — bridge pin #16
+    (the genuine full-card 2-slot admit / acceptance probe).** Drive
+    the ACTUAL parsed Diplomatic Relations printing through the
+    genuine loader admit transform (``_printing_to_card_def`` — pin
+    #15 proved that transform byte-equal) into a DETERMINISTIC matched
+    game with a friendly creature (p0) AND an opponent creature (p1),
+    then via ``step_both``: the 2-slot cast (``CastSpell`` ->
+    ``cast_spell_noncreature`` -> the 2-slot first-legal scan binds
+    slot 0 = first p0-controlled creature + slot 1 = first
+    p1-controlled creature onto the StackItem) AND the resolve (the
+    harness CE5 cast-vs-resolve mirror drains both stacks: the double
+    resolve-time swap threads both targets, ``DiplomaticRelations
+    Effect`` pumps slot-0 +1/+0 + vigilance UEOT then deals slot-0's
+    post-pump effective power as damage to slot-1, then ``move_source
+    _post_resolve`` sends the spell hand -> graveyard) surface ZERO
+    field-view divergences. Asserts post-cast AND post-resolve
+    byte-equal + the spell source in the controller's graveyard +
+    the pump/vigilance/damage observably resolved on BOTH engines.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, step_both, advance_phase_python,
+        compare_fields,
+    )
+    from tests.test_trajectory_parity import _step_views
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+    from mtg_bot.cards.source import get_active_source
+
+    src = get_active_source().get_printings()
+    real = src.get("Diplomatic Relations")
+    if real is None:
+        import pytest
+        pytest.skip("Diplomatic Relations absent from active CardSource")
+    assert trajectory._printing_is_bridge_simple_spell(real), (
+        "Diplomatic Relations must pass the Phase-2 spell guardrail")
+
+    dr_cd = trajectory._printing_to_card_def(real)
+    # p0's friendly creature (a 3/3 so the post-pump power = 4 is
+    # distinct from the 3/3's toughness — proves the +1 power read).
+    ally = CardDef(name="Ally Beast", card_type="Creature",
+                   mana_cost_generic=1, mana_cost_colored=(("G", 1),),
+                   power=3, toughness=3)
+    # p1's opponent creature (a 5/5 so it SURVIVES 4 damage —
+    # post-resolve byte-equality on a damaged-but-alive creature is a
+    # stronger pin than a death that just removes the object).
+    foe = CardDef(name="Foe Beast", card_type="Creature",
+                  mana_cost_generic=1, mana_cost_colored=(("G", 1),),
+                  power=5, toughness=5)
+    forest = CardDef(name="Forest", card_type="Land",
+                     mana_produced=("G",))
+    spec = DeckSpec(
+        card_defs=(dr_cd, ally, foe, forest),
+        p0_library=tuple(
+            ["Ally Beast", "Diplomatic Relations"] + ["Forest"] * 58),
+        p1_library=tuple(["Foe Beast"] + ["Forest"] * 59),
+    )
+    py, rs = trajectory.setup_matched_game(spec)
+    for pl in py.players:
+        pl.agent = _PickFirstLegalTargetAgent()
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+            pv, rv = _step_views(py, rs)
+            d = compare_fields(pv, rv)
+            assert not d, (
+                f"phase advance ({pv['step']}, turn {pv['turn']}) "
+                f"diverged: "
+                f"{[(x.field, x.py_value, x.rust_value) for x in d]}")
+
+    def tap_n(n):
+        ai = py.active_player_idx
+        taps = 0
+        for o in list(py.battlefield):
+            if (o.controller_id == ai and o.printing.is_land
+                    and not o.tapped and not o.summoning_sick
+                    and taps < n):
+                assert not step_both(
+                    py, rs,
+                    {"kind": "activate_ability",
+                     "source_id": int(o.id),
+                     "ability_index": 0}).divergences
+                taps += 1
+        assert taps == n, f"need {n} mana; tapped {taps}"
+
+    def play_forest():
+        ai = py.active_player_idx
+        hf = [o for o in py.players[ai].hand
+              if o.printing.name == "Forest"]
+        assert hf, "Forest must be in hand this ramp turn"
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land",
+             "card_id": int(hf[0].id)}).divergences
+
+    adv(3)  # turn 1 (p0) MAIN1
+    # p0 ramps a Forest; pass to p1.
+    play_forest()
+    adv(12)  # -> p1 MAIN1
+    # p1 plays a Forest + casts Foe Beast ({1}{G} = tap... p1 has 1
+    # Forest from its draw step only; play one then need 2 mana — so
+    # ramp p1 over 2 of its turns).
+    play_forest()
+    adv(24)  # -> p1 MAIN1 again (skip p0 turn — p0 just passes)
+    # p0's intervening turn: ramp another Forest so p0 reaches 3 mana
+    # for the Bear + later the spell. (adv(24) crossed a p0 turn; we
+    # land back at p1 — re-orient by driving forward to p0.)
+    # Simpler deterministic ramp: drive several turns playing a Forest
+    # for whoever is active + casting each side's creature when it can
+    # afford {1}{G}.
+    cast_ally = False
+    cast_foe = False
+    for _ in range(8):
+        ai = py.active_player_idx
+        # Play a land if one is in hand.
+        hf = [o for o in py.players[ai].hand
+              if o.printing.name == "Forest"]
+        if hf:
+            assert not step_both(
+                py, rs,
+                {"kind": "play_land",
+                 "card_id": int(hf[0].id)}).divergences
+        # Count untapped lands available.
+        lands = [o for o in py.battlefield
+                 if o.controller_id == ai and o.printing.is_land
+                 and not o.tapped and not o.summoning_sick]
+        if not cast_ally and ai == py.active_player_idx:
+            ally_h = [o for o in py.players[ai].hand
+                      if o.printing.name == "Ally Beast"]
+            if ally_h and len(lands) >= 2:
+                tap_n(2)
+                assert not step_both(
+                    py, rs,
+                    {"kind": "cast_spell",
+                     "card_id": int(ally_h[0].id)}).divergences
+                cast_ally = True
+        foe_h = [o for o in py.players[ai].hand
+                 if o.printing.name == "Foe Beast"]
+        if not cast_foe and foe_h and len(lands) >= 2:
+            tap_n(2)
+            assert not step_both(
+                py, rs,
+                {"kind": "cast_spell",
+                 "card_id": int(foe_h[0].id)}).divergences
+            cast_foe = True
+        adv(12)
+        if cast_ally and cast_foe:
+            break
+    assert cast_ally and cast_foe, (
+        f"deterministic ramp must seat both creatures "
+        f"(ally={cast_ally} foe={cast_foe})")
+    # Drive to a p0 MAIN1 where p0 has Diplomatic Relations + >=3 mana
+    # and BOTH creatures are on the battlefield, no longer
+    # summoning-sick (vigilance/damage don't care about sickness but
+    # the deterministic walk needs both present).
+    for _ in range(12):
+        ai = py.active_player_idx
+        allies = [o for o in py.battlefield
+                  if o.controller_id == ai
+                  and o.printing.name == "Ally Beast"]
+        foes = [o for o in py.battlefield
+                if o.controller_id != ai
+                and o.printing.name == "Foe Beast"]
+        spell_h = [o for o in py.players[ai].hand
+                   if o.printing.name == "Diplomatic Relations"]
+        hf = [o for o in py.players[ai].hand
+              if o.printing.name == "Forest"]
+        if hf:
+            assert not step_both(
+                py, rs,
+                {"kind": "play_land",
+                 "card_id": int(hf[0].id)}).divergences
+        lands = [o for o in py.battlefield
+                 if o.controller_id == ai and o.printing.is_land
+                 and not o.tapped and not o.summoning_sick]
+        if allies and foes and spell_h and len(lands) >= 3:
+            ally_obj = allies[0]
+            foe_obj = foes[0]
+            gy_before = len(py.players[ai].graveyard)
+            # Cast Diplomatic Relations. {2}{G} = tap 3 lands.
+            tap_n(3)
+            s = step_both(
+                py, rs,
+                {"kind": "cast_spell",
+                 "card_id": int(spell_h[0].id)})
+            # Pin #16: post-cast AND post-resolve byte-equal (the CE5
+            # cast-vs-resolve mirror drains both stacks before the
+            # compare — proves the 2-slot bind + double resolve-swap +
+            # pump + vigilance + power-equal damage are byte-equal).
+            assert not s.divergences, (
+                "Diplomatic Relations 2-slot cast->resolve diverged: "
+                f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+            # The spell source is in the controller's graveyard on
+            # BOTH engines post-resolve (zero divergence already
+            # proves Rust agrees; assert the Python observable).
+            py_spell = next(
+                (o for o in py.players[ai].graveyard
+                 if o.printing.name == "Diplomatic Relations"), None)
+            assert py_spell is not None, (
+                "Diplomatic Relations must be in p%d graveyard "
+                "post-resolve" % ai)
+            assert len(py.players[ai].graveyard) == gy_before + 1, (
+                "exactly the spell goes to graveyard (the 5/5 Foe "
+                "Beast survives 4 damage — no death)")
+            # Effect observably resolved: slot-0 Ally Beast pumped
+            # +1/+0 + vigilance UEOT; slot-1 Foe Beast took 4 damage
+            # (post-pump effective power = 3 + 1).
+            from mtg_bot.game import effective_power, effective_keywords
+            live_ally = next(
+                (o for o in py.battlefield if o.id == ally_obj.id),
+                None)
+            assert live_ally is not None
+            assert effective_power(py, live_ally) == 4, (
+                "Ally Beast must be 4/3 post-pump (3/3 +1/+0 UEOT)")
+            assert "vigilance" in effective_keywords(py, live_ally), (
+                "Ally Beast must have vigilance UEOT post-resolve")
+            live_foe = next(
+                (o for o in py.battlefield if o.id == foe_obj.id),
+                None)
+            assert live_foe is not None, (
+                "Foe Beast (5/5) survives 4 damage")
+            assert live_foe.damage == 4, (
+                f"Foe Beast must have 4 marked damage (Ally's "
+                f"post-pump power); got {live_foe.damage}")
+            break
+        adv(12)
+    else:
+        import pytest
+        pytest.fail(
+            "deterministic walk never reached a castable Diplomatic "
+            "Relations state with both creatures + 3 mana")
 
 
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===

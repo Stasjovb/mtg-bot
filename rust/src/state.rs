@@ -648,6 +648,21 @@ pub struct StackItem {
     /// targeted arms that opt into the payload-target convention,
     /// e.g. `EquipToTargetCreatureYouControl`).
     pub target_obj_id: Option<u32>,
+    /// **Spell-card-bridge lever, Phase 2 (round-76).** The SECOND
+    /// deterministic-first bound target for a `StackItemKind::Spell`
+    /// whose `spell_effect` is a 2-slot heterogeneous-target spell
+    /// (today: Diplomatic Relations — slot 0 = friendly pumped
+    /// creature on `target_obj_id`, slot 1 = opponent's damaged
+    /// creature here). Computed at cast time in
+    /// `cast_spell_noncreature` (the 2-slot first-legal scan,
+    /// mirroring Python's `_select_spell_targets` per-`slot_kinds`
+    /// pick) and swapped into `current_resolve_payload_target_id_2`
+    /// by both resolve entry points. `None` for every single-target
+    /// / pre-Phase-2 spell push (back-compat — the
+    /// discriminant-plus-optional pattern; the closed Phase-1
+    /// single-target arms self-scan and IGNORE both fields, so the
+    /// swap is a correct no-op for them).
+    pub target_obj_id_2: Option<u32>,
 }
 
 impl StackItem {
@@ -661,21 +676,38 @@ impl StackItem {
             kind: StackItemKind::Spell,
             trigger_payload: None,
             target_obj_id: None,
+            target_obj_id_2: None,
         }
     }
 
-    /// **Spell-card-bridge lever, Phase 1 (round-70).** Spell-shape
-    /// constructor that carries a deterministic-first bound target.
-    /// Used by `cast_spell_noncreature` for a single-required-target
-    /// Instant/Sorcery. Mirrors the existing
-    /// `new_trigger` / `new_trigger_with_target` pair (CE20 Slice 4):
-    /// the bare `new_spell` stays the back-compat path (every
-    /// pre-lever spell push is untargeted) and this sibling carries
-    /// the cast-time chosen target for the spell-cast pipeline.
-    pub(crate) fn new_spell_with_target(
+    /// **Spell-card-bridge lever — Phase 1 (round-70) single-target
+    /// + Phase 2 (round-76) 2-slot, unified.** Spell-shape
+    /// constructor that carries up to TWO deterministic-first bound
+    /// targets. Mirrors the `new_trigger`/`new_trigger_with_target`
+    /// pair (CE20 Slice 4): the bare `new_spell` stays the
+    /// back-compat untargeted path; this carries the cast-time
+    /// chosen target(s) for the spell-cast pipeline.
+    ///
+    /// - **Single-target spells** (Phase-1 Tier-A — Radiant Strike,
+    ///   Depressurize, Focus Fire, Biosynthic Burst, …) pass
+    ///   `target_obj_id = Some(first_legal)`, `target_obj_id_2 =
+    ///   None`. Byte-identical to the prior single-slot
+    ///   `new_spell_with_target` (now subsumed — Phase 2 removed the
+    ///   redundant single-slot constructor rather than keep a dead
+    ///   zombie alongside the 2-slot superset; the no-fallback-hybrid
+    ///   / clean-replacement discipline).
+    /// - **2-slot heterogeneous-target spells** (Phase-2 Tier-A —
+    ///   Diplomatic Relations: slot 0 = friendly pumped creature,
+    ///   slot 1 = opponent's damaged creature) pass both `Some(_)`.
+    ///
+    /// Both ride into resolve via the
+    /// `current_resolve_payload_target_id` /
+    /// `current_resolve_payload_target_id_2` swaps.
+    pub(crate) fn new_spell_with_targets(
         source_obj_id: u32,
         controller: u8,
         target_obj_id: Option<u32>,
+        target_obj_id_2: Option<u32>,
     ) -> Self {
         Self {
             source_obj_id,
@@ -683,6 +715,7 @@ impl StackItem {
             kind: StackItemKind::Spell,
             trigger_payload: None,
             target_obj_id,
+            target_obj_id_2,
         }
     }
 
@@ -713,6 +746,9 @@ impl StackItem {
             // slot is Spell-kind-only; a trigger carries its target
             // on `trigger_payload.target_id` instead.
             target_obj_id: None,
+            // Phase-2 (round-76): the 2-slot spell grammar is
+            // Spell-kind-only.
+            target_obj_id_2: None,
         }
     }
 
@@ -745,6 +781,8 @@ impl StackItem {
             // slot — a trigger's target rides on
             // `trigger_payload.target_id`.
             target_obj_id: None,
+            // Phase-2 (round-76): Spell-kind-only 2-slot grammar.
+            target_obj_id_2: None,
         }
     }
 }
@@ -1479,6 +1517,24 @@ pub struct GameState {
     /// state pre- and post-resolve produces the same digest
     /// regardless of intermediate target picks.
     pub current_resolve_payload_target_id: Option<u32>,
+    /// **Spell-card-bridge lever, Phase 2 (round-76).** The SECOND
+    /// resolve-time payload target — the slot-1 / heterogeneous
+    /// second target of a 2-slot spell (today: Diplomatic
+    /// Relations' opponent-creature damage target; slot 0 is the
+    /// friendly pumped creature carried on
+    /// `current_resolve_payload_target_id`). Swapped in/out by both
+    /// resolve entry points exactly like its single-slot sibling
+    /// (save → set → restore bracketing the apply closure). `None`
+    /// for every pre-Phase-2 push (back-compat — single-target
+    /// spells, triggers, and activations never set it; the closed
+    /// Phase-1 single-target arms self-scan and IGNORE both payload
+    /// targets, so the swap is a correct no-op for them). It is the
+    /// forward substrate for any 2-slot arm that opts into the
+    /// payload-target convention (today only
+    /// `DiplomaticRelationsEffect`). Transient + not serialized into
+    /// the fingerprint, identical discipline to
+    /// `current_resolve_payload_target_id`.
+    pub current_resolve_payload_target_id_2: Option<u32>,
     /// **CE20 follow-up Slice 5 (Walker loyalty Slice C) —
     /// once-per-turn-per-walker activation ledger.** CR 606.3:
     /// "A player may activate a loyalty ability of a planeswalker
@@ -1593,6 +1649,7 @@ impl Clone for GameState {
             pending_leaves_dispatches: self.pending_leaves_dispatches.clone(),
             pending_token_cease: self.pending_token_cease.clone(),
             current_resolve_payload_target_id: self.current_resolve_payload_target_id,
+            current_resolve_payload_target_id_2: self.current_resolve_payload_target_id_2,
             // CE20 Slice 5 (Walker loyalty Slice C): clone the once-
             // per-turn-per-walker ledger. CoW-friendly; HashSet's
             // clone is O(n) where n is the number of distinct walker
@@ -2106,6 +2163,11 @@ pub fn make_synthetic_state(
         // set by the stack resolver before apply_effect for
         // targeted activations, restored after. None by default.
         current_resolve_payload_target_id: None,
+        // Spell-card-bridge lever Phase 2: the second resolve-time
+        // payload-target slot (2-slot spells, e.g. Diplomatic
+        // Relations). None by default — single-target spells /
+        // triggers / activations never set it.
+        current_resolve_payload_target_id_2: None,
         // CE20 Slice 5 (Walker loyalty Slice C): empty
         // once-per-turn-per-walker ledger at construction; reset
         // each turn at cleanup.

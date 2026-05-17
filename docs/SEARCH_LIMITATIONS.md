@@ -5022,6 +5022,108 @@ targeted blocking Bears — no targeted-delta carve-out).
 
 ---
 
+## Diplomatic Relations — `DiplomaticRelationsEffect` (unit) Effect half shipped byte-equal; full Instant AUTO-JOINS the spell-card-bridge admit set via the Phase-2 2-slot grammar; vigilance-via-UEOT-keyword + counters-inclusive effective-power mirror the proven siblings (NO static-anthem / switch_pt fold — bridge-pool-empty by construction)
+
+**Location**: `rust/src/cards.rs`
+(`Effect::DiplomaticRelationsEffect` field-free unit variant +
+`parse_effect` arm `diplomatic_relations_effect` + `effect_to_dict`
+arm) + `rust/src/state_ops_resolve.rs` (the resolve match arm beside
+the Focus Fire / Biosynthic Burst / Depressurize Tier-A arms —
+5-zone source-controller resolution; the 2-slot payload-target reads
+off `current_resolve_payload_target_id` /
+`current_resolve_payload_target_id_2`; the `PowerToughnessBonus
+{+1,0}` + `GrantKeyword{"vigilance"}` UEOT pushes; the
+`DepressurizeEffect` counters-inclusive effective-power re-derivation;
+`obj.damage.saturating_add`). 2-slot StackItem substrate
+`rust/src/state.rs` (`StackItem.target_obj_id_2` +
+`new_spell_with_targets`); 2-slot cast-time bind
+`rust/src/state_ops_cast.rs` (`cast_spell_noncreature`). Bridge arm
+`src/mtg_bot/parity/cross_engine.py` (`diplomatic_relations_effect`,
+immediately above the `PHASE5_BRIDGE_ARMS` sentinel). Python→dict
+reverse-serializer leaf `src/mtg_bot/parity/trajectory.py`
+(`_python_spell_effect_to_dict` `_leaf`). Python class
+(pre-existing, NOT new): `DiplomaticRelationsEffect`
+(`src/mtg_bot/effects/bespoke.py:1884`).
+
+**What the shortcut is**: Diplomatic Relations (~29,818 17lands
+decks) is a `[Instant] {2}{G}` printing "Target creature you control
+gets +1/+0 and gains vigilance until end of turn. It deals damage
+equal to its power to target creature an opponent controls." — the
+SOLE 2-slot heterogeneous-target Tier-A spell
+(`target_count_range()==(2,2)`,
+`target_slot_kinds()==('my_creature','creature')`). The genuine
+parsed `spell_effect` is `DiplomaticRelationsEffect()` (field-free).
+Python's `resolve` pumps slot-0 +1/+0 + grants vigilance via
+`ApplyEffect(GrantKeywords({'vigilance'}), EndOfTurn())`, then deals
+`effective_power(state, slot0)` (post-pump) damage to slot-1 via
+`_apply_damage`. The Effect half closes byte-equal; like Biosynthic
+Burst / Focus Fire the **full Diplomatic Relations Instant
+AUTO-JOINS the spell-card-bridge bench-admit set** — the lever's
+`_printing_is_bridge_simple_spell` guardrail queries the LIVE
+covered set + round-trips the reverse serializer + (Phase 2) the
+surgical 2-slot widening, so adding the Effect + bridge + the
+reverse-serializer leaf + the guardrail widening flips the printing
+in (admit set 6→7; no hardcoded list — the §2 auto-grow teeth).
+
+**§2 simplification (mirrors the proven siblings, NOT new debt)**:
+two simplifications, each already cross-engine-proven byte-equal on
+the real bridge-admitted pool:
+
+1. **Vigilance via `UeotModifier::GrantKeyword` (lowercase)** instead
+   of Python's `ApplyEffect(GrantKeywords, EndOfTurn())`
+   continuous-effect path — the EXACT push shape the
+   already-cross-engine-proven `BiosynthicBurstEffect` /
+   `GrantKeywordsToTargetCreatureUntilEOT` arms use; their
+   continuous-effect↔ueot_modifiers equivalence is pinned byte-equal,
+   and both drain at the cleanup step on both engines.
+2. **Post-pump effective power read as the `DepressurizeEffect`
+   counters-inclusive formula** (`base = ueot_base_pt_override().p
+   OR printed_power`, `+ obj.counters`, `+ obj.ueot_power_bonus()`)
+   rather than Python's full `_compute_effective_pt` layer-7 walk.
+   Identical to the Depressurize arm's already-proven conditional
+   read. This omits layer-7c static anthems + 7e `switch_pt` — but
+   the spell-card-bridge bench loader admits ONLY basic lands +
+   simple creatures + the bridged spells, so NO static anthem / no
+   switch_pt continuous effect can be on the battlefield in any
+   bench game (the exact assumption the Depressurize arm relies on,
+   cross-engine-proven byte-equal). Python's `effective_power` is
+   NOT clamped to 0, so the damage is applied UNCONDITIONALLY (no
+   `amount > 0` gate) to byte-mirror Python's `obj.damage += amount`.
+
+**Why it's OK**: each simplification is the EXACT shape of an
+already-cross-engine-proven sibling on the same admitted pool;
+neither introduces a path the other engine models differently. The
+2-slot binding uses the same no-callback first-legal convention as
+Phase 1 (slot 0 = first caster creature, slot 1 = first non-caster
+creature, in `bf_iter_etb_sorted` order = Python's
+`_select_spell_targets` per-slot-kind first-legal). Target
+re-validation at resolve (CR 608.2b) mirrors Python exactly: slot-0
+illegal → WHOLE effect fizzles (no pump, no damage); slot-1 illegal
+→ pump applied, damage skipped.
+
+**Failure mode**: a bench game with a static power-anthem OR a
+`switch_pt` continuous effect on the slot-0 creature would diverge
+(Rust's counters-inclusive read omits layers 7c-static / 7e) — but
+such a permanent is structurally impossible in the spell-card-bridge
+bench (loader admits only basic lands + simple creatures + bridged
+spells; same as Depressurize). A future probe that needs a
+non-first target on either slot would diverge (the agent has no say
+— shared with the Phase-1 deterministic-first entry).
+
+**Fix scope estimate**: fold the static-anthem / switch_pt layers
+into the Rust effective-power read IF the bench loader ever admits a
+static-pump permanent (a shared follow-on with Depressurize, same
+formula site). Thread an agent target decision for the 2 slots for
+the non-first-target case.
+
+**Impact estimate**: +1 Tier-A card (Diplomatic Relations) flips
+loader-drop → bench-admit; ~29,818 17lands decks. The admit set
+grows 6→7. Effect-half is genuinely probed (a 2-slot real
+cast→resolve is DRIVEN byte-equal incl. the lethal SBA on the
+damaged slot-1 creature — no targeted-delta carve-out).
+
+---
+
 ## Cross-engine probe harness — `_zone_signature` counters-blindness FIXED + the symmetric-filler pattern for full `compare_fields` (round-r70)
 
 **Location**: `scripts/parity_smoke.py` `_zone_signature` /
@@ -5111,6 +5213,20 @@ view, not just inside a narrow asserted window.
 
 ## Spell-card-bridge lever Phase 1 — bench-admit is single-required-target-only
 
+**Round-76 update (Phase 2 — Diplomatic Relations, the 2-slot
+heterogeneous-target grammar).** Phase 2 widens
+`_printing_is_bridge_simple_spell` to ALSO admit EXACTLY the one
+2-slot shape `(2,2)` / `('my_creature','creature')` (Diplomatic
+Relations) — the surgical widening, NOT a blanket "any 2-target"
+widen (a synthetic `(2,2)` with a different slot-kind tuple stays
+positively declined; pin #12's negative control). The admit set grew
+**6→7** (the +1 is Diplomatic Relations). The single-target-only
+framing below remains true for every OTHER multi-slot shape (3+
+slots, other 2-slot kind-tuples, "any number of targets") and for
+modal / X / kicker / warp / additional-cost. Close Encounter STAYS
+Tier-C (covered-set gate). Read this sub-section first; the Phase-1
+description below is preserved verbatim for the single-target lane.
+
 **Location**: `src/mtg_bot/parity/trajectory.py`
 (`_printing_is_bridge_simple_spell` + its OR-chain entry in
 `_filter_deck_to_bridge_supported` + its `_printing_to_card_def`
@@ -5159,11 +5275,25 @@ the dedicated entry below).
 
 ## Spell-card-bridge lever Phase 1 — Rust spell-target binding via deterministic-first on the spell StackItem
 
+**Round-76 update (Phase 2 — 2-slot deterministic-first binding).**
+For the 2-slot grammar (Diplomatic Relations) `cast_spell_
+noncreature` binds slot 0 = first caster-controlled creature + slot
+1 = first non-caster-controlled creature off the SAME
+`bf_iter_etb_sorted` scan, mirroring Python's `_select_spell_targets`
+per-`slot_kinds` first-legal pick (slot 0 from the `my_creature`
+pool, slot 1 from the `creature` pool — both in `state.battlefield`
+order, the cross-engine-proven equivalent of `bf_iter_etb_sorted`).
+Same no-callback first-legal shortcut, generalized to two slots; the
+agent still has no say. Failure mode / fix-scope identical (a probe
+needing a non-first target on either slot would diverge; the fix is
+the agent target-decision follow-on). Impact 0 today.
+
 **Location**: `rust/src/state_ops_cast.rs`
 (`cast_spell_noncreature` — the cast-time `bf_iter_etb_sorted`
-first-creature scan bound onto `StackItem.target_obj_id`) +
+first-creature scan bound onto `StackItem.target_obj_id`, plus the
+Phase-2 2-slot partition onto `target_obj_id` + `target_obj_id_2`) +
 `rust/src/state_ops_resolve.rs` (the `current_resolve_payload_
-target_id` swap for `StackItemKind::Spell` in BOTH
+target_id` [+ Phase-2 `_2`] swap for `StackItemKind::Spell` in BOTH
 `resolve_top_of_stack` and `resolve_top_of_stack_pause`).
 
 **What the shortcut is**: Rust binds a single-target spell's target
@@ -5260,11 +5390,31 @@ optional-bounce edge) reuses in its own slice.
 
 ## Spell-card-bridge lever Phase 1 — spell StackItem carries a deterministic target slot (new substrate, not a shortcut)
 
+**Round-76 update (Phase 2 — the 2-slot substrate generalization).**
+Phase 2 added a SECOND target slot:
+`StackItem.target_obj_id_2: Option<u32>` (defaults `None`; only the
+2-slot `cast_spell_noncreature` path sets it) +
+`GameState.current_resolve_payload_target_id_2` (the second
+resolve-time swap field, same transient/not-fingerprinted discipline
+as its sibling) + the second save→set→restore swap mirrored into
+BOTH resolve entry points. The single-slot `new_spell_with_target`
+constructor was REMOVED (subsumed by the unified
+`new_spell_with_targets(.., target, target_2)` — a single-target
+push passes `target_2=None`, byte-identical; the no-fallback-hybrid
+/ clean-replacement discipline, NOT a dead zombie kept alongside the
+superset). Still genuinely-new substrate, NOT a divergence. Back-
+compat by construction (both fields default `None`; the closed
+Phase-1 single-target arms self-scan and ignore BOTH). The
+spell→graveyard move is STILL free (`post_resolve_destination`
+UNCHANGED — Phase 2 adds ZERO graveyard-move code).
+
 **Location**: `rust/src/state.rs` (`StackItem.target_obj_id:
-Option<u32>` + the `new_spell_with_target` constructor) + the
-resolve-time swap for `StackItemKind::Spell` in both
-`resolve_top_of_stack` and `resolve_top_of_stack_pause`
-(`rust/src/state_ops_resolve.rs`).
+Option<u32>` + `target_obj_id_2: Option<u32>` + the unified
+`new_spell_with_targets` constructor) +
+`GameState.current_resolve_payload_target_id` +
+`current_resolve_payload_target_id_2` + the resolve-time double swap
+for `StackItemKind::Spell` in both `resolve_top_of_stack` and
+`resolve_top_of_stack_pause` (`rust/src/state_ops_resolve.rs`).
 
 **What it is**: a new `StackItem` field (defaults `None`; every
 pre-lever `new_spell` push stays untargeted — the discriminant-plus-
