@@ -1211,6 +1211,32 @@ pub enum Effect {
     /// swapped Land→Creature. Mirrors Python's
     /// `effects/generic/destroy.py:DestroyTargetNoncreaturePermanent`.
     DestroyTargetNoncreaturePermanent,
+    /// **Effect-uncovered Tier-A — Radiant Strike inner half.**
+    /// Destroy the first battlefield permanent matching
+    /// (Artifact) OR (Creature AND tapped), in ETB-timestamp order,
+    /// skipping indestructible. Field-free unit variant (no payload —
+    /// the typed-OR filter is the whole behavior). Mirrors Python's
+    /// `DestroyTargetArtifactOrTappedCreature`
+    /// (`effects/generic/destroy.py:475`) whose `TargetSpec` filter is
+    /// `IsArtifact() | (IsCreature() & IsTapped())`.
+    ///
+    /// **Distinct from `DestroyTargetArtifact` (round 25)** — that
+    /// arm filters `card_types.contains("Artifact")` (artifacts only).
+    /// THIS arm admits artifacts OR tapped creatures: an untapped
+    /// non-artifact creature is NOT a legal pick (the OR-filter
+    /// teeth). Identical dispatch/LTB-fanout shape otherwise (BOTH
+    /// players' bf in ETB-timestamp order, indestructible-skip,
+    /// first-match, silent fizzle on empty / only-indestructible /
+    /// only-untapped-non-artifact-creatures). The `tapped` term is
+    /// read off the scanned `GameObject` (live battlefield state, the
+    /// round-53 effective-state lesson — read where the real card
+    /// would; `obj.tapped` IS the effective tapped state).
+    ///
+    /// The `Sequence`+`GainLife` outer shell is already live — Radiant
+    /// Strike's full effect is
+    /// `Sequence([DestroyTargetArtifactOrTappedCreature, GainLife{3}])`,
+    /// composed entirely from existing arms + this one new arm.
+    DestroyTargetArtifactOrTappedCreature,
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -5042,6 +5068,16 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // (Creature-exclude vs Land-exclude).
             Ok(Effect::DestroyTargetNoncreaturePermanent)
         }
+        "destroy_target_artifact_or_tapped_creature" => {
+            // Effect-uncovered Tier-A — Radiant Strike inner half.
+            // Unit variant — no required fields. Filter is intrinsic
+            // ("Artifact OR (Creature AND tapped), non-indestructible").
+            // Extra keys ignored. Mirrors `destroy_target_artifact`
+            // parser arm shape (silent-drop convention for
+            // unrecognized keys); only the intrinsic filter differs
+            // (artifact-OR-tapped-creature vs artifact-only).
+            Ok(Effect::DestroyTargetArtifactOrTappedCreature)
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -7444,6 +7480,9 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::DestroyTargetNoncreaturePermanent => {
             d.set_item("kind", "destroy_target_noncreature_permanent")?;
+        }
+        Effect::DestroyTargetArtifactOrTappedCreature => {
+            d.set_item("kind", "destroy_target_artifact_or_tapped_creature")?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;

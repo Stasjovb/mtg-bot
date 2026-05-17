@@ -5408,6 +5408,83 @@ fn apply_effect(
             crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         }
+        // DestroyTargetArtifactOrTappedCreature (Effect-uncovered
+        // Tier-A — Radiant Strike inner half). CR 701.7 with a typed-OR
+        // filter: (Artifact) OR (Creature AND tapped). Walks BOTH
+        // players' battlefield in ETB-timestamp order via the shared
+        // `crate::bf_iter::bf_iter_etb_sorted` helper, picking the
+        // first permanent that is either an Artifact OR a tapped
+        // Creature and is not indestructible. Mirrors Python's
+        // `effects/generic/destroy.py:475
+        // DestroyTargetArtifactOrTappedCreature` whose `TargetSpec`
+        // filter is `IsArtifact() | (IsCreature() & IsTapped())`,
+        // re-verified at resolution per CR 608.2b against the
+        // centralized `state.battlefield` walk (no controller
+        // restriction). `obj.tapped` is read off the scanned live
+        // GameObject — the round-53 effective-state lesson (read where
+        // the real card would; the engine has no continuous-effect
+        // tap-state layer, so `obj.tapped` IS the effective tapped
+        // state both engines agree on). Identical dispatch/LTB-fanout
+        // shape to the round-25 `DestroyTargetArtifact` arm above with
+        // the predicate widened Artifact → Artifact-OR-tapped-Creature.
+        // The `Sequence`+`GainLife` outer shell of Radiant Strike's
+        // full effect runs through the already-live `Effect::Sequence`
+        // / `Effect::GainLife` arms. See invariant I39.
+        Effect::DestroyTargetArtifactOrTappedCreature => {
+            let target: Option<(usize, u32)> = crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing = state.registry.lookup(obj.printing_id)?;
+                    let is_artifact =
+                        printing.card_types.iter().any(|t| t == "Artifact");
+                    let is_creature =
+                        printing.card_types.iter().any(|t| t == "Creature");
+                    // Typed-OR filter: artifact OR (creature AND tapped).
+                    // An untapped non-artifact creature is NOT legal
+                    // (the OR-filter teeth — pin both engines agree).
+                    if !(is_artifact || (is_creature && obj.tapped)) {
+                        return None;
+                    }
+                    if printing.keywords.iter().any(|k| k == "indestructible") {
+                        return None;
+                    }
+                    Some((obj.controller as usize, obj.id))
+                });
+            if let Some((pidx, target_id)) = target {
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id from scan but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                // CE13 closure: `summoning_sick` is NOT reset here.
+                // Python's `turn.move_off_battlefield` deliberately
+                // omits the clear (CR 302.1 — sickness is battlefield-
+                // only state). See I35.
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+                Arc::make_mut(&mut state.players[pidx].graveyard).push(obj);
+                // Round-29 Void LTB: target may be an artifact land or
+                // a creature; helper gates on the printing.
+                mark_left_battlefield_if_nonland(state, printing_id);
+                // Slice 10: LTB fan-out at the Effect arm — same
+                // deferred-drain rationale as the artifact arm above
+                // (bf-exit bypasses move_object; queue the leaving id,
+                // the drain runs in `resolve_top_of_stack` after the
+                // resolving slot pops).
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                // Round-55: token-cease sibling of the LEAVES push. The
+                // id is queued unconditionally; the is_token gate lives
+                // in drain_pending_token_cease (CR 111.7 / 704.5d).
+                crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+            }
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared
