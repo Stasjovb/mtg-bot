@@ -401,6 +401,17 @@ pub fn make_state(
         spell_warped_this_turn: false,
         pending_decisions: Vec::new(),
         next_etb_timestamp: 0,
+        // R76-1: seed the monotonic object-id counter past every
+        // object the setup build created. `next_id` was bumped once
+        // per pushed object across p0_library / p0_hand / p1_library
+        // / p1_hand, so it now equals the object count = 1 + the max
+        // initial id (the optional in-Rust shuffle above only
+        // reorders whole GameObjects, never mints, so `next_id` is
+        // still correct post-shuffle). This is byte-equal to Python's
+        // `next_object_id` after `build_python_state` builds the
+        // equivalent population via `state.new_object` in the same
+        // p0-then-p1 order (see cross_engine.build_python_state).
+        next_object_id: next_id,
         resolving_combat_damage_amount: 0,
         winner_id_sticky: None,
         // Effect-rng-threading closure: default `None`; cross-engine

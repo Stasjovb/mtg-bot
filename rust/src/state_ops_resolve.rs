@@ -2757,13 +2757,16 @@ fn apply_effect(
         // printing must exist before you can make tokens of it.
         // Mirrors the registry-bounds check in ``load_deck``.
         //
-        // **Fresh-id allocation** mirrors ``state_ops_deck.rs::
-        // load_deck`` and ``register_and_inject_object``: scan every
-        // zone (hand / library / battlefield / graveyard / exile) on
-        // both players for the current max id, allocate sequentially
-        // from ``max + 1``. Linear scan over all objects is fine
-        // here — token creation is not in the hot loop and the
-        // synthetic+production pools are bounded.
+        // **Fresh-id allocation (R76-1)**: draws from the monotonic
+        // ``GameState.next_object_id`` counter via
+        // ``crate::state::reserve_object_id`` — CR 111.7 (each object
+        // gets a NEW unique id; a ceased object's id is never
+        // reused). This mirrors Python's per-object
+        // ``self.next_object_id += 1`` (game.py:2787-2798) byte-for-
+        // byte. (Pre-R76-1 this arm re-scanned every live zone for
+        // ``max_id + 1`` — non-monotonic: a token that had ceased to
+        // exist no longer contributed to ``max_id``, so a later mint
+        // recycled the freed id and diverged from the Python SoT.)
         //
         // **Inlining note (cross-file friction).** Per per-slice file-
         // isolation we build the GameObjects + push to the active
@@ -2837,29 +2840,26 @@ fn apply_effect(
                 .current_resolve_source_controller
                 .unwrap_or(state.active_player);
 
-            // Allocate fresh ids: scan every zone on both players for
-            // the current max id, allocate starting at max + 1.
-            // Mirrors load_deck's allocator. Includes exile so r11+
-            // exiled objects don't collide.
-            let mut max_id: u32 = 0;
-            let mut found_any = false;
-            for player in &state.players {
-                for zone in [
-                    &player.hand,
-                    &player.library,
-                    &player.battlefield,
-                    &player.graveyard,
-                    &player.exile,
-                ] {
-                    for obj in zone.iter() {
-                        if !found_any || obj.id > max_id {
-                            max_id = obj.id;
-                            found_any = true;
-                        }
-                    }
-                }
+            // R76-1: draw fresh ids from the monotonic
+            // `next_object_id` counter (CR 111.7 — never reuse a
+            // freed object's id). This REPLACES the old non-monotonic
+            // `max_id + 1` live-zone re-scan, which recycled the id
+            // of a token that had ceased to exist. `reserve_object_id`
+            // mirrors Python's per-object `self.next_object_id += 1`
+            // (game.py:2787-2798) exactly, so the produced ids are
+            // byte-equal cross-engine. Reserve all `n` ids up front —
+            // before the `Arc::make_mut` battlefield borrow below —
+            // since `reserve_object_id` needs `&mut state`.
+            let n_u32 = n as u32; // n is the *count parameter (i32 → usize → u32 safe; count ≥ 0 was validated above)
+            // ETB-trigger Slice 2 (RS4): collect each fresh token's id
+            // so we can dispatch_event(Event::Enters, ...) for each
+            // AFTER the bf-push pass releases the player-mut borrow.
+            // Strictly-increasing per the per-object reserve, same as
+            // Python's per-token loop.
+            let mut token_ids: Vec<u32> = Vec::with_capacity(n);
+            for _ in 0..n {
+                token_ids.push(crate::state::reserve_object_id(state));
             }
-            let mut next_id: u32 = if found_any { max_id + 1 } else { 0 };
 
             // Push n tokens onto the active player's battlefield via
             // Arc::make_mut so a clone of the state pre-resolve keeps
@@ -2871,18 +2871,13 @@ fn apply_effect(
             // preserves the within-effect creation order while
             // intermixing correctly with timestamps from prior /
             // subsequent ETBs.
-            let n_u32 = n as u32; // n is the *count parameter (i32 → usize → u32 safe; count ≥ 0 was validated above)
             let bf_etb_base = state.next_etb_timestamp;
             state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(n_u32);
-            // ETB-trigger Slice 2 (RS4): collect each fresh token's id
-            // so we can dispatch_event(Event::Enters, ...) for each
-            // AFTER the bf-push pass releases the player-mut borrow.
-            let mut token_ids: Vec<u32> = Vec::with_capacity(n);
             let bf: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[active as usize].battlefield);
-            for i in 0..n {
+            for (i, &tok_id) in token_ids.iter().enumerate() {
                 bf.push(GameObject {
-                    id: next_id,
+                    id: tok_id,
                     printing_id: token_pid,
                     controller: active,
                     zone: ZONE_BATTLEFIELD,
@@ -2905,8 +2900,6 @@ fn apply_effect(
                     warp_exile_pending: false,
                     warped: false,
                 });
-                token_ids.push(next_id);
-                next_id += 1;
             }
             // ETB-trigger Slice 2 (RS4): queue ENTERS per token in
             // stamp order. Drained by the surrounding resolver after
@@ -3001,35 +2994,28 @@ fn apply_effect(
                 // natural fallthrough.
                 return Ok(());
             }
-            // Allocate fresh ids: scan every zone on every player
-            // for the current max id, allocate starting at max + 1.
-            // Mirrors the sister `CreateToken` arm's allocator.
-            let mut max_id: u32 = 0;
-            let mut found_any = false;
-            for player in &state.players {
-                for zone in [
-                    &player.hand,
-                    &player.library,
-                    &player.battlefield,
-                    &player.graveyard,
-                    &player.exile,
-                ] {
-                    for obj in zone.iter() {
-                        if !found_any || obj.id > max_id {
-                            max_id = obj.id;
-                            found_any = true;
-                        }
-                    }
-                }
+            // R76-1: draw fresh ids from the monotonic
+            // `next_object_id` counter (CR 111.7), REPLACING the old
+            // non-monotonic `max_id + 1` re-scan. Reserve all
+            // `total_tokens` ids up front — before any per-recipient
+            // `Arc::make_mut` battlefield borrow — in the SAME order
+            // they are consumed (recipient0's n, then recipient1's n,
+            // ...), so the produced ids stay strictly increasing and
+            // byte-equal with Python's per-token
+            // `self.next_object_id += 1` over the same fanout order.
+            let total_tokens = (n * living.len()) as u32;
+            let mut fresh_ids: Vec<u32> =
+                Vec::with_capacity(total_tokens as usize);
+            for _ in 0..total_tokens {
+                fresh_ids.push(crate::state::reserve_object_id(state));
             }
-            let mut next_id: u32 = if found_any { max_id + 1 } else { 0 };
             // CE4 closure: stamp each token (across all recipients
             // combined) with a fresh strictly-monotonic etb_timestamp.
-            let total_tokens = (n * living.len()) as u32;
             let bf_etb_base = state.next_etb_timestamp;
             state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(total_tokens);
             // Per-token global index so timestamps stay strictly
-            // monotonic across the whole fanout.
+            // monotonic across the whole fanout (also the index into
+            // the pre-reserved `fresh_ids`).
             let mut global_token_idx: u32 = 0;
             let mut token_ids: Vec<u32> = Vec::with_capacity(total_tokens as usize);
             for recipient_idx in living {
@@ -3037,8 +3023,9 @@ fn apply_effect(
                 let bf: &mut Vec<GameObject> =
                     Arc::make_mut(&mut state.players[recipient_idx].battlefield);
                 for _ in 0..n {
+                    let tok_id = fresh_ids[global_token_idx as usize];
                     bf.push(GameObject {
-                        id: next_id,
+                        id: tok_id,
                         printing_id: token_pid,
                         controller: recipient_u8,
                         zone: ZONE_BATTLEFIELD,
@@ -3061,8 +3048,7 @@ fn apply_effect(
                         warp_exile_pending: false,
                         warped: false,
                     });
-                    token_ids.push(next_id);
-                    next_id += 1;
+                    token_ids.push(tok_id);
                     global_token_idx += 1;
                 }
             }
@@ -3135,40 +3121,28 @@ fn apply_effect(
                 .current_resolve_source_controller
                 .unwrap_or(state.active_player);
 
-            // Allocate fresh ids: scan every zone on both players for
-            // the current max id, allocate starting at max + 1.
-            // Mirrors the sister `CreateToken` arm's allocator.
-            let mut max_id: u32 = 0;
-            let mut found_any = false;
-            for player in &state.players {
-                for zone in [
-                    &player.hand,
-                    &player.library,
-                    &player.battlefield,
-                    &player.graveyard,
-                    &player.exile,
-                ] {
-                    for obj in zone.iter() {
-                        if !found_any || obj.id > max_id {
-                            max_id = obj.id;
-                            found_any = true;
-                        }
-                    }
-                }
+            // R76-1: draw fresh ids from the monotonic
+            // `next_object_id` counter (CR 111.7), REPLACING the old
+            // non-monotonic `max_id + 1` re-scan. Reserve all `n`
+            // ids up front (before the `Arc::make_mut` battlefield
+            // borrow) so the per-token ids are strictly increasing
+            // and byte-equal with Python's per-token
+            // `self.next_object_id += 1`.
+            let n_u32 = n as u32;
+            let mut token_ids: Vec<u32> = Vec::with_capacity(n);
+            for _ in 0..n {
+                token_ids.push(crate::state::reserve_object_id(state));
             }
-            let mut next_id: u32 = if found_any { max_id + 1 } else { 0 };
 
             // CE4 closure: stamp each token with a fresh strictly-
             // monotonic etb_timestamp (mirrors the sister arm).
-            let n_u32 = n as u32;
             let bf_etb_base = state.next_etb_timestamp;
             state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(n_u32);
-            let mut token_ids: Vec<u32> = Vec::with_capacity(n);
             let bf: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[active as usize].battlefield);
-            for i in 0..n {
+            for (i, &tok_id) in token_ids.iter().enumerate() {
                 bf.push(GameObject {
-                    id: next_id,
+                    id: tok_id,
                     printing_id: token_pid,
                     controller: active,
                     zone: ZONE_BATTLEFIELD,
@@ -3194,8 +3168,6 @@ fn apply_effect(
                     warp_exile_pending: false,
                     warped: false,
                 });
-                token_ids.push(next_id);
-                next_id += 1;
             }
             // Queue ENTERS per token in stamp order -- mirrors the
             // sister `CreateToken` arm's pending dispatch shape. The
@@ -5843,30 +5815,13 @@ fn apply_effect(
                     let recipient: u8 = state
                         .current_resolve_source_controller
                         .unwrap_or(state.active_player);
-                    // Fresh-id allocator: max id across every zone on
-                    // both players + 1 (verbatim from the CreateToken
-                    // arm; includes exile so r11+ exiled objects don't
-                    // collide).
-                    let mut max_id: u32 = 0;
-                    let mut found_any = false;
-                    for player in &state.players {
-                        for zone in [
-                            &player.hand,
-                            &player.library,
-                            &player.battlefield,
-                            &player.graveyard,
-                            &player.exile,
-                        ] {
-                            for o in zone.iter() {
-                                if !found_any || o.id > max_id {
-                                    max_id = o.id;
-                                    found_any = true;
-                                }
-                            }
-                        }
-                    }
+                    // R76-1: draw a fresh id from the monotonic
+                    // `next_object_id` counter (CR 111.7), REPLACING
+                    // the old non-monotonic `max_id + 1` re-scan that
+                    // recycled a ceased token's id. Byte-equal with
+                    // Python's `self.next_object_id += 1`.
                     let new_id: u32 =
-                        if found_any { max_id + 1 } else { 0 };
+                        crate::state::reserve_object_id(state);
                     // Fresh etb_timestamp (CE4 closure — strictly
                     // monotonic so the snapshot/fingerprint walk
                     // orders this token after prior ETBs).
@@ -6023,28 +5978,13 @@ fn apply_effect(
                     let recipient: u8 = state
                         .current_resolve_source_controller
                         .unwrap_or(state.active_player);
-                    // Fresh-id allocator: max id across every zone on
-                    // both players + 1 (verbatim CreateToken shape).
-                    let mut max_id: u32 = 0;
-                    let mut found_any = false;
-                    for player in &state.players {
-                        for zone in [
-                            &player.hand,
-                            &player.library,
-                            &player.battlefield,
-                            &player.graveyard,
-                            &player.exile,
-                        ] {
-                            for o in zone.iter() {
-                                if !found_any || o.id > max_id {
-                                    max_id = o.id;
-                                    found_any = true;
-                                }
-                            }
-                        }
-                    }
+                    // R76-1: draw a fresh id from the monotonic
+                    // `next_object_id` counter (CR 111.7), REPLACING
+                    // the old non-monotonic `max_id + 1` re-scan that
+                    // recycled a ceased token's id. Byte-equal with
+                    // Python's `self.next_object_id += 1`.
                     let new_id: u32 =
-                        if found_any { max_id + 1 } else { 0 };
+                        crate::state::reserve_object_id(state);
                     let tok_etb = state.next_etb_timestamp;
                     state.next_etb_timestamp =
                         state.next_etb_timestamp.saturating_add(1);
@@ -9521,8 +9461,10 @@ fn apply_effect(
         }
         // Round-28 token-copy. Pick first creature on source-
         // controller's bf (deterministic first-slice target); allocate
-        // a new obj_id (max+1 across all zones); push a new GameObject
-        // with the same printing_id onto controller's bf. Token ETBs
+        // a new obj_id from the monotonic `next_object_id` counter
+        // (R76-1 — CR 111.7, byte-equal with Python's
+        // `self.next_object_id += 1`); push a new GameObject with the
+        // same printing_id onto controller's bf. Token ETBs
         // summoning-sick.
         Effect::CreateTokenCopyOfTargetCreatureYouControl => {
             // Locate source controller.
@@ -9570,24 +9512,12 @@ fn apply_effect(
             let Some(printing_id) = target_printing_id else {
                 return Ok(()); // no eligible target
             };
-            // Allocate new id: max across every object on both players.
-            let mut max_id: u32 = 0;
-            for player in &state.players {
-                for zone in [
-                    &player.hand,
-                    &player.library,
-                    &player.battlefield,
-                    &player.graveyard,
-                    &player.exile,
-                ] {
-                    for obj in zone.iter() {
-                        if obj.id > max_id {
-                            max_id = obj.id;
-                        }
-                    }
-                }
-            }
-            let new_id = max_id + 1;
+            // R76-1: draw a fresh id from the monotonic
+            // `next_object_id` counter (CR 111.7), REPLACING the old
+            // non-monotonic `max_id + 1` re-scan that recycled a
+            // ceased token's id. Byte-equal with Python's
+            // `self.next_object_id += 1`.
+            let new_id = crate::state::reserve_object_id(state);
             // CE4 closure: stamp the fresh-token ETB timestamp.
             let etb_ts = state.next_etb_timestamp;
             state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(1);
@@ -12538,6 +12468,18 @@ impl GameState {
             warp_exile_pending: false,
             warped: false,
         };
+
+        // R76-1: advance the monotonic id counter past this injected
+        // object. `register_and_inject_object` is a test/setup
+        // injection primitive (it runs before mid-game mints), so the
+        // `max + 1` scan above is correct *here* for the injected
+        // object's own id; but a subsequent mid-game token mint draws
+        // from `next_object_id`, which must never re-issue `next_id`.
+        // Take the max so a prior setup primitive that already pushed
+        // the counter higher is never walked backwards (CR 111.7 —
+        // the counter is monotonic).
+        self.next_object_id =
+            self.next_object_id.max(next_id.saturating_add(1));
 
         let player = &mut self.players[controller as usize];
         // Test-injection convention: for LIBRARY zone, insert at the
