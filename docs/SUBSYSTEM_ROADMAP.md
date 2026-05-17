@@ -204,6 +204,37 @@ second:
    >   Tier-A (additional-cost-choice + warp entanglement — the
    >   lever does not rescue it; authoritative in
    >   `EFFECT_UNCOVERED_TIERA_MINISPECS.md` §1.2).
+   > - **⚠ Phase-1 spec now IMPLEMENT-READY (round-67 DOCS).** The
+   >   lever doc above is the *scoping* basis; the executable
+   >   **Phase-1 spec** is `docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md`
+   >   (every file:line re-verified live at `29449569`; resolves two
+   >   lever-doc open questions — the spell→graveyard post-resolve
+   >   move is ALREADY FREE, and `StackItem` carries NO target slot
+   >   so Gate B'' is genuinely-new substrate). Sizing: **Phase 1 =
+   >   1 LARGE Rust round, flips up to 6 single-target ready Tier-A
+   >   cards incrementally as their per-card Effects close; Phase 2 =
+   >   +1 Rust round (Diplomatic Relations, 2-slot grammar; depends
+   >   on Phase 1)**. The two per-card mini-spec docs now mandate
+   >   each bridge arm ship **BOTH** directions (dict→Python AND
+   >   Python→dict) so the lever's `_printing_to_card_def` spell arm
+   >   reuses the per-card Python→dict siblings — a card flips to
+   >   bench-admit only if its per-card round shipped both directions.
+   > - **⚠ Covered-set-extraction precursor (Phase-1 critical
+   >   path).** Phase 1's loader guardrail
+   >   (`_spell_effect_is_covered_and_bridged`) MUST query the live
+   >   pool-parity covered set (NOT a hardcoded card list — the §2
+   >   teeth). `covered_python_class_set` + `card_effect_classes`
+   >   currently live in `scripts/measure_pool_parity.py`; a
+   >   production-package guardrail importing a `scripts/` module is a
+   >   layering inversion. **Precursor micro-slice (small, Python-lane,
+   >   on Phase 1's critical path either way):** extract those two
+   >   functions (+ their `_coverage_module()` dependency) into a new
+   >   importable `src/mtg_bot/parity/effect_coverage.py` and have BOTH
+   >   `scripts/measure_pool_parity.py` AND the guardrail import from
+   >   there (exactly ONE definition of "covered"). Phase 1 cannot
+   >   ship the guardrail without this; budget it before/with the
+   >   Rust lever round (`SPELL_CARD_BRIDGE_PHASE1_DESIGN.md` §3.6 /
+   >   §9 item 5).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
@@ -232,6 +263,18 @@ second:
   46 rounds. Its 31 single-gated members (Diplomatic Relations 29,818;
   Orbital Plunge 28,629; Depressurize 28,346 — high-deck instants/
   sorceries) are individually high-leverage but each is its own slice.
+  The realizable split is itemised in
+  `docs/EFFECT_UNCOVERED_TRIAGE.md` §4 (loader-gate model: 31
+  single-round-realizable Tier-A / 84 subsystem-entangled Tier-C;
+  **verify-first live-`resolve` corrected to 25 / 90** by the round-67
+  re-tag of triage ranks 13/14/15/18/19/20 — modal / X-cost /
+  control-change), with implement-ready per-card mini-specs in
+  `docs/EFFECT_UNCOVERED_TIERA_MINISPECS.md` (round-64 ready 7) +
+  `docs/EFFECT_UNCOVERED_TIERA_MINISPECS_BATCH2.md` (ranks 9-20). The
+  separate shared **bench-admit carrier** is the spell-card-bridge
+  lever — implement-ready Phase-1 spec at
+  `docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md` (see the warp-fold lever
+  row above; note its covered-set-extraction Python-lane precursor).
 
 - **Carrier activated abilities (35 cards, 53,689 decks)** is large
   but **0 single-gated** — every one is also gated by another

@@ -55,23 +55,41 @@ assigns a tractability tier from the live parse + gate set:
 | **D. Genuinely deferred (bespoke composite, no clean half)** | **0** | **0** | none in the 115 — the 6 genuinely-deferred residue cards are a **disjoint** curated bucket (see §2) |
 | **Total** | **115** | **521,045** | reconciles exactly with the roadmap's Effect-uncovered row (115 / 521,045 / 31 single-gated) |
 
-**Reconciliation.** 31 single-gated (Tier A) + 84 multi-gated (Tier C)
-= 115, and 267,804 + 253,241 = 521,045 — bit-exact with the roadmap's
-Effect-uncovered row (115 cards, 31 single-gated, 84 multi-gated,
-521,045 decks). Tier A IS the roadmap's "31 single-gated members …
-the ranked worklist"; this doc makes that worklist actionable and
-audits the other 84.
+**Reconciliation (loader-gate-model truth).** 31 single-gated (Tier
+A) + 84 multi-gated (Tier C) = 115, and 267,804 + 253,241 = 521,045 —
+bit-exact with the roadmap's Effect-uncovered row (115 cards, 31
+single-gated, 84 multi-gated, 521,045 decks). Tier A IS the roadmap's
+"31 single-gated members … the ranked worklist"; this doc makes that
+worklist actionable and audits the other 84.
+
+> **⚠ Verify-first correction to the table above (round-67 DOCS
+> re-tag fold).** The 31/84 split is the `subsystem_attribution()`
+> *loader-gate* truth (it keys off loader gates, not the effect's
+> internal subsystem reads). `docs/EFFECT_UNCOVERED_TIERA
+> _MINISPECS_BATCH2.md` §1.2 read the **live `resolve` body** of §4
+> ranks 13/14/15/18/19/20 and found each trips a non-Effect subsystem
+> (modal / X-cost / control-change) the gate set does not enumerate —
+> the round-64 §1.2 Close-Encounter discipline applied 6×. The
+> *single-round-realizable clean* yield is therefore **25 Tier-A
+> cards / 236,377 decks** (31 − 6, − 31,427 re-tagged decks), and the
+> verify-first Tier-C count is **90 cards / 284,668 decks** (84 + 6).
+> The 115 / 521,045 total is unchanged (the re-tag moves cards between
+> tiers, it does not leave the bucket — every re-tagged card is still
+> Effect-uncovered AND now also subsystem-entangled). §4 carries the
+> per-row markers; §5 and §6 reflect the corrected split.
 
 The headline correction (the
 `NONBASIC_LAND`/`COST_REDUCTION` honesty pattern):
 
 > **The roadmap's 115 / 521,045 is the attribution truth. The
 > *single-round-realizable* clean yield is the 31 Tier-A cards /
-> 267,804 decks — and of those, only ~28 have any real EoE deck
-> signal (3 are off-set zero-deck cards: Coordinated Clobbering,
-> Exorcise, Vengeful Possession — they contribute card-count, not
-> bench signal). The other 84 cards / 253,241 decks are NOT a
-> per-card Effect lane; they are gated behind subsystems the roadmap
+> 267,804 decks in the loader-gate model — corrected by the round-67
+> verify-first re-tag (above) to 25 cards / 236,377 decks — and of
+> those, only ~22 have any real EoE deck signal (3 are off-set
+> zero-deck cards: Coordinated Clobbering, Exorcise, Vengeful
+> Possession — they contribute card-count, not bench signal). The
+> other 84 (verify-first: 90) cards / 253,241 (284,668) decks are NOT
+> a per-card Effect lane; they are gated behind subsystems the roadmap
 > already defers (Station, Aura, activated-ability, the diffuse
 > non-safe-trigger tail). Closing their Effect-half alone flips zero
 > pool-parity cards — exactly the
@@ -155,7 +173,7 @@ definition makes Tier-B-within-it impossible; staleness lives in the
 
 ## 4. The prioritized Tier-A pipeline (the fed single-card lane)
 
-All 31 Tier-A cards ranked by 17lands deck-count. Each is single-gated
+All Tier-A cards ranked by 17lands deck-count. Each is single-gated
 by `effect_uncovered` ALONE — the bespoke Effect IS the whole card's
 relevant behavior, so closing it (bespoke Rust `Effect` + bridge arm +
 genuine real-EoE probe) flips the pool-parity card, exactly the
@@ -163,6 +181,24 @@ Perigee/Faller's/Famished single-round pattern. Round estimate: **1
 Rust round each** (the established X-from-count / bespoke-ETB cadence:
 ~3-4 commits — Rust variant+arms, Python class if missing, bridge arm
 + pins, real-EoE probe) unless flagged otherwise.
+
+> **⚠ Round-67 DOCS re-tag fold (batch-2 verify-first DROPS).** The
+> `subsystem_attribution()` loader-gate model classifies ranks
+> 13/14/15/18/19/20 below as clean single-gated Tier-A, but
+> `docs/EFFECT_UNCOVERED_TIERA_MINISPECS_BATCH2.md` §1.2 read each
+> card's **live `resolve` body** (the round-64 §1.2 Close-Encounter
+> discipline) and found every one trips a non-Effect subsystem the
+> gate set does not enumerate — modal mode-choice (Scour for Scrap,
+> Reroute Systems, Archenemy's Charm), X-cost + agent-choice (Zero
+> Point Ballad), or layer-2 control-change + a co-subsystem (Mutinous
+> Massacre, Systems Override). They are the Warmaker-Gunship pattern
+> (closing the Effect-half alone would silently mistranslate) and are
+> **re-tagged Tier-C → §5**; the rows below carry a `→ Tier-C`
+> marker and the rank numbers are kept stable so batch-2's
+> "rank 13/14/15/18/19/20" cross-references still resolve. The
+> single-round-realizable clean Tier-A yield is therefore **25 cards**
+> (31 − 6), not 31 (see §1 / §6); the 6 re-tags move to the §5
+> Tier-C count (84 → 90 cards, 253,241 → 284,668 decks).
 
 | # | Card | Decks | Live missing Effect class | Effect shape (live parse) | Est. |
 |--:|---|---:|---|---|---|
@@ -190,14 +226,14 @@ Tier-A ranks 11-31 (the remaining fed worklist, same 1-round cadence):
 |--:|---|---:|---|
 | 11 | Shattered Wings | 7,793 | `DestroyTargetArtifactEnchantmentOrFlyingCreature` (+`Surveil`/`Sequence` covered) ★ |
 | 12 | Emergency Eject | 6,291 | `DestroyTargetNonlandPermanentWithLanderForController` (Lander-rider ★) |
-| 13 | Scour for Scrap | 6,196 | `ReturnTargetArtifactCardFromYourGraveyardToHand` (other modal arm covered) |
-| 14 | Reroute Systems | 6,132 | `DealDamageToTargetTappedCreature` (other modal arm covered) |
-| 15 | Zero Point Ballad | 6,041 | `ZeroPointBalladEffect` |
+| 13 | Scour for Scrap | 6,196 | **→ Tier-C** (batch-2 §1.2: `ModalChooseOne` — cast-time mode decision, no Rust spell-mode) — `ReturnTargetArtifactCardFromYourGraveyardToHand` (other modal arm covered) |
+| 14 | Reroute Systems | 6,132 | **→ Tier-C** (batch-2 §1.2: `ModalChooseOne(pump-OR-damage-tapped)` — modal decline) — `DealDamageToTargetTappedCreature` (other modal arm covered) |
+| 15 | Zero Point Ballad | 6,041 | **→ Tier-C** (batch-2 §1.2: `resolve` reads `state.resolving_x_value` `{X}{B}` + an x≥6 agent-choice reanimation — X-cost + agent-choice) — `ZeroPointBalladEffect` |
 | 16 | Singularity Rupture | 5,046 | `SingularityRuptureEffect` |
 | 17 | Beyond the Quiet | 4,698 | `ExileAllCreaturesAndSpacecraft` |
-| 18 | Mutinous Massacre | 4,671 | `MutinousMassacreEffect` |
-| 19 | Archenemy's Charm | 4,286 | `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl`, `ReturnUpToNCreaturesFromYourGraveyardToHand` (2 modal arms) |
-| 20 | Systems Override | 4,101 | `SystemsOverrideEffect` |
+| 18 | Mutinous Massacre | 4,671 | **→ Tier-C** (batch-2 §1.2: `resolve` calls `state.grant_control_change_ueot` (Tractor-Beam control-swap substrate) + `choose_mode(["odd","even"])` — control-change + mode-choice) — `MutinousMassacreEffect` |
+| 19 | Archenemy's Charm | 4,286 | **→ Tier-C** (batch-2 §1.2: `ModalChooseOne(exile / up-to-2 graveyard-return / ...)` — modal decline + multi-pick graveyard arm) — `PutPlusOneCountersAndGrantKeywordsUEOTOnTargetCreatureYouControl`, `ReturnUpToNCreaturesFromYourGraveyardToHand` (2 modal arms) |
+| 20 | Systems Override | 4,101 | **→ Tier-C** (batch-2 §1.2: `resolve` calls `state.grant_control_change_ueot` (Tractor-Beam control-swap) + a delayed end-step `RemoveChargeCountersFromSourceDelayed` — control-change + charge-counter delayed-trigger) — `SystemsOverrideEffect` |
 | 21 | Scout for Survivors | 3,923 | `ReturnUpToNSmallCreaturesFromGraveyardWithCounters` |
 | 22 | Pull Through the Weft | 2,235 | `ReturnUpToNNonlandPermanentCardsFromGraveyardToHand` |
 | 23 | Devastating Onslaught | 2,218 | `CreateXTokensOfTargetPermanentWithHasteEndStepSac` |
@@ -328,15 +364,37 @@ The detailed sketches follow the `RESIDUE_CARD_PLANS.md` #1-3 rigor.
   correctly with SBA at end of turn (the round-39 SBA-on-0/0 class) —
   pin the cleanup.
 
-## 5. Tier C — subsystem-entangled (84 cards / 253,241 decks): NOT a per-card Effect lane
+## 5. Tier C — subsystem-entangled (loader-gate model: 84 cards / 253,241 decks; verify-first corrected: 90 cards / 284,668 decks): NOT a per-card Effect lane
 
-These 84 emit a bespoke uncovered Effect **AND** trip ≥1 deferred
-loader-gate subsystem. Closing the Effect-half alone flips **zero**
+These emit a bespoke uncovered Effect **AND** trip ≥1 deferred
+subsystem. Closing the Effect-half alone flips **zero**
 pool-parity cards (the Warmaker-Gunship pattern). They are
 cross-referenced to the roadmap's existing subsystem plans, NOT
 single-round, and explicitly **out of scope of the round-64+ Tier-A
-lane**. Breakdown by the dominant co-gate (a card may trip several;
-counted under each is in the scout output):
+lane**.
+
+> **⚠ Round-67 DOCS re-tag fold.** The loader-gate `subsystem
+> _attribution()` model counts 84 cards / 253,241 decks here. The
+> verify-first live-`resolve` read in `docs/EFFECT_UNCOVERED_TIERA
+> _MINISPECS_BATCH2.md` §1.2 moved **6 more cards / 31,427 decks**
+> into Tier-C — §4 ranks 13/14/15/18/19/20 (Scour for Scrap, Reroute
+> Systems, Zero Point Ballad, Mutinous Massacre, Archenemy's Charm,
+> Systems Override) — because each trips a non-Effect subsystem
+> (modal mode-choice / X-cost+agent-choice / layer-2 control-change +
+> co-subsystem) the loader-gate set does not enumerate. **Verify-first
+> Tier-C total = 90 cards / 284,668 decks.** Their dominant co-gate
+> belongs to the existing roadmap rows: the modal trio (Scour for
+> Scrap, Reroute Systems, Archenemy's Charm) → the modal-spell decline
+> (`SPELL_CARD_BRIDGE_LEVER_DESIGN.md` §2.2); Zero Point Ballad → the
+> X-cost decline; Mutinous Massacre + Systems Override → the
+> Tractor-Beam layer-2 control-swap `blocked_non_effect` substrate
+> (plus mode-choice / charge-counter delayed-trigger respectively).
+> None is a single-round clean close.
+
+Breakdown by the dominant co-gate of the loader-gate-model 84 (a card
+may trip several; counted under each is in the scout output; the 6
+verify-first re-tags above are additional and cross-referenced to the
+modal / X-cost / control-change roadmap rows):
 
 | Co-gating subsystem | Approx. Tier-C cards | Roadmap cross-ref |
 |---|---:|---|
@@ -362,9 +420,9 @@ allowlist extension), not single-round, so they correctly stay Tier C
 — but they are the *next* most tractable group after Tier A is
 exhausted, and several are high-deck (Terrapact Intimidator 13,910;
 Exosuit Savior 12,480; Territorial Bruntar 10,262; Comet Crawler
-9,732). Flagged for a future round's consideration once the 31 Tier-A
-single-round picks are drained; **not** part of the round-64+ pipeline
-this doc feeds.
+9,732). Flagged for a future round's consideration once the 25 Tier-A
+single-round picks are drained (31 − 6 round-67 re-tags, §4); **not**
+part of the round-64+ pipeline this doc feeds.
 
 ## 6. Recommended round-64+ single-card sequence
 
@@ -383,8 +441,14 @@ EoE consumer):
 8. **Round 71 — Seedship Impact** (13,908) ★ — Lander-rider (sister to Orbital Plunge)
 
 …then continue down the §4 ranks 9-26 (Cut Propulsion, Invasive
-Maneuvers, Shattered Wings ★, Emergency Eject ★, Scour for Scrap,
-Reroute Systems, …) at one per round. The 3 zero-deck off-set cards
+Maneuvers, Shattered Wings ★, Emergency Eject ★, Singularity Rupture,
+Beyond the Quiet, …) at one per round — **skipping the round-67 §4
+re-tags** (ranks 13/14/15/18/19/20 Scour for Scrap, Reroute Systems,
+Zero Point Ballad, Mutinous Massacre, Archenemy's Charm, Systems
+Override → Tier-C, NOT single-round; the implement-ready batch-2
+queue in `docs/EFFECT_UNCOVERED_TIERA_MINISPECS_BATCH2.md` is the
+authoritative cheapest-first ordering for ranks 9-20). The 3
+zero-deck off-set cards
 (Coordinated Clobbering, Exorcise, Vengeful Possession) are
 **deprioritized indefinitely** — closing them flips a pool-parity
 card but generates **zero bench signal** (0 EoE decks); they are
@@ -412,11 +476,15 @@ lowest-risk available card if two rounds run close together.
   the report.)
 - **Roadmap one-line note (recommended, orchestrator to apply):** the
   Effect-uncovered row / "NOT cheap unlocks" section should point at
-  this doc — "the 115 is 31 single-round-realizable (Tier A, 267,804
-  decks; round-64+ pipeline in `docs/EFFECT_UNCOVERED_TRIAGE.md`) + 84
+  this doc — "the 115 is 25 single-round-realizable (Tier A, 236,377
+  decks after the round-67 verify-first re-tag; round-64+ pipeline in
+  `docs/EFFECT_UNCOVERED_TRIAGE.md` §4 +
+  `docs/EFFECT_UNCOVERED_TIERA_MINISPECS{,_BATCH2}.md`) + 90
   subsystem-entangled (Tier C — NOT a per-card Effect lane)" — so a
   future round reads the realizable split, not just the 521,045
   headline, mirroring the round-59 non-basic-land row's §2 pointer.
+  (Loader-gate-model split is 31/84; the verify-first live-`resolve`
+  read corrects it to 25/90 — see §1 / §4 / §5.)
 - **Disjointness confirmed:** the 6 `genuinely_missing` + 2
   `blocked_non_effect` residue cards are **disjoint** from the 115
   (verified live via `classify_pool().tiers`, the round-61 N1 method).
