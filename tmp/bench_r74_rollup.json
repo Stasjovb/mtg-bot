@@ -1,0 +1,553 @@
+{
+  "batches": [
+    {
+      "band": "lo",
+      "seeds": "0-2",
+      "summary": {
+        "total_games": 66,
+        "passes": 37,
+        "fail_divergence": 29,
+        "fail_timeout": 0,
+        "archetype_filtered": 0,
+        "fail_exception": 0,
+        "total_elapsed_seconds": 255.16101159900427,
+        "divergence_shape_histogram": {
+          "combat_phase::life_p0": 19,
+          "cast_spell::battlefield": 9,
+          "combat_phase::life_p1": 1
+        },
+        "per_archetype": {
+          "2": {
+            "PASS": 3
+          },
+          "35": {
+            "PASS": 3
+          },
+          "70": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "111": {
+            "FAIL_DIVERGENCE": 3
+          },
+          "160": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "196": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "216": {
+            "FAIL_DIVERGENCE": 3
+          },
+          "249": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "268": {
+            "PASS": 3
+          },
+          "296": {
+            "PASS": 3
+          },
+          "330": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "357": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "384": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "531": {
+            "PASS": 3
+          },
+          "553": {
+            "PASS": 3
+          },
+          "578": {
+            "PASS": 3
+          },
+          "720": {
+            "PASS": 3
+          },
+          "815": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "1007": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "1126": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "1286": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "1590": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          }
+        }
+      }
+    },
+    {
+      "band": "mid1",
+      "seeds": "3-5",
+      "summary": {
+        "total_games": 75,
+        "passes": 58,
+        "fail_divergence": 17,
+        "fail_timeout": 0,
+        "archetype_filtered": 0,
+        "fail_exception": 0,
+        "total_elapsed_seconds": 258.04435039963573,
+        "divergence_shape_histogram": {
+          "cast_spell::battlefield": 8,
+          "combat_phase::life_p1": 7,
+          "combat_phase::life_p0": 2
+        },
+        "per_archetype": {
+          "26000": {
+            "PASS": 3
+          },
+          "26055": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "26098": {
+            "PASS": 3
+          },
+          "26140": {
+            "PASS": 3
+          },
+          "26158": {
+            "PASS": 3
+          },
+          "26196": {
+            "PASS": 3
+          },
+          "26255": {
+            "PASS": 3
+          },
+          "26297": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "26319": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "26361": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "26418": {
+            "PASS": 3
+          },
+          "26493": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "26518": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "26579": {
+            "PASS": 3
+          },
+          "26695": {
+            "FAIL_DIVERGENCE": 1,
+            "PASS": 2
+          },
+          "26826": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "26947": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "26996": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "27151": {
+            "PASS": 3
+          },
+          "27402": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "27916": {
+            "FAIL_DIVERGENCE": 1,
+            "PASS": 2
+          },
+          "28379": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "28711": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "29469": {
+            "PASS": 3
+          },
+          "29703": {
+            "PASS": 3
+          }
+        }
+      }
+    },
+    {
+      "band": "mid2",
+      "seeds": "6-8",
+      "summary": {
+        "total_games": 66,
+        "passes": 45,
+        "fail_divergence": 21,
+        "fail_timeout": 0,
+        "archetype_filtered": 0,
+        "fail_exception": 0,
+        "total_elapsed_seconds": 242.32232179958373,
+        "divergence_shape_histogram": {
+          "cast_spell::battlefield": 7,
+          "combat_phase::life_p0": 6,
+          "combat_phase::life_p1": 5,
+          "combat_phase::is_over,winner_id,life_p1": 1,
+          "cast_spell::graveyard_p1,battlefield": 1,
+          "cast_spell::graveyard_p0,battlefield": 1
+        },
+        "per_archetype": {
+          "52001": {
+            "PASS": 1,
+            "FAIL_DIVERGENCE": 2
+          },
+          "52021": {
+            "FAIL_DIVERGENCE": 3
+          },
+          "52059": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "52121": {
+            "PASS": 3
+          },
+          "52150": {
+            "PASS": 1,
+            "FAIL_DIVERGENCE": 2
+          },
+          "52177": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "52229": {
+            "PASS": 3
+          },
+          "52283": {
+            "PASS": 3
+          },
+          "52329": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "52374": {
+            "PASS": 1,
+            "FAIL_DIVERGENCE": 2
+          },
+          "52402": {
+            "PASS": 3
+          },
+          "52445": {
+            "PASS": 3
+          },
+          "52463": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "52487": {
+            "PASS": 1,
+            "FAIL_DIVERGENCE": 2
+          },
+          "52518": {
+            "PASS": 3
+          },
+          "52595": {
+            "PASS": 3
+          },
+          "52646": {
+            "PASS": 3
+          },
+          "52776": {
+            "PASS": 1,
+            "FAIL_DIVERGENCE": 2
+          },
+          "52859": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "53746": {
+            "PASS": 3
+          },
+          "53831": {
+            "PASS": 3
+          },
+          "54024": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          }
+        }
+      }
+    },
+    {
+      "band": "mid3",
+      "seeds": "9-11",
+      "summary": {
+        "total_games": 72,
+        "passes": 48,
+        "fail_divergence": 24,
+        "fail_timeout": 0,
+        "archetype_filtered": 0,
+        "fail_exception": 0,
+        "total_elapsed_seconds": 286.71576830069534,
+        "divergence_shape_histogram": {
+          "combat_phase::life_p0": 12,
+          "cast_spell::battlefield": 11,
+          "combat_phase::life_p1": 1
+        },
+        "per_archetype": {
+          "78003": {
+            "PASS": 3
+          },
+          "78034": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "78054": {
+            "PASS": 1,
+            "FAIL_DIVERGENCE": 2
+          },
+          "78097": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "78128": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "78170": {
+            "PASS": 3
+          },
+          "78213": {
+            "FAIL_DIVERGENCE": 3
+          },
+          "78230": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "78256": {
+            "PASS": 3
+          },
+          "78306": {
+            "PASS": 3
+          },
+          "78339": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "78388": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "78410": {
+            "PASS": 1,
+            "FAIL_DIVERGENCE": 2
+          },
+          "78452": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "78475": {
+            "PASS": 1,
+            "FAIL_DIVERGENCE": 2
+          },
+          "78586": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "78668": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "78760": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "78900": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "79213": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "79437": {
+            "PASS": 3
+          },
+          "79560": {
+            "PASS": 3
+          },
+          "79689": {
+            "PASS": 3
+          },
+          "79920": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          }
+        }
+      }
+    },
+    {
+      "band": "hi",
+      "seeds": "12-14",
+      "summary": {
+        "total_games": 81,
+        "passes": 61,
+        "fail_divergence": 20,
+        "fail_timeout": 0,
+        "archetype_filtered": 0,
+        "fail_exception": 0,
+        "total_elapsed_seconds": 270.5552575988695,
+        "divergence_shape_histogram": {
+          "cast_spell::battlefield": 10,
+          "combat_phase::life_p0": 8,
+          "combat_phase::life_p1": 2
+        },
+        "per_archetype": {
+          "104000": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "104035": {
+            "PASS": 3
+          },
+          "104075": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "104091": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "104130": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "104147": {
+            "PASS": 3
+          },
+          "104167": {
+            "PASS": 3
+          },
+          "104201": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "104240": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "104271": {
+            "PASS": 3
+          },
+          "104341": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "104380": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "104425": {
+            "PASS": 3
+          },
+          "104465": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "104506": {
+            "PASS": 3
+          },
+          "104591": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "104621": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "104676": {
+            "FAIL_DIVERGENCE": 2,
+            "PASS": 1
+          },
+          "104738": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "104813": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "104962": {
+            "PASS": 3
+          },
+          "105070": {
+            "PASS": 3
+          },
+          "105202": {
+            "PASS": 3
+          },
+          "105340": {
+            "PASS": 3
+          },
+          "105548": {
+            "PASS": 1,
+            "FAIL_DIVERGENCE": 2
+          },
+          "105730": {
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
+          },
+          "106161": {
+            "PASS": 3
+          }
+        }
+      }
+    }
+  ],
+  "aggregate": {
+    "total_games": 360,
+    "passes": 249,
+    "fail_divergence": 111,
+    "fail_timeout": 0,
+    "archetype_filtered": 0,
+    "fail_exception": 0,
+    "total_elapsed_seconds": 1312.7987096977886
+  },
+  "divergence_shapes": {
+    "combat_phase::life_p0": 47,
+    "cast_spell::battlefield": 45,
+    "combat_phase::life_p1": 16,
+    "combat_phase::is_over,winner_id,life_p1": 1,
+    "cast_spell::graveyard_p1,battlefield": 1,
+    "cast_spell::graveyard_p0,battlefield": 1
+  }
+}

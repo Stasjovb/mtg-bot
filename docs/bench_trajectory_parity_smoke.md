@@ -3721,3 +3721,275 @@ test_trajectory_parity + test_trajectory + test_effect_coverage`,
 worklog for the pass count) — no pinned trajectory shifted (none
 could: no code on the gate path moved). No Rust touched → no
 `maturin` here.
+
+## Round 74 (2026-05-17) — FIRST post-spell-admit broad bench sweep: the spell-cast path was UNREACHABLE in every prior standalone sweep (a `tests`-import gap silently FAIL_EXCEPTION'd it); fixed in the sweep wrapper → 360 spell-cast games over 5 disjoint bands surface **3 distinct divergences** (R74-1 combat +1/+1-counter omission [= the documented I23 "future slice once a parity test demands it" — now empirically demanded], R74-2 NEW Depressurize-destroy drops dies-trigger, R74-3 NEW `advance_phase_python` skips UEOT expiry while Rust's `advance_phase` performs it) + the already-tracked CFI-1 co-occurrence; **0 FAIL_TIMEOUT / 0 untriaged shape**
+
+This is the empirical full-trajectory signal `docs/POOL_PARITY.md`'s
+caveat explicitly carves out from the PROBED/covered tiers. This
+session the spell-card-bridge admit set grew **{} → 5** (Depressurize,
+Orbital Plunge, Radiant Strike, Seedship Impact, Biosynthic Burst —
+single-target Instant/Sorcery, loader-admitted → actually CAST in
+bench games). The PROBED tier asserts byte-equality on a *controlled*
+cross-engine state; no tier asserted these 5 stay byte-equal in REAL
+FULL-GAME bench trajectories at scale. This round is that test.
+
+### The load-bearing harness finding — the spell-cast path was never reached in any prior standalone sweep
+
+`bench_trajectory_parity._try_cast_one_creature` lazily does
+`from tests.parity._picker_shims import _PickFirstLegalTargetAgent`
+(scripts/bench_trajectory_parity.py:270) **only when a
+bridge-admitted spell is about to be cast** (the campaign first-legal
+target convention). Under pytest the repo root is on `sys.path` so
+`tests` resolves; a STANDALONE bench invocation from a worktree has
+only `src` (the bench's own bootstrap) → **every spell-cast game
+throws `ModuleNotFoundError('tests')` → FAIL_EXCEPTION** instead of
+exercising the cast. Every prior post-warp/post-admit standalone
+broad sweep (round 62/64/68/71/etc.) was therefore **structurally
+unable to cast any Instant/Sorcery** — the admit set was empty until
+this session, so it was latent; the moment the 5 spells became
+loader-admitted, a naive standalone sweep silently FAIL_EXCEPTIONs
+every spell-cast game and reports a falsely-clean headline. Fixed in
+the **sweep-driver wrapper** (`scripts/scout_r74_run_sweep.py` —
+puts the repo root on `sys.path`; an orchestration wrapper, the
+round-68/71 `tmp/bench_*` sweep-driver precedent — NOT a
+bench-script change; `bench_trajectory_parity.py` is round-72
+gate-pinned and untouched). With the gap closed the bench's
+*existing* spell-cast path runs byte-for-byte as the pytest gate
+already drives it.
+
+### Sweep design — substantially wider than any single prior sweep window, targeted at spell-cast games
+
+A scout (`scripts/scout_postspelladmit_carrier_archetypes.py`,
+read-only; reuses the REAL production loader
+`trajectory._printing_is_bridge_simple_spell` /
+`_printing_is_bridge_simple_creature` — the SAME admit verdict the
+bench plays) walked the **full 129,996-deck 17lands pool**:
+**86,212 / 129,996 decks (66.3%) carry ≥1 bench-admitted spell card**
+(Depressurize 28,346 · Orbital Plunge 28,629 · Radiant Strike 17,744
+· Seedship Impact 13,908 · Biosynthic Burst 22,799 — matching the
+~125k-deck spell-admit-expansion estimate); **33,147** of those also
+carry ≥3 admitted creature copies (the dense, verdict-reaching,
+spell-casting population). From it, 120 distinct dense spell-carrier
+archetypes were stratified across **5 disjoint index bands spanning
+the full pool** (idx [0,26k) / [26k,52k) / [52k,78k) / [78k,104k) /
+[104k,130k)), every band carrying all 5 spell cards, each band run
+at a **distinct disjoint seed-offset triple** (0-2 / 3-5 / 6-8 /
+9-11 / 12-14), at the **cap-120 round-72 default**, `attack_all`,
+mulligans off:
+
+| Band | Index window | Seeds | Games | PASS | FAIL_DIV | TIMEOUT | FILT | EXC |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| lo | [0, 26000) | 0-2 | 66 | 37 | 29 | **0** | 0 | 0 |
+| mid1 | [26000, 52000) | 3-5 | 75 | 58 | 17 | **0** | 0 | 0 |
+| mid2 | [52000, 78000) | 6-8 | 66 | 45 | 21 | **0** | 0 | 0 |
+| mid3 | [78000, 104000) | 9-11 | 72 | 48 | 24 | **0** | 0 | 0 |
+| hi | [104000, 130000) | 12-14 | 81 | 61 | 20 | **0** | 0 | 0 |
+| **Total** | full pool, 5 disjoint windows | 5 offsets | **360** | **249** | **111** | **0** | **0** | **0** |
+
+Per-spell carrier coverage in the sweep: Depressurize 40 archetypes,
+Orbital Plunge 32, Radiant Strike 30, Seedship Impact 33, Biosynthic
+Burst 45 (×3 seeds each). JSONs
+`tmp/bench_r74_{lo,mid1,mid2,mid3,hi}.json` + `tmp/bench_r74_rollup.json`
++ `tmp/scout_r74.json` (tracked round-evidence per the
+round-64/68/70/71 `tmp/bench_*` precedent). Wall 1312.8 s total
+(5 batches; the spell-cast games are slower than creature-only).
+**111 / 360 games provably CAST one of the 5 newly-admitted spell
+cards** (every FAIL_DIVERGENCE is 100% spell-or-its-debuff-driven
+per the triage below — this is the empirical full-trajectory signal
+no controlled probe produces).
+
+### `0 FAIL_TIMEOUT` at cap-120 on the spell-bearing pool
+
+**0 / 360 FAIL_TIMEOUT, 0 ARCHETYPE_FILTERED, 0 FAIL_EXCEPTION.**
+The round-72 cap-120 default fully recovers the deck-out tail even on
+these slower spell-bearing dense-carrier decks (107-/108-turn
+deck-out games observed converging to a clean verdict, never the
+cap) — the round-72 cap-120 characterization holds on the
+post-spell-admit pool, not just the round-70 canonical grid.
+
+### Divergence triage — 3 distinct shapes, every one attributed, 0 untriaged
+
+| Shape (count) | Attribution | Side / verdict |
+|---|---|---|
+| `combat_phase::life_p0` 47 + `::life_p1` 16 + `::is_over,winner_id,life_p1` 1 = **64** | **R74-1 / R74-3** (combat-power) | Rust-side / Python-SoT-correct |
+| `cast_spell::battlefield` **45** | **R74-2** | Rust-side / Python-SoT-correct (NEW) |
+| `cast_spell::graveyard_p1,battlefield` 1 + `::graveyard_p0,battlefield` 1 = **2** | **R74-2 + CFI-1 co-occurrence** | `battlefield` = R74-2; `graveyard_pX` = the already-tracked **CFI-1** (not re-filed) |
+
+**0 untriaged divergence shapes.** Python `src/mtg_bot/` is the
+source of truth and is **correct** in all three; every divergence is
+Rust-side or harness-side. Minimal deterministic repros below (each
+uses only the production loader — `archetype`+`seed` reproduce
+exactly).
+
+#### R74-1 — Rust combat damage omits the +1/+1 counter from attacker power (= the documented RUST_PARITY_GAPS I23 intentional asymmetry, now empirically demanded)
+
+**Minimal repro:** `--archetype 70 --seed 0` (also arch 0 s0 etc.).
+Turn 16: P1 has cast **Biosynthic Burst** on Galactic Wayfarer (a
+3/3) → +1/+1 counter → 4/4. The counter is byte-equal in the
+pre-combat field view (`battlefield` tuple identical on both engines
+— Rust *stores* the counter correctly). In combat-damage resolution,
+**Python deals 4** (counter-adjusted effective power), **Rust deals
+3** (base power — the counter dropped). P0 ends `life=-3` (Python) vs
+`-2` (Rust) → `life_p0` divergence.
+
+**Root cause (read-only Rust inspection — `rust/src/` NOT edited):**
+`rust/src/state_ops_combat.rs::battlefield_creature_power` (≈ line
+267) computes `base + ueot_power_bonus()` and its own doc-comment
+(lines 261-266) states *"Counters do not yet feed into the power
+side … `state_ops_sba.rs` adds `obj.counters` to effective toughness,
+not to effective power; that asymmetry is intentional, mirroring
+Python's `effective_power` shape."* That comment's premise is
+**factually wrong**: Python's `effective_power`
+(`game._compute_effective_pt`, the `p += obj.plus_one_counters -
+obj.minus_one_counters` fold) **does** add +1/+1 counters to power.
+This is exactly the **already-documented & already-scoped** gap:
+`docs/RUST_PARITY_GAPS.md` **I23** ("Intentional asymmetry:
+`battlefield_creature_toughness` (combat-side) folds UEOT bonus but
+NOT `obj.counters` … **Future slice can promote combat to fold
+counters once a parity test demands it**") + the SEARCH_LIMITATIONS
+"§2 counters-asymmetry" entries (Orbital Plunge re-derives the
+counter-inclusive formula privately precisely to dodge this getter).
+**R74-1 is that parity test — the spell-admit expansion makes the
+documented "future slice" trigger condition actually fire in
+real production-deck trajectories** (Biosynthic Burst is the first
+bench-admitted card placing a combat-relevant +1/+1 counter). Not a
+new untracked divergence; the empirical-scale demand for the
+already-tracked I23 promotion. **Rust-side fix** (owned by the
+Rust dispatch): fold `obj.counters` into
+`battlefield_creature_power` / `battlefield_creature_toughness` (and
+correct the stale "mirroring Python's shape" comment); the public
+`effective_power(obj_id)` getter likewise. Do NOT churn Python (SoT,
+correct). NOT re-filed as a new gap — it is I23.
+
+#### R74-2 — Rust's `Effect::DepressurizeEffect` hand-rolled destroy arm omits dies-triggered-ability dispatch (NEW)
+
+**Minimal repro:** `--archetype 216 --seed 0` (cast `card_id=60`,
+Depressurize). P1 casts Depressurize on **Gravpack Monoist** (a
+flying creature with a DIES-trigger: `Event.DIES / IsSelf →
+CreateToken(Robot, tapped)`; admitted via
+`_printing_is_bridge_simple_creature`, the round-50-validated
+substrate). Depressurize gives -3/-0 → effective power ≤ 0 → destroy.
+**Python**: Gravpack's dies-trigger fires → P1 gets a Robot token (CR
+603, leaves-the-battlefield trigger — correct). **Rust**: the
+creature dies but **no Robot token** — single-field `battlefield`
+divergence (Python has the extra `('Robot', …)` entry; no
+`graveyard_pX` component, so this is NOT CFI-1 — Gravpack here has no
++1/+1 counters).
+
+**Root cause (read-only Rust inspection):**
+`rust/src/state_ops_resolve.rs` `Effect::DepressurizeEffect`'s
+conditional-destroy branch (≈ lines 5956-5988) is a **hand-rolled
+destroy** — it `bf_mut.remove`s the object, sets `zone =
+ZONE_GRAVEYARD`, pushes to graveyard, calls
+`mark_left_battlefield_if_nonland`, pushes `pending_leaves_dispatches`
+and `queue_token_cease`, **but never enqueues / fires the destroyed
+creature's DIES-triggered ability** (it bypasses the generic
+`destroy()` dies-trigger dispatch path). Python's `turn.destroy`
+correctly fires it. R74-2 is a **NEW Rust-side divergence**,
+genuinely distinct from CFI-1 (which is the stray `obj.counters = 0;`
+at line 5969 in the *same* hand-rolled arm — a counter-zeroing on the
+dead object, `graveyard_pX` shape). They co-occur (the 2
+`cast_spell::graveyard_pX,battlefield` games) exactly when Depressurize
+destroys a creature carrying both a dies-trigger AND +1/+1 counters;
+the `graveyard_pX` component IS CFI-1 (already scoped/owned by the
+Rust dispatch — NOT re-filed per the campaign directive), the
+`battlefield` component is R74-2. **Rust-side fix:** the
+DepressurizeEffect destroy branch must route the kill through the
+generic destroy/dies-trigger dispatch (or explicitly enqueue the DIES
+event for the leaving object) so a destroyed dies-trigger creature's
+ability fires, matching Python. Do NOT churn Python.
+
+#### R74-3 — `advance_phase_python` deliberately skips UEOT expiration on a false "Rust doesn't either" premise; Rust's `advance_phase` DOES expire it (NEW, harness-side)
+
+**Minimal repro:** `--archetype 52329 --seed 7`. Turn 18: P1 casts
+**Depressurize** on Icecave Crasher (a 4/x) → -3/-0 **until end of
+turn**. Turn **19** combat: Python's `effective_power(Icecave) = 1`
+(`temp_power_bonus=-3` still applied — the UEOT debuff **leaked
+across the turn boundary**); Rust's `effective_power = 4` (the UEOT
+correctly expired at turn-18 cleanup). Combat: Rust deals 4 → P1
+`life=0` → `is_over=True, winner_id=0`; Python deals 1 → P1 `life=3`,
+game continues. `is_over,winner_id,life_p1` divergence — **Rust is
+correct, Python (bench-harness) is wrong.**
+
+**Root cause:** `src/mtg_bot/parity/cross_engine.py::advance_phase_python`
+(the CLEANUP arm, ≈ line 10500) **deliberately does NOT call
+`run_cleanup_step`**, with the in-code comment *"NOT calling
+`run_cleanup_step` directly because that Python primitive composes a
+much larger surface (UEOT expiration, copy reverts, control-change
+reverts, layer cache rebuilds) **that Rust's `advance_phase` does NOT
+do**. We inline only the two CR 514 hooks Rust models."* That premise
+is **now false for UEOT P/T expiration**: this round empirically
+proves `rust_state.advance_phase()` **does** clear the
+Depressurize -3/-0 UEOT modifier at the casting-turn cleanup
+(Rust `effective_power=4` at turn 19), while the bench's Python phase
+driver skips it and leaks the debuff forever (verified per-step:
+`temp_power_bonus=-3` persists from turn 18 BEGINNING_OF_COMBAT
+through turn 19 DECLARE_ATTACKERS; `#continuous_effects=1` never
+expires). Latent until this session (no bench-admitted card placed a
+cross-turn-surviving UEOT P/T modifier); **Depressurize joining the
+bench-admit set is the first card that does** — the post-spell-admit
+expansion makes the path reachable, exactly the predicted "empirical
+full-trajectory signal the controlled probes don't cover." This is
+NOT the documented Mouth-of-the-Storm "until your next turn" extended-
+duration cleanup-gate divergence (cross_engine.py:1704-1706 / a
+SEARCH_LIMITATIONS entry) — that concerns *extended-duration* debuffs;
+R74-3 is a **plain UEOT** debuff the harness's Python phase driver
+fails to expire while Rust's does. **Distinct, NEW, harness-side.**
+Fix scope (a dedicated reviewed slice — `advance_phase_python` is in
+a gate-pinned production parity module and the fix needs its own
+parity-safety analysis; deliberately NOT folded into this
+bench-sweep slice per no-fallback-hybrid discipline): make
+`advance_phase_python`'s CLEANUP arm expire UEOT P/T modifiers to
+match Rust's `advance_phase` (the comment's "Rust doesn't do UEOT
+expiration" assumption must be corrected — Rust DOES).
+
+### Verdict
+
+| Claim | Verdict |
+|---|---|
+| The post-spell-admit expansion ({}→5 single-target Instant/Sorcery) keeps the 5 spells byte-equal in REAL full-game bench trajectories at scale | **NO — 3 distinct divergences surface the moment the spell-cast path is actually reached.** 360 games / 5 disjoint full-pool index bands / 5 disjoint seed offsets / all 5 spells / 111 provably-spell-cast games. The PROBED/covered tiers' controlled-state byte-equality did NOT predict any of R74-1/R74-2/R74-3 (each is invisible to a controlled field-view compare: R74-1's counter is byte-equal *stored*, R74-3's UEOT modifier isn't in the comparable field-view tuple, R74-2 needs a destroy-with-dies-trigger no probe drives). |
+| The divergences are new untracked holes | **MIXED, all attributed.** R74-1 = the **already-documented & already-scoped** RUST_PARITY_GAPS I23 intentional asymmetry — its documented "future slice once a parity test demands it" trigger is now empirically met (not re-filed; the empirical-scale demand). R74-2 = **NEW** Rust-side (Depressurize hand-rolled destroy drops dies-trigger dispatch). R74-3 = **NEW** harness-side (`advance_phase_python` skips UEOT expiry on a false "Rust doesn't either" premise; Rust's `advance_phase` DOES expire it). CFI-1 (`graveyard_pX` co-occurrence component) = the already-tracked Rust-side stray `obj.counters = 0;` — surfaced, attributed, **NOT re-filed** per the campaign directive. |
+| Python `src/mtg_bot/` (SoT) is correct | **YES in all three.** R74-1/R74-2: Rust-side, Python correct. R74-3: Rust correct, the *bench-harness* `advance_phase_python` (not core Python) is wrong — the core `run_cleanup_step` clears it correctly; the bench's phase driver just never calls it. No Python-SoT churn anywhere. |
+| The round-72 cap-120 default holds on the post-spell-admit pool | **YES — 0/360 FAIL_TIMEOUT** even on slower spell-bearing dense-carrier decks (deck-out games converge to a verdict, never the cap). |
+
+### Scope / non-changes
+
+Pure docs (this entry) + tracked round-evidence JSONs
+(`tmp/bench_r74_*.json`, `tmp/scout_r74.json`) + 3 read-only
+`scripts/scout_*.py` diagnostics (the scout, the
+window-stratifier, the sweep-driver wrapper, and the
+minimal-repro tracer — agent-generated diagnostics that
+intentionally stay under `scripts/` per the project `CLAUDE.md`).
+**`scripts/bench_trajectory_parity.py` (round-72 gate-pinned) was
+run UNMODIFIED** — the `tests`-import fix lives in the
+orchestration *wrapper*, the round-68/71 sweep-driver precedent.
+**No production / harness / `_SAFE_*` / Rust / `.pyd` change**; the
+`rust/src/` inspection was strictly read-only (non-Rust agent). Did
+NOT touch `docs/POOL_PARITY.md` / `docs/residue_worklist.json` /
+`docs/SUBSYSTEM_ROADMAP.md` / `docs/EOE_PROBE_READINESS_AUDIT.md` /
+`docs/RUST_PARITY_GAPS.md` (its pin-pairing invariants — R74-1/I23 is
+recorded here, the canonical bench-sweep findings home, per the
+round-61/62/64/68 precedent and the CFI-1-agent in-module-note
+precedent) / `scripts/parity_smoke.py` `_zone_signature`/`_net_counters`
+/ the round-69/72 max-turns pins / the 6 protected
+`test_audit_safe_trigger_*` tests. The gate
+(`test_parity_smoke + test_cross_engine_etb_triggers +
+test_trajectory_parity + test_trajectory`, `--no-cov -n 4`) was run
+as the merge precondition — purely confirmatory (nothing executable
+on the gate path moved; the 4 new `scripts/scout_*.py` are not
+imported by any test). No Rust touched → no `maturin`.
+
+**Carry-forward for the Rust dispatch:** R74-2 (Depressurize
+hand-rolled destroy arm at `state_ops_resolve.rs` ≈5956-5988 omits
+DIES-trigger dispatch) is a **NEW** Rust-side parity bug — repro
+`bench_trajectory_parity --archetype 216 --seed 0`. R74-1 is the
+already-scoped I23 combat-counter promotion, **now empirically
+demanded** (repro arch 70 s0). CFI-1 (`obj.counters = 0;` ≈ line
+5969, same arm) co-occurs with R74-2 on counter'd dies-trigger
+creatures — already owned, not re-filed. **Carry-forward for a
+dedicated non-Rust harness slice:** R74-3 — `advance_phase_python`'s
+CLEANUP arm must expire UEOT P/T modifiers to match Rust's
+`advance_phase` (correct the false "Rust doesn't do UEOT expiration"
+comment); repro `--archetype 52329 --seed 7`. Out of this
+bench-sweep slice's scope (gate-pinned parity module, needs its own
+parity-safety analysis; no-fallback-hybrid discipline).
