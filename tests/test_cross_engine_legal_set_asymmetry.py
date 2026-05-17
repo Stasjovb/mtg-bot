@@ -1,79 +1,77 @@
-"""Cross-engine LEGAL-DECISION-SET asymmetry — characterization + the
-canonicalization that makes it parity-benign (regression pins).
+"""Cross-engine LEGAL-DECISION-SET mana-payability — the CLOSED
+contract (the permanent regression pin for legal_decisions
+mana-awareness Slice 1).
 
-FOUNDATIONAL QUESTION (surfaced by the warp-admitted probe agent,
-worklog ``2026-05-17-296703``: the Bygone-Colossus development-time
-``py=[True] vs rs=[False,True]`` legality-pair mismatch):
+HISTORY (the divergence this module used to characterize, now
+CLOSED): Python ``mtg_bot.legal.legal_actions`` is mana-aware — it
+gates every ``CastSpell`` emission on ``_can_cast`` →
+``can_pay_cost`` (``src/mtg_bot/legal.py:60-76`` + the call sites
+at ``:252-254`` instant-speed and ``:382-401`` sorcery-speed; the
+warp variants; the graveyard-warp loop ``:457-462``; the
+exile-recast ``:486-489``; and every ``ActivateAbility``). A spell
+whose cost the player cannot currently pay is **never enumerated**.
+Rust ``state_ops_legal.rs:legal_decisions`` USED to enumerate
+**structurally** — no non-destructive ``can_pay_cost`` predicate
+existed, so it emitted a ``cast_spell`` for every non-Land in hand
+regardless of mana availability. The two engines presented
+DIFFERENT legal-decision SETS at the same priority point whenever a
+hand card's cost was un-payable.
 
-    Python ``mtg_bot.legal.legal_actions`` is **mana-aware** — it
-    gates every ``CastSpell`` emission on ``_can_cast`` →
-    ``can_pay_cost`` (``src/mtg_bot/legal.py:60-76`` + the call
-    sites at ``:252-254`` instant-speed and ``:383-385``
-    sorcery-speed; ditto the warp / kicker / impending / granted-
-    warp / Room-half variants and EVERY ``ActivateAbility`` at
-    ``:631-657``). A spell whose cost the player cannot currently
-    pay is **never enumerated**.
+That divergence was an ACCEPTED, benign-by-construction asymmetry
+ONLY because every cross-engine harness uses the
+**observation-driven single-script-replay** contract (the action is
+computed from the **Python** SoT state and the SAME ``action_dict``
+is replayed on BOTH engines via ``step_both`` — no path sources an
+agent choice from ``rust_state.legal_decisions``). At the SoT flip
+that contract INVERTS (the NN/MCTS sources decisions from Rust's OWN
+enumeration), at which point Rust offering structurally-legal-but-
+UNPAYABLE casts becomes a REAL correctness defect (the policy head
+would score, and PUCT expand, illegal-by-mana actions).
 
-    Rust ``state_ops_legal.rs:legal_decisions`` enumerates
-    **structurally** — its own module docstring (lines 77-88,
-    "Deferred mana-affordability check") states Rust has no
-    non-destructive ``can_pay_cost`` predicate, so the first-slice
-    ``CastSpell`` loop "emits for EVERY non-Land in hand regardless
-    of mana availability".
+**CLOSED by legal_decisions mana-awareness Slice 1**
+(``docs/RUST_LEGAL_DECISIONS_MANA_AWARENESS_DESIGN.md``): the
+non-destructive ``state_ops_mana::can_pay_cost`` predicate (composing
+the already-byte-equal-pinned ``pool_can_cover`` +
+``auto_tap_headroom_pool``) now gates ALL of Rust's live CastSpell
+emission sites (base hand instant/sorcery, their warp variants, the
+graveyard-warp loop, the warp exile-recast). On the live cast
+surface ``RustCastSpellSet == PythonCastSpellSet`` — Rust no longer
+emits an un-payable cast. The change is parity-NEUTRAL under the
+current single-script-replay harness (the predicate is at-least-as-
+permissive as Python's ``can_pay_cost`` via the same
+``auto_tap_headroom_pool``, so every Python-sourced replayed action
+is still emitted by post-fix Rust — design doc §4 proof) and
+de-risks the flip well before the flip sequence begins.
 
-So the two engines present DIFFERENT legal-decision SETS at the
-same priority point whenever a hand card's cost is un-payable from
-currently-available mana. This is parity-foundational: if any
-cross-engine agent could ever PICK from the engine-specific set,
-the two engines could be driven down different trajectories.
+This module is now the **permanent regression pin for the CLOSED
+contract**. It:
 
-VERDICT (proven by construction below): **PROVABLY BENIGN for
-cross-engine trajectory parity.** Every cross-engine harness
-(``cross_engine.step_both`` / ``walk_both``, ``trajectory.*``, the
-``RealGameCombatAgent``, ``scripts/bench_trajectory_parity.py``,
-every ``test_probe_*`` module) uses the **observation-driven
-single-script-replay** contract: the action is computed from the
-**Python** state (the source of truth), and the SAME
-``action_dict`` is applied to BOTH engines via ``step_both``. No
-cross-engine code path lets an agent independently enumerate
-``rust_state.legal_decisions(pid)`` and choose from it, and no
-field-view divergence check ever compares the two emission sets.
-The Rust structural superset is therefore UNREACHABLE as an
-agent-choice source in any cross-engine context — the warp probe's
-``rs=[False, True]`` was an un-masked DIRECT-probe observation, not
-a trajectory divergence (every ``step_both`` there was byte-equal).
-
-This module is the regression pin for that verdict. It:
-
-  1. CHARACTERIZES the asymmetry on a MINIMAL real-EoE state — the
+  1. PINS THE CLOSED CONTRACT on a MINIMAL real-EoE state — the
      genuine parsed ``Slavering Branchsnapper`` printing ({4}{G}{G}
      7/6 trample, a clean bridge-simple creature) in p0's hand at a
-     real turn-1 PRECOMBAT_MAIN with ZERO mana available: Python's
-     ``legal_actions`` does NOT emit its ``CastSpell``; Rust's
-     ``legal_decisions`` DOES. (FAILS LOUDLY if a future Rust slice
-     adds the affordability check — at which point the
-     ``SEARCH_LIMITATIONS.md`` "Cross-engine legal-decision-set
-     mana-payability asymmetry" entry must be retired.)
+     real turn-1 PRECOMBAT_MAIN with ZERO mana available: **BOTH**
+     Python ``legal_actions`` and Rust ``legal_decisions`` now omit
+     the un-payable ``CastSpell``. FAILS LOUDLY if Rust regresses to
+     structural emission (the mana gate removed / broken).
 
-  2. PINS THE CANONICALIZATION: with the SAME Python-derived
-     pass-priority script replayed on both engines via ``step_both``,
-     the trajectory is byte-equal — the Rust-only structural
-     ``cast_spell`` option is never taken because the harness
-     replays ONE script, it does not let either engine's enumerator
-     drive.
+  2. PINS THE REPLAY CANONICALIZATION still holds: the
+     Python-derived pass-priority script replayed on both engines
+     via ``step_both`` stays byte-equal, AND the now-equal sets
+     persist through the replay.
 
-  3. NEGATIVE CONTROL: with sufficient mana seated, BOTH engines
-     emit the ``CastSpell`` — proving the divergence is SPECIFICALLY
-     the mana-payability prune (not a structural enumeration bug),
-     and the asymmetry collapses exactly where the warp probe
-     masks it (ramp-to-affordable).
+  3. NEGATIVE CONTROL (over-prune guard): with {4}{G}{G} affordable
+     (6 untapped G sources seated) BOTH engines emit exactly the
+     base ``CastSpell`` — proving the new predicate is
+     at-least-as-permissive as Python's (it does NOT over-prune a
+     cast Python offers; a pool-only check would wrongly drop this).
 
-> CAVEAT (mirrors ``docs/SEARCH_LIMITATIONS.md``): this pins an
-> ACCEPTED divergence + the construction that neutralizes it. It is
-> NOT a claim that the two raw emission sets are equal — they are
-> deliberately not. It is a claim that no cross-engine AGENT CHOICE
-> can ever observe the difference, because the replay contract
-> interposes the Python set as the sole script source.
+> NOTE (mirrors ``docs/SEARCH_LIMITATIONS.md`` at landing): the
+> mana-payability axis on the 5+ live CastSpell sites is CLOSED.
+> The residual divergence is the SEPARATE deferred surface:
+> target-satisfiability (Slice 2), additional-cost (Slice 3), and
+> the non-live alt-cost axes (kicker/impending/granted-warp/Room/X/
+> the "Deferred alt-cost flags"). This module pins the mana axis
+> only.
 """
 
 from __future__ import annotations
@@ -224,8 +222,9 @@ def _rs_cast_decisions_for(rs, card_id, player_id):
     ]
 
 
-def test_cross_engine_legal_set_mana_payability_asymmetry_characterized():
-    """CHARACTERIZATION + the documented-divergence pin.
+def test_cross_engine_legal_set_mana_payability_closed_both_omit_unpayable():
+    """THE CLOSED CONTRACT pin (was the characterization of the open
+    divergence; FLIPPED by legal_decisions mana-awareness Slice 1).
 
     At a MINIMAL real-EoE turn-1 p0 PRECOMBAT_MAIN with the genuine
     ``Slavering Branchsnapper`` ({4}{G}{G}) in p0's hand and ZERO
@@ -233,22 +232,23 @@ def test_cross_engine_legal_set_mana_payability_asymmetry_characterized():
 
       * Python ``legal_actions(py, 0)`` does NOT emit a ``CastSpell``
         for the card — ``_can_cast`` → ``can_pay_cost`` prunes it
-        (``src/mtg_bot/legal.py:383-385``).
-      * Rust ``legal_decisions(0)`` DOES emit a ``cast_spell`` for
-        it — the structural first-slice loop has no affordability
-        gate (``state_ops_legal.rs:77-88``, "Deferred
-        mana-affordability check").
+        (``src/mtg_bot/legal.py:382-385``). (Unchanged — Python was
+        always mana-aware.)
+      * Rust ``legal_decisions(0)`` now ALSO does NOT emit a
+        ``cast_spell`` for it — Slice 1's
+        ``state_ops_mana::can_pay_cost`` gate prunes the un-payable
+        cast at the emission site (was: structural emission with no
+        affordability gate).
 
-    The two engines present DIFFERENT legal-decision SETS at the
-    SAME real priority point. This is the asymmetry the warp probe
-    surfaced, in its un-masked form, on a genuine EoE printing.
+    BOTH engines now present the SAME (empty-for-this-card)
+    legal-decision set at the SAME real priority point. This is the
+    CLOSED state of the formerly-ACCEPTED divergence.
 
-    LOUD on closure: if a future Rust slice ports ``can_pay_cost``
-    (the docstring's promised follow-up), Rust will stop emitting
-    the un-payable cast and this assertion FAILS — that is the
-    signal to retire the ``SEARCH_LIMITATIONS.md`` "Cross-engine
-    legal-decision-set mana-payability asymmetry" entry, not to
-    weaken this test.
+    LOUD on regression: if Rust reverts to structural emission (the
+    ``can_pay_cost`` gate removed / the ``seen_castspell``
+    ordering broken / ``auto_tap_headroom_pool`` mis-credited), Rust
+    would re-emit the un-payable cast and this FAILS — that is a
+    Slice-1 regression, not a signal to weaken this test.
     """
     py, rs = _build_zero_mana_main_context(n_lands_in_lib=6)
 
@@ -271,45 +271,47 @@ def test_cross_engine_legal_set_mana_payability_asymmetry_characterized():
     assert py_casts == [], (
         f"{_CARD}: Python legal_actions UNEXPECTEDLY emitted a "
         f"CastSpell for an un-payable {{4}}{{G}}{{G}} with 0 mana — "
-        f"the mana-aware prune at legal.py:383-385 regressed: "
+        f"the mana-aware prune at legal.py:382-385 regressed: "
         f"{py_casts!r}"
     )
-    assert len(rs_casts) >= 1, (
-        f"{_CARD}: Rust legal_decisions did NOT emit the structural "
-        f"cast_spell for the un-payable card. If the affordability "
-        f"check was ported to Rust (state_ops_legal.rs:77-88), this "
-        f"asymmetry is CLOSED — retire the SEARCH_LIMITATIONS entry "
-        f"'Cross-engine legal-decision-set mana-payability "
-        f"asymmetry'. Got rs_casts={rs_casts!r}"
+    assert rs_casts == [], (
+        f"{_CARD}: Rust legal_decisions UNEXPECTEDLY emitted a "
+        f"cast_spell for an un-payable {{4}}{{G}}{{G}} with 0 mana. "
+        f"legal_decisions mana-awareness Slice 1 gates every live "
+        f"CastSpell site on state_ops_mana::can_pay_cost; a non-empty "
+        f"set here means the gate / seen_castspell ordering / "
+        f"auto_tap_headroom_pool regressed. Got rs_casts={rs_casts!r}"
     )
 
-    # The asymmetry, stated as a set difference at one priority point.
+    # The CLOSED contract, stated as set equality at one priority
+    # point: BOTH engines emit no cast for the un-payable card.
     assert {a.use_warp for a in py_casts} == set()
-    assert any(a.get("use_warp") is False for a in rs_casts), (
-        f"{_CARD}: Rust's structural emission should include the base "
-        f"(non-warp) cast for a no-alt-cost card; got {rs_casts!r}"
+    assert {bool(a.get("use_warp")) for a in rs_casts} == set(), (
+        f"{_CARD}: post-Slice-1 Rust must emit NO cast (base or warp) "
+        f"for the un-payable card; got {rs_casts!r}"
     )
 
 
-def test_cross_engine_legal_set_asymmetry_is_parity_benign_under_replay():
-    """THE CANONICALIZATION PIN — why the asymmetry is benign.
+def test_cross_engine_legal_set_closed_replay_stays_byte_equal():
+    """THE REPLAY CANONICALIZATION PIN — still holds post-Slice-1.
 
-    From the SAME divergent priority point as the characterization
-    test (Python prunes the cast, Rust structurally emits it), drive
-    the cross-engine harness's single-script-replay contract: the
-    decision is computed from the **Python** state (the SoT) — here
-    PassPriority, because Python's mana-aware ``legal_actions`` would
-    never offer the un-payable cast to any agent — and the SAME
-    ``action_dict`` is applied to BOTH engines via ``step_both``.
+    From the SAME zero-mana priority point as the closed-contract
+    test (now BOTH engines omit the un-payable cast), drive the
+    cross-engine harness's single-script-replay contract: the
+    decision is computed from the **Python** SoT state (here
+    PassPriority — Python's mana-aware ``legal_actions`` offers no
+    cast) and the SAME ``action_dict`` is applied to BOTH engines
+    via ``step_both``.
 
-    Asserts the trajectory stays byte-equal across a run of replayed
-    decisions. The Rust-only structural ``cast_spell`` option is
-    NEVER taken because the harness replays ONE Python-derived
-    script; neither engine's own enumerator is ever an agent-choice
-    source in a cross-engine context. This is the construction that
-    makes the legal-set asymmetry unobservable to any cross-engine
-    agent — the load-bearing reason the warp probes' trajectories
-    were byte-equal despite the raw-set difference.
+    Asserts (a) the trajectory stays byte-equal across a run of
+    replayed decisions (the single-script-replay contract is intact —
+    the load-bearing reason every cross-engine harness is parity-safe
+    pre-flip), AND (b) the now-EQUAL emission sets persist through
+    the replay (post-Slice-1 the asymmetry is closed, not merely
+    masked: Rust no longer has a structural-only cast to mask). This
+    is the parity-NEUTRALITY tripwire from the design doc §4 proof —
+    if Slice 1 had over-pruned a Python-sourced action the replay
+    would diverge here.
     """
     from mtg_bot.parity.cross_engine import step_both
 
@@ -318,47 +320,51 @@ def test_cross_engine_legal_set_asymmetry_is_parity_benign_under_replay():
         o for o in py.players[0].hand if o.printing.name == _CARD
     )
 
-    # Re-confirm the divergence is LIVE at this point (the premise of
-    # the benign claim is that the sets genuinely differ here).
+    # Post-Slice-1: BOTH engines omit the un-payable cast here (the
+    # sets are now EQUAL, not divergent — the closed contract).
     assert _py_cast_decisions_for(py, card_obj.id, 0) == []
-    assert len(_rs_cast_decisions_for(rs, card_obj.id, 0)) >= 1
+    assert _rs_cast_decisions_for(rs, card_obj.id, 0) == []
 
     # The replay contract: the script is Python-derived. Python's
     # mana-aware legal_actions for p0 here is exactly [PassPriority]
-    # for this card surface (the un-payable cast is pruned) — so the
-    # only thing any cross-engine agent could pick is pass_priority.
-    # Replay it on BOTH engines and assert byte-equality every step.
-    # The Rust-only structural cast_spell is unreachable: nothing in
-    # the cross-engine path consults rs.legal_decisions() to choose.
+    # for this card surface (the un-payable cast is pruned, as it
+    # always was) — so the only thing any cross-engine agent could
+    # pick is pass_priority. Replay it on BOTH engines and assert
+    # byte-equality every step (the §4 parity-neutrality tripwire:
+    # an over-prune of a Python-sourced action would diverge here).
     for step_idx in range(8):
         s = step_both(py, rs, {"kind": "pass_priority"})
         assert not s.divergences, (
             f"{_CARD}: replayed pass_priority step {step_idx} "
-            f"diverged — the single-script-replay canonicalization "
-            f"that makes the legal-set asymmetry benign has BROKEN: "
+            f"diverged — the single-script-replay contract (the §4 "
+            f"parity-neutrality proof's tripwire) has BROKEN: "
             f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
         )
 
-    # And the card is STILL only-castable-on-Rust — i.e. the
-    # asymmetry persisted through the replay (it was never resolved
-    # by an agent choosing it; it was simply never offered by the
-    # Python script that the harness replays).
+    # The sets stay EQUAL through the replay (the closed contract is
+    # stable, not a transient — Rust never re-acquires a structural-
+    # only un-payable cast as the game state advances under replay).
     assert _py_cast_decisions_for(py, card_obj.id, 0) == []
-    assert len(_rs_cast_decisions_for(rs, card_obj.id, 0)) >= 1
+    assert _rs_cast_decisions_for(rs, card_obj.id, 0) == []
 
 
-def test_cross_engine_legal_set_asymmetry_collapses_with_sufficient_mana():
-    """NEGATIVE CONTROL — the divergence is SPECIFICALLY the
-    mana-payability prune, not a structural enumeration bug.
+def test_cross_engine_legal_set_closed_negative_control_both_emit_when_affordable():
+    """NEGATIVE CONTROL / over-prune guard — Slice 1's predicate is
+    at-least-as-permissive as Python's ``can_pay_cost``.
 
     Same genuine ``Slavering Branchsnapper`` in p0's hand, but now
     {4}{G}{G} = 6 Forests SEATED on p0's battlefield (untapped) so
-    Python's mana-aware ``legal_actions`` ALSO sees the cost as
-    affordable. Both engines now emit the base ``CastSpell`` for the
-    card — the set difference vanishes exactly where the warp probes
-    mask it (ramp-to-affordable). This proves the asymmetry is the
-    ``can_pay_cost`` prune alone; Rust's structural set is a
-    superset that becomes EQUAL once Python's payability gate opens.
+    Python's mana-aware ``legal_actions`` sees the cost as
+    affordable. Post-Slice-1 BOTH engines emit exactly the base
+    ``CastSpell`` for the card. This is the design doc §3.2
+    over-prune guard: ``state_ops_mana::can_pay_cost`` reuses
+    ``auto_tap_headroom_pool`` (NOT a pool-only check) precisely so a
+    {4}{G}{G} cast Python offers when 6 untapped Forests are on the
+    battlefield is STILL emitted by Rust — a pool-only gate would
+    WRONGLY drop it (the predicate must not be NARROWER than Python's
+    or the single-script-replay harness would replay a Python-sourced
+    cast Rust no longer considers legal). Confirms Slice 1 closed the
+    over-emission without introducing an under-emission.
     """
     from mtg_bot.parity.cross_engine import step_both
 
@@ -367,9 +373,10 @@ def test_cross_engine_legal_set_asymmetry_collapses_with_sufficient_mana():
         o for o in py.players[0].hand if o.printing.name == _CARD
     )
 
-    # Divergent before seating mana.
+    # Post-Slice-1: BOTH omit before seating mana (the closed
+    # contract — was Python-omit / Rust-emit).
     assert _py_cast_decisions_for(py, card_obj.id, 0) == []
-    assert len(_rs_cast_decisions_for(rs, card_obj.id, 0)) >= 1
+    assert _rs_cast_decisions_for(rs, card_obj.id, 0) == []
 
     # Seat 6 Forests onto p0's battlefield byte-equal: play one land
     # per p0 turn (CR 305.2) via the single-script-replay contract.

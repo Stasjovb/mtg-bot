@@ -19832,6 +19832,16 @@ def test_r63_warp_parse_printing_roundtrips_warp_cost():
          "power": 2, "toughness": 2, "effects": []},
         0, _R63_ZONE_HAND))
     rs.set_phase(3)  # MAIN1 (sorcery timing)
+    # legal_decisions mana-awareness Slice 1: legal_decisions now
+    # gates every CastSpell site on can_pay_cost (the SoT-flip
+    # closure). Seat enough floating mana that BOTH the WarpBeast
+    # base {3}{R} + warp {1}{R} AND the Vanilla {1}{G} are payable,
+    # so this pin still exercises the warp/base EMISSION-SHAPE +
+    # round-trip it was written to characterize (the mana-prune is a
+    # separate axis, pinned by test_cross_engine_legal_set_asymmetry).
+    rs.add_mana(0, "C", 4)
+    rs.add_mana(0, "R", 1)
+    rs.add_mana(0, "G", 1)
     ld = rs.legal_decisions(0)
     warp_for_w = sorted(
         a.get("use_warp") for a in ld
@@ -19856,6 +19866,12 @@ def test_r63_warp_legal_emits_adjacent_base_then_warp_positional():
     rs = _r62_fresh_rust_state()
     w1 = _r63_inject_warp_creature(rs)
     rs.set_phase(3)
+    # legal_decisions mana-awareness Slice 1: seat mana so the
+    # WarpBeast base {3}{R} + warp {1}{R} are BOTH payable — this pin
+    # characterizes the POSITIONAL emission shape + dedup, not the
+    # (separately-pinned) mana-prune axis.
+    rs.add_mana(0, "C", 4)
+    rs.add_mana(0, "R", 1)
     ld = rs.legal_decisions(0)
     cs = [
         (a["card_id"], a["use_warp"]) for a in ld
@@ -19868,6 +19884,10 @@ def test_r63_warp_legal_emits_adjacent_base_then_warp_positional():
     # {base, warp} pair, matching Python's (name, use_warp, ...) key.
     w2 = _r63_inject_warp_creature(rs)
     rs.set_phase(3)
+    # Re-seat (the first legal_decisions call does not drain mana,
+    # but be explicit so the dedup half is independent of pool carry).
+    rs.add_mana(0, "C", 4)
+    rs.add_mana(0, "R", 1)
     ld2 = rs.legal_decisions(0)
     cs2 = [
         (a["card_id"], a["use_warp"]) for a in ld2
@@ -19959,6 +19979,13 @@ def test_r63_warp_exile_recast_pays_normal_cost_clears_warped():
     assert any(o["printing_name"] == "WarpBeast"
                for o in rs.exile_snapshot(0))
     rs.set_phase(3)  # a later MAIN1
+    # legal_decisions mana-awareness Slice 1: the warp-cast above
+    # drained the pool, so the warp-exiled object's BASE recast is
+    # now mana-gated. Seat the NORMAL {3}{R} BEFORE the emission
+    # assertion (this is the SAME mana the recast apply_action below
+    # consumes — the post-apply pool-drain assert still expects 0).
+    rs.add_mana(0, "R", 1)
+    rs.add_mana(0, "C", 3)  # {3}{R} normal mana_cost
     ld = rs.legal_decisions(0)
     recast = [
         (a["card_id"], a["use_warp"]) for a in ld
@@ -19967,8 +19994,6 @@ def test_r63_warp_exile_recast_pays_normal_cost_clears_warped():
     assert recast == [(wid, False)], (
         f"warp-exiled object must offer a BASE recast only "
         f"(use_warp=False, normal cost); got {recast}")
-    rs.add_mana(0, "R", 1)
-    rs.add_mana(0, "C", 3)  # {3}{R} normal mana_cost
     rs.apply_action({
         "kind": "cast_spell", "card_id": wid, "use_warp": False,
         "kicked": False, "cast_for_free": False,
@@ -21457,11 +21482,17 @@ def test_r72_warp_phase2_hand_life_gate_on_legal_emit():
     rider 0) at any ``life >= 1`` still emits ``[base, warp]`` — the
     life gate is a verified NO-OP for it (Phase-1 legal output
     unchanged)."""
+    # legal_decisions mana-awareness Slice 1: seat the cost so the
+    # LIFE gate is the sole variable under test (the mana-prune is a
+    # separate axis pinned by test_cross_engine_legal_set_asymmetry).
+    # TLC base {B}{B} + warp {B} → 2 B covers both independent
+    # non-destructive can_pay_cost checks.
     # life >= 3 → base+warp
     rs = _r62_fresh_rust_state()
     tlc = _r72_inject_tlc(rs, _R72_ZONE_HAND)
     rs.set_life(0, 3)
     rs.set_phase(3)
+    rs.add_mana(0, "B", 2)
     pairs = sorted(
         a["use_warp"] for a in rs.legal_decisions(0)
         if a.get("kind") == "cast_spell" and a.get("card_id") == tlc)
@@ -21472,6 +21503,7 @@ def test_r72_warp_phase2_hand_life_gate_on_legal_emit():
     tlc2 = _r72_inject_tlc(rs2, _R72_ZONE_HAND)
     rs2.set_life(0, 2)
     rs2.set_phase(3)
+    rs2.add_mana(0, "B", 2)
     pairs2 = sorted(
         a["use_warp"] for a in rs2.legal_decisions(0)
         if a.get("kind") == "cast_spell" and a.get("card_id") == tlc2)
@@ -21479,10 +21511,13 @@ def test_r72_warp_phase2_hand_life_gate_on_legal_emit():
         f"TLC in hand at life=2 must emit base ONLY (warp suppressed "
         f"by the life gate); got {pairs2}")
     # Phase-1 card (rider 0) at life=1 still base+warp (gate no-op).
+    # WarpBeast base {3}{R} + warp {1}{R} → 4 C + 1 R covers both.
     rs3 = _r62_fresh_rust_state()
     w = _r63_inject_warp_creature(rs3, _R63_ZONE_HAND)
     rs3.set_life(0, 1)
     rs3.set_phase(3)
+    rs3.add_mana(0, "C", 4)
+    rs3.add_mana(0, "R", 1)
     pairs3 = sorted(
         a["use_warp"] for a in rs3.legal_decisions(0)
         if a.get("kind") == "cast_spell" and a.get("card_id") == w)
@@ -21502,6 +21537,9 @@ def test_r72_warp_phase2_graveyard_loop_life_gate():
     tlc = _r72_inject_tlc(rs, _R72_ZONE_GRAVEYARD)
     rs.set_life(0, 3)
     rs.set_phase(3)
+    # legal_decisions mana-awareness Slice 1: seat the {B} graveyard-
+    # warp cost so the LIFE gate is the sole variable under test.
+    rs.add_mana(0, "B", 1)
     gy3 = [
         a for a in rs.legal_decisions(0)
         if a.get("kind") == "cast_spell" and a.get("card_id") == tlc]
@@ -21512,11 +21550,13 @@ def test_r72_warp_phase2_graveyard_loop_life_gate():
     tlc2 = _r72_inject_tlc(rs2, _R72_ZONE_GRAVEYARD)
     rs2.set_life(0, 2)
     rs2.set_phase(3)
+    rs2.add_mana(0, "B", 1)
     gy2 = [
         a for a in rs2.legal_decisions(0)
         if a.get("kind") == "cast_spell" and a.get("card_id") == tlc2]
     assert gy2 == [], (
-        f"graveyard TLC at life=2 → NONE (life gate); got {gy2}")
+        f"graveyard TLC at life=2 → NONE (life gate, mana seated so "
+        f"the life gate is the sole prune); got {gy2}")
 
 
 def test_r72_warp_phase2_hand_cast_pays_warp_cost_and_life():
@@ -21598,6 +21638,14 @@ def test_r72_warp_phase2_graveyard_cast_full_then_exile_then_recast():
     # NORMAL {B}{B} cost; it must NOT re-offer a graveyard-warp (the
     # object is in EXILE, not the graveyard).
     rs.set_phase(3)
+    # legal_decisions mana-awareness Slice 1: the graveyard-warp-cast
+    # above drained the {B} pool, so the warp-exiled object's BASE
+    # recast is now mana-gated. Seat the NORMAL {B}{B} BEFORE the
+    # emission assertion (this is the SAME mana the recast
+    # apply_action below consumes — the post-apply B==0 drain assert
+    # still holds; life is unchanged by seating/emission).
+    rs.add_mana(0, "B", 2)  # the NORMAL {B}{B}
+    life_before = rs.get_life(0)
     ld = rs.legal_decisions(0)
     recast = sorted(
         a["use_warp"] for a in ld
@@ -21605,8 +21653,6 @@ def test_r72_warp_phase2_graveyard_cast_full_then_exile_then_recast():
     assert recast == [False], (
         f"warp-exiled TLC recast must be BASE-only (use_warp=False) at "
         f"NORMAL mana_cost — NOT a second graveyard-warp; got {recast}")
-    rs.add_mana(0, "B", 2)  # the NORMAL {B}{B}
-    life_before = rs.get_life(0)
     rs.apply_action({
         "kind": "cast_spell", "card_id": tlc, "use_warp": False,
         "kicked": False, "cast_for_free": False,

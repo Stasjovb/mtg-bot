@@ -5430,16 +5430,37 @@ boundary and per-game evidence on record".
 
 ---
 
-## Cross-engine legal-decision-set mana-payability asymmetry (ACCEPTED — parity-benign by the single-script-replay contract)
+## Cross-engine legal-decision-set mana-payability asymmetry (PARTIALLY CLOSED — the mana axis is CLOSED Slice 1; residual = target/additional-cost/alt-cost axes)
 
-**Status**: ACCEPTED divergence with rationale. Characterized +
-regression-pinned 2026-05-17 (`feature/cross-engine-legal-set-asymmetry`).
-This entry exists because `rust/src/state_ops_legal.rs:77-88`
-("Deferred mana-affordability check") *claims* the divergence is
-"Documented in `docs/SEARCH_LIMITATIONS.md` alongside the
-one-land-per-turn gate" — but no such entry existed. This closes
-that documentation gap and records WHY the asymmetry cannot affect
-cross-engine trajectory parity.
+**Status**: **PARTIALLY CLOSED.** The **mana-payability axis on the
+live CastSpell sites is CLOSED** by legal_decisions mana-awareness
+Slice 1 (2026-05-17, `feature/rust-legal-decisions-mana-slice1`;
+`docs/RUST_LEGAL_DECISIONS_MANA_AWARENESS_DESIGN.md`): the
+non-destructive `state_ops_mana::can_pay_cost` predicate (composing
+the already-byte-equal-pinned `pool_can_cover` +
+`auto_tap_headroom_pool`, co-located with the destructive
+`pay_mana_cost` twin) now gates ALL of Rust's live CastSpell
+emission sites — base hand instant/sorcery, their warp variants, the
+warp-from-graveyard loop, and the warp exile-recast. On the live
+cast surface `RustCastSpellSet == PythonCastSpellSet` for the mana
+axis; Rust no longer emits a structurally-legal-but-un-payable cast.
+The change is parity-NEUTRAL under the current single-script-replay
+harness (design-doc §4 proof: the predicate is at-least-as-permissive
+as Python's `can_pay_cost` via the same `auto_tap_headroom_pool`, so
+every Python-sourced replayed action is still emitted by post-fix
+Rust). **Residual divergence (still ACCEPTED, the separate deferred
+surface):** (a) target-satisfiability (Slice 2 — a non-destructive
+Rust `legal_targets`-count analog of `_targets_are_satisfiable`),
+(b) additional non-mana costs (Slice 3 — the
+`_additional_costs_payable` analog), (c) the non-live alt-cost axes
+(kicker / impending / granted-warp / Room-half / X — the separate
+`state_ops_legal.rs:90-101` "Deferred alt-cost flags" surface, no
+Rust emission site yet). The earlier history: this entry originally
+existed because `rust/src/state_ops_legal.rs:77-88` *claimed* the
+divergence was "Documented in `docs/SEARCH_LIMITATIONS.md`" with no
+such entry; the characterization + canonicalization pin landed
+2026-05-17 (`feature/cross-engine-legal-set-asymmetry`), and Slice 1
+now closes the mana axis it characterized.
 
 **Location**:
 - Python (source of truth): `src/mtg_bot/legal.py` —
@@ -5458,26 +5479,35 @@ cross-engine trajectory parity.
   separately tracked in the "`legal_decisions` ActivateAbility
   approximated to mana producers" entry above.
 
-**What the asymmetry is**: Python `legal_actions` is **mana-aware**
-— it never enumerates a CastSpell / ActivateAbility whose cost the
-player cannot currently pay (it calls the non-destructive
-`can_pay_cost` predicate, which auto-taps available lands/mana
-creatures hypothetically). Rust `legal_decisions` enumerates
-**structurally** — Rust has no non-destructive `can_pay_cost`
-predicate yet (only the destructive `pay_mana_cost`), so the
-first-slice CastSpell loop emits a `cast_spell` dict for **every**
-non-Land, non-Instant card in hand (plus a warp variant whenever
-`warp_cost.is_some()`) regardless of available mana. At a priority
-point where a hand card's cost is un-payable, the two engines
-present **different legal-decision SETS**: Python omits the cast,
-Rust includes it. The breadth is **not** confined to the
-un-payable-normal-cost case — it spans the entire cast surface
-(normal / kicked / warp / impending / granted-warp / Room-half) and
-the activated-ability surface; it also includes Python-only
-target-satisfiability and additional-cost pruning. (Rust DOES
-filter some structural axes at enumeration — e.g. the post-CE17
-defender keyword — so this is specifically the *cost/target
-payability* axis, not "Rust never prunes".)
+**What the asymmetry was, and what remains (CORRECTED — verify-first,
+the stale ActivateAbility clause struck)**: Python `legal_actions`
+is **mana-aware** — it never enumerates a CastSpell / ActivateAbility
+whose cost the player cannot currently pay (it calls the
+non-destructive `can_pay_cost` predicate, which auto-taps available
+lands/mana creatures hypothetically). **The ActivateAbility surface
+is ALREADY mana-aware on the Rust side too** — `state_ops_legal.rs`
+gates the ability emission loop on
+`pool_can_cover(&auto_tap_headroom_pool(self, idx), &ability.cost.mana)`
+(pins I50; the original "and the activated-ability surface" clause
+here was STALE and is struck — verify-first correction per the
+design doc §1.4). **The CastSpell mana axis is now CLOSED too**
+(Slice 1, above): `state_ops_legal.rs:legal_decisions` gates every
+live CastSpell emission site on `state_ops_mana::can_pay_cost`, so it
+no longer emits a `cast_spell` dict for an un-payable card. **What
+remains a divergence** (the residual, still ACCEPTED): Rust still
+does NOT apply Python's *target-satisfiability* prune
+(`_targets_are_satisfiable`, CR 601.2c — Slice 2) nor the
+*additional non-mana cost* prune (`_additional_costs_payable` —
+Slice 3) at the CastSpell emission sites, and the non-live alt-cost
+axes (kicker / impending / granted-warp / Room-half / X) are not yet
+Rust emission sites at all (the separate "Deferred alt-cost flags"
+surface). At a priority point where a hand card is mana-payable but
+has 0 legal targets, the two engines still present different
+legal-decision SETS (Python omits, Rust includes). (Rust DOES filter
+several structural axes at enumeration — the post-CE17 defender
+keyword, and now the mana axis — so the residual is specifically the
+*target / additional-cost / non-live-alt-cost* axes, not "Rust never
+prunes".)
 
 **Why it's OK (parity-benign by construction — the
 canonicalization)**: every cross-engine harness uses the
@@ -5530,37 +5560,73 @@ out of scope of this entry.
 **Regression pin**:
 `tests/test_cross_engine_legal_set_asymmetry.py` — 3 tests on a
 minimal real-EoE state (the genuine `Slavering Branchsnapper`
-{4}{G}{G} 7/6 printing in p0's hand at turn-1 PRECOMBAT_MAIN):
-(1) `..._mana_payability_asymmetry_characterized` — with 0 mana,
-Python emits no CastSpell, Rust emits the structural one (pins the
-asymmetry + is LOUD on Rust closure); (2)
-`..._is_parity_benign_under_replay` — the same divergent point
+{4}{G}{G} 7/6 printing in p0's hand at turn-1 PRECOMBAT_MAIN),
+**re-anchored to the CLOSED contract by Slice 1**:
+(1) `..._mana_payability_closed_both_omit_unpayable` — with 0 mana,
+**BOTH** Python and Rust now omit the un-payable CastSpell (was:
+Python omit / Rust structural-emit; FLIPPED by Slice 1 — LOUD on a
+Rust mana-gate regression); (2)
+`..._closed_replay_stays_byte_equal` — the same zero-mana point
 driven by the Python-derived single-script replay stays byte-equal
-every step (pins the canonicalization); (3)
-`..._collapses_with_sufficient_mana` — negative control: with 6 G
-sources both engines emit exactly the base cast (proves the
-divergence is the `can_pay_cost` prune alone, and reproduces the
-warp probe's ramp-to-affordable masking).
+every step AND the now-equal sets persist (the §4
+parity-neutrality tripwire — an over-prune would diverge here);
+(3) `..._closed_negative_control_both_emit_when_affordable` — the
+over-prune guard: with 6 G sources BOTH engines emit exactly the
+base cast (proves Slice 1's predicate is at-least-as-permissive as
+Python's — `auto_tap_headroom_pool`, not a pool-only check).
 
-**Fix scope estimate**: medium (Rust-side; tracked, not on a
-deadline). Port a non-destructive `can_pay_cost` /
-`try_pay_mana_cost`-with-rollback predicate to
-`rust/src/state_ops_mana.rs`, then gate the `legal_decisions`
-CastSpell + ActivateAbility loops on it (the docstring's promised
-follow-up slice). Lands the alt-cost flag detector at the same time
-for the kicker/warp/impending variants. Closing it RETIRES this
-entry and FLIPS test (1) (Rust would stop emitting the un-payable
-cast) — that test failure is the intended closure signal, not a
-regression to suppress.
+**Fix scope estimate**: the mana axis (this slice) is **DONE**. The
+residual is Slice 2 (target-satisfiability — a non-destructive Rust
+`legal_targets`-count analog of `_targets_are_satisfiable`, CR
+601.2c, gating the same sites) + Slice 3 (`_additional_costs_payable`
+analog) + the bundled alt-cost axes (kicker/impending/granted-warp/
+Room-half/X/restricted-coin/convoke — composes via the designed
+`can_pay_cost` extension points, design doc §2.4/§2.5). ALL must
+land before any NN-drives-Rust (SoT-flip) milestone (design doc §6).
+This entry is RETIRED only when Slices 2–3 + the alt-cost surface
+also close.
 
-**Impact estimate**: zero on cross-engine trajectory parity (the
-deliverable is the characterization + the canonicalization pin —
-it converts an asserted-but-undocumented "documented in
-SEARCH_LIMITATIONS" claim into an actually-documented,
-regression-pinned accepted divergence). Within the Rust engine,
-closing it would tighten `legal_decisions` (fewer wasted search
-visits on un-payable casts) — a strength gain tracked under the
-sibling Rust-port entries, not here.
+**Impact estimate**: zero on cross-engine trajectory parity
+(parity-NEUTRAL by the §4 single-script-replay proof — the existing
+gate + probe modules stay byte-equal; the deliverable is the
+flip-readiness correctness fix). Within the Rust engine the mana-gate
+tightens `legal_decisions` (fewer wasted search visits on un-payable
+casts — a strength gain) and, critically, makes Rust's enumeration
+*correct* for when it becomes the authoritative decision source at
+the SoT flip (the policy head no longer scores / PUCT no longer
+expands illegal-by-mana actions). No Effect / bridge / `_SAFE_*`
+change; no `cards.rs` touch; bench-admit set + POOL_PARITY/PROBED
+headline untouched.
+
+**Identity-seam sub-simplifications (deliberate, live-surface,
+parity-safe — recorded per the §3.1/§2.2/§2.3 design):**
+- **`eff(c) = c`** (the cost-reduction seam, `state_ops_legal.rs`):
+  Rust's `cards.rs` has no `cost_reductions` /
+  `external_cost_reductions` on the live bridge-admitted cast
+  surface (the bridge declines cost-reduction cards;
+  `COST_REDUCTION_PHASE1` is realizable-0), so the effective cost IS
+  the printed cost. The identity wrapper is the single named
+  insertion point for a future cost-reduction slice (it does not
+  re-touch the gate sites). A pin would over-prune ONLY if a
+  cost-reduction card became bridge-admitted (then Python reduces +
+  finds payable, Rust wouldn't) — mitigated by the bridge declining
+  them today + the named seam.
+- **`SpellKind::Any` (restricted-coin)**: the Rust `ManaPool` is a
+  bare count struct with no per-coin spend-restriction model; no
+  live admitted CastSpell card exercises a restricted-coin context
+  (Treasure/Eldrazi/artifact-spend idioms off the cast surface).
+  `spell_kind` is carried in `can_pay_cost`'s signature for
+  forward-composition but ignored — equivalent to Python's behavior
+  when no coin carries a restriction (the dominant real case), and
+  it can only keep Rust a SUPERSET of Python in the restricted
+  corner (preserves the `Rust ⊇ Python` direction the replay
+  contract needs). Restricted-coin port bundled with the alt-cost
+  slice.
+- **`convoke` / `sac_for_mana` omitted**: Python's upper-bound
+  wideners ("only ever make a spell cheaper"); no live admitted axis
+  card has convoke and sac-for-mana is the Treasure idiom — both off
+  the live cast surface. Adding them later is a pure widening (never
+  narrows the emitted set) so it lands without re-pinning.
 
 ---
 

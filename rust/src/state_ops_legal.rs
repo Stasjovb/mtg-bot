@@ -511,7 +511,10 @@ fn activate_ability_dict(
 /// the commit step. Returns `true` iff `pool` can cover `cost`
 /// outright. Composes with `auto_tap_headroom_pool` for the broader
 /// emission-side affordability check.
-fn pool_can_cover(pool: &crate::state::ManaPool, cost: &crate::cards::ManaCost) -> bool {
+pub(crate) fn pool_can_cover(
+    pool: &crate::state::ManaPool,
+    cost: &crate::cards::ManaCost,
+) -> bool {
     if pool.white < cost.white
         || pool.blue < cost.blue
         || pool.black < cost.black
@@ -556,7 +559,7 @@ fn pool_can_cover(pool: &crate::state::ManaPool, cost: &crate::cards::ManaCost) 
 /// in `legal_actions`, strict in `_activate_ability`" model.
 ///
 /// Pins I50; see `docs/RUST_PARITY_GAPS.md`.
-fn auto_tap_headroom_pool(
+pub(crate) fn auto_tap_headroom_pool(
     state: &crate::state::GameState,
     player_idx: usize,
 ) -> crate::state::ManaPool {
@@ -588,6 +591,31 @@ fn auto_tap_headroom_pool(
         }
     }
     pool
+}
+
+/// **legal_decisions mana-awareness Slice 1 — the cost-reduction
+/// seam.** Returns the EFFECTIVE `ManaCost` for affordability, the
+/// Rust analog of Python's `_effective_cost` / `apply_cost_reductions`
+/// (`src/mtg_bot/actions.py:406-438`, called as `_effective_cost` at
+/// `legal.py:187-188` BEFORE every `_can_cast`). Python applies
+/// spell-local + battlefield-permanent-granted generic-mana
+/// reductions before the payability check; the predicate must see the
+/// reduced cost, not the printed one.
+///
+/// **Live-surface scope (verify-first, evidence-bound):** Rust's
+/// `cards.rs` has NO `cost_reductions` / `external_cost_reductions`
+/// fields on the live bridge-admitted cast surface — the bridge
+/// declines cost-reduction cards (`docs/COST_REDUCTION_PHASE1_DESIGN.md`
+/// is "realizable-0"). So `eff(c) = c` (identity) for every live
+/// CastSpell axis. This is the single NAMED insertion point so a
+/// future cost-reduction slice has exactly one place to wire the
+/// reduction in (it does NOT have to re-touch the 6 gate sites).
+/// Deliberate live-surface simplification, recorded in
+/// `SEARCH_LIMITATIONS.md`; a pin asserts the live admitted set
+/// carries no `cost_reductions` (the §3.5.4 regression tripwire).
+#[inline]
+fn eff(cost: &crate::cards::ManaCost) -> &crate::cards::ManaCost {
+    cost
 }
 
 /// Build a `{"kind": "declare_attackers", "attacker_ids": [...]}` dict.
@@ -939,41 +967,73 @@ impl GameState {
             if seen_castspell.contains(name) {
                 continue;
             }
+            // **legal_decisions mana-awareness Slice 1.** Mirror
+            // Python's `_emit_hand_cast`-only-inside-`if _can_cast`
+            // ordering (`legal.py:252-271`): compute base + warp
+            // affordability FIRST, then dedup-insert + push ONLY the
+            // affordable subset. `eff(c) = c` is the cost-reduction
+            // seam — Rust's `cards.rs` carries NO `cost_reductions`
+            // on the live bridge-admitted surface (the bridge
+            // declines cost-reduction cards; `COST_REDUCTION_PHASE1`
+            // is realizable-0), so the effective cost IS the printed
+            // cost; the identity wrapper is the single named
+            // insertion point for a future cost-reduction slice.
+            let sk = crate::state_ops_mana::SpellKind::Any;
+            let base_payable = crate::state_ops_mana::can_pay_cost(
+                self,
+                idx,
+                eff(&printing.mana_cost),
+                &sk,
+            );
+            // Warp variant is gated on its OWN cost (`warp_cost`),
+            // INDEPENDENT of the base `mana_cost` gate (mirrors
+            // Python's separate `_can_cast(warp_cost)` at
+            // `legal.py:264-266` — do NOT share one affordability
+            // boolean across base+warp). The warp life gate
+            // (`life > warp_additional_life_cost`) is preserved
+            // verbatim (warp Phase 2 landed it; mirrors
+            // `legal.py:269`).
+            let warp_payable = match printing.warp_cost.as_ref() {
+                Some(wc) => {
+                    (self.players[idx].life as i64)
+                        > (printing.warp_additional_life_cost as i64)
+                        && crate::state_ops_mana::can_pay_cost(
+                            self, idx, eff(wc), &sk,
+                        )
+                }
+                None => false,
+            };
+            if !base_payable && !warp_payable {
+                // Nothing affordable for this card — DO NOT insert
+                // into `seen_castspell` (Python only `seen_instant.add`s
+                // inside `_emit_hand_cast`, which is only called after
+                // `_can_cast` passes — `legal.py:241-244`,`:252-255`).
+                // Skipping the insert keeps a later same-named copy in
+                // a payable context still emittable (the §3.5.2
+                // load-bearing ordering rule). Continue WITHOUT
+                // marking the name seen.
+                continue;
+            }
+            // At least one of base/warp is affordable → the card
+            // emits, so claim the name-dedup slot now (mirrors
+            // Python's `_emit_hand_cast` add-on-emit).
             seen_castspell.insert(name);
-            actions.push(cast_spell_dict(py, obj.id)?);
-            if printing.warp_cost.is_some()
-                && (self.players[idx].life as i64)
-                    > (printing.warp_additional_life_cost as i64)
-            {
-                // Phase-1 warp: offer the use_warp=true variant
-                // alongside the base cast, mirroring Python
-                // legal.py:262-271 (instant-speed). Gated on
-                // warp_cost presence — Rust's CastSpell emitter
-                // has no _can_cast payability gate (module docstring
-                // "Deliberate divergence"); the warp variant inherits
-                // the same shape so its gating stays consistent with
-                // the base CastSpell beside it. Phase-1 deckspec cards
-                // (Red Tiger Mechan, Bygone Colossus) are Artifact
-                // Creatures cast at sorcery speed; the instant-speed
-                // mirror is here for shape-parity with Python's two
-                // emit sites (a future flash-warp card composes
-                // cleanly). The warp dict is intentionally NOT added
-                // to `seen_castspell` (name-only set) — it is a
-                // distinct action (use_warp flag differs); Python's
-                // dedup key is the 6-tuple (name, use_warp, ...). For
-                // 2x the same warp printing Python yields {base, warp}
-                // once and Rust's name-only set yields {base} once +
-                // this warp push once = the same {base, warp} pair.
-                //
-                // **Phase-2 life gate** (mirrors Python
-                // legal.py:269). The warp emit is now ALSO gated on
-                // `player.life > warp_additional_life_cost` (signed
-                // widening to avoid any u8 edge; Player.life is i32).
-                // For every Phase-1/1.5 card the rider is 0, so the
-                // gate is `life > 0` — always true in a live game (a
-                // player at <=0 life has lost via SBA), a NO-OP that
-                // does not perturb Phase-1/1.5 legal output. It only
-                // narrows Timeline Culler's hand emit to `life >= 3`.
+            if base_payable {
+                actions.push(cast_spell_dict(py, obj.id)?);
+            }
+            if warp_payable {
+                // Phase-1 warp: the use_warp=true variant, mirroring
+                // Python legal.py:262-271 (instant-speed). The warp
+                // dict is intentionally NOT added to `seen_castspell`
+                // (name-only set) — it is a distinct action (use_warp
+                // flag differs); Python's dedup key is the 6-tuple
+                // (name, use_warp, ...). For 2x the same warp printing
+                // Python yields {base, warp} once and Rust's name-only
+                // set yields {base?} once + this warp push once = the
+                // same pair. The warp life gate + the new
+                // `can_pay_cost(warp_cost)` gate are folded into
+                // `warp_payable` above (mirrors Python's combined
+                // `_can_cast(warp_cost) && p.life > rider`).
                 actions.push(cast_spell_warp_dict(py, obj.id)?);
             }
         }
@@ -1072,27 +1132,49 @@ impl GameState {
             if seen_castspell.contains(name) {
                 continue;
             }
+            // **legal_decisions mana-awareness Slice 1** — same
+            // affordability-first + dedup-only-on-emit ordering as
+            // the instant-speed pass above, mirroring Python's
+            // sorcery-speed `_emit_hand_cast`-inside-`if _can_cast`
+            // (`legal.py:382-401`). `eff(c)=c` cost-reduction seam;
+            // warp gated INDEPENDENTLY on `warp_cost` + the preserved
+            // life gate.
+            let sk = crate::state_ops_mana::SpellKind::Any;
+            let base_payable = crate::state_ops_mana::can_pay_cost(
+                self,
+                idx,
+                eff(&printing.mana_cost),
+                &sk,
+            );
+            let warp_payable = match printing.warp_cost.as_ref() {
+                Some(wc) => {
+                    (self.players[idx].life as i64)
+                        > (printing.warp_additional_life_cost as i64)
+                        && crate::state_ops_mana::can_pay_cost(
+                            self, idx, eff(wc), &sk,
+                        )
+                }
+                None => false,
+            };
+            if !base_payable && !warp_payable {
+                // Nothing affordable — skip WITHOUT claiming the
+                // name-dedup slot (the §3.5.2 ordering rule; mirrors
+                // Python's add-on-emit `seen_instant`).
+                continue;
+            }
             seen_castspell.insert(name);
-            actions.push(cast_spell_dict(py, obj.id)?);
-            if printing.warp_cost.is_some()
-                && (self.players[idx].life as i64)
-                    > (printing.warp_additional_life_cost as i64)
-            {
+            if base_payable {
+                actions.push(cast_spell_dict(py, obj.id)?);
+            }
+            if warp_payable {
                 // Phase-1 warp (sorcery-speed): mirror Python
-                // legal.py:392-401. This is the LIVE path for the two
-                // Phase-1 Artifact-Creature cards (Red Tiger Mechan,
-                // Bygone Colossus). Same gating + dedup rationale as
-                // the instant-speed mirror above. Emission order:
-                // base cast_spell_dict then cast_spell_warp_dict
-                // immediately after, matching Python's `:386` then
-                // `:401` so the action-list fingerprint matches
-                // positionally, not just as a set.
-                //
-                // **Phase-2 life gate** (mirrors Python
-                // legal.py:399) — `life > warp_additional_life_cost`,
-                // signed-widened. No-op for Phase-1/1.5 cards (rider
-                // 0 → `life > 0` always true in a live game); narrows
-                // Timeline Culler's hand emit to `life >= 3`.
+                // legal.py:392-401. The LIVE path for the Phase-1
+                // Artifact-Creature warp cards (Red Tiger Mechan,
+                // Bygone Colossus) + Timeline Culler. Emission order:
+                // base then warp immediately after, matching Python's
+                // `:386` then `:401` positionally. The life gate + the
+                // new `can_pay_cost(warp_cost)` gate are folded into
+                // `warp_payable` (mirrors Python's combined predicate).
                 actions.push(cast_spell_warp_dict(py, obj.id)?);
             }
         }
@@ -1135,6 +1217,20 @@ impl GameState {
             {
                 continue;
             }
+            // **legal_decisions mana-awareness Slice 1.** Mirror
+            // Python's graveyard-warp `_can_cast(warp_cost)` gate
+            // (`legal.py:457-462`). The `warp_cost.is_none()` skip
+            // above guarantees `warp_cost` is Some here.
+            let sk = crate::state_ops_mana::SpellKind::Any;
+            let wc = printing
+                .warp_cost
+                .as_ref()
+                .expect("warp_cost checked Some by the is_none skip");
+            if !crate::state_ops_mana::can_pay_cost(
+                self, idx, eff(wc), &sk,
+            ) {
+                continue;
+            }
             actions.push(cast_spell_warp_dict(py, obj.id)?);
         }
 
@@ -1156,6 +1252,19 @@ impl GameState {
                 continue;
             };
             if printing.card_types.iter().any(|t| t == "Instant") {
+                continue;
+            }
+            // **legal_decisions mana-awareness Slice 1.** The warp
+            // exile-recast pays the NORMAL `mana_cost` (not
+            // `warp_cost`). Mirror Python's `_can_cast(mana_cost)`
+            // gate on the exile-recast (`legal.py:486-489`).
+            let sk = crate::state_ops_mana::SpellKind::Any;
+            if !crate::state_ops_mana::can_pay_cost(
+                self,
+                idx,
+                eff(&printing.mana_cost),
+                &sk,
+            ) {
                 continue;
             }
             actions.push(cast_spell_dict(py, obj.id)?);
