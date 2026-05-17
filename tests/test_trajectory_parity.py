@@ -5753,3 +5753,675 @@ def test_r49_carddef_create_token_fires_on_cast_parity():
         )
     finally:
         clear_token_printings()
+
+
+# ===========================================================================
+# `_SAFE_TRIGGERS` allowlist CORRECTNESS AUDIT (continuous-pipeline,
+# non-Rust lane).
+#
+# Premise (docs/EFFECT_UNCOVERED_TIERC_CLOSEST_TO_A.md +
+# docs/EFFECT_UNCOVERED_TIERC_RUNG1_SPEC.md): the entire Tier-C unlock
+# ladder rests on EXTENDING `_SAFE_TRIGGERS`. Before any extension, the
+# *existing* allowlist's correctness must be audited — if a
+# currently-allowed safe trigger is silently NON-byte-equal Python vs
+# Rust, every production card riding it is already wrong and every
+# future rung inherits the latent divergence.
+#
+# A coverage sweep at HEAD f2526960 found that of the 21 live
+# `_SAFE_TRIGGERS` entries, SIX trigger families had only
+# recognizer/filter UNIT pins (test_trajectory.py) and NO genuine
+# end-to-end cross-engine FIRE probe (drive the trigger on BOTH engines,
+# assert byte-equal trajectory):
+#
+#   1. ("enters",  "source_is_self", "scry_n")            (round-1 starter)
+#   2. ("attacks", "source_is_self", "surveil")           (round-43)
+#   3. ("attacks", "source_is_self", "draw_cards")        (round-44)
+#   4. ("attacks", "source_is_self", "gain_life")         (round-44)
+#   5. ("dies",    "source_is_self", "surveil")           (round-42)
+#   6. ("enters",  "source_is_self", "create_token_tapped") (round-50)
+#
+# The Tier-C Rung-1 ladder leans heavily on the ASSERTED-but-unprobed
+# claim "the ATTACKS dispatch is pre-proven bit-equal (round-43)" — the
+# round-43/44 slices shipped as "substrate-only, no real-EoE consumer"
+# with only reject-path unit pins, never a live cross-engine ATTACKS
+# fire probe. These six tests close that audit gap with STRICT asserts
+# (a divergence here is a hard failure to be diagnosed, NOT an xfail).
+#
+# Verdict (recorded as the positive correctness result that de-risks
+# the whole ladder): ALL SIX families are byte-equal Python<->Rust.
+#
+# The other 15 live entries already have a genuine fire probe:
+#   * enters+self+draw_cards/gain_life — Germinating Wurm / Quantum
+#     Riddler / Cryogen Relic real-EoE probes (test_parity_smoke.py)
+#   * enters+self+surveil — Thawbringer / Wurmwall Sweeper / Starbreach
+#     Whale real-EoE probes
+#   * enters+self+mill — Seedship Broodtender real-EoE probe
+#   * enters/dies+self+create_token — Wedgelight Rammer / Galactic
+#     Wayfarer / Beamsaw Prospector real-EoE probes
+#   * dies+self+create_token_tapped — Gravpack Monoist real-EoE probe
+#   * dies+self+gain_life/draw_cards —
+#     test_carddef_safe_dies_*_fires_on_sba_death_parity (this file)
+#   * becomes_tapped+self+create_token — Seedship Agrarian genuine probe
+#   * landfall x {gain_life,pump_self,draw_cards,mill,
+#     put_plus_one_counter_on_self} — Eumidian / Icecave Crasher /
+#     Icetill Explorer / Seedship Agrarian probes (this file +
+#     test_parity_smoke.py)
+# ===========================================================================
+
+
+def _safe_trigger_audit_deckspec(seed: int = 42):
+    """Mirror-match DeckSpec with a deep Forest library so draw / scry /
+    mill leaves have library content to act on. No creatures in the
+    library — the audit carriers are side-channel injected so the probe
+    is hermetic (only the audited trigger fires).
+    """
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec
+
+    forest = CardDef(name="Forest", card_type="Land", mana_produced=("G",))
+    return DeckSpec(
+        card_defs=(forest,),
+        p0_library=("Forest",) * 40,
+        p1_library=("Forest",) * 40,
+        shared_rng_seed=seed,
+    )
+
+
+def _walk_to_step(py_state, rust_state, step_name: str, max_advances: int = 30):
+    """Advance both engines until ``py_state.step.name == step_name``
+    with p0 active. Mirrors the prototype's reach-DECLARE_ATTACKERS /
+    reach-PRECOMBAT_MAIN walk."""
+    from mtg_bot.parity.cross_engine import advance_phase_python
+
+    for _ in range(max_advances):
+        if (
+            py_state.step.name == step_name
+            and py_state.active_player_idx == 0
+        ):
+            return
+        advance_phase_python(py_state)
+        rust_state.advance_phase()
+    raise AssertionError(
+        f"did not reach {step_name} (p0 active) within {max_advances} "
+        f"advances; stuck at {py_state.step.name} turn "
+        f"{py_state.turn_number}"
+    )
+
+
+def _inject_attacks_trigger_carrier(
+    py_state, rust_state, *, name, py_effect, rust_effect,
+):
+    """Inject a 2/2 ATTACKS+IsSelf+<leaf> carrier (not summoning sick)
+    on p0's bf, both engines. Returns ``(py_id, rust_id)``. Mirrors the
+    genuine Seedship-Agrarian probe's inject-then-production-tap shape
+    on the ATTACKS event axis."""
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.game import Zone
+
+    printing = CardPrinting(
+        name=name,
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ATTACKS,
+                predicate=IsSelf(subject=None),
+                effect=py_effect,
+            ),
+        ),
+    )
+    py_obj = py_state.new_object(
+        printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    ZONE_BATTLEFIELD = 2
+    rust_id = rust_state.register_and_inject_object(
+        {
+            "name": name,
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "triggered_abilities": [
+                {
+                    "event": "attacks",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": rust_effect,
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    rust_state.clear_summoning_sick_for_player(0)
+    return int(py_obj.id), int(rust_id)
+
+
+def _audit_drive_attacks_and_assert(
+    py_state, rust_state, py_id, rust_id, *, family,
+):
+    """Drive a declare-attackers that fires the audited ATTACKS trigger
+    on BOTH engines (Python: combat.declare_attackers — the production
+    per-attacker dispatch; Rust: declare_attacker — routes through the
+    same per-attacker Event::Attacks dispatch), drain both stacks, and
+    assert byte-equal field views. STRICT — any divergence is a hard
+    correctness failure."""
+    from mtg_bot import combat
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.parity.cross_engine import compare_fields
+
+    # Post-inject parity must be clean BEFORE the trigger fires.
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    assert inject_divs == [], (
+        f"[{family}] post-inject divergence (carrier injection is not "
+        f"parity-clean — the audit cannot proceed): "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in inject_divs]}"
+    )
+
+    combat.declare_attackers(py_state, [py_id])
+    assert rust_state.declare_attacker(rust_id) is True, (
+        f"[{family}] Rust declare_attacker rejected the audited "
+        f"carrier — cannot exercise the ATTACKS trigger"
+    )
+
+    # The audited trigger must be on BOTH stacks (the dispatch fired
+    # on both engines).
+    assert len(py_state.stack) == 1, (
+        f"[{family}] Python: ATTACKS trigger missing from stack after "
+        f"declare_attackers (the audited trigger did not fire)"
+    )
+    assert rust_state.stack_size() == 1, (
+        f"[{family}] Rust: ATTACKS trigger missing from stack after "
+        f"declare_attacker (the audited trigger did not fire)"
+    )
+
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        py_resolve(py_state)
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"[{family}] LATENT DIVERGENCE on a currently-allowed "
+        f"_SAFE_TRIGGERS entry — every production card riding it is "
+        f"already wrong (Python is source of truth): "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
+
+
+def test_audit_safe_trigger_attacks_self_draw_cards_byte_equal():
+    """AUDIT: ("attacks","source_is_self","draw_cards") (round-44) —
+    fire it on BOTH engines via the production declare-attackers path,
+    assert byte-equal trajectory. Closes the round-44 substrate-only
+    "no live ATTACKS fire probe" gap (the Tier-C Rung-1 ladder's
+    load-bearing 'ATTACKS dispatch pre-proven' claim).
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+
+    spec = _safe_trigger_audit_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _walk_to_step(py_state, rust_state, "DECLARE_ATTACKERS")
+
+    py_p0_hand_before = len(py_state.players[0].hand)
+    py_p0_lib_before = len(py_state.players[0].library)
+
+    py_id, rust_id = _inject_attacks_trigger_carrier(
+        py_state, rust_state,
+        name="AuditAttacksDrawer",
+        py_effect=DrawCards(amount=1),
+        rust_effect={"kind": "draw_cards", "count": 1},
+    )
+    _audit_drive_attacks_and_assert(
+        py_state, rust_state, py_id, rust_id,
+        family="attacks/self/draw_cards",
+    )
+
+    # Sanity: the leaf actually did something observable + identically.
+    assert len(py_state.players[0].hand) == py_p0_hand_before + 1
+    assert len(py_state.players[0].library) == py_p0_lib_before - 1
+    assert rust_state.hand_sizes[0] == len(py_state.players[0].hand)
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+
+
+def test_audit_safe_trigger_attacks_self_gain_life_byte_equal():
+    """AUDIT: ("attacks","source_is_self","gain_life") (round-44) —
+    production-path fire on both engines, byte-equal trajectory."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.effects.generic.life import GainLife
+
+    spec = _safe_trigger_audit_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _walk_to_step(py_state, rust_state, "DECLARE_ATTACKERS")
+
+    py_p0_life_before = py_state.players[0].life
+    assert py_p0_life_before == rust_state.get_life(0) == 20
+
+    py_id, rust_id = _inject_attacks_trigger_carrier(
+        py_state, rust_state,
+        name="AuditAttacksGainer",
+        py_effect=GainLife(amount=2),
+        rust_effect={"kind": "gain_life", "amount": 2},
+    )
+    _audit_drive_attacks_and_assert(
+        py_state, rust_state, py_id, rust_id,
+        family="attacks/self/gain_life",
+    )
+    assert py_state.players[0].life == py_p0_life_before + 2
+    assert rust_state.get_life(0) == py_state.players[0].life
+    assert rust_state.get_life(1) == py_state.players[1].life == 20
+
+
+def test_audit_safe_trigger_attacks_self_surveil_byte_equal():
+    """AUDIT: ("attacks","source_is_self","surveil") (round-43, the
+    FIRST ATTACKS entry — the dispatch the Rung-1 ladder calls
+    'pre-proven') — production-path fire on both engines, byte-equal
+    trajectory (no-agent surveil keeps every card on top identically)."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.effects.generic.library_lookat import Surveil
+
+    spec = _safe_trigger_audit_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _walk_to_step(py_state, rust_state, "DECLARE_ATTACKERS")
+
+    py_p0_lib_before = len(py_state.players[0].library)
+
+    py_id, rust_id = _inject_attacks_trigger_carrier(
+        py_state, rust_state,
+        name="AuditAttacksSurveiler",
+        py_effect=Surveil(amount=1),
+        rust_effect={"kind": "surveil", "count": 1},
+    )
+    _audit_drive_attacks_and_assert(
+        py_state, rust_state, py_id, rust_id,
+        family="attacks/self/surveil",
+    )
+    # No-agent surveil(1) keeps the card on top — library size
+    # unchanged, identically on both engines.
+    assert len(py_state.players[0].library) == py_p0_lib_before
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+
+
+def test_audit_safe_trigger_enters_self_scry_n_byte_equal():
+    """AUDIT: ("enters","source_is_self","scry_n") — a round-1 STARTER
+    triple that, despite being foundational, had no genuine end-to-end
+    cross-engine fire probe (only recognizer unit pins). Cast a
+    synthetic ENTERS+IsSelf+Scry(1) carrier on both engines, drain,
+    assert byte-equal trajectory (no-agent scry keeps top card)."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.library_lookat import Scry
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.game import StackItem, Zone
+
+    spec = _safe_trigger_audit_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _walk_to_step(py_state, rust_state, "PRECOMBAT_MAIN")
+
+    py_p0_lib_before = len(py_state.players[0].library)
+
+    printing = CardPrinting(
+        name="AuditEntersScryer",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.ENTERS,
+                predicate=IsSelf(subject=None),
+                effect=Scry(amount=1),
+            ),
+        ),
+    )
+    py_obj = py_state.new_object(
+        printing, owner_id=0, zone=Zone.HAND,
+    )
+    py_state.players[0].hand.append(py_obj)
+    rust_id = rust_state.register_and_inject_object(
+        {
+            "name": "AuditEntersScryer",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "scry_n", "count": 1},
+                }
+            ],
+        },
+        0,
+        1,  # ZONE_LIBRARY filler slot — same idiom as the genuine probes
+    )
+
+    # Post-inject parity (the Rust filler lands in a library slot;
+    # compare BEFORE the spell moves so the views are aligned).
+    rust_state.push_to_stack(int(rust_id), 0)
+    rust_state.resolve_top_of_stack()  # spell -> bf, ETB on stack
+    py_state.players[0].hand.remove(py_obj)
+    py_obj.zone = Zone.STACK
+    py_state.stack.append(StackItem(source=py_obj, controller_id=0))
+    py_resolve(py_state)  # spell -> bf, ETB on stack
+
+    assert len(py_state.stack) == 1, (
+        "[enters/self/scry_n] Python: ETB Scry(1) trigger missing"
+    )
+    assert rust_state.stack_size() == 1, (
+        "[enters/self/scry_n] Rust: ETB Scry(1) trigger missing"
+    )
+
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        py_resolve(py_state)
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"[enters/self/scry_n] LATENT DIVERGENCE on a round-1 starter "
+        f"_SAFE_TRIGGERS entry (Python is source of truth): "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
+    # No-agent scry(1) keeps the card on top — library size unchanged.
+    assert len(py_state.players[0].library) == py_p0_lib_before
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+
+
+def test_audit_safe_trigger_dies_self_surveil_byte_equal():
+    """AUDIT: ("dies","source_is_self","surveil") (round-42) — fire it
+    on BOTH engines via the production SBA-death path (lethal damage ->
+    state-based-actions pass moves bf->gy and fires DIES), drain,
+    assert byte-equal trajectory. Mirrors the proven
+    test_carddef_safe_dies_gain_life_fires_on_sba_death_parity shape on
+    the surveil leaf."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import compare_fields
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.base import TriggeredAbility
+    from mtg_bot.effects.generic.library_lookat import Surveil
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.game import Zone
+
+    spec = _safe_trigger_audit_deckspec(seed=42)
+    py_state, rust_state = trajectory.setup_matched_game(spec)
+    _walk_to_step(py_state, rust_state, "PRECOMBAT_MAIN")
+
+    py_p0_lib_before = len(py_state.players[0].library)
+
+    printing = CardPrinting(
+        name="AuditDiesSurveiler",
+        mana_cost_str="",
+        mana_cost=ManaCost(),
+        type_line="Creature",
+        supertypes=(),
+        card_types=("Creature",),
+        subtypes=(),
+        power=2,
+        toughness=2,
+        produces=frozenset(),
+        triggered_abilities=(
+            TriggeredAbility(
+                event=Event.DIES,
+                predicate=IsSelf(subject=None),
+                effect=Surveil(amount=1),
+            ),
+        ),
+    )
+    py_obj = py_state.new_object(
+        printing, owner_id=0, zone=Zone.BATTLEFIELD,
+    )
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+    ZONE_BATTLEFIELD = 2
+    rust_id = rust_state.register_and_inject_object(
+        {
+            "name": "AuditDiesSurveiler",
+            "card_types": ["Creature"],
+            "power": 2,
+            "toughness": 2,
+            "triggered_abilities": [
+                {
+                    "event": "dies",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "surveil", "count": 1},
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+
+    # Post-inject parity must be clean (no DIES fire on bf entry).
+    py_view, rust_view = _step_views(py_state, rust_state)
+    inject_divs = compare_fields(py_view, rust_view)
+    assert inject_divs == [], (
+        f"[dies/self/surveil] post-inject divergence: "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in inject_divs]}"
+    )
+    assert len(py_state.stack) == 0 and rust_state.stack_size() == 0, (
+        "[dies/self/surveil] DIES must NOT fire on bf entry"
+    )
+
+    # Mark lethal damage (2 = lethal for a 2/2) and run SBA on both.
+    py_obj.damage = 2
+    rust_state.deal_damage(int(rust_id), 2)
+    py_sba(py_state)
+    rust_state.apply_sbas()
+
+    assert len(py_state.stack) == 1, (
+        "[dies/self/surveil] Python: DIES trigger missing after "
+        "SBA-induced lethal-damage destroy"
+    )
+    assert rust_state.stack_size() == 1, (
+        "[dies/self/surveil] Rust: DIES trigger missing after SBA "
+        "destroy"
+    )
+
+    while rust_state.stack_size() > 0:
+        rust_state.resolve_top_of_stack()
+    while py_state.stack:
+        py_resolve(py_state)
+
+    py_view, rust_view = _step_views(py_state, rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        f"[dies/self/surveil] LATENT DIVERGENCE on a currently-allowed "
+        f"_SAFE_TRIGGERS entry (Python is source of truth): "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+    )
+    # No-agent surveil(1) keeps the card on top.
+    assert len(py_state.players[0].library) == py_p0_lib_before
+    assert rust_state.library_sizes[0] == len(py_state.players[0].library)
+    # Carrier landed in p0's graveyard on both engines.
+    py_gy = [o.printing.name for o in py_state.players[0].graveyard]
+    assert "AuditDiesSurveiler" in py_gy
+
+
+def test_audit_safe_trigger_enters_self_create_token_tapped_byte_equal():
+    """AUDIT: ("enters","source_is_self","create_token_tapped")
+    (round-50 ENTERS sibling — shipped substrate-only, the DIES sibling
+    has the Gravpack Monoist real-EoE probe but the ENTERS sibling had
+    NO fire probe). Cast a loader-SEATED ENTERS+IsSelf+
+    CreateTokenTapped(vanilla Robot) carrier and assert the spawned
+    token is byte-equal — INCLUDING the tapped flag — on both engines.
+
+    Uses the clean `_seat_token_printings` DeckSpec path (no Rust
+    filler-injection id skew) so the full field-view compare applies,
+    exactly like test_r49_carddef_create_token_fires_on_cast_parity."""
+    from mtg_bot.cards.base import make_token_creature
+    from mtg_bot.parity.cross_engine import (
+        CardDef,
+        DeckSpec,
+        build_python_field_view,
+        compare_fields,
+        parity_smoke,
+        clear_token_printings,
+    )
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.trajectory import (
+        _token_vanilla_card_def,
+        _seat_token_printings,
+    )
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.game import StackItem, Zone
+
+    clear_token_printings()
+    try:
+        robot = make_token_creature(
+            name="Audit CTT Robot Token", power=2, toughness=2,
+            subtypes=("Robot",), artifact=True,
+        )
+        token_cd = _token_vanilla_card_def(robot)
+        assert token_cd is not None
+        maker = CardDef(
+            name="Audit CTT Maker",
+            card_type="Creature",
+            mana_cost_generic=1,
+            mana_cost_colored=(("G", 1),),
+            power=2,
+            toughness=2,
+            triggered_abilities=(
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "create_token_tapped",
+                        "count": 1,
+                        "_token_card_def": token_cd,
+                    },
+                },
+            ),
+        )
+        forest = CardDef(
+            name="Forest", card_type="Land", mana_produced=("G",)
+        )
+        seated = _seat_token_printings([maker, forest])
+        seated_eff = next(
+            c for c in seated if c.name == "Audit CTT Maker"
+        ).triggered_abilities[0]["effect"]
+        assert seated_eff["kind"] == "create_token_tapped"
+        assert "token_printing_id" in seated_eff
+
+        spec = DeckSpec(
+            card_defs=tuple(seated),
+            p0_library=("Forest",) * 50 + ("Audit CTT Maker",) * 10,
+            p1_library=("Forest",) * 50 + ("Audit CTT Maker",) * 10,
+            shared_rng_seed=42,
+        )
+        py_state, rust_state = trajectory.setup_matched_game(spec)
+
+        py_p0 = py_state.players[0]
+        py_maker = next(
+            o for o in py_p0.hand
+            if o.printing.name == "Audit CTT Maker"
+        )
+        rust_maker_entry = next(
+            e for e in rust_state.hand_snapshot(0)
+            if e["printing_name"] == "Audit CTT Maker"
+        )
+        rust_maker_id = rust_maker_entry["id"]
+        assert int(py_maker.id) == int(rust_maker_id)
+
+        py_bf_before = len(py_state.battlefield)
+        rust_bf_before = len(
+            parity_smoke()._build_field_view(rust_state)["battlefield"]
+        )
+
+        rust_state.push_to_stack(rust_maker_id, 0)
+        rust_state.resolve_top_of_stack()
+        py_p0.hand.remove(py_maker)
+        py_maker.zone = Zone.STACK
+        py_state.stack.append(
+            StackItem(source=py_maker, controller_id=0)
+        )
+        py_resolve(py_state)
+
+        assert len(py_state.stack) == 1, (
+            "[enters/self/create_token_tapped] Python: ETB trigger "
+            "missing"
+        )
+        assert rust_state.stack_size() == 1, (
+            "[enters/self/create_token_tapped] Rust: ETB trigger "
+            "missing"
+        )
+
+        while rust_state.stack_size() > 0:
+            rust_state.resolve_top_of_stack()
+        while py_state.stack:
+            py_resolve(py_state)
+
+        py_view = build_python_field_view(py_state)
+        rust_view = parity_smoke()._build_field_view(rust_state)
+        py_bf_names = sorted(t[0] for t in py_view["battlefield"])
+        rust_bf_names = sorted(t[0] for t in rust_view["battlefield"])
+        assert "Audit CTT Maker" in py_bf_names
+        assert "Audit CTT Maker" in rust_bf_names
+        assert "Audit CTT Robot Token" in py_bf_names, (
+            f"Python: tapped token not spawned; bf={py_bf_names}"
+        )
+        assert "Audit CTT Robot Token" in rust_bf_names, (
+            f"Rust: tapped token not spawned; bf={rust_bf_names}"
+        )
+        assert len(py_view["battlefield"]) == py_bf_before + 2
+        assert len(rust_view["battlefield"]) == rust_bf_before + 2
+
+        # The spawned token enters TAPPED on BOTH engines (the
+        # load-bearing create_token_tapped assertion — the field-view
+        # signature includes the tapped flag).
+        py_tok = next(
+            o for o in py_state.battlefield
+            if o.printing.name == "Audit CTT Robot Token"
+        )
+        rust_tok = next(
+            d for d in rust_state.battlefield_snapshot()
+            if d["printing_name"] == "Audit CTT Robot Token"
+        )
+        assert py_tok.tapped is True, (
+            "[enters/self/create_token_tapped] Python: token must "
+            "enter tapped"
+        )
+        assert rust_tok["tapped"] is True, (
+            "[enters/self/create_token_tapped] Rust: token must enter "
+            "tapped"
+        )
+
+        divs = compare_fields(py_view, rust_view)
+        assert divs == [], (
+            f"[enters/self/create_token_tapped] LATENT DIVERGENCE on a "
+            f"currently-allowed _SAFE_TRIGGERS entry (Python is source "
+            f"of truth): "
+            f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in divs]}"
+        )
+    finally:
+        clear_token_printings()
