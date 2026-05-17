@@ -9557,7 +9557,33 @@ def _dict_to_python_action(action_dict: dict):
     if kind == "play_land":
         return PlayLand(card_id=_resolve_id_with_alias(action_dict, kind))
     if kind == "cast_spell":
-        return CastSpell(card_id=_resolve_id_with_alias(action_dict, kind))
+        # warp_cost substrate (Phase 1, round-63) — PRE-EXISTING
+        # HARNESS BUG FIX. This arm previously passed ONLY
+        # ``card_id``, silently dropping the four alt-cost / mode
+        # flags Rust's ``parse_action`` reads (``actions.rs`` —
+        # ``use_warp`` / ``kicked`` / ``cast_for_free`` /
+        # ``use_impending`` / ``cast_room_half``). No pre-Phase-1
+        # slice drove a non-default flag through ``step_both``
+        # (every prior cross-engine cast was a vanilla
+        # ``use_warp=False`` creature), so the gap was latent: a
+        # ``{"kind":"cast_spell","use_warp":true}`` dict cast at
+        # NORMAL cost on the Python side (CastSpell defaults
+        # ``use_warp=False``) while Rust honored the warp flag —
+        # producing a guaranteed cross-engine divergence on the
+        # FIRST warp cast driven through the harness. Threading all
+        # five flags makes the Python side honor the same alt-cost
+        # the Rust side does (Rust's ``parse_action`` already reads
+        # them; this aligns the bridge's Python decode). Defaults
+        # match the ``CastSpell`` dataclass so every existing
+        # vanilla-cast caller is bit-identical.
+        return CastSpell(
+            card_id=_resolve_id_with_alias(action_dict, kind),
+            use_warp=bool(action_dict.get("use_warp", False)),
+            kicked=bool(action_dict.get("kicked", False)),
+            cast_for_free=bool(action_dict.get("cast_for_free", False)),
+            use_impending=bool(action_dict.get("use_impending", False)),
+            cast_room_half=action_dict.get("cast_room_half", None),
+        )
     if kind == "activate_ability":
         return ActivateAbility(
             source_id=_resolve_id_with_alias(action_dict, kind),
@@ -10097,6 +10123,52 @@ def advance_phase_python(py_state) -> int:
         from mtg_bot.turn import draw_card as _py_draw_card
 
         _py_draw_card(py_state, py_state.active_player_idx)
+
+    if new_step == Step.END:
+        # 5b. **warp_cost substrate (Phase 1, round-63).** Mirror
+        #     Rust's ``state_ops_steps.rs::warp_exile_sweep_on_end_step``
+        #     (the new PHASE_END_STEP-entry hook). Production Python
+        #     schedules ``WarpExileSelf`` as a CR-603.7 delayed
+        #     trigger fired by ``turn.run_delayed_end_step_triggers``;
+        #     this harness primitive deliberately restricts itself to
+        #     the SAME composition Rust's ``advance_phase`` does (see
+        #     this function's docstring — it is NOT the production
+        #     engine entrypoint), so it inlines the deterministic
+        #     observable of ``WarpExileSelf`` exactly as it inlines
+        #     the CR-514 cleanup hooks below: every battlefield
+        #     permanent the ACTIVE player controls that was warp-cast
+        #     (``cast_via_warp``) moves to its owner's exile with the
+        #     CR-400.7 reset Python's ``turn.move_off_battlefield``
+        #     applies (damage / tapped / attached_to), gets
+        #     ``warped=True`` (non-token — mirrors
+        #     ``effects/generic/exile.py::WarpExileSelf``), and
+        #     ``cast_via_warp`` cleared. Active player here is the
+        #     player whose turn it is (the turn wrap is on the
+        #     CLEANUP->UNTAP advance, not END entry) — matches Rust's
+        #     ``active_player`` read and Python's ``offset=0`` for
+        #     sorcery-speed warps cast on the caster's own turn.
+        #     Byte-equal with Rust's sweep for the Phase-1 cards
+        #     (no LEAVES/DIES trigger fires — exile is not a graveyard
+        #     transit, and the bridge-admitted warp cards carry
+        #     ``triggered_abilities=()``; documented Phase-1
+        #     simplification, ``docs/SEARCH_LIMITATIONS.md``).
+        from mtg_bot.game import Zone
+
+        ai = py_state.active_player_idx
+        warp_pending = [
+            o for o in list(py_state.battlefield)
+            if o.controller_id == ai and getattr(o, "cast_via_warp", False)
+        ]
+        for obj in warp_pending:
+            py_state.battlefield.remove(obj)
+            obj.damage = 0
+            obj.tapped = False
+            obj.attached_to = None
+            obj.zone = Zone.EXILE
+            if not obj.printing.is_token:
+                obj.warped = True
+            obj.cast_via_warp = False
+            py_state.player_by_id(obj.owner_id).exile.append(obj)
 
     if new_step == Step.CLEANUP:
         # 6. CR 514.1 hand-size discard + CR 514.2 damage clear.

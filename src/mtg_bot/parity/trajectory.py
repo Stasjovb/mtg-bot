@@ -3352,6 +3352,34 @@ def _printing_is_bridge_pure_warp_creature(printing) -> bool:
     ``printing.warp_cost`` rejection (which is the whole point — this
     predicate REQUIRES it) PLUS the two Phase-2-rider positive
     rejections that are the §2 guardrail's teeth.
+
+    **Live-tree drift caught (round-63, the round-60-N1-class catch).**
+    The round-62 design doc (``WARP_COST_PHASE1_DESIGN.md`` §1)
+    enumerated Phase-1's set as exactly Red Tiger Mechan + Bygone
+    Colossus, both with ``triggered_abilities=()``. Verifying the
+    spec's §3.7 predicate against the LIVE ``OracleParserCardSource``
+    showed THREE more warp creatures now parse with a SINGLE SAFE
+    ETB trigger (Germinating Wurm — ENTERS/IsSelf/GainLife;
+    Knight Luminary — ENTERS/IsSelf/CreateToken; Starbreach Whale —
+    ENTERS/IsSelf/Surveil), so the §3.7 ``_python_ta_to_safe_dict``
+    branch would have admitted FIVE, not 2 — a different card set
+    than the spec authorized (and a Phase-1-boundary expansion the
+    round-62 scout did not cost / pin). These three are the
+    *residue-tier warp-gated cards* the spec §6 explicitly carves
+    out ("warp-gated cards whose Effect/trigger arm already shipped
+    — they live in the residue tier, NOT the 10-card roadmap row").
+    Per the spec's §1 Phase-1 boundary ("the ONLY blocking feature
+    on the two Phase-1 cards is ``warp_cost``;
+    ``triggered_abilities=()``") and the round-59 sub-shape-split
+    discipline (front-load the smallest self-contained slice),
+    Phase 1 is tightened to ``triggered_abilities == ()`` so it
+    admits EXACTLY the 2 spec'd cards. The safe-trigger+warp residue
+    trio is a clean follow-up (their trigger half is already
+    bridge-correct; they just need the warp substrate THIS slice
+    ships + a pin verifying the trigger fires byte-equal under a
+    warp-cast — a Phase-1.5 / Phase-2-sibling slice, not silently
+    folded in here). This keeps the spec's pin #12 ("exactly 2 EoE
+    printings pass") honest.
     """
     if "Creature" not in printing.card_types:
         return False
@@ -3364,15 +3392,19 @@ def _printing_is_bridge_pure_warp_creature(printing) -> bool:
         return False
     if getattr(printing, "warp_castable_from_graveyard", False):
         return False
+    # Phase-1 boundary (spec §1): the ONLY blocking feature is
+    # warp_cost — NO triggered abilities at all. The
+    # safe-trigger+warp residue trio (Germinating Wurm /
+    # Knight Luminary / Starbreach Whale) is a clean follow-up
+    # slice, not folded into Phase 1 (see the docstring's
+    # live-tree-drift note + SEARCH_LIMITATIONS.md).
+    if printing.triggered_abilities:
+        return False
     # No OTHER blocking feature — same exclusion set as
     # _printing_is_bridge_simple_creature (the 7 multi-gated warp
     # cards trip one of these and stay filtered):
     if printing.keywords and not printing.keywords.issubset(_SAFE_KEYWORDS):
         return False
-    if printing.triggered_abilities:
-        for ta in printing.triggered_abilities:
-            if _python_ta_to_safe_dict(ta) is None:
-                return False
     if printing.activated_abilities:
         return False
     if printing.static_abilities:
@@ -3561,12 +3593,12 @@ def _printing_to_card_def(printing) -> CardDef:
         # / ``cast_creature_warp`` Creature-gate passes on
         # ('Creature',) alone. ``warp_cost_str`` is parsed into the
         # (generic, colored) codec the bridge carries.
+        # Phase-1 boundary: the guardrail guarantees
+        # ``triggered_abilities == ()`` (the safe-trigger+warp residue
+        # trio is a follow-up), so no trigger threading is needed —
+        # the CardDef gets the default empty ``triggered_abilities``.
         generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
         wgen, wcol = _parse_mana_cost_string(printing.warp_cost_str or "")
-        triggered_abilities = tuple(
-            _python_ta_to_safe_dict(ta)
-            for ta in printing.triggered_abilities
-        )
         return CardDef(
             name=printing.name,
             card_type="Creature",
@@ -3575,7 +3607,6 @@ def _printing_to_card_def(printing) -> CardDef:
             power=printing.power,
             toughness=printing.toughness,
             keywords=tuple(sorted(printing.keywords)),
-            triggered_abilities=triggered_abilities,
             warp_cost_generic=wgen,
             warp_cost_colored=wcol,
             has_warp=True,
