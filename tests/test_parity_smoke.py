@@ -62507,6 +62507,426 @@ def test_cross_engine_real_eoe_seedship_agrarian_becomes_tapped_create_lander_pa
     assert py_state.players[1].life == py_p1_life_before
 
 
+def test_cross_engine_real_eoe_seedship_agrarian_both_triggers_full_card_parity(
+    parity_smoke,
+):
+    """GENUINE real-EoE probe (round-59 N1 — closes Seedship
+    Agrarian's SOLE remaining blocker). Drives the **real parsed
+    Seedship Agrarian printing**
+    (``get_active_source().get_printings()["Seedship Agrarian"]``)
+    end-to-end exercising **BOTH** triggers and asserts byte-equal
+    whole-card cross-engine state. The round-58 N1 probe
+    (``..._becomes_tapped_create_lander_parity``) covered ONLY
+    trigger-1; this probe proves Seedship Agrarian's WHOLE card is
+    now byte-equal-admittable.
+
+    Real EoE oracle (``data/edge_of_eternities.json``, eoe/204):
+
+        "Whenever this creature becomes tapped, create a Lander token.
+         (...)
+         Landfall — Whenever a land you control enters, put a +1/+1
+         counter on this creature."
+
+    Two parsed TriggeredAbilities, BOTH driven here:
+      * TRIGGER-1: ``BECOMES_TAPPED / IsSelf / CreateToken(Lander)``
+        — bridged round-58 N1. Driven via a production tap path
+        (Python ``tap_permanent``; Rust ``declare_attacker`` ->
+        ``tap_permanent_and_dispatch``).
+      * TRIGGER-2: ``ENTERS / land_enters_controlled_by_you /
+        PutPlusOneCounterOnSelf(1)`` — the leaf THIS slice admits
+        (the orthogonal landfall +1/+1 the round-58 resync narrowed
+        Seedship's residual to). Driven via a production land-play
+        path (Python ``_play_land``; Rust ``play_land``) so the
+        landfall trigger fires off the genuine ENTERS-on-land
+        dispatch on both engines.
+
+    **Why this is a GENUINE probe.** The Python side uses the
+    literally-parsed Seedship Agrarian ``CardPrinting`` from the
+    active CardSource (the same object the loader / bench sees),
+    asserting first that it parses to the EXACT two-trigger shape
+    (the §2 source of truth — both trigger-1 BECOMES_TAPPED/IsSelf/
+    CreateToken AND trigger-2 ENTERS/landfall/PutPlusOneCounterOnSelf
+    must be present and well-formed). The Rust side carries the
+    bridge-dict equivalent of BOTH triggers. Each is driven through
+    its production path.
+
+    **Sequencing.** Inject Seedship onto P0's bf (no trigger — ETB is
+    not BECOMES_TAPPED and Seedship is not itself a land, so its own
+    arrival fires NEITHER trigger). Then:
+      1. Tap Seedship -> BECOMES_TAPPED -> CreateToken(Lander) on the
+         stack; drain. (trigger-1)
+      2. Play a Forest from P0's hand -> the land's ENTERS fires the
+         landfall predicate -> PutPlusOneCounterOnSelf on Seedship on
+         the stack; drain. (trigger-2)
+    Order is deliberate: trigger-1 first (tapping does not move the
+    creature; landfall is checked when the LAND enters, independent
+    of Seedship's tap state), so the post-state carries the COMBINED
+    effect of both triggers.
+
+    Expected byte-equal post-state on BOTH engines (up to the
+    documented Lander token-registration boundary — same boundary the
+    round-58 probe / Galactic Wayfarer stop at):
+      * Seedship Agrarian still on P0's bf, now 4/4 (3/3 base + one
+        +1/+1 counter from the landfall trigger); plus_one_counters==1
+        / Rust ``counters``==1.
+      * Exactly one Lander token on P0's bf (from trigger-1),
+        controller 0, name "Lander", UNTAPPED.
+      * Forest on P0's bf (just played).
+      * P1's bf unchanged; P1 untouched.
+      * Life totals unchanged on both seats (neither trigger touches
+        life).
+      * No residual stack.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.game import (
+        Zone, effective_power, effective_toughness,
+    )
+    from mtg_bot.turn import tap_permanent
+    from mtg_bot.actions import _play_land
+    from mtg_bot.effects.predicates import Event, IsSelf, And
+    from mtg_bot.effects.generic.tokens import CreateToken
+    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings, register_token_printing,
+    )
+
+    real = get_active_source().get_printings().get("Seedship Agrarian")
+    if real is None:
+        import pytest
+        pytest.skip("Seedship Agrarian absent from active CardSource")
+
+    # §2 source-of-truth: the GENUINE parsed printing must carry
+    # EXACTLY the two-trigger shape this whole-card probe pins.
+    assert real.is_creature and (real.power, real.toughness) == (3, 3)
+    assert len(real.triggered_abilities) == 2
+    bt_trigs = [
+        t for t in real.triggered_abilities
+        if t.event is Event.BECOMES_TAPPED
+    ]
+    lf_trigs = [
+        t for t in real.triggered_abilities
+        if t.event is Event.ENTERS
+    ]
+    assert len(bt_trigs) == 1 and len(lf_trigs) == 1, (
+        "genuine Seedship Agrarian must parse exactly one "
+        "BECOMES_TAPPED trigger + one ENTERS (landfall) trigger; "
+        f"got bt={len(bt_trigs)} lf={len(lf_trigs)}"
+    )
+    bt = bt_trigs[0]
+    lf = lf_trigs[0]
+    # Trigger-1 shape (round-58).
+    assert isinstance(bt.predicate, IsSelf) and bt.predicate.subject is None
+    assert isinstance(bt.effect, CreateToken)
+    real_lander = bt.effect.token_printing
+    assert real_lander.name == "Lander"
+    assert int(bt.effect.count) == 1
+    assert getattr(bt.effect, "tapped", False) is False
+    # Trigger-2 shape (THIS slice): landfall +1/+1 on self.
+    assert isinstance(lf.predicate, And), (
+        "genuine Seedship landfall predicate must be the compound "
+        f"And(Subject(IsLand), Controlled(YOU)); got {type(lf.predicate)}"
+    )
+    assert isinstance(lf.effect, PutPlusOneCounterOnSelf), (
+        "genuine Seedship landfall effect must be "
+        f"PutPlusOneCounterOnSelf; got {type(lf.effect).__name__}"
+    )
+    assert int(lf.effect.amount) == 1
+
+    forest = CardDef(name="Forest", card_type="Land", mana_produced=("G",))
+    spec = DeckSpec(
+        card_defs=(forest,),
+        p0_library=("Forest", "Forest", "Forest"),
+        p1_library=("Forest", "Forest", "Forest"),
+    )
+    py_state = build_python_state(spec)
+    rust_state = build_rust_state(spec)
+    assert rust_state.active_player == 0
+    assert py_state.active_player_idx == 0
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+
+    # ---- Rust side: register the Lander token, build the bridge-dict
+    # Seedship carrying BOTH triggers, inject onto P0's bf. ----
+    rust_lander_dict = {
+        "name": "Lander",
+        "card_types": ["Artifact"],
+        "subtypes": ["Lander"],
+    }
+    rust_token_pid = rust_state.registry_size
+    rust_state.register_and_inject_object(rust_lander_dict, 1, 1)
+    rust_trigger_bt = {
+        "event": "becomes_tapped",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token",
+            "count": 1,
+            "token_printing_id": rust_token_pid,
+        },
+    }
+    rust_trigger_lf = {
+        "event": "enters",
+        "predicate": {
+            "kind": "and",
+            "left": {"kind": "subject_is_land"},
+            "right": {"kind": "controlled_by_you"},
+        },
+        "effect": {"kind": "put_plus_one_counter_on_self", "amount": 1},
+    }
+    rust_p0_life_before = rust_state.get_life(0)
+    rust_p1_life_before = rust_state.get_life(1)
+    rust_bf_p0_before = rust_state.battlefield_sizes[0]
+    rust_bf_p1_before = rust_state.battlefield_sizes[1]
+    rust_seedship_id = rust_state.register_and_inject_object(
+        {
+            "name": "Seedship Agrarian",
+            "card_types": ["Creature"],
+            "subtypes": ["Insect", "Scientist"],
+            "mana_cost": {"generic": 3, "G": 1},
+            "power": 3,
+            "toughness": 3,
+            "effects": [],
+            "triggered_abilities": [rust_trigger_bt, rust_trigger_lf],
+        },
+        0, ZONE_BATTLEFIELD,
+    )
+    # Injecting a non-land creature fires NEITHER trigger (ETB is not
+    # BECOMES_TAPPED; Seedship is not a land so its own ENTERS does
+    # not satisfy the landfall subject_is_land predicate).
+    assert rust_state.stack_size() == 0, (
+        "Rust: Seedship's own arrival must fire neither trigger"
+    )
+    rust_forest_dict = {
+        "name": "Forest",
+        "card_types": ["Land"],
+        "mana_produced": ["G"],
+        "effects": [],
+    }
+    rust_forest_id = rust_state.register_and_inject_object(
+        rust_forest_dict, 0, ZONE_HAND
+    )
+    rust_state.clear_summoning_sick_for_player(0)
+
+    # ---- Python side: GENUINE parsed Seedship printing + register
+    # the real Lander token against Rust's pid. ----
+    py_lander = CardPrinting(
+        name=real_lander.name,
+        mana_cost_str="",
+        mana_cost=ManaCost(generic=0, colored=()),
+        type_line=real_lander.type_line,
+        supertypes=real_lander.supertypes,
+        card_types=real_lander.card_types,
+        subtypes=real_lander.subtypes,
+        power=real_lander.power,
+        toughness=real_lander.toughness,
+        produces=frozenset(),
+        triggered_abilities=(),
+        activated_abilities=getattr(
+            real_lander, "activated_abilities", ()
+        ),
+    )
+    clear_token_printings()
+    register_token_printing(rust_token_pid, py_lander)
+    try:
+        # Sanity: the bridge round-trips BOTH Rust trigger dicts back
+        # to the SAME Python shapes the genuine printing parses to.
+        bridged_bt = _ta_dict_to_python_triggered_ability(rust_trigger_bt)
+        assert bridged_bt.event is Event.BECOMES_TAPPED
+        assert isinstance(bridged_bt.effect, CreateToken)
+        bridged_lf = _ta_dict_to_python_triggered_ability(rust_trigger_lf)
+        assert bridged_lf.event is Event.ENTERS
+        assert isinstance(bridged_lf.predicate, And)
+        assert isinstance(bridged_lf.effect, PutPlusOneCounterOnSelf)
+        assert bridged_lf.effect.amount == 1
+
+        py_p0_life_before = py_state.players[0].life
+        py_p1_life_before = py_state.players[1].life
+        py_bf_p0_before = len(
+            [o for o in py_state.battlefield if o.controller_id == 0]
+        )
+        py_bf_p1_before = len(
+            [o for o in py_state.battlefield if o.controller_id == 1]
+        )
+        # Inject the GENUINE parsed Seedship printing.
+        py_seedship = py_state.new_object(
+            real, owner_id=0, zone=Zone.BATTLEFIELD,
+        )
+        py_seedship.summoning_sick = False
+        py_seedship.tapped = False
+        py_seedship.damage = 0
+        py_seedship.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(py_seedship)
+        assert len(py_state.stack) == 0, (
+            "Python: Seedship's own arrival must fire neither trigger"
+        )
+        # Move a Forest from library to hand for _play_land.
+        py_forest = py_state.players[0].library[0]
+        assert py_forest.printing.name == "Forest"
+        py_state.players[0].library.remove(py_forest)
+        py_forest.zone = Zone.HAND
+        py_state.players[0].hand.append(py_forest)
+
+        # ===== TRIGGER-1: tap Seedship -> BECOMES_TAPPED -> Lander =====
+        assert rust_state.declare_attacker(rust_seedship_id) is True
+        assert rust_state.stack_size() == 1, (
+            "Rust: tapping Seedship must fire BECOMES_TAPPED -> "
+            "CreateToken on the stack"
+        )
+        tap_permanent(py_state, py_seedship)
+        assert len(py_state.stack) == 1, (
+            "Python: tap_permanent on Seedship must fire "
+            "BECOMES_TAPPED -> CreateToken on the stack"
+        )
+        _drain_stack_both(py_state, rust_state)
+        assert rust_state.stack_size() == 0
+        assert len(py_state.stack) == 0
+
+        # ===== TRIGGER-2: play a land -> landfall -> +1/+1 on self ===
+        rust_state.play_land(rust_forest_id, 0)
+        assert (
+            rust_state.find_object_zone(rust_forest_id)
+            == ZONE_BATTLEFIELD
+        ), "Rust: Forest should be on bf after play_land"
+        assert rust_state.stack_size() == 1, (
+            "Rust: Seedship's landfall trigger should be on the stack "
+            "after the Forest enters"
+        )
+        py_state.players[0].lands_played_this_turn = 0
+        _play_land(py_state, 0, py_forest.id)
+        assert any(
+            o.printing.name == "Forest" and o.controller_id == 0
+            for o in py_state.battlefield
+        ), "Python: Forest should be on bf after _play_land"
+        assert len(py_state.stack) == 1, (
+            "Python: Seedship's landfall trigger should be on the "
+            "stack after the Forest enters"
+        )
+        _drain_stack_both(py_state, rust_state)
+    finally:
+        clear_token_printings()
+
+    assert rust_state.stack_size() == 0
+    assert len(py_state.stack) == 0
+
+    # ---- Cross-engine byte-equal whole-card assertions ----
+    # Baselines captured BEFORE injecting Seedship. Post both
+    # triggers, P0's seat gained: Seedship carrier + 1 Lander token
+    # + 1 Forest = +3.
+    rust_bf_p0_after = rust_state.battlefield_sizes[0]
+    rust_bf_p1_after = rust_state.battlefield_sizes[1]
+    assert rust_bf_p0_after == rust_bf_p0_before + 3, (
+        f"Rust: P0's bf should gain Seedship + Lander + Forest = +3. "
+        f"before={rust_bf_p0_before} after={rust_bf_p0_after}"
+    )
+    assert rust_bf_p1_after == rust_bf_p1_before
+    py_bf_p0_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 0]
+    )
+    py_bf_p1_after = len(
+        [o for o in py_state.battlefield if o.controller_id == 1]
+    )
+    assert py_bf_p0_after == py_bf_p0_before + 3, (
+        f"Python: P0's bf should gain Seedship + Lander + Forest = "
+        f"+3. before={py_bf_p0_before} after={py_bf_p0_after}"
+    )
+    assert py_bf_p1_after == py_bf_p1_before
+    assert (rust_bf_p0_after - rust_bf_p0_before) == (
+        py_bf_p0_after - py_bf_p0_before
+    ) == 3
+
+    # --- Seedship carrier: exactly ONE +1/+1 counter (trigger-2),
+    # now a 4/4 (3/3 base + 1) on BOTH engines. ---
+    rust_seedship_snap = [
+        d for d in rust_state.battlefield_snapshot()
+        if d["id"] == rust_seedship_id
+    ]
+    assert len(rust_seedship_snap) == 1, "Rust: Seedship must survive"
+    assert rust_seedship_snap[0]["counters"] == 1, (
+        "Rust: Seedship must carry exactly 1 +1/+1 counter from the "
+        f"landfall trigger; got {rust_seedship_snap[0]['counters']}"
+    )
+    assert rust_state.get_counters(rust_seedship_id) == 1
+    # NOTE on the P/T parity contract: Rust's ``effective_power`` /
+    # ``effective_toughness`` return the BASE P/T and expose the
+    # +1/+1 counter contribution SEPARATELY via
+    # ``power_bonus_from_counters`` / ``toughness_bonus_from_counters``
+    # (verified: a 3/3 with 1 counter -> effective_power()==3,
+    # power_bonus_from_counters()==1). Python's ``effective_power``
+    # FOLDS the counter bonus in (3/3 + 1 counter -> 5? no: ==4).
+    # The byte-equal cross-engine signal is therefore Rust's
+    # base+counter-bonus == Python's folded effective value.
+    rust_seed_eff_p = (
+        rust_state.effective_power(rust_seedship_id)
+        + rust_state.power_bonus_from_counters(rust_seedship_id)
+    )
+    rust_seed_eff_t = (
+        rust_state.effective_toughness(rust_seedship_id)
+        + rust_state.toughness_bonus_from_counters(rust_seedship_id)
+    )
+    assert rust_state.power_bonus_from_counters(rust_seedship_id) == 1
+    assert rust_state.toughness_bonus_from_counters(rust_seedship_id) == 1
+    assert rust_seed_eff_p == 4
+    assert rust_seed_eff_t == 4
+    assert py_seedship in py_state.battlefield, "Python: Seedship survives"
+    assert py_seedship.plus_one_counters == 1, (
+        "Python: Seedship must carry exactly 1 +1/+1 counter from the "
+        f"landfall trigger; got {py_seedship.plus_one_counters}"
+    )
+    py_seed_eff_p = effective_power(py_state, py_seedship)
+    py_seed_eff_t = effective_toughness(py_state, py_seedship)
+    assert py_seed_eff_p == 4
+    assert py_seed_eff_t == 4
+    # Cross-engine: byte-equal counter count + effective P/T.
+    assert (
+        rust_state.get_counters(rust_seedship_id)
+        == py_seedship.plus_one_counters
+        == 1
+    )
+    assert rust_seed_eff_p == py_seed_eff_p == 4
+    assert rust_seed_eff_t == py_seed_eff_t == 4
+
+    # --- The Lander token (trigger-1): exactly 1, controller 0,
+    # name "Lander", UNTAPPED — byte-equal on both engines. ---
+    rust_landers = [
+        d for d in rust_state.battlefield_snapshot()
+        if d["printing_name"] == "Lander"
+    ]
+    assert len(rust_landers) == 1, (
+        f"Rust: exactly 1 Lander token expected; got {len(rust_landers)}"
+    )
+    py_landers = [
+        o for o in py_state.battlefield
+        if o.printing.name == "Lander"
+    ]
+    assert len(py_landers) == 1, (
+        f"Python: exactly 1 Lander token expected; got {len(py_landers)}"
+    )
+    assert rust_landers[0]["controller_id"] == 0
+    assert py_landers[0].controller_id == 0
+    assert rust_landers[0]["tapped"] is False
+    assert py_landers[0].tapped is False
+
+    # --- The Forest is on P0's bf on both engines. ---
+    assert any(
+        d["printing_name"] == "Forest" and d["controller_id"] == 0
+        for d in rust_state.battlefield_snapshot()
+    )
+    assert any(
+        o.printing.name == "Forest" and o.controller_id == 0
+        for o in py_state.battlefield
+    )
+
+    # --- Life totals unchanged on both seats (neither trigger
+    # touches life). ---
+    assert rust_state.get_life(0) == rust_p0_life_before
+    assert rust_state.get_life(1) == rust_p1_life_before
+    assert py_state.players[0].life == py_p0_life_before
+    assert py_state.players[1].life == py_p1_life_before
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
