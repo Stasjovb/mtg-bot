@@ -3624,6 +3624,34 @@ precedent** exactly (`CardDef bridge filter drops creatures with
 dynamic_pt_formula / ward_cost`, this doc above): a rider the bridge
 drops symmetrically, bit-equal under the bench play strategy, shipped
 blocked-at-fidelity rather than as a latent inter-engine divergence.
+
+> **⚠ ROUND-61 N3 CORRECTION — the "byte-equal / it's OK" claim
+> above is FALSE on the activated mana-ability path; the round-60
+> admit currently ships a LATENT real-game cross-engine
+> divergence.** The round-60 byte-equality evidence was a STATIC
+> `compare_fields()` CardDef compare + an `attack_all` probe that
+> never activates a 2-color land's mana ability in a way that
+> exposes it. Round-61 N3's post-admit production-deck sweep (112
+> games over real shockland-bearing archetypes) found **4
+> FAIL_DIVERGENCE**, all the identical shape: the two
+> `mana_produced` mana-ability *bridges disagree* for a multi-color
+> land — Python's `_card_def_to_python_printing` builds **one mana
+> ability per color** (idx0=Add c1, idx1=Add c2); Rust's
+> `apply_mana_produced_bridge` (`rust/src/cards.rs`) builds **one
+> ability adding ALL colors** (`Sequence(Add c1, Add c2)`). So
+> `activate_ability(land, ability_index=0)` makes Python add 1
+> color while Rust adds BOTH → a spurious extra mana in the Rust
+> pool. Invisible before round-60 because basics are single-color
+> (the bridges agreed) and the round-60 pins were static-CardDef-
+> compare only. The shockland admit is therefore **NOT byte-equal-
+> validated at scale**; it is a real divergence pending the
+> **round-62 Rust fix** (make `apply_mana_produced_bridge` emit one
+> `is_mana_ability` ability per color — CR-correct + matches
+> Python; re-run round-61 N3 Sweep A → must reach 0 FAIL_DIVERGENCE
+> + add an activated-mana-ability cross-engine pin here). See
+> `docs/bench_trajectory_parity_smoke.md` round-61 entry for the
+> precise capture.
+
 The guardrail predicate POSITIVELY asserts the parser-flattened
 mana-only profile (non-basic Land, 1-2 produce colors, NO
 activated/triggered/static abilities, NO `enters_tapped`, NO

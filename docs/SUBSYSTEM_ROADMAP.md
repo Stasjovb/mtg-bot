@@ -139,6 +139,35 @@ second:
    established warp is a §2-declined cost-mechanic; this is a known
    scoped slice but its pool-flip yield is modest.
 
+   > **⚠ Round-61 scoping audit (N2 warp_cost + N1 Aura-attachment)
+   > — full plans: `docs/WARP_COST_SUBSTRATE_PLAN.md`,
+   > `docs/AURA_ATTACHMENT_SUBSTRATE_PLAN.md`.**
+   > - **warp_cost (N2):** count HONEST (10 / 3 single-gated /
+   >   15,436 single-gate decks — parser faithfully structures it,
+   >   unlike non-basic-land r59). Realizable near-term yield = **0**
+   >   (asymmetric divergence visible at the `legal_actions` layer —
+   >   Python offers the warp-cast, Rust doesn't; no symmetric-bit-
+   >   equality escape hatch). A deferred multi-round Rust substrate
+   >   but **smaller than cost-reduction** (~2-3 Rust rounds, fixed
+   >   `ManaCost`, NO Condition-grammar; partial scaffolding exists).
+   > - **Aura-attachment (N1):** count honest but **the 7-card row
+   >   is DISJOINT from the residue Aura cards** the premise names —
+   >   Meltstrider's Resolve + Pain for All are
+   >   `blocked_genuinely_missing`, Tractor Beam `blocked_non_effect`;
+   >   NONE is in the 7 (the 633-deck single-gate number does not
+   >   credit them). Realizable yield = **0**; **largest §2-declined
+   >   substrate audited** (no Aura-spell attach path in Rust at all;
+   >   ~5-7 Rust rounds; resolves Meltstrider/Pain-for-All only at
+   >   Phase 3+). Future roadmap reads must cross-check
+   >   `classify_pool().tiers`, not just `subsystem_attribution()` —
+   >   residue cards are invisible to the attribution model.
+   > - **Sequencing (head-to-head):** do **warp_cost BEFORE
+   >   Aura-attachment** — ~24× leverage-per-Rust-round (15,436 vs
+   >   633 single-gate decks), contained vs sprawling. Confirmed
+   >   warp-before-cost-reduction. Neither is a near-term cheap win;
+   >   the honest near-term lever remains the per-card Effect lane +
+   >   the bench-divergence sweep.
+
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
    `Effect-uncovered`, so bridging BECOMES_TAPPED alone flips
