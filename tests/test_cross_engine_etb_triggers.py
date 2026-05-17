@@ -20585,5 +20585,82 @@ def test_bridge_dtaotc_composable_in_radiant_strike_sequence():
     assert e.effects[1].amount == 3
 
 
+def test_bridge_seedship_impact_effect_basic_translation():
+    """Effect-uncovered Tier-A queue #2 — Seedship Impact. Rust
+    ``{"kind": "seedship_impact_effect", "token_printing_id": N}``
+    translates to Python ``SeedshipImpactEffect()`` (the bridge DROPS
+    the Rust-side pid carrier — Python's class is field-free and mints
+    the Lander intrinsically from TOKEN_PRINTINGS["Lander"]).
+    """
+    from mtg_bot.effects.bespoke import SeedshipImpactEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "seedship_impact_effect", "token_printing_id": 42}
+    )
+    assert isinstance(e, SeedshipImpactEffect)
+
+
+def test_bridge_seedship_impact_effect_pid_dropped_equality():
+    """Bridge arm pin: the translated effect equals a directly-
+    constructed ``SeedshipImpactEffect()`` regardless of the Rust
+    ``token_printing_id`` value — the pid is a Rust-registry carrier
+    with no Python mirror (Python uses TOKEN_PRINTINGS["Lander"]); the
+    bridge constructs the bare field-free class so two different pids
+    round-trip to EQUAL Python effects.
+    """
+    from mtg_bot.effects.bespoke import SeedshipImpactEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {"kind": "seedship_impact_effect", "token_printing_id": 7}
+    )
+    e2 = _ta_dict_to_python_effect(
+        {"kind": "seedship_impact_effect", "token_printing_id": 999}
+    )
+    assert e1 == e2 == SeedshipImpactEffect()
+
+
+def test_bridge_seedship_impact_effect_extra_keys_silently_ignored():
+    """Bridge arm pin: extra keys beyond kind/token_printing_id are
+    silently dropped (the bridge only constructs the bare Python
+    class; the silent-drop convention shared by sister arms).
+    """
+    from mtg_bot.effects.bespoke import SeedshipImpactEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "seedship_impact_effect", "token_printing_id": 1,
+         "spurious": "x"}
+    )
+    assert isinstance(e, SeedshipImpactEffect)
+
+
+def test_bridge_seedship_impact_effect_composable_in_sequence():
+    """Round-trip the bespoke arm through the recursive Sequence
+    translator to pin it dispatches correctly when nested (forward-
+    compat with any future Sequence-wrapped consumer).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.bespoke import SeedshipImpactEffect
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "seedship_impact_effect",
+                 "token_printing_id": 3},
+                {"kind": "gain_life", "amount": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], SeedshipImpactEffect)
+    assert isinstance(e.effects[1], GainLife)
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

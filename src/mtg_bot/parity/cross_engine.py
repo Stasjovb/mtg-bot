@@ -8209,6 +8209,55 @@ def _ta_dict_to_python_effect(eff_dict: dict):
             DestroyTargetArtifactOrTappedCreature,
         )
         return DestroyTargetArtifactOrTappedCreature()
+    if kind == "seedship_impact_effect":
+        # **Effect-uncovered Tier-A — Seedship Impact (Lander-rider).**
+        # Rust substrate ``Effect::SeedshipImpactEffect {
+        # token_printing_id }`` (cards.rs single-field payload
+        # variant; parser ``"seedship_impact_effect"``; resolve in
+        # state_ops_resolve.rs beside
+        # ``DestroyTargetArtifactOrTappedCreature``).
+        #
+        # **Field shape (Rust-side pid carrier, dropped at the
+        # bridge).** Rust's variant carries
+        # ``token_printing_id: u32`` — its Rust ``Registry`` index for
+        # the Lander token (Rust has NO intrinsic Lander; a bespoke
+        # token-minting arm must carry the pid exactly like
+        # ``Effect::CreateToken``, the round-49/56
+        # ``TOKEN_PRINTING_SUBSTRATE``). Python's
+        # ``SeedshipImpactEffect`` (effects/bespoke.py:1219) is a
+        # FIELD-FREE frozen dataclass — it resolves the Lander
+        # intrinsically via ``TOKEN_PRINTINGS["Lander"]``. So the
+        # bridge **drops** the pid and constructs the bare Python
+        # class — adds NO Python. (The probe still seats the SAME
+        # Lander printing on BOTH engines: Rust via the registered
+        # ``token_printing_id``, Python via TOKEN_PRINTINGS — so the
+        # created token is byte-equal.)
+        #
+        # **Resolve semantics (parity-relevant).** Rust scans BOTH
+        # players' battlefield in ETB-timestamp order via
+        # ``bf_iter::bf_iter_etb_sorted`` for the first
+        # non-indestructible Artifact OR Enchantment, reads its
+        # PRINTED mana value before destroy, destroys it, and — only
+        # if it was actually destroyed AND mv ≤ 2 — creates one
+        # Lander under the source's controller (CR 111.4). Python's
+        # ``SeedshipImpactEffect.resolve`` picks the agent-chosen
+        # artifact/enchantment, reads ``obj.printing.mana_cost.total``
+        # BEFORE ``destroy(state, obj)`` (which returns False for
+        # indestructible → early-return, NO Lander consolation), then
+        # ``if mv <= 2`` creates the Lander for ``controller_id``.
+        # Indestructible permanents survive on BOTH; the
+        # indestructible-only board reaches the same no-destroy /
+        # no-Lander observable on both engines (Rust skips it in the
+        # scan; Python's destroy() fails).
+        #
+        # **Honest Effect-half split (§2).** The Effect closes + is
+        # genuinely probed (destroy + conditional Lander, byte-equal);
+        # the full Seedship Impact Instant stays loader-gated on the
+        # not-yet-shipped shared spell-card-bridge lever (no
+        # Instant/Sorcery bench admit path). Mirrors the r51..r60
+        # Effect-half-vs-full-card precedent.
+        from mtg_bot.effects.bespoke import SeedshipImpactEffect
+        return SeedshipImpactEffect()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

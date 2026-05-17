@@ -5485,6 +5485,205 @@ fn apply_effect(
                 crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
             }
         }
+        // SeedshipImpactEffect (Effect-uncovered Tier-A — Seedship
+        // Impact, Lander-rider). CR 701.7 destroy with an
+        // Artifact-OR-Enchantment filter + a conditional Lander rider.
+        // Mirrors Python's `SeedshipImpactEffect.resolve`
+        // (`effects/bespoke.py:1237`): pick the first
+        // (Artifact OR "Enchantment" in card_types) permanent; read
+        // its PRINTED mana value BEFORE destroy; destroy it (skip
+        // indestructible — the scan filter); if it was actually
+        // destroyed AND its mv ≤ 2, create one Lander token under the
+        // source's controller. Destroy-half clones the round-25/65
+        // `DestroyTargetArtifact` / `DestroyTargetArtifactOrTapped
+        // Creature` body verbatim with the filter swapped to
+        // Artifact-OR-Enchantment. The Lander-create block is
+        // re-derived privately (file-iso) from the `Effect::Create
+        // Token` arm — registry-bounds check, fresh-id allocator,
+        // source-controller seat, fresh etb_timestamp, ENTERS
+        // dispatch queue. `token_printing_id` is the Lander's Rust
+        // registry index (carried on the variant; Python's class is
+        // field-free and uses TOKEN_PRINTINGS["Lander"] intrinsically
+        // — the pid is dropped at the bridge). See invariant I39 /
+        // I81 (source-controller token seat).
+        //
+        // **§2 indestructible parity**: the scan SKIPS indestructible
+        // permanents (the shipped DestroyTargetArtifact precedent).
+        // Python's `legal_targets` includes indestructible artifacts/
+        // enchantments but `destroy()` returns False for them →
+        // early-return, NO Lander consolation. An indestructible-ONLY
+        // board reaches the SAME observable on both engines (no
+        // destroy, no Lander). The probe pins single-legal-target
+        // boards so the deterministic-first pick is unambiguous; a
+        // mixed indestructible+destroyable board is not exercised
+        // (different first-pick conventions — out of probe scope, as
+        // with the Radiant Strike precedent).
+        Effect::SeedshipImpactEffect { token_printing_id } => {
+            let lander_pid: u32 = *token_printing_id;
+            // Registry-bounds check up front (mirrors the CreateToken
+            // arm's whole-or-nothing contract) — surface an unknown
+            // pid before any state mutation.
+            if state.registry.lookup(lander_pid).is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "SeedshipImpactEffect token_printing_id \
+                     {lander_pid} not in registry"
+                )));
+            }
+            // Target scan: first Artifact OR Enchantment in
+            // ETB-timestamp order across BOTH bfs, non-indestructible.
+            // Capture the PRINTED mana value at scan time (read BEFORE
+            // destroy — Python reads `obj.printing.mana_cost.total`
+            // before `destroy(...)`; the printing is immutable so
+            // scan-time == pre-destroy).
+            let target: Option<(usize, u32, u32)> =
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find_map(|obj| {
+                        let printing =
+                            state.registry.lookup(obj.printing_id)?;
+                        let is_artifact = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Artifact");
+                        let is_enchantment = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Enchantment");
+                        if !(is_artifact || is_enchantment) {
+                            return None;
+                        }
+                        if printing
+                            .keywords
+                            .iter()
+                            .any(|k| k == "indestructible")
+                        {
+                            return None;
+                        }
+                        // Printed mana value = generic + all colored
+                        // pips (Rust ManaCost has no hybrid/x field;
+                        // the registry flattens hybrid at parse time —
+                        // matches Python `mana_cost.total` for
+                        // non-hybrid costs; the registry-level
+                        // hybrid-flatten is the existing documented
+                        // simplification, not new here).
+                        let mc = &printing.mana_cost;
+                        let mv: u32 = mc.generic as u32
+                            + mc.white as u32
+                            + mc.blue as u32
+                            + mc.black as u32
+                            + mc.red as u32
+                            + mc.green as u32;
+                        Some((obj.controller as usize, obj.id, mv))
+                    });
+            if let Some((pidx, target_id, mv)) = target {
+                // ---- Destroy half (verbatim DestroyTargetArtifact
+                // remove→graveyard + LTB + token-cease tail).
+                let bf_mut: &mut Vec<GameObject> =
+                    Arc::make_mut(&mut state.players[pidx].battlefield);
+                let pos = bf_mut
+                    .iter()
+                    .position(|o| o.id == target_id)
+                    .expect("target_id from scan but not found on re-scan");
+                let mut obj = bf_mut.remove(pos);
+                obj.zone = ZONE_GRAVEYARD;
+                obj.tapped = false;
+                // CE13 closure: `summoning_sick` is NOT reset here
+                // (CR 302.1 — battlefield-only state). See I35.
+                obj.damage = 0;
+                obj.counters = 0;
+                obj.attached_to = None;
+                obj.exiled_with_source = None;
+                let (printing_id, leaving_obj_id) =
+                    (obj.printing_id, obj.id);
+                Arc::make_mut(&mut state.players[pidx].graveyard)
+                    .push(obj);
+                // Round-29 Void LTB: target is artifact/enchantment;
+                // helper gates on the printing.
+                mark_left_battlefield_if_nonland(state, printing_id);
+                // Slice 10: LTB fan-out at the Effect arm.
+                state.pending_leaves_dispatches.push(leaving_obj_id);
+                // Round-55: token-cease sibling of the LEAVES push.
+                crate::state_ops_zones::queue_token_cease(
+                    state,
+                    leaving_obj_id,
+                );
+
+                // ---- Conditional Lander rider: only when the target
+                // was actually destroyed (it was — the scan already
+                // excluded indestructible, matching Python's
+                // `if not destroy(...): return` no-Lander-consolation)
+                // AND its printed mv ≤ 2.
+                if mv <= 2 {
+                    // Source-controller seat (CR 111.4 — token under
+                    // the spell's controller, not active_player). The
+                    // in-tree stack resolver sets
+                    // `current_resolve_source_controller` around its
+                    // apply_effect loop (the I81 substrate); fall back
+                    // to active_player for direct apply_effect_pub
+                    // callers (back-compat).
+                    let recipient: u8 = state
+                        .current_resolve_source_controller
+                        .unwrap_or(state.active_player);
+                    // Fresh-id allocator: max id across every zone on
+                    // both players + 1 (verbatim from the CreateToken
+                    // arm; includes exile so r11+ exiled objects don't
+                    // collide).
+                    let mut max_id: u32 = 0;
+                    let mut found_any = false;
+                    for player in &state.players {
+                        for zone in [
+                            &player.hand,
+                            &player.library,
+                            &player.battlefield,
+                            &player.graveyard,
+                            &player.exile,
+                        ] {
+                            for o in zone.iter() {
+                                if !found_any || o.id > max_id {
+                                    max_id = o.id;
+                                    found_any = true;
+                                }
+                            }
+                        }
+                    }
+                    let new_id: u32 =
+                        if found_any { max_id + 1 } else { 0 };
+                    // Fresh etb_timestamp (CE4 closure — strictly
+                    // monotonic so the snapshot/fingerprint walk
+                    // orders this token after prior ETBs).
+                    let tok_etb = state.next_etb_timestamp;
+                    state.next_etb_timestamp =
+                        state.next_etb_timestamp.saturating_add(1);
+                    let bf: &mut Vec<GameObject> = Arc::make_mut(
+                        &mut state.players[recipient as usize]
+                            .battlefield,
+                    );
+                    bf.push(GameObject {
+                        id: new_id,
+                        printing_id: lander_pid,
+                        controller: recipient,
+                        zone: ZONE_BATTLEFIELD,
+                        tapped: false,
+                        summoning_sick: true,
+                        damage: 0,
+                        counters: 0,
+                        charge_counters: 0,
+                        loyalty_counters: 0,
+                        attached_to: None,
+                        exiled_with_source: None,
+                        stun_counters: 0,
+                        etb_timestamp: tok_etb,
+                        ueot_modifiers: Vec::new(),
+                        warp_exile_pending: false,
+                        warped: false,
+                    });
+                    // ETB-trigger Slice 2 (RS4): queue ENTERS for the
+                    // fresh token; drained by the surrounding resolver
+                    // after the resolving spell's stack item pops.
+                    state.pending_etb_dispatches.push(new_id);
+                }
+            }
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared

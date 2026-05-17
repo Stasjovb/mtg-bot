@@ -4279,6 +4279,127 @@ lever).
 
 ---
 
+## Seedship Impact — `SeedshipImpactEffect { token_printing_id }` Effect half shipped byte-equal; full Instant stays loader-gated (no spell-card bench-admit path)
+
+**Location**: `rust/src/cards.rs`
+(`Effect::SeedshipImpactEffect { token_printing_id: u32 }`
+single-field payload variant + `parse_effect` arm
+`seedship_impact_effect` + `effect_to_pydict` arm) +
+`rust/src/state_ops_resolve.rs` (the resolve match arm beside
+`Effect::DestroyTargetArtifactOrTappedCreature` — destroy-half clones
+the shipped `DestroyTargetArtifact` body with the filter swapped to
+Artifact-OR-Enchantment; the conditional Lander-create block is
+re-derived privately from the `Effect::CreateToken` arm:
+registry-bounds check, fresh-id allocator, source-controller seat,
+fresh `etb_timestamp`, ENTERS-dispatch queue). Bridge arm
+`src/mtg_bot/parity/cross_engine.py` (`seedship_impact_effect`,
+immediately above the `PHASE5_BRIDGE_ARMS` sentinel). Python class
+(pre-existing, NOT new): `SeedshipImpactEffect`
+(`src/mtg_bot/effects/bespoke.py:1219`) — a field-free `Effect`
+subclass whose `resolve` picks the first artifact/enchantment, reads
+`obj.printing.mana_cost.total` BEFORE `destroy(state, obj)`, and
+creates `TOKEN_PRINTINGS["Lander"]` for `controller_id` iff `mv ≤ 2`.
+
+**What the shortcut is**: Seedship Impact (~13,908 17lands decks) is
+an `[Instant] {1}{G}` printing "Destroy target artifact or
+enchantment. If its mana value was 2 or less, create a Lander token."
+The genuine parsed printing's `spell_effect` is the field-free
+`SeedshipImpactEffect()`. The shipped Rust variant carries a
+`token_printing_id: u32` — its Rust `Registry` index for the Lander
+token. **This is a deliberate deviation from the mini-spec's
+field-free-unit-variant sketch, taken because it is the only
+bridge-correct option**: Rust's registry has NO intrinsic Lander
+concept (`RegistryData::is_token` is purely supertype-derived;
+`cards.rs:4482`), so a bespoke token-minting arm MUST carry the pid
+exactly as `Effect::CreateToken { count, token_printing_id }` does
+(the round-49/56 `TOKEN_PRINTING_SUBSTRATE`). The pid is a Rust-side
+registry-index carrier ONLY; the bridge **drops** it and constructs
+the bare field-free Python `SeedshipImpactEffect()` (Python mints the
+Lander intrinsically from `TOKEN_PRINTINGS["Lander"]`, no registry).
+Both engines therefore seat the SAME "Lander" printing (Rust via the
+registered pid, Python via `TOKEN_PRINTINGS`); the name-keyed field
+view (`_zone_signature` keys on `printing.name`, not registry pid)
+makes the created token byte-equal. The **deliberate divergence is
+NOT in the closed Effect half** (byte-equal — see below) but in the
+**scope**: the **full Seedship Impact Instant is NOT added to the
+production-deck loader `_SAFE_*` allowlist** (no loader admit). There
+is no Instant/Sorcery bench-admit path at all (`CardDef.card_type` ∈
+{Land, Creature}; `_printing_is_bridge_simple_creature` rejects
+`spell_effect is not None`).
+
+**Indestructible parity nuance (§2, load-bearing)**: Python's
+`SeedshipImpactEffect.legal_targets` includes indestructible
+artifacts/enchantments, but at resolve `destroy(state, obj)` returns
+`False` for indestructible → early-return with **no Lander
+consolation**. The Rust scan SKIPS indestructible permanents (the
+shipped `DestroyTargetArtifact` precedent). For a single-legal-target
+board these reach the SAME observable on both engines
+(indestructible-only → no destroy, no Lander). The pins/probe
+deliberately use single-legal-target boards so the
+deterministic-first pick is unambiguous; a mixed
+indestructible+destroyable board (where Python's agent could pick the
+indestructible target while Rust's scan picks the destroyable one) is
+out of probe scope, identical to the Radiant Strike precedent's
+documented scoping. The indestructible-keyword read also uses
+`printing.keywords` (printed) vs Python `effective_keywords` — the
+same effective-state reasoning as the shipped `DestroyTargetArtifact`
+arm (no keyword-granting interaction in a synthetic probe → byte-
+equal). The printed mana value is read from `ManaCost`'s
+generic+colored sum (Rust has no hybrid/x field — the registry
+flattens hybrid at parse time, the existing documented simplification,
+matching Python `mana_cost.total` for non-hybrid costs).
+
+**Why it's OK / which scenarios make it not-OK / failure mode**: this
+is the honest Effect-half-closes / full-card-stays-gated split
+established by r51..r65 (Monoist..Radiant Strike). The closed half
+round-trips byte-equal — the genuine real-EoE probe drives the
+ACTUAL parsed Seedship Impact printing's `spell_effect` (the field-
+free `SeedshipImpactEffect`) on Python via a `StackItem` with the
+chosen `("permanent", id)` target, vs the bridged synthetic Instant
+carrying the registered Lander pid on Rust, and asserts the WHOLE
+field view byte-equal on TWO arms: (POSITIVE) an mv-2 artifact is
+destroyed → p1 graveyard AND a Lander is created under p0 on BOTH;
+(NEGATIVE) an mv-3 artifact is destroyed but NO Lander on BOTH (mv 3
+> 2). The NOT-OK scenario is admitting the full Instant to the bench
+loader, which is structurally impossible today (no spell-card admit
+path) — i.e. there is **no real-card-exposed divergence**: the card
+is not on any `_SAFE_*` allowlist and no production path drives it.
+
+**Fix scope estimate**: the Effect half (the Artifact-OR-Enchantment
+destroy + the printed-mv-≤2 conditional Lander rider, re-derived from
+the shipped CreateToken Lander block) is **complete**. Flipping the
+full Seedship Impact Instant into the production-deck bench needs the
+separate shared spell-card-bridge lever (a `CardDef` spell shape + a
+`_printing_is_bridge_spell` predicate) — the same ~1-2-round shared
+substrate that unblocks ALL ~30 remaining Effect-uncovered Tier-A
+cards' bench admit at once. Deferred to that lever; not this slice.
+
+**Impact estimate**: zero production strength cost (Seedship Impact
+not on the loader allowlist; no production exposure). The
+real-card-coverage progress is the honest closure of the closeable
+Effect half (Seedship Impact leaves the Effect-uncovered Tier-A
+bucket — its emitted class `SeedshipImpactEffect` becomes a subset of
+the covered set) + honest pinning of the loader-gated
+spell-card-bridge remainder.
+
+**Pinned by**: 4 cross-engine bridge pins
+(`tests/test_cross_engine_etb_triggers.py::test_bridge_seedship_impact_effect_basic_translation`
++ `..._pid_dropped_equality` + `..._extra_keys_silently_ignored` +
+`..._composable_in_sequence`); 6 Rust regression pins
+(`tests/test_parity_smoke.py::test_rust_seedship_*` — destroy
+artifact mv1 → Lander; destroy enchantment mv2 → Lander; destroy
+artifact mv3 → NO Lander; indestructible target skipped → no destroy
+no Lander; no legal target → silent no-op; Lander under
+source-controller not active_player); 1 genuine real-EoE
+cross-engine probe
+(`tests/test_parity_smoke.py::test_cross_engine_real_eoe_seedship_impact_destroy_then_conditional_lander_parity`
+— drives the actual parsed Seedship Impact printing's `spell_effect`
+cross-engine, POSITIVE mv-2-destroy+Lander + NEGATIVE
+mv-3-destroy-no-Lander arms, the WHOLE field view byte-equal on BOTH;
+the spell-card bench-admit lever intentionally NOT exercised).
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,
