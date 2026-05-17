@@ -2638,3 +2638,129 @@ own primitives, modifies no production/`_SAFE_*`/bench-script code) +
 harness / `_SAFE_*` / bench-script code changed.** Parity gate **not**
 re-run; nothing in this slice is on its path (baseline **1397**
 unchanged). No Rust → no `maturin`.
+
+## Round 66 (2026-05-16) — N1: `--require-creatures N` bench precondition — FAIL_TIMEOUT becomes a truthful signal-coverage metric
+
+Round-65 N3's FAIL_TIMEOUT/creature-floor investigation (merge
+`6568c346`) established **with data** that the ~42-50% FAIL_TIMEOUT
+floor is a diffuse `unsafe_trigger` long tail with no cheap §2-correct
+unlock (the real lever is the multi-round TOKEN_PRINTING_SUBSTRATE
+Phase-3/5 Rust work), and that the **only contained ~1-Python-slice**
+worth doing is lever G / r47 option 2: a `--require-creatures N` bench
+precondition. This round ships it.
+
+### The flag
+
+`scripts/bench_trajectory_parity.py` gains `--require-creatures N`
+(`drive_one_game(require_creatures=...)`), **default-off (`None`) =
+exact current behavior**. When set, at game start AFTER the deck is
+loaded and the bridge-admit filter is applied but BEFORE the matched
+game state is constructed, it counts admitted creature copies (via
+`_count_admitted_creature_copies`, **reusing the round-65 scout's
+EXACT counting logic verbatim** —
+`scout_r64_timeout_creature_floor._admitted_creature_profile`'s body,
+the REAL production loader's
+`trajectory._printing_is_bridge_simple_creature` filter). If `< N`,
+the game is classified **`ARCHETYPE_FILTERED`** (the EXISTING outcome
+class for a structurally-uncloseable mirror — the same column the
+empty-post-filter-library path already uses) and returned WITHOUT
+running it (`turns_played == 0`, no wasted play), so it is **NOT**
+counted as `FAIL_TIMEOUT`.
+
+It adds **ZERO coverage** (no admit-set change, §2-neutral). It
+separates the structural never-can-close population from genuine
+stalls so the headline FAIL_TIMEOUT % becomes a true signal-coverage
+metric, and the Phase-3/5 substrate's future TIMEOUT→PASS/DIV
+conversion is trackable on the residual.
+
+### Engine-symmetry — never introduces a divergence (confirmed)
+
+The precondition is a **pure deterministic function of the
+bridge-filtered deck-name list** + the shared, engine-agnostic
+`_printing_is_bridge_simple_creature` filter. It carries **no
+per-engine state**, is computed identically on both engines, and runs
+**before either engine's state object is even constructed** — it
+gates the game (skip / run), it never alters any trajectory. The
+regression test recomputes the count and asserts equality + that it
+matches the round-65 N3 sweep datum. The confirming sweep ran
+**0 FAIL_DIVERGENCE / 0 FAIL_EXCEPTION** with the flag on.
+
+### Default-off = byte-for-byte unchanged (confirmed)
+
+The default bench / production self-play / all existing invocations
+pass `require_creatures=None`; the precondition block is then inert
+(regression contract 1: a 1-admitted-creature archetype still runs +
+FAIL_TIMEOUTs identically to before the flag existed; explicit
+`require_creatures=None` is byte-identical to the default). For a
+`>= N` archetype the flag is also inert — the regression test pins
+that `--require-creatures 3` yields the IDENTICAL status AND
+identical `turns_played` to default-off (gates, never alters play).
+
+### Confirming sweep — round-65 N3 grid, before → after (HARD ≤3-min cap honored)
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+  scripts/bench_trajectory_parity.py \
+  --archetypes 0,1,2,3,4,5,7,8,9,10,11,12,13,40,42 --seeds 0-3 \
+  --max-turns 22 [--require-creatures 3]
+```
+
+60 games each run, ~76s / ~73s wall (both well under the 3-min cap).
+The baseline reproduces the round-65 N3 datum **exactly**: 35 PASS /
+25 FAIL_TIMEOUT / 0 ARCHETYPE_FILTERED (58.3% / 41.7%).
+
+| Outcome | Baseline (no flag) | `--require-creatures 3` |
+|---|---:|---:|
+| PASS | 35 | 17 |
+| FAIL_TIMEOUT | **25** | **7** |
+| ARCHETYPE_FILTERED | 0 | **36** |
+| FAIL_DIVERGENCE | 0 | 0 |
+| FAIL_EXCEPTION | 0 | 0 |
+
+**The truthful split of the 25 baseline FAIL_TIMEOUT games:**
+
+| Reclassification | Count | Meaning |
+|---|---:|---|
+| → still `FAIL_TIMEOUT` | **7** | **genuine stall** — ≥3 admitted creature copies but too small/slow to close before the cap (the real `_SAFE_TRIGGERS`/substrate drag the Phase-3/5 work will convert) |
+| → `ARCHETYPE_FILTERED` | **18** | **structural never-converter** — <3 admitted creature copies; could never reach lethal regardless of cap (zero signal possible) |
+
+**Headline becomes truthful.** N=3 is a *per-deck structural* gate
+(an archetype with <3 admitted copies is filtered for **all** its
+seeds — a property of the bridge-filtered deck, not a per-game
+outcome), so it correctly also removes the 18 baseline-PASS games on
+those same structurally-thin archetypes (a <3-creature "PASS" is a
+deck-out / no-real-combat artifact — itself zero combat-trajectory
+signal, so removing it from the denominator is the honest move). The
+metric to track going forward is **FAIL_TIMEOUT among the
+signal-bearing (≥N-admitted) pool**:
+
+- BEFORE (no flag): **25/60 = 41.7%** FAIL_TIMEOUT (polluted — the
+  denominator includes 36 structurally-uncloseable games).
+- AFTER (`--require-creatures 3`): 36/60 structurally relabeled out;
+  signal-bearing pool = 24 games → **7/24 = 29.2%** FAIL_TIMEOUT
+  (PASS 17/24 = 70.8%). The residual 29.2% is **genuine stalls**, the
+  exact population the TOKEN_PRINTING_SUBSTRATE Phase-3/5 Rust work
+  converts — now cleanly trackable.
+
+This adds no coverage and converts nothing (exactly as round-65 lever
+G predicted — "a reporting honesty improvement, not a drag fix"); its
+value is making the headline FAIL_TIMEOUT % a metric that *means*
+"genuine parity-signal stall" instead of being 72%-diluted by
+structurally-impossible mirrors. When the Phase-3/5 substrate lands,
+its TIMEOUT→PASS conversion will show up directly in the
+signal-bearing-pool FAIL_TIMEOUT % rather than being masked by the
+structural floor.
+
+### Gate
+
+1 bench-script change (`scripts/bench_trajectory_parity.py` — flag +
+precondition + a pure helper, all default-off) + 1 regression pin
+(`tests/test_parity_smoke.py::test_r66_require_creatures_precondition_default_off_and_reclassifies`,
+above the `PHASE5_PROBES` sentinel — 4 contracts, all on REAL
+17lands archetypes) + this docs entry. Full parity gate
+(`test_parity_smoke + test_cross_engine_etb_triggers +
+test_trajectory_parity + test_trajectory`, `--no-cov -n 4`) **1397 →
+1398** (+1, the new pin; no regression). The bench-script change is
+on the gate's path (per `test_parity_smoke.py`'s
+`bench_trajectory_parity` imports) — gate stays green. No Rust → no
+`maturin`.
