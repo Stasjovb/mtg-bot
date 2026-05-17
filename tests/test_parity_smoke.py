@@ -62927,6 +62927,235 @@ def test_cross_engine_real_eoe_seedship_agrarian_both_triggers_full_card_parity(
     assert py_state.players[1].life == py_p1_life_before
 
 
+def test_r59_lander_sac_harness_step_byte_equal_and_default_off():
+    """ROUND-59 N3 regression pin — the review-gated Lander
+    sac-activation bench harness step
+    (``bench_trajectory_parity._try_activate_lander_sac``).
+
+    This pins the round-58-N3-specified minimal unlock that makes the
+    round-55 token-cease-to-exist SBA (CR 111.7) REAL-GAME validatable:
+    a narrow, default-off harness step that drives a Lander token's
+    ``{2},Sac:SearchLibraryForBasicLandTapped`` activation IDENTICALLY
+    on both engines so the token leaves the battlefield (the SBA
+    fires) and the post-sac state is byte-equal cross-engine.
+
+    Three contracts:
+
+    1. **No-Lander → no-op.** With NO Lander on the battlefield the
+       harness primitive returns ``None`` and mutates nothing — the
+       step is inert (the load-bearing default-off guarantee: the
+       bench / production self-play is byte-for-byte unchanged unless
+       a real Lander is present AND the caller opted in).
+    2. **Lander present → activates, token leaves bf, SBA fires.**
+       With a real Galactic Wayfarer-spawned Lander on the bf the
+       primitive drives the activation, the Lander leaves the
+       battlefield on BOTH engines, and the round-55 token-cease-to-
+       exist SBA removes it (graveyard empty on both — the token
+       ceased to exist).
+    3. **Byte-equal cross-engine.** The whole post-sac field view is
+       ``compare_fields() == []`` — the primitive raises
+       ``_DivergenceError`` if not, so reaching the end without a
+       raise IS the byte-equal assertion; the explicit
+       ``compare_fields`` re-check below double-pins it.
+
+    Same real card / real loader / real activation as
+    ``test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation``
+    — but it drives the activation through the ACTUAL bench harness
+    primitive (not an inline ``step_both``), so a regression in the
+    harness step itself (scoping, shared-rng install, mana seeding,
+    post-resolve drain/compare) is caught here.
+    """
+    import pytest
+
+    pytest.importorskip("mtg_bot_engine")
+    import sys
+    import pathlib
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view,
+        compare_fields,
+        parity_smoke as ce_parity_smoke,
+        clear_token_printings,
+        _card_def_to_python_printing,
+    )
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.actions import dispatch_event
+    from mtg_bot.effects.predicates import Event
+    from mtg_bot.game import Zone
+
+    scripts_dir = pathlib.Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from bench_trajectory_parity import (  # type: ignore[import-not-found]
+        _DivergenceError,
+        _try_activate_lander_sac,
+    )
+
+    clear_token_printings()
+    try:
+        pr = get_active_source().get_printings()
+        if pr.get("Galactic Wayfarer") is None:
+            pytest.skip("Galactic Wayfarer absent from active CardSource")
+        gw = pr.get("Galactic Wayfarer")
+        spec = trajectory.production_deck_to_deckspec(
+            ["Galactic Wayfarer"] * 6 + ["Forest"] * 54,
+            shared_rng_seed=59, pad_to_size=60, pad_with="Forest",
+        )
+        gw_cd = next(
+            c for c in spec.card_defs if c.name == "Galactic Wayfarer"
+        )
+        lander_pid = gw_cd.triggered_abilities[0]["effect"][
+            "token_printing_id"
+        ]
+        py_state, rust_state = trajectory.setup_matched_game(
+            spec, opening_hand_size=0
+        )
+
+        # ---- CONTRACT 1: no Lander on bf yet → primitive is inert.
+        rng_guard: set = set()
+        pre_view = build_python_field_view(py_state)
+        rc = _try_activate_lander_sac(py_state, rust_state, rng_guard)
+        assert rc is None, (
+            "no-Lander → the harness step must be a no-op (default-off "
+            "guarantee: nothing activated when no Lander is present)"
+        )
+        assert rng_guard == set(), (
+            "no-Lander → the shared-rng install must NOT have run "
+            "(it is lazy: only on a real activation)"
+        )
+        assert build_python_field_view(py_state) == pre_view, (
+            "no-Lander → the harness step mutated state; it must be "
+            "perfectly inert when there is no Lander to sac"
+        )
+
+        # ---- Spawn a real Lander via the real carrier's ETB, BOTH
+        # engines (same recipe as the round-53/55 genuine probes).
+        py_printing = _card_def_to_python_printing(gw_cd)
+        py_carrier = py_state.new_object(
+            py_printing, owner_id=0, zone=Zone.BATTLEFIELD
+        )
+        py_carrier.summoning_sick = False
+        py_carrier.tapped = False
+        py_carrier.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(py_carrier)
+        dispatch_event(py_state, Event.ENTERS, obj=py_carrier)
+        ZONE_BATTLEFIELD = 2
+        rust_state.register_and_inject_object(
+            {
+                "name": "Galactic Wayfarer",
+                "card_types": ["Creature"],
+                "mana_cost": {"generic": gw.mana_cost.generic, "G": 1},
+                "power": gw.power, "toughness": gw.toughness,
+                "effects": [],
+                "triggered_abilities": [
+                    {
+                        "event": "enters",
+                        "predicate": {"kind": "source_is_self"},
+                        "effect": {
+                            "kind": "create_token",
+                            "count": 1,
+                            "token_printing_id": lander_pid,
+                        },
+                    }
+                ],
+            },
+            0,
+            ZONE_BATTLEFIELD,
+        )
+        while rust_state.stack_size() > 0:
+            rust_state.resolve_top_of_stack()
+        while py_state.stack:
+            py_resolve(py_state)
+
+        # The real Lander spawned byte-equal on both engines.
+        pre_sac = compare_fields(
+            build_python_field_view(py_state),
+            ce_parity_smoke()._build_field_view(rust_state),
+        )
+        assert pre_sac == [], (
+            f"real Lander spawn must be byte-equal pre-sac: {pre_sac}"
+        )
+        assert any(
+            o.printing.name == "Lander" for o in py_state.battlefield
+        ), "sanity: a real Lander token must be on the Python bf"
+
+        # ---- CONTRACT 2+3: drive the activation THROUGH the harness
+        # primitive (the actual bench code path). It seeds {2}
+        # symmetrically, installs the shared post-search-shuffle rng,
+        # step_both's the activation, drains both stacks, and
+        # compare_fields-checks — raising _DivergenceError on ANY
+        # cross-engine divergence. Reaching here without a raise IS
+        # the byte-equal assertion.
+        try:
+            action = _try_activate_lander_sac(
+                py_state, rust_state, rng_guard,
+            )
+        except _DivergenceError as e:  # pragma: no cover - regression
+            raise AssertionError(
+                "ROUND-59 N3: the Lander sac-activation harness step "
+                "diverged cross-engine — a regression in the round-55 "
+                "token-cease-to-exist SBA, the round-54 shared-rng "
+                "post-search-shuffle, or the harness primitive itself. "
+                f"action={e.action} fields="
+                f"{[d.field for d in e.divergences]}"
+            )
+        assert action is not None, (
+            "Lander present + a basic in library + {2} payable → the "
+            "harness step MUST drive the activation (returns the "
+            "action dict)"
+        )
+        assert action == {
+            "kind": "activate_ability", "ability_index": 0,
+            "source_id": action["source_id"],
+        }, f"unexpected harness action shape: {action}"
+        assert rng_guard, (
+            "the shared post-search-shuffle rng must have been "
+            "installed on the real activation (round-54 #15 recipe)"
+        )
+
+        # Lander left the battlefield on BOTH engines (sac cost paid).
+        py_view = build_python_field_view(py_state)
+        rust_view = ce_parity_smoke()._build_field_view(rust_state)
+        assert not any(
+            t[0] == "Lander" for t in py_view["battlefield"]
+        ), "Python: the Lander must be sacrificed off the battlefield"
+        assert not any(
+            t[0] == "Lander" for t in rust_view["battlefield"]
+        ), "Rust: the Lander must be sacrificed off the battlefield"
+
+        # The round-55 token-cease-to-exist SBA fired: the sacrificed
+        # Lander ceased to exist — graveyard empty on BOTH engines.
+        assert py_view["graveyard_p0"] == (), (
+            "Python graveyard_p0 must be empty — the sacrificed Lander "
+            f"token ceased to exist (CR 111.7). Got "
+            f"{py_view['graveyard_p0']!r}"
+        )
+        assert not any(
+            t[0] == "Lander" for t in rust_view["graveyard_p0"]
+        ), (
+            "ROUND-55/59: Rust graveyard_p0 must NOT hold the "
+            "sacrificed Lander — the token-cease-to-exist SBA removes "
+            f"it (CR 111.7). Got {rust_view['graveyard_p0']!r}"
+        )
+        # A basic land was searched onto bf on both (the search
+        # resolved); the WHOLE field view is byte-equal.
+        assert any(
+            t[0] == "Forest" for t in py_view["battlefield"]
+        ), "Python: SearchLibraryForBasicLandTapped put a Forest on bf"
+        post_divs = compare_fields(py_view, rust_view)
+        assert post_divs == [], (
+            "ROUND-59 N3: the harness-driven Lander sac-activation is "
+            "FULLY byte-equal cross-engine — the round-55 token-cease-"
+            "to-exist SBA real-game-validated. A divergence is a "
+            f"regression. Got "
+            f"{[(d.field, d.py_value, d.rust_value) for d in post_divs]}"
+        )
+    finally:
+        clear_token_printings()
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
