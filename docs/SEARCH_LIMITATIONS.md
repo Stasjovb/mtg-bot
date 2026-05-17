@@ -3586,6 +3586,106 @@ battlefield divergence count drops to 0 — verified round-39).
 
 ---
 
+## 5 EoE pay-life shocklands admitted as plain untapped dual lands — `enters_tapped` / `pay-2-life` replacement dropped on BOTH engines (round-60 phase 1)
+
+**Where**: `src/mtg_bot/parity/trajectory.py:_printing_is_bridge_nonbasic_mana_land`
+(the new predicate, wired into `_filter_deck_to_bridge_supported` +
+`_printing_to_card_def`). Spec:
+`docs/NONBASIC_LAND_SUBSTRATE_PLAN.md` §2/§3 (round-59 N2).
+
+**What the shortcut is**: the production-deck trajectory-parity
+loader now admits the 5 EoE pay-life shocklands — **Breeding Pool,
+Watery Grave, Stomping Ground, Godless Shrine, Sacred Foundry** — as
+plain untapped dual-mana lands (a `CardDef(card_type="Land",
+mana_produced=<sorted dual>)`, the exact shape the basic-land arm
+emits, minus the `"Basic"` supertype gate). The real Magic card
+carries the replacement "As this land enters, you may pay 2 life. If
+you don't, it enters tapped." The live `OracleParserCardSource`
+**never structures that replacement at all** — it flattens each
+shockland to `produces={c1,c2}` + `enters_tapped=False` + zero
+abilities (verified round-60 against the live parser). The CardDef
+bridge has no `enters_tapped` field and Rust's `register_printing`
+has no land tapped-entry path, so the rider is dropped a SECOND time
+symmetrically. Net: the shockland is modeled as a vanilla untapped
+dual on BOTH engines — no pay-life decision, no tapped-entry, ever.
+
+**Why it's OK**: the drop is **symmetric** — the parser flattens the
+printing identically before either engine sees it, so Python and Rust
+materialize the *same* untapped dual and round-trip **byte-equal**
+(pinned: 3 cross-engine bridge pins build the real Stomping Ground /
+Watery Grave / Breeding Pool CardDefs and assert
+`compare_fields() == []`; 1 genuine real-EoE probe drives real
+17lands archetype 30 — which runs Stomping Ground + Watery Grave —
+through `attack_all` for ~10 turns divergence-free). The bench's
+`attack_all` strategy never makes the pay-life choice and never reads
+a land's tapped-state for a decision, so the simplification is inert
+under the coverage it unlocks. This is the **round-39 Ward
+precedent** exactly (`CardDef bridge filter drops creatures with
+dynamic_pt_formula / ward_cost`, this doc above): a rider the bridge
+drops symmetrically, bit-equal under the bench play strategy, shipped
+blocked-at-fidelity rather than as a latent inter-engine divergence.
+The guardrail predicate POSITIVELY asserts the parser-flattened
+mana-only profile (non-basic Land, 1-2 produce colors, NO
+activated/triggered/static abilities, NO `enters_tapped`, NO
+`enters_tapped_unless_any_player_life_at_most`, NO clone) so it
+admits ONLY these 5 and DECLINES the other 18 non-basic-land-gated
+cards (the 5 Planet lands' real `enters_tapped` inter-engine
+divergence + Station/AA; the 10 conditional painlands' structured
+conditional-tapped; Secluded Starforge's manaless activated
+abilities; Cathedral of War's tapped+Exalted; Echoing Deeps' clone
+replacement) — admitting any of THOSE would be a real silent
+mistranslation, which is why the predicate's negative set is pinned
+exhaustively (`tests/test_trajectory.py::test_r60_*`).
+
+NOTE on the conditional-tapped guard: the live
+`CardPrinting.enters_tapped_unless_any_player_life_at_most` is an
+`int` whose disabled sentinel is `0` (`cards/base.py:733` — "0
+disables"), NOT `None`. The round-59 spec text wrote that guard as
+`... is not None`; applied literally to the live `int`-`0` field
+that would reject all 5 shocklands (`0 is not None` is True) and
+ship a +0-card no-op. The intent-preserving translation of the spec
+to the live field is a falsy check (0/absent ⇒ admit; the painlands'
+positive `13` ⇒ reject), which honors the spec's stated design
+(+5 cards / +18,065 decks).
+
+**Failure mode**: a future probe (or a smarter bench strategy) that
+DRIVES a shockland's pay-life / tapped-entry decision would observe
+Python and Rust **agree with each other** (both skip the choice and
+play it untapped) but **disagree with the Comprehensive Rules** (a
+real shockland can enter tapped or cost its controller 2 life,
+affecting life totals and same-turn tempo). It is a shared
+CR-incompleteness, NOT a cross-engine divergence — the bench cannot
+surface it because neither engine models it and the strategy never
+exercises it. The honest risk is that this masks the *absence* of
+the `enters_tapped` substrate, not that it produces a wrong
+cross-engine comparison.
+
+**Fix-scope estimate**: deferred to the Phase-3 `enters_tapped`
+substrate (spec §3 Phase 3): a `CardDef.enters_tapped: bool` +
+`enters_tapped_unless_any_player_life_at_most: int` field, Rust
+`register_printing` land-tapped path (`rust/src/cards.rs` + the
+state-builder land materialization — a Rust slice requiring
+`maturin develop --release`), bridge round-trip arms, then widen
+this predicate. The pay-life *replacement choice* (a real agent
+decision) is a further substrate beyond even Phase 3. Estimate:
+~4-6h for the Rust `enters_tapped` slice; the pay-life-choice
+modeling is a larger separate effort. Per spec §3 the Phase-3
+real-bench yield is ~0 (the 9 Duskmourn painlands have 0 EoE decks;
+B/E stay §2-blocked on Station/Exalted) so it is NOT a recommended
+near-term round.
+
+**Impact estimate**: **+5 cards / +18,065 cumulative 17lands decks**
+(Breeding Pool 4,712 + Watery Grave 4,226 + Stomping Ground 3,859 +
+Godless Shrine 2,937 + Sacred Foundry 2,331) unblocked into the
+production-deck bench, **0 strength cost** (no engine behavior
+changes; this is a bench-coverage admit, not a rules change). This
+is the entire *clean* realizable yield of the non-basic-land lever;
+the roadmap's remaining ~16,510-deck tail (the other 18) is gated
+behind the deferred Station / activated-ability / static / clone
+subsystems, not behind this substrate.
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,

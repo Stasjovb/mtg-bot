@@ -3362,14 +3362,94 @@ def _printing_is_bridge_basic_land(printing) -> bool:
     return True
 
 
+def _printing_is_bridge_nonbasic_mana_land(printing) -> bool:
+    """True if a CardPrinting is a NON-basic mana-only land the bridge
+    can round-trip byte-equal across both engines.
+
+    Phase-6 non-basic-land substrate, **phase 1** (round-60 N1; spec at
+    ``docs/NONBASIC_LAND_SUBSTRATE_PLAN.md`` §2/§3, written round-59 N2).
+
+    The motivating set is the 5 EoE pay-life shocklands — Breeding
+    Pool, Watery Grave, Stomping Ground, Godless Shrine, Sacred
+    Foundry. The live ``OracleParserCardSource`` flattens each to
+    ``produces={c1,c2}`` + ``enters_tapped=False`` + no abilities: the
+    parser does **not** structure the "pay 2 life or enter tapped"
+    replacement at all (verified round-60 against the live parser).
+    Both engines therefore materialize the **same** untapped dual —
+    bit-equal cross-engine, but CR-incomplete (a real shockland can
+    enter tapped or cost 2 life). This is the round-39 Ward precedent:
+    a rider the bridge drops *symmetrically*, admittable as a
+    **documented deliberate simplification** (see
+    ``docs/SEARCH_LIMITATIONS.md`` —
+    ``trajectory.py:_printing_is_bridge_nonbasic_mana_land``).
+
+    The predicate is the §2 Class-1 guardrail: it admits ONLY the
+    parser-flattened mana-only profile (non-basic Land, 1-2 produce
+    colors, NO abilities, NO structured tapped-entry, NO clone). It
+    MUST reject the other 18 non-basic-land-gated cards — the Planet
+    lands (``enters_tapped=True`` + Station + activated ability),
+    the Duskmourn conditional painlands
+    (``enters_tapped_unless_any_player_life_at_most`` set), Secluded
+    Starforge (no ``produces`` + activated abilities), Cathedral of
+    War (``enters_tapped=True`` + Exalted static + no mana), and
+    Echoing Deeps (``optional_copy_land_from_graveyard`` clone). Each
+    of those is a real cross-engine divergence or a §2-declined
+    subsystem the bridge cannot carry today; admitting them via a bare
+    supertype-gate widen would ship silent mistranslation (§4 of the
+    plan, the round-38-E5 count-chasing anti-pattern §2 exists to
+    prevent).
+
+    NOTE on the conditional-tapped guard: the live
+    ``CardPrinting.enters_tapped_unless_any_player_life_at_most`` is an
+    ``int`` whose **disabled sentinel is ``0``** (``cards/base.py:733``
+    — "0 disables"), NOT ``None``. The round-59 spec text wrote the
+    guard as ``... is not None`` against an assumed ``int | None``
+    shape; applied literally to the live ``int``-``0`` field that would
+    reject all 5 shocklands (``0 is not None`` → True) and ship the
+    round-60 slice as a +0-card no-op — the exact opposite of the
+    spec's stated intent (§1/§3: "+5 cards"). The intent-preserving
+    translation of the spec to the live field is a **falsy** check:
+    ``0``/absent ⇒ no conditional tapped ⇒ admit; any positive
+    threshold (the painlands' ``13``) ⇒ reject. This honors the spec's
+    design (admit exactly the 5, reject the 10 painlands on the
+    conditional-tapped guard) rather than its mistyped literal.
+    """
+    if "Land" not in printing.card_types:
+        return False
+    if "Basic" in printing.supertypes:
+        return False  # basic path owns these
+    if not printing.produces or not (1 <= len(printing.produces) <= 2):
+        return False
+    if printing.activated_abilities:
+        return False
+    if printing.triggered_abilities:
+        return False
+    if printing.static_abilities:
+        return False
+    if getattr(printing, "enters_tapped", False):
+        return False
+    # int field; 0 (or absent) disables the conditional-tapped
+    # replacement (cards/base.py:733). A positive threshold (the
+    # Duskmourn painlands' 13) is a parser-structured tapped-entry
+    # Python honors and Rust ignores — a real cross-engine divergence.
+    if getattr(printing, "enters_tapped_unless_any_player_life_at_most", 0):
+        return False
+    if getattr(printing, "enters_as_copy_of_creature", False):
+        return False
+    if getattr(printing, "optional_copy_land_from_graveyard", False):
+        return False  # Echoing Deeps' real clone field (round-59 verified)
+    return True
+
+
 def _printing_to_card_def(printing) -> CardDef:
     """Convert a bridge-supported CardPrinting into a CardDef.
 
-    Pre-condition: printing must pass either
-    :func:`_printing_is_bridge_simple_creature` or
-    :func:`_printing_is_bridge_basic_land`. Otherwise the conversion
-    drops fields the bridge can't carry, producing a printing that
-    silently disagrees across engines.
+    Pre-condition: printing must pass
+    :func:`_printing_is_bridge_simple_creature`,
+    :func:`_printing_is_bridge_basic_land`, or
+    :func:`_printing_is_bridge_nonbasic_mana_land`. Otherwise the
+    conversion drops fields the bridge can't carry, producing a
+    printing that silently disagrees across engines.
     """
     if _printing_is_bridge_basic_land(printing):
         produces = next(iter(printing.produces))
@@ -3377,6 +3457,24 @@ def _printing_to_card_def(printing) -> CardDef:
             name=printing.name,
             card_type="Land",
             mana_produced=(produces,),
+        )
+    if _printing_is_bridge_nonbasic_mana_land(printing):
+        # Phase-6 non-basic-land substrate phase 1 (round-60 N1): a
+        # mana-only non-basic land becomes the EXACT shape the basic
+        # arm produces, just without the "Basic" supertype gate. The
+        # per-color mana-ability auto-wire at
+        # ``cross_engine.py`` iterates ``mana_produced`` — a 2-color
+        # land gets two ``{T}: Add <c>`` abilities on Python and a
+        # 2-element ``mana_produced`` Vec on Rust, byte-equal. The
+        # pay-life / tapped replacement is dropped on BOTH engines
+        # (the parser never structures it; the bridge carries no
+        # replacement field) — a documented deliberate simplification
+        # (SEARCH_LIMITATIONS.md). No CardDef field change, no Rust
+        # change.
+        return CardDef(
+            name=printing.name,
+            card_type="Land",
+            mana_produced=tuple(sorted(printing.produces)),
         )
     if _printing_is_bridge_simple_creature(printing):
         generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
@@ -3846,6 +3944,7 @@ def _filter_deck_to_bridge_supported(
             continue
         if not (
             _printing_is_bridge_basic_land(printing)
+            or _printing_is_bridge_nonbasic_mana_land(printing)
             or _printing_is_bridge_simple_creature(printing)
         ):
             continue

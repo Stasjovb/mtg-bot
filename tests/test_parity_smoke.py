@@ -63156,6 +63156,141 @@ def test_r59_lander_sac_harness_step_byte_equal_and_default_off():
         clear_token_printings()
 
 
+def test_r60_genuine_real_eoe_shockland_byte_equal_through_bench(
+    parity_smoke,
+):
+    """**ROUND-60 N1 — the genuine real-EoE shockland probe.**
+
+    Phase-6 non-basic-land substrate phase 1 admits the 5 EoE pay-life
+    shocklands as untapped dual-mana lands (spec
+    docs/NONBASIC_LAND_SUBSTRATE_PLAN.md §3). This is the "did a real
+    EoE deck just get admitted and stay bit-equal" check — the
+    round-46 bench-signal discipline.
+
+    Loads real 17lands archetype **30** (which runs BOTH Stomping
+    Ground and Watery Grave — verified round-60) through the ACTUAL
+    production-deck loader (``setup_matched_game_from_real_decks`` →
+    the real ``_filter_deck_to_bridge_supported`` → the new
+    ``_printing_is_bridge_nonbasic_mana_land`` admit path), then drives
+    the mirror through the ``attack_all`` bench strategy for ~10 turns
+    on BOTH engines. ``_advance_phase_with_compare`` /
+    ``_try_play_one_land`` / ``step_both`` raise ``_DivergenceError``
+    on ANY cross-engine field divergence — reaching the turn cap
+    without a raise IS the byte-equal assertion.
+
+    Two contracts:
+
+    1. **The real shockland is genuinely admitted.** At least one of
+       the two arch-30 shocklands survives the real bridge filter and
+       is materialized as an untapped dual-mana ``Land`` (the new
+       admit path is actually exercised, not skipped).
+    2. **Byte-equal through ~10 turns.** The mirror game is
+       divergence-free — the parser drops the pay-life / tapped
+       replacement SYMMETRICALLY, so both engines materialize and play
+       the SAME untapped dual (round-39 Ward precedent; bit-equal
+       cross-engine, CR-incomplete; SEARCH_LIMITATIONS.md).
+    """
+    import sys
+    import pathlib
+
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity import trajectory
+    from mtg_bot.turn import Step
+
+    scripts_dir = pathlib.Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from bench_trajectory_parity import (  # type: ignore[import-not-found]
+        _DivergenceError,
+        _try_play_one_land,
+        _try_cast_one_creature,
+        _advance_phase_with_compare,
+        _game_over,
+    )
+
+    _ARCH = 30
+    _SHOCKS = {
+        "Breeding Pool", "Watery Grave", "Stomping Ground",
+        "Godless Shrine", "Sacred Foundry",
+    }
+
+    by = OracleParserCardSource().get_printings()
+    deck_names = trajectory.load_production_deck(archetype=_ARCH)
+    filtered, card_defs = trajectory._filter_deck_to_bridge_supported(
+        deck_names, by,
+    )
+    admitted_shocks = sorted(set(filtered) & _SHOCKS)
+    if not admitted_shocks:
+        pytest.skip(
+            f"arch {_ARCH} no longer admits a shockland through the "
+            f"bridge filter — deck-pool drifted; re-pin against a "
+            f"current shockland-bearing archetype"
+        )
+    # CONTRACT 1: each admitted shockland is an untapped dual Land.
+    cd_by_name = {c.name: c for c in card_defs}
+    for nm in admitted_shocks:
+        cd = cd_by_name[nm]
+        assert cd.card_type == "Land", (
+            f"{nm} must be admitted as a Land CardDef, got {cd!r}"
+        )
+        assert 1 <= len(cd.mana_produced) <= 2 and cd.mana_produced, (
+            f"{nm} must carry 1-2 produce colors, got "
+            f"{cd.mana_produced!r}"
+        )
+
+    py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
+        deck_names, shared_rng_seed=0, mulligans=False,
+    )
+    combat_agent = trajectory.RealGameCombatAgent(strategy="attack_all")
+
+    # CONTRACT 2: drive the real mirror through ~10 turns; any
+    # cross-engine divergence raises _DivergenceError.
+    try:
+        while not _game_over(py_state):
+            if py_state.turn_number > 10:
+                break
+            if py_state.step == Step.PRECOMBAT_MAIN:
+                _try_play_one_land(py_state, rust_state)
+                while _try_cast_one_creature(py_state, rust_state) is not None:
+                    pass
+                _advance_phase_with_compare(py_state, rust_state)
+                continue
+            if py_state.step == Step.DECLARE_ATTACKERS:
+                trajectory.drive_combat_phase(
+                    py_state, rust_state, combat_agent,
+                )
+                _advance_phase_with_compare(py_state, rust_state)
+                continue
+            _advance_phase_with_compare(py_state, rust_state)
+    except _DivergenceError as e:  # pragma: no cover - regression
+        raise AssertionError(
+            "ROUND-60 N1: the real arch-30 shockland-bearing mirror "
+            "diverged cross-engine — the 5-shockland untapped-dual "
+            "admit path (or its symmetric pay-life drop) is NOT "
+            f"byte-equal. action={e.action} "
+            f"fields={[d.field for d in e.divergences]}"
+        )
+
+    # Sanity: at least one admitted shockland actually reached a zone
+    # the engines materialized (it's in the shared library at minimum —
+    # the byte-equal library_pN comparison above already proves the
+    # untapped-dual printing round-trips identically).
+    py_lib_names = {
+        o.printing.name for o in py_state.players[0].library
+    }
+    py_bf_hand = {
+        o.printing.name
+        for o in list(py_state.players[0].hand)
+        + list(getattr(py_state, "battlefield", []))
+    }
+    seen = (py_lib_names | py_bf_hand) & set(admitted_shocks)
+    assert seen, (
+        f"expected >=1 admitted shockland {admitted_shocks} to be "
+        f"materialized somewhere in the arch-{_ARCH} mirror; the new "
+        f"admit path was not actually exercised"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
