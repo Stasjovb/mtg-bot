@@ -304,20 +304,22 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main ca239485 (round-62 HEAD, post N1+N2+N3),
-     resynced by the round-62 post-merge re-stamp slice. Counts
-     UNCHANGED (112/114/21/...) — round-62 N1 fixed the shockland
-     mana-ability bridge bug by modifying the existing
-     `apply_mana_produced_bridge` helper (no new Effect variant /
-     no new _ta_dict kind arm). N1 touched cards.rs -> cadence
-     re-verify fired; the 7 still-genuinely-missing entries
-     re-stamped verified_absent_at_commit=ca239485. No fold this
-     round (no residue closed; shocklands are zero-Effect lands,
-     never in the worklist — N1 closed the SEARCH_LIMITATIONS
-     shockland entry itself). Honest residue still 6 distinct
-     cards. N2: warp_cost Phase-1 implementation spec ready
-     (round-63 Rust). N3: broad full-surface sweep — clean, 0
-     NEW divergence. -->
+     Measured at main 9f3ef1d1 (post warp_cost Phase 1, continuous-
+     pipeline cycle). Counts UNCHANGED (112/114/21/12/9) — warp
+     Phase 1 is a CardDef `warp_cost` field + Action::CastSpell
+     branch + admit guardrail, NOT a new Effect:: variant /
+     _ta_dict kind arm / _SAFE_* entry (cron confirmed no count
+     drift). warp Phase 1 touched cards.rs/cross_engine.py ->
+     cadence re-verify fired; the 7 still-genuinely-missing
+     entries re-stamped verified_absent_at_commit=9f3ef1d1
+     (cron structural check re-confirmed absence — no hard-stale).
+     No residue fold (warp-gated cards are loader-gated, not in
+     the residue worklist; warp P1 added its own 3 SEARCH_-
+     LIMITATIONS entries). Honest residue still 6 distinct cards.
+     Pool-parity unchanged 298/475 — warp's +6,450-deck admit is
+     loader/real-game coverage, NOT an Effect+bridge-metric move
+     (same dimension caveat as the round-60 shockland admit;
+     correctly not double-counted). -->
 rust_effect_variants = 112
 bridge_arms = 114
 safe_triggers = 21

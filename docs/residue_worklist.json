@@ -90,7 +90,7 @@
         "CastFromExileWithCostHike"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "e6f95002",
+      "verified_absent_at_commit": "9f3ef1d1",
       "note": "No Rust arm. play-from-exile-with-cost-hike permission subsystem; multi-round. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to a single Event.ENTERS TriggeredAbility whose effect is the bespoke composite EachOpponentExilesCardFromHandWithCastPermission (a Python class with NO matching name in the live 112-variant Rust Effect:: enum — cross-checked against the full enum, not just the alias list; no alias resolves to a live Rust variant; printed name 'Lightstall Inquisitor' is in NO wired bridge arm). TRUE new-Rust-Effect ask. Prior re-verifies: 31ef47ff (round-56 N2)."
     },
     {
@@ -101,7 +101,7 @@
         "EachOpponentExilesFromHand"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "e6f95002",
+      "verified_absent_at_commit": "9f3ef1d1",
       "note": "No Rust arm (same card as CastFromExileWithCostHike — second arm of Lightstall Inquisitor; the real parse fuses both halves into the single bespoke EachOpponentExilesCardFromHandWithCastPermission composite, no separate shipped EachOpponentExilesFromHand Effect). Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live printing's sole Event.ENTERS effect is EachOpponentExilesCardFromHandWithCastPermission (bespoke Python class, NOT in the live 112-variant Rust enum); no alias resolves to a live Rust variant; printed name in NO wired bridge arm. TRUE new-Rust-Effect ask. Prior re-verifies: 31ef47ff (round-56 N2)."
     },
     {
@@ -113,7 +113,7 @@
         "SacrificeSelfUnlessYouTapAPermanent"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "e6f95002",
+      "verified_absent_at_commit": "9f3ef1d1",
       "name_in_arm_ack": "add_mana_to_pool",
       "note": "No Rust arm. land-ETB trigger path + tap-a-permanent cost decision subsystem; multi-round. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to Event.ENTERS → SacrificeSelfUnlessTapPermanent (bespoke Python class, NOT in the live 112-variant Rust enum, NOT bridged) PLUS a separate activated AddManaToPool ability. No alias resolves to a live Rust variant. The printed name 'Command Bridge' appears in the wired `add_mana_to_pool` arm, but that arm wires the card's MANA ABILITY ({T}: Add {color}, round-27 mana-ability primitive consumer list) — a DIFFERENT ability than the claimed land-ETB `SacUnlessYouTap` trigger (round-63 re-confirmed via the real parse: SacrificeSelfUnlessTapPermanent is genuinely unshipped). Per-arm ack records that audited re-walk; the round-55 structural cron suppresses exactly this arm and no other. Prior re-verifies: 31ef47ff (round-56 N2). TRUE new-Rust-Effect ask."
     },
@@ -126,7 +126,7 @@
         "ReturnNoncreatureNonlandFromGYWithMVLEManaSpent"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "e6f95002",
+      "verified_absent_at_commit": "9f3ef1d1",
       "note": "No mana-value-condition GY-return arm. X = mana spent to cast self -> cast-cost-paid ledger subsystem; multi-round. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to Event.ENTERS → the bespoke composite AstelliReclaimerETBEffect (Python class, NOT in the live 112-variant Rust enum); no alias resolves to a live Rust variant; printed name 'Astelli Reclaimer' in NO wired bridge arm. Prior re-verifies: 31ef47ff (round-56 N2). TRUE new-Rust-Effect ask."
     },
     {
@@ -165,7 +165,7 @@
         "EnchantedDealsDamageThenPropagate"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "e6f95002",
+      "verified_absent_at_commit": "9f3ef1d1",
       "note": "No self-replicating damage substrate. Aura attached_to + damage-feedback subsystem; multi-round. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to Event.ENTERS → bespoke PainForAllETBEffect AND Event.DEALT_DAMAGE → bespoke PainForAllDamageEchoEffect — neither is a live Rust Effect:: variant (both cross-checked absent against the full 112-variant enum); no alias resolves to a live Rust variant; printed name 'Pain for All' in NO wired bridge arm. Prior re-verifies: 31ef47ff (round-56 N2). TRUE new-Rust-Effect ask."
     },
     {
@@ -208,7 +208,7 @@
         "EnchantedCreatureFightsTarget"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "e6f95002",
+      "verified_absent_at_commit": "9f3ef1d1",
       "name_in_arm_ack": "fight_target_creature_with_target_creature",
       "note": "Bare bilateral Fight shipped (FightTargetCreatureWithTargetCreature); the Aura-shape Effect::EnchantedCreatureFightsTarget (source fighter = Aura's attached_to) is still missing — Aura-attachment subsystem. See SEARCH_LIMITATIONS.md. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to Event.ENTERS → EnchantedCreatureFightsTargetEffect (bespoke Python class, NOT in the live 112-variant Rust enum) — the only alias `EnchantedCreatureFightsTarget` does NOT resolve to a live Rust variant. The printed name \"Meltstrider's Resolve\" appears in the wired `fight_target_creature_with_target_creature` arm, but that arm wires the BARE-BILATERAL Fight sibling (a DIFFERENT effect than the claimed Aura-shape; the cards.rs doc-comment itself names \"Meltstrider's Resolve specifically\" as the deferred Aura-shape follow-up). Per-arm ack records that audited re-walk; the round-55 structural cron suppresses exactly this arm. Prior re-verifies: 31ef47ff (round-56 N2). The Aura-shape Effect is genuinely missing. TRUE new-Rust-Effect ask."
     },
@@ -221,7 +221,7 @@
         "VoidExileFromGYCopyAndCastForFree"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "e6f95002",
+      "verified_absent_at_commit": "9f3ef1d1",
       "note": "Void condition shipped (ConditionalIfVoid r29); the exile-then-cast-copy-for-free half is still new Rust — cast-from-exile-copy subsystem; multi-round. Re-verified genuinely absent at e6f95002 (round-63 N5 full re-walk, OracleParserCardSource verify-first): the live real-EoE printing parses to Event.ENTERS → the bespoke composite RovingActuatorETBEffect (Python class, NOT in the live 112-variant Rust enum — no shipped Rust Effect arm for the exile-then-cast-copy half); no alias resolves to a live Rust variant; printed name 'Roving Actuator' in NO wired bridge arm. Prior re-verifies: 31ef47ff (round-56 N2). TRUE new-Rust-Effect ask."
     },
     {
