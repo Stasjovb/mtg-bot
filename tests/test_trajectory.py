@@ -5874,8 +5874,13 @@ def test_r60_nonbasic_decline_traps_not_admitted_by_loader():
 
 
 # ---------------------------------------------------------------------------
-# warp_cost Phase 1 (round-63) — §2 guardrail's-teeth negative pins.
-# Spec: docs/WARP_COST_PHASE1_DESIGN.md §4 pins 9-12.
+# warp_cost Phase 1 (round-63) + Phase 1.5 (round-65) — §2
+# guardrail's-teeth pins. Phase 1.5 widens the guardrail to admit the
+# safe-trigger+warp residue trio (Germinating Wurm / Knight Luminary /
+# Starbreach Whale); the §2 teeth (Timeline Culler / Codecracker Hound
+# / Quantum Riddler / Starfield Vocalist stay declined) are PRESERVED.
+# Spec: docs/WARP_COST_PHASE1_DESIGN.md §4 pins 9-12 + the Phase-1.5
+# follow-up the Phase-1 guardrail docstring flagged.
 # ---------------------------------------------------------------------------
 
 
@@ -5885,26 +5890,54 @@ import pytest as _pytest_warp  # noqa: E402
 @_pytest_warp.mark.parametrize(
     "card_name,expected",
     [
-        # Pin 9 — the two Phase-1 cards ADMIT.
+        # Pin 9 — the two Phase-1 pure-fixed-cost cards ADMIT.
         ("Red Tiger Mechan", True),
         ("Bygone Colossus", True),
+        # Phase 1.5 — the safe-trigger+warp residue trio now ADMITS
+        # (each: warp_cost + exactly one SAFE ETB trigger; warp was
+        # the only gate, the trigger half already ships
+        # bridge-correct, and the ETB fires byte-equal under the
+        # warp-cast path — see the real-EoE probe in
+        # test_parity_smoke.py).
+        ("Germinating Wurm", True),    # ENTERS/IsSelf/GainLife 2
+        ("Knight Luminary", True),     # ENTERS/IsSelf/CreateToken
+        ("Starbreach Whale", True),    # ENTERS/IsSelf/Surveil 2
         # Pin 10 — Timeline Culler REJECTED (Phase 2: it carries
         # warp_additional_life_cost=2 AND warp_castable_from_graveyard).
         ("Timeline Culler", False),
-        # Pin 11 — the two highest-deck-count multi-gated traps stay
-        # filtered: Starfield Vocalist (static-ability gate),
-        # Codecracker Hound (Effect-uncovered + nonsafe trigger).
+        # Pin 11 — the multi-gated traps stay filtered: Starfield
+        # Vocalist (static-ability gate), Codecracker Hound
+        # (Effect-uncovered + NON-safe trigger). The §2 teeth survive
+        # the Phase-1.5 widen — only genuinely-already-safe+bridged
+        # triggers are admitted.
         ("Starfield Vocalist", False),
         ("Codecracker Hound", False),
+        # Phase-1.5 §2-teeth: Quantum Riddler ALSO has a safe ETB
+        # trigger (ENTERS/IsSelf/DrawCards 1) + {1}{U} warp, but
+        # carries a HandSizeAtMost(1) draw-replacement static — it is
+        # NOT a safe-trigger+warp-ONLY card and stays correctly
+        # DECLINED on the static_abilities clause (the guardrail is
+        # NOT widened beyond the 3; the §2 exclusion set, not a
+        # special-case, gates it).
+        ("Quantum Riddler", False),
+        # Mechanozoa: safe-keyword-free but a NON-safe ETB trigger
+        # (TapTargetAndPutStunCounter) — the safe-trigger gate rejects
+        # it; warp closure alone never flips it.
+        ("Mechanozoa", False),
     ],
 )
-def test_r63_warp_phase1_guardrail_admits_exactly_the_two_pure_cards(
+def test_r63_warp_phase15_guardrail_admits_trio_declines_others(
     card_name, expected,
 ):
-    """``_printing_is_bridge_pure_warp_creature`` admits ONLY the two
-    pure fixed-cost Phase-1 warp creatures and positively rejects
-    Timeline Culler (Phase-2 life/graveyard riders) + the multi-gated
-    traps (the §2 guardrail's teeth — spec §4 pins 9-11)."""
+    """``_printing_is_bridge_pure_warp_creature`` (Phase 1.5) admits
+    the two pure-fixed-cost Phase-1 cards AND the safe-trigger+warp
+    residue trio, and positively rejects Timeline Culler (Phase-2
+    life/graveyard riders), the static-gated cards (Starfield
+    Vocalist, Quantum Riddler), and the NON-safe-trigger cards
+    (Codecracker Hound, Mechanozoa). The §2 guardrail's teeth — spec
+    §4 pins 9-11 + the Phase-1.5 §2-teeth (the widen admits ONLY
+    genuinely-already-safe+bridged triggers; anything else stays
+    declined)."""
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_pure_warp_creature,
@@ -5925,15 +5958,17 @@ def test_r63_warp_phase1_guardrail_admits_exactly_the_two_pure_cards(
     )
 
 
-def test_r63_warp_phase1_guardrail_positive_set_is_exactly_two():
-    """Spec §4 pin 12 — the guardrail's positive set is EXHAUSTIVE for
-    Phase 1: EXACTLY two EoE printings pass
-    ``_printing_is_bridge_pure_warp_creature`` (Red Tiger Mechan +
-    Bygone Colossus). Regenerable companion to the round-58 scout;
-    this is the anti-count-chasing pin that caught the round-63
-    live-tree drift (the safe-trigger+warp residue trio —
-    Germinating Wurm / Knight Luminary / Starbreach Whale — must
-    NOT leak into Phase 1; they are residue-tier follow-ups)."""
+def test_r63_warp_phase15_guardrail_positive_set_is_exactly_five():
+    """Phase-1.5 spec pin (the round-63 spec §4 pin 12, widened) — the
+    guardrail's positive set is EXHAUSTIVE: EXACTLY five EoE printings
+    pass ``_printing_is_bridge_pure_warp_creature`` — the two
+    pure-fixed-cost Phase-1 cards (Bygone Colossus, Red Tiger Mechan)
+    PLUS the safe-trigger+warp residue trio (Germinating Wurm,
+    Knight Luminary, Starbreach Whale). Regenerable companion to the
+    round-58 scout; the anti-count-chasing pin that catches a future
+    silent widen (e.g. Quantum Riddler — safe trigger but static-gated
+    — must NOT leak in; a non-safe-trigger warp card must NOT leak
+    in)."""
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_pure_warp_creature,
@@ -5944,25 +5979,35 @@ def test_r63_warp_phase1_guardrail_positive_set_is_exactly_two():
         n for n, pr in by.items()
         if _printing_is_bridge_pure_warp_creature(pr)
     )
-    assert passing == ["Bygone Colossus", "Red Tiger Mechan"], (
-        f"Phase-1 guardrail must admit EXACTLY Red Tiger Mechan + "
-        f"Bygone Colossus; got {passing}. If a new warp creature "
-        f"parses without triggered_abilities and a strictly-cheaper "
-        f"fixed warp cost, it belongs to a costed follow-up slice, "
-        f"not a silent Phase-1 expansion (see "
-        f"_printing_is_bridge_pure_warp_creature's live-tree-drift "
-        f"note + docs/SEARCH_LIMITATIONS.md)."
+    assert passing == [
+        "Bygone Colossus",
+        "Germinating Wurm",
+        "Knight Luminary",
+        "Red Tiger Mechan",
+        "Starbreach Whale",
+    ], (
+        f"Phase-1.5 guardrail must admit EXACTLY the pure-fixed-cost "
+        f"pair + the safe-trigger+warp trio; got {passing}. A new "
+        f"warp creature is admitted ONLY if its sole gate is "
+        f"warp_cost and every trigger round-trips the SAFE gate; "
+        f"anything static-gated (Quantum Riddler) or non-safe-trigger "
+        f"(Codecracker Hound) belongs to a separate substrate, not a "
+        f"silent expansion (see "
+        f"_printing_is_bridge_pure_warp_creature's docstring + "
+        f"docs/SEARCH_LIMITATIONS.md)."
     )
 
 
-def test_r63_warp_phase1_residue_trio_stays_filtered():
-    """The safe-trigger+warp residue trio (Germinating Wurm /
-    Knight Luminary / Starbreach Whale — each warp_cost + a single
-    SAFE ETB trigger) must NOT be admitted by Phase 1's loader gate.
-    Pins the round-63 live-tree-drift handling: these are
-    residue-tier warp-gated cards whose trigger half already ships,
-    deferred to a clean follow-up (NOT folded silently into
-    Phase 1's +2/+6,450 attribution)."""
+def test_r63_warp_phase15_residue_trio_now_admitted_by_loader():
+    """Phase 1.5 (round-65): the safe-trigger+warp residue trio
+    (Germinating Wurm / Knight Luminary / Starbreach Whale — each
+    warp_cost + a single SAFE ETB trigger) is now ADMITTED by the
+    production-deck loader (the drop→admit flip Phase 1.5 ships;
+    +3 cards). Each trio member's CardDef carries BOTH the warp
+    fields (has_warp + warp_cost codec) AND the safe-trigger tuple —
+    the Phase-1 boundary's `triggered_abilities==()` gate is widened
+    to the safe-trigger gate. Timeline Culler stays declined (Phase
+    2)."""
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
 
@@ -5971,13 +6016,25 @@ def test_r63_warp_phase1_residue_trio_stays_filtered():
     present = [n for n in trio if n in by]
     if not present:
         _pytest_warp.skip("residue trio absent from active CardSource")
-    deck = present + ["Forest"]
-    filtered, _ = _filter_deck_to_bridge_supported(deck, by)
+    deck = present + ["Timeline Culler", "Forest"]
+    filtered, defs = _filter_deck_to_bridge_supported(deck, by)
+    by_name = {d.name: d for d in defs}
     for nm in present:
-        assert nm not in filtered, (
-            f"{nm} is a residue-tier safe-trigger+warp card; it must "
-            f"NOT be admitted by Phase 1's loader gate (Phase-1 "
-            f"boundary is triggered_abilities==()). It's a clean "
-            f"follow-up, not a silent Phase-1 expansion."
+        assert nm in filtered, (
+            f"{nm} is a Phase-1.5 safe-trigger+warp card; it MUST be "
+            f"admitted by the production-deck loader (the drop→admit "
+            f"flip Phase 1.5 ships)."
         )
+        cd = by_name[nm]
+        assert cd.has_warp is True, (
+            f"{nm} CardDef must carry the warp fields (has_warp)"
+        )
+        assert len(cd.triggered_abilities) == 1, (
+            f"{nm} CardDef must carry its single SAFE ETB trigger; "
+            f"got {cd.triggered_abilities!r}"
+        )
+    assert "Timeline Culler" not in filtered, (
+        "Timeline Culler stays declined (Phase 2: life/graveyard "
+        "riders) — the §2 teeth survive the Phase-1.5 widen."
+    )
     assert "Forest" in filtered  # control: a real basic still admits
