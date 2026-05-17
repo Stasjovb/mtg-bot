@@ -112,20 +112,52 @@ def make_game_state_adapter(
     raise ValueError(f"unknown decision_source: {src!r}")
 
 
+def printing_resolver_from_spec(spec: Any) -> dict:
+    """Build the B3-S2 ``name -> Python CardPrinting`` resolver from a
+    ``cross_engine.DeckSpec``'s ``card_defs``, through the SAME
+    ``_card_def_to_python_printing`` path ``build_python_state`` uses
+    (the card parser/loader stays Python per the flip architecture,
+    ``SOT_FLIP_CUTOVER_PLAN.md`` §5). The codec resolves
+    ``printing.name`` / ``.is_creature`` / ``.is_spacecraft`` /
+    ``.room_halves`` through this so its slot semantics are
+    byte-identical to the Python path."""
+    from mtg_bot.parity.cross_engine import _card_def_to_python_printing
+
+    return {
+        card.name: _card_def_to_python_printing(card)
+        for card in spec.card_defs
+    }
+
+
 def make_rust_game_state_adapter(
     rust_state: Any,
     *,
     expose_combat_decisions: bool = True,
+    printing_resolver: Optional[dict] = None,
+    spec: Any = None,
 ):
     """Construct the Rust-backed provider directly from a live Rust
     ``GameState`` handle (e.g. from
     ``cross_engine.build_rust_state`` / ``build_matched_states`` — the
     surviving loader path per ``BRIDGE_VESTIGIALIZATION_PLAN.md``
     §2.1). Used by the B3 unit tests and the B3-S4 ``rust_shadow``
-    bake-in; the production self-play sites adopt it in B3-S3/S4."""
+    bake-in; the production self-play sites adopt it in B3-S3/S4.
+
+    B3-S2: pass ``spec`` (the ``DeckSpec`` the Rust state was built
+    from) to auto-derive the codec ``printing_resolver``, or pass an
+    explicit ``printing_resolver`` (a ``name -> CardPrinting`` map).
+    Without either, the codec slot-source switch still works for the
+    name+id positional axis (the Rust snapshots carry both) but a
+    printing-typed lookup (``is_creature`` for an
+    ``ActivateAbility`` / ``ActivateStation`` slot) raises loudly
+    rather than silently mis-slotting — never a silent gap."""
     from mtg_bot.search.rust_engine_adapter import RustGameStateAdapter
+
+    if printing_resolver is None and spec is not None:
+        printing_resolver = printing_resolver_from_spec(spec)
 
     return RustGameStateAdapter(
         rust_state,
         expose_combat_decisions=expose_combat_decisions,
+        printing_resolver=printing_resolver,
     )

@@ -103,20 +103,54 @@ class RustGameStateAdapter:
     §2.1).
     """
 
+    # B3-S2 marker: the action-encoding codec's _enumerate_legal
+    # routes through this provider's legal_decisions() (which already
+    # maps Rust dicts -> Decisions via the non-vestigial
+    # rust_decision_adapter). A class attribute (not an isinstance
+    # check) so the codec needs no import of this module — avoids an
+    # import cycle (action_encoding <- search).
+    _is_rust_decision_provider: bool = True
+
     def __init__(
         self,
         rust_state: Any,
         *,
         expose_combat_decisions: bool = True,
+        printing_resolver: Optional[dict] = None,
     ) -> None:
         self._rust = rust_state
         self._expose_combat = expose_combat_decisions
+        # B3-S2: name -> Python CardPrinting map (built from the same
+        # DeckSpec CardDefs the Rust state was built from, via the
+        # SAME _card_def_to_python_printing path build_python_state
+        # uses). The card parser/loader stays Python per the flip
+        # architecture (SOT_FLIP_CUTOVER_PLAN §5); the codec's
+        # printing.name / .is_creature / .is_spacecraft / .room_halves
+        # are resolved through this so slot semantics are byte-
+        # identical to the Python path. None until S2 wires it.
+        self._printing_resolver: dict = printing_resolver or {}
         # Consecutive priority passes since the last non-pass or stack
         # resolution. Lives on the provider (not Rust state) because it
         # is search-loop bookkeeping — Rust's apply_action(pass) is a
         # no-op and does NOT track this. Mirrors
         # MtgGameStateAdapter._pass_count.
         self._pass_count = 0
+        # B3-S2 / spec §2.4-G2 — the PlayLand per-turn-limit interim
+        # mask. Rust's legal_decisions over-offers a PlayLand for
+        # EVERY land in hand regardless of the one-per-turn limit (no
+        # `lands_played_this_turn` field on the Rust GameState —
+        # state_ops_legal.rs:40-50, SL-documented). Direction is
+        # benign ("Rust offers one extra structurally; apply rejects
+        # it") but it pollutes the root legal mask. The spec's
+        # recommended parity-safe interim is a B3-side mask filter in
+        # the provider (mirroring the existing _should_force_landdrop
+        # adapter-filter pattern). We track land-played per turn via
+        # Python-side bookkeeping (same shape as _pass_count) keyed by
+        # the Rust turn_number, and filter ALL PlayLand decisions out
+        # of legal_decisions() once a land was applied this turn
+        # (max_lands == 1 on the loader-admitted surface). The proper
+        # fix (the Rust field) is sequenced post-flip per the SL note.
+        self._land_played_on_turn: Optional[int] = None
         # Per-priority-moment cache of the Rust legal_decisions dict
         # list, keyed by the player whose set was computed. Mirrors
         # MtgGameStateAdapter's _legal_actions_cache lifetime: per
@@ -220,6 +254,14 @@ class RustGameStateAdapter:
                 self._rust.pass_priority()
         else:
             d = decision_to_rust_dict(decision)
+            # G2 interim mask bookkeeping: record the land drop so the
+            # next legal_decisions() filters the structurally-over-
+            # offered extra PlayLand(s) (Rust has no
+            # lands_played_this_turn field). Recorded BEFORE apply so a
+            # mid-apply raise still marks the attempt consistently
+            # (apply is the hard gate either way).
+            if d.get("kind") == "play_land":
+                self._land_played_on_turn = int(self._rust.turn_number)
             self._rust.apply_action(d)
             self._rust.apply_sbas()
             self._pass_count = 0
@@ -237,7 +279,9 @@ class RustGameStateAdapter:
         # spec prose.
         c._rust = self._rust.clone_once()
         c._expose_combat = self._expose_combat
+        c._printing_resolver = self._printing_resolver
         c._pass_count = self._pass_count
+        c._land_played_on_turn = self._land_played_on_turn
         # Cache lifetime is per-priority-moment; the clone starts
         # empty (same rationale as MtgGameStateAdapter.clone — a
         # post-clone determinizer mutation would otherwise be served
@@ -266,6 +310,24 @@ class RustGameStateAdapter:
             return []
         pid = self._priority_pid()
         dicts = self._legal_dicts_cached(pid)
+        # G2 interim mask (spec §2.4-G2): if a land was already
+        # played this turn, filter the structurally-over-offered
+        # PlayLand dict(s) Rust still emits (no lands_played_this_turn
+        # field). max_lands == 1 on the loader-admitted surface, so
+        # ANY prior land this turn ⇒ no further PlayLand is legal.
+        # Mirrors the MtgGameStateAdapter._should_force_landdrop
+        # adapter-filter pattern (a list-comprehension prune, never a
+        # reorder). PARITY-SAFE: dormant under decision_source=python
+        # (this provider is not constructed); under rust_shadow the
+        # S4 LEGAL_SET_EQ assertion verifies the filtered set equals
+        # Python's legal_actions.
+        if (
+            self._land_played_on_turn is not None
+            and self._land_played_on_turn == int(self._rust.turn_number)
+        ):
+            dicts = [
+                d for d in dicts if d.get("kind") != "play_land"
+            ]
         return [rust_dict_to_decision(d) for d in dicts]
 
     def chance_outcomes(self) -> list[tuple[Decision, float]]:
@@ -309,6 +371,29 @@ class RustGameStateAdapter:
         (B3-S4) and combat-accumulation port (B3-S3) reach through
         this; the rest of search stays on the Protocol surface."""
         return self._rust
+
+    @property
+    def engine_state(self):
+        """B3-S2: the codec slot-source switch. The action-encoding
+        codec reaches the engine zones via ``_engine_state(state) ->
+        getattr(state, "engine_state", state)``
+        (``action_encoding.py:316-319``). For the Rust provider this
+        returns a ``RustZoneView`` presenting the SAME
+        ``player_by_id``/``battlefield`` surface, sourced from the
+        Rust ``*_snapshot`` pymethods — so the codec's slot mapping is
+        byte-identical (v-chain-SAFE), only its data source moves.
+        Rebuilt per access from the live Rust state (the codec calls
+        it once per decision moment; same order as the Python
+        ``player_by_id`` walk it replaces)."""
+        from mtg_bot.search.rust_zone_view import RustZoneView
+
+        return RustZoneView(self._rust, self._printing_resolver)
+
+    @property
+    def printing_resolver(self) -> dict:
+        """The name -> Python CardPrinting resolver (B3-S2). Exposed
+        for the S4 shadow-checker / tests to assert resolution."""
+        return self._printing_resolver
 
     @property
     def combat_phase(self) -> Optional[str]:
