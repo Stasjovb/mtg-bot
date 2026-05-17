@@ -5330,17 +5330,21 @@ cross-engine harness use first-legal).
 
 ---
 
-## Tier-C target-seating sub-substrate — deterministic no-agent push-time target seat for SAFE targeted triggered abilities (lever-a: Sunset Saboteur)
+## Tier-C target-seating sub-substrate — deterministic no-agent push-time target seat for SAFE targeted triggered abilities (lever-a: Sunset Saboteur + Exosuit Savior)
 
 **Location**: `rust/src/state_ops_resolve.rs`
 (`first_legal_trigger_target` next to `push_triggered_ability` — the
 gated push-time first-legal seat into the EXISTING
 `TriggerPayload.target_id` via `new_trigger_with_target`; the
-`Effect::PutPlusOneCounterOnOpponentsCreature` resolve arm reading
-`current_resolve_payload_target_id` with a CR 608.2b re-legality
-check) + `src/mtg_bot/actions.py`
-(`_put_triggered_ability_on_stack` — the `controller.agent is None`
-branch's gated `pool[0]` seat) + `src/mtg_bot/parity/trajectory.py`
+`Effect::PutPlusOneCounterOnOpponentsCreature` and
+`Effect::ReturnTargetPermanentYouControlToOwnersHand` resolve arms
+reading `current_resolve_payload_target_id` with a CR 608.2b
+re-legality check; `lever_trigger_requires_target` distinguishes the
+`count_min>=1` skip-push-fizzle (Sunset Saboteur) from the
+`count_min==0` push-with-no-target no-op (Exosuit Savior)) +
+`src/mtg_bot/actions.py` (`_put_triggered_ability_on_stack` — the
+`controller.agent is None` branch's gated `pool[0]` seat) +
+`src/mtg_bot/parity/trajectory.py`
 (`_is_target_seated_safe_trigger` — the surgical gate).
 
 **What the shortcut is**: real MTG picks a triggered ability's
@@ -5354,12 +5358,20 @@ insertion order (Python's `Effect._enumerate_for_filter` order; the
 (`ATTACKS / IsSelf / PutPlusOneCounterOnOpponentsCreature`,
 `count_min=1`) that is the first creature an opponent of the
 source's controller controls; no eligible target ⇒ the trigger
-fizzles (CR 603.3c — not pushed) byte-equal on both engines. The
-seat is **gated** (`_is_target_seated_safe_trigger` /
-`first_legal_trigger_target`'s per-variant match) so it fires ONLY
-for the lever-admitted targeted safe triggers — every existing
-untargeted safe trigger and every non-lever targeted trigger keeps
-its prior behavior byte-identically.
+fizzles (CR 603.3c — not pushed) byte-equal on both engines. For
+Exosuit Savior (`ENTERS / IsSelf /
+ReturnTargetPermanentYouControlToOwnersHand`, `count_min=0` — the
+optional-bounce edge) that is the first non-source permanent the
+source's controller controls; no eligible permanent ⇒ the trigger
+is pushed with NO target and the optional resolves as a no-op
+(byte-equal with Python's `targets=()` `Bounce.resolve`
+early-return — the optional is *declined*, NOT fizzled, the distinct
+`count_min==0` semantics). The seat is **gated**
+(`_is_target_seated_safe_trigger` / `first_legal_trigger_target`'s
+per-variant match) so it fires ONLY for the lever-admitted targeted
+safe triggers — every existing untargeted safe trigger and every
+non-lever targeted trigger keeps its prior behavior
+byte-identically.
 
 **Why it's OK**: this is the SAME deliberate divergence the campaign
 already documents for every `_PickFirst*`-driven probe, the Rust
@@ -5381,10 +5393,15 @@ loader (a much larger, separate effort — the same fix-scope as the
 spell-target / resolution-decision-vocab entries).
 
 **Impact estimate**: parity-positive, zero strength claim. Flips
-Sunset Saboteur (6,375 17lands decks) from Effect-uncovered /
-bench-dropped to byte-equal bench-admittable; the shared seat is the
-substrate Exosuit Savior (12,480 decks, the `count_min=0`
-optional-bounce edge) reuses in its own slice.
+**both** Tier-C target-seating consumers from Effect-uncovered /
+bench-dropped to byte-equal bench-admittable: Sunset Saboteur
+(6,375 17lands decks, the `count_min=1` mandatory-counter card) +
+Exosuit Savior (12,480 decks, the `count_min=0` optional-bounce
+edge) = **2 cards / 18,855 17lands decks** — the complete honest
+Tier-C target-seating payoff (NOT ~39k: Terrapact / Genemorph /
+Boilerbilges each carry a SECOND blocking substrate and are honest
+exclusions, per the design's §5.3/§6 honest-shrinkage). No further
+target-seating consumers remain.
 
 ---
 

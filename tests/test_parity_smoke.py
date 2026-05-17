@@ -68848,6 +68848,310 @@ def test_cross_engine_real_eoe_sunset_saboteur_attacks_seats_first_opponent_crea
     assert py_sab2.plus_one_counters == 0
 
 
+def test_cross_engine_real_eoe_exosuit_savior_etb_seats_first_own_permanent(
+    parity_smoke,
+):
+    """**GENUINE real-EoE probe — Tier-C target-seating sub-substrate,
+    lever-a (Exosuit Savior — the count_min=0 optional-bounce edge).**
+
+    Drives the **real parsed Exosuit Savior printing** end-to-end
+    through the production cast→ETB path with **NO agent seated** and
+    asserts byte-equal cross-engine state: the SHARED deterministic
+    push-time seat (shipped with Sunset Saboteur) picks the SAME
+    object on both engines — the smallest-bf-index permanent the
+    controller controls that is NOT Exosuit Savior itself — and
+    exactly that object is bounced to its owner's hand.
+
+    Real EoE oracle (``data/edge_of_eternities.json``):
+
+        "Flying
+         When this creature enters, you may return another target
+         permanent you control to its owner's hand."
+
+    Parsed shape (§2 source of truth, asserted live):
+    ``(ENTERS, IsSelf, ReturnTargetPermanentYouControlToOwnersHand)``,
+    ``requires_target=False`` (because ``count_min=0`` — the bounce
+    is OPTIONAL, CR "you may return"), ``count_range=(0,1)``,
+    ``slot_kinds=()``, slot filter
+    ``ControlledByYou() & ~IsPlayer() & ~IsSource()``.
+
+    **The count_min=0 optional edge under test (distinct from Sunset
+    Saboteur's count_min=1).**
+      * **Scenario A (eligible permanent exists):** two own permanents
+        are seated on P0's bf BEFORE Exosuit Savior is cast; the ETB
+        seats the FIRST (smallest-bf-index) one and bounces exactly it
+        to P0's hand — NOT the second, NOT both — byte-equal on both
+        engines.
+      * **Scenario B (NO eligible permanent — only the source):** the
+        ETB seat returns ``None`` (the only own permanent is Exosuit
+        Savior itself, excluded by ``~IsSource()``); the trigger is
+        pushed with NO target and resolves as a NO-OP — NOT a
+        fizzle-skip-push (that is Sunset Saboteur's count_min=1
+        semantics). Nothing is bounced; byte-equal on both engines.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.bounce import (
+        ReturnTargetPermanentYouControlToOwnersHand,
+    )
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        _ta_dict_to_python_triggered_ability,
+    )
+    from mtg_bot.actions import resolve_top_of_stack as py_resolve
+    from mtg_bot.game import StackItem, Zone
+
+    real = get_active_source().get_printings().get("Exosuit Savior")
+    if real is None:
+        import pytest
+        pytest.skip("Exosuit Savior absent from active CardSource")
+
+    # §2 source-of-truth: the GENUINE parsed printing must carry the
+    # EXACT single optional-targeted ENTERS trigger this probe pins.
+    assert real.is_creature and (real.power, real.toughness) == (2, 2)
+    assert len(real.triggered_abilities) == 1
+    ta = real.triggered_abilities[0]
+    assert ta.event is Event.ENTERS
+    assert isinstance(ta.predicate, IsSelf) and ta.predicate.subject is None
+    assert isinstance(ta.effect, ReturnTargetPermanentYouControlToOwnersHand)
+    assert ta.effect.requires_target() is False  # count_min=0 → False
+    assert ta.effect.target_count_range() == (0, 1)
+    assert ta.effect.target_slot_kinds() == ()
+
+    ZONE_HAND = 0
+    ZONE_BATTLEFIELD = 2
+
+    sab_trigger = {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "return_target_permanent_you_control"},
+    }
+    # Bridge round-trips the dict back to the genuine Python shape.
+    bridged = _ta_dict_to_python_triggered_ability(sab_trigger)
+    assert bridged.event is Event.ENTERS
+    assert isinstance(
+        bridged.effect, ReturnTargetPermanentYouControlToOwnersHand
+    )
+    assert bridged.effect.optional is True
+    assert bridged.effect.exclude_self is True
+    # The recognizer derives the byte-equal dict from the GENUINE
+    # printing (the Python→dict direction).
+    from mtg_bot.parity import trajectory as _T
+    rec = _T._python_ta_to_safe_dict(ta)
+    assert rec == sab_trigger, (
+        f"recognizer must emit the byte-equal bridge dict for the "
+        f"genuine Exosuit Savior trigger; got {rec}"
+    )
+    assert _T._is_target_seated_safe_trigger(real, ta) is True
+    assert _T._printing_is_bridge_simple_creature(real) is True
+
+    savior_dict = {
+        "name": "Exosuit Savior",
+        "card_types": ["Creature"],
+        "subtypes": ["Robot"],
+        "mana_cost": {"generic": 2, "W": 1},
+        "power": 2,
+        "toughness": 2,
+        "keywords": ["flying"],
+        "effects": [],
+        "triggered_abilities": [sab_trigger],
+    }
+    bear_def = {
+        "name": "Grizzly Bears",
+        "card_type": "Creature",
+        "mana_cost_generic": 1,
+        "mana_cost_colored": (("G", 1),),
+        "power": 2,
+        "toughness": 2,
+    }
+    forest_def = {
+        "name": "Forest",
+        "card_type": "Land",
+        "mana_produced": ("G",),
+    }
+
+    from mtg_bot.parity.cross_engine import CardDef
+
+    def _build():
+        spec = DeckSpec(
+            card_defs=(CardDef(**bear_def), CardDef(**forest_def)),
+            p0_library=("Grizzly Bears", "Forest"),
+            p1_library=("Grizzly Bears", "Forest"),
+        )
+        return build_python_state(spec), build_rust_state(spec)
+
+    # ===== Scenario A: two own permanents → bounce the FIRST. =====
+    py_state, rust_state = _build()
+    # Seat two own permanents on P0's bf in lockstep order: Grizzly
+    # Bears (smaller id) THEN Forest. Then cast Exosuit Savior; its
+    # ETB must seat + bounce the FIRST (Bears), leaving the Forest.
+    rs_bear = rust_state.register_and_inject_object(
+        {"name": "Grizzly Bears", "card_types": ["Creature"],
+         "mana_cost": {"generic": 1, "G": 1}, "power": 2,
+         "toughness": 2, "effects": []},
+        0, ZONE_BATTLEFIELD,
+    )
+    rs_forest = rust_state.register_and_inject_object(
+        {"name": "Forest", "card_types": ["Land"],
+         "mana_produced": ["G"], "effects": []},
+        0, ZONE_BATTLEFIELD,
+    )
+    rs_savior = rust_state.register_and_inject_object(
+        savior_dict, 0, ZONE_HAND
+    )
+    # Symmetric Python seat (same order ⇒ same ids ⇒ same seat).
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    def _py_bf(py_state, name, card_types, power=None, toughness=None,
+               produces=()):
+        pr = CardPrinting(
+            name=name, mana_cost_str="",
+            mana_cost=ManaCost(generic=1, colored=()),
+            type_line=" ".join(card_types), supertypes=(),
+            card_types=tuple(card_types), subtypes=(),
+            power=power, toughness=toughness,
+            produces=frozenset(produces), triggered_abilities=(),
+        )
+        o = py_state.new_object(pr, owner_id=0, zone=Zone.BATTLEFIELD)
+        o.summoning_sick = False
+        o.tapped = False
+        o.damage = 0
+        o.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(o)
+        return o
+
+    py_bear = _py_bf(py_state, "Grizzly Bears", ["Creature"], 2, 2)
+    py_forest = _py_bf(py_state, "Forest", ["Land"], produces=("G",))
+    # Cast Exosuit Savior via the inject→push→resolve path (its ETB
+    # fires when the spell resolves to a permanent).
+    rust_state.push_to_stack(rs_savior, 0)
+    rust_state.resolve_top_of_stack()
+    assert rust_state.find_object_zone(rs_savior) == ZONE_BATTLEFIELD
+    assert rust_state.stack_size() == 1, (
+        "Rust: Exosuit Savior's ETB must push (an eligible own "
+        "permanent exists, so the seat is non-None)"
+    )
+    py_savior_pr = CardPrinting(
+        name="Exosuit Savior", mana_cost_str="",
+        mana_cost=ManaCost(generic=2, colored=(("W", 1),)),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=("Robot",),
+        power=2, toughness=2, produces=frozenset(),
+        keywords=frozenset(("flying",)),
+        triggered_abilities=(
+            _ta_dict_to_python_triggered_ability(sab_trigger),
+        ),
+    )
+    py_savior = py_state.new_object(
+        py_savior_pr, owner_id=0, zone=Zone.STACK
+    )
+    py_state.stack.append(StackItem(source=py_savior, controller_id=0))
+    assert py_state.players[0].agent is None
+    py_resolve(py_state)
+    assert any(
+        o.printing.name == "Exosuit Savior" for o in py_state.battlefield
+    ), "Python: Exosuit Savior should resolve onto the battlefield"
+    assert len(py_state.stack) == 1, (
+        "Python: Exosuit Savior's ETB must push (eligible own "
+        "permanent exists)"
+    )
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0 and len(py_state.stack) == 0
+
+    # The FIRST own permanent (Bears, smallest bf-index) was bounced
+    # to P0's HAND; the SECOND (Forest) stayed on the bf — byte-equal.
+    rs_bf = {d["printing_name"] for d in rust_state.battlefield_snapshot()}
+    rs_hand = [
+        d["printing_name"] for d in rust_state.hand_snapshot(0)
+    ]
+    assert "Grizzly Bears" not in rs_bf, (
+        "Rust: the FIRST own permanent (Bears) must be bounced off bf"
+    )
+    assert "Grizzly Bears" in rs_hand, (
+        "Rust: bounced Bears must be in P0's hand"
+    )
+    assert "Forest" in rs_bf, (
+        "Rust: the SECOND own permanent (Forest) must stay on bf "
+        "(deterministic first-legal seat, not all-eligible)"
+    )
+    assert "Exosuit Savior" in rs_bf
+    py_bf = {o.printing.name for o in py_state.battlefield}
+    py_hand = [o.printing.name for o in py_state.players[0].hand]
+    assert "Grizzly Bears" not in py_bf and "Grizzly Bears" in py_hand, (
+        "Python: the FIRST own permanent (Bears) must be bounced to "
+        "P0's hand"
+    )
+    assert "Forest" in py_bf, (
+        "Python: the SECOND own permanent (Forest) must stay on bf"
+    )
+    assert "Exosuit Savior" in py_bf
+    # Cross-engine byte-equal: same card bounced, same card stays.
+    assert ("Grizzly Bears" in rs_hand) == ("Grizzly Bears" in py_hand)
+    assert ("Forest" in rs_bf) == ("Forest" in py_bf) is True
+
+    # ===== Scenario B: NO other own permanent → optional NO-OP. =====
+    py_state2, rust_state2 = _build()
+    rs_savior2 = rust_state2.register_and_inject_object(
+        savior_dict, 0, ZONE_HAND
+    )
+    rust_state2.push_to_stack(rs_savior2, 0)
+    rust_state2.resolve_top_of_stack()
+    assert rust_state2.find_object_zone(rs_savior2) == ZONE_BATTLEFIELD
+    # count_min=0 + no eligible target (only own permanent is the
+    # source, excluded by ~IsSource()): the trigger is pushed WITH NO
+    # target (NOT fizzle-skipped — that's Sunset Saboteur's
+    # count_min=1 semantics) and resolves as a NO-OP.
+    assert rust_state2.stack_size() == 1, (
+        "Rust: count_min=0 Exosuit Savior ETB pushes with no target "
+        "(optional decline), it does NOT skip-push"
+    )
+    py_savior2 = py_state2.new_object(
+        py_savior_pr, owner_id=0, zone=Zone.STACK
+    )
+    py_state2.stack.append(
+        StackItem(source=py_savior2, controller_id=0)
+    )
+    assert py_state2.players[0].agent is None
+    py_resolve(py_state2)
+    assert any(
+        o.printing.name == "Exosuit Savior"
+        for o in py_state2.battlefield
+    )
+    assert len(py_state2.stack) == 1, (
+        "Python: count_min=0 Exosuit Savior ETB goes on the stack "
+        "with targets=() (the optional is declined, NOT fizzled)"
+    )
+    _drain_stack_both(py_state2, rust_state2)
+    assert rust_state2.stack_size() == 0 and len(py_state2.stack) == 0
+    # NO-OP: nothing bounced; Exosuit Savior still the lone bf
+    # permanent on P0's side, P0's hand empty of bounced cards —
+    # byte-equal.
+    rs_bf2 = [
+        d["printing_name"] for d in rust_state2.battlefield_snapshot()
+        if d["controller_id"] == 0
+    ]
+    assert rs_bf2 == ["Exosuit Savior"], (
+        f"Rust: count_min=0 no-eligible-target ETB must no-op; P0 bf "
+        f"= {rs_bf2}"
+    )
+    assert rust_state2.hand_snapshot(0) == [] or all(
+        d["printing_name"] != "Exosuit Savior"
+        for d in rust_state2.hand_snapshot(0)
+    )
+    py_bf2 = [
+        o.printing.name for o in py_state2.battlefield
+        if o.controller_id == 0
+    ]
+    assert py_bf2 == ["Exosuit Savior"], (
+        f"Python: count_min=0 no-eligible-target ETB must no-op; P0 "
+        f"bf = {py_bf2}"
+    )
+    assert rs_bf2 == py_bf2, (
+        f"cross-engine no-op mismatch: rs={rs_bf2} py={py_bf2}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

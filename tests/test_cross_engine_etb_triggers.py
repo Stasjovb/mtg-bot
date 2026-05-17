@@ -22426,5 +22426,85 @@ def test_bridge_spell_card_lever_phase2_diplomatic_relations_real_eoe_cast_resol
             "Relations state with both creatures + 3 mana")
 
 
+def test_bridge_return_target_permanent_you_control_bidirectional_round_trip():
+    """**Tier-C target-seating sub-substrate, lever-a (Exosuit Savior
+    — the count_min=0 optional-bounce edge) — the bidirectional
+    bridge round-trip pin.**
+
+    BOTH directions, byte-equal:
+
+      * **Python→dict** — the recognizer applied to the GENUINE
+        parsed Exosuit Savior ENTERS trigger emits exactly
+        ``{"event": "enters",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {"kind":
+                "return_target_permanent_you_control"}}`` (a UNIT
+        effect dict — no payload field; the filter / count_min=0 are
+        structural).
+      * **dict→Python** — reconstructs an equal
+        ``ReturnTargetPermanentYouControlToOwnersHand(optional=True,
+        exclude_self=True)`` (``count_range=(0,1)``).
+      * **dict→Rust** — Rust's ``register_printing`` parser accepts
+        the SAME dict (the ``return_target_permanent_you_control``
+        ``parse_effect`` unit arm).
+
+    Pins the lockstep-provenance contract: the bridge arm exists on
+    BOTH engines before the targeted-``_SAFE_TRIGGERS`` triple + the
+    real-EoE firing-parity probe (in test_parity_smoke.py).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.bounce import (
+        ReturnTargetPermanentYouControlToOwnersHand,
+    )
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect,
+        _ta_dict_to_python_triggered_ability,
+    )
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    real = get_active_source().get_printings().get("Exosuit Savior")
+    if real is None:
+        import pytest
+        pytest.skip("Exosuit Savior absent from active CardSource")
+    ta = real.triggered_abilities[0]
+    fwd = _python_ta_to_safe_dict(ta)
+    assert fwd == {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "return_target_permanent_you_control"},
+    }
+    # dict→Python (effect arm) — optional/exclude_self fixed
+    # structurally to Exosuit Savior's shape (count_min=0).
+    back_eff = _ta_dict_to_python_effect(fwd["effect"])
+    assert isinstance(back_eff, ReturnTargetPermanentYouControlToOwnersHand)
+    assert back_eff.optional is True
+    assert back_eff.exclude_self is True
+    assert back_eff.target_count_range() == (0, 1)
+    # dict→Python (whole triggered ability).
+    back_ta = _ta_dict_to_python_triggered_ability(fwd)
+    assert back_ta.event is Event.ENTERS
+    assert isinstance(back_ta.predicate, IsSelf)
+    assert isinstance(
+        back_ta.effect, ReturnTargetPermanentYouControlToOwnersHand
+    )
+    # dict→Rust: the same UNIT dict registers cleanly on the Rust
+    # parser (the return_target_permanent_you_control parse arm).
+    import mtg_bot_engine
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Exosuit Savior",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 2, "W": 1},
+            "power": 2,
+            "toughness": 2,
+            "keywords": ["flying"],
+            "triggered_abilities": [fwd],
+        }
+    )
+    assert pid == 0, "Rust must register the Exosuit Savior trigger dict"
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

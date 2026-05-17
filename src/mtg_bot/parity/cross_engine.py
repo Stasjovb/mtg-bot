@@ -8613,6 +8613,58 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # teeth).
         from mtg_bot.effects.bespoke import DiplomaticRelationsEffect
         return DiplomaticRelationsEffect()
+    if kind == "return_target_permanent_you_control":
+        # **Tier-C target-seating sub-substrate, lever-a — Exosuit
+        # Savior (the count_min=0 optional-bounce edge).** Return a
+        # target permanent the source's controller controls (and
+        # which is neither the source itself nor a player) to its
+        # owner's hand. Rust's
+        # ``Effect::ReturnTargetPermanentYouControlToOwnersHand``
+        # (rust/src/cards.rs — a unit variant) reads the push-time
+        # SEATED target from ``current_resolve_payload_target_id``
+        # (the Tier-C shared ``first_legal_trigger_target`` seat;
+        # ``count_min=0`` ⇒ no eligible own permanent leaves the seat
+        # ``None`` and the resolve arm no-ops — byte-equal with
+        # Python's ``targets=()`` decline, NOT a fizzle-skip-push).
+        # When seated it runs the established bounce-to-hand lifecycle
+        # (the ``Effect::ReturnToHand`` AnyCreature arm's shape:
+        # zone→HAND, reset damage/counters/attach, mark
+        # left-bf-if-nonland, LTB fan-out) after a CR 608.2b
+        # resolve-time re-legality check (still on the controller's
+        # bf, not the source).
+        #
+        # Python's
+        # ``ReturnTargetPermanentYouControlToOwnersHand(optional=True,
+        # exclude_self=True)`` class (effects/generic/bounce.py — a
+        # ``Bounce`` subclass) wires the single slot
+        # ``TargetSpec(ControlledByYou() & ~IsPlayer() & ~IsSource(),
+        # count_min=0, count_max=1)``; its base-class ``resolve``
+        # walks the per-slot chosen target (the no-agent ``pool[0]``
+        # seat at ``actions.py:_put_triggered_ability_on_stack``,
+        # gated by ``trajectory._is_target_seated_safe_trigger``),
+        # re-checks legality per CR 608.2b via
+        # ``_slot_target_still_legal``, and bounces via
+        # ``_bounce_to_hand`` (token ceases / card to owner's hand) —
+        # and early-``return``s on empty ``targets`` (the
+        # ``count_min=0`` optional decline, byte-equal with the Rust
+        # no-seat no-op). Both engines pick the SAME object by
+        # construction (the bf-insertion-order + object-id lockstep
+        # the harness maintains), so the post-resolve zone fingerprint
+        # is byte-equal.
+        #
+        # ``optional=True`` / ``exclude_self=True`` are passed so the
+        # Python slot matches Exosuit Savior's parsed shape exactly
+        # (``count_min=0``, ``& ~IsSource()``). A unit dict shape —
+        # the filter is structural to the effect class on Python and
+        # to the seat's per-variant scan + the resolve re-check on
+        # Rust (the recognizer's bare-shape gate enforces the single
+        # implicit-target contract), so there is no payload field.
+        from mtg_bot.effects.generic.bounce import (
+            ReturnTargetPermanentYouControlToOwnersHand,
+        )
+        return ReturnTargetPermanentYouControlToOwnersHand(
+            optional=True, exclude_self=True,
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

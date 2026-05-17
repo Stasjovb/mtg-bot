@@ -694,7 +694,7 @@ pub(crate) fn tap_permanent_and_dispatch(
 /// this; the helper only answers "which object, if any".
 fn first_legal_trigger_target(
     state: &GameState,
-    _source_id: u32,
+    source_id: u32,
     controller: u8,
     effect: &Effect,
 ) -> Option<u32> {
@@ -720,6 +720,28 @@ fn first_legal_trigger_target(
             }
             None
         }
+        // Exosuit Savior (`ENTERS`, source_is_self,
+        // `ReturnTargetPermanentYouControlToOwnersHand`): slot filter
+        // `ControlledByYou() & ~IsPlayer() & ~IsSource()`. Scan the
+        // source-controller's OWN battlefield in Vec order; first
+        // permanent that is not the source (players are never bf
+        // objects, so `~IsPlayer()` is satisfied by construction).
+        // `count_min=0` (optional) — `None` here means "no eligible
+        // own permanent": `push_triggered_ability` then pushes via
+        // the unchanged `new_trigger` path and the resolve arm
+        // no-ops (byte-equal with Python's `targets=()` decline). It
+        // is NOT in `lever_trigger_requires_target` so the trigger is
+        // NEVER fizzle-skipped (contrast Sunset Saboteur).
+        Effect::ReturnTargetPermanentYouControlToOwnersHand => {
+            let cidx = controller as usize;
+            for obj in state.players[cidx].battlefield.iter() {
+                if obj.id == source_id {
+                    continue; // ~IsSource()
+                }
+                return Some(obj.id);
+            }
+            None
+        }
         // Every other effect (all existing untargeted safe triggers,
         // and any non-lever targeted trigger the engine handles
         // elsewhere): NOT a target-seating consumer — the helper is
@@ -736,8 +758,12 @@ fn first_legal_trigger_target(
 /// 603.3c: a targeted ability with no legal target is removed from
 /// the stack — Python's `_put_triggered_ability_on_stack` logs
 /// "no legal targets; fizzles" and `return False`). The
-/// `count_min==0` optional cards (Exosuit Savior, a future slice)
-/// are NOT in this set — they push with no target and no-op.
+/// `count_min==0` optional cards — Exosuit Savior's
+/// `ReturnTargetPermanentYouControlToOwnersHand` — are
+/// DELIBERATELY NOT in this set: with no eligible target they push
+/// via the unchanged `new_trigger` path and the resolve arm no-ops
+/// (byte-equal with Python's `targets=()` `Bounce.resolve`
+/// early-return — the optional was simply declined, not fizzled).
 fn lever_trigger_requires_target(effect: &Effect) -> bool {
     matches!(effect, Effect::PutPlusOneCounterOnOpponentsCreature { .. })
 }
@@ -8541,6 +8567,111 @@ fn apply_effect(
                     break;
                 }
             }
+        }
+        // **Tier-C target-seating sub-substrate (lever-a, Exosuit
+        // Savior — the count_min=0 optional-bounce edge).** Return
+        // the push-time-SEATED target permanent (the source's
+        // controller's own non-source non-player permanent) to its
+        // owner's hand. Mirrors Python's
+        // `ReturnTargetPermanentYouControlToOwnersHand` (a `Bounce`
+        // subclass; `Bounce.resolve` no-ops on empty `targets` — the
+        // optional decline).
+        //
+        // **The count_min=0 optional edge.** No seat
+        // (`current_resolve_payload_target_id` is `None` — the
+        // shared seat returned `None` because no eligible own
+        // permanent existed, so `push_triggered_ability` pushed via
+        // the unchanged `new_trigger` path) ⇒ silent no-op, byte
+        // equal with Python's `targets=()` `Bounce.resolve`
+        // early-`return`. NOT a fizzle-skip-push (that is Sunset
+        // Saboteur's count_min>=1 semantics).
+        //
+        // **Payload-target convention + CR 608.2b.** When seated,
+        // re-validate at resolve: the target must still be on the
+        // source's controller's battlefield, not be the source, and
+        // be a permanent (it always is — players are excluded by the
+        // seat filter; the re-check is defense-in-depth + the
+        // left-bf / changed-control fizzle). Bounce lifecycle mirrors
+        // the `Effect::ReturnToHand` AnyCreature arm: zone→HAND,
+        // reset damage/counters/attach, mark left-bf-if-nonland, LTB
+        // fan-out via `pending_leaves_dispatches` + the round-55
+        // token-cease sibling.
+        Effect::ReturnTargetPermanentYouControlToOwnersHand => {
+            // Locate the source's controller (the same five-zone walk
+            // + stack fallback the counter arms use).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source untracked → silent fizzle
+            };
+            // count_min=0 optional: no seat → no-op (the optional was
+            // declined; byte-equal with Python's targets=() no-op).
+            let payload_target = match state.current_resolve_payload_target_id {
+                Some(t) => t,
+                None => return Ok(()),
+            };
+            // CR 608.2b resolve-time re-legality: still on the
+            // source-controller's bf, not the source itself. (Players
+            // are never seated — the filter excludes them — but the
+            // not-source guard mirrors Python's ~IsSource() slot.)
+            let cidx = controller as usize;
+            let pos = match state.players[cidx]
+                .battlefield
+                .iter()
+                .position(|o| o.id == payload_target && o.id != source_obj_id)
+            {
+                Some(p) => p,
+                None => return Ok(()), // left bf / became illegal → fizzle
+            };
+            // Bounce lifecycle — mirrors the Effect::ReturnToHand
+            // AnyCreature arm (the established bounce-to-hand shape).
+            let bf_mut: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            let mut obj = bf_mut.remove(pos);
+            obj.zone = ZONE_HAND;
+            obj.tapped = false;
+            // CE13: summoning_sick NOT reset (Python's
+            // move_off_battlefield omits it; re-ETB restamps it).
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+            // Owner == the source's controller (Exosuit Savior bounces
+            // a permanent ITS controller controls; controller == owner
+            // for the EoE consumer — same owner/controller convention
+            // as the ReturnToHand first-slice arm).
+            Arc::make_mut(&mut state.players[cidx].hand).push(obj);
+            // Round-29 Void LTB tracking: bounce is a battlefield-exit;
+            // flag flips iff the bounced object is nonland.
+            mark_left_battlefield_if_nonland(state, printing_id);
+            // LTB fan-out + round-55 token-cease sibling — queued for
+            // the post-pop drain in resolve_top_of_stack (identical to
+            // the ReturnToHand arm).
+            state.pending_leaves_dispatches.push(leaving_obj_id);
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
         }
         // Round-28 Lotus-Field-shape mana minting. First-slice
         // deterministic color choice: pick options[0]. Mirrors
