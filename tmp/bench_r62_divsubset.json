@@ -1,0 +1,173 @@
+{
+  "config": {
+    "decks": "17lands",
+    "archetypes": "46,122,123,130",
+    "seeds": "0-1",
+    "max_turns": 22,
+    "combat_strategy": "attack_all",
+    "mulligans": 0,
+    "activate_lander_sac": false
+  },
+  "summary": {
+    "total_games": 8,
+    "passes": 8,
+    "fail_divergence": 0,
+    "fail_timeout": 0,
+    "archetype_filtered": 0,
+    "fail_exception": 0,
+    "total_elapsed_seconds": 8.942151099909097,
+    "divergence_shape_histogram": {},
+    "per_archetype": {
+      "46": {
+        "PASS": 2
+      },
+      "122": {
+        "PASS": 2
+      },
+      "123": {
+        "PASS": 2
+      },
+      "130": {
+        "PASS": 2
+      }
+    }
+  },
+  "games": [
+    {
+      "archetype": 46,
+      "seed": 0,
+      "status": "PASS",
+      "turns_played": 16,
+      "actions_played": 34,
+      "elapsed_seconds": 0.9176405998878181,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": null,
+      "divergence_fields": [],
+      "exception_type": null,
+      "exception_message": null,
+      "last_action_kind": null,
+      "winner_player_idx": 1,
+      "win_reason": "life total <= 0"
+    },
+    {
+      "archetype": 46,
+      "seed": 1,
+      "status": "PASS",
+      "turns_played": 18,
+      "actions_played": 37,
+      "elapsed_seconds": 0.8023031000047922,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": null,
+      "divergence_fields": [],
+      "exception_type": null,
+      "exception_message": null,
+      "last_action_kind": null,
+      "winner_player_idx": 1,
+      "win_reason": "life total <= 0"
+    },
+    {
+      "archetype": 122,
+      "seed": 0,
+      "status": "PASS",
+      "turns_played": 16,
+      "actions_played": 37,
+      "elapsed_seconds": 0.8000372000969946,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": null,
+      "divergence_fields": [],
+      "exception_type": null,
+      "exception_message": null,
+      "last_action_kind": null,
+      "winner_player_idx": 1,
+      "win_reason": "life total <= 0"
+    },
+    {
+      "archetype": 122,
+      "seed": 1,
+      "status": "PASS",
+      "turns_played": 16,
+      "actions_played": 38,
+      "elapsed_seconds": 1.1570941999088973,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": null,
+      "divergence_fields": [],
+      "exception_type": null,
+      "exception_message": null,
+      "last_action_kind": null,
+      "winner_player_idx": 1,
+      "win_reason": "life total <= 0"
+    },
+    {
+      "archetype": 123,
+      "seed": 0,
+      "status": "PASS",
+      "turns_played": 16,
+      "actions_played": 37,
+      "elapsed_seconds": 1.3209129001479596,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": null,
+      "divergence_fields": [],
+      "exception_type": null,
+      "exception_message": null,
+      "last_action_kind": null,
+      "winner_player_idx": 1,
+      "win_reason": "life total <= 0"
+    },
+    {
+      "archetype": 123,
+      "seed": 1,
+      "status": "PASS",
+      "turns_played": 16,
+      "actions_played": 38,
+      "elapsed_seconds": 1.3537735999561846,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": null,
+      "divergence_fields": [],
+      "exception_type": null,
+      "exception_message": null,
+      "last_action_kind": null,
+      "winner_player_idx": 1,
+      "win_reason": "life total <= 0"
+    },
+    {
+      "archetype": 130,
+      "seed": 0,
+      "status": "PASS",
+      "turns_played": 16,
+      "actions_played": 34,
+      "elapsed_seconds": 1.2837475999258459,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": null,
+      "divergence_fields": [],
+      "exception_type": null,
+      "exception_message": null,
+      "last_action_kind": null,
+      "winner_player_idx": 1,
+      "win_reason": "life total <= 0"
+    },
+    {
+      "archetype": 130,
+      "seed": 1,
+      "status": "PASS",
+      "turns_played": 18,
+      "actions_played": 38,
+      "elapsed_seconds": 1.3066418999806046,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": null,
+      "divergence_fields": [],
+      "exception_type": null,
+      "exception_message": null,
+      "last_action_kind": null,
+      "winner_player_idx": 1,
+      "win_reason": "life total <= 0"
+    }
+  ]
+}
