@@ -895,7 +895,12 @@ def test_real_worklist_genuinely_missing_all_carry_stamp():
     mod = _load_tool()
     entries = mod.parse_residue_worklist()
     gm = [e for e in entries if e["status"] == "genuinely_missing"]
-    assert len(gm) >= 10
+    # Sanity only — there is still genuine residue. A hard count FLOOR
+    # (was `>= 10`) is the wrong invariant: the honest residue
+    # legitimately SHRINKS as folds close/­reclassify cards (that is
+    # the campaign's success metric, not a regression). The durable
+    # guard is the per-entry stamp + per-arm ack below.
+    assert len(gm) >= 1
     for e in gm:
         sha = e.get("verified_absent_at_commit")
         assert isinstance(sha, str) and re.fullmatch(
