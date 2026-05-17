@@ -555,6 +555,89 @@ pub(crate) fn dispatch_event(
     Ok(())
 }
 
+/// **Round-58 BECOMES_TAPPED event bridge — the centralized "tap a
+/// permanent and fire its becomes-tapped triggers" chokepoint.**
+///
+/// This is the Rust analogue of Python's `turn.tap_permanent`
+/// (`src/mtg_bot/turn.py:542-571`): flip `tapped` on the battlefield
+/// permanent `obj_id`, and — iff the flip actually changed state
+/// (the object was UNTAPPED and is now tapped) — dispatch
+/// `Event::BecomesTapped` for it.
+///
+/// **No-op-if-already-tapped parity.** Python's `tap_permanent`
+/// early-returns when `obj.tapped` is already True (no re-trigger).
+/// This helper mirrors that exactly: a tap of an already-tapped
+/// permanent is a silent no-op (no event, no `Arc::make_mut` clone).
+/// The "did it actually change" gate is what makes the event-firing
+/// set byte-equal to Python's.
+///
+/// **Subject stays on the bf.** Tapping does not move the permanent,
+/// so the subject is still on the battlefield at dispatch time —
+/// `dispatch_event`'s bf-snapshot observer set already contains it
+/// and `Predicate::SourceIsSelf` ("whenever this creature becomes
+/// tapped") matches naturally via `source_id == subject_id`. No
+/// DIES/CAST-style extra-observer entry is needed (this is exactly
+/// the ATTACKS shape — see the `Event::Attacks` dispatch at
+/// `state_ops_combat.rs`).
+///
+/// **Why a free function, not a `tap_object` rewrite.** The existing
+/// `tap_object` pymethod in `state_ops_tap.rs` is a test/cost
+/// primitive that deliberately does NOT dispatch (its callers
+/// pre-date the event). Routing it through dispatch would change
+/// every existing tap-cost test's stack invariants. Per the
+/// per-file isolation rule, the production tap sites
+/// (`state_ops_mana`, `state_ops_actions`, the TapTarget-family
+/// effect arms in this file, and the attack-tap in
+/// `state_ops_combat`) each inline a flip + a call to this single
+/// helper so the dispatch logic lives in exactly one place and the
+/// no-op gate can't drift between sites.
+///
+/// Returns `Ok(true)` if the permanent became tapped (event fired),
+/// `Ok(false)` if it was already tapped / not on any bf (no-op), or
+/// `Err` if the dispatched trigger's effect raised.
+pub(crate) fn tap_permanent_and_dispatch(
+    state: &mut GameState,
+    obj_id: u32,
+) -> PyResult<bool> {
+    // Phase 1: flip, scoped so the Arc::make_mut borrow is released
+    // before dispatch_event re-borrows state mutably. Mirrors the
+    // `state_ops_tap::tap_object` CoW shape: skip the make_mut clone
+    // entirely on the already-tapped no-op path.
+    let mut changed = false;
+    'find: for player in state.players.iter_mut() {
+        if player.battlefield.iter().any(|o| o.id == obj_id) {
+            // Pre-check tapped before paying the make_mut clone.
+            let already_tapped = player
+                .battlefield
+                .iter()
+                .find(|o| o.id == obj_id)
+                .map(|o| o.tapped)
+                .unwrap_or(true);
+            if already_tapped {
+                break 'find;
+            }
+            let zone: &mut Vec<GameObject> =
+                std::sync::Arc::make_mut(&mut player.battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == obj_id {
+                    obj.tapped = true;
+                    changed = true;
+                    break 'find;
+                }
+            }
+        }
+    }
+    if !changed {
+        // Already tapped, or no bf permanent with that id — Python's
+        // `tap_permanent` early-return path. No event.
+        return Ok(false);
+    }
+    // Phase 2: fire becomes-tapped triggers. Same dispatcher every
+    // other event flows through.
+    dispatch_event(state, Event::BecomesTapped, obj_id)?;
+    Ok(true)
+}
+
 /// **Slice 1 — push one triggered ability onto the stack.** Adds a
 /// `StackItem::new_trigger` carrying the source object's id, the
 /// trigger's controller, and the payload effect. Bumps the
@@ -1733,17 +1816,25 @@ fn apply_effect(
                     return Ok(()); // fizzle silently
                 }
                 let target_id = bf[0].id;
-                // Flip ``tapped = true`` on the target. Idempotent:
-                // already-tapped targets are silently re-stamped
-                // True (no-op). Use Arc::make_mut for CoW safety.
-                let bf_mut: &mut Vec<GameObject> =
-                    Arc::make_mut(&mut state.players[defender].battlefield);
-                for obj in bf_mut.iter_mut() {
-                    if obj.id == target_id {
-                        obj.tapped = true;
-                        break;
-                    }
-                }
+                // Round-58 BECOMES_TAPPED event bridge — tapper-
+                // effect site. Python's TapTarget-family effects
+                // (`effects/generic/tap.py`'s TapTarget /
+                // TapAnotherTargetCreature etc., plus
+                // `effects/combinators.py:163` and
+                // `effects/bespoke.py:496`) all route the actual tap
+                // through `turn.tap_permanent`, which fires
+                // `Event.BECOMES_TAPPED` for the tapped target — and
+                // ONLY when the target was untapped (Python's
+                // `tap_permanent` no-ops on an already-tapped
+                // permanent: no re-stamp, no event). Route through
+                // the centralized chokepoint so the no-op-if-already-
+                // tapped gate matches Python exactly (an already-
+                // tapped target is a silent no-op with NO
+                // BECOMES_TAPPED dispatch — byte-equal to Python's
+                // early return).
+                crate::state_ops_resolve::tap_permanent_and_dispatch(
+                    state, target_id,
+                )?;
             }
         },
         // Round-13: UntapTarget. Symmetric counterpart to
@@ -7581,17 +7672,18 @@ fn apply_effect(
                         None
                     }
                 });
-            let Some((pidx, target_id)) = target else {
+            let Some((_pidx, target_id)) = target else {
                 return Ok(()); // fizzle
             };
-            let bf_mut: &mut Vec<GameObject> =
-                Arc::make_mut(&mut state.players[pidx].battlefield);
-            for obj in bf_mut.iter_mut() {
-                if obj.id == target_id {
-                    obj.tapped = true;
-                    break;
-                }
-            }
+            // Round-58 BECOMES_TAPPED event bridge — tapper-effect
+            // site (Python `effects/generic/tap.py:
+            // TapTargetArtifactOrCreature`, routes the tap through
+            // `turn.tap_permanent`). Centralized chokepoint so the
+            // no-op-if-already-tapped gate matches Python (an
+            // already-tapped target: silent no-op, NO event).
+            crate::state_ops_resolve::tap_permanent_and_dispatch(
+                state, target_id,
+            )?;
         }
         // Round-28 intervening-if conditional. Count source-
         // controller's tapped creatures; if >= min_count, recursively
@@ -8326,17 +8418,21 @@ fn apply_effect(
                     break;
                 }
             }
-            let Some(tidx) = target_loc else {
+            if target_loc.is_none() {
                 return Ok(());
-            };
-            let bf_mut: &mut Vec<GameObject> =
-                Arc::make_mut(&mut state.players[tidx].battlefield);
-            for obj in bf_mut.iter_mut() {
-                if obj.id == target_id {
-                    obj.tapped = true;
-                    break;
-                }
             }
+            // Round-58 BECOMES_TAPPED event bridge — enchanted-
+            // permanent tapper-effect site. Python's
+            // `effects/generic/tap.py:TapEnchantedPermanent.resolve`
+            // (Stay Hidden Stay Silent's Aura-ETB tap) is a pure
+            // tap with an explicit `if host.tapped: return` guard
+            // followed by `turn.tap_permanent(state, host)` — exactly
+            // the centralized chokepoint's no-op-if-already-tapped +
+            // dispatch shape. Route through it so an already-tapped
+            // host is a silent no-op with NO BECOMES_TAPPED event.
+            crate::state_ops_resolve::tap_permanent_and_dispatch(
+                state, target_id,
+            )?;
         }
         // Round-30 stun-counter substrate. Walks both players'
         // battlefield in ETB-timestamp order via the shared
@@ -8417,6 +8513,26 @@ fn apply_effect(
             let Some((pidx, target_id)) = target else {
                 return Ok(()); // fizzle
             };
+            // Round-58 BECOMES_TAPPED event bridge — tap+stun
+            // combined site. Python's
+            // `effects/generic/tap.py:TapTargetOpponentPermanentAndStunIt.resolve`
+            // (tap.py:237-256) calls `turn.tap_permanent(state, obj)`
+            // (fires BECOMES_TAPPED ONLY if the target was untapped —
+            // no-op early-return otherwise) and THEN
+            // `add_stun_counters(state, obj, 1)` UNCONDITIONALLY (the
+            // stun counter is added even when the creature was
+            // already tapped). So the no-op-if-already-tapped gate
+            // applies to the EVENT only, not the stun rider — the
+            // centralized chokepoint can't be reused wholesale here.
+            // Snapshot `was_tapped` before the flip, apply tap+stun
+            // exactly as before, then dispatch BECOMES_TAPPED iff the
+            // creature actually transitioned untapped->tapped.
+            let was_tapped = state.players[pidx]
+                .battlefield
+                .iter()
+                .find(|o| o.id == target_id)
+                .map(|o| o.tapped)
+                .unwrap_or(true);
             let bf_mut: &mut Vec<GameObject> =
                 Arc::make_mut(&mut state.players[pidx].battlefield);
             for obj in bf_mut.iter_mut() {
@@ -8425,6 +8541,11 @@ fn apply_effect(
                     obj.stun_counters = obj.stun_counters.saturating_add(1);
                     break;
                 }
+            }
+            if !was_tapped {
+                dispatch_event(
+                    state, Event::BecomesTapped, target_id,
+                )?;
             }
         }
         // Round-28 "until source leaves" exile. Pick defender's first
@@ -9566,15 +9687,21 @@ fn apply_effect(
                 found = Some((obj.controller as usize, obj.id));
                 break;
             }
-            if let Some((pidx, target_id)) = found {
-                let zone: &mut Vec<GameObject> =
-                    Arc::make_mut(&mut state.players[pidx].battlefield);
-                for obj in zone.iter_mut() {
-                    if obj.id == target_id {
-                        obj.tapped = true;
-                        break;
-                    }
-                }
+            if let Some((_pidx, target_id)) = found {
+                // Round-58 BECOMES_TAPPED event bridge — "tap another
+                // target creature" tapper-effect site. Python's
+                // `effects/generic/tap.py:TapAnotherTargetCreature`
+                // extends the base `Tap` class, whose `resolve`
+                // routes the tap through `turn.tap_permanent` (the
+                // docstring at tap.py:36 spells out "no-op if already
+                // tapped"). Centralized chokepoint so the
+                // no-op-if-already-tapped gate matches Python (an
+                // already-tapped target is a silent no-op with NO
+                // BECOMES_TAPPED event — byte-equal to Python's
+                // early return).
+                crate::state_ops_resolve::tap_permanent_and_dispatch(
+                    state, target_id,
+                )?;
             }
             // else: no eligible creature → silent fizzle.
         }
