@@ -1980,3 +1980,176 @@ fail**. No Rust → no `maturin`.
    Phase 2 (non-creature Lander carriers) remain the §2-honest
    pool-delta levers that would also indirectly creature-densify the
    mirror.
+
+## Round 61 (2026-05-16) — N3: post-r57-admit-surface sweep — REAL cross-engine divergence found (2-color non-basic land mana-ability bridge mismatch; first exposed by the round-60 shocklands)
+
+The round-58/59/60 work admitted a substantial new surface that had
+**never been exercised at scale in real production-deck games**: the
+round-60 **5 pay-life shocklands** (Breeding Pool / Watery Grave /
+Stomping Ground / Godless Shrine / Sacred Foundry — +18,065 cumulative
+17lands decks that previously collapsed to lands-light bridge sets,
+now running real dual-color manabases), round-58/59 **Seedship
+Agrarian** (whole card: BECOMES_TAPPED→Lander + landfall+1/+1), and
+the round-60 **Perigee Beckoner** Effect half. This round ran the
+highest-real-signal lever — a fresh production-deck bench divergence
+sweep over that expanded surface. **It found a REAL cross-engine
+divergence** (the round-50-Gravpack / r53-Mightform / r55-Pulsar /
+r56-token-pid pattern: a newly-admitted code path running in real
+games surfaces a genuine engine-to-engine bug).
+
+### Scouted surface — which archetypes carry it, what the loader admits
+
+`scripts/scout_r61_postadmit_surface.py` (carrier + bridge-admit
+confirmation over the 129,996-deck 17lands pool):
+
+| Surface | raw carrier archetypes | sampled admit | bench-relevant |
+|---|---|---|---|
+| 5 shocklands | **16,477** | 14/14 admit (arches 30/67/69 carry **2** shocklands → **2 dual-color lands** in the bridged deck) | YES — biggest delta; real dual manabase materializes |
+| Seedship Agrarian | 14,078 | 14/14 admit | YES |
+| Perigee Beckoner | 21,131 | **0/14 admit** | NO — full card stays loader-gated on `warp_cost` per SEARCH_LIMITATIONS (only the Effect half shipped). Expected/correct, NOT a sweep target. |
+
+The shockland admit is real and material: pre-r60 these decks
+bridge-collapsed to lands-light; post-r60 the bridged deckspec now
+carries the 1-2 dual-color `mana_produced` lands (verified —
+arch 30 Stomping Ground+Watery Grave, arch 69 Breeding Pool+Watery
+Grave, etc.). This is the **first time a 2-color `mana_produced`
+land reaches real bench play** (every basic is single-color).
+
+### Sweeps + full result counts
+
+| Sweep | Grid | Games | PASS | FAIL_DIV | TIMEOUT | EXC | FILTERED |
+|---|---|---|---|---|---|---|---|
+| A — shocklands | arch 30,37,43,46,54,57,58,61,62,63,67,69,86,88 ×s0-3 | 56 | 28 | **3** | 25 | 0 | 0 |
+| B — Seedship Agrarian | arch 5,15,16,17,40,46,50,53,67,70,73,75,86,96 ×s0-3 | 56 | 24 | **1** | 31 | 0 | 0 |
+| **Total** | | **112** | **52** | **4** | **56** | **0** | **0** |
+
+`attack_all`, max-turns 22, mulligans off. `tmp/bench_r61_shockland.json`
++ `tmp/bench_r61_seedship.json`. Wall 71s + 72s (under the ~3-min cap).
+
+### The divergence — captured precisely (the high-value find)
+
+All **4 FAIL_DIVERGENCE have the IDENTICAL byte shape** —
+`activate_ability` :: `mana_pool_pX`, Rust pool carries a **spurious
+extra `('U', 1)`** that Python does not:
+
+| Sweep | arch | seed | turn | a-idx | byte-diff |
+|---|---|---|---|---|---|
+| A | 37 | 3 | 9 | 17 | `mana_pool_p0` py=`('B',2),('U',0)…` rust=`('B',2),('U',1)…` |
+| A | 46 | 0 | 8 | 15 | `mana_pool_p1` py=`('G',2),('U',0)…` rust=`('G',2),('U',1)…` |
+| A | 69 | 0 | 10 | 19 | `mana_pool_p1` py=`('G',2),('U',0)…` rust=`('G',2),('U',1)…` |
+| B | 46 | 0 | 8 | 15 | `mana_pool_p1` py=`('G',2),('U',0)…` rust=`('G',2),('U',1)…` |
+
+(Sweep-B arch 46 is the **same game** as Sweep-A arch 46 — the
+divergence is the Breeding Pool mana ability, NOT Seedship; arch 46
+carries both. Seedship Agrarian itself produced **0**
+Seedship-specific divergences — no BECOMES_TAPPED/landfall+counter
+divergence — across all 56 Sweep-B games.)
+
+Every divergent archetype runs a **2-color shockland that includes
+`U`**: arch 37 = Watery Grave (B/U), arch 46 = Breeding Pool (G/U),
+arch 69 = Breeding Pool (G/U) + Watery Grave (B/U). The spurious
+mana is always the land's *second* color.
+
+### Root cause — the two `mana_produced` mana-ability bridges DISAGREE for a multi-color land
+
+Deterministic, no-game repro:
+`scripts/scout_r61_shockland_mana_divergence.py` (synthesized
+`CardDef(mana_produced=("B","U"))`):
+
+- **Python** (`cross_engine._card_def_to_python_printing`,
+  ~L8912-8920): builds **ONE `ActivatedAbility` per color** in
+  `mana_produced`:
+  - `ability_index=0` = `{T}: AddManaToPool(('B',1))`
+  - `ability_index=1` = `{T}: AddManaToPool(('U',1))`
+- **Rust** (`cards.rs::apply_mana_produced_bridge`, ~L6387-6436):
+  builds **ONE synthesized ability** whose effect aggregates **ALL**
+  colors. For ≥2 colors it wraps them in a **`Sequence`**:
+  - `ability_index=0` = `{T}: Sequence(Add B, Add U)` — both colors
+    in a single activation.
+
+For a **single-color** land (every basic) both bridges produce one
+ability that adds the one color — bit-equal, which is why this never
+surfaced before round-60. For a **2-color** land they diverge: the
+bench (and any consumer) taps a land via
+`activate_ability(land_id, ability_index=0)`; Python adds **one**
+color, Rust adds **BOTH** → Rust's pool gains the spurious second
+color (the captured extra `U`).
+
+This is a **REAL cross-engine divergence** (Rust ≠ Python), not a
+shared CR-incompleteness — though it is *also* CR-incorrect on the
+Rust side (a real dual land's mana ability adds **one chosen** color,
+not all). The campaign-relevant defect is the engine-to-engine
+disagreement; round-60's shockland admit is exactly the first
+real-game exercise that exposed it (`SEARCH_LIMITATIONS.md`
+shockland entry asserted byte-equality via 3 *static CardDef
+compare* pins + 1 `attack_all` probe on arch 30 — arch 30's bridged
+duals are Stomping Ground (R/G) + Watery Grave (B/U); the probe
+evidently did not drive an `activate_ability(dual, 0)` deep enough to
+hit it, so the pins were insufficient — they compared field views,
+not the activated mana-ability effect shape).
+
+### Verdict
+
+| Claim | Verdict |
+|---|---|
+| Round-60 shockland admit produces a cross-engine divergence when exercised at scale | **YES — REAL FAIL_DIVERGENCE.** 4/112 games (3 distinct, arch 46 double-counted across sweeps). 2-color non-basic land mana-ability bridge mismatch: Python = one ability per color, Rust = one ability adding all colors (`Sequence`). `activate_ability(dual,0)` → Rust over-produces the 2nd color. Root cause pinned deterministically (`scout_r61_shockland_mana_divergence.py`). |
+| Seedship Agrarian (r58/r59 whole card) byte-equal at scale | **VALIDATED CLEAN** — 0 Seedship-specific divergences across 56 Sweep-B games; the BECOMES_TAPPED→Lander + landfall+1/+1 surface holds at scale on real production decks. (The 1 Sweep-B FAIL is the orthogonal shockland bug on arch 46's Breeding Pool, not Seedship.) |
+| Perigee Beckoner | NOT admitted by the loader (full card warp_cost-gated; only the Effect half shipped) — expected/correct, no bench exposure, validated as designed. |
+| Shockland manabase expansion measurably changed game dynamics | **YES** — the bridged decks now carry real dual-color `mana_produced` lands (1-2 per deck) instead of lands-light collapse; this is precisely what reached the previously-untested 2-color mana-ability code path and surfaced the bug. |
+
+### Round-62 fix recommendation (HIGH VALUE — Rust lane)
+
+Make the two `mana_produced` mana-ability bridges build the **same
+per-color ability shape**. The CR-correct shape is **one
+`is_mana_ability` `ActivatedAbility` per distinct color** (the player
+chooses which color when activating) — i.e. fix the **Rust** side
+(`cards.rs::apply_mana_produced_bridge`) to emit one ability per
+color (Python is already correct: `ActivateAbility(land,0)` = first
+color, `…,1)` = second). This is a **Rust slice** (requires
+`maturin develop --release` + `.pyd` rebuild) — out of scope for this
+Python/bench round; serialized to the single Rust agent next round.
+Pin: the deterministic `scout_r61_shockland_mana_divergence.py`
+mechanism + a cross-engine `activate_ability(dual_land, 0)` /
+`(…, 1)` byte-equal probe + a re-run of Sweep A (must go
+0-FAIL_DIVERGENCE). Also widen the `SEARCH_LIMITATIONS.md` shockland
+entry's pin set: the 3 static-CardDef-compare pins must be
+supplemented by an **activated-mana-ability** cross-engine pin
+(field-view compare alone missed this). NOTE: until the Rust fix
+lands, the round-60 shockland admit is shipping a **latent
+real-game cross-engine divergence** — flag forward; do not
+represent the shockland surface as byte-equal-validated at scale.
+
+### Gate
+
+Pure docs + 2 `scripts/scout_*.py` diagnostics
+(`scout_r61_postadmit_surface.py`, `scout_r61_shockland_mana_divergence.py`)
++ 2 `tmp/bench_r61_*.json` artifacts. **No production / harness /
+`_SAFE_*` / bench-script code changed** — the bench was run
+un-modified; the scouts are pure diagnostics. Parity gate **not**
+re-run (nothing in this slice is on its path; baseline **1386**
+unchanged). No Rust → no `maturin`. The divergence-fix is a
+round-62 Rust-lane slice.
+
+### Forward picture for round 62
+
+1. **HIGH-VALUE Rust fix queued**: the 2-color non-basic land
+   mana-ability bridge mismatch. `apply_mana_produced_bridge` must
+   emit one `is_mana_ability` ability per color (matching Python +
+   CR). Deterministically pinned (`scout_r61_shockland_mana_divergence.py`);
+   re-run Sweep A as the regression gate. This is the round-50/53/55/56
+   pattern — a newly-admitted code path's first real-game exercise
+   found a genuine cross-engine bug.
+2. **Seedship Agrarian validated clean at scale** — the r58/r59
+   BECOMES_TAPPED + landfall+counter surface holds byte-equal on
+   real production decks; no further validation needed there.
+3. **The shockland surface is NOT yet byte-equal-validated** —
+   correct it before representing it as such. After the round-62 Rust
+   fix, a clean Sweep-A re-run closes it.
+4. **Timeout note**: 56/112 games FAIL_TIMEOUT (creature-sparse
+   bridged mirrors hitting max-turns=22 — the standing round-50/58
+   creatureless-mirror limitation, unchanged; not a regression). The
+   shockland admit deepened some games (more spells castable off real
+   dual mana) but the lands-heavy 17lands-limited decks still stall on
+   the creature floor — the §2-honest pool-delta levers (Phase 5
+   `each_player`, Phase 2 non-creature carriers) remain the route to
+   creature-dense mirrors.
