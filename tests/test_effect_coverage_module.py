@@ -265,3 +265,288 @@ def test_collect_rust_effect_variants_no_enum_raises(ec, tmp_path):
     bogus.write_text("// no Effect enum here\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="pub enum Effect"):
         ec.collect_rust_effect_variants(bogus)
+
+
+# ---------------------------------------------------------------------------
+# Error-path / uncovered-branch hardening (the descope-fallback slice).
+#
+# The error paths above (missing cards.rs -> FileNotFoundError; no enum
+# block -> RuntimeError) were already pinned by the precursor agent. The
+# tests below close the REMAINING defensive branches the precursor's
+# coverage left uncovered, so a future refactor that silently breaks one
+# (e.g. the walker's broken-introspection swallow, the unbalanced-brace
+# guard, or the Rust-keyword false-positive filter) fails loudly here.
+# These are pure-helper unit tests — no engine ``.pyd``, no full-pool
+# parser walk.
+# ---------------------------------------------------------------------------
+
+
+def test_collect_rust_effect_variants_unbalanced_braces_raises(ec, tmp_path):
+    """An Effect enum whose opening brace is never closed (depth never
+    returns to 0) raises the ``unbalanced braces`` ``RuntimeError`` —
+    the second parse-rule guard, distinct from the no-enum case (this
+    one finds the ``pub enum Effect {`` header but walks off the end of
+    the file with ``depth > 0``)."""
+    bogus = tmp_path / "cards.rs"
+    # Header present, but the `{` is never balanced by a matching `}`.
+    bogus.write_text(
+        "pub enum Effect {\n    GainLife,\n    DealDamage(u32),\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="unbalanced braces"):
+        ec.collect_rust_effect_variants(bogus)
+
+
+def test_collect_rust_effect_variants_filters_rust_keyword_falsepos(
+    ec, tmp_path
+):
+    """The variant scanner skips the known false-positive identifiers
+    (``Self`` / ``Some`` / ``None`` / ``Ok`` / ``Err``) that can appear
+    as the first token on a line inside the enum block (e.g. inside an
+    inline ``match`` an attribute macro), while still collecting the
+    real CamelCase variants around them. Pins the defensive
+    keyword-filter branch."""
+    src = (
+        "pub enum Effect {\n"
+        "    GainLife,\n"
+        # These look like variants to the line regex but are filtered:
+        "    Self(u32),\n"
+        "    Some,\n"
+        "    None,\n"
+        "    Ok(bool),\n"
+        "    Err,\n"
+        "    DealDamage(u32),\n"
+        "}\n"
+    )
+    f = tmp_path / "cards.rs"
+    f.write_text(src, encoding="utf-8")
+    variants = ec.collect_rust_effect_variants(f)
+    assert variants == ["GainLife", "DealDamage"]
+    for kw in ("Self", "Some", "None", "Ok", "Err"):
+        assert kw not in variants
+
+
+def test_collect_rust_effect_variants_dedups_repeated_variant(
+    ec, tmp_path
+):
+    """A variant name that appears twice (defensive ``seen`` set) is
+    collected exactly once, in first-seen source order — pins the
+    dedup branch alongside the source-order contract."""
+    src = (
+        "pub enum Effect {\n"
+        "    GainLife,\n"
+        "    DealDamage(u32),\n"
+        "    GainLife,\n"  # duplicate — must NOT appear twice
+        "}\n"
+    )
+    f = tmp_path / "cards.rs"
+    f.write_text(src, encoding="utf-8")
+    assert ec.collect_rust_effect_variants(f) == ["GainLife", "DealDamage"]
+
+
+def test_walk_effect_none_is_noop(ec):
+    """``_walk_effect(None, ...)`` returns immediately and records
+    nothing (the ``if eff is None`` guard — reached directly, not via
+    ``_maybe_walk`` which filters ``None`` earlier)."""
+    from collections import Counter, defaultdict
+
+    classes: Counter = Counter()
+    examples: dict = defaultdict(set)
+    ec._walk_effect(
+        None,
+        classes=classes,
+        examples=examples,
+        parent_card_name="X",
+        seen_ids=set(),
+    )
+    assert classes == Counter()
+    assert examples == {}
+
+
+def test_walk_effect_non_dataclass_uses_dunder_dict(ec):
+    """A duck-typed ``Effect`` that is NOT a dataclass is introspected
+    via ``__dict__`` (the ``else`` arm of ``_walk_effect``). A nested
+    Effect-shaped attribute on it is recursively walked, so both class
+    names land in the vocab."""
+
+    class _Inner:
+        def resolve(self, *a, **k):
+            pass
+
+        def describe(self):
+            return "inner"
+
+    class _Outer:
+        def resolve(self, *a, **k):
+            pass
+
+        def describe(self):
+            return "outer"
+
+        def __init__(self):
+            self.child = _Inner()
+
+    cls = ec.card_effect_classes(
+        type(
+            "P",
+            (),
+            {
+                "name": "NonDataclassEffect",
+                "spell_effect": _Outer(),
+                "triggered_abilities": (),
+                "activated_abilities": (),
+                "static_abilities": (),
+            },
+        )()
+    )
+    assert cls == {"_Outer", "_Inner"}
+
+
+def test_walk_effect_dataclass_field_getattr_raises_is_swallowed(ec):
+    """A dataclass ``Effect`` one of whose declared fields raises on
+    attribute access: the field is skipped (the ``except Exception:
+    continue`` in ``_walk_effect``'s dataclass branch) and the Effect
+    itself still contributes its class name — no crash, no lost
+    top-level class.
+
+    ``__getattribute__`` raises only for the declared field name
+    (``bad``), so ``dataclasses.fields()`` still yields it (the walker
+    reaches the ``getattr(eff, f.name)`` that throws) while
+    ``type(eff).__name__`` / ``resolve`` / ``describe`` still resolve
+    normally."""
+    import dataclasses
+
+    @dataclasses.dataclass
+    class _ExplodingField:
+        bad: int = 0
+
+        def resolve(self, *a, **k):
+            pass
+
+        def describe(self):
+            return "x"
+
+        def __getattribute__(self, name):
+            if name == "bad":
+                raise RuntimeError("intentional field access failure")
+            return object.__getattribute__(self, name)
+
+    cls = ec.card_effect_classes(
+        type(
+            "P",
+            (),
+            {
+                "name": "ExplodingFieldCard",
+                "spell_effect": _ExplodingField(),
+                "triggered_abilities": (),
+                "activated_abilities": (),
+                "static_abilities": (),
+            },
+        )()
+    )
+    assert cls == {"_ExplodingField"}
+
+
+def test_maybe_walk_nested_dataclass_field_getattr_raises_is_swallowed(
+    ec,
+):
+    """``_maybe_walk`` recursing into a NON-Effect dataclass whose field
+    raises on access swallows it (the ``except Exception: continue`` in
+    ``_maybe_walk``'s ``is_dataclass`` branch) — the surrounding Effect
+    is still collected. Distinct code path from the ``_walk_effect``
+    dataclass-field guard above (this is the plain-dataclass container
+    recursion via ``_maybe_walk``, not the Effect recursion). The
+    container is NOT Effect-shaped (no ``resolve``/``describe``) so
+    ``_maybe_walk`` takes its ``is_dataclass`` arm and iterates the
+    field whose ``getattr`` throws."""
+    import dataclasses
+
+    @dataclasses.dataclass
+    class _BadContainer:
+        kaboom: int = 0
+
+        def __getattribute__(self, name):
+            if name == "kaboom":
+                raise RuntimeError("intentional container field failure")
+            return object.__getattribute__(self, name)
+
+    class _EffWithBadContainer:
+        def resolve(self, *a, **k):
+            pass
+
+        def describe(self):
+            return "x"
+
+        def __init__(self):
+            # A non-Effect dataclass attribute -> _maybe_walk recurses
+            # into its fields and hits the raising attribute.
+            self.cfg = _BadContainer()
+
+    cls = ec.card_effect_classes(
+        type(
+            "P",
+            (),
+            {
+                "name": "BadContainerCard",
+                "spell_effect": _EffWithBadContainer(),
+                "triggered_abilities": (),
+                "activated_abilities": (),
+                "static_abilities": (),
+            },
+        )()
+    )
+    assert cls == {"_EffWithBadContainer"}
+
+
+def test_collect_python_effect_vocab_swallows_unintrospectable_printing(
+    ec, monkeypatch
+):
+    """``collect_python_effect_vocab`` mirrors ``card_effect_classes``'s
+    defensive contract at the POOL level: a printing whose
+    introspection raises contributes no classes (the ``except
+    Exception: continue`` in the per-printing loop) instead of aborting
+    the whole pool walk. Monkeypatch the parser source so the walk is a
+    fast 2-card synthetic pool (no real EoE parse) — one good card, one
+    that explodes on ``spell_effect`` access."""
+
+    class _GoodEff:
+        def resolve(self, *a, **k):
+            pass
+
+        def describe(self):
+            return "good"
+
+    class _GoodPrinting:
+        spell_effect = _GoodEff()
+        triggered_abilities = ()
+        activated_abilities = ()
+        static_abilities = ()
+
+    class _ExplodingPrinting:
+        @property
+        def spell_effect(self):
+            raise RuntimeError("unintrospectable printing")
+
+        triggered_abilities = ()
+        activated_abilities = ()
+        static_abilities = ()
+
+    class _FakeSource:
+        def get_printings(self):
+            return {
+                "Good": _GoodPrinting(),
+                "Boom": _ExplodingPrinting(),
+            }
+
+    import mtg_bot.cards.parser.source as src_mod
+
+    monkeypatch.setattr(
+        src_mod, "OracleParserCardSource", lambda: _FakeSource()
+    )
+
+    classes, examples, n = ec.collect_python_effect_vocab()
+    # Both printings counted; the exploding one swallowed (contributed
+    # no classes); the good one's class collected.
+    assert n == 2
+    assert classes["_GoodEff"] == 1
+    assert examples["_GoodEff"] == {"Good"}
