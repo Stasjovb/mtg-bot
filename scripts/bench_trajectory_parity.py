@@ -339,6 +339,96 @@ def _parse_mana_cost(s: str) -> tuple[int, list[tuple[str, int]]]:
     return generic, sorted(colored.items())
 
 
+# ---------------------------------------------------------------------------
+# Round-66 N1 — `--require-creatures N` bench precondition
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS (the round-65 N3 FAIL_TIMEOUT/creature-floor
+# finding, merge 6568c346, docs/bench_trajectory_parity_smoke.md
+# round-65). The standing ~42-50% FAIL_TIMEOUT floor is the campaign's
+# biggest non-divergence signal drag. Round-65 quantified it: the
+# CardDef bridge-admit filter collapses each 17lands archetype to ~1-2
+# admitted creature copies + ~58 lands → a near-creatureless mirror →
+# never reaches lethal → max-turns cap → FAIL_TIMEOUT (zero
+# trajectory-divergence signal). Round-65's data showed the
+# admitted-copy↔PASS correlation is **monotone and stark**: every
+# archetype with ≥5 admitted copies went 4/4 PASS, every 1-copy
+# archetype timed out ≥50%; an archetype with `< 3` admitted creature
+# copies is a STRUCTURALLY uncloseable mirror — it can never convert,
+# so counting it as FAIL_TIMEOUT pollutes the headline metric.
+#
+# Round-65 established with data that no cheap §2-correct unlock
+# exists (the real lever is the multi-round TOKEN_PRINTING_SUBSTRATE
+# Phase-3/5 Rust work). The ONLY contained ~1-Python-slice it
+# recommended (lever G, r47 option 2) is this: a `--require-creatures
+# N` bench precondition (N≈3, justified from r65's
+# admitted-copy↔PASS-monotone data) that, when a post-bridge-filter
+# deck has `< N` admitted creature copies, marks the game
+# **ARCHETYPE_FILTERED** (the EXISTING outcome class for a
+# structurally-uncloseable mirror) instead of FAIL_TIMEOUT BEFORE
+# running it (skip the wasted play). It adds ZERO coverage but
+# separates the structural never-can-close population from genuine
+# stalls, so the headline FAIL_TIMEOUT % becomes a true signal-
+# coverage metric and the Phase-3/5 substrate's future TIMEOUT→
+# PASS/DIV conversion is trackable.
+#
+# SCOPING DISCIPLINE (deliberately narrow, like the round-59 Lander
+# harness above):
+#
+#   * It is GATED behind an explicit opt-in (the ``require_creatures``
+#     parameter / ``--require-creatures N`` CLI flag), DEFAULT-OFF
+#     (``None``), so the default bench / production self-play / all
+#     existing invocations are byte-for-byte unchanged. This is opt-in
+#     instrumentation, NOT a behavior change.
+#   * The precondition is a property of the bridge-FILTERED deck — it
+#     is engine-agnostic (same admitted card-name list on both
+#     engines; the filter is deterministic and shared via the REAL
+#     production loader's ``_printing_is_bridge_simple_creature``).
+#     Counting it identically on both sides means it can NEVER itself
+#     introduce a cross-engine divergence: it gates the game (skip /
+#     run), it does NOT alter the trajectory. The game is classified
+#     ``ARCHETYPE_FILTERED`` BEFORE either engine's state is even
+#     constructed.
+#   * It reuses the round-65 scout's EXACT admitted-creature-copy
+#     counting (``scout_r64_timeout_creature_floor._admitted_creature
+#     _profile``'s body) — the same REAL production loader path
+#     (``trajectory._printing_is_bridge_simple_creature``), so the
+#     count is EXACTLY what the bench plays with. Not re-derived.
+
+
+def _count_admitted_creature_copies(deck_names: list[str]) -> int:
+    """Round-66: count admitted creature *copies* in one deck.
+
+    Reuses the round-65 scout's EXACT counting logic verbatim
+    (``scout_r64_timeout_creature_floor._admitted_creature_profile``):
+    for every card name in the raw deck, resolve its printing via the
+    active CardSource and count it iff it is a Creature that passes
+    the REAL production-deck bridge-admit filter
+    (``trajectory._printing_is_bridge_simple_creature``) — i.e. it is
+    a creature the bench actually plays (post-filter, pre-pad;
+    duplicates preserved, mirroring the bench's pre-pad library).
+
+    This is engine-agnostic (a property of the deterministic
+    bridge-filtered deck), so the same count is produced on both
+    engines — the precondition can never itself introduce a
+    cross-engine divergence.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+
+    src = get_active_source()
+    printings = src.get_printings()
+    admitted_creature_copies = 0
+    for name in deck_names:
+        pr = printings.get(name)
+        if pr is None:
+            continue
+        if "Creature" in pr.card_types:
+            if trajectory._printing_is_bridge_simple_creature(pr):
+                admitted_creature_copies += 1
+    return admitted_creature_copies
+
+
 class _DivergenceError(Exception):
     """Raised from inside the action loop when a step_both reports
     divergences. Carries the action dict + divergence list so the
@@ -552,6 +642,7 @@ def drive_one_game(
     mulligans: int,
     verbose: bool = False,
     activate_lander_sac: bool = False,
+    require_creatures: Optional[int] = None,
 ) -> GameResult:
     """Drive one (archetype, seed) mirror game end-to-end on both engines.
 
@@ -563,6 +654,25 @@ def drive_one_game(
     opted in (``--activate-lander-sac``). This is the round-58 N3-
     specified minimal unlock for REAL-GAME-validating the round-55
     token-cease-to-exist SBA.
+
+    ``require_creatures`` (round-66 N1, default-off / ``None``): when
+    set to an int ``N``, a precondition runs at game start AFTER the
+    deck is loaded and the bridge-admit filter is applied but BEFORE
+    the matched game state is constructed: if the post-filter deck
+    carries ``< N`` admitted creature copies (counted via
+    :func:`_count_admitted_creature_copies`, the round-65 scout's
+    exact logic), the game is classified ``ARCHETYPE_FILTERED`` (the
+    EXISTING outcome class for a structurally-uncloseable mirror) and
+    returned WITHOUT running it — so it is NOT counted as
+    FAIL_TIMEOUT. This adds zero coverage; it separates the structural
+    never-can-close population from genuine stalls so the headline
+    FAIL_TIMEOUT % is a true signal-coverage metric (round-65 N3
+    finding; docs/bench_trajectory_parity_smoke.md round-65, lever G /
+    r47 option 2). Engine-agnostic — the precondition is a property of
+    the deterministic bridge-filtered deck, computed identically on
+    both engines, so it can never itself introduce a divergence.
+    Default-off (``None``): the default bench / production self-play /
+    all existing invocations are byte-for-byte unchanged.
     """
     from mtg_bot.parity import trajectory
     from mtg_bot.turn import Step
@@ -583,6 +693,33 @@ def drive_one_game(
         result.exception_message = str(e)
         result.elapsed_seconds = time.perf_counter() - t0
         return result
+
+    # ---- Round-66 N1: `--require-creatures N` precondition ----------------
+    # If opted in and the post-bridge-filter deck carries fewer than N
+    # admitted creature copies, this archetype is a structurally
+    # uncloseable mirror (round-65 N3: admitted-copy↔PASS is monotone;
+    # `< N` admitted copies can never reach lethal before the cap).
+    # Classify it as ARCHETYPE_FILTERED (the EXISTING outcome class for
+    # a structurally-filtered-out archetype — same column the empty-
+    # post-filter-library path already uses) and return WITHOUT running
+    # the game, so it is NOT counted as FAIL_TIMEOUT and no play is
+    # wasted. The count is engine-agnostic (a property of the
+    # deterministic bridge-filtered deck), so this never introduces a
+    # cross-engine divergence — it gates the game, it does not alter
+    # any trajectory. Default-off (require_creatures is None): this
+    # block is inert and the bench is byte-for-byte unchanged.
+    if require_creatures is not None:
+        n_admitted = _count_admitted_creature_copies(deck_names)
+        if n_admitted < require_creatures:
+            result.status = "ARCHETYPE_FILTERED"
+            result.exception_message = (
+                f"require-creatures precondition: {n_admitted} admitted "
+                f"creature copies < N={require_creatures} "
+                f"(structurally-uncloseable mirror; round-65 N3 — "
+                f"reclassified out of FAIL_TIMEOUT, no game run)"
+            )
+            result.elapsed_seconds = time.perf_counter() - t0
+            return result
 
     # Build agent (covers mulligan + combat). mulligan_agent only
     # supplied when mulligans>0; default no-op otherwise.
@@ -887,6 +1024,29 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--require-creatures", type=int, default=None, metavar="N",
+        help=(
+            "ROUND-66 N1 reporting-honesty precondition (DEFAULT-OFF). "
+            "When set to an int N, any (archetype, seed) game whose "
+            "post-bridge-filter deck carries < N admitted creature "
+            "copies is classified ARCHETYPE_FILTERED (the existing "
+            "outcome class for a structurally-uncloseable mirror) "
+            "BEFORE running it, instead of being run and timing out as "
+            "FAIL_TIMEOUT. N~3 is the round-65 N3 data-driven floor "
+            "(admitted-copy-to-PASS is monotone; <3 admitted copies "
+            "can never reach lethal before the cap). Adds ZERO "
+            "coverage - it separates the structural never-can-close "
+            "population from genuine stalls so the headline "
+            "FAIL_TIMEOUT pct is a true signal-coverage metric. "
+            "Engine-agnostic (a property "
+            "of the deterministic bridge-filtered deck) so it never "
+            "introduces a divergence. Off by default — the default "
+            "bench / production self-play / all existing invocations "
+            "are byte-for-byte unchanged unless this is explicitly "
+            "passed."
+        ),
+    )
+    p.add_argument(
         "--json-out", default=None,
         help="Optional path to dump structured results as JSON.",
     )
@@ -921,7 +1081,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         f"seed(s) = {len(archetypes) * len(seeds)} games; strategy="
         f"{args.combat_strategy}, max_turns={args.max_turns}, "
         f"mulligans={args.mulligans}, "
-        f"activate_lander_sac={args.activate_lander_sac}\n"
+        f"activate_lander_sac={args.activate_lander_sac}, "
+        f"require_creatures={args.require_creatures}\n"
     )
 
     results: list[GameResult] = []
@@ -938,6 +1099,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 mulligans=args.mulligans,
                 verbose=args.verbose,
                 activate_lander_sac=args.activate_lander_sac,
+                require_creatures=args.require_creatures,
             )
             results.append(r)
             if args.verbose:
@@ -969,6 +1131,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "combat_strategy": args.combat_strategy,
                 "mulligans": args.mulligans,
                 "activate_lander_sac": args.activate_lander_sac,
+                "require_creatures": args.require_creatures,
             },
             "summary": asdict(summary),
             "games": [asdict(r) for r in results],
