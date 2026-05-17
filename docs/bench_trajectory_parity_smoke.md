@@ -1857,3 +1857,126 @@ on the gate's path (baseline **1315** unchanged). No Rust → no
    making the mirror creature-dense enough for routine combat — but
    the targeted Lander sac harness (#1) is the direct,
    bounded route to real-game SBA validation.
+
+## Round 59 (2026-05-16) — N3: token-cease-to-exist SBA REAL-GAME VALIDATED byte-equal (the round-58 N3 Lander sac-activation harness step, built + run)
+
+The round-58 N3 deferral is now closed. The standing open question
+since round 55 — *is the round-55 N2 Rust token-cease-to-exist SBA
+(CR 111.7) byte-equal when it FIRES in a real production-deck game,
+or is it only round-53-synthetic-in-test-pinned?* — is answered
+**definitively: REAL-GAME VALIDATED, byte-equal, 0 divergence.**
+
+### The harness step (round-58 N3's exact spec, built)
+
+`scripts/bench_trajectory_parity.py::_try_activate_lander_sac` — a
+**narrow, deterministic, default-off, review-gated** bench-driver
+step:
+
+- **Narrow.** Activates ONLY a `Lander` token's `ability_index=0`
+  (the `{2},Sac:SearchLibraryForBasicLandTapped`). It is explicitly
+  NOT a general "bench activates arbitrary abilities" change (that
+  would alter bench combat/mana semantics broadly and is out of
+  scope per round-58 N3 + the standing bridge-correctness
+  discipline). It only fires when a Lander is on the active player's
+  bf AND a basic land exists in library to search AND `{2}` is
+  payable.
+- **Default-off / opt-in.** Gated behind `--activate-lander-sac`
+  (CLI) → `drive_one_game(activate_lander_sac=False)` default. With
+  the flag off the step is a complete no-op; the bench / production
+  self-play is **byte-for-byte unchanged**. It is a *validation*
+  harness, not a behavior change to production self-play.
+- **Same activation on BOTH engines (fair cross-engine
+  comparison).** Mirrors the proven in-test probe
+  `test_phase3a_genuine_real_eoe_galactic_wayfarer_lander_activation`
+  exactly: (a) ONE shared `random.Random` threaded into both engines
+  (`py_state.rng` + `rust_state.set_external_rng`) so the round-54
+  post-search shuffle is byte-equal (SEARCH_LIMITATIONS #15 closure
+  recipe), installed **lazily once per game** only when the first
+  real Lander activation happens (Lander-free games are
+  byte-for-byte unaffected); (b) `{2}` colorless seeded
+  **symmetrically** into both mana pools (deterministic — not
+  dependent on which lands auto-tap); (c) the activation driven via
+  `step_both` (identical `{kind:activate_ability, source_id,
+  ability_index:0}`, no target — the search is untargeted); (d) the
+  Lander's ability is NOT a mana ability so it goes on the stack —
+  BOTH stacks drained to the pre-activation floor
+  (`resolve_top_of_stack_python`/`_rust`) and field views
+  re-compared. Any cross-engine divergence raises `_DivergenceError`
+  exactly like every other bench step.
+
+### Validation sweep — the SBA now FIRES and is byte-equal
+
+`scout_r59_lander_sac_lifecycle.py` (the round-58 lifecycle scout
+re-pointed at the harness step; Python source of truth for "did the
+SBA fire" via the `"Lander token ceases to exist"` log line, the
+bench's `_DivergenceError` gate for cross-engine byte-equality).
+
+Sweep: archetypes `18,36,37,39,63,64,73,88,91,97` × seeds `0-5` =
+**60 games**, `attack_all`, max-turns 22, harness step ENABLED:
+
+| Lifecycle (harness ON) | round-58 (no harness) | **round-59 (harness ON)** |
+|---|---|---|
+| carrier reached bf | 84/120 | 43/60 |
+| token created | 6/120 | 6/60 |
+| Lander sac activations | 0 | **6** |
+| **token LEFT bf (round-55 SBA fires)** | **0/240** | **6/60** |
+| **SBA fired & no divergence** | n/a | **6/6** |
+| **ANY FAIL_DIVERGENCE** | **0** | **0** |
+
+Production bench `bench_trajectory_parity.py --activate-lander-sac`
+(archetypes `36,73` × seeds `0-5` = 12 games, the Lander-producing
+grid — `tmp/bench_r59.json`): **0 FAIL_DIVERGENCE / 0
+FAIL_EXCEPTION**. Default-off control (`73 × s1,2` WITHOUT the flag):
+PASS, identical to pre-change (the no-op guarantee holds).
+
+**Every Lander created (6/6) was sac-activated, LEFT the
+battlefield, ceased to exist on BOTH engines (graveyard empty on
+both — CR 111.7), and the whole post-sac field view was byte-equal
+cross-engine.** The round-58 finding of token-LEFT-bf `0/240`
+(structurally un-exercisable) is now token-LEFT-bf `6/6` on every
+token-created game — the structural blocker is closed by the
+specified harness step. Token *creation* stays seed-dependent (6/60
+— matches round-58; the carrier's ETB/DIES trigger must actually
+fire; the harness unlocks the token *exit*, it cannot manufacture
+token *creation*).
+
+### Verdict
+
+| Claim | Verdict |
+|---|---|
+| Round-55 token-cease-to-exist SBA byte-equal *when fired in a real full-game trajectory* | **REAL-GAME VALIDATED** — 6/6 token-created games: Lander sac-activated → left bf → ceased to exist on both engines → whole field view byte-equal (0 FAIL_DIVERGENCE). The round-53 synthetic-in-test caveat in SEARCH_LIMITATIONS can be folded → **validated**. |
+| Harness step scoped/gated correctly | **YES** — narrow (Lander sac ability only), default-off (`--activate-lander-sac`; no-op when off, no-Lander, or no basic to search), same activation both engines (shared-rng + symmetric `{2}` + `step_both` + post-resolve drain/compare). Default bench / production self-play byte-for-byte unchanged. |
+| New cross-engine divergence | **NONE** — 0 FAIL_DIVERGENCE across all 72 games (60 lifecycle + 12 production-bench). |
+| New latent bug surfaced | **NONE** — the first real-game exercise of the full sac→search→shuffle→token-cease path is clean (it had been pinned only synthetically; round-58 flagged a divergence here as "entirely possible"; none surfaced). |
+
+### Gate
+
+Baseline **1325** → **1326** (+1: `test_r59_lander_sac_harness_step
+_byte_equal_and_default_off`, pinning no-Lander-no-op /
+Lander-present-activates+token-leaves-bf+SBA-fires /
+whole-field-view-byte-equal). Full gate
+(`test_parity_smoke.py + test_cross_engine_etb_triggers.py +
+test_trajectory_parity.py + test_trajectory.py`) **1326 passed, 0
+fail**. No Rust → no `maturin`.
+
+### Forward picture for round 60
+
+1. **Token-cease-to-exist SBA real-game validation is DONE.** The
+   round-55 SBA is now byte-equal-validated end-to-end through the
+   real activation in real production-deck games — no longer a
+   synthetic-in-test-only pin. The SEARCH_LIMITATIONS round-53/55
+   "in-test-pinned" caveat folds to validated (orchestrator action).
+2. **The Lander sac harness is a reusable validation lever.** Any
+   future Lander-cluster cross-engine work (the 57,779-deck Galactic
+   Wayfarer / Beamsaw Prospector cluster) can now real-game-exercise
+   the full sac→search→shuffle→token-cease path via
+   `--activate-lander-sac` — no synthetic injection needed.
+3. **The Robot path remains the round-58 #2 deferral.** Gravpack
+   Monoist's 2/2 Robot still needs a DIES carrier to trade on a
+   near-creatureless mirror (round-50/56 limitation). The cleaner
+   targeted unlock is the round-42+ standing "DIES-event /
+   forced-removal harness, review-gated" — shared shape with this
+   round's Lander sac harness. Phase 5 (`each_player` → Edge Rover) /
+   Phase 2 (non-creature Lander carriers) remain the §2-honest
+   pool-delta levers that would also indirectly creature-densify the
+   mirror.
