@@ -4264,3 +4264,305 @@ gate tests all still pass — every game the gate drives that
 completes yields the same verdict; the only deltas are the +2 new
 R74-3 pins and the bench grid's +10 PASS, all R74-3-attributable
 and all in the correct FAIL→PASS direction).
+
+## Round 76 (2026-05-17) — the post-ALL-3-fixes round-74 RE-SWEEP VALIDATION: identical 360-game / 5-disjoint-band / 5-seed-offset grid on the `fc430262` `.pyd` (R74-1/R74-2/R74-3 ALL Rust/harness-fixed). **249 PASS / 111 FAIL_DIVERGENCE → 340 PASS / 20 FAIL_DIVERGENCE (−91, 82% resolved at scale)**; the round-74 trio is RESOLVED (all 3 canonical repros flip FAIL→PASS); the 20 residuals are 100% attributed to **two NEW Rust-side divergences the round-74 coarse `cast_spell::battlefield` bucket had conflated with R74-2** — **R76-1** (non-monotonic token-id allocator reuses a ceased-to-exist token's id) + **R76-2** (Radiant Strike's `DestroyTargetArtifactOrTappedCreature` destroy arm drops DIES-trigger dispatch — same class as R74-2, different Effect arm) — plus 2× already-tracked CFI-1; **0 untriaged, 0 FAIL_TIMEOUT/FILT/EXC**
+
+This is the genuine post-fix validation the round-74/75 entries
+carried forward (NOT confirmation-padding): it verifies the 3 fixes
+actually resolved the 111 round-74 divergences **at scale** and
+surfaces any residual or newly-unmasked divergence. Context: all
+three round-74 root causes are now fixed on `main` —
+**R74-2** (`f456ec20`, Depressurize hand-rolled destroy now fires
+DIES-triggers), **R74-3** (`e4d4a50e`, harness `advance_phase_python`
+CLEANUP arm expires UEOT P/T), **R74-1 / I23** (`c3cd126f`, Rust
+combat-side `battlefield_creature_power`/`_toughness` folds
+`obj.counters`); resync `fc430262` is HEAD. CFI-1 was fixed earlier
+(`8a2a8d84`).
+
+### Re-sweep design — IDENTICAL to round-74 (the same orchestration wrapper, byte-for-byte comparable)
+
+Re-ran `scripts/scout_r74_run_sweep.py` **UNMODIFIED** (the round-74
+wrapper that closed the `tests`-import gap making the spell-cast
+path reachable; `scripts/bench_trajectory_parity.py` round-72
+gate-pinned, run UNMODIFIED) against the `fc430262` shared
+`.venv-py313` `.pyd`. Same 5 disjoint full-pool index bands × 5
+disjoint seed-offset triples × cap-120 × `attack_all` × mulligans
+off × the bench-admitted spell set — the exact round-74 coverage,
+so the before→after delta is confound-free (same archetypes, same
+seeds, same driver; only the `.pyd` advanced from the pre-fix build
+to `fc430262`).
+
+| Band | Index window | Seeds | Games | R74 PASS | R74 DIV | **R76 PASS** | **R76 DIV** |
+|---|---|---|---:|---:|---:|---:|---:|
+| lo | [0, 26000) | 0-2 | 66 | 37 | 29 | **63** | **3** |
+| mid1 | [26000, 52000) | 3-5 | 75 | 58 | 17 | **72** | **3** |
+| mid2 | [52000, 78000) | 6-8 | 66 | 45 | 21 | **63** | **3** |
+| mid3 | [78000, 104000) | 9-11 | 72 | 48 | 24 | **64** | **8** |
+| hi | [104000, 130000) | 12-14 | 81 | 61 | 20 | **78** | **3** |
+| **Total** | full pool, 5 disjoint windows | 5 offsets | **360** | **249** | **111** | **340** | **20** |
+
+JSONs `tmp/bench_r74_{lo,mid1,mid2,mid3,hi}.json` +
+`tmp/bench_r74_rollup.json` regenerated (the
+round-64/68/70/71/74/75 `tmp/bench_*` tracked-round-evidence
+precedent — they overwrite the round-75 isolation-run evidence).
+Wall 1379.0 s. **0 / 360 FAIL_TIMEOUT / 0 ARCHETYPE_FILTERED / 0
+FAIL_EXCEPTION** — the round-72 cap-120 default continues to fully
+recover the deck-out tail on the post-spell-admit pool.
+
+### Before → after
+
+| Metric | Round-74 baseline | Round-76 re-sweep (`fc430262`, all 3 fixes) | Δ |
+|---|---:|---:|---:|
+| total games | 360 | 360 | 0 |
+| **PASS** | **249** | **340** | **+91** |
+| **FAIL_DIVERGENCE** | **111** | **20** | **−91 (82% resolved)** |
+| FAIL_TIMEOUT / FILT / EXC | 0 / 0 / 0 | 0 / 0 / 0 | 0 |
+| `combat_phase::life_p0` | 47 | **0** | **−47** |
+| `combat_phase::life_p1` | 16 | **0** | **−16** |
+| `combat_phase::is_over,winner_id,life_p1` | 1 | **0** | **−1** |
+| `cast_spell::battlefield` | 45 | 18 | −27 |
+| `cast_spell::graveyard_p{0,1},battlefield` | 2 | 0 | −2 |
+| `cast_spell::graveyard_p1` (CFI-1) | 0* | 2 | +2* |
+
+\* The 2 residual `graveyard_p1` are the already-tracked CFI-1 stray
+`obj.counters=0;` (NOT a regression — round-74 reported CFI-1 only
+as a `graveyard_pX,battlefield` *co-occurrence* component because
+R74-2's missing-token dominated the same games; with R74-2 now
+Rust-fixed the CFI-1 counter-zeroing surfaces as its own clean
+`graveyard_p1` shape — the SAME already-owned bug, now unmasked, not
+re-filed per the campaign directive).
+
+### The trio-resolved verdict — the 3 fixes resolved the round-74 trio at scale (expected ~111 → ~0)
+
+**ALL `combat_phase::*` divergences are GONE (64 → 0).** Those were
+the entire R74-1 (Rust combat-counter omission) + R74-3 (harness
+UEOT-leak) bucket — every one is now PASS. The three round-74
+**canonical minimal repros**, re-run on the `fc430262` `.pyd`, **all
+flip FAIL_DIVERGENCE → PASS**:
+
+| Repro | Round-74 shape | Round-76 on `fc430262` | Resolved by |
+|---|---|---|---|
+| `--archetype 70 --seed 0` (R74-1 / I23) | `combat_phase::life_p0` | **PASS** | `c3cd126f` (I23 combat-counter fold) |
+| `--archetype 216 --seed 0` (R74-2) | `cast_spell::battlefield` | **PASS** | `f456ec20` (Depressurize DIES-trigger) |
+| `--archetype 52329 --seed 7` (R74-3) | `combat_phase::is_over,winner_id,life_p1` | **PASS** | `e4d4a50e` (harness UEOT expiry) |
+
+**Verdict: YES — the 3 fixes resolved the round-74 trio at scale.**
+111 → 20 is the expected "~111 → ~0 for the trio" plus the residual
+that is **100% NOT R74-1/R74-2/R74-3** (verified below). The residual
+20 is a strictly-cleaner, strictly-Rust-side signal (one CFI-1 class
+already owned; two genuinely-distinct NEW Rust bugs the coarse
+round-74 `battlefield` bucket had conflated). The 91-game swing is
+all in the correct FAIL→PASS direction; **0 games regressed
+PASS→FAIL**, **0 new untriaged shapes**, per-band game counts
+byte-identical to round-74 (no game became unreachable — only
+divergent games converged to PASS).
+
+### Residual triage — 3 classes, every game attributed, 0 untriaged
+
+The 20 residuals (`tmp/bench_r74_*.json`): **18
+`cast_spell::battlefield`** + **2 `cast_spell::graveyard_p1`**. Each
+isolated via a minimal deterministic repro
+(`scripts/scout_r76_repro_tracer.py`, read-only diagnostic — the
+round-74 tracer precedent; drives the UNMODIFIED bench game and
+dumps the per-zone Python-vs-Rust field-view delta). Python
+`src/mtg_bot/` is the source of truth and is **correct** in every
+one.
+
+| Class (count) | Shape | Side / verdict |
+|---|---|---|
+| **R76-1** (token-id reuse) | `cast_spell::battlefield`, ids skew by exactly 1, no missing object | **NEW Rust-side** / Python-SoT-correct |
+| **R76-2** (Radiant Strike DIES-trigger drop) | `cast_spell::battlefield`, a dies-trigger token ONLY-IN-PY (absent in Rust) | **NEW Rust-side** / Python-SoT-correct |
+| **CFI-1** (2: arch 815 s2, arch 54024 s7) | `cast_spell::graveyard_p1`, dead object's net counters PY≠0 / RST=0 | already-tracked Rust-side, **NOT re-filed** per directive |
+
+> **Why these are NEW, not "R74-2 fix incomplete".** R74-2
+> (Depressurize specifically) IS fully Rust-fixed — its canonical
+> repro `--archetype 216 --seed 0` now PASSes. The round-74 triage's
+> single `cast_spell::battlefield` bucket was a **superset** that
+> *also* contained R76-1 and R76-2 (both invisible while R74-2's
+> missing-token dominated the same `battlefield` field of the same
+> games). Verify-against-the-round-75-isolation-evidence: arch 1126
+> s2 / 52021 s7 / 28711 s5 were ALL `FAIL_DIVERGENCE
+> cast_spell::battlefield` in the round-75 baseline too — they did
+> not "start failing"; the R74-2 fix **un-masked** the genuinely-
+> distinct sub-divergence that was conflated underneath. This is
+> exactly the predicted "deeper-game reach / sharper signal exposes
+> a residual the coarse bucket hid" outcome, not an incomplete fix.
+
+#### R76-1 — Rust's token-id allocator is non-monotonic: it reuses the id of a token that ceased to exist (NEW, Rust-side)
+
+**Minimal repro:** `bench_trajectory_parity --archetype 1126 --seed
+2` (FAIL_DIVERGENCE t14 a29 `cast_spell::battlefield`). Also arch
+52463 s6, arch 78213 s9 (each: Lander/Robot id skews by exactly 1,
+no object missing).
+
+**Mechanism (proven by the id-allocation trace,
+`scripts/scout_r76_repro_tracer.py`):** `Galactic Wayfarer`
+(Creature — Human Scout, `{2}{G}`, ETB "create a Lander token";
+admitted via `_printing_is_bridge_simple_creature`, the round-50
+substrate) is cast TWICE in the game. Trace:
+
+* compare #92: first Wayfarer (id 9) ETB → first Lander minted —
+  **Python id 120 == Rust id 120** (synced, parity-clean).
+* compare #125: that first Lander **ceases to exist** (CR 111.7 —
+  it left the battlefield). Both engines: Lander gone. Still synced.
+* compare #199: a SECOND Wayfarer (id 68 on BOTH) ETB → second
+  Lander minted — **Python id 121, Rust id 120** (skew = exactly
+  1; every other battlefield object id is byte-identical).
+
+**Root cause (read-only Rust inspection — `rust/src/` NOT edited):**
+`rust/src/state_ops_resolve.rs` token-mint arms (≈ lines **2719,
+2882, 3016**, and the Seedship Impact / Orbital Plunge Lander arms
+re-derive it privately — "fresh-id allocator") allocate a token id
+by **scanning every live zone on both players for the current
+`max_id` and using `max_id + 1`** (the in-code comment: *"Allocate
+fresh ids: scan every zone on both players for the current max id …
+Mirrors load_deck's allocator"*). This is **non-monotonic**: a token
+that ceased to exist no longer contributes to `max_id`, so a later
+token mint **re-derives a value at-or-below the freed id and reuses
+it**. Python's `GameState.new_object`
+(`src/mtg_bot/game.py:2787-2798`) uses a strict monotonic
+`self.next_object_id += 1` that **never reuses** a freed id — the
+correct, standard object-identity invariant (object ids must be
+unique over the game's lifetime; reusing a ceased token's id is a
+correctness hazard — stale-reference / fingerprint-collision
+class). The `load_deck` allocator the comment cites is correct
+*in its context* (it runs once at game start when no id has been
+freed); transplanting `max_id + 1` to mid-game token mints is the
+bug. **Python (SoT) correct; Rust wrong.**
+
+**Carry-forward for the Rust dispatch (do NOT edit `rust/src/` from
+a non-Rust slice):** add a monotonic `next_object_id`-style counter
+to the Rust `GameState` (mirroring Python's
+`GameState.next_object_id` AND Rust's own existing monotonic
+`next_etb_timestamp` / `reserve_next_etb_timestamp` precedent at
+`rust/src/state.rs` — persisted across clones, saturating
+increment), seed it at game start to `max_initial_id + 1`, and
+have ALL token-mint sites (the 3 `state_ops_resolve.rs`
+`max_id + 1` instances + the Lander-rider private re-derivations)
+draw from it instead of the live `max_id + 1` re-scan. Repro
+`--archetype 1126 --seed 2`. Same observable-bench impact class as
+R74-2 but a distinct root cause (id allocator, not dies-trigger
+dispatch).
+
+#### R76-2 — Rust's `Effect::DestroyTargetArtifactOrTappedCreature` (Radiant Strike) hand-rolled destroy arm omits DIES-trigger dispatch (NEW, Rust-side; same class as R74-2, different Effect arm)
+
+**Minimal repro:** `bench_trajectory_parity --archetype 52021
+--seed 7` (FAIL_DIVERGENCE t15 a33 `cast_spell::battlefield`). Also
+arch 28711 s5, arch 28379 s4, arch 78097 s9, arch 104676 s12 (each:
+a dies-trigger token — Robot or Lander — ONLY-IN-PY, entirely
+absent on Rust).
+
+**Mechanism (proven by the trace):** P1 casts **Radiant Strike**
+(`{3}{W}` Instant: *"Destroy target artifact or tapped creature.
+You gain 3 life."*; a bench-admitted single-target spell) targeting
+a tapped **Gravpack Monoist** (Creature — Human Scout, dies-trigger
+*"When this creature dies, create a tapped 2/2 colorless Robot"*;
+admitted via `_printing_is_bridge_simple_creature`). Both engines
+correctly move Gravpack to `graveyard_p1` (id byte-identical). But
+**Python fires Gravpack's DIES-trigger → Robot token (id 120);
+Rust destroys Gravpack and creates NO Robot** — single-field
+`battlefield` divergence (Python has the extra Robot; Rust does
+not). The trace at compare #218 confirms Gravpack is in
+`graveyard_p1` on BOTH and **no creature died via combat** — the
+kill is Radiant Strike's destroy.
+
+**Root cause (read-only Rust inspection):**
+`rust/src/state_ops_resolve.rs`
+`Effect::DestroyTargetArtifactOrTappedCreature` (Radiant Strike's
+destroy arm, ≈ lines **5433-5486**) is a **hand-rolled destroy** —
+structurally identical to the R74-2 anti-pattern: it
+`bf_mut.remove`s the object, sets `zone = ZONE_GRAVEYARD`, pushes
+to graveyard, calls `mark_left_battlefield_if_nonland`, pushes
+`pending_leaves_dispatches` (LEAVES fan-out) and
+`queue_token_cease` (CR 111.7) — **but never enqueues / fires the
+destroyed creature's DIES-triggered ability** (it bypasses the
+generic `destroy()` dies-trigger dispatch path). Python's
+`src/mtg_bot/effects/generic/destroy.py::DestroyTargetArtifactOr
+TappedCreature.resolve` correctly calls **`destroy(state, obj)`**
+from `mtg_bot.turn` — the generic destroy that fires dies-triggers
+(CR 603 / 700.4). R74-2's fix (`f456ec20`) added the DIES drain at
+the 4 `Effect::DepressurizeEffect` resolution sites **only** —
+it did not touch the `DestroyTargetArtifactOrTappedCreature` arm,
+so this distinct Effect arm still drops the dispatch.
+**Python (SoT) correct; Rust wrong.**
+
+**Carry-forward for the Rust dispatch (do NOT edit `rust/src/`):**
+route the `Effect::DestroyTargetArtifactOrTappedCreature` kill
+through the generic destroy / dies-trigger dispatch (or explicitly
+enqueue the DIES event for the leaving object), exactly the R74-2
+`f456ec20` fix shape transplanted to this arm. Audit the OTHER
+hand-rolled destroy arms in `state_ops_resolve.rs` (Seedship
+Impact's destroy-half clones the `DestroyTargetArtifact` /
+`DestroyTargetArtifactOrTappedCreature` body verbatim per its own
+comment) for the same omission while there. Repro `--archetype
+52021 --seed 7`.
+
+### CFI-1 (the 2 `cast_spell::graveyard_p1`) — already-tracked, NOT re-filed
+
+arch 815 s2 (`Galactic Wayfarer` id 72: counters PY 3 / RST 0) and
+arch 54024 s7 (`Germinating Wurm` id 66: counters PY 1 / RST 0) —
+each byte-identical except the net-counters field on a destroyed
+object: Python preserves the dead object's net +1/+1 counters in
+the graveyard signature, Rust zeroed them. This is the
+already-tracked Rust-side stray `obj.counters = 0;` in a
+hand-rolled destroy arm (the round-74 CFI-1 co-occurrence
+component, surfaced standalone now that R74-2 no longer dominates
+the same games). Per the campaign directive **NOT re-filed** —
+already owned by the Rust dispatch / orchestrator resync.
+
+### Verdict
+
+| Claim | Verdict |
+|---|---|
+| The 3 fixes (R74-1 `c3cd126f` / R74-2 `f456ec20` / R74-3 `e4d4a50e`) resolved the round-74 trio at scale (expect ~111 → ~0 for the trio) | **YES.** Identical 360-game / 5-disjoint-band / 5-seed-offset grid on `fc430262`: **249 → 340 PASS, 111 → 20 FAIL_DIVERGENCE (−91, 82%)**. ALL 64 `combat_phase::*` (the entire R74-1+R74-3 bucket) → 0. All 3 canonical repros flip FAIL→PASS. 0 PASS→FAIL regressions, per-band game counts byte-identical, 0 new untriaged shapes. |
+| The residual 20 is a residual of R74-1/2/3 (incomplete fix) | **NO.** Every R74-1/R74-2/R74-3 canonical repro PASSes; the entire `combat_phase` (R74-1/R74-3) bucket is zero. The residual is two **NEW** genuinely-distinct Rust-side divergences (R76-1 token-id reuse; R76-2 Radiant Strike DIES-trigger drop) the round-74 coarse `cast_spell::battlefield` bucket had **conflated** with R74-2 — un-masked by the R74-2 fix, NOT caused by an incomplete one (verify-against-round-75-isolation-evidence: same games failed pre-fix). Plus 2× already-tracked CFI-1. |
+| Python `src/mtg_bot/` (SoT) is correct | **YES in all.** R76-1: Python's monotonic `next_object_id` is the correct invariant; Rust's `max_id+1` live-scan reuses freed ids. R76-2: Python's `destroy()` fires dies-triggers (CR 603); Rust's hand-rolled arm bypasses it. CFI-1: Python preserves the dead object's counters; Rust zeroed them. No Python/SoT churn anywhere. |
+| The round-72 cap-120 holds on the post-spell-admit pool at the deeper game reach | **YES — 0/360 FAIL_TIMEOUT/FILT/EXC** even at the deeper-game reach the 3 fixes enable. |
+
+### Scope / non-changes
+
+Pure docs (this entry) + the regenerated tracked round-evidence
+JSONs (`tmp/bench_r74_{lo,mid1,mid2,mid3,hi}.json` +
+`tmp/bench_r74_rollup.json`, the round-64/68/70/71/74/75
+`tmp/bench_*` precedent — they overwrite the round-75 isolation
+evidence) + ONE new read-only diagnostic
+(`scripts/scout_r76_repro_tracer.py` — agent-generated, stays under
+`scripts/` per the project `CLAUDE.md` round-74 tracer precedent;
+NOT imported by any test). **`scripts/bench_trajectory_parity.py`
+(round-72 gate-pinned) and `scripts/scout_r74_run_sweep.py` (the
+round-74 wrapper) were run UNMODIFIED** — the re-sweep is the same
+orchestration wrapper round-74/75 used, so the before→after delta
+is confound-free. **No production / harness / `_SAFE_*` / Rust /
+`.pyd` change**; the `rust/src/` inspection was strictly read-only
+(non-Rust agent — R76-1/R76-2 are Rust-dispatch carry-forwards, NOT
+fixed here per the directive; no `maturin`). Did NOT touch
+`docs/POOL_PARITY.md` / `docs/residue_worklist.json` /
+`docs/SUBSYSTEM_ROADMAP.md` / `docs/EOE_PROBE_READINESS_AUDIT.md` /
+`docs/RUST_PARITY_GAPS.md` (R76-1/R76-2 recorded here, the canonical
+bench-sweep findings home, per the round-61/62/64/68/74/75
+precedent and the R74-1/R74-2 Rust-side carry-forward precedent —
+a Python-side test pin would be a brittle anti-pin that breaks the
+gate the moment the Rust dispatch fixes it; the tracking pin is
+this documented carry-forward + the worklog todo entries) /
+`scripts/parity_smoke.py`'s `_zone_signature`/`_net_counters` / the
+round-69/72 max-turns pins / the 6 protected
+`test_audit_safe_trigger_*` tests / the two concurrent Rust agents'
+surfaces. The gate
+(`test_parity_smoke + test_cross_engine_etb_triggers +
+test_trajectory_parity + test_trajectory`, `--no-cov -n 4`) was run
+as the merge precondition — **GREEN 1521** (clean `fc430262`
+passing set; nothing executable on the gate path moved — the new
+`scripts/scout_r76_repro_tracer.py` is not imported by any test).
+
+**Carry-forward for the Rust dispatch:** **R76-1** — non-monotonic
+token-id allocator (`state_ops_resolve.rs` ≈2719/2882/3016 +
+Lander-rider private re-derivations) reuses a ceased-to-exist
+token's id; fix = a monotonic `next_object_id` counter on the Rust
+`GameState` (Python `game.py:2787-2798` / Rust `next_etb_timestamp`
+precedent). Repro `--archetype 1126 --seed 2`. **R76-2** —
+`Effect::DestroyTargetArtifactOrTappedCreature` (Radiant Strike,
+≈5433-5486) hand-rolled destroy drops DIES-trigger dispatch; fix =
+the R74-2 `f456ec20` shape transplanted to this arm (+ audit the
+other hand-rolled destroy arms incl. Seedship Impact's destroy-half
+clone). Repro `--archetype 52021 --seed 7`. CFI-1 (the 2
+`graveyard_p1`) already owned — NOT re-filed.
