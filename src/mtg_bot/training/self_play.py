@@ -46,6 +46,7 @@ from mtg_bot.agents import RandomAgent
 from mtg_bot.decks import Deck
 from mtg_bot.replay import save_replay
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
+from mtg_bot.search.engine_adapter_factory import make_game_state_adapter
 from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
@@ -531,7 +532,11 @@ def _play_one_match_game(
         decks=[deck_p0.cards, deck_p1.cards],
         seed=engine_seed,
     )
-    adapter = MtgGameStateAdapter(
+    # B3-S1: route through the single decision-source factory. Under
+    # decision_source="python" (the default, carried on `heuristics`)
+    # this returns the identical MtgGameStateAdapter built with the
+    # same args — byte-identical to pre-B3 behavior.
+    adapter = make_game_state_adapter(
         engine, expose_combat_decisions=True,
         heuristics=heuristics,
     )

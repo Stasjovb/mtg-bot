@@ -83,6 +83,7 @@ from mtg_bot.decks import Deck
 from mtg_bot.features import FEATURE_DIM, extract_features
 from mtg_bot.replay import save_replay
 from mtg_bot.search.engine_adapter import MtgGameStateAdapter
+from mtg_bot.search.engine_adapter_factory import make_game_state_adapter
 from mtg_bot.search.heuristics_config import HeuristicsConfig
 from mtg_bot.search.protocol import CHANCE_PLAYER, PlayerID
 from mtg_bot.simulate import setup_game
@@ -848,7 +849,12 @@ def _generate_one_game_data(
     if game_idx % 2 == 1:
         engine.active_player_idx = 1
         engine.priority_player_idx = 1
-    adapter = MtgGameStateAdapter(
+    # B3-S1: route through the single decision-source factory. Under
+    # decision_source="python" (the default, carried on `heuristics`)
+    # this returns the identical MtgGameStateAdapter built with the
+    # same args — byte-identical to pre-B3 behavior. The flag is read
+    # once here at game construction (the single atomic-revert knob).
+    adapter = make_game_state_adapter(
         engine, expose_combat_decisions=True,
         heuristics=heuristics,
     )

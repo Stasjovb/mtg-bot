@@ -29,7 +29,25 @@ SEARCH_LIMITATIONS.md entries (#6, #7, #9, #10, #11).
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
+
+# The single atomic-revert flip knob (B3 / SOT_FLIP_CUTOVER_PLAN
+# Step 3). Per the umbrella's rollback constraint
+# (``SOT_FLIP_CUTOVER_PLAN.md`` §3) the decision-source switch MUST be
+# a single flag so revert is atomic — a half-reverted state must be
+# unrepresentable. It is read once at game-construction by
+# ``make_game_state_adapter``; the whole game then uses one provider.
+#
+# * ``"python"``       — today's behavior (the unchanged
+#   ``MtgGameStateAdapter``). THE DEFAULT until the flip. Zero
+#   behavior change when off — the safe-by-default landing.
+# * ``"rust_shadow"``  — B3-S4 bake-in: Rust drives, Python checks in
+#   lock-step (the 4-assertion equivalence tripwire).
+# * ``"rust"``         — post-bake-in: Rust only (B3-S5, the atomic
+#   flip — orchestrator-sequenced, NOT enabled by B3-S1..S4).
+DecisionSource = Literal["python", "rust", "rust_shadow"]
+_VALID_DECISION_SOURCES = ("python", "rust", "rust_shadow")
+DEFAULT_DECISION_SOURCE: DecisionSource = "python"
 
 
 @dataclass(frozen=True)
@@ -37,10 +55,16 @@ class HeuristicsConfig:
     """Bundled toggles for the adapter's priority short-circuit
     heuristics.
 
-    All defaults are ``True``: production self-play uses every
-    heuristic. ``HeuristicsConfig.disabled()`` returns the all-False
-    counterpart used by eval / correctness-sensitive runs (and by the
-    test session fixture that wraps the adapter).
+    All heuristic defaults are ``True``: production self-play uses
+    every heuristic. ``HeuristicsConfig.disabled()`` returns the
+    all-False counterpart used by eval / correctness-sensitive runs
+    (and by the test session fixture that wraps the adapter).
+
+    ``decision_source`` is the B3 single atomic-revert flip knob
+    (default ``"python"`` — zero behavior change when off). It travels
+    with the heuristics through the same JSON-serialization /
+    cross-pickle plumbing so the distributed orchestrator round-trips
+    it for free.
     """
 
     phase_prune_enabled: bool = True
@@ -48,6 +72,15 @@ class HeuristicsConfig:
     skip_empty_combat_enabled: bool = True
     skip_opp_postcombat_main_enabled: bool = True
     skip_dead_main1_enabled: bool = True
+    decision_source: DecisionSource = DEFAULT_DECISION_SOURCE
+
+    def __post_init__(self) -> None:
+        if self.decision_source not in _VALID_DECISION_SOURCES:
+            raise ValueError(
+                f"decision_source must be one of "
+                f"{_VALID_DECISION_SOURCES!r}, got "
+                f"{self.decision_source!r}"
+            )
 
     @classmethod
     def disabled(cls) -> "HeuristicsConfig":
@@ -101,5 +134,11 @@ class HeuristicsConfig:
             ),
             skip_dead_main1_enabled=bool(
                 d.get("skip_dead_main1_enabled", True),
+            ),
+            # decision_source defaults to "python" (the safe-by-
+            # default flip knob) when absent — every pre-B3 serialized
+            # config round-trips byte-identically.
+            decision_source=d.get(
+                "decision_source", DEFAULT_DECISION_SOURCE,
             ),
         )
