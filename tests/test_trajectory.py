@@ -6011,6 +6011,107 @@ def test_r74_3_advance_phase_python_expires_ueot_pt_at_cleanup():
     )
 
 
+def test_r76_1_rust_token_id_allocator_is_monotonic():
+    """Round-76 R76-1 pin: Rust's token-mint sites must allocate object
+    ids from a monotonic counter, byte-equal with Python's
+    ``GameState.new_object`` (``src/mtg_bot/game.py:2787-2798``;
+    ``self.next_object_id += 1``, never reused — CR 111.7).
+
+    Pre-fix, every Rust token-mint arm in ``state_ops_resolve.rs``
+    (``Effect::CreateToken`` + the each-player / tapped riders +
+    the Seedship Impact / Orbital Plunge Lander riders + the
+    ``CreateTokenCopyOfTargetCreatureYouControl`` arm) allocated a
+    new id by scanning every live zone on both players for the
+    current ``max_id`` and using ``max_id + 1``. That scan is
+    **non-monotonic**: a token that has ceased to exist (CR 111.7 —
+    it left the battlefield) no longer contributes to ``max_id``, so
+    a later mint re-derives a value at-or-below the freed id and
+    **reuses it**, diverging from the Python SoT (whose persistent
+    monotonic counter never recycles a freed id).
+
+    Documented minimal repro (``docs/bench_trajectory_parity_smoke.md``
+    round-76 R76-1): ``bench_trajectory_parity --archetype 1126
+    --seed 2``. ``Galactic Wayfarer`` (ETB "create a Lander token")
+    is cast twice; the first Lander ceases to exist before the
+    second Wayfarer's ETB, so pre-fix Rust mints the second Lander
+    with the freed id (Python id 121, Rust id 120) — a single-field
+    ``cast_spell::battlefield`` divergence, every other object id
+    byte-identical.
+
+    Post-fix all mint sites draw from the monotonic
+    ``GameState.next_object_id`` counter via
+    ``crate::state::reserve_object_id`` (seeded at game start to
+    ``1 + max initial id`` = exactly Python's ``next_object_id``
+    after its setup ``new_object`` loop, persisted across clones —
+    CR 111.7), so the documented repro runs to a clean ``PASS``
+    (no id-reuse divergence). NEGATIVE CONTROL: this assertion is
+    verified to FAIL pre-fix at the documented
+    ``cast_spell::battlefield`` id-reuse divergence and to be GREEN
+    post-fix.
+    """
+    import sys
+    import pathlib
+
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+
+    # The bench driver lives under scripts/ and lazily imports
+    # `tests.parity._picker_shims`; under pytest the repo root is on
+    # sys.path so that resolves. scripts/ must be importable too.
+    _repo = pathlib.Path(__file__).resolve().parent.parent
+    _scripts = _repo / "scripts"
+    if str(_scripts) not in sys.path:
+        sys.path.insert(0, str(_scripts))
+    import bench_trajectory_parity as bench  # noqa: E402
+
+    pr = get_active_source().get_printings()
+    if pr.get("Galactic Wayfarer") is None:
+        pytest.skip(
+            "Galactic Wayfarer absent from active CardSource"
+        )
+
+    R76_1_ARCH, R76_1_SEED = 1126, 2  # documented minimal repro
+    try:
+        deck_names = trajectory.load_production_deck(archetype=R76_1_ARCH)
+    except (FileNotFoundError, IndexError):
+        pytest.skip(
+            "17lands deck pool unavailable for archetype 1126"
+        )
+    assert "Galactic Wayfarer" in deck_names, (
+        "archetype 1126 must carry Galactic Wayfarer (round-76 R76-1 "
+        "scout — the twice-cast ETB-Lander token-id-reuse carrier)"
+    )
+
+    result = bench.drive_one_game(
+        archetype=R76_1_ARCH,
+        seed=R76_1_SEED,
+        max_turns=120,  # the round-72 cap-120 default
+        combat_strategy="attack_all",
+        mulligans=0,
+    )
+
+    # Pre-fix this was FAIL_DIVERGENCE at turn 14 (action ~29) with
+    # field shape ``cast_spell::battlefield`` — the second Lander's
+    # id skewed by exactly 1 (Python 121, Rust 120) because Rust
+    # recycled the first (ceased) Lander's freed id. Post-fix the
+    # monotonic counter never recycles, so both engines mint the
+    # second Lander with the same fresh id and the game runs to a
+    # clean natural end.
+    assert result.status == "PASS", (
+        f"R76-1 repro (archetype {R76_1_ARCH}, seed {R76_1_SEED}) "
+        f"must PASS post-fix; got status={result.status!r} "
+        f"divergence_turn={result.divergence_turn} "
+        f"kind={result.divergence_kind!r} "
+        f"fields={result.divergence_fields!r} "
+        f"exc={result.exception_type!r}:{result.exception_message!r}. "
+        f"A non-PASS here means a Rust token-mint site is still "
+        f"allocating object ids via the non-monotonic max_id+1 "
+        f"re-scan instead of the monotonic next_object_id counter "
+        f"(CR 111.7 — reusing a ceased object's id diverges from "
+        f"the Python SoT GameState.new_object)."
+    )
+
+
 def test_r74_3_advance_phase_python_clears_temp_pt_and_cleanup_registry():
     """Round-74 R74-3 unit pin: ``advance_phase_python``'s CLEANUP-entry
     transition zeros every battlefield permanent's

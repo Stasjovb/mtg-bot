@@ -137,6 +137,18 @@ impl GameState {
             next_id += 1;
         }
 
+        // R76-1: keep the monotonic id counter in lockstep with the
+        // freshly-injected library. `load_deck` runs at game setup
+        // (before any id has been freed), so the `max_id + 1` scan
+        // above is correct *here* for the injected objects' own ids;
+        // but a later mid-game token mint draws from
+        // `next_object_id`, so it MUST be advanced past every id this
+        // call just used or the mint would collide with a library
+        // card's id. Take the max so a prior setup primitive that
+        // already pushed the counter higher is never walked
+        // backwards (CR 111.7 — the counter is monotonic).
+        self.next_object_id = self.next_object_id.max(next_id);
+
         // Replace the library through Arc::make_mut so cloning a
         // GameState and then loading a deck on the clone doesn't
         // mutate the source's Vec.

@@ -317,6 +317,34 @@ pub fn reserve_etb_timestamp(state: &mut GameState) -> u32 {
     ts
 }
 
+/// **R76-1 closure — reserve the next monotonic object id (CR 111.7).**
+///
+/// Reads `state.next_object_id`, increments the counter (saturating
+/// add — u32 is wide enough that a realistic game won't overflow),
+/// and returns the just-reserved id for the caller to stamp onto the
+/// fresh `GameObject` before pushing it into a zone.
+///
+/// This is the single monotonic id primitive every mid-game mint
+/// site draws from. It mirrors Python's `GameState.new_object`
+/// (`src/mtg_bot/game.py:2787-2798`), whose `self.next_object_id +=
+/// 1` is the byte-equal source of truth: an object id created during
+/// a game is NEVER reused, even after the object ceases to exist
+/// (CR 111.7). Centralizing the read-then-bump idiom (same shape as
+/// `reserve_etb_timestamp`) keeps every call site one line and makes
+/// the non-monotonic `max_id + 1` re-scan that caused R76-1
+/// structurally impossible to reintroduce at a mint site.
+///
+/// Multi-object mints (the per-`count` token loops) call this once
+/// per object so the produced ids are strictly increasing and
+/// intermix correctly with ids minted by prior / subsequent effects
+/// — identical to the per-object `state.next_object_id += 1` Python
+/// runs in its own per-token loop.
+pub fn reserve_object_id(state: &mut GameState) -> u32 {
+    let id = state.next_object_id;
+    state.next_object_id = state.next_object_id.saturating_add(1);
+    id
+}
+
 /// **CE20 Slice 5 (Walker loyalty — `starting_loyalty` ETB seeding).**
 /// Per CR 606.5b, a planeswalker enters the battlefield with a number
 /// of loyalty counters equal to its printed starting loyalty. This
@@ -1252,6 +1280,50 @@ pub struct GameState {
     /// order via a stable-sort by `etb_timestamp` at battlefield-walk
     /// time rather than emitting the field itself.
     pub next_etb_timestamp: u32,
+    /// **R76-1 closure — monotonic object-id source (CR 111.7).**
+    /// Bookkeeping counter incremented once per object minted after
+    /// game start (every token-mint site in `state_ops_resolve.rs` —
+    /// `Effect::CreateToken` / the each-player / tapped riders /
+    /// Seedship Impact / Orbital Plunge Lander riders / the
+    /// copy-token arm — plus the `load_deck` /
+    /// `register_and_inject_object` setup-injection primitives, which
+    /// keep this counter in lockstep with the initial population).
+    /// Each mint site reads the current value via
+    /// `reserve_object_id(&mut state)` (saturating bump, same shape
+    /// as `reserve_etb_timestamp`).
+    ///
+    /// **Why it exists (the R76-1 bug).** The pre-R76-1 token-mint
+    /// arms allocated a new id by scanning every live zone on both
+    /// players for the current `max_id` and using `max_id + 1`. That
+    /// scan is **non-monotonic**: a token that has ceased to exist
+    /// (CR 111.7 — it left the battlefield) no longer contributes to
+    /// `max_id`, so a later mint re-derives a value at-or-below the
+    /// freed id and **reuses it**, violating the object-identity
+    /// invariant (each object created during a game gets a NEW
+    /// unique id). Python's `GameState.new_object`
+    /// (`src/mtg_bot/game.py:2787-2798`) is the source of truth: a
+    /// strict monotonic `self.next_object_id += 1` that never reuses
+    /// a freed id. This counter mirrors Python's exactly so token
+    /// ids stay byte-equal across engines for the whole game.
+    ///
+    /// **Seeded at game start** to the number of objects the setup
+    /// primitive created (`make_state`'s post-build `next_id`, =
+    /// 1 + max initial id = exactly Python's `next_object_id` after
+    /// its `new_object` setup loop). The `load_deck` /
+    /// `register_and_inject_object` test/setup primitives advance it
+    /// past every object they inject so a mid-game mint that follows
+    /// an injection still draws a fresh id.
+    ///
+    /// **Persisted across clones** (CR 111.7 is a game-lifetime
+    /// invariant — a determinized clone must keep allocating ids
+    /// above every id the parent ever used, never recycle). Like
+    /// `next_etb_timestamp`, it is a transient bookkeeping counter
+    /// and is **not serialized into the fingerprint** — the per-
+    /// object `id` slot already carries the observable identity; two
+    /// states that share the same observable object ids must share a
+    /// fingerprint regardless of how many mints happened along the
+    /// way.
+    pub next_object_id: u32,
     /// **Round 28 freq-2 closure — resolving combat-damage amount.**
     /// Bookkeeping slot read by
     /// `Effect::DrawCardsEqualToResolvingCombatDamage` (Starwinder /
@@ -1640,6 +1712,12 @@ impl Clone for GameState {
             spell_warped_this_turn: self.spell_warped_this_turn,
             pending_decisions: self.pending_decisions.clone(),
             next_etb_timestamp: self.next_etb_timestamp,
+            // R76-1: CR 111.7 is a game-lifetime invariant — a
+            // determinized clone must keep allocating object ids above
+            // every id the parent ever used (never recycle a freed
+            // id). Persist the monotonic counter, mirroring Python's
+            // `clone()` copying `state.next_object_id` (game.py:3322).
+            next_object_id: self.next_object_id,
             resolving_combat_damage_amount: self.resolving_combat_damage_amount,
             winner_id_sticky: self.winner_id_sticky,
             rng,
@@ -2132,6 +2210,13 @@ pub fn make_synthetic_state(
         spell_warped_this_turn: false,
         pending_decisions: Vec::new(),
         next_etb_timestamp: 0,
+        // R76-1: seed the monotonic id counter past every object
+        // `make_player` created. p0 ids run [0, id_offset); p1 ids
+        // run [id_offset, 2*id_offset). The next fresh id is
+        // 2*id_offset = exactly 1 + the max initial id, the same
+        // value Python's `next_object_id` holds after building the
+        // equivalent population via `new_object`.
+        next_object_id: id_offset.saturating_mul(2),
         resolving_combat_damage_amount: 0,
         winner_id_sticky: None,
         // Effect-rng-threading closure: default `None`; cross-engine
