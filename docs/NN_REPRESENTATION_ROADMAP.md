@@ -8,7 +8,42 @@ research-style Phase 0/1/2/3 decision tree. We're not running Phase 0 (aux
 heads on the current featurizer) as a probe — we're committing directly
 to the structured input. We're explicitly not pursuing Phase 3 (MuZero).
 
+**Implementation status (2026-05-17 — verified against `trained_weights/`):**
+
+- **Step 1 (structured per-object input) — LANDED.** The production
+  v-chain is `architecture: structured` for **every** registered
+  version `v1`–`v10` (`current_best: v5`, per
+  `trained_weights/iterate_state.json`). Input is built by
+  `mtg_bot.training.state_tokenizer` → `StructuredModel`, **not**
+  `features.py`. `v1` was the random-init cold-start; `v2` onward
+  were trained on the structured representation.
+- **Step 3 (last-N action tokens) — LANDED**, folded into Step 1 as
+  designed: the tokenizer emits the filtered, viewer-redacted
+  last-32 action history (`structured_config.action_history_n: 32`).
+- **Step 2 (offline deck-belief) — NOT landed.** Hidden information
+  is still handled by PIMC determinization; the tokenizer
+  deliberately emits the opponent hand as anonymous slots
+  (`PRINTING_NA`, `public_mask=0`).
+- **Step 4 (hand-belief aux head) — NOT landed** (depends on Step 2).
+- The legacy 51-dim `features.py` featurizer + flat `_ValuePolicyMLP`
+  trunk is the **pre-structured** path; those weights (`v11`–`v16`,
+  the 1024-1024-512 trunk) are **archived** at
+  `trained_weights/archived_pre_structured/` and are not production.
+  The "Current state" section below describes that **superseded
+  baseline** — retained for the design rationale (why structured was
+  necessary), not as a description of today.
+- **Net-scale caveat** (see `docs/BENCHMARKING_FINDINGS.md` §2A): the
+  shipped structured trunk is **small** (`emb_dim 128, n_layers 2,
+  hidden_dim 256`). "Structured input has landed" ≠ "the trunk is
+  large" — trunk capacity/depth-vs-data is an **open** question, not
+  closed by Step 1.
+
 ## Current state
+
+> **Superseded — pre-structured baseline (historical).** This section
+> describes the legacy 51-dim featurizer that motivated the rewrite;
+> it is **not** the production input as of 2026-05-17 (see
+> "Implementation status" above). Kept for the design rationale.
 
 The NN evaluator's input today is a fixed 51-dim float vector produced
 by `src/mtg_bot/features.py`. Layout (see `features.py:48-104` for the
