@@ -3514,3 +3514,117 @@ cycle-2 post-merge resync against the current origin/main Rust
 non-Rust slice this slice did NOT rebuild it. No Rust touched → no
 `maturin` here. The gate run below is purely confirmatory (no pinned
 trajectory could shift — nothing executable changed).
+
+## Round 72 (2026-05-17) — apply the de-risked round-70 mitigation: bench `--max-turns` default **60 → 120** (one line) + a cap-60→120 parity-safety pin; the canonical-broad-grid residual ~23% FAIL_TIMEOUT is eliminated (verdict density 76.7% → 100%)
+
+Round-70 (`256e2ce3`) proved the residual **~23% (14/60)** cap-60
+FAIL_TIMEOUT on the canonical broad grid (archetypes 0-29 × seeds 0-1)
+is **100% recoverable** and explicitly deferred a now-de-risked
+one-line follow-up: raise the bench `--max-turns` default 60 → 120.
+This round applies exactly that, with the round-69 25→60 change
+pattern.
+
+### The change — one argparse default line + comment/prose sync
+
+- **`scripts/bench_trajectory_parity.py`** argparse default:
+  `"--max-turns", type=int, default=60` → `default=120` (the single
+  load-bearing line). Plus a data-justified comment citing round-70's
+  per-game ground truth, the `--max-turns` help text, the module
+  docstring run example + parenthetical, and the FAIL_TIMEOUT
+  docstring prose. **NO logic change** — `max_turns` is consumed at
+  exactly one site, the loop bound `if py_state.turn_number >
+  max_turns: FAIL_TIMEOUT; break`.
+
+### Before → after (canonical broad grid, the round-70 ground truth)
+
+The expectation is the round-70 real-bench cross-check verbatim (this
+round does not re-run the broad sweep — round-70/71 already established
+it divergence-clean at scale; this is the one-line application of a
+proven characterization):
+
+| Outcome | round-69 default (cap 60) | round-72 default (cap 120) |
+|---|---:|---:|
+| PASS | 46 | **60** |
+| **FAIL_TIMEOUT** | **14 (23.3%)** | **0 (0.0%)** |
+| FAIL_DIVERGENCE | 0 | **0** |
+| FAIL_EXCEPTION | 0 | 0 |
+| **Parity verdicts** | **46/60 (76.7%)** | **60/60 (100%)** |
+| Wall | 81s | **84.3s (+3s)** |
+
+**Before→after FAIL_TIMEOUT% expectation on the canonical broad grid:
+23.3% → 0.0%** (+23.3 pts of parity-verdict density; all 14 residual
+converts FAIL_TIMEOUT → **PASS**, 0 → FAIL_DIVERGENCE — round-70's
+per-game finding: the residual is near-creatureless deck-out races,
+12/14 converging ~turn 108 both at 20 life, 2/14 a lone-1/1 slow
+clock; caps 160/220 recover +0, so 120 is the true ceiling). On the
+broader disjoint round-71 span (740 games, idx 30-759) the analogous
+18.6% cap-60 FAIL_TIMEOUT residue likewise converts at the new
+default — same lever, same parity-safety, same deck-out-race shape.
+
+### Parity-safety — identical to round-69's proof, already pin-locked
+
+`max_turns` is a pure upper bound on an otherwise-deterministic loop
+(checked only as `if turn_number > max_turns`). Raising it can **ONLY
+convert FAIL_TIMEOUT → PASS/DIVERGENCE**; it can **NEVER** alter a
+game that already ended before the old cap. This is the round-69
+property verbatim, one cap-doubling deeper, and round-70 already
+verified it empirically per-game: **0 trajectory-shift / 0
+FAIL_DIVERGENCE / 0 FAIL_EXCEPTION across all 60 canonical-grid games
+× all 5 cap rungs 60→90→120→160→220.** Every gate test passes
+`max_turns` explicitly (the `MT` local constant / per-test value), so
+the argparse default is consumed only by the CLI `main()` — changing
+it is structurally invisible to the pinned suite (confirmed: full
+gate green, no pinned trajectory shifted, the round-69 pin still
+green).
+
+The new `test_parity_smoke.py::test_r72_max_turns_120_recovers_floor_and_stays_parity_safe`
+pin (mirrors the round-69 pin one cap-doubling deeper, above the
+`PHASE5_PROBES` sentinel) locks both properties at the new boundary:
+**(1)** every game that COMPLETES at cap-60 is byte-identical
+(status / winner / win_reason / turns_played / actions_played) at
+cap-120 — a RED-FLAG assertion if a completed trajectory ever shifts
+on a cap change; **(2)** representative round-70 residual deck-out
+games (scanned from the canonical archetypes 0-29 × seeds 0-1
+population) that FAIL_TIMEOUT at cap-60 recover to a clean **PASS** at
+cap-120 with 0 FAIL_TIMEOUT→FAIL_DIVERGENCE conversions (the round-70
+ground truth: all 14 residual converts → PASS). Both the round-69
+pin and the new round-72 pin verified green; **no pinned trajectory
+shifted** (the load-bearing RED-FLAG check — none could: nothing on
+the gate path moved, and the cap-invariance assertion held per-game).
+
+### Relationship to round 69 / 70 / 71
+
+Round-69 first raised the cap 25 → 60, sized to the *round-65 grid's*
+slowest decisive (turn 60), recovering ~30 pts. Round-70 then proved
+the *residual* 23% it handed back to the Phase-3/5 Rust lever is
+**also** a budget mis-size — the canonical broad grid's
+bridge-filtered near-creatureless mirrors are deck-out races running
+to ~turn 108, not a structural floor and not the round-65
+TOKEN_PRINTING_SUBSTRATE Rust ask. Round-71 confirmed the round-69
+cap-60 default is divergence-clean at scale (740 games, idx 30-759,
+0 FAIL_DIVERGENCE). This round closes the loop: the one-line
+application of round-70's de-risked finding. The entire historical
+~53% FAIL_TIMEOUT drag on the canonical broad grid is now eliminated
+as a turn-budget mis-size; none of it was a Rust-substrate gap.
+`--require-creatures N` (round-66) remains a valid orthogonal
+reporting-honesty knob (default-off, passes `max_turns` explicitly in
+its own pin) — unaffected. The round-70 forward flag of a
+deck-out-aware early terminator (recovering the same 12 games in
+fewer turns than a blanket cap-120) remains a future wall-cheaper
+parity-safe bench-harness lever, not this slice.
+
+### Gate
+
+1 bench-script change (`scripts/bench_trajectory_parity.py` —
+argparse `--max-turns` default 60 → 120 + data-justified comment +
+help/docstring/prose sync; no logic change) + 1 regression pin
+(`test_parity_smoke.py::test_r72_max_turns_120_recovers_floor_and_stays_parity_safe`,
+above the `PHASE5_PROBES` sentinel) + this docs entry. Full parity
+gate (`test_parity_smoke + test_cross_engine_etb_triggers +
+test_trajectory_parity + test_trajectory`, `--no-cov -n 4`): **1481**
+(1480 → 1481, +1 the new pin) — no regression, no pinned trajectory
+shifted (the round-69 cap-invariance pin still green, and the new
+pin's Property-1 RED-FLAG assertion held per-game). The `.pyd` was
+already rebuilt by the orchestrator's cycle-2 post-merge resync
+against the current origin/main Rust; as a non-Rust slice this slice
+did NOT rebuild it. No Rust touched → no `maturin` here.
