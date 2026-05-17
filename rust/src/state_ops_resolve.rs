@@ -409,20 +409,23 @@ pub(crate) fn dispatch_event(
     subject_id: u32,
 ) -> PyResult<()> {
     // Defensive: Slice 9 wires ENTERS + DIES + CAST + ATTACKS +
-    // BLOCKS + LEAVES_BATTLEFIELD. Other events declared in the enum
-    // stay raise-on-dispatch so a future caller who skipped the
-    // fan-out plan surfaces it loudly rather than silently no-op.
+    // BLOCKS + LEAVES_BATTLEFIELD; round-58 adds BECOMES_TAPPED.
+    // Other events declared in the enum stay raise-on-dispatch so a
+    // future caller who skipped the fan-out plan surfaces it loudly
+    // rather than silently no-op.
     if event != Event::Enters
         && event != Event::Dies
         && event != Event::Cast
         && event != Event::Attacks
         && event != Event::Blocks
         && event != Event::LeavesBattlefield
+        && event != Event::BecomesTapped
     {
         return Err(PyValueError::new_err(format!(
             "dispatch_event: event {event:?} is not yet wired in Slice 9; \
              only Event::Enters, Event::Dies, Event::Cast, Event::Attacks, \
-             Event::Blocks, and Event::LeavesBattlefield dispatch today"
+             Event::Blocks, Event::LeavesBattlefield, and \
+             Event::BecomesTapped dispatch today"
         )));
     }
 
