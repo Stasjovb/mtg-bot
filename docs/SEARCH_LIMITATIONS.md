@@ -5928,6 +5928,60 @@ parity-safe — recorded per the §3.1/§2.2/§2.3 design):**
 
 ---
 
+## Loader-admit gate is a reduced-card-universe boundary (DOCUMENTED + ENFORCEABLE — C6 pin landed)
+
+**Location.** `src/mtg_bot/parity/trajectory.py`:
+`_filter_deck_to_bridge_supported` (the 5-disjunct admit chokepoint)
++ `_production_deck_to_deckspec_core` (the Forest-pad). Public
+surface: `production_deck_to_deckspec` (silent-drop default,
+parity-required) / `production_deck_to_deckspec_instrumented` (the C6
+observable + fail-loud wrapper) / `LoaderAdmitPolicy` /
+`NonAdmittedCardError` / `LoaderAdmitReport`.
+
+**What the shortcut is.** The parity loader admits a card-name only if
+it passes one of 5 bridge-support disjuncts (`basic_land`,
+`nonbasic_mana_land`, `pure_warp_creature`, `simple_creature`,
+`simple_spell`); any other name is dropped and the deck is
+Forest-padded to size. Per `docs/LOADER_ADMIT_COMPLETENESS_ANALYSIS.md`
+(re-measured `4704ca3e`): pool admit 10.95%, mean non-land deck-slot
+admit ~19.7%, **0 / 129,996 real decks fully admittable**. The bench
+therefore plays the *admitted residue of real decks, Forest-padded* —
+a deliberately reduced card universe.
+
+**Why it's OK.** This is the accepted staged-flip fence
+(`docs/SOT_FLIP_CUTOVER_PLAN.md` C5/C6/§7-OQ3). While Python is the
+source of truth (single-script-replay), the silent drop is benign:
+both engines replay the SAME action-dict, so a Forest-padded reduced
+deck is still a faithful cross-engine parity probe. The byte-equal
+campaign metric is honest *over the admitted population*, which is
+exactly what the bench exercises.
+
+**Failure mode (and the C6 closure).** At/after the SoT flip the
+silent drop would become a *silent correctness hole* — a Rust-sourced
+bot would quietly play a different (reduced, Forest-padded) deck than
+intended, with no signal. C6 closes this: the boundary is now
+**observable** (`LoaderAdmitReport` names every dropped slot +
+Forest-pad count, with multiplicity) and **fail-loud-enforceable**
+(`LoaderAdmitPolicy.RAISE` raises `NonAdmittedCardError` instead of
+silently degrading — the post-flip Rust-sourced path sets this). The
+default `production_deck_to_deckspec` path is **bit-identical** to the
+pre-C6 behavior (parity-neutral; the silent drop stays the
+Python-SoT default). **Pinned by:**
+`tests/test_c6_loader_admit_boundary.py` (observable not silent,
+fail-loud RAISE, parity-neutral default-path-bit-identical).
+
+**Fix scope.** Not a "fix" — it is the deliberate, now-enforced
+soundness boundary. Growing the admitted universe is C1 / the
+substrate slices' job (orchestrator-sequenced, multi-round); it is
+explicitly NOT C6's job. C6 is the boundary pin only.
+
+**Impact.** No strength/perf cost on the parity path (observe-only on
+the default). Post-flip the RAISE policy converts a silent
+correctness hole into a loud, debuggable, deck-named failure — the
+load-bearing soundness improvement for the staged flip.
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,
