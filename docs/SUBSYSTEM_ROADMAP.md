@@ -836,6 +836,53 @@ second:
    >     at a time; no padding.
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 14 —
+   >   SoT-FLIP B3-impl COMPLETE + bake-in READY + new blocker
+   >   G4 surfaced; @ `92fc03d3`, counts UNCHANGED, parity
+   >   307/475 / PROBED 106 UNCHANGED).**
+   >   - **B3-impl S1..S4 COMPLETE** (`0d3c6a9f`/`6413dbea`/
+   >     `fab19c14`/`92fc03d3`): `RustGameStateAdapter` behind
+   >     `decision_source` flag (default `python` — parity-safe,
+   >     1532 baseline UNMOVED, no pin shifted with flag off);
+   >     new non-vestigial dict↔Decision adapter; v-chain-SAFE
+   >     codec slot-source shim; determinization-via-Rust; the
+   >     `rust_shadow` 4-assertion bake-in tripwire (LEGAL_SET_EQ
+   >     /CHOSEN_EQ/STATE_EQ/NO_RAISE, negative-control-pinned).
+   >     The bake-in harness the C4 post-R76 scaled re-sweep
+   >     runs through is READY. Only one Rust write
+   >     (`state_ops_zones.rs set_object_printing_id`, B3-S3,
+   >     Mechanism-A) — state_ops-only, NOT count-shifting,
+   >     residue cadence did NOT fire (CFI-1 precedent, cron
+   >     verified); shared `.pyd` rebuilt this resync.
+   >   - **NEW pre-flip blocker G4 (the C1/G1-analog for the
+   >     I20 axis) — surfaced BY the bake-in, exactly as
+   >     designed.** Rust `advance_phase` empties mana per-phase
+   >     (CR 106.4 — CORRECT); Python holds mana until cleanup
+   >     (the documented I20 SIMPLIFICATION — Python is the
+   >     known-wrong side). Under the role-swapped Rust-driven/
+   >     Python-shadow contract this is a legal-CAST-SET
+   >     divergence. **The flip IMPROVES CR-correctness** — G4
+   >     is the bake-in correctly detecting Python's I20
+   >     simplification disagreeing with CR-correct Rust, NOT a
+   >     Rust bug. Disposition: (a) bounded Python-shadow
+   >     reconciliation (drive `advance_phase_python` in the
+   >     bake-in's Python side — the I20 reconciliation
+   >     `step_both` already proves), or (b) umbrella-accept
+   >     C6-fenced as an intentional flip correctness-
+   >     improvement. Pinned + SL-documented. S2/S3 scoped
+   >     non-blocking C6-fenced follow-ups noted (canonical_v2
+   >     modifier-flag scope; `publicly_known_to` scope —
+   >     admitted-surface-exact).
+   >   - **Flip endgame is now: G4 closure (bounded, next lane)
+   >     → run the C4 post-R76 scaled re-sweep THROUGH the
+   >     rust_shadow bake-in (equivalence evidence) →
+   >     ORCHESTRATOR+USER go/no-go on the atomic SoT-flip
+   >     (B3-S5) — explicitly NOT autonomous (the single
+   >     least-reversible action in the campaign) → bake-in
+   >     period → bridge-vestigialization cleanup.** No known
+   >     hidden gaps beyond G4 (which is scoped + reconcilable).
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

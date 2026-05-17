@@ -304,7 +304,40 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main f5c11231 (continuous-pipeline cycle 13 —
+     Measured at main 92fc03d3 (continuous-pipeline cycle 14 —
+     SoT-FLIP B3-impl COMPLETE + rust_shadow bake-in READY +
+     new pre-flip blocker G4 surfaced). B3-S1..S4 merged
+     (0d3c6a9f/6413dbea/fab19c14/92fc03d3): RustGameStateAdapter
+     behind decision_source flag (default python — parity-safe,
+     1532 baseline UNMOVED, no pin shifted flag-off) + dict<->
+     Decision adapter + v-chain-safe codec shim +
+     determinization-via-Rust + the rust_shadow 4-assertion
+     bake-in tripwire (negative-control-pinned). Only 1 Rust
+     write (state_ops_zones.rs set_object_printing_id, B3-S3,
+     Mechanism-A) — state_ops-only -> residue cadence did NOT
+     fire (CFI-1 precedent, cron verified exit-0); NO count
+     drift; POOL_PARITY/PROBED UNCHANGED 307/475 / 106 (regen
+     no-op); shared .pyd rebuilt this resync (S3 pymethod was
+     isolated-venv-only); 8 genuinely_missing residue stamps
+     stay bb29df8d (no re-stamp owed). **The bake-in did its
+     job: surfaced G4** — the C1/G1-analog for the I20 axis.
+     Rust advance_phase empties mana per-phase (CR 106.4,
+     CORRECT); Python holds mana until cleanup (documented I20
+     SIMPLIFICATION — Python the known-wrong side); role-
+     swapped this is a legal-CAST-SET divergence. The flip
+     IMPROVES CR-correctness; G4 = the bake-in correctly
+     detecting Python's I20 disagreeing, NOT a Rust bug.
+     Disposition: (a) bounded Python-shadow advance_phase_python
+     reconciliation (the I20 fix step_both already proves) or
+     (b) umbrella-accept C6-fenced as intentional correctness
+     improvement. S2/S3 scoped non-blocking C6-fenced
+     follow-ups noted. NEXT = G4 closure -> C4 post-R76 scaled
+     re-sweep run THROUGH the bake-in -> ORCHESTRATOR+USER
+     go/no-go on the atomic SoT-flip B3-S5 (explicitly NOT
+     autonomous — the single least-reversible campaign action)
+     -> bake-in period -> bridge-vestigialization cleanup. No
+     known hidden gaps beyond G4 (scoped + reconcilable).
+     PRIOR cycle 13 (@ f5c11231 —
      SoT-FLIP G1 COMPLETE; decision-set contract now COMPLETE
      on BOTH axes). G1 (`f5c11231`): Rust legal_decisions now
      emits FACTORED per-creature AttackerDecision/BlockerDecision

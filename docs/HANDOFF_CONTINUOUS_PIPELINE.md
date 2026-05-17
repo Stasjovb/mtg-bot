@@ -138,7 +138,7 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 13, @ `f5c11231` — READ FIRST.**
+> **⚠ SoT-FLIP PATH — cycle 14, @ `92fc03d3` — READ FIRST.**
 > The cycle-11 phase-transition decision is RESOLVED: the user chose
 > **pivot to the SoT-flip path** (deliberate sequenced flip-execution,
 > NOT continuous cheap-refill). The continuous cheap-parallel-refill
@@ -164,14 +164,30 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   decision-set contract is now COMPLETE on **both** axes (cast +
 >   combat). **B3 wiring SPEC** also done (`302cadf0`,
 >   `docs/NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md`).
-> - **NEXT (the single genuine flip lane): B3-IMPL** — the
->   mechanical flag-gated Python wiring per the B3 spec:
->   `RustGameStateAdapter` behind `decision_source:
->   python|rust_shadow|rust` (default `python`) + dict↔Decision
->   adapter + codec slot-source switch + determinization-via-Rust +
->   the rust_shadow 4-assertion bake-in tripwire — NOW UNBLOCKED
->   (G1 closed) → rust_shadow bake-in **folding the C4 post-R76
->   scaled re-sweep** → B3-S5 atomic SoT-flip flag → Step 5/6
+> - **B3-IMPL S1..S4 COMPLETE** (`0d3c6a9f`/`6413dbea`/`fab19c14`/
+>   `92fc03d3`): `RustGameStateAdapter` behind `decision_source`
+>   (default `python` — parity-safe, 1532 baseline unmoved, no pin
+>   shifted flag-off) + dict↔Decision adapter + v-chain-safe codec
+>   shim + determinization-via-Rust + the **`rust_shadow` 4-assertion
+>   bake-in tripwire** (negative-control-pinned). The bake-in harness
+>   the C4 re-sweep runs through is **READY**.
+> - **NEW pre-flip blocker G4** (surfaced BY the bake-in — exactly as
+>   designed): the C1/G1-analog for the I20 axis. Rust `advance_phase`
+>   empties mana per-phase (CR 106.4 — correct); Python holds mana
+>   until cleanup (the documented I20 simplification — Python the
+>   known-wrong side). Role-swapped ⇒ a legal-CAST-SET divergence.
+>   **The flip IMPROVES CR-correctness** — G4 is the bake-in correctly
+>   detecting Python's I20 disagreeing, not a Rust bug. (S2/S3 scoped
+>   non-blocking C6-fenced follow-ups noted.)
+> - **NEXT (the single genuine flip lane): G4 closure** — the bounded
+>   Python-shadow reconciliation (drive `advance_phase_python` in the
+>   bake-in's Python side, the I20 fix `step_both` already proves),
+>   OR umbrella-accept C6-fenced as an intentional flip correctness-
+>   improvement → then run the **C4 post-R76 scaled re-sweep THROUGH
+>   the rust_shadow bake-in** (equivalence evidence) → **the atomic
+>   SoT-flip (B3-S5) is an ORCHESTRATOR+USER go/no-go on that
+>   evidence — explicitly NOT autonomous** (the single least-
+>   reversible action in the campaign) → bake-in period → Step 5/6
 >   bridge-vestigialization cleanup
 >   (`docs/BRIDGE_VESTIGIALIZATION_PLAN.md`). No known hidden gaps
 >   remain (G2 interim-maskable non-blocker; G3 accepted C6-fenced
