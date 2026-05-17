@@ -319,7 +319,7 @@ def main(argv=None) -> None:  # pragma: no cover
         print(
             f"#   NN-eval fraction  = "
             f"{tot_evals / tot_nodes:.3f}  "
-            f"(states forwarded / search nodes; >1 ⇒ standalone "
+            f"(states forwarded / search nodes; >1 => standalone "
             f"PUCT root/prior forwards dominate cache+terminal skips)"
         )
     else:
