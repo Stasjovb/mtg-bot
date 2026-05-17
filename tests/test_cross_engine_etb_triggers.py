@@ -19232,5 +19232,119 @@ def test_bridge_ta_landfall_put_plus_one_counter_amount_preserved():
     assert ta.effect == PutPlusOneCounterOnSelf(amount=3)
 
 
+# ===========================================================================
+# Phase-6 non-basic-land substrate — PHASE 1 cross-engine bridge pins
+# (round-60 N1; spec docs/NONBASIC_LAND_SUBSTRATE_PLAN.md §2/§3)
+#
+# The 5 EoE pay-life shocklands are admitted as untapped dual-mana
+# lands. These pins prove the bridge round-trips the REAL shockland
+# CardDef (built by trajectory._printing_to_card_def from the live
+# parser printing) IDENTICALLY on both engines: same untapped dual,
+# byte-equal field views, exactly two auto-wired {T}: Add <c> mana
+# abilities (one per produce color), no extra rider fields.
+# ===========================================================================
+
+
+def _r60_real_shockland_card_def(name: str):
+    """The REAL shockland CardDef the production loader uses — built
+    from the live ``OracleParserCardSource`` printing through the
+    actual ``trajectory._printing_to_card_def`` arm (NOT a synthetic
+    hand-rolled CardDef). This makes the pin exercise the real
+    code path end-to-end."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    by = OracleParserCardSource().get_printings()
+    return _printing_to_card_def(by[name])
+
+
+def test_r60_bridge_shockland_card_def_is_real_untapped_dual():
+    """The real Breeding Pool CardDef the loader emits is a "Land"
+    with the sorted dual ``mana_produced=("G","U")`` and carries NO
+    creature / ability / rider fields — structurally identical to a
+    basic-land CardDef, just non-basic. This is the shape the bridge
+    must round-trip byte-equal on both engines."""
+    cd = _r60_real_shockland_card_def("Breeding Pool")
+    assert cd.card_type == "Land"
+    assert cd.mana_produced == ("G", "U")
+    assert cd.power is None and cd.toughness is None
+    assert cd.triggered_abilities == ()
+    assert cd.keywords == ()
+
+
+def test_r60_bridge_python_state_wires_two_mana_abilities_for_shockland():
+    """``build_python_state`` materializes the real Watery Grave
+    printing with its dual ``produces`` and the per-color mana-ability
+    auto-wire: exactly TWO activated abilities (one ``{T}: Add U`` +
+    one ``{T}: Add B``), enters_tapped False (the parser flattened the
+    pay-life replacement — documented deliberate simplification)."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_python_state
+
+    cd = _r60_real_shockland_card_def("Watery Grave")
+    spec = DeckSpec(
+        card_defs=(cd,),
+        p0_library=("Watery Grave",),
+        p1_library=("Watery Grave",),
+    )
+    state = build_python_state(spec)
+    pr = state.players[0].library[0].printing
+    assert pr.produces == frozenset({"U", "B"})
+    assert "Land" in pr.card_types
+    # Dual produce -> exactly two auto-wired {T}: Add <c> mana abilities.
+    assert len(pr.activated_abilities) == 2
+    assert pr.triggered_abilities == ()
+    assert pr.static_abilities == ()
+    # The pay-life / tapped replacement was dropped by the parser —
+    # the bridged printing is a vanilla untapped dual on this engine.
+    assert getattr(pr, "enters_tapped", False) is False
+
+
+def test_r60_bridge_shockland_byte_equal_initial_state_both_engines():
+    """**The cross-engine equality contract**: a DeckSpec built from
+    the real Stomping Ground CardDef produces a BYTE-EQUAL initial
+    field view on Python and Rust — the parser drops the pay-life
+    replacement SYMMETRICALLY so both engines materialize the SAME
+    untapped dual (round-39 Ward precedent; bit-equal cross-engine,
+    CR-incomplete; see SEARCH_LIMITATIONS.md)."""
+    import importlib.util
+    import pathlib
+    import sys
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        build_matched_states,
+        build_python_field_view,
+        compare_fields,
+    )
+
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    spec_mod = importlib.util.spec_from_file_location(
+        "parity_smoke", repo_root / "scripts" / "parity_smoke.py",
+    )
+    parity_smoke = importlib.util.module_from_spec(spec_mod)
+    sys.modules["parity_smoke"] = parity_smoke
+    spec_mod.loader.exec_module(parity_smoke)
+
+    cd = _r60_real_shockland_card_def("Stomping Ground")
+    spec = DeckSpec(
+        card_defs=(cd,),
+        p0_library=("Stomping Ground",) * 4,
+        p1_library=("Stomping Ground",) * 4,
+    )
+    py_state, rust_state = build_matched_states(spec)
+    py_view = build_python_field_view(py_state)
+    rust_view = parity_smoke._build_field_view(rust_state)
+    divs = compare_fields(py_view, rust_view)
+    assert divs == [], (
+        "round-60 phase-1: the real Stomping Ground CardDef must "
+        "build a BYTE-EQUAL initial state on both engines (untapped "
+        f"dual, symmetric pay-life drop). Divergences: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in divs]}"
+    )
+    # Both libraries carry the 4 Stomping Grounds, byte-equal.
+    assert py_view["library_p0"] == rust_view["library_p0"]
+    assert py_view["library_p1"] == rust_view["library_p1"]
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
