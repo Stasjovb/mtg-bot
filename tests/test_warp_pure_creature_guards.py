@@ -218,24 +218,41 @@ def test_warp_guard_declines_unparseable_normal_cost_string():
     assert _printing_is_bridge_pure_warp_creature(p) is False
 
 
-# ----------------------------------- Phase-2-rider teeth (synthetic)
-# Timeline Culler is the real-pool carrier; these pin the two positive
-# rejections directly so they stay meaningful independent of the pool.
+# --------------------------------- Phase-2 riders are now ADMITTED
+# Phase 2 (Timeline Culler) lands the life rider + graveyard-cast
+# rider on BOTH engines, so the two former positive-rejection clauses
+# were removed from the guardrail. A warp creature carrying either
+# rider (and otherwise clean) is now ADMITTED — these pins flipped
+# False->True with the Phase-2 widening (the §2 teeth that decline the
+# 26 multi-gated warp cards are on the OTHER clauses, unchanged; see
+# the static / non-safe-trigger negatives below + the live Timeline
+# Culler / Quantum Riddler real-card pins).
 
 
-def test_warp_guard_declines_warp_additional_life_cost():
-    """A warp creature with ``warp_additional_life_cost > 0`` is
-    DECLINED — a Phase-2 rider (Timeline Culler's "Pay 2 life"); the
-    §2 guardrail's teeth."""
+def test_warp_guard_admits_warp_additional_life_cost():
+    """A warp creature with ``warp_additional_life_cost > 0`` is now
+    ADMITTED — Phase 2 models the "Pay N life" rider on both engines
+    (Timeline Culler's "Pay 2 life"). Was DECLINED pre-Phase-2 (the
+    rider-rejection clause was removed by the surgical widening)."""
     p = _warp_creature(warp_additional_life_cost=2)
-    assert _printing_is_bridge_pure_warp_creature(p) is False
+    assert _printing_is_bridge_pure_warp_creature(p) is True
 
 
-def test_warp_guard_declines_warp_castable_from_graveyard():
+def test_warp_guard_admits_warp_castable_from_graveyard():
     """A warp creature with ``warp_castable_from_graveyard=True`` is
-    DECLINED — the other Phase-2 rider; never flips on warp alone."""
+    now ADMITTED — Phase 2 models the graveyard-cast rider on both
+    engines. Was DECLINED pre-Phase-2."""
     p = _warp_creature(warp_castable_from_graveyard=True)
-    assert _printing_is_bridge_pure_warp_creature(p) is False
+    assert _printing_is_bridge_pure_warp_creature(p) is True
+
+
+def test_warp_guard_admits_both_phase2_riders_together():
+    """The Timeline-Culler shape — BOTH riders on one clean warp
+    creature — is ADMITTED (the real card carries both)."""
+    p = _warp_creature(
+        warp_additional_life_cost=2, warp_castable_from_graveyard=True
+    )
+    assert _printing_is_bridge_pure_warp_creature(p) is True
 
 
 # ------------------------------------- the required-feature negatives

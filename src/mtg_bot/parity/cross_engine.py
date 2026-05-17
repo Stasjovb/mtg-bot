@@ -238,6 +238,23 @@ class CardDef:
     warp_cost_generic: int = 0
     warp_cost_colored: tuple[tuple[str, int], ...] = ()
     has_warp: bool = False
+    # warp_cost substrate (Phase 2). Timeline Culler's two warp
+    # riders. ``warp_life_cost`` = the "Pay N life" additional cost
+    # paid as part of the warp cast (Timeline Culler: 2; every
+    # Phase-1/1.5 card: 0 = no rider, back-compat default).
+    # ``warp_from_graveyard`` = the card may ALSO be warp-cast from
+    # the graveyard, not only the hand (Timeline Culler: True; every
+    # other warp card: False = hand-only). Both default to the
+    # rider-absent value so every pre-Phase-2 CardDef is bit-identical
+    # — the registry-dict builder omits the keys and the Rust parser
+    # maps the absence to 0/false (the existing Option/serde-default
+    # pattern). The guardrail
+    # ``trajectory._printing_is_bridge_pure_warp_creature`` admits
+    # these ONLY for the pure-life+graveyard profile (Timeline Culler);
+    # the §2 teeth (static / non-safe-trigger) still decline every
+    # other warp card. Only meaningful when ``has_warp=True``.
+    warp_life_cost: int = 0
+    warp_from_graveyard: bool = False
     # Spell-card-bridge lever, Phase 1 (round-70). Pure single-mode
     # single-target Instant/Sorcery (EoE Tier-A — Radiant Strike +
     # Depressurize are the live admit set at landing; Seedship Impact /
@@ -9000,6 +9017,17 @@ def build_rust_state(spec: DeckSpec):
                 (("generic", card.warp_cost_generic),)
                 if card.warp_cost_generic else ()
             ) | {color: n for color, n in card.warp_cost_colored}
+            # warp_cost substrate (Phase 2): Timeline Culler's two
+            # riders. Omit the keys when 0/False so every pre-Phase-2
+            # CardDef's printing_dict is byte-identical — the Rust
+            # parser maps the absence to 0/false (matches the Phase-1
+            # warp_cost-key-omitted-when-no-warp convention).
+            if card.warp_life_cost:
+                printing_dict["warp_additional_life_cost"] = (
+                    card.warp_life_cost
+                )
+            if card.warp_from_graveyard:
+                printing_dict["warp_castable_from_graveyard"] = True
         # Spell-card-bridge lever, Phase 1 (round-70): a spell CardDef
         # carries exactly one ``spell_effect`` dict (the SAME schema
         # Rust's ``parse_effect`` consumes — the round-64 per-card
@@ -9256,6 +9284,17 @@ def _card_def_to_python_printing(card: "CardDef"):
             generic=card.warp_cost_generic,
             colored=tuple(sorted(card.warp_cost_colored)),
         )
+    # warp_cost substrate (Phase 2): materialize Timeline Culler's two
+    # riders so the Python side of the bridge produces the warp
+    # printing IDENTICALLY to the live parser (life rider + graveyard
+    # flag present). For every Phase-1/1.5 card these are 0/False, so
+    # the materialized CardPrinting is bit-identical to pre-Phase-2.
+    warp_additional_life_cost = (
+        card.warp_life_cost if card.has_warp else 0
+    )
+    warp_castable_from_graveyard = (
+        card.warp_from_graveyard if card.has_warp else False
+    )
     # Type-line is reconstructed from card_type + a basic-land
     # subtype heuristic; this is cosmetic for the engine but keeps
     # the printing well-formed.
@@ -9373,10 +9412,17 @@ def _card_def_to_python_printing(card: "CardDef"):
         triggered_abilities=triggered_abilities,
         keywords=frozenset(card.keywords),
         # warp_cost substrate (Phase 1, round-63). None for every
-        # non-warp CardDef (back-compat default). Phase-1 guardrail
-        # rejects the life / graveyard riders so they default here.
+        # non-warp CardDef (back-compat default).
         warp_cost=warp_cost,
         warp_cost_str=warp_cost_str,
+        # warp_cost substrate (Phase 2): Timeline Culler's life +
+        # graveyard riders. 0 / False for every non-warp and every
+        # Phase-1/1.5 CardDef (back-compat default — only Timeline
+        # Culler's CardDef sets warp_life_cost=2 / warp_from_
+        # graveyard=True), so the materialized CardPrinting is
+        # bit-identical to pre-Phase-2 for all of them.
+        warp_additional_life_cost=warp_additional_life_cost,
+        warp_castable_from_graveyard=warp_castable_from_graveyard,
         # Spell-card-bridge lever, Phase 1 (round-70). None for every
         # non-spell CardDef (back-compat default — the guardrail
         # rejects modal/X/warp/unseatable-token-pid so only a

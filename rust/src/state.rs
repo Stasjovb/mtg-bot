@@ -1951,6 +1951,10 @@ pub fn make_synthetic_state(
         // warp_cost substrate (Phase 1, round-63): synthetic-state
         // printings have no warp. Back-compat default.
         warp_cost: None,
+        // warp_cost substrate (Phase 2): no life / graveyard rider on
+        // synthetic-state printings. Back-compat defaults.
+        warp_additional_life_cost: 0,
+        warp_castable_from_graveyard: false,
     });
     // Grizzly Bears: no mana_produced → bridge is a no-op (returns
     // Vec::new() unchanged).
@@ -1981,6 +1985,10 @@ pub fn make_synthetic_state(
         // warp_cost substrate (Phase 1, round-63): synthetic-state
         // printings have no warp. Back-compat default.
         warp_cost: None,
+        // warp_cost substrate (Phase 2): no life / graveyard rider on
+        // synthetic-state printings. Back-compat defaults.
+        warp_additional_life_cost: 0,
+        warp_castable_from_graveyard: false,
     });
     // Oversimplification: real Llanowar Elves has the activated
     // ability "{T}: Add {G}". The synthetic state's first-slice
@@ -2024,6 +2032,10 @@ pub fn make_synthetic_state(
         // warp_cost substrate (Phase 1, round-63): synthetic-state
         // printings have no warp. Back-compat default.
         warp_cost: None,
+        // warp_cost substrate (Phase 2): no life / graveyard rider on
+        // synthetic-state printings. Back-compat defaults.
+        warp_additional_life_cost: 0,
+        warp_castable_from_graveyard: false,
     });
     let registry = builder.snapshot();
 

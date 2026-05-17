@@ -941,11 +941,14 @@ impl GameState {
             }
             seen_castspell.insert(name);
             actions.push(cast_spell_dict(py, obj.id)?);
-            if printing.warp_cost.is_some() {
+            if printing.warp_cost.is_some()
+                && (self.players[idx].life as i64)
+                    > (printing.warp_additional_life_cost as i64)
+            {
                 // Phase-1 warp: offer the use_warp=true variant
                 // alongside the base cast, mirroring Python
                 // legal.py:262-271 (instant-speed). Gated on
-                // warp_cost presence ONLY — Rust's CastSpell emitter
+                // warp_cost presence — Rust's CastSpell emitter
                 // has no _can_cast payability gate (module docstring
                 // "Deliberate divergence"); the warp variant inherits
                 // the same shape so its gating stays consistent with
@@ -961,6 +964,16 @@ impl GameState {
                 // 2x the same warp printing Python yields {base, warp}
                 // once and Rust's name-only set yields {base} once +
                 // this warp push once = the same {base, warp} pair.
+                //
+                // **Phase-2 life gate** (mirrors Python
+                // legal.py:269). The warp emit is now ALSO gated on
+                // `player.life > warp_additional_life_cost` (signed
+                // widening to avoid any u8 edge; Player.life is i32).
+                // For every Phase-1/1.5 card the rider is 0, so the
+                // gate is `life > 0` — always true in a live game (a
+                // player at <=0 life has lost via SBA), a NO-OP that
+                // does not perturb Phase-1/1.5 legal output. It only
+                // narrows Timeline Culler's hand emit to `life >= 3`.
                 actions.push(cast_spell_warp_dict(py, obj.id)?);
             }
         }
@@ -1061,7 +1074,10 @@ impl GameState {
             }
             seen_castspell.insert(name);
             actions.push(cast_spell_dict(py, obj.id)?);
-            if printing.warp_cost.is_some() {
+            if printing.warp_cost.is_some()
+                && (self.players[idx].life as i64)
+                    > (printing.warp_additional_life_cost as i64)
+            {
                 // Phase-1 warp (sorcery-speed): mirror Python
                 // legal.py:392-401. This is the LIVE path for the two
                 // Phase-1 Artifact-Creature cards (Red Tiger Mechan,
@@ -1071,8 +1087,55 @@ impl GameState {
                 // immediately after, matching Python's `:386` then
                 // `:401` so the action-list fingerprint matches
                 // positionally, not just as a set.
+                //
+                // **Phase-2 life gate** (mirrors Python
+                // legal.py:399) — `life > warp_additional_life_cost`,
+                // signed-widened. No-op for Phase-1/1.5 cards (rider
+                // 0 → `life > 0` always true in a live game); narrows
+                // Timeline Culler's hand emit to `life >= 3`.
                 actions.push(cast_spell_warp_dict(py, obj.id)?);
             }
+        }
+
+        // **Phase-2 warp-cast-from-graveyard (Timeline Culler).**
+        // Mirrors Python's SEPARATE graveyard loop
+        // (`legal.py:447-476`) — placed AFTER the hand sorcery loop
+        // and BEFORE the exile-recast loop so the emission order
+        // matches Python positionally (hand casts, then graveyard
+        // warp-casts, then exile recasts). Sorcery-speed only (all
+        // such cards in the pool are creatures; Python guards the
+        // loop with `if card.printing.is_instant: continue` + the
+        // same "currently only sorcery-speed" comment). Emits exactly
+        // one `use_warp=true` CastSpell per graveyard object that is
+        // `warp_castable_from_graveyard` && `warp_cost.is_some()` &&
+        // !Instant && `life > warp_additional_life_cost`. NO base /
+        // free-cast variant from the graveyard (CR 117.9b — the
+        // warp-from-graveyard permission is itself the alternative
+        // cost; see the `legal.py:464-476` comment block + the
+        // test_weftwalking_and_possibility regression). The graveyard
+        // loop is independent of `seen_castspell` — Python's
+        // graveyard loop has no dedup either (a graveyard object is a
+        // distinct castable from any hand copy).
+        for obj in self.players[idx].graveyard.iter() {
+            let Some(printing) = self.registry.lookup(obj.printing_id)
+            else {
+                continue;
+            };
+            if !printing.warp_castable_from_graveyard {
+                continue;
+            }
+            if printing.warp_cost.is_none() {
+                continue;
+            }
+            if printing.card_types.iter().any(|t| t == "Instant") {
+                continue;
+            }
+            if (self.players[idx].life as i64)
+                <= (printing.warp_additional_life_cost as i64)
+            {
+                continue;
+            }
+            actions.push(cast_spell_warp_dict(py, obj.id)?);
         }
 
         // Phase-1 warp exile-recast (round-63): a warp-exiled

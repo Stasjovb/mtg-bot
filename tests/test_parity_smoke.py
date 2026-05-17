@@ -68152,6 +68152,320 @@ def test_cross_engine_real_eoe_focus_fire_drives_combat_then_casts_parity(
     ), "Rust: Bears id 9 in p1's graveyard (byte-equal)"
 
 
+import pytest as _pytest_r72_warp_p2  # noqa: E402
+
+
+def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_byte_equal():
+    """**GENUINE real-EoE cross-engine probe — the ACTUAL parsed
+    Timeline Culler printing driven through BOTH warp paths on BOTH
+    engines (Phase 2; +1 card / +8,986 17lands decks; spec
+    docs/WARP_COST_PHASE2_DESIGN.md §5).**
+
+    Resolves Timeline Culler via the live ``OracleParserCardSource``
+    (NOT a synthetic CardDef — the real-EoE-signal discipline),
+    converts it through the production-deck bridge
+    (``trajectory._printing_to_card_def``), and drives, on BOTH
+    engines, byte-equal at every step/phase:
+
+      1. **Hand-warp + life path.** Timeline Culler in hand: both
+         engines offer the SAME base+warp pair (gated identically on
+         ``life > 2``); the warp cast pays {B} + 2 life byte-equal
+         (life identical on both); the following END exiles it
+         byte-equal; a later-turn recast-from-exile at {B}{B}
+         byte-equal.
+      2. **Graveyard-warp path** (the path that diverged PRE-Phase-2
+         and the bench cannot reach on its own). Deterministically
+         seed a SECOND real Timeline Culler printing into BOTH
+         engines' graveyards; both offer the SAME graveyard
+         ``use_warp=True`` cast at ``life > 2``; drive it byte-equal
+         (life −2 on both, card on bf, ``spell_warped_this_turn``);
+         END exiles it byte-equal.
+
+    This is the Phase-2 acceptance gate. Sanity-asserts the
+    genuinely-parsed warp+rider shape first (verify-against-live
+    discipline; FAIL-loud — never skip — on live-tree drift).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.game import Zone
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, step_both, advance_phase_python,
+        compare_fields,
+    )
+    from mtg_bot.legal import legal_actions
+    from tests.test_trajectory_parity import _step_views
+
+    src = get_active_source().get_printings()
+    real = src.get("Timeline Culler")
+    if real is None:
+        _pytest_r72_warp_p2.skip(
+            "Timeline Culler absent from active CardSource")
+    # Verify-against-live: the genuine printing IS the Phase-2 shape.
+    assert real.warp_cost is not None
+    assert real.warp_cost_str == "{B}"
+    assert real.mana_cost_str == "{B}{B}"
+    assert getattr(real, "warp_additional_life_cost", 0) == 2, (
+        "Timeline Culler must parse warp_additional_life_cost=2 — the "
+        "Phase-2 admit set drifted; re-derive (do NOT relax to skip).")
+    assert getattr(real, "warp_castable_from_graveyard", False) is True, (
+        "Timeline Culler must parse warp_castable_from_graveyard=True "
+        "— the Phase-2 admit set drifted; re-derive.")
+    assert real.triggered_abilities == ()
+    assert trajectory._printing_is_bridge_pure_warp_creature(real), (
+        "Timeline Culler must pass the Phase-2-widened guardrail at "
+        "HEAD — the admit set drifted; re-derive (do NOT skip).")
+
+    cd = trajectory._printing_to_card_def(real)
+    assert cd.has_warp is True
+    assert cd.warp_life_cost == 2 and cd.warp_from_graveyard is True, (
+        f"the CardDef must carry the Phase-2 riders; got "
+        f"life={cd.warp_life_cost} gy={cd.warp_from_graveyard}")
+    # Single-color Swamps (the documented dual-producer-ambiguity
+    # avoidance — Timeline Culler is mono-B). Plenty of B for {B} warp,
+    # 2-life rider, and the {B}{B} exile-recast.
+    swamp = CardDef(name="Swamp", card_type="Land",
+                    mana_produced=("B",))
+    lib = ("Timeline Culler",) + ("Swamp",) * 39
+    spec = DeckSpec(
+        card_defs=(cd, swamp),
+        p0_library=lib,
+        p1_library=("Swamp",) * 40,
+    )
+    py, rs = trajectory.setup_matched_game(spec)
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+            pv, rv = _step_views(py, rs)
+            d = compare_fields(pv, rv)
+            assert not d, (
+                f"Timeline Culler: phase advance ({pv['step']}, turn "
+                f"{pv['turn']}) diverged: "
+                f"{[(x.field, x.py_value, x.rust_value) for x in d]}")
+
+    adv(3)  # turn 1 MAIN1
+    # Build a B mana base over several p0 turns (need 2 for {B}{B}
+    # exile-recast; 1 for {B} warp).
+    for _ in range(6):
+        hand_sw = [
+            o for o in py.players[py.active_player_idx].hand
+            if o.printing.name == "Swamp"
+        ]
+        if hand_sw:
+            assert not step_both(
+                py, rs,
+                {"kind": "play_land",
+                 "card_id": int(hand_sw[0].id)}).divergences
+        adv(24)
+    ai = py.active_player_idx
+
+    # ---- (1) HAND-WARP + LIFE PATH.
+    # Tap one Swamp for the {B} warp cost.
+    for o in list(py.battlefield):
+        if (o.controller_id == ai and o.printing.is_land
+                and not o.tapped and not o.summoning_sick):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            break
+    tlc_h = next(o for o in py.players[ai].hand
+                 if o.printing.name == "Timeline Culler")
+    # Both engines offer the SAME base+warp pair (life starts at 20 >
+    # 2, so the life gate passes identically).
+    py_pair = sorted(
+        a.use_warp for a in legal_actions(py, ai)
+        if getattr(a, "card_id", None) == tlc_h.id)
+    rs_pair = sorted(
+        a["use_warp"] for a in rs.legal_decisions(ai)
+        if a.get("kind") == "cast_spell"
+        and a.get("card_id") == tlc_h.id)
+    assert py_pair == rs_pair == [False, True], (
+        f"hand base+warp pair mismatch — py={py_pair} rs={rs_pair}")
+    life_before = py.players[ai].life
+    s = step_both(
+        py, rs,
+        {"kind": "cast_spell", "card_id": int(tlc_h.id),
+         "use_warp": True})
+    assert not s.divergences, (
+        f"Timeline Culler hand-warp cast diverged: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+    assert py.players[ai].life == life_before - 2, (
+        f"hand-warp life rider: {life_before} - 2; got "
+        f"{py.players[ai].life}")
+    assert rs.get_life(ai) == py.players[ai].life, (
+        f"cross-engine life mismatch post hand-warp: "
+        f"py={py.players[ai].life} rs={rs.get_life(ai)}")
+    assert py.spell_warped_this_turn and rs.spell_warped_this_turn
+    # The following END step exiles it byte-equal.
+    adv(7)
+    py_ex = sorted(o.printing.name for o in py.players[ai].exile)
+    rs_ex = sorted(o["printing_name"] for o in rs.exile_snapshot(ai))
+    assert py_ex == rs_ex == ["Timeline Culler"], (
+        f"hand-warp TLC must be warp-exiled on BOTH; py={py_ex} "
+        f"rs={rs_ex}")
+
+    # ---- (1b) Recast from exile at NORMAL {B}{B} — byte-equal.
+    for _ in range(120):
+        pv, _rv = _step_views(py, rs)
+        if (py.active_player_idx == ai
+                and pv["step"] == "PRECOMBAT_MAIN"
+                and py.players[ai].lands_played_this_turn == 0):
+            break
+        adv(1)
+    fhand = [o for o in py.players[ai].hand
+             if o.printing.name == "Swamp"]
+    if fhand:
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land",
+             "card_id": int(fhand[0].id)}).divergences
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == ai and o.printing.is_land
+                and not o.tapped and not o.summoning_sick
+                and taps < 2):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    assert taps == 2, f"need 2 B for {{B}}{{B}} recast; tapped {taps}"
+    exiled = next(o for o in py.players[ai].exile
+                  if o.printing.name == "Timeline Culler")
+    life_before2 = py.players[ai].life
+    s = step_both(
+        py, rs,
+        {"kind": "cast_spell", "card_id": int(exiled.id),
+         "use_warp": False})
+    assert not s.divergences, (
+        f"Timeline Culler exile-recast diverged: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+    assert any(o.printing.name == "Timeline Culler"
+               for o in py.battlefield)
+    assert any(o["printing_name"] == "Timeline Culler"
+               for o in rs.battlefield_snapshot())
+    assert py.players[ai].life == life_before2, (
+        f"exile-recast pays NO life rider (NORMAL-cost cast); life "
+        f"{life_before2} -> {py.players[ai].life}")
+    assert rs.get_life(ai) == py.players[ai].life
+
+    # ---- (2) GRAVEYARD-WARP PATH (the genuinely-new Phase-2 arm).
+    # Deterministically seed a SECOND real Timeline Culler into BOTH
+    # graveyards (the documented zone-seed idiom). Walk to a fresh p0
+    # MAIN1 with a B source available.
+    for _ in range(120):
+        pv, _rv = _step_views(py, rs)
+        if (py.active_player_idx == ai
+                and pv["step"] == "PRECOMBAT_MAIN"):
+            break
+        adv(1)
+    # Python: build a real Timeline Culler GameObject in the graveyard
+    # via the canonical factory (allocates the id from
+    # ``next_object_id`` internally — the established zone-seed idiom).
+    # ``new_object`` defaults ``summoning_sick=True`` (the r28 CE1
+    # universal default) but ``rs.register_and_inject_object`` seeds a
+    # graveyard object with ``summoning_sick=False``; a graveyard
+    # object's summoning-sick flag is meaningless game state (BOTH
+    # engines reset it on ETB), so this is a probe-fixture artifact,
+    # NOT an engine divergence — normalise to False to match the Rust
+    # injection (the documented new-code-is-right fixture idiom).
+    py_gy_tlc = py.new_object(real, ai, Zone.GRAVEYARD)
+    py_gy_tlc.summoning_sick = False
+    py.players[ai].graveyard.append(py_gy_tlc)
+    rs_gy_tlc = int(rs.register_and_inject_object(
+        {"name": "Timeline Culler", "card_types": ["Creature"],
+         "mana_cost": {"B": 2}, "warp_cost": {"B": 1},
+         "warp_additional_life_cost": 2,
+         "warp_castable_from_graveyard": True,
+         "keywords": ["haste"], "power": 2, "toughness": 2,
+         "effects": []},
+        ai, 3))  # 3 = ZONE_GRAVEYARD
+    pv, rv = _step_views(py, rs)
+    d = compare_fields(pv, rv)
+    assert not d, (
+        f"graveyard-seed mirror left views divergent (probe-setup "
+        f"unsoundness): "
+        f"{[(x.field, x.py_value, x.rust_value) for x in d]}")
+    # Tap a Swamp for the {B} graveyard-warp cost on BOTH.
+    for o in list(py.battlefield):
+        if (o.controller_id == ai and o.printing.is_land
+                and not o.tapped and not o.summoning_sick):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            break
+    # Both engines offer the SAME graveyard use_warp=True cast (life
+    # is well above 2). Different obj ids (Python's own vs Rust's
+    # injected) — drive each with its own id, assert byte-equal.
+    py_gy = sorted(
+        a.use_warp for a in legal_actions(py, ai)
+        if getattr(a, "card_id", None) == py_gy_tlc.id)
+    rs_gy = sorted(
+        a["use_warp"] for a in rs.legal_decisions(ai)
+        if a.get("kind") == "cast_spell"
+        and a.get("card_id") == rs_gy_tlc)
+    assert py_gy == [True] and rs_gy == [True], (
+        f"both engines must offer EXACTLY the graveyard use_warp=True "
+        f"cast (no base/free); py={py_gy} rs={rs_gy}")
+    gy_life_before = py.players[ai].life
+    from mtg_bot.actions import apply_action as _py_apply
+    from mtg_bot.actions import CastSpell as _PyCastSpell
+    from mtg_bot.parity.cross_engine import (
+        resolve_top_of_stack_python, resolve_top_of_stack_rust,
+    )
+    # The two engines hold the graveyard TLC under DIFFERENT obj ids
+    # (Python's own factory vs Rust's injected), so step_both (which
+    # routes ONE action dict to both) can't drive it — apply each with
+    # its own id, then replicate step_both's CE5 cast-vs-resolve mirror
+    # by hand: snapshot the pre-cast stack floors, apply, then drain
+    # BOTH stacks (Rust's cast_creature_warp is a no-stack primitive;
+    # Python's CastSpell pushes a creature StackItem that needs the
+    # mirrored resolve — exactly what step_both does for cast_spell).
+    py_floor = len(getattr(py, "stack", ()))
+    rs_floor = rs.stack_size()
+    _py_apply(py, ai, _PyCastSpell(py_gy_tlc.id, use_warp=True))
+    rs.apply_action({
+        "kind": "cast_spell", "card_id": rs_gy_tlc, "use_warp": True,
+        "kicked": False, "cast_for_free": False,
+        "use_impending": False, "cast_room_half": None,
+    })
+    resolve_top_of_stack_python(py, floor=py_floor)
+    resolve_top_of_stack_rust(rs, floor=rs_floor)
+    pv, rv = _step_views(py, rs)
+    d = compare_fields(pv, rv)
+    assert not d, (
+        f"Timeline Culler graveyard-warp-cast diverged (FULL "
+        f"compare_fields): "
+        f"{[(x.field, x.py_value, x.rust_value) for x in d]}")
+    assert py.players[ai].life == gy_life_before - 2, (
+        f"graveyard-warp life rider: {gy_life_before} - 2; got "
+        f"{py.players[ai].life}")
+    assert rs.get_life(ai) == py.players[ai].life
+    assert py.spell_warped_this_turn and rs.spell_warped_this_turn
+    assert not [o for o in py.players[ai].graveyard
+                if o.id == py_gy_tlc.id], (
+        "the graveyard TLC must have LEFT the graveyard on Python")
+    assert any(o.printing.name == "Timeline Culler"
+               for o in py.battlefield)
+    assert any(e["id"] == rs_gy_tlc
+               for e in rs.battlefield_snapshot())
+    # END step exiles the graveyard-warp-cast TLC byte-equal (SAME
+    # deterministic sweep, graveyard origin).
+    adv(7)
+    py_ex2 = sorted(o.printing.name for o in py.players[ai].exile)
+    rs_ex2 = sorted(o["printing_name"]
+                    for o in rs.exile_snapshot(ai))
+    assert "Timeline Culler" in py_ex2 and py_ex2 == rs_ex2, (
+        f"graveyard-warp-cast TLC must be warp-exiled byte-equal; "
+        f"py_ex={py_ex2} rs_ex={rs_ex2}")
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

@@ -21374,5 +21374,572 @@ def test_bridge_focus_fire_bidirectional_round_trip():
     assert back.base == 2
 
 
+# ---------------------------------------------------------------------------
+# warp_cost Phase 2 (Timeline Culler) — Rust regression + cross-engine
+# bridge pins. Spec: docs/WARP_COST_PHASE2_DESIGN.md §4 pins 1-10.
+# Phase 2 lands the two warp riders (warp_additional_life_cost +
+# warp_castable_from_graveyard) on BOTH engines: Rust CardPrinting
+# fields + parse, the cast_creature_warp life debit + graveyard
+# fall-through arm, the life-gated legal emit + the graveyard warp
+# loop, and the bidirectional CardDef bridge.
+# ---------------------------------------------------------------------------
+
+_R72_ZONE_HAND = 0       # state_ops_zones.rs ZONE_HAND
+_R72_ZONE_GRAVEYARD = 3  # ZONE_GRAVEYARD
+
+
+def _r72_inject_tlc(rs, zone=_R72_ZONE_HAND):
+    """Inject a Timeline-Culler-shaped bare Creature ({B}{B} normal,
+    {B} warp, Pay 2 life, graveyard-castable, 2/2 haste) into p0's
+    ``zone`` via the dict registry path. Returns the obj id."""
+    return int(rs.register_and_inject_object(
+        {
+            "name": "TLC",
+            "card_types": ["Creature"],
+            "mana_cost": {"B": 2},
+            "warp_cost": {"B": 1},
+            "warp_additional_life_cost": 2,
+            "warp_castable_from_graveyard": True,
+            "keywords": ["haste"],
+            "power": 2,
+            "toughness": 2,
+            "effects": [],
+        },
+        0,
+        zone,
+    ))
+
+
+def test_r72_warp_phase2_parse_printing_roundtrips_riders():
+    """Spec §4 pin 1 — ``parse_printing`` with
+    ``warp_additional_life_cost=2`` + ``warp_castable_from_graveyard
+    =true`` round-trips into the new ``CardPrinting`` fields; the
+    absent keys map to ``0`` / ``false`` (back-compat — a non-Phase-2
+    printing dict still parses with both at default). Verified via the
+    Phase-2 legal/cast behavior the riders gate (a TLC-shaped printing
+    in the graveyard offers the use_warp variant only with the riders
+    parsed; a no-rider printing in the graveyard offers nothing)."""
+    rs = _r62_fresh_rust_state()
+    # WITH riders: in the graveyard, life high → graveyard warp offer.
+    tlc = _r72_inject_tlc(rs, _R72_ZONE_GRAVEYARD)
+    # WITHOUT the gy rider: a pure-warp creature (Phase-1 shape) in the
+    # graveyard must NOT be graveyard-warp-castable.
+    nogy = int(rs.register_and_inject_object(
+        {"name": "NoGyWarp", "card_types": ["Creature"],
+         "mana_cost": {"generic": 3, "R": 1},
+         "warp_cost": {"generic": 1, "R": 1},
+         "power": 3, "toughness": 3, "effects": []},
+        0, _R72_ZONE_GRAVEYARD))
+    rs.set_phase(3)  # MAIN1 (sorcery timing)
+    rs.add_mana(0, "B", 5)
+    ld = rs.legal_decisions(0)
+    tlc_gy = sorted(
+        a.get("use_warp") for a in ld
+        if a.get("kind") == "cast_spell" and a.get("card_id") == tlc
+    )
+    nogy_gy = [
+        a for a in ld
+        if a.get("kind") == "cast_spell" and a.get("card_id") == nogy
+    ]
+    assert tlc_gy == [True], (
+        f"a graveyard TLC (riders parsed) must offer EXACTLY one "
+        f"use_warp=True cast (no base / free-cast); got {tlc_gy}")
+    assert nogy_gy == [], (
+        f"a no-graveyard-rider warp creature in the graveyard must "
+        f"offer NOTHING (back-compat: absent key -> false); got "
+        f"{nogy_gy}")
+
+
+def test_r72_warp_phase2_hand_life_gate_on_legal_emit():
+    """Spec §4 pin 2 — Timeline Culler in HAND: at ``life >= 3`` the
+    emit is ``[base, warp]``; at ``life == 2`` the warp variant is
+    suppressed by the life gate (base only). A Phase-1 card (life
+    rider 0) at any ``life >= 1`` still emits ``[base, warp]`` — the
+    life gate is a verified NO-OP for it (Phase-1 legal output
+    unchanged)."""
+    # life >= 3 → base+warp
+    rs = _r62_fresh_rust_state()
+    tlc = _r72_inject_tlc(rs, _R72_ZONE_HAND)
+    rs.set_life(0, 3)
+    rs.set_phase(3)
+    pairs = sorted(
+        a["use_warp"] for a in rs.legal_decisions(0)
+        if a.get("kind") == "cast_spell" and a.get("card_id") == tlc)
+    assert pairs == [False, True], (
+        f"TLC in hand at life=3 must emit base+warp; got {pairs}")
+    # life == 2 → base only (warp suppressed: life > 2 is False)
+    rs2 = _r62_fresh_rust_state()
+    tlc2 = _r72_inject_tlc(rs2, _R72_ZONE_HAND)
+    rs2.set_life(0, 2)
+    rs2.set_phase(3)
+    pairs2 = sorted(
+        a["use_warp"] for a in rs2.legal_decisions(0)
+        if a.get("kind") == "cast_spell" and a.get("card_id") == tlc2)
+    assert pairs2 == [False], (
+        f"TLC in hand at life=2 must emit base ONLY (warp suppressed "
+        f"by the life gate); got {pairs2}")
+    # Phase-1 card (rider 0) at life=1 still base+warp (gate no-op).
+    rs3 = _r62_fresh_rust_state()
+    w = _r63_inject_warp_creature(rs3, _R63_ZONE_HAND)
+    rs3.set_life(0, 1)
+    rs3.set_phase(3)
+    pairs3 = sorted(
+        a["use_warp"] for a in rs3.legal_decisions(0)
+        if a.get("kind") == "cast_spell" and a.get("card_id") == w)
+    assert pairs3 == [False, True], (
+        f"Phase-1 warp card (life rider 0) at life=1 must STILL emit "
+        f"base+warp — the life gate is a no-op for rider 0; got "
+        f"{pairs3}")
+
+
+def test_r72_warp_phase2_graveyard_loop_life_gate():
+    """Spec §4 pin 3 — Timeline Culler in GRAVEYARD: at ``life >= 3``
+    emits EXACTLY one ``use_warp=True`` CastSpell for the graveyard
+    object (NO base, NO free-cast); at ``life == 2`` emits NONE. A
+    non-``warp_castable_from_graveyard`` card in the graveyard emits
+    nothing (regression)."""
+    rs = _r62_fresh_rust_state()
+    tlc = _r72_inject_tlc(rs, _R72_ZONE_GRAVEYARD)
+    rs.set_life(0, 3)
+    rs.set_phase(3)
+    gy3 = [
+        a for a in rs.legal_decisions(0)
+        if a.get("kind") == "cast_spell" and a.get("card_id") == tlc]
+    assert [a["use_warp"] for a in gy3] == [True], (
+        f"graveyard TLC at life=3 → exactly one use_warp=True (no "
+        f"base/free); got {gy3}")
+    rs2 = _r62_fresh_rust_state()
+    tlc2 = _r72_inject_tlc(rs2, _R72_ZONE_GRAVEYARD)
+    rs2.set_life(0, 2)
+    rs2.set_phase(3)
+    gy2 = [
+        a for a in rs2.legal_decisions(0)
+        if a.get("kind") == "cast_spell" and a.get("card_id") == tlc2]
+    assert gy2 == [], (
+        f"graveyard TLC at life=2 → NONE (life gate); got {gy2}")
+
+
+def test_r72_warp_phase2_hand_cast_pays_warp_cost_and_life():
+    """Spec §4 pin 4 — ``Action::CastSpell{use_warp:true}`` on TLC in
+    HAND (life=10): pays ``warp_cost`` ({B}), ``life == 8`` (2 paid),
+    ``spell_warped_this_turn == True``, the battlefield permanent has
+    ``warp_exile_pending == True`` (observed via the end-step exile
+    one phase later)."""
+    rs = _r62_fresh_rust_state()
+    tlc = _r72_inject_tlc(rs, _R72_ZONE_HAND)
+    rs.set_life(0, 10)
+    rs.set_phase(3)
+    rs.add_mana(0, "B", 1)  # exactly the {B} warp cost
+    assert rs.spell_warped_this_turn is False
+    rs.apply_action({
+        "kind": "cast_spell", "card_id": tlc, "use_warp": True,
+        "kicked": False, "cast_for_free": False,
+        "use_impending": False, "cast_room_half": None,
+    })
+    pool = dict(rs.get_mana_pool(0))
+    assert sum(pool.values()) == 0, (
+        f"the {{B}} warp cost must fully drain the 1-B pool; got "
+        f"{pool} (non-empty would mean it paid {{B}}{{B}} mana_cost)")
+    assert rs.get_life(0) == 8, (
+        f"warp life rider: 10 - 2 = 8; got {rs.get_life(0)}")
+    assert rs.spell_warped_this_turn is True
+    bf = [o for o in rs.battlefield_snapshot()
+          if o["printing_name"] == "TLC"]
+    assert len(bf) == 1, "TLC must be on the battlefield post-cast"
+    # end-step sweep proves warp_exile_pending was stamped.
+    rs.set_phase(9)
+    rs.advance_phase()  # → END_STEP
+    assert [o for o in rs.battlefield_snapshot()
+            if o["printing_name"] == "TLC"] == []
+    assert len([o for o in rs.exile_snapshot(0)
+                if o["printing_name"] == "TLC"]) == 1
+
+
+def test_r72_warp_phase2_graveyard_cast_full_then_exile_then_recast():
+    """Spec §4 pins 5-7 — ``Action::CastSpell{use_warp:true}`` on TLC
+    in the GRAVEYARD (life=10): the card LEAVES the graveyard, ENTERS
+    the battlefield, pays ``warp_cost`` ({B}), ``life == 8``,
+    ``spell_warped_this_turn == True``, ``warp_exile_pending == True``.
+    Advancing to PHASE_END_STEP exiles it (``warped == true``); a
+    later turn's recast from EXILE pays the NORMAL ``{B}{B}``
+    ``mana_cost`` (NOT a second graveyard-warp) and clears
+    ``warped``."""
+    rs = _r62_fresh_rust_state()
+    tlc = _r72_inject_tlc(rs, _R72_ZONE_GRAVEYARD)
+    rs.set_life(0, 10)
+    rs.set_phase(3)
+    rs.add_mana(0, "B", 1)
+    rs.apply_action({
+        "kind": "cast_spell", "card_id": tlc, "use_warp": True,
+        "kicked": False, "cast_for_free": False,
+        "use_impending": False, "cast_room_half": None,
+    })
+    assert [o for o in rs.graveyard_snapshot(0)
+            if o["printing_name"] == "TLC"] == [], (
+        "TLC must have LEFT the graveyard (graveyard-warp-cast)")
+    bf = [o for o in rs.battlefield_snapshot()
+          if o["printing_name"] == "TLC"]
+    assert len(bf) == 1, "TLC must be on the battlefield"
+    assert rs.get_life(0) == 8, (
+        f"graveyard-warp life rider: 10 - 2 = 8; got {rs.get_life(0)}")
+    assert rs.spell_warped_this_turn is True
+    assert dict(rs.get_mana_pool(0)).get("B", 0) == 0
+    # End step → exile (Phase-1 sweep reused, graveyard origin).
+    rs.set_phase(9)
+    rs.advance_phase()  # → END_STEP
+    ex = [o for o in rs.exile_snapshot(0)
+          if o["printing_name"] == "TLC"]
+    assert len(ex) == 1, (
+        f"graveyard-warp-cast TLC must be exiled by the SAME end-step "
+        f"sweep; exile={[o['printing_name'] for o in rs.exile_snapshot(0)]}")
+    assert [o for o in rs.battlefield_snapshot()
+            if o["printing_name"] == "TLC"] == []
+    # Recast from exile on a later turn: BASE use_warp=False at the
+    # NORMAL {B}{B} cost; it must NOT re-offer a graveyard-warp (the
+    # object is in EXILE, not the graveyard).
+    rs.set_phase(3)
+    ld = rs.legal_decisions(0)
+    recast = sorted(
+        a["use_warp"] for a in ld
+        if a.get("kind") == "cast_spell" and a.get("card_id") == tlc)
+    assert recast == [False], (
+        f"warp-exiled TLC recast must be BASE-only (use_warp=False) at "
+        f"NORMAL mana_cost — NOT a second graveyard-warp; got {recast}")
+    rs.add_mana(0, "B", 2)  # the NORMAL {B}{B}
+    life_before = rs.get_life(0)
+    rs.apply_action({
+        "kind": "cast_spell", "card_id": tlc, "use_warp": False,
+        "kicked": False, "cast_for_free": False,
+        "use_impending": False, "cast_room_half": None,
+    })
+    assert len([o for o in rs.battlefield_snapshot()
+                if o["printing_name"] == "TLC"]) == 1, (
+        "exile-recast TLC must be back on the battlefield")
+    assert dict(rs.get_mana_pool(0)).get("B", 0) == 0, (
+        "the exile-recast must pay the NORMAL {B}{B} (2 B drained)")
+    assert rs.get_life(0) == life_before, (
+        f"exile-recast pays NO life rider (it is a NORMAL-cost cast, "
+        f"not a warp cast); life {life_before} -> {rs.get_life(0)}")
+
+
+def _r72_tlc_synth_deckspec(in_graveyard=False):
+    """A synthetic Timeline-Culler-shaped CardDef ({B}{B} normal, {B}
+    warp, warp_life_cost=2, warp_from_graveyard=True, 2/2 haste) + a
+    Swamp-that-taps-B, padded so both engines have enough B mana.
+    Used by the cross-engine bridge pins."""
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec
+
+    tlc = CardDef(
+        name="SynthTLC", card_type="Creature",
+        mana_cost_generic=0, mana_cost_colored=(("B", 2),),
+        power=2, toughness=2, keywords=("haste",),
+        warp_cost_generic=0, warp_cost_colored=(("B", 1),),
+        has_warp=True, warp_life_cost=2, warp_from_graveyard=True,
+    )
+    swamp = CardDef(name="Swamp", card_type="Land",
+                    mana_produced=("B",))
+    lib = ("SynthTLC",) + ("Swamp",) * 39
+    return DeckSpec(
+        card_defs=(tlc, swamp),
+        p0_library=lib,
+        p1_library=("Swamp",) * 40,
+    )
+
+
+def test_r72_warp_phase2_bridge_both_engines_same_hand_pair():
+    """Spec §4 pin 8 — a DeckSpec with a synthetic Timeline-Culler
+    CardDef: once the {B} warp cost is payable, BOTH engines'
+    ``legal_actions`` offer the SAME ``{base, warp}`` hand pair at
+    ``life >= 3`` and the SAME (none-warp) at ``life == 2``
+    (action-set + positional byte-equal). Same ``_can_cast``-asymmetry
+    caveat as the Phase-1 pin — mana made payable first."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python, step_both,
+    )
+    from mtg_bot.legal import legal_actions
+
+    py, rs = trajectory.setup_matched_game(_r72_tlc_synth_deckspec())
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+
+    adv(3)  # turn 1 MAIN1
+    # Build B mana: a Swamp each p0 turn for 2 turns, then a 3rd, tap 2.
+    for _ in range(2):
+        s = next(o for o in py.players[py.active_player_idx].hand
+                 if o.printing.name == "Swamp")
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land", "card_id": int(s.id)}).divergences
+        adv(24)
+    s = next(o for o in py.players[py.active_player_idx].hand
+             if o.printing.name == "Swamp")
+    assert not step_both(
+        py, rs, {"kind": "play_land", "card_id": int(s.id)}).divergences
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == py.active_player_idx
+                and o.printing.is_land and not o.tapped
+                and not o.summoning_sick and taps < 1):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    ai = py.active_player_idx
+    tlc = next(o for o in py.players[ai].hand
+               if o.printing.name == "SynthTLC")
+    # life >= 3 → both engines offer base+warp.
+    py.players[ai].life = 5
+    rs.set_life(ai, 5)
+    py_pairs = sorted(
+        a.use_warp for a in legal_actions(py, ai)
+        if getattr(a, "card_id", None) == tlc.id)
+    rs_pairs = sorted(
+        a["use_warp"] for a in rs.legal_decisions(ai)
+        if a.get("kind") == "cast_spell" and a.get("card_id") == tlc.id)
+    assert py_pairs == [False, True] and rs_pairs == [False, True], (
+        f"life>=3: py={py_pairs} rs={rs_pairs}")
+    assert py_pairs == rs_pairs, (
+        f"cross-engine hand pair mismatch (life>=3): py={py_pairs} "
+        f"rs={rs_pairs}")
+    # life == 2 → neither engine offers the warp variant.
+    py.players[ai].life = 2
+    rs.set_life(ai, 2)
+    py_w = sorted(
+        a.use_warp for a in legal_actions(py, ai)
+        if getattr(a, "card_id", None) == tlc.id)
+    rs_w = sorted(
+        a["use_warp"] for a in rs.legal_decisions(ai)
+        if a.get("kind") == "cast_spell" and a.get("card_id") == tlc.id)
+    assert True not in py_w and True not in rs_w, (
+        f"life==2: the warp variant must be suppressed on BOTH; "
+        f"py={py_w} rs={rs_w}")
+    assert py_w == rs_w, (
+        f"cross-engine hand pair mismatch (life==2): py={py_w} "
+        f"rs={rs_w}")
+
+
+def test_r72_warp_phase2_bridge_hand_cast_byte_equal():
+    """Spec §4 pin 9 — driving ``CastSpell{use_warp:true}`` from HAND
+    via ``step_both``: post-cast state fingerprint byte-equal (mana
+    pool, **life**, zones, ``spell_warped_this_turn``) across
+    engines."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python, step_both,
+    )
+
+    py, rs = trajectory.setup_matched_game(_r72_tlc_synth_deckspec())
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+
+    adv(3)
+    for _ in range(2):
+        s = next(o for o in py.players[py.active_player_idx].hand
+                 if o.printing.name == "Swamp")
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land", "card_id": int(s.id)}).divergences
+        adv(24)
+    s = next(o for o in py.players[py.active_player_idx].hand
+             if o.printing.name == "Swamp")
+    assert not step_both(
+        py, rs, {"kind": "play_land", "card_id": int(s.id)}).divergences
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == py.active_player_idx
+                and o.printing.is_land and not o.tapped
+                and not o.summoning_sick and taps < 1):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    ai = py.active_player_idx
+    tlc = next(o for o in py.players[ai].hand
+               if o.printing.name == "SynthTLC")
+    res = step_both(
+        py, rs,
+        {"kind": "cast_spell", "card_id": int(tlc.id),
+         "use_warp": True})
+    assert not res.divergences, (
+        f"TLC hand-warp-cast diverged (FULL compare_fields): "
+        f"{[(d.field, d.py_value, d.rust_value) for d in res.divergences]}")
+    assert py.spell_warped_this_turn is True
+    assert rs.spell_warped_this_turn is True
+
+
+def test_r72_warp_phase2_bridge_graveyard_cast_lifecycle_byte_equal():
+    """Spec §4 pin 10 — seed the synthetic Timeline-Culler CardDef
+    into BOTH engines' GRAVEYARDS; both ``legal_actions`` offer the
+    SAME graveyard ``use_warp=true`` CastSpell; drive it via
+    ``step_both`` → byte-equal (life debited 2 on both, card on
+    battlefield, ``warp_exile_pending`` on both). Advance both to END
+    → byte-equal exile; recast from exile at ``{B}{B}`` → byte-equal
+    (and assert it does NOT re-offer the graveyard-warp variant since
+    the object is in exile, not the graveyard)."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python, compare_fields, step_both,
+    )
+    from mtg_bot.game import Zone
+    from mtg_bot.legal import legal_actions
+    from tests.test_trajectory_parity import _step_views
+
+    py, rs = trajectory.setup_matched_game(_r72_tlc_synth_deckspec())
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+            pv, rv = _step_views(py, rs)
+            d = compare_fields(pv, rv)
+            assert not d, (
+                f"TLC gy-lifecycle: phase advance diverged: "
+                f"{[(x.field, x.py_value, x.rust_value) for x in d]}")
+
+    adv(3)
+    # Develop 2 Swamps for the {B} warp cost (graveyard cast still
+    # pays the warp mana). Then seed TLC into BOTH graveyards.
+    for _ in range(2):
+        s = next(o for o in py.players[py.active_player_idx].hand
+                 if o.printing.name == "Swamp")
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land", "card_id": int(s.id)}).divergences
+        adv(24)
+    ai = py.active_player_idx
+    # Tap a Swamp for the {B} warp cost on BOTH — do this FIRST, via
+    # step_both (FULL field-view byte-equal), while the two engines
+    # are still obj-id-aligned (BEFORE the divergent-id graveyard
+    # seed below). This keeps the strong whole-field compare on the
+    # ramp.
+    for o in list(py.battlefield):
+        if (o.controller_id == ai and o.printing.is_land
+                and not o.tapped and not o.summoning_sick):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            break
+    # Seat the SynthTLC in the graveyard on BOTH engines (the
+    # zone-seed idiom). Python reuses the deck object's id; Rust's
+    # register_and_inject_object allocates its OWN fresh id — so the
+    # graveyard object's id is unavoidably different between engines
+    # (a pure probe-construction artifact of seeding via two
+    # mechanisms, NOT an engine divergence; the FULL whole-field
+    # byte-equality on the ACTUAL Timeline Culler — including the
+    # graveyard-warp lifecycle — is proven by the real-EoE pin
+    # test_cross_engine_real_eoe_warp_phase2_..._byte_equal). This
+    # synthetic pin's job is the SYNTHETIC CardDef bridge round-trip
+    # + the graveyard-warp OBSERVABLES byte-equal, so post-seed we
+    # assert the observables (life, on-bf, spell_warped, exile-dest)
+    # rather than the id-sensitive whole-field compare.
+    tlc = next(
+        (o for o in py.players[ai].hand
+         if o.printing.name == "SynthTLC"), None)
+    if tlc is None:
+        tlc = next(
+            o for o in py.players[ai].library
+            if o.printing.name == "SynthTLC")
+        py.players[ai].library.remove(tlc)
+    else:
+        py.players[ai].hand.remove(tlc)
+    tlc.zone = Zone.GRAVEYARD
+    tlc.summoning_sick = False
+    tlc.tapped = False
+    py.players[ai].graveyard.append(tlc)
+    rs_tlc = int(rs.register_and_inject_object(
+        {"name": "SynthTLC", "card_types": ["Creature"],
+         "mana_cost": {"B": 2}, "warp_cost": {"B": 1},
+         "warp_additional_life_cost": 2,
+         "warp_castable_from_graveyard": True,
+         "keywords": ["haste"], "power": 2, "toughness": 2,
+         "effects": []},
+        ai, _R72_ZONE_GRAVEYARD))
+    # Both engines offer the SAME graveyard use_warp=True cast.
+    py_gy = sorted(
+        a.use_warp for a in legal_actions(py, ai)
+        if getattr(a, "card_id", None) == tlc.id)
+    rs_gy = sorted(
+        a["use_warp"] for a in rs.legal_decisions(ai)
+        if a.get("kind") == "cast_spell"
+        and a.get("card_id") == rs_tlc)
+    assert py_gy == [True] and rs_gy == [True], (
+        f"both engines must offer exactly the graveyard use_warp=True "
+        f"cast; py={py_gy} rs={rs_gy}")
+    # Drive each engine with its own id; replicate step_both's CE5
+    # cast-vs-resolve mirror by hand (Rust's cast_creature_warp is
+    # no-stack; Python's CastSpell pushes a creature StackItem that
+    # needs the mirrored resolve).
+    py_life0 = py.players[ai].life
+    rs_life0 = rs.get_life(ai)
+    from mtg_bot.actions import apply_action as _py_apply
+    from mtg_bot.actions import CastSpell as _PyCastSpell
+    from mtg_bot.parity.cross_engine import (
+        resolve_top_of_stack_python, resolve_top_of_stack_rust,
+    )
+    py_floor = len(getattr(py, "stack", ()))
+    rs_floor = rs.stack_size()
+    _py_apply(py, ai, _PyCastSpell(tlc.id, use_warp=True))
+    rs.apply_action({
+        "kind": "cast_spell", "card_id": rs_tlc, "use_warp": True,
+        "kicked": False, "cast_for_free": False,
+        "use_impending": False, "cast_room_half": None,
+    })
+    resolve_top_of_stack_python(py, floor=py_floor)
+    resolve_top_of_stack_rust(rs, floor=rs_floor)
+    # Observables byte-equal across engines (the synthetic bridge
+    # round-trip's contract): life debited 2 on BOTH; the card on the
+    # battlefield on BOTH; spell_warped set on BOTH; graveyard emptied
+    # of the SynthTLC on BOTH.
+    assert py.players[ai].life == py_life0 - 2, (
+        f"Python life rider: {py_life0} - 2; got {py.players[ai].life}")
+    assert rs.get_life(ai) == rs_life0 - 2, (
+        f"Rust life rider: {rs_life0} - 2; got {rs.get_life(ai)}")
+    assert py.players[ai].life == rs.get_life(ai), (
+        f"cross-engine life mismatch post graveyard-warp-cast: "
+        f"py={py.players[ai].life} rs={rs.get_life(ai)}")
+    assert any(o.printing.name == "SynthTLC"
+               for o in py.battlefield), (
+        "SynthTLC must be on the Python battlefield post gy-warp-cast")
+    assert any(e["printing_name"] == "SynthTLC"
+               for e in rs.battlefield_snapshot()), (
+        "SynthTLC must be on the Rust battlefield post gy-warp-cast")
+    assert not [o for o in py.players[ai].graveyard
+                if o.printing.name == "SynthTLC"], (
+        "SynthTLC must have LEFT the Python graveyard")
+    assert not [e for e in rs.graveyard_snapshot(ai)
+                if e["printing_name"] == "SynthTLC"], (
+        "SynthTLC must have LEFT the Rust graveyard")
+    assert py.spell_warped_this_turn and rs.spell_warped_this_turn
+    # End step → byte-equal exile DESTINATION (the SAME deterministic
+    # sweep, graveyard origin).
+    py_floor2 = len(getattr(py, "stack", ()))
+    rs_floor2 = rs.stack_size()
+    for _ in range(7):
+        advance_phase_python(py)
+        rs.advance_phase()
+    resolve_top_of_stack_python(py, floor=py_floor2)
+    resolve_top_of_stack_rust(rs, floor=rs_floor2)
+    py_ex = sorted(o.printing.name for o in py.players[ai].exile)
+    rs_ex = sorted(e["printing_name"]
+                   for e in rs.exile_snapshot(ai))
+    assert "SynthTLC" in py_ex and py_ex == rs_ex, (
+        f"graveyard-warp-cast SynthTLC must be warp-exiled byte-equal "
+        f"(exile destination, not graveyard); py_ex={py_ex} "
+        f"rs_ex={rs_ex}")
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
