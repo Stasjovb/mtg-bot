@@ -9963,12 +9963,31 @@ def resolve_top_of_stack_rust(rust_state, *, floor: int = 0) -> int:
     trigger observable on every cast of a card with an ETB trigger
     that pushes onto the stack.
 
+    **SBA symmetry (round-73 — surfaced by the Lander-spell-token-
+    seating sub-substrate).** Python's sister mirror runs
+    ``state_based_actions(py_state)`` after EACH resolve (matching
+    ``simulate.priority_loop``'s pop→SBA→repeat contract). Rust's
+    ``apply_sbas`` is the documented analog (see the
+    ``apply_sbas``/``state_based_actions`` pairing at lines
+    10800/11465/14864). Before round-73 the only cast-path Effects
+    admitted through ``step_both`` mutated state immediately inside
+    resolve (e.g. ``DepressurizeEffect`` calls ``destroy()``), so the
+    missing Rust SBA drain was unobservable. Orbital Plunge deals
+    DAMAGE and relies on the lethal-damage SBA to move the dead
+    creature to the graveyard — Python's drain fires that SBA, so
+    without the matching ``apply_sbas`` here Rust's damaged creature
+    lingered on the battlefield = a HARNESS asymmetry false-positive
+    (the engines agree; the mirror didn't). Mirroring the SBA call
+    restores apples-to-apples (the EXACT pattern every Effect-half
+    probe runs by hand: ``py_sba(py)`` + ``rs.apply_sbas()``).
+
     Returns the count of stack items drained (0 if Rust's stack was
     already at or below ``floor``).
     """
     drained = 0
     while rust_state.stack_size() > floor:
         rust_state.resolve_top_of_stack()
+        rust_state.apply_sbas()
         drained += 1
     return drained
 

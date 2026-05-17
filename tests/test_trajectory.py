@@ -698,12 +698,16 @@ def test_production_deck_to_deckspec_filters_unsupported_cards():
 
     cards = load_production_deck(0)
     spec = production_deck_to_deckspec(cards, shared_rng_seed=42)
-    # card_defs are basic Lands, bridge-simple Creatures, OR a
+    # card_defs are basic Lands, bridge-simple Creatures, a
+    # spell-card-bridge Instant/Sorcery (round-70 lever; round-73
+    # Lander-spell-token-seating sub-substrate added the Lander-pid
+    # spells — archetype 0 carries Seedship Impact), OR a
     # loader-SEATED token CardDef (round-49 vanilla-token / Phase 3a
-    # round-53 ability-bearing-Lander substrate). Seated token defs
-    # carry the ``Token`` supertype, are NEVER in either player's
-    # library (registered for the pid only), and may be a non-creature
-    # type (the Lander is ``Artifact``).
+    # round-53 ability-bearing-Lander substrate; round-73 the same
+    # Lander seated via the spell axis). Seated token defs carry the
+    # ``Token`` supertype, are NEVER in either player's library
+    # (registered for the pid only), and may be a non-creature type
+    # (the Lander is ``Artifact``).
     lib_names = set(spec.p0_library) | set(spec.p1_library)
     for cd in spec.card_defs:
         is_seated_token = "Token" in (cd.supertypes or ())
@@ -713,13 +717,20 @@ def test_production_deck_to_deckspec_filters_unsupported_cards():
                 f"seated token {cd.name!r} must not be in any library"
             )
             continue
-        assert cd.card_type in ("Land", "Creature")
+        assert cd.card_type in ("Land", "Creature", "Instant", "Sorcery")
         if cd.card_type == "Creature":
             assert cd.power is not None
             assert cd.toughness is not None
         if cd.card_type == "Land":
             # Basic lands carry exactly one mana_produced color.
             assert len(cd.mana_produced) == 1
+        if cd.card_type in ("Instant", "Sorcery"):
+            # Spell-card-bridge admit: a covered+bridged single-effect
+            # spell CardDef carries its serialized spell_effect dict
+            # (Lander-pid spells carry the numeric seated
+            # token_printing_id, never the symbolic _token_card_def).
+            assert isinstance(cd.spell_effect, dict)
+            assert "_token_card_def" not in cd.spell_effect
 
 
 def test_production_deck_to_deckspec_pads_to_target_size():

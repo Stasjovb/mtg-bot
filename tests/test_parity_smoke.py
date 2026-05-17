@@ -66963,6 +66963,293 @@ def test_r72_max_turns_120_recovers_floor_and_stays_parity_safe():
     )
 
 
+def _lander_spell_loader_admit_and_cast_resolve(
+    spell_name, expect_card_type, victim_extra_card_types,
+    expect_lander, expect_dead,
+):
+    """Shared driver for the two Lander-spell-token-seating sub-
+    substrate (round-73) genuine real-EoE acceptance probes.
+
+    Drives the ACTUAL parsed ``spell_name`` printing through the
+    GENUINE production-deck loader (``production_deck_to_deckspec`` →
+    the round-73-extended ``_seat_token_printings`` spell-axis pass)
+    into a DETERMINISTIC matched game, casts the spell at the
+    deterministic-first target, drains both stacks via the CE5
+    cast-vs-resolve mirror, and asserts ZERO field-view divergence +
+    the conditional-Lander / target-death observable on BOTH engines.
+
+    This is the slice's load-bearing proof: it exercises the EXACT
+    bench-admit path the sub-substrate unlocks (loader-drop → admit
+    flip) AND proves the Lander the loader seats on Rust (via the
+    registered ``token_printing_id``) is byte-equal to the Lander
+    Python mints intrinsically from ``TOKEN_PRINTINGS["Lander"]`` —
+    BOTH translation directions, end-to-end, through the real loader.
+    """
+    import pathlib
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, step_both, advance_phase_python, compare_fields,
+    )
+    from tests.test_trajectory_parity import _step_views
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+    from mtg_bot.cards.source import get_active_source
+
+    src = get_active_source().get_printings()
+    real = src.get(spell_name)
+    if real is None:
+        import pytest as _pt
+        _pt.skip(f"{spell_name} absent from active CardSource")
+    # Verify-against-live: genuinely the post-sub-substrate admit shape.
+    assert trajectory._printing_is_bridge_simple_spell(real), (
+        f"{spell_name} must pass the spell guardrail post-round-73")
+    assert expect_card_type in real.card_types
+
+    # (1) Loader-admit flip via the SAME entry point the bench uses.
+    # Pre-round-73 every Lander-pid Instant/Sorcery was DECLINED (the
+    # reverse-serializer round-trip-or-bail tooth returned None).
+    deck = [spell_name] * 4 + ["Forest"] * 36
+    spec0 = trajectory.production_deck_to_deckspec(
+        deck, ["Forest"] * 40, pad_to_size=40)
+    admitted = {cd.name for cd in spec0.card_defs}
+    assert spell_name in admitted, (
+        f"{spell_name} must be ADMITTED into the bridged DeckSpec (the "
+        f"loader-drop → bench-admit flip the sub-substrate delivers); "
+        f"admitted={sorted(admitted)}")
+    assert "Lander" in admitted, (
+        f"the Lander token must be auto-seated by _seat_token_printings "
+        f"walking spell_effect; admitted={sorted(admitted)}")
+    spell_cd0 = next(cd for cd in spec0.card_defs
+                     if cd.name == spell_name)
+    assert spell_cd0.card_type == expect_card_type
+    assert "_token_card_def" not in spell_cd0.spell_effect
+    lander_pid0 = next(
+        i for i, cd in enumerate(spec0.card_defs)
+        if cd.name == "Lander")
+    assert spell_cd0.spell_effect["token_printing_id"] == lander_pid0
+
+    # (2) Deterministic matched game over a hand-built spec carrying
+    # the genuine loader-admit transform of the real printing. Mirrors
+    # the Depressurize Phase-1 acceptance-probe shape (bridge pins
+    # #8/#9). The ramp land produces EXACTLY the spell's required
+    # color (Seedship Impact {1}{G} → {G}; Orbital Plunge {3}{R} →
+    # {R}) so both engines can pay the real printed cost (Rust's mana
+    # gate is strict — a wrong-color land silently fails the cast,
+    # exactly the divergence verify-first surfaced); deterministic
+    # library (no shuffle).
+    rmc = real.mana_cost
+    rcolored = (
+        dict(rmc.colored).items() if rmc and hasattr(rmc.colored, "items")
+        else (rmc.colored if rmc else ()))
+    spell_color = next((c for c, n in rcolored if n > 0), "C")
+    spell_cd = trajectory._printing_to_card_def(real)
+    forest = CardDef(name="Forest", card_type="Land",
+                     mana_produced=(spell_color,))
+    # The victim is a vanilla 2/2 (Creature, optionally +Artifact for
+    # Seedship's is_artifact predicate), cast for {1}<spell_color> so
+    # the single-color land ramp affords it AND the real spell.
+    target_cd = CardDef(
+        name="TGT_VICTIM", card_type="Creature",
+        extra_card_types=tuple(victim_extra_card_types),
+        mana_cost_generic=1, mana_cost_colored=((spell_color, 1),),
+        power=2, toughness=2)
+    base_spec = DeckSpec(
+        card_defs=(spell_cd, target_cd, forest),
+        p0_library=tuple(
+            ["TGT_VICTIM", spell_name] + ["Forest"] * 58),
+        p1_library=tuple(["Forest"] * 60),
+    )
+    # Run the loader's spell-axis token-seating on the union card_defs
+    # exactly as production_deck_to_deckspec does (the real bench path).
+    seated = trajectory._seat_token_printings(list(base_spec.card_defs))
+    spec = DeckSpec(
+        card_defs=tuple(seated),
+        p0_library=base_spec.p0_library,
+        p1_library=base_spec.p1_library,
+    )
+    assert any(cd.name == "Lander" for cd in spec.card_defs), (
+        "the Lander token must be seated into the union card_defs")
+    py, rs = trajectory.setup_matched_game(spec)
+    for pl in py.players:
+        pl.agent = _PickFirstLegalTargetAgent()
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+            pv, rv = _step_views(py, rs)
+            d = compare_fields(pv, rv)
+            assert not d, (
+                f"phase advance ({pv['step']}, turn {pv['turn']}) "
+                f"diverged: "
+                f"{[(x.field, x.py_value, x.rust_value) for x in d]}")
+
+    def tap_n(n):
+        ai = py.active_player_idx
+        taps = 0
+        for o in list(py.battlefield):
+            if (o.controller_id == ai and o.printing.is_land
+                    and not o.tapped and not o.summoning_sick
+                    and taps < n):
+                assert not step_both(
+                    py, rs,
+                    {"kind": "activate_ability",
+                     "source_id": int(o.id),
+                     "ability_index": 0}).divergences
+                taps += 1
+        assert taps == n, f"need {n} mana; tapped {taps}"
+
+    adv(3)  # turn 1 MAIN1
+    # 5 land drops (deterministic ramp: enough for {3}{R}). adv(24) =
+    # +2 turns back to p0 MAIN1.
+    for t in range(5):
+        ai = py.active_player_idx
+        hf = [o for o in py.players[ai].hand
+              if o.printing.name == "Forest"]
+        assert hf, "Forest must be in hand each ramp turn"
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land", "card_id": int(hf[0].id)}).divergences
+        if t < 4:
+            adv(24)
+    ai = py.active_player_idx
+    # Cast the target victim. Its mana cost = {1}{R} (2 lands).
+    tap_n(2)
+    vic_obj = next(o for o in py.players[ai].hand
+                   if o.printing.name == "TGT_VICTIM")
+    assert not step_both(
+        py, rs,
+        {"kind": "cast_spell",
+         "card_id": int(vic_obj.id)}).divergences
+    adv(24)  # next p0 turn — the victim is no longer summoning-sick
+    ai = py.active_player_idx
+    vics_bf = [o for o in py.battlefield
+               if o.printing.name == "TGT_VICTIM"]
+    assert vics_bf, "the victim must be on the battlefield"
+    vic_id = vics_bf[0].id
+    landers_before = len(
+        [o for o in py.battlefield
+         if o.printing.name == "Lander"
+         and o.controller_id == ai])
+
+    # Cast the Lander spell at the deterministic-first creature.
+    # {1}{G} (Seedship — but target is a creature here; Seedship
+    # targets artifact/enchantment, so for the creature-victim case we
+    # use Orbital Plunge. The caller picks a target_cd matching the
+    # spell's legal target.) Tap enough lands for the printed cost.
+    cost = real.mana_cost
+    need = (cost.generic if cost else 0) + sum(
+        n for _, n in (cost.colored.items() if cost
+                       and hasattr(cost.colored, "items")
+                       else (cost.colored if cost else ())))
+    tap_n(need)
+    spell = next(o for o in py.players[ai].hand
+                 if o.printing.name == spell_name)
+    s = step_both(
+        py, rs, {"kind": "cast_spell", "card_id": int(spell.id)})
+    # Post-cast AND post-resolve byte-equal (the CE5 cast-vs-resolve
+    # mirror drains both stacks before the compare — this is the
+    # bidirectional proof: the Lander Rust seats via the loader pid is
+    # byte-equal to Python's intrinsic TOKEN_PRINTINGS["Lander"]).
+    assert not s.divergences, (
+        f"{spell_name} cast→resolve diverged through the genuine "
+        f"loader path: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+    # The spell source is in the controller's graveyard on BOTH (zero
+    # divergence already proves Rust agrees; assert the Python
+    # observable explicitly — CR 608.2m).
+    assert any(o.printing.name == spell_name
+               for o in py.players[ai].graveyard), (
+        f"{spell_name} must be in p{ai} graveyard post-resolve")
+    landers_after = len(
+        [o for o in py.battlefield
+         if o.printing.name == "Lander"
+         and o.controller_id == ai])
+    if expect_lander:
+        assert landers_after == landers_before + 1, (
+            f"{spell_name} must create exactly one Lander under p{ai} "
+            f"(conditional rider satisfied); "
+            f"{landers_before}→{landers_after}")
+    else:
+        assert landers_after == landers_before, (
+            f"{spell_name} must create NO Lander (conditional rider "
+            f"NOT satisfied); {landers_before}→{landers_after}")
+    dead = not [o for o in py.battlefield if o.id == vic_id]
+    assert dead is expect_dead, (
+        f"{spell_name} target-death observable mismatch: "
+        f"expected dead={expect_dead}, got dead={dead}")
+
+
+def test_cross_engine_real_eoe_orbital_plunge_loader_admit_and_cast_resolve_parity():
+    """**GENUINE real-EoE cross-engine probe — Orbital Plunge
+    (~28,629 17lands decks) — Lander-spell-token-seating sub-substrate
+    (round-73), the slice's headline bench-admit flip.**
+
+    Pre-round-73 Orbital Plunge was POSITIVELY DECLINED by the spell-
+    card-bridge Phase-1 guardrail (its Rust ``parse_effect`` arm
+    ``require("token_printing_id")`` for the Lander; the loader's spell
+    path had NO Lander-token-seating pass — the reverse serializer
+    round-trip-or-bail tooth returned None). The sub-substrate extends
+    ``_seat_token_printings`` to ALSO walk ``spell_effect``, so the
+    full Sorcery now survives the production loader and runs cross-
+    engine byte-equal.
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Sorcery] {3}{R} — Orbital Plunge deals 6 damage to target
+         creature. If excess damage was dealt this way, create a
+         Lander token."
+
+    Drives the GENUINE loader path over a printed-2-toughness creature
+    victim: 6 damage → remaining 2 → excess 4 > 0 → exactly one Lander
+    under p0 AND the creature dead, WHOLE field view byte-equal on
+    BOTH engines (the Lander Rust seats via the loader-assigned
+    ``token_printing_id`` == the Lander Python mints intrinsically —
+    BOTH directions, end-to-end).
+    """
+    # A vanilla 2/2 creature: 6 damage, remaining 2, excess 4 > 0 →
+    # Lander; lethal → dead. (The driver builds it with {1}{R} so the
+    # red ramp affords it — Orbital Plunge is {3}{R}.)
+    _lander_spell_loader_admit_and_cast_resolve(
+        "Orbital Plunge", "Sorcery", (),
+        expect_lander=True, expect_dead=True,
+    )
+
+
+def test_cross_engine_real_eoe_seedship_impact_loader_admit_and_cast_resolve_parity():
+    """**GENUINE real-EoE cross-engine probe — Seedship Impact
+    (~13,908 17lands decks) — Lander-spell-token-seating sub-substrate
+    (round-73), the slice's headline bench-admit flip.**
+
+    Pre-round-73 Seedship Impact was POSITIVELY DECLINED for the SAME
+    reason as Orbital Plunge (Lander ``token_printing_id`` unseatable
+    on the spell path). The sub-substrate flips it to bench-admit.
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Instant] {1}{G} — Destroy target artifact or enchantment.
+         If its mana value was 2 or less, create a Lander token."
+
+    Drives the GENUINE loader path over an Artifact-Creature victim
+    (``SeedshipImpactEffect.legal_targets`` accepts any battlefield
+    permanent where ``printing.is_artifact`` — an Artifact Creature
+    qualifies AND casts cleanly via the normal creature path, like
+    the Orbital-Plunge Bear): printed mv = 2 ≤ 2 → destroyed AND
+    exactly one Lander under p0, WHOLE field view byte-equal on BOTH
+    engines (the deterministic-first scan picks it on both — the same
+    equivalence the Effect-half Seedship probe already proved).
+    """
+    # An Artifact Creature (extra_card_types=("Artifact",)): the
+    # driver builds it as a 2/2 cast for {1}{G} (mv 2 ≤ 2 → the
+    # Lander rider fires; the green ramp affords it — Seedship is
+    # {1}{G}); Seedship's predicate (is_artifact) accepts it;
+    # destroyed by Seedship → dead.
+    _lander_spell_loader_admit_and_cast_resolve(
+        "Seedship Impact", "Instant", ("Artifact",),
+        expect_lander=True, expect_dead=True,
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

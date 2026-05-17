@@ -70,31 +70,49 @@ pytestmark = pytest.mark.skipif(
 #
 # The lever's admit set is NOT a static card-name list — it is the set
 # of EoE printings passing ``_printing_is_bridge_simple_spell`` (covered
-# + bridged + pid-free + single-target). At the implement HEAD that set
-# is EXACTLY {Depressurize, Radiant Strike}; it auto-grows as each
-# subsequent per-card Tier-A Effect closes. This module probes ONLY the
-# two members live at THIS HEAD; the test below fails loudly (rather
-# than letting a probe silently drift onto a non-admitted card) if the
-# set has changed — the honest "re-verify, don't assume" discipline a
-# future re-orienting routine MUST inherit.
+# + bridged + single-target + token-pid seatable). At the round-70
+# implement HEAD that set was EXACTLY {Depressurize, Radiant Strike};
+# the round-73 Lander-spell-token-seating sub-substrate grew it to
+# {Depressurize, Orbital Plunge, Radiant Strike, Seedship Impact}
+# (Seedship/Orbital flipped DECLINE→SEATED — new-code-is-right). It
+# auto-grows further as each subsequent per-card Tier-A Effect closes.
+# This module's carrier-sweep probes drive Depressurize / Radiant
+# Strike explicitly (Seedship/Orbital have their own dedicated
+# loader-admit + cast→resolve real-EoE probes in
+# ``test_parity_smoke.py``); the test below fails loudly (rather than
+# letting a probe silently drift onto a non-admitted card) if the set
+# changes — the honest "re-verify, don't assume" discipline a future
+# re-orienting routine MUST inherit.
 # ---------------------------------------------------------------------------
 
 
-_PHASE1_ADMITTED_AT_THIS_HEAD = ["Depressurize", "Radiant Strike"]
+_PHASE1_ADMITTED_AT_THIS_HEAD = [
+    "Depressurize", "Orbital Plunge", "Radiant Strike", "Seedship Impact",
+]
+# The two members this module's carrier-sweep probes drive directly
+# (Seedship/Orbital are covered by their dedicated probes elsewhere).
+_CARRIER_SWEEP_PROBED = ["Depressurize", "Radiant Strike"]
 
 
-def test_phase1_admit_set_is_exactly_radiant_strike_and_depressurize():
-    """Verify-first guard: the live Phase-1 spell-card-bridge admit set
-    (the set of EoE printings passing the production-deck loader's
+def test_phase1_admit_set_is_exactly_the_covered_bridged_seatable_set():
+    """Verify-first guard: the live spell-card-bridge admit set (the
+    set of EoE printings passing the production-deck loader's
     ``_printing_is_bridge_simple_spell`` guardrail) is EXACTLY
-    ``{Depressurize, Radiant Strike}`` at this HEAD.
+    ``{Depressurize, Orbital Plunge, Radiant Strike, Seedship Impact}``
+    at this HEAD (round-73 — the Lander-spell-token-seating
+    sub-substrate flipped Seedship Impact / Orbital Plunge
+    DECLINE→SEATED; was {Depressurize, Radiant Strike} at the round-70
+    Phase-1 landing).
 
-    Every probe in this module relies on these two cards being
-    genuinely bench-admitted through the Phase-1 carrier. If this
-    assertion fails the lever's admit set has drifted (it auto-grows
-    as Focus Fire / Biosynthic Burst close): a re-orienting routine
-    must drop+replace the probe set honestly against the NEW live set,
-    not assume the old one.
+    This module's carrier-sweep probes drive ``_CARRIER_SWEEP_PROBED``
+    (Depressurize / Radiant Strike) through the full Phase-1 carrier;
+    Seedship Impact / Orbital Plunge have their own dedicated genuine
+    real-EoE loader-admit + cast→resolve probes
+    (``test_cross_engine_real_eoe_{seedship_impact,orbital_plunge}_loader_admit_and_cast_resolve_parity``).
+    If this assertion fails the lever's admit set has drifted further
+    (it auto-grows as Focus Fire / Biosynthic Burst close): a
+    re-orienting routine must drop+replace the probe set honestly
+    against the NEW live set, not assume the old one.
     """
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
@@ -510,9 +528,15 @@ def _drive_phase1_carrier(card_name, *, target_tapped, deck_variant):
 # ---------------------------------------------------------------------------
 # The SWEEP.
 #
-# Both bench-admitted spells x multiple GENUINELY-DISTINCT deterministic
-# deck contexts (all seed=None deck-list order — the bridge-pin #8/#9
-# idiom; no RNG, fully reproducible). The four deck variants
+# The two pid-FREE bench-admitted spells (Depressurize / Radiant
+# Strike) x multiple GENUINELY-DISTINCT deterministic deck contexts
+# (all seed=None deck-list order — the bridge-pin #8/#9 idiom; no RNG,
+# fully reproducible). The two Lander-pid bench-admitted spells
+# (Seedship Impact / Orbital Plunge — round-73 SEATED) have their own
+# dedicated genuine real-EoE loader-admit + cast→resolve probes in
+# ``test_parity_smoke.py`` (they exercise the spell-axis token-seating
+# path this carrier-sweep's pid-free pair does not). The four deck
+# variants
 # (``prefix`` / ``deep`` / ``multi`` / ``bear_first``) give different
 # opening hands, ramp depths, cast turns, and cast-time battlefield
 # shapes — a real multi-deck spread through the carrier, not one

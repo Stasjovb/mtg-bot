@@ -4894,65 +4894,141 @@ it to a 2-slot payload).
 
 ---
 
-## Spell-card-bridge lever Phase 1 — Lander-pid spell Effects DECLINED (Seedship Impact / Orbital Plunge): no spell-path token-seating sub-substrate
+## Lander-spell-token-seating sub-substrate (round-73) — Seedship Impact / Orbital Plunge now SEATED + bench-admitted (was DECLINED at the round-70 Phase-1 landing)
+
+> **Status flip (round-73).** This entry previously documented
+> Seedship Impact / Orbital Plunge as *positively DECLINED* (the
+> spell-card-bridge Phase-1 round-trip-or-bail tooth — the loader's
+> spell path had no Lander-token-seating pass). The
+> Lander-spell-token-seating sub-substrate now SHIPS that pass; both
+> cards are SEATED + bench-admitted byte-equal. The decline tooth is
+> NOT removed — it still positively declines any genuinely-unseatable
+> shape (see "What the round-trip-or-bail tooth STILL declines").
 
 **Location**: `src/mtg_bot/parity/trajectory.py`
-(`_python_spell_effect_to_dict` — the reverse serializer
-deliberately does NOT serialize `SeedshipImpactEffect` /
-`DealDamageToTargetCreatureWithExcessLanderRider`; the
-`_printing_is_bridge_simple_spell` second tooth
-`if _python_spell_effect_to_dict(se) is None: return False`).
+(`_canonical_lander_token_card_def` — the canonical Lander CardDef
+via the EXISTING `_token_with_safe_activated_ability_card_def`;
+`_python_spell_effect_to_dict` — the reverse serializer now emits a
+symbolic `_token_card_def` for `SeedshipImpactEffect` /
+`DealDamageToTargetCreatureWithExcessLanderRider`;
+`_seat_token_printings` — `_carrier_spell_token_ref` + the
+spell-axis branch of the rewrite loop, mirroring the
+`triggered_abilities` `create_token` machinery on the `spell_effect`
+axis) + `src/mtg_bot/parity/cross_engine.py`
+(`resolve_top_of_stack_rust` — the SBA-symmetry fix) +
+`tests/parity/_picker_shims.py`
+(`_PickFirstLegalTargetAgent.choose_surveil` — the keep-on-top
+byte-equal default).
 
-**What the shortcut is (verify-first-surfaced, NOT in the spec)**:
-Seedship Impact + Orbital Plunge are covered+bridged at the Effect
-level (their Effect classes are in `covered_python_class_set()`), so
-the spec's covered-set gate alone would admit them. **But their Rust
-`parse_effect` arms `require("token_printing_id")`** for the Lander
-token, and the production-deck loader's spell path has **NO
-Lander-token-seating pass**: `_seat_token_printings` only walks
-`triggered_abilities` carriers (the `_token_card_def` key emitted by
-`_python_ta_to_safe_dict`), never `spell_effect`. Admitting them
-would raise in `parse_effect` (require fails — there is no Lander pid
-to seat) or silently mistranslate. Phase 1 therefore **positively
-declines** both via the reverse-serializer round-trip-or-bail tooth,
-keeping the admit set to the pid-FREE covered single-target Tier-A
-spells (Radiant Strike — `Sequence(DestroyTargetArtifactOrTapped
-Creature, GainLife)`; Depressurize — `DepressurizeEffect`).
+**What the deliberate simplifications are**: the *seating* itself is
+genuinely-new loader substrate (NOT a shortcut — it is the exact
+`triggered_abilities` `_seat_token_printings` machinery applied to
+the `spell_effect` axis: walk for a symbolic `_token_card_def`, seat
+the Lander CardDef at a deterministic pid, rewrite to the numeric
+`token_printing_id`, `register_token_printing` the matching Python
+printing). The deliberate divergences it *carries* (recorded per
+project policy):
 
-**Why it's OK**: this is the no-fallback-hybrid / silent-no-op
-discipline (`feedback_no_fallback_hybrids` /
-`feedback_silent_noop_pipelines`) applied honestly — a half-wired
-spell path that admits a card whose Rust parser cannot construct the
-effect is exactly the diverging-stub anti-pattern the task forbids.
-Declining is correct, not a regression: Seedship Impact / Orbital
-Plunge still have their Effect halves shipped + genuinely probed
-byte-equal (their own SEARCH_LIMITATIONS entries); only the
-*bench-admit* of the full card waits. The decline is structural (the
-serializer does not emit those shapes) AND pinned (negative pin
-#12b: covered True, guardrail False, serializer None).
+1. **The bridge drops the Lander pid (pre-existing, unchanged).**
+   Rust's `parse_effect` `require("token_printing_id")` for the
+   Lander; the dict→Python bridge arms (`cross_engine.py`
+   `seedship_impact_effect` /
+   `deal_damage_to_target_creature_with_excess_lander_rider`)
+   construct the FIELD-FREE Python class (Python mints the Lander
+   intrinsically from `TOKEN_PRINTINGS["Lander"]`). Both engines seat
+   the SAME logical "Lander" printing (Rust via the loader-assigned
+   pid, Python intrinsic) so the created token is byte-equal in the
+   name-keyed field view — the SAME pid-carrier deviation already
+   documented in the Seedship-Impact / Orbital-Plunge Effect-half
+   entries above. The loader uses the EXACT helper the triggered
+   path uses (`_token_with_safe_activated_ability_card_def`) so the
+   seated Lander's registered Python printing is byte-identical to
+   the intrinsic one.
 
-**Failure mode**: none today — both cards are declined cleanly (no
-bench entry, no parse raise). The risk this entry guards against is
-a future widening of the covered-set gate (or a per-card round
-shipping a Python->dict sibling) silently re-admitting them WITHOUT
-the spell-path token-seating substrate, which would re-introduce the
-parse-raise / mistranslation.
+2. **The spell rewrite preserves the Rust arm's exact field set.**
+   Unlike the `triggered_abilities` `create_token` rewrite (which
+   reconstructs a fixed `{kind,count,token_printing_id}` dict), the
+   spell rewrite copies the whole `spell_effect` dict, drops
+   `_token_card_def`, adds the numeric `token_printing_id`, and
+   injects NO `count` (Rust's `seedship_impact_effect` arm requires
+   ONLY `token_printing_id`; the Orbital Plunge arm requires
+   `amount` + `token_printing_id` — a spurious `count` would be the
+   silent-mistranslation class the §2 teeth exist to prevent).
 
-**Fix scope estimate**: a Lander-spell-token-seating sub-substrate —
-extend `_seat_token_printings` (or a sibling pass) to ALSO walk a
-carrier's `spell_effect` for a symbolic Lander token, seat the
-Lander CardDef + rewrite the spell_effect dict's `token_printing_id`
-+ `register_token_printing` — the exact `triggered_abilities`
-machinery, applied to the `spell_effect` axis. One focused
-Python-lane slice (the Rust + bridge arms already exist; this is
-loader plumbing). The reverse serializer then gains the two arms +
-the guardrail tooth admits them automatically.
+3. **`resolve_top_of_stack_rust` SBA symmetry (pre-existing latent
+   gap, surfaced + fixed).** The harness's Rust cast-mirror drain
+   ran `resolve_top_of_stack()` per item but (unlike its Python
+   sibling, which runs `state_based_actions`) did NOT run
+   `apply_sbas()`. Pre-round-73 every admitted cast-path Effect
+   mutated state inside resolve (e.g. `DepressurizeEffect` calls
+   `destroy()`), so the gap was unobservable. Orbital Plunge deals
+   DAMAGE and relies on the lethal-damage SBA; the missing
+   `apply_sbas()` left Rust's damaged creature on the battlefield = a
+   HARNESS false-positive (the engines agree). Fixed by mirroring the
+   Python sibling's SBA call — apples-to-apples, the exact pattern
+   every Effect-half probe runs by hand.
 
-**Impact estimate**: deferred +2 single-target Tier-A bench-admits
-(Seedship Impact ~13,908 + Orbital Plunge ~28,629 17lands decks)
-until the spell-path token-seating sub-substrate lands. The lever
-itself (the carrier) is unaffected — it flips Radiant Strike +
-Depressurize on landing and auto-grows as the gate widens.
+4. **`_PickFirstLegalTargetAgent.choose_surveil` keep-on-top
+   (pre-existing latent gap, surfaced + fixed).** The bench installs
+   this agent on both Python players whenever a spell may be cast.
+   It lacked `choose_surveil` (base `Agent` raises
+   `NotImplementedError`); no real bench game cast a spell AND lived
+   long enough to fire a surveil ETB (e.g. Thawbringer's
+   enters→surveil 1) until Seedship/Orbital extended such games past
+   the trigger. Fixed to `return False` (keep on top) — the BYTE-
+   EQUAL mirror of Rust's terminal
+   `auto_resolve_pending(self, "keep_all_on_top")` + Python's
+   `p.agent is None` keep-on-top short-circuit (returning `True`
+   would mill and DIVERGE from Rust's no-mill default).
+
+**Why it's OK**: this is the no-fallback-hybrid discipline applied
+positively — the symbolic Lander ref is emitted ONLY because the
+seating pass that resolves it now exists; the two pre-existing latent
+harness gaps were fixed BYTE-EQUAL (not papered over, not relaxed in
+the r72 fixture test). Genuinely probed: the two real-EoE
+loader-admit + cross-engine cast→resolve byte-equality probes
+(`test_cross_engine_real_eoe_{seedship_impact,orbital_plunge}_loader_admit_and_cast_resolve_parity`)
+drive the GENUINE production loader path end-to-end (loader-drop →
+admit flip + the destroy/damage + conditional-Lander observable
+byte-equal on BOTH engines, BOTH translation directions); bridge pin
+#14 pins the bidirectional seated round-trip; pins #12b/#13 flipped
+DECLINE→SEATED (new-code-is-right).
+
+**What the round-trip-or-bail tooth STILL declines (the
+necessary-but-not-sufficient card)**: the tooth is NOT weakened into
+a fallback hybrid. `_python_spell_effect_to_dict` still returns
+`None` for any genuinely-unseatable shape — a `Sequence` with one
+unrecognized child; any token-pid Effect whose token is not the
+bridge-correct Lander (`_canonical_lander_token_card_def` returns
+`None` if the authored Lander ever drifts out of the
+`_token_with_safe_activated_ability_card_def` §2 shape). And
+complementary to this serializer, the covered-set gate still
+positively declines **Close Encounter** — the concrete
+necessary-but-not-sufficient card (`CloseEncounterEffect` is NOT in
+`covered_python_class_set()`: no additional-cost-choice substrate
+ships it; live `Close Encounter.warp_cost is None` so the spec
+ADDENDUM's warp reason is stale — the covered-set gate is the robust
+teeth, pinned #11). **Diplomatic Relations** also stays declined
+(2-slot grammar — Phase 2; pinned #12).
+
+**Failure mode**: none today. The risk guarded against: a future
+spell-effect token-pid Effect whose token is NOT the Lander would
+need its own `_canonical_*_token_card_def` + serializer arm — the
+generic spell-axis seating only seats the symbolic ref the
+serializer emits, so an un-served shape stays declined (no
+parse-raise / mistranslation).
+
+**Fix scope estimate**: SHIPPED (round-73). One focused Python-lane
+slice (loader plumbing — the Rust `parse_effect` + bridge arms
+already existed); +2 small pre-existing harness-gap fixes (SBA
+symmetry, keep-on-top surveil).
+
+**Impact estimate**: +2 single-target Tier-A bench-admits — Seedship
+Impact (~13,908 17lands decks) + Orbital Plunge (~28,629) = ~42,537
+decks flip loader-drop → bench-admit. The spell-card-bridge admit set
+is now {Depressurize, Orbital Plunge, Radiant Strike, Seedship
+Impact}; it auto-grows further as Focus Fire / Biosynthic Burst
+close. Zero production strength cost (parity-instrumentation only).
 
 ## Bench deck-out-aware early terminator — DECLINED (honest-no-ship): no parity-PROVABLE predicate covers the population, and the sound one is dominated by the already-shipped blanket cap-120
 
