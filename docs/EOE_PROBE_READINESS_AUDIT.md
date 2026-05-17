@@ -304,22 +304,20 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 11bb2ecc (round-60 HEAD, post N1+N2+N3),
-     resynced by the round-60 post-merge fold slice. Rust
-     variant +1 (N3 Effect::PumpTargetCreatureUntilEotGrant-
-     DiesReturnTapped) + bridge-arm +1. N3 touched cards.rs/
-     cross_engine.py -> cadence re-verify fired; the 7 still-
-     genuinely-missing entries re-stamped verified_absent_at_-
-     commit=11bb2ecc. Perigee Beckoner folded genuinely_missing
-     -> closed (Effect-half shipped + genuine probe; full card
-     stays loader-gated on nested-trigger-grant + warp_cost).
-     N1: non-basic-land substrate phase-1 shipped (5 pay-life
-     shocklands admitted, +18,065 decks; documented simplifi-
-     cation per round-39 Ward precedent — NOT a _SAFE_*/Effect
-     change, an admit-filter predicate). N2: cost-reduction
-     scoped — honest realizable yield 0 near-term (multi-round
-     Rust substrate, re-ranked behind warp_cost). Honest
-     residue 7 -> 6 distinct cards. -->
+     Measured at main ca239485 (round-62 HEAD, post N1+N2+N3),
+     resynced by the round-62 post-merge re-stamp slice. Counts
+     UNCHANGED (112/114/21/...) — round-62 N1 fixed the shockland
+     mana-ability bridge bug by modifying the existing
+     `apply_mana_produced_bridge` helper (no new Effect variant /
+     no new _ta_dict kind arm). N1 touched cards.rs -> cadence
+     re-verify fired; the 7 still-genuinely-missing entries
+     re-stamped verified_absent_at_commit=ca239485. No fold this
+     round (no residue closed; shocklands are zero-Effect lands,
+     never in the worklist — N1 closed the SEARCH_LIMITATIONS
+     shockland entry itself). Honest residue still 6 distinct
+     cards. N2: warp_cost Phase-1 implementation spec ready
+     (round-63 Rust). N3: broad full-surface sweep — clean, 0
+     NEW divergence. -->
 rust_effect_variants = 112
 bridge_arms = 114
 safe_triggers = 21
