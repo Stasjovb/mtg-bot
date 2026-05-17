@@ -45,7 +45,7 @@ The residue worklist's per-card re-walk is the AUTHORITY on genuine Effect absen
 _Context (NOT drift): 3 `blocked_non_effect` card(s) have covered/probed Effects — that is their definition (Effects shipped; full-card admit gated by a non-Effect path). The metric counts Effect+bridge byte-equality; these cards' Effects ARE byte-equal but the CARD is not full-game parity-able. This is the precise gap between the two — surfaced for honesty:_
 
 - `Dauntless Scrapbot` — Effects probed at the Effect+bridge level; CARD remains `blocked_non_effect` (non-Effect gate).
-- `Seedship Agrarian` — Effects covered at the Effect+bridge level; CARD remains `blocked_non_effect` (non-Effect gate).
+- `Seedship Agrarian` — Effects probed at the Effect+bridge level; CARD remains `blocked_non_effect` (non-Effect gate).
 - `Tractor Beam` — Effects covered at the Effect+bridge level; CARD remains `blocked_non_effect` (non-Effect gate).
 
 ## PROBED cards (genuine real-EoE byte-equality probes)
