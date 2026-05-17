@@ -653,6 +653,95 @@ pub(crate) fn tap_permanent_and_dispatch(
 /// - **No fizzle check.** Targets are picked at resolve time, so
 ///   "no legal targets at push" is moot under Slice 1's deferred-
 ///   targeting shape. Slice 4+ adds the fizzle gate.
+/// **Tier-C target-seating shared sub-substrate.** The deterministic
+/// no-agent push-time target seat for a SAFE *targeted* triggered
+/// ability — the single byte-equal-able first-legal rule shared by
+/// every per-card lever-a consumer (Sunset Saboteur today; Exosuit
+/// Savior next), mirrored exactly by the Python seat at
+/// `actions.py:_put_triggered_ability_on_stack` (the
+/// `controller.agent is None` branch).
+///
+/// **The rule (identical on both engines, by construction).** Scan
+/// `state.players` in ascending seat index; within each player's
+/// `battlefield` Vec in insertion order; return the id of the first
+/// object that passes the effect's slot filter. This is exactly
+/// Python's `Effect._enumerate_for_filter` order
+/// (`base.py` — battlefield in list order then players in order);
+/// `legal_targets[0]` IS this pick, which is what the campaign's
+/// `_PickFirstLegalTargetAgent` shim family encodes. The
+/// cross-engine harness keeps object ids + bf insertion order in
+/// lockstep (`build_rust_state` registers in Python bf order), so
+/// "smallest bf index passing the filter" names the SAME object on
+/// both engines.
+///
+/// **Gated to lever-a effects ONLY.** Returns `None` for every
+/// effect that is NOT a Tier-C target-seating lever variant —
+/// including every one of the 20+ live UNTARGETED safe triggers
+/// (`DrawCards` / `GainLife` / `Surveil` / `CreateToken` / …). For
+/// those `push_triggered_ability` takes the unchanged
+/// `new_trigger` path → byte-identical behavior, zero regression.
+/// The per-card filter is the lever variant's own (matched here):
+/// `PutPlusOneCounterOnOpponentsCreature` → first creature an
+/// opponent of `controller` controls. (`new_trigger_with_target`
+/// is the EXISTING constructor — CE20 Slice 4 / Equipment-equip;
+/// no new `StackItem`/`TriggerPayload` field, see `state.rs`.)
+///
+/// **None semantics at the call site.** `count_min>=1` + no eligible
+/// target ⇒ the trigger must NOT be pushed (Python fizzles,
+/// `return False` — CR 603.3c). `count_min==0` + no eligible ⇒ push
+/// with no target (the optional effect resolves as a no-op,
+/// byte-equal with Python's `targets=()`). The call site encodes
+/// this; the helper only answers "which object, if any".
+fn first_legal_trigger_target(
+    state: &GameState,
+    _source_id: u32,
+    controller: u8,
+    effect: &Effect,
+) -> Option<u32> {
+    match effect {
+        // Sunset Saboteur (`ATTACKS`, source_is_self,
+        // `PutPlusOneCounterOnOpponentsCreature`): slot filter
+        // `IsCreature() & ControlledByOpponent()`. Opponent = any
+        // player whose seat != the source-controller's seat (2-seat
+        // model). Scan ascending seat then bf-Vec order; first
+        // creature an opponent controls.
+        Effect::PutPlusOneCounterOnOpponentsCreature { .. } => {
+            for (pidx, player) in state.players.iter().enumerate() {
+                if pidx as u8 == controller {
+                    continue; // own creatures excluded by the filter
+                }
+                for obj in player.battlefield.iter() {
+                    let printing =
+                        state.registry.printings.get(obj.printing_id as usize)?;
+                    if printing.card_types.iter().any(|t| t == "Creature") {
+                        return Some(obj.id);
+                    }
+                }
+            }
+            None
+        }
+        // Every other effect (all existing untargeted safe triggers,
+        // and any non-lever targeted trigger the engine handles
+        // elsewhere): NOT a target-seating consumer — the helper is
+        // a no-op so `push_triggered_ability` takes the unchanged
+        // `new_trigger` path.
+        _ => None,
+    }
+}
+
+/// True iff `effect` is a Tier-C target-seating lever-a variant whose
+/// trigger MUST fizzle (NOT be pushed) when no legal target exists —
+/// the `count_min>=1` cards. Sunset Saboteur's
+/// `PutPlusOneCounterOnOpponentsCreature` is `count_min=1` (CR
+/// 603.3c: a targeted ability with no legal target is removed from
+/// the stack — Python's `_put_triggered_ability_on_stack` logs
+/// "no legal targets; fizzles" and `return False`). The
+/// `count_min==0` optional cards (Exosuit Savior, a future slice)
+/// are NOT in this set — they push with no target and no-op.
+fn lever_trigger_requires_target(effect: &Effect) -> bool {
+    matches!(effect, Effect::PutPlusOneCounterOnOpponentsCreature { .. })
+}
+
 pub(crate) fn push_triggered_ability(
     state: &mut GameState,
     source_id: u32,
@@ -661,9 +750,37 @@ pub(crate) fn push_triggered_ability(
     effect: Effect,
     once_per_turn: bool,
 ) -> PyResult<()> {
-    state
-        .stack
-        .push(StackItem::new_trigger(source_id, controller, effect, ability_index));
+    // Tier-C target-seating: compute the deterministic first-legal
+    // seat. `None` for every non-lever effect (every existing safe
+    // trigger — preserves the byte-identical pre-substrate path).
+    let tgt = first_legal_trigger_target(state, source_id, controller, &effect);
+    if tgt.is_none() && lever_trigger_requires_target(&effect) {
+        // `count_min>=1` + no eligible target: the trigger fizzles
+        // and is NEVER pushed (CR 603.3c), byte-equal with Python's
+        // `_put_triggered_ability_on_stack` "no legal targets;
+        // fizzles" `return False`. The once-per-turn ledger is NOT
+        // bumped (the ability didn't go on the stack — matches
+        // Python, where `should_fire_trigger` already passed but the
+        // fizzle path returns before the StackItem append; the ledger
+        // bump is downstream of the push in both engines).
+        return Ok(());
+    }
+    match tgt {
+        Some(t) => state.stack.push(StackItem::new_trigger_with_target(
+            source_id,
+            controller,
+            effect,
+            ability_index,
+            t,
+        )),
+        // Unchanged path: untargeted safe triggers AND the
+        // `count_min==0` optional lever cards with no eligible target
+        // (push with no seat → the optional effect resolves as a
+        // no-op, byte-equal with Python's `targets=()`).
+        None => state
+            .stack
+            .push(StackItem::new_trigger(source_id, controller, effect, ability_index)),
+    }
     if once_per_turn {
         state
             .triggered_this_turn
@@ -8107,6 +8224,124 @@ fn apply_effect(
                 Arc::make_mut(&mut state.players[cidx].battlefield);
             for obj in zone.iter_mut() {
                 if obj.id == target_id {
+                    obj.counters = obj.counters.saturating_add(delta);
+                    break;
+                }
+            }
+        }
+        // **Tier-C target-seating sub-substrate (lever-a, Sunset
+        // Saboteur).** Put `amount` +1/+1 counter(s) on a target
+        // creature an OPPONENT of the source's controller controls.
+        // Mirrors Python's `PutPlusOneCounterOnOpponentsCreature`
+        // (a `PutPlusOneCounters` subclass; resolve walks its single
+        // `TargetSpec(IsCreature() & ControlledByOpponent())` slot,
+        // re-checks legality per CR 608.2b, and adds `amount` via
+        // `add_plus_one_counters`).
+        //
+        // **Payload-target convention (NOT a self-scan).** Unlike the
+        // you-control sibling arm above (which deterministically scans
+        // the source-controller's own bf at apply time), this arm
+        // reads the push-time-seated target from
+        // `state.current_resolve_payload_target_id` exactly like
+        // `Effect::EquipToTargetCreatureYouControl`. The seat is
+        // computed by `first_legal_trigger_target` at
+        // `push_triggered_ability` time (the Tier-C shared-seat
+        // micro-substrate) so BOTH engines pick the SAME object: the
+        // deterministic smallest-bf-index creature an opponent of the
+        // source's controller controls. The CR 608.2b resolve-time
+        // re-legality check (target still on a bf, still a creature,
+        // still opponent-controlled) silently fizzles a target that
+        // left the bf / changed control between push and resolve,
+        // byte-equal with Python's
+        // `PutPlusOneCounters.resolve`/`_slot_target_still_legal`
+        // re-check. `amount=0` short-circuits; negative raises
+        // (defense-in-depth — parse catches it at register time).
+        Effect::PutPlusOneCounterOnOpponentsCreature { amount } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "PutPlusOneCounterOnOpponentsCreature amount must be non-negative, got {amount}"
+                )));
+            }
+            if *amount == 0 {
+                return Ok(());
+            }
+            // Locate the source's controller (the same five-zone walk
+            // + stack fallback the you-control sibling arm uses).
+            let mut src_controller: Option<u8> = None;
+            'outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                        src_controller = Some(obj.controller);
+                        break 'outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            let Some(controller) = src_controller else {
+                return Ok(()); // source untracked → silent fizzle
+            };
+            // CR 608.2b resolve-time re-legality: the seated target
+            // must still be on SOME player's bf, be a Creature, and be
+            // controlled by an OPPONENT of `controller`. An unseeded
+            // payload (no `first_legal_trigger_target` ran, e.g. a
+            // direct `apply_effect_pub` caller) → silent fizzle, the
+            // same observable as Python's no-target no-op (the seat is
+            // the production path; this is defense-in-depth, mirrors
+            // the EquipToTargetCreatureYouControl `None` fall-through
+            // but WITHOUT a first-eligible self-scan — a self-scan
+            // here is exactly the cross-engine divergence the shared
+            // seat eliminates).
+            let payload_target = match state.current_resolve_payload_target_id {
+                Some(t) => t,
+                None => return Ok(()),
+            };
+            let mut tgt_loc: Option<usize> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if let Some(obj) =
+                    player.battlefield.iter().find(|o| o.id == payload_target)
+                {
+                    // Opponent-controlled (controller of the obj is not
+                    // the source's controller) AND a creature.
+                    if obj.controller == controller {
+                        return Ok(()); // became own creature → fizzle
+                    }
+                    let printing = match state
+                        .registry
+                        .printings
+                        .get(obj.printing_id as usize)
+                    {
+                        Some(p) => p,
+                        None => return Ok(()),
+                    };
+                    if !printing.card_types.iter().any(|t| t == "Creature") {
+                        return Ok(()); // no longer a creature → fizzle
+                    }
+                    tgt_loc = Some(pidx);
+                    break;
+                }
+            }
+            let Some(tidx) = tgt_loc else {
+                return Ok(()); // target left the bf → silent fizzle
+            };
+            let delta = *amount;
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[tidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == payload_target {
                     obj.counters = obj.counters.saturating_add(delta);
                     break;
                 }

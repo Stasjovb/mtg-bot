@@ -2991,6 +2991,158 @@ def test_python_ta_to_safe_dict_rejects_dies_event_with_non_surveil_or_gain_life
     assert _python_ta_to_safe_dict(ta) is None
 
 
+def test_tierc_sunset_saboteur_targeted_attacks_trigger_admits():
+    """**Tier-C target-seating sub-substrate, lever-a (Sunset
+    Saboteur) — the positive recognizer pin.** The genuine parsed
+    Sunset Saboteur printing's single targeted ATTACKS trigger
+    ``(ATTACKS, IsSelf, PutPlusOneCounterOnOpponentsCreature)`` now
+    round-trips through ``_python_ta_to_safe_dict`` to the byte-equal
+    bridge dict AND is flagged ``_is_target_seated_safe_trigger`` so
+    the surgical no-agent Python seat fires for it. Pins the
+    recognizer arm + the targeted-``_SAFE_TRIGGERS`` triple + the
+    ``_SAFE_EFFECT_KEYS`` whitelist + the ``_is_safe_trigger_dict``
+    dict-side gate as ONE contract.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnOpponentsCreature,
+    )
+    from mtg_bot.parity.trajectory import (
+        _python_ta_to_safe_dict,
+        _is_safe_trigger_dict,
+        _is_target_seated_safe_trigger,
+        _printing_is_bridge_simple_creature,
+    )
+
+    real = get_active_source().get_printings().get("Sunset Saboteur")
+    if real is None:
+        import pytest
+        pytest.skip("Sunset Saboteur absent from active CardSource")
+    assert len(real.triggered_abilities) == 1
+    ta = real.triggered_abilities[0]
+    assert ta.event is Event.ATTACKS
+    assert isinstance(ta.predicate, IsSelf) and ta.predicate.subject is None
+    assert isinstance(ta.effect, PutPlusOneCounterOnOpponentsCreature)
+    dct = _python_ta_to_safe_dict(ta)
+    assert dct == {
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "put_plus_one_counter_on_opponents_creature",
+            "amount": 1,
+        },
+    }
+    assert _is_safe_trigger_dict(dct) is True
+    assert _is_target_seated_safe_trigger(real, ta) is True
+    assert _printing_is_bridge_simple_creature(real) is True
+
+
+def test_tierc_target_seating_necessary_but_not_sufficient_declines():
+    """**Tier-C target-seating §3.5 teeth.** Sharing
+    ``(event, source_is_self)`` with Sunset Saboteur is NECESSARY but
+    NOT SUFFICIENT. Each of these stays ``_python_ta_to_safe_dict ->
+    None`` (and ``_is_target_seated_safe_trigger -> False``), proving
+    the gate is the full triple + the recognizer's bare-shape slot
+    check, NOT the bare targeted-ATTACKS / targeted-ETB shape:
+
+      * **Terrapact Intimidator** — IDENTICAL ENTERS/source_is_self/
+        targeted shape to Exosuit Savior, ``count_range=(1,1)``, BUT
+        its resolve is a modal ``opponent.agent.choose_mode`` (the
+        substrate seats a *target*, not a *mode*).
+      * **Hardened Escort / Flesh Burrower** — ATTACKS/source_is_self/
+        ``PumpTargetCreatureUntilEOT``: targeted, but
+        ``pump_target_creature_until_eot`` is never added to the
+        ATTACKS ``safe_effect_kinds`` (positive control that the
+        Sunset Saboteur ATTACKS-arm widen is surgical).
+      * **Genemorph Imago** — targeted but the predicate is landfall,
+        not ``source_is_self``; the recognizer's ``source_is_self``
+        arm never matches it.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.trajectory import (
+        _python_ta_to_safe_dict,
+        _is_target_seated_safe_trigger,
+        _printing_is_bridge_simple_creature,
+    )
+
+    src = get_active_source().get_printings()
+    for nm in (
+        "Terrapact Intimidator",
+        "Hardened Escort",
+        "Flesh Burrower",
+        "Genemorph Imago",
+    ):
+        p = src.get(nm)
+        if p is None:
+            continue  # honest skip if absent from the active source
+        for ta in p.triggered_abilities:
+            assert _python_ta_to_safe_dict(ta) is None, (
+                f"{nm}: trigger must stay declined "
+                f"(necessary-but-not-sufficient); recognizer returned "
+                f"non-None"
+            )
+            assert _is_target_seated_safe_trigger(p, ta) is False, (
+                f"{nm}: must NOT be flagged target-seated"
+            )
+        assert _printing_is_bridge_simple_creature(p) is False, (
+            f"{nm}: must stay bridge-dropped"
+        )
+
+
+def test_tierc_sunset_saboteur_effect_is_structurally_bare_shaped():
+    """**Tier-C target-seating bare-shape contract.**
+    ``PutPlusOneCounterOnOpponentsCreature.__post_init__``
+    unconditionally wires the SINGLE bare slot
+    ``TargetSpec(IsCreature() & ControlledByOpponent())``
+    (``count_min==count_max==1``, ``slot_kinds()==()``, no
+    ``distinct_from``) — even if a caller passes a widened
+    ``targets`` tuple (``dataclasses.replace`` is overridden by
+    ``__post_init__``). This is WHY the recognizer's bare-shape gate
+    can never be violated *by this class*: the shape is structural,
+    not caller-supplied. The gate stays in the recognizer as
+    defensive depth against a hypothetical future effect class
+    reusing the same ``eff_kind`` with a heterogeneous slot — pinning
+    the structural invariant here is the honest test (a
+    ``dataclasses.replace``-widened instance silently snaps back to
+    the bare slot, so a "rejects widened shape" assertion would test
+    an unreachable state and pass vacuously).
+    """
+    import dataclasses
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnOpponentsCreature,
+    )
+    from mtg_bot.effects.object_predicates import (
+        ControlledByOpponent, IsCreature,
+    )
+    from mtg_bot.effects.targets import TargetSpec
+
+    eff = PutPlusOneCounterOnOpponentsCreature(amount=1)
+    assert eff.target_count_range() == (1, 1)
+    assert eff.target_slot_kinds() == ()
+    assert len(eff.targets) == 1
+    slot = eff.targets[0]
+    assert isinstance(slot, TargetSpec)
+    assert slot.count_min == 1 and slot.count_max == 1
+    assert getattr(slot, "distinct_from", ()) in ((), None)
+    # __post_init__ snaps a caller-widened tuple back to the bare
+    # single slot — the structural invariant the recognizer relies on.
+    widened = dataclasses.replace(
+        eff,
+        targets=(
+            TargetSpec(
+                IsCreature() & ControlledByOpponent(),
+                count_min=1,
+                count_max=2,
+            ),
+        ),
+    )
+    assert widened.target_count_range() == (1, 1), (
+        "__post_init__ must force the bare (1,1) slot regardless of a "
+        "caller-supplied widened tuple"
+    )
+
+
 def test_simple_creature_filter_admits_surveil_etb_only_creature():
     """A bare-vanilla creature carrying only ENTERS+IsSelf+Surveil
     passes the bridge-simple filter end-to-end. Constructs the

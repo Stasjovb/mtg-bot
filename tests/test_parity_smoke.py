@@ -68578,6 +68578,276 @@ def test_cross_engine_counter_attacker_combat_damage_folds_plus_one(
     assert rust_state.get_life(0) == 20
 
 
+def test_cross_engine_real_eoe_sunset_saboteur_attacks_seats_first_opponent_creature(
+    parity_smoke,
+):
+    """**GENUINE real-EoE probe — Tier-C target-seating sub-substrate,
+    lever-a (Sunset Saboteur). The FIRST targeted-safe-trigger
+    firing-parity pin.**
+
+    Drives the **real parsed Sunset Saboteur printing**
+    (``get_active_source().get_printings()["Sunset Saboteur"]``)
+    end-to-end through the production ATTACKS path with **NO agent
+    seated** and asserts byte-equal cross-engine state: the
+    deterministic shared push-time seat picks the SAME object on both
+    engines — the smallest-bf-index creature an opponent controls —
+    and exactly that object gains exactly one +1/+1 counter.
+
+    Real EoE oracle (``data/edge_of_eternities.json``):
+
+        "Menace
+         Whenever Sunset Saboteur attacks, put a +1/+1 counter on
+         target creature an opponent controls."
+
+    Parsed shape (§2 source of truth, asserted live):
+    ``(ATTACKS, IsSelf, PutPlusOneCounterOnOpponentsCreature)``,
+    ``requires_target=True``, ``count_range=(1,1)``,
+    ``slot_kinds=()``, slot filter
+    ``IsCreature() & ControlledByOpponent()``, ``amount=1``.
+
+    **The byte-equal seat rule under test.** The production-deck
+    bench loader seats NO agent. Pre-substrate, Python's
+    ``_put_triggered_ability_on_stack`` ``break``s at
+    ``controller.agent is None`` → the ``count_min=1`` trigger
+    FIZZLES (never pushed); a standalone Rust targeted arm would
+    first-eligible-scan + apply → a guaranteed divergence. The Tier-C
+    shared sub-substrate replaces BOTH no-agent behaviors with the
+    SAME deterministic first-legal pick (ascending seat × bf-Vec
+    order, first creature an opponent controls). Two opponent
+    creatures are injected so the pin proves it picks the FIRST
+    (smallest bf-index) one — NOT the second, NOT both — identically
+    on both engines.
+
+    **Fizzle-when-no-eligible (CR 603.3c).** A second matched pair
+    with NO opponent creature: the trigger must NOT be pushed on
+    EITHER engine (Python logs "no legal targets; fizzles" and
+    ``return False``; Rust's ``push_triggered_ability`` skips the
+    push for a ``count_min>=1`` lever trigger with no seat). No
+    counters anywhere; stacks empty; byte-equal.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnOpponentsCreature,
+    )
+    from mtg_bot.combat import declare_attackers
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        _ta_dict_to_python_triggered_ability,
+    )
+    from mtg_bot.game import Zone
+
+    real = get_active_source().get_printings().get("Sunset Saboteur")
+    if real is None:
+        import pytest
+        pytest.skip("Sunset Saboteur absent from active CardSource")
+
+    # §2 source-of-truth: the GENUINE parsed printing must carry the
+    # EXACT single targeted ATTACKS trigger this probe pins.
+    assert real.is_creature and (real.power, real.toughness) == (4, 1)
+    assert len(real.triggered_abilities) == 1
+    ta = real.triggered_abilities[0]
+    assert ta.event is Event.ATTACKS
+    assert isinstance(ta.predicate, IsSelf) and ta.predicate.subject is None
+    assert isinstance(ta.effect, PutPlusOneCounterOnOpponentsCreature)
+    assert ta.effect.requires_target() is True
+    assert ta.effect.target_count_range() == (1, 1)
+    assert ta.effect.target_slot_kinds() == ()
+    assert int(ta.effect.amount) == 1
+
+    ZONE_BATTLEFIELD = 2
+
+    def _build():
+        spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+        return build_python_state(spec), build_rust_state(spec)
+
+    # The bridge-dict equivalent of Sunset Saboteur's trigger (what a
+    # CardDef carrying this card would thread to both engines). The
+    # recognizer (`trajectory._python_ta_to_safe_dict`) emits exactly
+    # this shape for the real printing — sanity-asserted below.
+    sab_trigger = {
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "put_plus_one_counter_on_opponents_creature",
+            "amount": 1,
+        },
+    }
+    # Bridge round-trips the dict back to the genuine Python shape.
+    bridged = _ta_dict_to_python_triggered_ability(sab_trigger)
+    assert bridged.event is Event.ATTACKS
+    assert isinstance(bridged.effect, PutPlusOneCounterOnOpponentsCreature)
+    assert int(bridged.effect.amount) == 1
+    # And it matches what the recognizer derives from the GENUINE
+    # parsed printing (the Python→dict direction).
+    from mtg_bot.parity import trajectory as _T
+    rec = _T._python_ta_to_safe_dict(ta)
+    assert rec == sab_trigger, (
+        f"recognizer must emit the byte-equal bridge dict for the "
+        f"genuine Sunset Saboteur trigger; got {rec}"
+    )
+    assert _T._is_target_seated_safe_trigger(real, ta) is True
+    assert _T._printing_is_bridge_simple_creature(real) is True
+
+    saboteur_inj = {
+        "name": "Sunset Saboteur",
+        "card_types": ["Creature"],
+        "subtypes": ["Robot", "Pilot"],
+        "mana_cost": {"generic": 1, "B": 1},
+        "power": 4,
+        "toughness": 1,
+        "keywords": ["menace"],
+        "effects": [],
+        "triggered_abilities": [sab_trigger],
+    }
+    bear_inj = {
+        "name": "Grizzly Bears",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "power": 2,
+        "toughness": 2,
+        "effects": [],
+    }
+    wolf_inj = {
+        "name": "Timber Wolves",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "power": 1,
+        "toughness": 1,
+        "effects": [],
+    }
+
+    def _py_inject(py_state, d, controller, zone):
+        from mtg_bot.cards.base import CardPrinting, ManaCost
+        mc = d.get("mana_cost", {})
+        gen = int(mc.get("generic", 0))
+        col = tuple(
+            (k, int(v)) for k, v in mc.items() if k != "generic"
+        )
+        pr = CardPrinting(
+            name=d["name"],
+            mana_cost_str="",
+            mana_cost=ManaCost(generic=gen, colored=col),
+            type_line=" ".join(d["card_types"]),
+            supertypes=(),
+            card_types=tuple(d["card_types"]),
+            subtypes=tuple(d.get("subtypes", ())),
+            power=d.get("power"),
+            toughness=d.get("toughness"),
+            produces=frozenset(),
+            keywords=frozenset(d.get("keywords", ())),
+            triggered_abilities=tuple(
+                _ta_dict_to_python_triggered_ability(t)
+                for t in d.get("triggered_abilities", ())
+            ),
+        )
+        obj = py_state.new_object(
+            pr, owner_id=controller, zone=Zone.BATTLEFIELD,
+        )
+        obj.summoning_sick = False
+        obj.tapped = False
+        obj.damage = 0
+        obj.etb_timestamp = py_state.next_timestamp
+        py_state.next_timestamp += 1
+        py_state.battlefield.append(obj)
+        return obj
+
+    # ===== Scenario A: two opponent creatures → seat the FIRST. =====
+    py_state, rust_state = _build()
+    # Rust injects in bf-Vec order: Bears (id lower) THEN Wolf on P1's
+    # bf; Saboteur on P0's bf. Python mirrors the SAME order so object
+    # ids + bf insertion order stay in lockstep (the harness
+    # invariant the byte-equal seat rests on).
+    rs_bear = rust_state.register_and_inject_object(bear_inj, 1, ZONE_BATTLEFIELD)
+    rs_wolf = rust_state.register_and_inject_object(wolf_inj, 1, ZONE_BATTLEFIELD)
+    rs_sab = rust_state.register_and_inject_object(
+        saboteur_inj, 0, ZONE_BATTLEFIELD
+    )
+    rust_state.clear_summoning_sick_for_player(0)
+    py_bear = _py_inject(py_state, bear_inj, 1, ZONE_BATTLEFIELD)
+    py_wolf = _py_inject(py_state, wolf_inj, 1, ZONE_BATTLEFIELD)
+    py_sab = _py_inject(py_state, saboteur_inj, 0, ZONE_BATTLEFIELD)
+    # No agent on either player (build_python_state seats none — the
+    # production-deck bench reality this substrate targets).
+    assert py_state.players[0].agent is None
+    assert py_state.players[1].agent is None
+    assert len(py_state.stack) == 0 and rust_state.stack_size() == 0
+
+    # Drive the genuine ATTACKS path. Rust: declare_attacker fires the
+    # ATTACKS dispatch → push_triggered_ability seats the first
+    # opponent creature. Python: declare_attackers → _fire_attacks_
+    # triggers → _put_triggered_ability_on_stack hits the no-agent
+    # branch → the gated pool[0] seat.
+    assert rust_state.declare_attacker(rs_sab) is True
+    assert rust_state.stack_size() == 1, (
+        "Rust: Sunset Saboteur attacking must push its targeted "
+        "ATTACKS trigger (a legal opponent creature exists)"
+    )
+    declare_attackers(py_state, [py_sab.id])
+    assert len(py_state.stack) == 1, (
+        "Python: Sunset Saboteur attacking must push its targeted "
+        "ATTACKS trigger (a legal opponent creature exists)"
+    )
+    _drain_stack_both(py_state, rust_state)
+    assert rust_state.stack_size() == 0 and len(py_state.stack) == 0
+
+    # The FIRST opponent creature (Bears, smallest bf-index) got
+    # exactly ONE +1/+1 counter; the SECOND (Wolf) got NONE — byte
+    # equal on both engines. (Proves the deterministic first-legal
+    # rule, not "any" or "all".)
+    assert rust_state.get_counters(rs_bear) == 1, (
+        f"Rust: the first opponent creature must get 1 counter; got "
+        f"{rust_state.get_counters(rs_bear)}"
+    )
+    assert (rust_state.get_counters(rs_wolf) or 0) == 0, (
+        "Rust: the SECOND opponent creature must get 0 counters "
+        "(deterministic first-legal seat, not all-eligible)"
+    )
+    assert py_bear.plus_one_counters == 1, (
+        f"Python: the first opponent creature must get 1 counter; got "
+        f"{py_bear.plus_one_counters}"
+    )
+    assert py_wolf.plus_one_counters == 0, (
+        "Python: the SECOND opponent creature must get 0 counters"
+    )
+    # Cross-engine byte-equal.
+    assert (
+        rust_state.get_counters(rs_bear) == py_bear.plus_one_counters == 1
+    )
+    assert (
+        (rust_state.get_counters(rs_wolf) or 0)
+        == py_wolf.plus_one_counters == 0
+    )
+    # Saboteur itself untouched (the counter goes on the OPPONENT's
+    # creature, never self) on both engines.
+    assert (rust_state.get_counters(rs_sab) or 0) == 0
+    assert py_sab.plus_one_counters == 0
+
+    # ===== Scenario B: NO opponent creature → fizzle (CR 603.3c). ===
+    py_state2, rust_state2 = _build()
+    rs_sab2 = rust_state2.register_and_inject_object(
+        saboteur_inj, 0, ZONE_BATTLEFIELD
+    )
+    rust_state2.clear_summoning_sick_for_player(0)
+    py_sab2 = _py_inject(py_state2, saboteur_inj, 0, ZONE_BATTLEFIELD)
+    assert py_state2.players[0].agent is None
+    # Attacking with no legal target: the count_min=1 trigger must
+    # NOT be pushed on EITHER engine (it fizzles per CR 603.3c).
+    assert rust_state2.declare_attacker(rs_sab2) is True
+    assert rust_state2.stack_size() == 0, (
+        "Rust: with no opponent creature the count_min=1 targeted "
+        "trigger must FIZZLE (push skipped) — not push with no target"
+    )
+    declare_attackers(py_state2, [py_sab2.id])
+    assert len(py_state2.stack) == 0, (
+        "Python: with no opponent creature the count_min=1 targeted "
+        "trigger must FIZZLE (no legal targets; return False)"
+    )
+    # Nothing got a counter anywhere; byte-equal empty outcome.
+    assert (rust_state2.get_counters(rs_sab2) or 0) == 0
+    assert py_sab2.plus_one_counters == 0
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

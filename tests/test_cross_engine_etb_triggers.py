@@ -21995,5 +21995,99 @@ def test_r72_warp_phase2_bridge_graveyard_cast_lifecycle_byte_equal():
         f"rs_ex={rs_ex}")
 
 
+def test_bridge_put_plus_one_counter_on_opponents_creature_bidirectional_round_trip():
+    """**Tier-C target-seating sub-substrate, lever-a (Sunset
+    Saboteur) — the bidirectional bridge round-trip pin.**
+
+    BOTH directions, byte-equal:
+
+      * **Python→dict** — the recognizer
+        ``trajectory._python_ta_to_safe_dict`` applied to the GENUINE
+        parsed Sunset Saboteur ATTACKS trigger emits exactly
+        ``{"event": "attacks",
+            "predicate": {"kind": "source_is_self"},
+            "effect": {"kind":
+                "put_plus_one_counter_on_opponents_creature",
+                "amount": 1}}``.
+      * **dict→Python** — ``_ta_dict_to_python_effect`` /
+        ``_ta_dict_to_python_triggered_ability`` reconstruct an equal
+        ``PutPlusOneCounterOnOpponentsCreature(amount=1)`` /
+        ``TriggeredAbility(ATTACKS, IsSelf, ...)``.
+      * **dict→Rust** — Rust's ``register_printing`` parser accepts
+        the SAME dict (the ``put_plus_one_counter_on_opponents_
+        creature`` ``parse_effect`` arm); its ``to_dict`` re-emits
+        the byte-equal ``{"kind": ..., "amount": 1}`` (the
+        recognizer's payload whitelist mirrors it).
+
+    The bidirectional arm is the lockstep-provenance contract
+    (``trajectory.py`` ``_SAFE_TRIGGERS`` docstring): the bridge arm
+    must exist on BOTH engines before the targeted-``_SAFE_TRIGGERS``
+    triple + the real-EoE firing-parity probe (in
+    test_parity_smoke.py).
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnOpponentsCreature,
+    )
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_effect,
+        _ta_dict_to_python_triggered_ability,
+    )
+    from mtg_bot.parity.trajectory import _python_ta_to_safe_dict
+
+    real = get_active_source().get_printings().get("Sunset Saboteur")
+    if real is None:
+        import pytest
+        pytest.skip("Sunset Saboteur absent from active CardSource")
+    ta = real.triggered_abilities[0]
+    # Python→dict (the recognizer is the reverse serializer for
+    # triggered abilities — there is no separate _python_*_to_dict
+    # since the recognizer IS the Python→dict direction).
+    fwd = _python_ta_to_safe_dict(ta)
+    assert fwd == {
+        "event": "attacks",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "put_plus_one_counter_on_opponents_creature",
+            "amount": 1,
+        },
+    }
+    # dict→Python (effect arm).
+    back_eff = _ta_dict_to_python_effect(fwd["effect"])
+    assert isinstance(back_eff, PutPlusOneCounterOnOpponentsCreature)
+    assert int(back_eff.amount) == 1
+    # dict→Python (whole triggered ability).
+    back_ta = _ta_dict_to_python_triggered_ability(fwd)
+    assert back_ta.event is Event.ATTACKS
+    assert isinstance(back_ta.predicate, IsSelf)
+    assert isinstance(back_ta.effect, PutPlusOneCounterOnOpponentsCreature)
+    assert int(back_ta.effect.amount) == 1
+    # Missing-amount tolerance (mirrors Rust parse_effect default=1).
+    assert int(
+        _ta_dict_to_python_effect(
+            {"kind": "put_plus_one_counter_on_opponents_creature"}
+        ).amount
+    ) == 1
+    # dict→Rust: the SAME dict registers cleanly on the Rust parser
+    # (the ``put_plus_one_counter_on_opponents_creature``
+    # ``parse_effect`` arm) — the lockstep gate that keeps the Python
+    # bridge from drifting away from Rust's parse coverage.
+    import mtg_bot_engine
+    reg = mtg_bot_engine.Registry()
+    pid = reg.register_printing(
+        {
+            "name": "Sunset Saboteur",
+            "card_types": ["Creature"],
+            "mana_cost": {"generic": 1, "B": 1},
+            "power": 4,
+            "toughness": 1,
+            "keywords": ["menace"],
+            "triggered_abilities": [fwd],
+        }
+    )
+    assert pid == 0, "Rust must register the Sunset Saboteur trigger dict"
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
