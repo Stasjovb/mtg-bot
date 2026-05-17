@@ -66786,6 +66786,183 @@ def test_spell_card_bridge_phase1_real_eoe_loader_admit_and_game_parity():
     )
 
 
+def test_r72_max_turns_120_recovers_floor_and_stays_parity_safe():
+    """Round-72 — apply the round-70 FAIL_TIMEOUT-floor characterization.
+
+    Round-69 raised the bench ``--max-turns`` default 25 → 60 on
+    per-turn stall-anatomy of the round-65 grid. Round-70 then supplied
+    the missing PER-GAME ground truth for the residual ~23% that still
+    hit exactly cap-60 on the canonical broad grid (archetypes 0-29 ×
+    seeds 0-1): an escalating-cap ladder (60→90→120→160→220) over the
+    SAME games via the bench's own per-step primitives proved 14/14 of
+    the residual are ``budget_recoverable`` — near-creatureless deck-out
+    races (12/14 converge ~turn 108 with both players at 20 life;
+    2/14 a lone-1/1 slow clock) that ALL converge to a clean PASS by
+    cap-120 (caps 160/220 recover +0). 0 ``genuine_stalemate``,
+    0 round-65 ``structural_never_converter``; the round-65
+    ``<3-copy → never converges`` causal claim is refuted with data.
+    The fix raised the bench ``--max-turns`` default 60 → 120.
+
+    This pin mirrors the round-69
+    ``test_r69_max_turns_raise_is_parity_safe_and_recovers_timeout_signal``
+    pin one cap-doubling deeper and locks the two load-bearing
+    properties at the new boundary:
+
+    1. **PARITY-SAFE (the critical invariant).** ``max_turns`` is a
+       pure upper bound on an otherwise-deterministic loop (checked
+       only as ``if turn_number > max_turns``). A game that COMPLETES
+       (PASS / DIVERGENCE / EXCEPTION, i.e. NOT FAIL_TIMEOUT) at
+       cap-60 MUST have a byte-identical outcome — status, winner,
+       win_reason, turns_played, actions_played — at cap-120. Raising
+       the cap can ONLY convert FAIL_TIMEOUT → PASS/DIVERGENCE; it can
+       NEVER shift a pinned/already-completed trajectory. (If this
+       assertion ever fails, the cap is no longer a pure bound — that
+       is a RED FLAG, investigate, do not bump the cap value.)
+    2. The new default genuinely recovers the round-70 residual: a
+       representative real-17lands archetype from the round-70 broad
+       grid that FAIL_TIMEOUTs at cap-60 (a near-creatureless deck-out
+       race) yields a real PASS verdict at cap-120, with 0
+       FAIL_TIMEOUT→FAIL_DIVERGENCE conversions (the timeout was
+       masking clean signal, not a divergence — the round-70 finding:
+       all 14 residual converts went FAIL_TIMEOUT → PASS).
+
+    Uses REAL 17lands archetypes (round-46 real-signal discipline) and
+    the bench's own ``drive_one_game`` (the exact production entry).
+    """
+    import pathlib
+
+    from mtg_bot.parity import trajectory
+
+    scripts_dir = pathlib.Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from bench_trajectory_parity import (  # type: ignore[import-not-found]
+        drive_one_game,
+    )
+
+    try:
+        trajectory.load_production_deck(archetype=0)
+    except (FileNotFoundError, IndexError):
+        import pytest as _pt
+        _pt.skip("17lands deck pool unavailable")
+
+    # ---- Property 1: PARITY-SAFE — cap-60-completed games are
+    # cap-invariant at cap-120. Archetypes 2/3/4 PASS well before
+    # turn 25 (round-69 stall-anatomy data + the round-65 grid: every
+    # >=5-admitted-copy archetype goes 4/4 PASS at ~17-22 turns), so
+    # they complete far inside cap-60. Their full trajectory MUST be
+    # byte-identical at cap-60 and at the new cap-120 default.
+    for arch in (2, 3, 4):
+        for sd in (0, 1):
+            lo = drive_one_game(
+                archetype=arch, seed=sd, max_turns=60,
+                combat_strategy="attack_all", mulligans=0,
+            )
+            if lo.status == "FAIL_TIMEOUT":
+                # Not a completed game at cap-60 — skip (this pin
+                # asserts the invariant only for games that COMPLETE
+                # before the low cap; the timeout→verdict conversion is
+                # property 2).
+                continue
+            hi = drive_one_game(
+                archetype=arch, seed=sd, max_turns=120,
+                combat_strategy="attack_all", mulligans=0,
+            )
+            assert lo.status == hi.status, (
+                f"PARITY-SAFETY VIOLATION arch={arch} seed={sd}: a game "
+                f"that completed ({lo.status}) at cap-60 changed to "
+                f"{hi.status} at cap-120 — max_turns is supposed to be "
+                f"a pure upper bound, never altering a completed "
+                f"trajectory. RED FLAG, investigate."
+            )
+            assert lo.turns_played == hi.turns_played, (
+                f"PARITY-SAFETY VIOLATION arch={arch} seed={sd}: "
+                f"turns_played shifted {lo.turns_played}→"
+                f"{hi.turns_played} when only the cap changed"
+            )
+            assert lo.actions_played == hi.actions_played, (
+                f"PARITY-SAFETY VIOLATION arch={arch} seed={sd}: "
+                f"actions_played shifted {lo.actions_played}→"
+                f"{hi.actions_played} when only the cap changed"
+            )
+            assert (
+                lo.winner_player_idx == hi.winner_player_idx
+                and lo.win_reason == hi.win_reason
+            ), (
+                f"PARITY-SAFETY VIOLATION arch={arch} seed={sd}: winner/"
+                f"reason shifted ({lo.winner_player_idx},{lo.win_reason})"
+                f"→({hi.winner_player_idx},{hi.win_reason}) on cap change"
+            )
+
+    # ---- Property 2: the new cap-120 default recovers a round-70
+    # residual deck-out timeout into a clean PASS. The round-70
+    # escalating-cap characterization (canonical grid archetypes 0-29 ×
+    # seeds 0-1) found 14/14 residual games FAIL_TIMEOUT at cap-60 and
+    # ALL converge to PASS by cap-120 — 12/14 are deck-out wins
+    # (~turn 108, both at 20 life). We probe the round-70 residual
+    # population for a representative game that FAIL_TIMEOUTs at cap-60
+    # and assert it reaches a real verdict (and specifically PASS, the
+    # round-70 finding) at the new default cap-120, with no
+    # timeout-masked divergence. Scanning the residual population
+    # rather than hard-coding one (archetype, seed) keeps the pin
+    # robust to harmless RNG-line drift while still failing loudly if
+    # the recoverability property itself regresses.
+    residual_caps60 = []
+    for arch in range(0, 30):
+        for sd in (0, 1):
+            r60 = drive_one_game(
+                archetype=arch, seed=sd, max_turns=60,
+                combat_strategy="attack_all", mulligans=0,
+            )
+            if r60.status == "FAIL_TIMEOUT":
+                residual_caps60.append((arch, sd))
+                if len(residual_caps60) >= 3:
+                    break
+        if len(residual_caps60) >= 3:
+            break
+
+    assert residual_caps60, (
+        "round-70 data fixture: the canonical broad grid "
+        "(archetypes 0-29 × seeds 0-1) is expected to carry residual "
+        "FAIL_TIMEOUT games at cap-60 (round-70 measured 14/60). Found "
+        "none — if the bench trajectory legitimately changed, re-derive "
+        "the fixture from a fresh round-70-style escalating-cap run "
+        "(do NOT just relax this assertion)."
+    )
+
+    recovered_to_pass = 0
+    for arch, sd in residual_caps60:
+        hi = drive_one_game(
+            archetype=arch, seed=sd, max_turns=120,
+            combat_strategy="attack_all", mulligans=0,
+        )
+        assert hi.status in ("PASS", "FAIL_DIVERGENCE"), (
+            f"round-70: raising the cap 60→120 must convert the "
+            f"residual FAIL_TIMEOUT into a real parity verdict; "
+            f"arch={arch} seed={sd} got {hi.status} at cap-120 "
+            f"(round-70 proved 60/60 reach a verdict at cap-120 — a "
+            f"persistent FAIL_TIMEOUT here is a RED FLAG, investigate)."
+        )
+        assert hi.status != "FAIL_DIVERGENCE", (
+            f"round-70: all 14 residual converts went FAIL_TIMEOUT → "
+            f"PASS (0 → FAIL_DIVERGENCE — the timeouts were masking "
+            f"CLEAN signal, not a hidden divergence). arch={arch} "
+            f"seed={sd} converted to FAIL_DIVERGENCE at cap-120 — that "
+            f"is a genuine newly-surfaced divergence, NOT a test "
+            f"failure to paper over: investigate as a real parity "
+            f"signal."
+        )
+        if hi.status == "PASS":
+            recovered_to_pass += 1
+
+    assert recovered_to_pass == len(residual_caps60), (
+        f"round-70: every probed cap-60 residual game must recover to "
+        f"a clean PASS at cap-120 (the round-70 ground truth: 14/14 → "
+        f"PASS); only {recovered_to_pass}/{len(residual_caps60)} did "
+        f"(residual probed: {residual_caps60})"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

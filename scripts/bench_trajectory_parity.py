@@ -16,9 +16,18 @@ Each game produces a pass/fail signal:
     cap of 25, ~2/3 of these were NOT stalls at all — life was still
     dropping every turn and the game would have produced a verdict with
     a larger budget (the bridge-filtered mirror is slow, not frozen).
-    The default cap was raised 25 → 60 to recover that lost signal; a
-    residual FAIL_TIMEOUT at cap 60 is a genuine frozen mirror (no
-    side can damage the other) or an empty-board structural floor.
+    Round-70 then supplied per-game ground truth (an escalating-cap
+    ladder over the same games) showing the residual that still hit
+    cap-60 is ALSO not a floor: 14/14 are near-creatureless deck-out
+    races converging by ~turn 108 to a clean PASS — the round-65
+    ``<3-copy → never-converter`` causal claim is refuted with data,
+    and none of it is the TOKEN_PRINTING_SUBSTRATE Phase-3/5 Rust ask.
+    The default cap was raised 25 → 60 (round-69) then 60 → 120
+    (round-72) to recover that lost signal. There is currently NO
+    genuine permanent FAIL_TIMEOUT floor on the canonical broad grid
+    (60/60 reach a real parity verdict at cap-120); a residual
+    FAIL_TIMEOUT at cap 120 would be a game even slower than the
+    measured ~turn-108 deck-out clock.
   * **ARCHETYPE_FILTERED** — the EoE archetype's deck didn't survive
     the production-deck bridge filter (empty post-filter library on
     either side). No game ran.
@@ -34,14 +43,18 @@ Run from a worktree::
 
     PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \\
         scripts/bench_trajectory_parity.py \\
-        --archetypes 0-50 --seeds 0-10 --max-turns 60 \\
+        --archetypes 0-50 --seeds 0-10 --max-turns 120 \\
         --json-out /tmp/parity_bench.json --verbose
 
-(``--max-turns`` default is 60 as of round-69 — sized to the measured
-bridge-filtered-mirror deck speed; see the argparse help + the
-round-69 entry in ``docs/bench_trajectory_parity_smoke.md``. The old
-cap of 25 was silently discarding ~1/3 of the parity signal as
-FAIL_TIMEOUT on games that were still progressing.)
+(``--max-turns`` default is 120 as of round-72 — sized to the round-70
+per-game ground truth that the canonical broad grid's bridge-filtered
+near-creatureless mirrors are deck-out races converging by ~turn 108;
+see the argparse help + the round-70/72 entries in
+``docs/bench_trajectory_parity_smoke.md``. Round-69 first raised it
+25 → 60 (the round-65-grid slowest decisive); round-72 raised it
+60 → 120 to recover the residual ~23% that cap-60 still discarded as
+FAIL_TIMEOUT on games that were still progressing — broad-sweep
+parity-verdict density 76.7% → 100%, ~+3s wall.)
 
 Reuses production helpers:
 
@@ -1059,38 +1072,56 @@ def build_parser() -> argparse.ArgumentParser:
         help="RNG seed range (e.g. '0-10') or comma list.",
     )
     p.add_argument(
-        # Default raised 25 → 60 (round-69 N: FAIL_TIMEOUT stall-anatomy
-        # finding, docs/bench_trajectory_parity_smoke.md round-69). The
-        # round-65 analysis treated FAIL_TIMEOUT as an *admit-count*
-        # problem and concluded the only lever was a multi-round Rust
-        # substrate. Per-turn instrumentation of the round-65 grid
-        # (scout_timeout_stall_anatomy.py) showed that was a
-        # mis-diagnosis: ~67% of FAIL_TIMEOUT games at cap-25 are
-        # `budget_progressing` (life is STILL dropping every turn, board
-        # on both sides — they simply ran out of turns), and the
-        # remaining `no_board` games were a cap-25 artifact too (they
-        # draw into a castable creature given more turns). The
-        # bridge-filtered near-creatureless mirror is SLOW, not stalled:
-        # 35% of all DECISIVE games finish after turn 25, the slowest at
-        # turn 60. Cap 25 was silently discarding a third of the
-        # available parity signal. Cap 60 captures 100% of decisive
-        # games on the round-65 grid (FAIL_TIMEOUT 35.0% → 0.0%, PASS
-        # 65% → 100%). PARITY-SAFE: `max_turns` is a pure upper bound on
-        # an otherwise-deterministic loop (checked only as
-        # `if turn_number > max_turns`), so raising it can ONLY convert
-        # FAIL_TIMEOUT → PASS/DIVERGENCE; it can NEVER alter a game that
-        # already ended before the old cap (empirically verified: 0
-        # trajectory-shift across all games that completed at cap-25,
-        # caps 25→40→60). Every gate test passes max_turns explicitly
-        # (MT local constant), so no pinned trajectory depends on this
-        # default.
-        "--max-turns", type=int, default=60,
+        # Default raised 60 → 120 (round-72: applies the round-70
+        # FAIL_TIMEOUT-floor characterization, docs/
+        # bench_trajectory_parity_smoke.md round-70/72). Round-69 first
+        # raised the cap 25 → 60 on per-turn stall-anatomy of the
+        # round-65 grid (~67% of cap-25 FAIL_TIMEOUTs were
+        # `budget_progressing`, not frozen — the bridge-filtered mirror
+        # is SLOW, not stalled), recovering ~30 pts of broad-sweep
+        # signal. Round-70 then supplied the missing PER-GAME ground
+        # truth for the residual ~23% that still hit exactly cap-60 on
+        # the canonical broad grid (archetypes 0-29 × seeds 0-1): an
+        # escalating-cap ladder (60→90→120→160→220) over the SAME games
+        # via the bench's own per-step primitives proved 14/14 of the
+        # residual are `budget_recoverable` (0 `genuine_stalemate`, 0
+        # round-65 `structural_never_converter`). They are
+        # near-creatureless deck-out RACES: 12/14 converge at ~turn 108
+        # with both players still at 20 life (library-exhaustion wins,
+        # zero damage ever dealt — the round-69 life-only classifier's
+        # `no_board`/`frozen_stalemate` labels were FALSE POSITIVES);
+        # the other 2 are a genuine lone-1/1 slow damage clock. ALL 14
+        # converge to a clean PASS by cap-120 (caps 160/220 recover +0
+        # — 120 is the true ceiling). Real-bench cross-check: the
+        # canonical broad grid goes FAIL_TIMEOUT 14 (23.3%) → 0 (0.0%),
+        # parity verdicts 46/60 → 60/60, all 14 converts → PASS (0 →
+        # FAIL_DIVERGENCE), wall +3s (81s → 84.3s, well inside the
+        # ≤3-min sweep budget). The round-65 `<3 admitted-copy → never
+        # converges` causal claim is REFUTED with data (all 14 carry
+        # <3 copies, 10 carry zero — `<3` predicts "slow deck-out
+        # race", NOT "never converges"); the residual is the SAME
+        # budget lever as round-69, under-corrected by ~2×, NOT the
+        # round-65 TOKEN_PRINTING_SUBSTRATE Phase-3/5 Rust ask.
+        # PARITY-SAFE (identical to the round-69 proof): `max_turns` is
+        # a pure upper bound on an otherwise-deterministic loop (checked
+        # only as `if turn_number > max_turns`), so raising it can ONLY
+        # convert FAIL_TIMEOUT → PASS/DIVERGENCE; it can NEVER alter a
+        # game that already ended before the old cap (empirically
+        # verified per-game: 0 trajectory-shift / 0 divergence /
+        # 0 exception across all 60 canonical-grid games × all 5 cap
+        # rungs 60→90→120→160→220). Every gate test passes max_turns
+        # explicitly (MT local constant / per-test value), so no pinned
+        # trajectory depends on this argparse default.
+        "--max-turns", type=int, default=120,
         help="Game-turn cap (FAIL_TIMEOUT if reached without a loser). "
-             "Default 60: sized to the measured bridge-filtered-mirror "
-             "deck speed (round-69; the slowest decisive game on the "
-             "round-65 grid lands at turn 60). Raising the cap is "
-             "parity-safe — it is a pure upper bound and never alters a "
-             "game that ended before the old cap.",
+             "Default 120: sized to the round-70 per-game ground truth "
+             "(the canonical broad grid's bridge-filtered "
+             "near-creatureless mirrors are deck-out races converging "
+             "by ~turn 108; 60/60 reach a real parity verdict at "
+             "cap-120, +0 beyond — raised from round-69's 60, which "
+             "was sized only to the round-65 grid's slowest decisive). "
+             "Raising the cap is parity-safe — it is a pure upper bound "
+             "and never alters a game that ended before the old cap.",
     )
     p.add_argument(
         "--combat-strategy", default="attack_all",
