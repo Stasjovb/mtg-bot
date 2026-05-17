@@ -1147,6 +1147,66 @@ fn destroy_first_defender_creature_then_draw_if_undamaged(
     }
 }
 
+/// **BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner target
+/// pick.** Resolve the source's controller by scanning every tracked
+/// zone for `source_obj_id` (identical to the bare
+/// `Effect::PumpTargetCreatureUntilEOT` arm's source-controller
+/// search — Perigee is its `granted_triggered_ability`-carrying
+/// sibling, so the controller resolution must match exactly), then
+/// return `(controller_idx, target_id)` for the FIRST creature on
+/// that controller's battlefield whose id is NOT `source_obj_id`
+/// (Perigee's "ANOTHER target creature you control" — CR 115.4
+/// "another" excludes the source itself; mirrors Python's
+/// `PumpTargetCreatureUntilEOT(exclude_self=True)` dropping
+/// `state.resolving_source` from `legal_targets`).
+///
+/// Returns `None` when the source is untrackable (silent fizzle) or
+/// the controller controls no OTHER creature (Perigee's ETB is a
+/// non-`optional` "another target creature you control" — with no
+/// legal target the trigger still resolves but does nothing, CR
+/// 608.2b; observationally a silent no-op, matching Python's
+/// `if not legal_targets: return`).
+///
+/// Creature-ness gates on the printing's `card_types` containing
+/// "Creature" — the canonical creature-detection pattern shared with
+/// the bare pump arm (state_ops_cast.rs:304 / state_ops_legal.rs:571).
+fn perigee_pick_another_own_creature(
+    state: &GameState,
+    source_obj_id: u32,
+) -> Option<(usize, u32)> {
+    let mut src_controller: Option<u8> = None;
+    'outer: for player in &state.players {
+        for zone in [
+            &player.hand,
+            &player.library,
+            &player.battlefield,
+            &player.graveyard,
+            &player.exile,
+        ] {
+            if let Some(obj) = zone.iter().find(|o| o.id == source_obj_id) {
+                src_controller = Some(obj.controller);
+                break 'outer;
+            }
+        }
+    }
+    let controller = src_controller?;
+    let cidx = controller as usize;
+    let bf = &state.players[cidx].battlefield;
+    let registry = &state.registry;
+    let target_id = bf.iter().find_map(|obj| {
+        if obj.id == source_obj_id {
+            return None; // CR 115.4 "another" — exclude the source
+        }
+        let printing = registry.printings.get(obj.printing_id as usize)?;
+        if printing.card_types.iter().any(|t| t == "Creature") {
+            Some(obj.id)
+        } else {
+            None
+        }
+    })?;
+    Some((cidx, target_id))
+}
+
 fn apply_effect(
     state: &mut GameState,
     effect: &Effect,
@@ -5614,6 +5674,42 @@ fn apply_effect(
                         power: *power_bonus,
                         toughness: *toughness_bonus,
                     });
+                    break;
+                }
+            }
+        }
+        Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped {
+            power_bonus,
+            toughness_bonus,
+        } => {
+            // BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner
+            // ETB. Same source-controller scan + first-creature-on-
+            // own-bf target pick as `PumpTargetCreatureUntilEOT`, with
+            // the "ANOTHER target creature you control" exclusion
+            // (the chosen target must NOT be the source object — CR
+            // 115.4 "another"). Push BOTH the +P/+T pump AND the
+            // `GrantedDiesReturnTapped` marker the SBA destroy path
+            // honors. (0/0) is still a legal target-and-mark op (the
+            // rider applies even at +0/+0 — Perigee is +2/+0 but the
+            // marker, not the pump, is the load-bearing observable),
+            // so unlike the bare pump arm there is NO (0,0) short-
+            // circuit. Empty / only-self own-bf → silent fizzle
+            // (Python's non-optional `if not legal_targets: return`).
+            let Some((cidx, target_id)) =
+                perigee_pick_another_own_creature(state, source_obj_id)
+            else {
+                return Ok(()); // untrackable / no eligible OTHER creature
+            };
+            let zone: &mut Vec<GameObject> =
+                Arc::make_mut(&mut state.players[cidx].battlefield);
+            for obj in zone.iter_mut() {
+                if obj.id == target_id {
+                    obj.ueot_modifiers.push(UeotModifier::PowerToughnessBonus {
+                        power: *power_bonus,
+                        toughness: *toughness_bonus,
+                    });
+                    obj.ueot_modifiers
+                        .push(UeotModifier::GrantedDiesReturnTapped);
                     break;
                 }
             }

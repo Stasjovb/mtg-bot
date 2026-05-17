@@ -19346,5 +19346,260 @@ def test_r60_bridge_shockland_byte_equal_initial_state_both_engines():
     assert py_view["library_p1"] == rust_view["library_p1"]
 
 
+def test_bridge_perigee_pump_grant_dies_return_tapped_translates():
+    """**BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner.**
+    The ``pump_target_creature_until_eot_grant_dies_return_tapped``
+    dict translates to ``PumpTargetCreatureUntilEOT`` carrying the
+    EXACT params the genuine printing parses to: power/toughness
+    bonus preserved, ``you_control_only`` + ``exclude_self`` set, and
+    a ``granted_triggered_ability`` whose effect is
+    ``PerigeeBeckonerDiesReturnTappedEffect``, event ``DIES``,
+    predicate ``IsSelf``.
+    """
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.effects.bespoke import (
+        PerigeeBeckonerDiesReturnTappedEffect,
+    )
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    eff = _ta_dict_to_python_effect({
+        "kind": "pump_target_creature_until_eot_grant_dies_return_tapped",
+        "power_bonus": 2,
+        "toughness_bonus": 0,
+    })
+    assert isinstance(eff, PumpTargetCreatureUntilEOT)
+    assert eff.power_bonus == 2
+    assert eff.toughness_bonus == 0
+    assert eff.you_control_only is True
+    assert eff.exclude_self is True
+    gta = eff.granted_triggered_ability
+    assert gta is not None
+    assert isinstance(gta.effect, PerigeeBeckonerDiesReturnTappedEffect)
+    assert gta.event == Event.DIES
+    assert isinstance(gta.predicate, IsSelf)
+
+
+def test_bridge_perigee_pump_grant_dies_return_tapped_defaults_zero():
+    """Missing ``power_bonus`` / ``toughness_bonus`` default to 0 on
+    BOTH sides (Rust parse arm tolerates the missing keys; the bridge
+    mirrors that with ``eff_dict.get(..., 0)``). The rider is still
+    attached even at +0/+0 — the marker, not the pump, is the
+    load-bearing observable.
+    """
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    eff = _ta_dict_to_python_effect({
+        "kind": "pump_target_creature_until_eot_grant_dies_return_tapped",
+    })
+    assert isinstance(eff, PumpTargetCreatureUntilEOT)
+    assert eff.power_bonus == 0
+    assert eff.toughness_bonus == 0
+    assert eff.granted_triggered_ability is not None
+
+
+def test_bridge_perigee_pump_grant_dies_return_tapped_etb_pump_parity():
+    """Cross-engine ETB parity on the PUMP-applied observable: a
+    Perigee-shape source enters with an "another" 2/2 ally on the
+    controller's bf; after the ETB resolves, the ally is +2/+0 on
+    BOTH engines (Rust: ``UeotModifier::PowerToughnessBonus`` push;
+    Python: the genuine ``PumpTargetCreatureUntilEOT`` resolve). The
+    source itself is NOT pumped (CR 115.4 "another" — Rust's
+    source-id exclusion; Python's ``exclude_self``).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.game import Zone
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from tests.parity._picker_shims import (
+        _PickFirstControlledCreatureAgent,
+    )
+
+    real = get_active_source().get_printings().get("Perigee Beckoner")
+    if real is None:
+        pytest.skip("Perigee Beckoner absent from active CardSource")
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2
+    py.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    def _gp(n):
+        return CardPrinting(
+            name=n, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=2, toughness=2, produces=frozenset(),
+        )
+
+    py_ally = py.new_object(_gp("Ally"), owner_id=0,
+                            zone=Zone.BATTLEFIELD)
+    py.battlefield.append(py_ally)
+    rs_ally = rs.register_and_inject_object(
+        {"name": "Ally", "card_types": ["Creature"],
+         "power": 2, "toughness": 2}, 0, ZB)
+
+    rs.register_and_inject_object(
+        {"name": "Perigee Beckoner", "card_types": ["Creature"],
+         "power": 4, "toughness": 5,
+         "triggered_abilities": [{
+             "event": "enters",
+             "predicate": {"kind": "source_is_self"},
+             "effect": {
+                 "kind": "pump_target_creature_until_eot_grant_dies_return_tapped",
+                 "power_bonus": 2, "toughness_bonus": 0,
+             }}]}, 0, ZB)
+    py_src = py.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py.next_timestamp
+    py.next_timestamp += 1
+    py.battlefield.append(py_src)
+    _trigger_etb_abilities(py, py_src)
+
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    for _ in range(12):
+        if not py.stack:
+            break
+        resolve_top_of_stack(py)
+    assert rs.stack_size() == 0 and not py.stack
+
+    from mtg_bot.game import effective_power
+
+    rs_bf = {o["id"]: o for o in rs.battlefield_snapshot()}
+    # Ally got +2/+0 on BOTH (effective power 2 -> 4), byte-equal.
+    py_ally_pow = effective_power(py, py_ally)
+    assert py_ally_pow == 4
+    assert rs.effective_power(rs_ally) == py_ally_pow
+    assert rs_ally in rs_bf
+    assert rs_bf[rs_ally]["printing_name"] == "Ally"
+    assert rs_bf[rs_ally]["tapped"] is False
+    # Source itself NOT pumped on BOTH ("another"), byte-equal.
+    py_src_pow = effective_power(py, py_src)
+    assert py_src_pow == real.power
+    rs_src_id = next(o["id"] for o in rs.battlefield_snapshot()
+                     if o["printing_name"] == "Perigee Beckoner")
+    assert rs.effective_power(rs_src_id) == py_src_pow
+
+
+def test_bridge_perigee_pump_grant_dies_return_tapped_dies_return_parity():
+    """Cross-engine parity on the DIES-RETURN-TAPPED observable (the
+    genuinely-new shape this slice ships): after the pumped ally is
+    destroyed, it returns to its OWNER's battlefield TAPPED with no
+    UEOT bonus, graveyard empty, on BOTH engines (Rust: the SBA
+    return-tapped path; Python: the genuine
+    ``PerigeeBeckonerDiesReturnTappedEffect``).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.game import Zone
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.turn import state_based_actions
+    from tests.parity._picker_shims import (
+        _PickFirstControlledCreatureAgent,
+    )
+
+    real = get_active_source().get_printings().get("Perigee Beckoner")
+    if real is None:
+        pytest.skip("Perigee Beckoner absent from active CardSource")
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2
+    py.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    def _gp(n):
+        return CardPrinting(
+            name=n, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=2, toughness=2, produces=frozenset(),
+        )
+
+    py_ally = py.new_object(_gp("Ally"), owner_id=0,
+                            zone=Zone.BATTLEFIELD)
+    py.battlefield.append(py_ally)
+    rs_ally = rs.register_and_inject_object(
+        {"name": "Ally", "card_types": ["Creature"],
+         "power": 2, "toughness": 2}, 0, ZB)
+    rs.register_and_inject_object(
+        {"name": "Perigee Beckoner", "card_types": ["Creature"],
+         "power": 4, "toughness": 5,
+         "triggered_abilities": [{
+             "event": "enters",
+             "predicate": {"kind": "source_is_self"},
+             "effect": {
+                 "kind": "pump_target_creature_until_eot_grant_dies_return_tapped",
+                 "power_bonus": 2, "toughness_bonus": 0,
+             }}]}, 0, ZB)
+    py_src = py.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py.next_timestamp
+    py.next_timestamp += 1
+    py.battlefield.append(py_src)
+    _trigger_etb_abilities(py, py_src)
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    for _ in range(12):
+        if not py.stack:
+            break
+        resolve_top_of_stack(py)
+
+    # Kill the pumped ally on BOTH (lethal marked damage + SBAs).
+    py_ally.damage = 99
+    for _ in range(20):
+        if not state_based_actions(py):
+            break
+        while py.stack:
+            resolve_top_of_stack(py)
+    rs.deal_damage(rs_ally, 99)
+    rs.apply_sbas_until_quiescent()
+
+    # Ally returned tapped under owner's control on BOTH; gy empty.
+    rs_bf = {o["id"]: o for o in rs.battlefield_snapshot()}
+    assert rs_ally in rs_bf, "Rust: ally must return to bf"
+    assert rs_bf[rs_ally]["tapped"] is True
+    assert rs_bf[rs_ally]["controller_id"] == 0
+    assert rs.graveyard_snapshot(0) == []
+
+    py_ally_back = [o for o in py.battlefield
+                    if o.printing.name == "Ally"]
+    assert len(py_ally_back) == 1, "Python: ally must return to bf"
+    assert py_ally_back[0].tapped is True
+    assert py_ally_back[0].controller_id == 0
+    assert list(py.players[0].graveyard) == []
+    # **Source-of-truth power-retention (round-53 effective-state
+    # lesson).** Python's PerigeeBeckonerDiesReturnTappedEffect
+    # re-uses the SAME object and put_into_battlefield does NOT reset
+    # temp_power_bonus, so the returned creature KEEPS the +2/+0 pump
+    # (effective power stays 4, NOT a clean CR-400.7 new-object 2).
+    # Rust matches that source-of-truth behavior by dropping ONLY the
+    # rider marker and keeping the PowerToughnessBonus — byte-equal on
+    # BOTH (4), asserted here rather than against a textbook value the
+    # source engine does not implement.
+    from mtg_bot.game import effective_power
+    py_back_pow = effective_power(py, py_ally_back[0])
+    rs_back_pow = rs.effective_power(rs_ally)
+    assert py_back_pow == 4, (
+        f"Python source-of-truth: returned ally keeps +2/+0 "
+        f"(eff power 4); got {py_back_pow}")
+    assert rs_back_pow == py_back_pow, (
+        f"Rust returned-ally effective power {rs_back_pow} must "
+        f"byte-equal Python's {py_back_pow}")
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
