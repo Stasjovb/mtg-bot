@@ -4613,6 +4613,32 @@ pub struct CardPrinting {
     /// legal emitter (`state_ops_legal.rs`) offers the
     /// `use_warp=true` CastSpell variant iff this is `Some`.
     pub warp_cost: Option<ManaCost>,
+    /// **warp_cost substrate (Phase 2).** Timeline Culler's "Warp—{B},
+    /// Pay 2 life" life rider: the additional life paid as part of the
+    /// warp cast (`0` = no rider, the back-compat default — every
+    /// pre-Phase-2 registry dict omits the `warp_additional_life_cost`
+    /// key, which the parser maps to `0`, identical to the Phase-1
+    /// `warp_cost` Option-parse shape). Mirrors Python's
+    /// `CardPrinting.warp_additional_life_cost: int`
+    /// (`src/mtg_bot/cards/base.py:521`). Debited from the caster's
+    /// life inside `cast_creature_warp` (hand AND the new graveyard
+    /// fall-through arm, `state_ops_cast.rs`); the legal emitter gates
+    /// the warp variant on `player.life > this` (mirrors Python
+    /// `legal.py:269` / `:399` / `:461`).
+    pub warp_additional_life_cost: u8,
+    /// **warp_cost substrate (Phase 2).** Timeline Culler's "You may
+    /// cast this card from your graveyard using its warp ability":
+    /// `true` iff the card may be warp-cast from the graveyard zone
+    /// (not only the hand). `false` = hand-only (the back-compat
+    /// default — every pre-Phase-2 registry dict omits the
+    /// `warp_castable_from_graveyard` key). Mirrors Python's
+    /// `CardPrinting.warp_castable_from_graveyard: bool`
+    /// (`src/mtg_bot/cards/base.py:525`). When `true`, the legal
+    /// emitter offers a `use_warp=true` CastSpell for the card while
+    /// it is in the graveyard (mirrors the separate graveyard loop at
+    /// `legal.py:447-476`); the cast pipeline routes it through the
+    /// graveyard fall-through in `cast_creature_warp`.
+    pub warp_castable_from_graveyard: bool,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -6796,6 +6822,23 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => None,
     };
+    // warp_cost substrate (Phase 2): Timeline Culler's two riders.
+    // Same back-compat `match get_item { Some => extract, None =>
+    // default }` shape as `warp_cost` above (no serde derive). Missing
+    // key -> 0 / false (every pre-Phase-2 registry dict omits both;
+    // build_rust_state only emits the keys for Timeline Culler).
+    let warp_additional_life_cost = match dict
+        .get_item("warp_additional_life_cost")?
+    {
+        Some(v) => v.extract::<u8>()?,
+        None => 0,
+    };
+    let warp_castable_from_graveyard = match dict
+        .get_item("warp_castable_from_graveyard")?
+    {
+        Some(v) => v.extract::<bool>()?,
+        None => false,
+    };
     let effects = match dict.get_item("effects")? {
         Some(eff_any) => {
             let mut out = Vec::new();
@@ -7025,6 +7068,8 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         activated_abilities,
         starting_loyalty,
         warp_cost,
+        warp_additional_life_cost,
+        warp_castable_from_graveyard,
     })
 }
 

@@ -5885,13 +5885,15 @@ def test_r60_nonbasic_decline_traps_not_admitted_by_loader():
 
 
 # ---------------------------------------------------------------------------
-# warp_cost Phase 1 (round-63) + Phase 1.5 (round-65) — §2
-# guardrail's-teeth pins. Phase 1.5 widens the guardrail to admit the
+# warp_cost Phase 1 (round-63) + Phase 1.5 (round-65) + Phase 2 — §2
+# guardrail's-teeth pins. Phase 1.5 widened the guardrail to admit the
 # safe-trigger+warp residue trio (Germinating Wurm / Knight Luminary /
-# Starbreach Whale); the §2 teeth (Timeline Culler / Codecracker Hound
-# / Quantum Riddler / Starfield Vocalist stay declined) are PRESERVED.
-# Spec: docs/WARP_COST_PHASE1_DESIGN.md §4 pins 9-12 + the Phase-1.5
-# follow-up the Phase-1 guardrail docstring flagged.
+# Starbreach Whale); **Phase 2 admits Timeline Culler** (the life +
+# graveyard-cast riders are now modeled on both engines — the two
+# rider-rejection clauses were removed by the surgical widening). The
+# §2 teeth (Codecracker Hound / Quantum Riddler / Starfield Vocalist /
+# Mechanozoa stay declined on the OTHER clauses) are PRESERVED. Spec:
+# docs/WARP_COST_PHASE2_DESIGN.md §4 pins 11-14.
 # ---------------------------------------------------------------------------
 
 
@@ -5913,9 +5915,13 @@ import pytest as _pytest_warp  # noqa: E402
         ("Germinating Wurm", True),    # ENTERS/IsSelf/GainLife 2
         ("Knight Luminary", True),     # ENTERS/IsSelf/CreateToken
         ("Starbreach Whale", True),    # ENTERS/IsSelf/Surveil 2
-        # Pin 10 — Timeline Culler REJECTED (Phase 2: it carries
-        # warp_additional_life_cost=2 AND warp_castable_from_graveyard).
-        ("Timeline Culler", False),
+        # Phase 2 — Timeline Culler now ADMITS. It carries
+        # warp_additional_life_cost=2 AND warp_castable_from_graveyard,
+        # both now modeled on both engines (the two rider-rejection
+        # clauses were removed by the surgical Phase-2 widening). It is
+        # the ONLY card carrying either rider (verified live), so this
+        # is exactly +1 vs Phase 1.5.
+        ("Timeline Culler", True),
         # Pin 11 — the multi-gated traps stay filtered: Starfield
         # Vocalist (static-ability gate), Codecracker Hound
         # (Effect-uncovered + NON-safe trigger). The §2 teeth survive
@@ -5940,15 +5946,16 @@ import pytest as _pytest_warp  # noqa: E402
 def test_r63_warp_phase15_guardrail_admits_trio_declines_others(
     card_name, expected,
 ):
-    """``_printing_is_bridge_pure_warp_creature`` (Phase 1.5) admits
-    the two pure-fixed-cost Phase-1 cards AND the safe-trigger+warp
-    residue trio, and positively rejects Timeline Culler (Phase-2
-    life/graveyard riders), the static-gated cards (Starfield
-    Vocalist, Quantum Riddler), and the NON-safe-trigger cards
-    (Codecracker Hound, Mechanozoa). The §2 guardrail's teeth — spec
-    §4 pins 9-11 + the Phase-1.5 §2-teeth (the widen admits ONLY
-    genuinely-already-safe+bridged triggers; anything else stays
-    declined)."""
+    """``_printing_is_bridge_pure_warp_creature`` (Phase 2) admits
+    the two pure-fixed-cost Phase-1 cards, the safe-trigger+warp
+    residue trio (Phase 1.5), AND Timeline Culler (Phase 2 — the
+    life/graveyard riders are now modeled on both engines), and still
+    positively rejects the static-gated cards (Starfield Vocalist,
+    Quantum Riddler) and the NON-safe-trigger cards (Codecracker
+    Hound, Mechanozoa). The §2 guardrail's teeth — spec §4 pins 11-13:
+    the Phase-2 widen drops ONLY the two rider rejections; every other
+    clause (static / non-safe-trigger / kicker / ...) is byte-for-byte
+    unchanged, so the 26 multi-gated warp cards stay declined."""
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_pure_warp_creature,
@@ -5969,17 +5976,20 @@ def test_r63_warp_phase15_guardrail_admits_trio_declines_others(
     )
 
 
-def test_r63_warp_phase15_guardrail_positive_set_is_exactly_five():
-    """Phase-1.5 spec pin (the round-63 spec §4 pin 12, widened) — the
-    guardrail's positive set is EXHAUSTIVE: EXACTLY five EoE printings
+def test_r63_warp_phase2_guardrail_positive_set_is_exactly_six():
+    """Phase-2 spec pin (WARP_COST_PHASE2_DESIGN.md §4 pin 14) — the
+    guardrail's positive set is EXHAUSTIVE: EXACTLY six EoE printings
     pass ``_printing_is_bridge_pure_warp_creature`` — the two
-    pure-fixed-cost Phase-1 cards (Bygone Colossus, Red Tiger Mechan)
-    PLUS the safe-trigger+warp residue trio (Germinating Wurm,
-    Knight Luminary, Starbreach Whale). Regenerable companion to the
+    pure-fixed-cost Phase-1 cards (Bygone Colossus, Red Tiger Mechan),
+    the safe-trigger+warp residue trio (Germinating Wurm, Knight
+    Luminary, Starbreach Whale), PLUS Timeline Culler (Phase 2 — the
+    life + graveyard-cast riders). Regenerable companion to the
     round-58 scout; the anti-count-chasing pin that catches a future
     silent widen (e.g. Quantum Riddler — safe trigger but static-gated
     — must NOT leak in; a non-safe-trigger warp card must NOT leak
-    in)."""
+    in). The Phase-2 delta vs the pre-Phase-2 count of 5 is EXACTLY
+    {Timeline Culler} — it is the only card carrying either rider
+    (verified live)."""
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import (
         _printing_is_bridge_pure_warp_creature,
@@ -5996,29 +6006,32 @@ def test_r63_warp_phase15_guardrail_positive_set_is_exactly_five():
         "Knight Luminary",
         "Red Tiger Mechan",
         "Starbreach Whale",
+        "Timeline Culler",
     ], (
-        f"Phase-1.5 guardrail must admit EXACTLY the pure-fixed-cost "
-        f"pair + the safe-trigger+warp trio; got {passing}. A new "
-        f"warp creature is admitted ONLY if its sole gate is "
-        f"warp_cost and every trigger round-trips the SAFE gate; "
-        f"anything static-gated (Quantum Riddler) or non-safe-trigger "
+        f"Phase-2 guardrail must admit EXACTLY the pure-fixed-cost "
+        f"pair + the safe-trigger+warp trio + Timeline Culler; got "
+        f"{passing}. The Phase-2 widen drops ONLY the two rider "
+        f"rejections — a new warp creature is admitted ONLY if its "
+        f"sole gate is warp_cost (modulo the life/graveyard riders) "
+        f"and every trigger round-trips the SAFE gate; anything "
+        f"static-gated (Quantum Riddler) or non-safe-trigger "
         f"(Codecracker Hound) belongs to a separate substrate, not a "
         f"silent expansion (see "
         f"_printing_is_bridge_pure_warp_creature's docstring + "
-        f"docs/SEARCH_LIMITATIONS.md)."
+        f"docs/WARP_COST_PHASE2_DESIGN.md §1/§2)."
     )
 
 
-def test_r63_warp_phase15_residue_trio_now_admitted_by_loader():
-    """Phase 1.5 (round-65): the safe-trigger+warp residue trio
+def test_r63_warp_phase2_residue_trio_and_tlc_admitted_by_loader():
+    """Phase 1.5 + Phase 2: the safe-trigger+warp residue trio
     (Germinating Wurm / Knight Luminary / Starbreach Whale — each
-    warp_cost + a single SAFE ETB trigger) is now ADMITTED by the
-    production-deck loader (the drop→admit flip Phase 1.5 ships;
-    +3 cards). Each trio member's CardDef carries BOTH the warp
-    fields (has_warp + warp_cost codec) AND the safe-trigger tuple —
-    the Phase-1 boundary's `triggered_abilities==()` gate is widened
-    to the safe-trigger gate. Timeline Culler stays declined (Phase
-    2)."""
+    warp_cost + a single SAFE ETB trigger) AND **Timeline Culler**
+    (Phase 2 — the life + graveyard-cast riders, now modeled on both
+    engines) are all ADMITTED by the production-deck loader. Each
+    trio member's CardDef carries BOTH the warp fields (has_warp +
+    warp_cost codec) AND the safe-trigger tuple; Timeline Culler's
+    CardDef carries the warp fields PLUS warp_life_cost=2 /
+    warp_from_graveyard=True (the Phase-2 rider bridge fields)."""
     from mtg_bot.cards.source import OracleParserCardSource
     from mtg_bot.parity.trajectory import _filter_deck_to_bridge_supported
 
@@ -6044,8 +6057,29 @@ def test_r63_warp_phase15_residue_trio_now_admitted_by_loader():
             f"{nm} CardDef must carry its single SAFE ETB trigger; "
             f"got {cd.triggered_abilities!r}"
         )
-    assert "Timeline Culler" not in filtered, (
-        "Timeline Culler stays declined (Phase 2: life/graveyard "
-        "riders) — the §2 teeth survive the Phase-1.5 widen."
-    )
+        # Phase-1/1.5 cards carry NO Phase-2 rider (back-compat).
+        assert cd.warp_life_cost == 0 and cd.warp_from_graveyard is False, (
+            f"{nm} (Phase-1/1.5) CardDef must carry NO Phase-2 rider "
+            f"(life={cd.warp_life_cost}, gy={cd.warp_from_graveyard})"
+        )
+    # Phase 2: Timeline Culler is now ADMITTED (was declined
+    # pre-Phase-2) and its CardDef carries the two rider fields.
+    if "Timeline Culler" in by:
+        assert "Timeline Culler" in filtered, (
+            "Timeline Culler MUST be admitted by the loader (Phase 2: "
+            "the life + graveyard-cast riders are modeled on both "
+            "engines)."
+        )
+        tlc = by_name["Timeline Culler"]
+        assert tlc.has_warp is True, (
+            "Timeline Culler CardDef must carry the warp fields"
+        )
+        assert tlc.warp_life_cost == 2, (
+            f"Timeline Culler CardDef must carry warp_life_cost=2; "
+            f"got {tlc.warp_life_cost}"
+        )
+        assert tlc.warp_from_graveyard is True, (
+            f"Timeline Culler CardDef must carry "
+            f"warp_from_graveyard=True; got {tlc.warp_from_graveyard}"
+        )
     assert "Forest" in filtered  # control: a real basic still admits

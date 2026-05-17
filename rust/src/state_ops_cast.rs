@@ -318,6 +318,61 @@ fn move_from_exile_to_battlefield(
     Ok(Some(snapshot))
 }
 
+/// **Phase-2 warp-cast-from-graveyard (Timeline Culler).** Sibling of
+/// `move_from_hand_to_battlefield` / `move_from_exile_to_battlefield`
+/// for the graveyard→battlefield warp-cast path: a
+/// `warp_castable_from_graveyard` object in `player.graveyard` moves
+/// to the battlefield (mirrors Python's `actions.py:1437-1464`
+/// `p.graveyard.remove(card)` then `put_into_battlefield`). Identical
+/// CE4 timestamp reservation + walker-loyalty seed + ENTERS drain as
+/// the hand / exile helpers so the graveyard-warp-cast permanent is
+/// byte-identical to a hand-warp-cast one (modulo the origin zone —
+/// Timeline Culler has `triggered_abilities=()` so the ETB drain is
+/// inert for THIS card but keeps the path forward-correct and
+/// identical to the hand arm). Returns the pushed-object snapshot, or
+/// `None` if the id isn't a live graveyard object for `idx`.
+fn move_from_graveyard_to_battlefield(
+    state: &mut GameState,
+    idx: usize,
+    obj_id: u32,
+) -> PyResult<Option<GameObject>> {
+    let Some(pos) = state.players[idx]
+        .graveyard
+        .iter()
+        .position(|o| o.id == obj_id)
+    else {
+        return Ok(None);
+    };
+    let etb_ts = state.next_etb_timestamp;
+    state.next_etb_timestamp = state.next_etb_timestamp.saturating_add(1);
+    let starting_loyalty: i32 = {
+        let pid = state.players[idx].graveyard[pos].printing_id;
+        match state.registry.lookup(pid) {
+            Some(printing)
+                if printing.card_types.iter().any(|t| t == "Planeswalker") =>
+            {
+                printing.starting_loyalty
+            }
+            _ => 0,
+        }
+    };
+    let player = &mut state.players[idx];
+    let graveyard = Arc::make_mut(&mut player.graveyard);
+    let mut obj = graveyard.remove(pos);
+    obj.zone = ZONE_BATTLEFIELD;
+    obj.etb_timestamp = etb_ts;
+    if starting_loyalty != 0 {
+        obj.loyalty_counters = starting_loyalty;
+    }
+    let snapshot = obj.clone();
+    let entered_id = obj.id;
+    let bf = Arc::make_mut(&mut player.battlefield);
+    bf.push(obj);
+    state.pending_etb_dispatches.push(entered_id);
+    crate::state_ops_resolve::drain_pending_etb_dispatches(state)?;
+    Ok(Some(snapshot))
+}
+
 #[pymethods]
 impl GameState {
     /// Read the `summoning_sick` flag for the battlefield permanent
@@ -510,65 +565,115 @@ impl GameState {
         Ok(true)
     }
 
-    /// **Phase-1 warp substrate (round-63).** Warp-cast a creature
-    /// from `player_id`'s hand: identical to `cast_creature` with
-    /// four deltas (verified against the live `cast_creature` body):
+    /// **Phase-1 warp substrate (round-63) + Phase 2 (Timeline
+    /// Culler).** Warp-cast a creature from `player_id`'s hand OR (if
+    /// absent there and the printing is `warp_castable_from_graveyard`)
+    /// the GRAVEYARD: identical to `cast_creature` with these deltas
+    /// (verified against the live `cast_creature` + Python
+    /// `actions.py:1393-1464` bodies):
     ///
+    /// 0. **(Phase 2) Source-zone cascade:** hand first, then
+    ///    graveyard gated on `warp_castable_from_graveyard` — mirrors
+    ///    Python's single `_cast_spell` `if hand: ... elif gy-warp:`
+    ///    cascade so the `Action::CastSpell` dispatch site stays
+    ///    byte-identical (no new arm). Phase-1/1.5 cards are never in
+    ///    the graveyard when warp-cast and carry
+    ///    `warp_castable_from_graveyard=false`, so the fall-through
+    ///    never triggers for them (unchanged behavior).
     /// 1. **Cost source:** pays `printing.warp_cost` (unwrapped —
     ///    the legal emitter only offered `use_warp=true` when this
     ///    is `Some`) instead of `printing.mana_cost`. Mirrors
     ///    Python's `effective_warp_cost(...)` element `[0]`
-    ///    (`actions.py:1399-1400`); Phase 1 carries only the innate
-    ///    fixed-cost warp (no battlefield-granted warp / life rider
-    ///    — the filter guardrail rejects those).
+    ///    (`actions.py:1399-1400`) / the graveyard branch's
+    ///    `card.printing.warp_cost` (`actions.py:1448`).
+    /// 1b. **(Phase 2) Life rider:** after the mana spend commits,
+    ///    debit `printing.warp_additional_life_cost` from the
+    ///    caster's life UNCONDITIONALLY (CR 117.9b — part of the warp
+    ///    alternative cost, no decision point). The legal emitter has
+    ///    already gated `life > rider`, so this never drops below 1.
+    ///    `rider == 0` (every Phase-1/1.5 card) is a no-op. Mirrors
+    ///    Python `actions.py:1430-1436` (hand) / `:1458-1464`
+    ///    (graveyard).
     /// 2. **`spell_warped_this_turn`:** set `true` after the mana
-    ///    spend commits, mirroring Python `actions.py:1427`. This is
-    ///    the production write site the round-61 SL pin says
-    ///    "follows trivially at the warp-cast site" (the field is a
-    ///    plain `bool` on `GameState` at `state.rs`; no Arc dance).
+    ///    spend commits, mirroring Python `actions.py:1427` (hand) /
+    ///    `:1457` (graveyard) — BOTH branches set it. The field is a
+    ///    plain `bool` on `GameState` (`state.rs`; no Arc dance).
     /// 3. **`warp_exile_pending`:** stamp `true` on the just-cast
     ///    permanent (alongside the `summoning_sick = true` stamp) so
     ///    the `PHASE_END_STEP`-entry sweep
     ///    (`state_ops_steps.rs::warp_exile_sweep_on_end_step`)
-    ///    exiles it at the next end step (Rust's no-stack model: a
-    ///    deterministic phase-entry sweep, NOT Python's stack-pushed
-    ///    `WarpExileSelf` delayed trigger — documented simplification
-    ///    in `SEARCH_LIMITATIONS.md`).
+    ///    exiles it at the next end step. Set IDENTICALLY for the
+    ///    hand AND graveyard arm — Python schedules the SAME
+    ///    `WarpExileSelf` for both (`actions.py:1550-1559` runs for
+    ///    any `use_warp`). Rust's no-stack model: a deterministic
+    ///    phase-entry sweep, NOT Python's stack-pushed delayed
+    ///    trigger — documented in `SEARCH_LIMITATIONS.md`.
     /// 4. **Type gate / priority tail:** unchanged from
     ///    `cast_creature` (the `Creature`-type gate passes on
-    ///    `Artifact Creature`; the priority/passes reset is verbatim).
+    ///    `Artifact Creature` / a bare `Creature`; the priority/
+    ///    passes reset is verbatim).
     ///
-    /// The `Creature`-type gate (CR — both Phase-1 cards are
-    /// `Artifact Creature`) stays. Returns `true` on success,
-    /// `false` on the same precondition failures as `cast_creature`
-    /// plus "the printing has no `warp_cost`" (defensive — the legal
-    /// emitter never offers `use_warp=true` without it).
+    /// Returns `true` on success, `false` on the same precondition
+    /// failures as `cast_creature` plus "not in hand AND (not in
+    /// graveyard OR not `warp_castable_from_graveyard`)" / "the
+    /// printing has no `warp_cost`" (defensive — the legal emitter
+    /// never offers `use_warp=true` without these).
     fn cast_creature_warp(
         &mut self,
         obj_id: u32,
         player_id: u8,
     ) -> PyResult<bool> {
         let idx = check_player_id(player_id)?;
-        let printing_id = match self.players[idx]
+        // **Phase-2 source-zone resolution (mirrors Python's
+        // `_cast_spell` `if card in hand: ... elif graveyard-warp:`
+        // cascade in ONE function — actions.py:1393/1437).** Look up
+        // the object in the HAND first; if absent, fall through to
+        // the GRAVEYARD gated on `warp_castable_from_graveyard`. This
+        // keeps the `Action::CastSpell` dispatch site byte-identical
+        // (no new arm) — exactly as Python keeps the cascade inside
+        // `_cast_spell`. `from_graveyard` records which arm fired so
+        // the move + provenance match Python's two branches.
+        let (printing_id, from_graveyard) = if let Some(pid) = self
+            .players[idx]
             .hand
             .iter()
             .find(|o| o.id == obj_id)
             .map(|o| o.printing_id)
         {
-            Some(pid) => pid,
-            None => return Ok(false),
+            (pid, false)
+        } else if let Some(pid) = self.players[idx]
+            .graveyard
+            .iter()
+            .find(|o| o.id == obj_id)
+            .map(|o| o.printing_id)
+        {
+            // Only the graveyard-cast rider authorizes a
+            // graveyard-origin warp cast (Python actions.py:1444
+            // `grave_card.printing.warp_castable_from_graveyard`).
+            let gy_ok = self
+                .registry
+                .lookup(pid)
+                .map(|p| p.warp_castable_from_graveyard)
+                .unwrap_or(false);
+            if !gy_ok {
+                return Ok(false);
+            }
+            (pid, true)
+        } else {
+            return Ok(false);
         };
         // Delta 1: pay `warp_cost` (not `mana_cost`). Bail if the
         // printing has no warp (defensive) or isn't a creature.
-        let cost = match self.registry.lookup(printing_id) {
+        let (cost, life_cost) = match self.registry.lookup(printing_id) {
             Some(p) => {
                 if !p.card_types.iter().any(|t| t == "Creature") {
                     return Ok(false);
                 }
-                match &p.warp_cost {
+                let wc = match &p.warp_cost {
                     Some(wc) => wc.clone(),
                     None => return Ok(false),
-                }
+                };
+                (wc, p.warp_additional_life_cost)
             }
             None => return Ok(false),
         };
@@ -578,21 +683,56 @@ impl GameState {
         }
         self.players[idx].mana_pool = pool_copy;
         // Delta 2: production write of `spell_warped_this_turn`
-        // (mirrors Python actions.py:1427). Plain bool on GameState,
-        // no CoW. Set after the mana spend commits.
+        // (mirrors Python actions.py:1427 hand / :1457 graveyard —
+        // BOTH branches set it). Plain bool on GameState, no CoW.
+        // Set after the mana spend commits.
         self.spell_warped_this_turn = true;
+        // **Phase-2: pay the warp ability's "Pay N life" rider**
+        // (Timeline Culler). The legal emitter has already gated
+        // `life > warp_additional_life_cost`, so this never drops
+        // the caster below 1. `life_cost == 0` (every Phase-1/1.5
+        // card) is a no-op. Mirrors Python actions.py:1430-1436
+        // (hand) / :1458-1464 (graveyard) — debited unconditionally
+        // inside the cast (CR 117.9b: the Pay-2-life is part of the
+        // warp alternative cost, no decision point). Player.life is
+        // i32; widen the u8 rider to match.
+        if life_cost > 0 {
+            self.players[idx].life -= life_cost as i32;
+        }
         // CAST event before ENTERS, same ordering as `cast_creature`.
         crate::state_ops_resolve::dispatch_event(
             self,
             crate::cards::Event::Cast,
             obj_id,
         )?;
-        let _ = move_from_hand_to_battlefield(self, idx, obj_id)?;
+        // Delta 1b: move from the resolved source zone. Hand →
+        // `move_from_hand_to_battlefield` (Phase 1, unchanged);
+        // graveyard → `move_from_graveyard_to_battlefield` (Phase 2,
+        // mirrors Python actions.py:1450 `p.graveyard.remove(card)` +
+        // put_into_battlefield). Both fire the SAME CAST→ENTERS drain
+        // path so any ETB fires byte-equal (inert for Timeline
+        // Culler — triggered_abilities=() — but forward-correct).
+        if from_graveyard {
+            let _ =
+                move_from_graveyard_to_battlefield(self, idx, obj_id)?;
+        } else {
+            let _ = move_from_hand_to_battlefield(self, idx, obj_id)?;
+        }
         let player = &mut self.players[idx];
         let bf = Arc::make_mut(&mut player.battlefield);
         if let Some(obj) = bf.iter_mut().find(|o| o.id == obj_id) {
             obj.summoning_sick = true;
-            // Delta 3: stamp the end-step warp-exile schedule.
+            // Delta 3: stamp the end-step warp-exile schedule. This
+            // is set IDENTICALLY for the hand AND graveyard arm —
+            // Python schedules the SAME `WarpExileSelf` delayed
+            // trigger for both branches (actions.py:1550-1559 runs
+            // for any `use_warp`), so a graveyard-warp-cast Timeline
+            // Culler is exiled by the SAME deterministic
+            // PHASE_END_STEP sweep and then re-castable from exile at
+            // NORMAL {B}{B} (the Phase-1 sweep + exile-recast handle
+            // the rest unchanged — the exile object is in exile, not
+            // the graveyard, so it never re-enters the graveyard-warp
+            // loop).
             obj.warp_exile_pending = true;
         }
         // Delta 4: priority/passes reset, verbatim from

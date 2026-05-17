@@ -3375,13 +3375,20 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
 def _printing_is_bridge_pure_warp_creature(printing) -> bool:
     """True iff a CardPrinting is a warp creature the warp substrate
     round-trips byte-equal across engines — Phase 1's pure fixed-cost
-    pair PLUS Phase 1.5's safe-trigger+warp residue trio.
+    pair PLUS Phase 1.5's safe-trigger+warp residue trio PLUS Phase
+    2's Timeline Culler (the life + graveyard-cast riders).
 
     Phase-6 warp_cost substrate, **phase 1** (round-63; spec at
     ``docs/WARP_COST_PHASE1_DESIGN.md`` §3, written round-62 N2) +
     **phase 1.5** (round-65; the safe-trigger+warp residue trio the
     Phase-1 agent deliberately scoped out — see the live-tree-drift
-    note below).
+    note below) + **phase 2** (Timeline Culler; spec at
+    ``docs/WARP_COST_PHASE2_DESIGN.md`` — the two former
+    rider-rejection clauses were removed because the life rider +
+    graveyard-cast rider are now modeled on BOTH engines; Timeline
+    Culler is the ONLY card carrying either rider, so the widen
+    admits EXACTLY it and the §2 teeth that decline every other warp
+    card are byte-for-byte unchanged).
 
     Motivating set:
 
@@ -3405,17 +3412,20 @@ def _printing_is_bridge_pure_warp_creature(printing) -> bool:
       Phase-1.5 real-EoE probe).
 
     The §2 Class-1 guardrail: it admits ONLY the pure-fixed-cost
-    profile OR the safe-trigger+warp profile, and MUST reject
-    Timeline Culler (``warp_additional_life_cost=2``,
-    ``warp_castable_from_graveyard`` — Phase 2) and every multi-gated
-    warp card (static / Effect-uncovered — never flips on warp
-    alone). The exclusion set is the SAME as
-    :func:`_printing_is_bridge_simple_creature` (so the 7 multi-gated
+    profile OR the safe-trigger+warp profile OR Timeline Culler's
+    pure-life+graveyard profile (Phase 2 — the riders are now modeled
+    on both engines), and MUST still reject every multi-gated warp
+    card (static / Effect-uncovered — never flips on warp alone). The
+    exclusion set is the SAME as
+    :func:`_printing_is_bridge_simple_creature` (so the 26 multi-gated
     warp cards trip one of these and stay filtered) MINUS the
     ``printing.warp_cost`` rejection (which is the whole point — this
     predicate REQUIRES it), with ``triggered_abilities`` gated to the
-    SAFE set (not hard-rejected), PLUS the two Phase-2-rider positive
-    rejections that are the §2 guardrail's teeth.
+    SAFE set (not hard-rejected). Phase 2 REMOVED the two
+    Phase-2-rider positive rejections (Timeline Culler is the ONLY
+    card carrying either rider — verified live — so the widen admits
+    EXACTLY it; every other clause is byte-for-byte unchanged so the
+    §2 teeth that decline the 26 multi-gated warp cards still hold).
 
     **Live-tree drift caught (round-63) → resolved (round-65 Phase
     1.5).** The round-62 design doc (``WARP_COST_PHASE1_DESIGN.md``
@@ -3452,11 +3462,20 @@ def _printing_is_bridge_pure_warp_creature(printing) -> bool:
         return False
     if printing.warp_cost is None:
         return False
-    # Phase-2 riders — positively rejected (the §2 guardrail teeth):
-    if getattr(printing, "warp_additional_life_cost", 0):
-        return False
-    if getattr(printing, "warp_castable_from_graveyard", False):
-        return False
+    # Phase 2 (Timeline Culler): the life rider + graveyard-cast rider
+    # are now MODELED on BOTH engines (CardDef warp_life_cost /
+    # warp_from_graveyard + Rust warp_additional_life_cost /
+    # warp_castable_from_graveyard + the cast_creature_warp life debit
+    # + the graveyard cast-from-zone fall-through + the life-gated
+    # legal emit + the graveyard warp loop). They are no longer
+    # §2-rejected. Timeline Culler ({B} warp, Pay 2 life, gy-castable)
+    # is the ONLY card carrying either rider (verified live), so
+    # dropping the two former rejection clauses admits EXACTLY Timeline
+    # Culler and nothing else — every other warp card still trips a
+    # non-warp clause below (static / non-safe-trigger / kicker /
+    # ...), so the §2 teeth that decline the 26 multi-gated warp cards
+    # are byte-for-byte unchanged. See
+    # docs/WARP_COST_PHASE2_DESIGN.md §1/§2.
     # Phase-1.5 boundary (round-65): triggered abilities are admitted
     # ONLY if EVERY one round-trips through the already-bridge-correct
     # safe-trigger gate (the SAME machinery
@@ -3986,6 +4005,15 @@ def _printing_to_card_def(printing) -> CardDef:
             warp_cost_generic=wgen,
             warp_cost_colored=wcol,
             has_warp=True,
+            # Phase 2 — Timeline Culler's two riders. For every
+            # Phase-1/1.5 card these are 0/False, so the returned
+            # CardDef is bit-identical to the pre-Phase-2 one (the two
+            # new kwargs equal their defaults). Only Timeline Culler's
+            # CardDef gains warp_life_cost=2 / warp_from_graveyard=True.
+            warp_life_cost=getattr(
+                printing, "warp_additional_life_cost", 0),
+            warp_from_graveyard=getattr(
+                printing, "warp_castable_from_graveyard", False),
         )
     if _printing_is_bridge_simple_spell(printing):
         # Spell-card-bridge lever, Phase 1 (round-70): a pure

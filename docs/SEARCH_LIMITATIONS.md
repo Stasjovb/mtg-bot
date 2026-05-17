@@ -1577,7 +1577,50 @@ matters when those specific cards resolve.
 
 ---
 
-## Rust port — warp alt-cost cast pipeline: PHASE 1 + 1.5 SHIPPED (pure fixed-cost + safe-trigger+warp trio); life/graveyard riders + full delayed-trigger modeling remain Phase 2+
+## Rust port — warp alt-cost cast pipeline: PHASE 1 + 1.5 + 2 SHIPPED (pure fixed-cost + safe-trigger+warp trio + Timeline Culler life/graveyard riders); full CR-603.7 delayed-trigger modeling remains the only Phase-3 follow-on
+
+**Phase 2 update (Timeline Culler — the life + graveyard-cast
+riders).** Phase 2 (`docs/WARP_COST_PHASE2_DESIGN.md`) closes the two
+warp riders on **both** engines, admitting **exactly +1** card —
+**Timeline Culler ({B} warp, Pay 2 life, graveyard-castable; +8,986
+17lands decks)**. It is the ONLY card in the EoE pool carrying either
+`warp_additional_life_cost > 0` OR `warp_castable_from_graveyard`
+(verified live), so the surgical guardrail widening (delete the two
+Phase-2-rider positive-rejection clauses in
+`_printing_is_bridge_pure_warp_creature`,
+`src/mtg_bot/parity/trajectory.py`) admits EXACTLY it; every other
+clause is byte-for-byte unchanged so the 26 multi-gated warp cards
+stay declined (static / non-safe-trigger / kicker — verified). Rust
+changes: `CardPrinting` gains `warp_additional_life_cost: u8` +
+`warp_castable_from_graveyard: bool` (`rust/src/cards.rs`, parsed via
+the same back-compat `get_item { Some => .., None => default }`
+shape); `cast_creature_warp` (`rust/src/state_ops_cast.rs`) is
+extended with a hand→graveyard source-zone cascade (mirrors Python's
+`_cast_spell` `if hand: .. elif gy-warp: ..`) + an unconditional life
+debit after the mana spend (CR 117.9b — part of the warp alternative
+cost, NO decision point); a new `move_from_graveyard_to_battlefield`
+sibling of the exile-recast helper; the legal emitter
+(`rust/src/state_ops_legal.rs`) gains a `life >
+warp_additional_life_cost` gate on the hand warp emit (both
+instant/sorcery sites — a verified NO-OP for every Phase-1/1.5 card
+since their rider is 0 → `life > 0`, always true in a live game) + a
+new SEPARATE graveyard warp loop (mirrors Python `legal.py:447-476`,
+sorcery-speed, NO base/free-cast variant). The CardDef bridge
+(`src/mtg_bot/parity/cross_engine.py`) gains `warp_life_cost` /
+`warp_from_graveyard` round-tripped bidirectionally. **Shortcut =
+none** — this is a faithful Python mirror, not a simplification. The
+warp end-step exile remains the documented deterministic
+PHASE_END_STEP-entry sweep, NOT a CR-603.7 stack-pushed delayed
+trigger (UNCHANGED — Timeline Culler has `triggered_abilities=()`, no
+LEAVES/DIES observer, and `attack_all` never holds priority at end
+step; the delayed-trigger port is the only Phase-3 follow-on and
+admits 0 new cards — see the dedicated PHASE_END_STEP-entry sweep
+entry below). **Failure mode** = none for the bench-admitted set.
+**Fix-scope** = realized. **Impact** = +1 card / +8,986 17lands
+decks (a loader/real-game-coverage unlock — Timeline Culler is a
+zero-Effect vanilla 2/2, NOT an Effect+bridge POOL_PARITY metric
+move; the orchestrator resync should not double-count it, same as
+Phase-1's +6,450 / the round-60 shockland dimension).
 
 **Round-65 update (Phase 1.5 — safe-trigger+warp residue trio).**
 Phase 1.5 widens `_printing_is_bridge_pure_warp_creature`'s Phase-1
@@ -1623,21 +1666,36 @@ resolver — consumer), `rust/src/state_ops_actions.rs:287-352`
 (`cast_creature` + the new `cast_creature_warp` / exile-recast
 branch), `rust/src/cards.rs:4225-4419` (`CardPrinting` struct — now
 HAS `warp_cost: Option<ManaCost>`; `warp_castable_from_graveyard` /
-`warp_additional_life_cost` remain Phase-2 fields, NOT yet present).
+`warp_additional_life_cost` are now BOTH present (Phase 2 — `u8` /
+`bool`, parsed via the same back-compat get_item shape), alongside
+the new `move_from_graveyard_to_battlefield` helper + the
+`cast_creature_warp` graveyard fall-through & life debit
+(`state_ops_cast.rs`) + the life-gate & graveyard warp loop
+(`state_ops_legal.rs`).
 
-**What we do today (post-Phase-1)**: the
+**What we do today (post-Phase-2)**: the
 `state.spell_warped_this_turn` field exists on Rust's `GameState`,
 is reset on entry to PHASE_CLEANUP, and is read by the
 `Effect::ConditionalIfVoid` resolver via `is_void_active` (LTB-half
-OR warp-half). Phase 1 ADDS the production write at
+OR warp-half). Phase 1 ADDED the production write at
 `cast_creature_warp` (pure-fixed-cost warp from hand). The
-`Action::CastSpell` dispatch arm now branches on `use_warp`: `true`
+`Action::CastSpell` dispatch arm branches on `use_warp`: `true`
 → `cast_creature_warp` (pays `warp_cost`, sets the flag, stamps the
 end-step exile); `false` → `cast_creature` (also serves the
-warp-exile recast at normal `mana_cost`). The remaining gap is the
-Phase-2 riders (life / graveyard zone) — Timeline Culler's warp-cast
-still does not set the flag because it carries those riders and is
-filtered out (`_printing_is_bridge_pure_warp_creature` rejects it).
+warp-exile recast at normal `mana_cost`). **Phase 2 closed the
+remaining riders**: `cast_creature_warp` now also (a) falls through
+to the GRAVEYARD when the obj is absent from hand and the printing
+is `warp_castable_from_graveyard` (the dispatch site is
+byte-identical — the cascade is inside the primitive, mirroring
+Python's single `_cast_spell`), and (b) debits
+`warp_additional_life_cost` from the caster's life unconditionally
+after the mana spend. So Timeline Culler's warp-cast (hand OR
+graveyard) NOW sets the flag, pays {B} + 2 life, and is exiled by
+the SAME deterministic end-step sweep — it is admitted by
+`_printing_is_bridge_pure_warp_creature` (the two former
+rider-rejection clauses were removed). No rider gap remains; the
+only Phase-3 follow-on is the CR-603.7 delayed-trigger model
+(0-card-leverage — see the PHASE_END_STEP-entry sweep entry).
 
 **Why this diverges from Python**: Python's
 `src/mtg_bot/actions.py:1426-1436,1457` flips
@@ -1744,7 +1802,35 @@ gameplay surface. Perf neutral.
 
 ---
 
-## Rust port — warp end-step exile is a PHASE_END_STEP-entry sweep, NOT a CR-603.7 delayed trigger (Phase 1, round-63; Phase 1.5, round-65)
+## Rust port — warp end-step exile is a PHASE_END_STEP-entry sweep, NOT a CR-603.7 delayed trigger (Phase 1, round-63; Phase 1.5, round-65; Phase 2 — Timeline Culler)
+
+**Phase 2 (Timeline Culler) — the graveyard-warp-cast permanent is
+exiled by the SAME deterministic sweep.** Phase 2 admits Timeline
+Culler (the life + graveyard-cast riders). A Timeline Culler
+warp-cast from the GRAVEYARD (the new `cast_creature_warp` graveyard
+fall-through) stamps `warp_exile_pending = true` on the just-arrived
+permanent IDENTICALLY to the hand arm (Python schedules the SAME
+`WarpExileSelf` for both branches — `actions.py:1550-1559` runs for
+any `use_warp`), so the SAME deterministic PHASE_END_STEP-entry sweep
+exiles it and it then becomes re-castable from EXILE at the NORMAL
+`{B}{B}` cost (NOT re-warpable from the graveyard a second time — the
+exile object is in the exile zone, not the graveyard, so it never
+re-enters the graveyard-warp loop; the Phase-1 exile-recast path pays
+`mana_cost` unchanged). **Phase 2 does NOT port the CR-603.7
+delayed-trigger model** — the no-response-to-the-warp-exile claim
+below is UNCHANGED: Timeline Culler carries `triggered_abilities=()`,
+no LEAVES/DIES observer, and `attack_all` never holds priority at end
+step, so the `WarpExileSelf`-as-stack-object response window is
+unreachable for it (as for every Phase-1/1.5 card). The
+delayed-trigger port remains the only Phase-3 follow-on and admits
+**0 new cards** (it only changes the response-window semantics for a
+scenario no EoE card reaches; correctness-completeness work, not
+leverage work). The Phase-2 graveyard-warp lifecycle is pinned by
+`tests/test_parity_smoke.py::
+test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_byte_equal`
++ the Rust regression pins in
+`tests/test_cross_engine_etb_triggers.py` (the `test_r72_warp_phase2_*`
+family).
 
 **Phase 1.5 (round-65) — the safe-trigger+warp residue trio
 admitted.** Phase 1's `_printing_is_bridge_pure_warp_creature`
