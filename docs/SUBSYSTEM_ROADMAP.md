@@ -601,6 +601,56 @@ second:
    >     per the test's own docstring), NOT in the 4-file gate.
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 9 —
+   >   R74-1/I23 FIXED + round-74 trio fully resolved + ≤2-Rust
+   >   FLIP ACTIVATED; @ `c3cd126f`, counts UNCHANGED 118/120,
+   >   parity 304/475 / PROBED 104 UNCHANGED).**
+   >   - **R74-1/I23 FIXED** (`c3cd126f`): Rust combat power/
+   >     toughness readers now fold `obj.counters` byte-equal
+   >     with Python SoT (the documented-scoped I23 asymmetry,
+   >     empirically demanded by the round-74 Biosynthic-Burst
+   >     divergence; negative-control-verified pin; scope held
+   >     EXACTLY — the separate Fight-arm omission is a DISTINCT,
+   >     not-yet-bench-demanded SEARCH_LIMITATIONS §2 item, left
+   >     tracked, NOT scope-crept). RUST_PARITY_GAPS I23
+   >     combat-side CLOSED. Byte-equal behavior fix, NOT
+   >     count-shifting (CFI-1/R74-2 precedent).
+   >   - **The round-74 spell-cast divergence trio is FULLY
+   >     RESOLVED**: R74-2 (`f456ec20`, dies-trigger) ✓ /
+   >     R74-3 (`e4d4a50e`, harness UEOT expiry) ✓ /
+   >     R74-1/I23 (`c3cd126f`, combat counters) ✓. The first
+   >     real spell-cast bench sweep's ~31%-divergent finding
+   >     is closed; a post-all-3-fixes re-sweep validation is
+   >     dispatched (genuine — confirms 111 divergences → ~0).
+   >   - **≤2-RUST FLIP ACTIVATED** (user staged-rollout gate
+   >     MET): the Mechanism-A dogfood PASSED end-to-end
+   >     (isolated `.venv-wt` gate-green, shared `.venv-py313`
+   >     provably untouched, fail-loud isolation self-check held;
+   >     setup ~48s first / ~28-32s edit-rebuild — the doc's
+   >     ~4s was the no-Rust-change case, a slightly optimistic
+   >     estimate, not a defect). NOW: up to **2 concurrent
+   >     Rust agents**, each `scripts/setup_rust_worktree_venv
+   >     .ps1` isolated; merges + the orchestrator post-merge
+   >     resync still serialize on `main`. HANDOFF operating-
+   >     rules updated to ≤2-Rust ACTIVE. ~1.7-2× on the serial
+   >     Rust queue from here.
+   >   - **Tier-C target-seating — THIRD independent verify-
+   >     first honest-stop.** Confirmed live: no shared push-
+   >     time seat on either engine; Sunset Saboteur lever-a
+   >     ALONE is a diverging stub (count_min=1 → Python
+   >     fizzles no-agent while a new Rust arm picks a target).
+   >     The genuine unit = a **combined shared-seat + lever-a**
+   >     ~7-part count-shifting Rust round (owes a full resync).
+   >     Now dispatched as a dedicated Rust slice under ≤2.
+   >   - **Revised Rust queue (≤2 concurrent):** (A) Tier-C
+   >     combined shared-seat + Sunset-Saboteur lever-a round
+   >     (count-shifting); (B) spell-card-bridge **Phase 2 —
+   >     Diplomatic Relations** 2-slot grammar (count-shifting,
+   >     grows the spell-admit set); then the Fight-arm
+   >     counter-omission once bench-demanded, future Effect
+   >     closes. Aura struck.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

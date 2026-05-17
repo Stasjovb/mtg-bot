@@ -142,22 +142,30 @@ The campaign **no longer runs synchronized rounds**:
 
 - **≤5 concurrent background agents.** The orchestrator keeps the pool
   filled with disjoint slices; an agent finishing frees a slot.
-- **Rust concurrency — STAGED ROLLOUT to ≤2 Rust (user-decided
-  cycle-8).** The old blanket `≤1-Rust` rule was verify-first-proven
-  over-broad: the only genuine race is the *install* into the shared
-  `.venv-py313` (the per-worktree cargo build is already isolated; see
+- **Rust concurrency — ≤2 Rust ACTIVE (user-decided staged rollout,
+  flipped cycle-9; dogfood PASSED).** The old blanket `≤1-Rust` rule
+  was verify-first-proven over-broad: the only genuine race is the
+  *install* into the shared `.venv-py313` (the per-worktree cargo
+  build is already isolated; see
   `docs/RUST_PARALLELIZATION_FEASIBILITY.md`). Mechanism A
   (`scripts/setup_rust_worktree_venv.ps1` — per-worktree
   `--system-site-packages` venv + local engine wheel) eliminates that
-  race and is empirically validated end-to-end (~1.7-2× on the serial
-  Rust queue; rollback-free/opt-in). **Current gate state: still
-  ≤1 Rust until the dogfood lands.** The NEXT Rust dispatch MUST use
-  the helper + gate via `PYTHONPATH=src .venv-wt\Scripts\python.exe`
-  (the dogfood, still ≤1). After that dogfood slice lands green via
-  the isolated venv → **flip to ≤2 Rust** (each Rust agent on its own
-  isolated venv; merges + the orchestrator post-merge resync still
-  serialize on `main`). Python / docs / bench slices parallelize
-  freely as before.
+  race; the cycle-8 dogfood validated it end-to-end (isolated
+  `.venv-wt` gate-green, shared venv provably untouched). **RULE NOW:
+  up to 2 concurrent Rust agents.** EVERY Rust agent MUST run
+  `scripts/setup_rust_worktree_venv.ps1` in its fresh worktree and
+  gate via `PYTHONPATH=src .venv-wt\Scripts\python.exe` (NOT the
+  shared `.venv-py313`). Merges to `main` AND the orchestrator
+  post-merge cron resync still serialize on `main` (single
+  orchestrator; two Rust agents adding `Effect::` enum variants will
+  rebase-conflict on the `cards.rs` enum block — the second-to-merge
+  `git pull --rebase`s, the routine concurrent-merge friction agents
+  already handle; ~1.7-2× not a clean 2× for this reason). The
+  orchestrator's own shared-`.venv-py313` resync rebuild does NOT
+  race the agents' isolated `.venv-wt` builds (distinct targets —
+  the whole point of Mechanism A). Python / docs / bench slices
+  parallelize freely as before. Rollback: stop dispatching a 2nd
+  Rust agent — byte-identical to the old ≤1 behaviour.
 - **Agents auto-merge when green** — no end-of-round merge barrier. The
   agent runs the gate, rebases cleanly on `origin/main`, merges
   `--no-ff`, pushes immediately, cleans its worktree, deletes its

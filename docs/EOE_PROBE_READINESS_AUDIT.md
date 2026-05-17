@@ -304,7 +304,32 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main f1f09bbb (continuous-pipeline cycle 8 —
+     Measured at main c3cd126f (continuous-pipeline cycle 9 —
+     R74-1/I23 FIXED (c3cd126f: Rust combat power/toughness now
+     fold obj.counters byte-equal with Python SoT; the
+     documented-scoped I23 asymmetry, empirically demanded by
+     the round-74 Biosynthic-Burst bench divergence; negative-
+     control-verified pin; the round-74 spell-cast divergence
+     trio is now FULLY resolved — R74-1✓ R74-2✓ R74-3✓) + the
+     MECHANISM-A DOGFOOD PASSED so the user-decided Rust-
+     concurrency rule is now FLIPPED to ≤2 Rust ACTIVE (each
+     Rust agent on its own isolated .venv-wt via
+     scripts/setup_rust_worktree_venv.ps1; merges + the
+     orchestrator resync still serialize on main). Counts
+     UNCHANGED (118/120/21/12/9): I23 is a byte-equal behavior
+     fix on already-covered combat readers (CFI-1/R74-2
+     precedent) — NO Effect/bridge/_SAFE_*; cron confirmed no
+     headline drift; POOL_PARITY/PROBED UNCHANGED 304/475 / 104.
+     The residue cadence fired (e4d4a50e's cross_engine.py
+     touch + the c3cd126f window); all 8 genuinely_missing
+     entries (incl. Sothera) re-stamped verified_absent_at_-
+     commit 85d51879->c3cd126f (R74-3 harness UEOT fix + I23
+     combat-counter fold ship NO Effect — disjoint from all 8
+     residue signatures; absence trivially preserved). Tier-C
+     target-seating: THIRD independent verify-first honest-stop
+     — Sunset Saboteur lever-a alone is a diverging stub; the
+     genuine unit is a large combined shared-seat + lever-a
+     count-shifting round (scoped). PRIOR cycle 8 (@ f1f09bbb —
      R74-2 Depressurize-destroy dies-trigger FIXED (f456ec20) +
      legal_decisions Slice 1 IMPLEMENTED (f1f09bbb, the SoT-flip
      C1 decision-sourcing keystone, parity-neutral) + the
