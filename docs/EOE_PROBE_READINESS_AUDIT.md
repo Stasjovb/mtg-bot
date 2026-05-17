@@ -304,46 +304,47 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main ad9832ac (continuous-pipeline cycle 5 —
-     Tier-A #6 Biosynthic Burst Effect close). Counts MOVED
-     +1/+1/0/0/0: rust_effect_variants 116->117 (new
-     Effect::BiosynthicBurstEffect), bridge_arms 118->119
-     (new biosynthic_burst_effect arm); _SAFE_* UNCHANGED.
-     Unlike the cycle-3/4 carrier flips, THIS is a genuine
-     Effect+bridge close (new variant + bridge arm + a genuine
-     real-EoE probe) so it DOES move the canonical metric.
-     cards.rs + state_ops_resolve.rs + cross_engine.py +
-     trajectory.py touched -> structural-arm cadence; the 7
-     still-genuinely-missing entries re-stamped
-     verified_absent_at_commit=ad9832ac (Biosynthic Burst is
-     disjoint from all 7 residue Effect signatures; absence
-     preserved, no close). Honest residue still 6 distinct
-     cards; Sothera-the-Supervoid still flagged for the next
-     residue re-walk cadence (NOT yet a worklist entry).
-     Pool-parity 302/475 -> 303/475 (63.6% -> 63.8%); PROBED
-     60 -> 61 (Biosynthic Burst's own canonical probe);
-     Effect-uncovered (no covered Rust counterpart) 111 -> 110
-     cards, Tier-A 27 -> 26. The spell-card-bridge admit set
-     also grew to 5 — {Depressurize, Orbital Plunge, Radiant
-     Strike, Seedship Impact, Biosynthic Burst} (+~22,799
-     decks bench-admit dimension, correctly NOT double-counted
-     into the +1 Effect-metric move). HONEST MEASUREMENT FLAG
-     STILL OPEN: the ~60 genuine real-EoE batch probes (cycles
-     3-5: covered-unprobed A-D + spell-card-bridge-admitted +
-     warp-admitted + warp-combat) STILL do not move PROBED
-     (only +1 here = Biosynthic Burst's canonical-style probe)
-     — measure_pool_parity.py's PROBED detector does not
-     credit the test_probe_*.py module style; PROBED=61
-     UNDERSTATES real coverage. A measurement-tooling
-     reconciliation slice is IN FLIGHT (not hand-inflated).
-     Tier-A #5 Focus Fire re-scoped by verify-first: NOT
-     Tier-C — a substantial-but-bounded ~1.5-round Rust slice
-     (first effect-resolve arm to read combat-declaration
-     state + the Creature∪Spacecraft set-union denominator);
-     clean to do next. Close Encounter / Diplomatic Relations
-     still positively DECLINED. -->
-rust_effect_variants = 117
-bridge_arms = 119
+     Measured at main 770d4a04 (continuous-pipeline cycle 6 —
+     Tier-A #5 Focus Fire Effect close + the corrected PROBED
+     measurement tooling now on main). Counts MOVED +1/+1/0/0/0:
+     rust_effect_variants 117->118 (new Effect::FocusFireEffect),
+     bridge_arms 119->120 (new focus_fire_effect arm); _SAFE_*
+     UNCHANGED. Focus Fire is a genuine Effect+bridge close
+     (new variant + arm + canonical probe; first effect-resolve
+     arm to READ combat-declaration state; Creature∪Spacecraft
+     set-union denominator counted once). cards.rs +
+     state_ops_resolve.rs + cross_engine.py + trajectory.py
+     touched -> structural-arm cadence; the 7 still-genuinely-
+     missing entries re-stamped verified_absent_at_commit=
+     770d4a04 (Focus Fire disjoint from all 7 residue Effect
+     signatures; absence preserved, no close). Honest residue
+     still 6 distinct cards; Sothera-the-Supervoid still flagged
+     for the next residue re-walk (NOT yet a worklist entry).
+     Pool-parity 303/475 -> 304/475 (63.8% -> 64.0%).
+     **PROBED 61 -> 96** (+35): +1 is Focus Fire's own
+     canonical probe; the OTHER +34 is the HONEST-MEASUREMENT
+     CORRECTION — the measurement-tooling reconciliation
+     LANDED (97069ef1) so measure_pool_parity now credits the
+     ~70 genuine real-EoE batch probes (covered-unprobed A-F +
+     the registered modules) at the SAME established bar
+     (integrity-guarded; warp/spell-bridge modules honestly
+     excluded as already-PROBED-via-smoke; NOT hand-inflated).
+     The strongest-evidence tier is now 20.2% of the pool
+     (was a 12.8% understatement); covered-not-probed 242->208.
+     The spell-card-bridge admit set grew 5 -> 6 — {Biosynthic
+     Burst, Depressurize, Focus Fire, Orbital Plunge, Radiant
+     Strike, Seedship Impact} (+~23,211 decks bench-admit
+     dimension, correctly NOT double-counted into the +1
+     Effect-metric move). The cheap single-card Tier-A lane is
+     now EXHAUSTED (#5/#6 closed; #7 Diplomatic Relations is
+     2-slot Phase-2). KNOWN Rust-side divergence CFI-1 (stray
+     `obj.counters=0` in Effect::DepressurizeEffect destroy
+     arm, state_ops_resolve.rs ~5969) is tracked strict-xfail
+     + in-module note — the NEXT Rust dispatch's first slice
+     (one-line fix + xfail->pin flip), ahead of warp Phase 2.
+     Close Encounter / Diplomatic Relations still DECLINED. -->
+rust_effect_variants = 118
+bridge_arms = 120
 safe_triggers = 21
 safe_keywords = 12
 safe_effect_keys = 9

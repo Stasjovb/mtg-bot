@@ -444,6 +444,48 @@ second:
    >     future resync. PROBED=61 is a FLOOR.
    >   - Carry-forward: Sothera residue re-walk; SL doc-wide
    >     "Headline counts" lag (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 6 —
+   >   Tier-A #5 Focus Fire REALIZED + PROBED truth surfaced;
+   >   resync @ `770d4a04`, counts 117/119 -> 118/120, parity
+   >   303 -> 304/475 64.0%).**
+   >   - **Tier-A #5 Focus Fire SHIPPED** (`770d4a04`, gate 1509)
+   >     — genuine Effect+bridge close (new `Effect::FocusFireEffect`
+   >     + bridge arm + canonical probe; first effect-resolve arm
+   >     to read combat-declaration state; Creature∪Spacecraft
+   >     set-union counted once). 303 -> 304/475. Auto-joined the
+   >     spell-card-bridge admit set -> **6 cards {Biosynthic
+   >     Burst, Depressurize, Focus Fire, Orbital Plunge, Radiant
+   >     Strike, Seedship Impact}** (+~23,211 decks bench-admit
+   >     dimension, not double-counted).
+   >   - **The cheap single-card Tier-A lane is EXHAUSTED** —
+   >     #5/#6 closed; #7 Diplomatic Relations is the 2-slot
+   >     Phase-2-grammar card (Phase 2 of the spell-card-bridge,
+   >     not a cheap close). No more 1-round Tier-A single-card
+   >     closes remain.
+   >   - **PROBED 61 -> 96 — the honest-measurement correction
+   >     LANDED.** The measurement-tooling reconciliation
+   >     (`97069ef1`) made measure_pool_parity credit the ~70
+   >     genuine real-EoE batch probes at the established bar
+   >     (integrity-guarded; not hand-inflated). Strongest-
+   >     evidence tier 12.8% -> 20.2% of the pool;
+   >     covered-not-probed 242 -> 208. The cycle-4 "PROBED is a
+   >     floor" flag is RESOLVED — PROBED now reflects reality.
+   >   - **NEXT Rust sequencing (revised):** (a) **CFI-1 FIRST** —
+   >     a CONFIRMED active Rust-side parity divergence (stray
+   >     `obj.counters = 0;` in `Effect::DepressurizeEffect`'s
+   >     destroy arm, `state_ops_resolve.rs` ~5969; diverges from
+   >     Python SoT AND Rust's own generic destroy path; found by
+   >     the cross-feature interaction probes, pinned strict-xfail
+   >     + in-module note). One-line fix + flip the xfail to a
+   >     pin. A confirmed bug OUTRANKS coverage-expansion. (b) warp
+   >     Phase 2 — Timeline Culler (+8,986; genuine multi-component
+   >     round, `WARP_COST_PHASE2_DESIGN.md` anchors verified live
+   >     at 770d4a04, NOT a single-card close — budget it whole).
+   >     (c) Tier-C target-seating (2 cards/18,855; split 2 per-card
+   >     + 1 shared `first_legal_trigger_target` micro-slice).
+   >     Aura struck.
+   >   - Carry-forward: Sothera residue re-walk; SL doc-wide
+   >     "Headline counts" lag (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
