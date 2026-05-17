@@ -3686,6 +3686,132 @@ subsystems, not behind this substrate.
 
 ---
 
+## Perigee Beckoner — `PumpTargetCreatureUntilEotGrantDiesReturnTapped` Effect half shipped byte-equal; full card stays loader-gated (general nested-trigger-grant subsystem + warp_cost)
+
+**Location**: `rust/src/state.rs`
+(`UeotModifier::GrantedDiesReturnTapped` marker variant + no-op arms
+in the two exhaustive `ueot_power_bonus` / `ueot_toughness_bonus`
+accessors) + `rust/src/cards.rs`
+(`Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped {
+power_bonus, toughness_bonus }` variant + `parse_effect` arm
+`pump_target_creature_until_eot_grant_dies_return_tapped` +
+`effect_to_pydict` arm) + `rust/src/state_ops_resolve.rs`
+(module-private helper `perigee_pick_another_own_creature` + the
+resolve match arm) + `rust/src/state_ops_sba.rs` (module-private
+helper `perigee_return_tapped_if_marked` + the post-DIES/LEAVES-drain
+return call in `apply_sbas`). Bridge arm
+`src/mtg_bot/parity/cross_engine.py`
+(`pump_target_creature_until_eot_grant_dies_return_tapped`,
+immediately above the `PHASE5_BRIDGE_ARMS` sentinel). Python class
+(pre-existing, NOT new): `PumpTargetCreatureUntilEOT`
+(`src/mtg_bot/effects/generic/pump.py:258`) carrying the existing
+`granted_triggered_ability` / `exclude_self` / `you_control_only`
+fields + the pre-existing bespoke
+`PerigeeBeckonerDiesReturnTappedEffect`
+(`src/mtg_bot/effects/bespoke.py:2107`) — the exact class+params the
+genuine Perigee Beckoner printing already parses to.
+
+**What the shortcut is**: Perigee Beckoner (~21,131 17lands decks)
+prints "When this creature enters, until end of turn, another target
+creature you control gets +2/+0 and gains 'When this creature dies,
+return it to the battlefield tapped under its owner's control.' Warp
+{1}{B} ...". The genuine parsed printing's ETB is
+`PumpTargetCreatureUntilEOT(power_bonus=2, you_control_only=True,
+exclude_self=True, granted_triggered_ability=TriggeredAbility(
+effect=PerigeeBeckonerDiesReturnTappedEffect(), event=Event.DIES,
+predicate=IsSelf()))`. The **bare** `PumpTargetCreatureUntilEOT` Rust
+arm (round 28) is shipped + bridged but its own doc-comment ("Schema
+simplification vs Python") explicitly **deferred the
+`granted_triggered_ability` rider to a follow-up slice**. Round 60
+ships that rider for the Perigee shape: a dedicated Effect variant
+that pushes BOTH a `UeotModifier::PowerToughnessBonus` AND a
+payload-free `UeotModifier::GrantedDiesReturnTapped` marker onto the
+first OTHER creature on the source-controller's bf (CR 115.4
+"another"); the SBA destroy path, AFTER the DIES/LEAVES dispatches,
+returns a marked carrier to its OWNER's battlefield TAPPED. The
+**deliberate divergence is NOT in the closed Effect half** (which is
+byte-equal — see below) but in the **scope**: Rust has **no general
+layer-6 grant-triggered-ability registry** (Python's
+`continuous_effects` `grant_triggered_ability` /
+`game.effective_triggered_abilities`). Rather than building that whole
+subsystem, the marker variant models **exactly the fixed Perigee
+shape** ("dies → return tapped under owner's control"). Any OTHER
+card that grants a *different* nested triggered ability via a pump
+rider is **not** covered. The **full Perigee Beckoner card is NOT
+added to the production-deck loader `_SAFE_*` allowlist** (no loader
+admit) — only the bridge/probe-level Effect half closes; `warp_cost`
+(a §2-declined cost-mechanic) gates the loader independently anyway.
+
+**Round-53 effective-state lesson applied (subtle, load-bearing)**:
+Python's `PerigeeBeckonerDiesReturnTappedEffect` RE-USES the same
+`GameObject` (`put_into_battlefield(state, source, ...)`), and
+`put_into_battlefield` does NOT reset the per-object
+`temp_power_bonus`. So Python's returned creature **keeps the +2/+0
+pump** (verified: effective power stays 4 after the return; loses only
+the layer-6 grant so a 2nd death does not re-return). A naive "clean
+CR-400.7 new-object: clear all UEOT modifiers on return" would make
+Rust read the returned creature as 2/2 vs Python's 4/2 — a real §2
+silent divergence. Per the round-53 directive (Python is the source
+of truth; resolve parity failures by matching it, not by copying a
+textbook rule the source engine does not implement), Rust's
+`perigee_return_tapped_if_marked` drops **only** the
+`GrantedDiesReturnTapped` marker and **keeps** the
+`PowerToughnessBonus`. This is a documented deviation from a clean CR
+400.7 new-object reading, deliberately taken to stay byte-equal with
+the Python source of truth.
+
+**Why it's OK / which scenarios make it not-OK / failure mode**: this
+is the honest Effect-half-closes / full-card-stays-gated split
+established by r51 (Monoist), r52 (Extinguisher), r53 (Mightform), r54
+(Famished Worldsire), r56 (Dauntless Scrapbot), r57 (Faller's
+Faithful). The closed half round-trips byte-equal — the genuine
+real-EoE probe drives the ACTUAL parsed Perigee Beckoner printing's
+ETB cross-engine and asserts byte-equality across the full lifecycle:
+the "another" ally is pumped +2/+0 on BOTH (the source itself is NOT
+self-pumped — "another"); after the ally is destroyed it returns to
+its OWNER's battlefield TAPPED on BOTH, graveyard empty on BOTH,
+keeping the +2/+0 (effective power byte-equal at 4) on BOTH; a second
+death does not re-return on BOTH. The NOT-OK scenario is admitting the
+full card to the bench loader, which would (a) silently mistranslate
+ANY future card whose pump rider grants a *different* nested
+triggered ability (the general nested-trigger-grant subsystem is
+unmodeled in Rust), and (b) require the §2-declined `warp_cost`
+cost-mechanic — both explicitly declined. No real-card-exposed
+divergence (the card is not on any `_SAFE_*` allowlist; no production
+path drives it today).
+
+**Fix scope estimate**: closing the remaining half needs a general
+Rust layer-6 grant-triggered-ability registry (a per-object granted-
+ability list the DIES/ENTERS/… dispatch reads alongside the
+printing's `triggered_abilities`, with CR-613 timestamp ordering and
+EndOfTurn expiry) + its bridge, PLUS the `warp_cost` cost-mechanic —
+a multi-round subsystem, deferred. The Effect half (pump + the fixed
+Perigee dies-return-tapped rider + the round-53 power-retention
+parity) is complete.
+
+**Impact estimate**: zero production strength cost (Perigee Beckoner
+not on the loader allowlist; no production exposure). The
+real-card-coverage progress is the honest closure of the closeable
+Effect half + honest pinning of the loader-gated
+nested-trigger-grant/warp remainder.
+
+**Pinned by**: 4 cross-engine bridge pins
+(`tests/test_cross_engine_etb_triggers.py::test_bridge_perigee_pump_grant_dies_return_tapped_translates`
++ `..._defaults_zero` + `..._etb_pump_parity` +
+`..._dies_return_parity`); 6 Rust regression pins
+(`tests/test_parity_smoke.py::test_r60_rust_perigee_*` — pumps
+another own creature / source excluded; dies-return-tapped keeps
++2/+0; second-death no re-return; no-other-creature silent fizzle;
+non-creature other not targeted; first-other-creature deterministic
+pick); 1 genuine real-EoE cross-engine probe
+(`tests/test_parity_smoke.py::test_cross_engine_real_eoe_perigee_beckoner_etb_pump_grant_dies_return_tapped_parity`
+— drives the actual parsed Perigee Beckoner printing's full
+pump→dies→return-tapped lifecycle cross-engine; byte-equal at every
+step incl. the round-53 effective-state power-retention corner; the
+general nested-trigger-grant subsystem intentionally NOT exercised).
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,
