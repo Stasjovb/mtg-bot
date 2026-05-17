@@ -370,6 +370,26 @@ step, and why we explicitly rejected Phase 0 (aux heads on the current
 featurizer) and Phase 3 (MuZero) from the earlier research-style
 version of this roadmap.
 
+## Benchmarking findings (single source of truth)
+
+**All performance/economics measurements live in
+[`docs/BENCHMARKING_FINDINGS.md`](docs/BENCHMARKING_FINDINGS.md)** —
+dated, with method, context, and the honest corrections. Read it
+before quoting any perf/cost multiplier, and **add a dated row when
+you measure something new** rather than asserting from priors or help
+text. Load-bearing facts as of 2026-05-17 (see the doc for full
+context + caveats): AWS CPU spot ≈ **$1.70–1.75 / 1000 games**, ~20–40×
+local-owned cost (AWS = elastic burst only); validated **`device=cuda`
+≈ 2× per-game vs `cpu`** on the production config path (currently
+*unrealized* — the worker daemon is CPU-by-design; opt-in wiring is
+`feature/worker-daemon-gpu-device`); the **batched SHM eval server is
+~2× SLOWER** than per-process cuda at the current (tiny) net scale —
+do not wire it in (re-measure at a larger trunk). The earlier
+"3–10× GPU/SHM" claims (incl. `iterate` help text + dead `--use-shm-*`
+flags/`use_shm_server` spec fields) are **discredited** — they came
+from a benchmark that could not load the structured net; treat that
+lore as wrong until a dated row says otherwise.
+
 ## Documenting deliberate divergences
 
 Any shortcut, heuristic, search optimization, or incorrect / outdated implementation of real MTG comprehensive rules **must be documented in `docs/SEARCH_LIMITATIONS.md`** at the time it lands.
