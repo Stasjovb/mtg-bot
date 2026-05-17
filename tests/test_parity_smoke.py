@@ -65929,6 +65929,421 @@ def test_cross_engine_real_eoe_orbital_plunge_excess_conditional_lander_parity(
     )
 
 
+# =====================================================================
+# Effect-uncovered Tier-A queue #4 — Depressurize.
+# Effect::DepressurizeEffect { power_penalty } mirrors Python's
+# DepressurizeEffect (effects/bespoke.py:1531): target creature gets
+# −power_penalty/−0 UEOT; then if its POST-UEOT effective power
+# (counters-inclusive Python-SoT view) is ≤ 0, destroy it (respecting
+# indestructible). legal_targets is ANY creature (not controller-
+# restricted) — the verified deviation from the bare pump arm.
+#
+# 6 Rust regression pins drive the resolve arm via an ETB trigger;
+# the genuine real-EoE probe drives the ACTUAL parsed Depressurize
+# spell_effect cross-engine.
+# =====================================================================
+
+
+def _build_rust_depressurize_state(
+    *,
+    victim_power: int = 2,
+    victim_toughness: int = 2,
+    victim_counters: int = 0,
+    victim_indestructible: bool = False,
+    victim_controller: int = 1,
+    seed_creature: bool = True,
+    victim_card_types=("Creature",),
+):
+    """Build a Rust state: Depressurize ETB carrier on p0's bf +
+    (optionally) one victim on ``victim_controller``'s bf. Returns
+    ``(rs, victim_id_or_None)``."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    victim_id = None
+    if seed_creature:
+        vd = {
+            "name": "DP Victim",
+            "card_types": list(victim_card_types),
+        }
+        if "Creature" in victim_card_types:
+            vd["power"] = victim_power
+            vd["toughness"] = victim_toughness
+        if victim_indestructible:
+            vd["keywords"] = ["indestructible"]
+        victim_id = rs.register_and_inject_object(
+            vd, victim_controller, ZB
+        )
+        if victim_counters != 0:
+            assert rs.set_counters(victim_id, victim_counters) is True
+    rs.register_and_inject_object(
+        {
+            "name": "DP Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"B": 1, "generic": 1},
+            "power": 1,
+            "toughness": 1,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "depressurize_effect",
+                               "power_penalty": 3},
+                }
+            ],
+        },
+        0,
+        ZB,
+    )
+    return rs, victim_id
+
+
+def _dp_bf_ids(rs):
+    return [int(e["id"]) for e in rs.battlefield_snapshot()]
+
+
+def test_rust_depressurize_2_2_destroyed():
+    """Rust pin (a): 2/2 → −3/−0 → effective power −1 ≤ 0 → the
+    creature is destroyed (off bf, into its controller's graveyard)."""
+    rs, vid = _build_rust_depressurize_state(
+        victim_power=2, victim_toughness=2
+    )
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    assert vid not in _dp_bf_ids(rs), (
+        "2/2 → eff power −1 ≤ 0 → destroyed"
+    )
+    assert vid in [
+        int(e["id"]) for e in rs.graveyard_snapshot(1)
+    ]
+
+
+def test_rust_depressurize_5_5_survives_with_ueot_mod():
+    """Rust pin (b): 5/5 → 2/5, effective power 2 > 0 → the creature
+    SURVIVES (the UEOT −3/−0 modifier is present but the conditional
+    destroy does NOT fire)."""
+    rs, vid = _build_rust_depressurize_state(
+        victim_power=5, victim_toughness=5
+    )
+    rs.resolve_top_of_stack()
+    assert vid in _dp_bf_ids(rs), (
+        "5/5 → eff power 2 > 0 → survives (debuffed, not destroyed)"
+    )
+
+
+def test_rust_depressurize_counters_fold_into_effective_power():
+    """Rust pin (c) — the §2 counters-asymmetry. A printed 3/3 with
+    a −1 net counter has effective power 2 BEFORE the pump; after the
+    −3/−0 UEOT the effective power is 3 (base) + (−1) (counters) +
+    (−3) (UEOT) = −1 ≤ 0 → destroyed. A bug that read the combat-side
+    effective_power (which OMITS counters) would compute 3 + (−3) = 0
+    ≤ 0 — coincidentally still destroyed here, so use a sharper case:
+    a printed 2/2 with +2 net counters → effective power BEFORE pump
+    = 4; after −3 UEOT = 2 + 2 + (−3) = 1 > 0 → SURVIVES. A
+    counters-omitting bug would read 2 + (−3) = −1 ≤ 0 → WRONGLY
+    destroy. This pins the counters-inclusive post-UEOT power read."""
+    rs, vid = _build_rust_depressurize_state(
+        victim_power=2, victim_toughness=2, victim_counters=2
+    )
+    rs.resolve_top_of_stack()
+    assert vid in _dp_bf_ids(rs), (
+        "printed 2/2 +2 counters → eff power 2+2−3 = 1 > 0 → SURVIVES "
+        "(counters-inclusive post-UEOT power; a combat-getter read "
+        "would compute 2−3=−1 and wrongly destroy)"
+    )
+
+
+def test_rust_depressurize_negative_counters_destroyed():
+    """Rust pin (c′) — the §2 counters-asymmetry, the destroy
+    direction. A printed 4/4 with −2 net counters → effective power
+    BEFORE pump = 2; after −3 UEOT = 4 + (−2) + (−3) = −1 ≤ 0 →
+    destroyed. A counters-omitting bug would read 4 + (−3) = 1 > 0 →
+    WRONGLY survive."""
+    rs, vid = _build_rust_depressurize_state(
+        victim_power=4, victim_toughness=4, victim_counters=-2
+    )
+    rs.resolve_top_of_stack()
+    assert vid not in _dp_bf_ids(rs), (
+        "printed 4/4 −2 counters → eff power 4−2−3 = −1 ≤ 0 → "
+        "destroyed (counters-inclusive; a combat-getter read would "
+        "compute 4−3=1 and wrongly survive)"
+    )
+
+
+def test_rust_depressurize_indestructible_pumped_not_destroyed():
+    """Rust pin (d): an INDESTRUCTIBLE 1/1 → effective power −2 ≤ 0
+    BUT indestructible (CR 702.12) → the UEOT −3/−0 still applies, the
+    creature is NOT destroyed (it survives on the battlefield)."""
+    rs, vid = _build_rust_depressurize_state(
+        victim_power=1, victim_toughness=1, victim_indestructible=True
+    )
+    rs.resolve_top_of_stack()
+    assert vid in _dp_bf_ids(rs), (
+        "indestructible target with eff power ≤ 0 → pumped but NOT "
+        "destroyed (CR 702.12)"
+    )
+
+
+def test_rust_depressurize_targets_opponents_creature_too():
+    """Rust pin (e): Depressurize's legal_targets is ANY creature
+    (NOT controller-restricted — the verified deviation from the bare
+    PumpTargetCreatureUntilEOT arm). With ONLY a creature on p0's
+    (the source's controller's) bf and none on p1's, the source's own
+    creature is still a legal target and gets debuffed/destroyed.
+    (The carrier is on p0; the deterministic-first scan picks the
+    earliest-ETB creature — the carrier 1/1 itself becomes −2 power →
+    destroyed; pins the non-controller-restricted ANY-creature
+    scan.)"""
+    # No separate victim — the only creatures are on p0's bf (carrier).
+    rs, _vid = _build_rust_depressurize_state(seed_creature=False)
+    rs.resolve_top_of_stack()
+    # The carrier (1/1 on p0) is the only creature; ANY-creature scan
+    # picks it → −3/−0 → eff power −2 ≤ 0 → destroyed. (Proves the
+    # scan is NOT restricted to "no creature anywhere".)
+    assert not any(
+        e["printing_name"] == "DP Carrier"
+        for e in rs.battlefield_snapshot()
+    ), (
+        "ANY-creature scan must reach p0's own creature (the carrier) "
+        "— Depressurize is not controller-restricted"
+    )
+
+
+def test_rust_depressurize_no_creature_silent_noop():
+    """Rust pin (f): NO creature anywhere → silent no-op. Driven via
+    the spell-push path (an ETB creature carrier is itself a legal
+    Depressurize target). Only an Artifact on p1's bf."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    rs.register_and_inject_object(
+        {"name": "DP Inert Artifact", "card_types": ["Artifact"]},
+        1, 2,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Depressurize", "card_types": ["Instant"],
+         "effects": [{"kind": "depressurize_effect",
+                      "power_penalty": 3}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert any(
+        e["printing_name"] == "DP Inert Artifact"
+        for e in rs.battlefield_snapshot()
+    ), "no creature anywhere → silent no-op, artifact untouched"
+
+
+def test_cross_engine_real_eoe_depressurize_debuff_then_conditional_destroy_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Depressurize
+    (~28,346 17lands decks). Effect-uncovered Tier-A queue #4.**
+
+    Drives the **ACTUAL parsed Depressurize printing** on the Python
+    side: ``get_active_source().get_printings()["Depressurize"]`` —
+    which the live parser maps to a ``spell_effect`` of
+    ``DepressurizeEffect(power_penalty=3)`` (verified below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Instant] {1}{B} — Target creature gets -3/-0 until end of
+         turn. Then if that creature's power is 0 or less, destroy
+         it."
+
+    **Honest split (§2 — Effect-half closes byte-equal; full card
+    stays loader-gated).** The new Effect arm under test —
+    ``Effect::DepressurizeEffect { power_penalty }`` — is shipped this
+    slice (Rust single-field payload variant + parse + to_dict +
+    resolve; the UEOT-push is the shipped PowerToughnessBonus shape,
+    the conditional destroy re-derived privately from the shipped
+    indestructible-respecting destroy tail), bridged via
+    ``cross_engine.py`` ``depressurize_effect`` to the pre-existing
+    Python ``DepressurizeEffect`` (effects/bespoke.py:1531). The full
+    Depressurize **Instant** is NOT added to the production-deck
+    loader ``_SAFE_*`` allowlist — no Instant/Sorcery bench-admit
+    path. Mirrors the r51..r65 Effect-half-vs-full-card precedent —
+    see ``docs/SEARCH_LIMITATIONS.md`` Depressurize entry.
+
+    **§2 counters-asymmetry pinned (load-bearing).** Python's
+    ``effective_power`` folds the just-pushed UEOT bonus AND ±1/±1
+    counters (CR 613 layer 7c+7d). The COUNTERS arm uses a printed
+    2/2 with +2 net counters → effective power BEFORE pump = 4; after
+    the −3 UEOT = 2+2−3 = 1 > 0 → SURVIVES on BOTH (a
+    counters-omitting bug would read 2−3 = −1 ≤ 0 and WRONGLY destroy
+    → divergence). The PLAIN arm uses a 2/2 → eff power −1 ≤ 0 →
+    destroyed on BOTH. Both WHOLE-field byte-equal modulo the
+    documented Python comparator counters-blindness on a dead
+    counter'd creature (orthogonal — see the Orbital Plunge entry).
+
+    **Deterministic, no RNG.** p1 (opponent) has exactly one
+    creature; p0 casts the genuine Depressurize (Python: real
+    ``spell_effect`` on a ``StackItem`` with the chosen
+    ``("creature", id)`` target; Rust: the bridged synthetic Instant).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.effects.bespoke import DepressurizeEffect
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = get_active_source().get_printings().get("Depressurize")
+    if real is None:
+        pytest.skip("Depressurize absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, DepressurizeEffect), (
+        f"genuine Depressurize spell_effect must be DepressurizeEffect;"
+        f" got {type(se).__name__}"
+    )
+    assert se.power_penalty == 3
+
+    def _cp(name, power, toughness):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=power, toughness=toughness, produces=frozenset(),
+        )
+
+    def _run_arm(printed_power, printed_toughness, net_counters):
+        spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+        py = build_python_state(spec)
+        rs = build_rust_state(spec)
+        ZB = 2
+
+        py_vic = py.new_object(
+            _cp("DP Real Victim", printed_power, printed_toughness),
+            owner_id=1, zone=Zone.BATTLEFIELD)
+        py_vic.summoning_sick = False
+        if net_counters >= 0:
+            py_vic.plus_one_counters = net_counters
+        else:
+            py_vic.minus_one_counters = -net_counters
+        py.battlefield.append(py_vic)
+        rs_vic_id = rs.register_and_inject_object(
+            {"name": "DP Real Victim", "card_types": ["Creature"],
+             "power": printed_power,
+             "toughness": printed_toughness}, 1, ZB)
+        if net_counters != 0:
+            assert rs.set_counters(rs_vic_id, net_counters) is True
+
+        py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+        py_spell.summoning_sick = False
+        py.stack.append(
+            StackItem(source=py_spell, controller_id=0,
+                      targets=(("creature", py_vic.id),))
+        )
+        resolve_top_of_stack(py)
+        py_sba(py)
+        assert len(py.stack) == 0
+
+        rs_spell_id = rs.register_and_inject_object(
+            {"name": "Depressurize", "card_types": ["Instant"],
+             "effects": [{"kind": "depressurize_effect",
+                          "power_penalty": 3}]},
+            0, 0,
+        )
+        rs.push_to_stack(rs_spell_id, 0)
+        rs.resolve_top_of_stack()
+        rs.apply_sbas()
+        assert rs.stack_size() == 0
+
+        diffs = compare_fields(
+            build_python_field_view(py),
+            ce_parity_smoke()._build_field_view(rs),
+        )
+
+        # Documented Python comparator counters-blindness (see the
+        # Orbital Plunge SL entry, generalized here): the comparator's
+        # `_zone_signature` reads `getattr(obj, "counters", 0)` but a
+        # Python GameObject has NO `counters` attr (it carries split
+        # `plus_one_counters`/`minus_one_counters` ints), so the
+        # counters slot (idx 4) is STRUCTURALLY 0 for every Python
+        # object while Rust emits the real net counters. This is a
+        # PURE COMPARATOR ARTIFACT (the engines agree on counters —
+        # Depressurize/Orbital mint no counters and both engines
+        # preserve them on zone-change) and applies to ANY zone
+        # holding a counter'd object — battlefield (a SURVIVING
+        # counter'd creature) just as much as graveyard (a DEAD one).
+        # Filter exactly that shape (a *_p* or `battlefield` field
+        # whose ONLY per-tuple difference is the counters slot, py=0).
+        # The §2 counters-asymmetry is pinned by the SURVIVAL/DESTROY
+        # observable (ra/pa below), which directly depends on the
+        # counters-inclusive post-UEOT effective power — that is the
+        # load-bearing assertion the comparator blindness cannot
+        # weaken.
+        def _known_blind(fd):
+            fld = str(fd.field)
+            if not (
+                fld == "battlefield"
+                or fld.startswith("graveyard_p")
+                or fld.startswith("hand_p")
+                or fld.startswith("library_p")
+                or fld.startswith("exile_p")
+            ):
+                return False
+            pv, rvv = fd.py_value, fd.rust_value
+            if not (isinstance(pv, tuple) and isinstance(rvv, tuple)):
+                return False
+            if len(pv) != len(rvv):
+                return False
+            for pt, rt in zip(pv, rvv):
+                if len(pt) != 8 or len(rt) != 8:
+                    return False
+                if pt[4] != 0:
+                    return False
+                if pt[:4] != rt[:4] or pt[5:] != rt[5:]:
+                    return False
+            return True
+
+        meaningful = [fd for fd in diffs if not _known_blind(fd)]
+        rs_alive = any(e["id"] == rs_vic_id
+                       for e in rs.battlefield_snapshot())
+        py_alive = any(o.id == py_vic.id for o in py.battlefield)
+        return meaningful, rs_alive, py_alive
+
+    # ---- PLAIN: 2/2, no counters → eff power 2−3 = −1 ≤ 0 →
+    # destroyed on BOTH; WHOLE field byte-equal.
+    diffs, ra, pa = _run_arm(2, 2, 0)
+    assert ra is False and pa is False, (
+        f"2/2 → eff power −1 ≤ 0 → destroyed on BOTH; "
+        f"rust_alive={ra} py_alive={pa}"
+    )
+    assert diffs == [], (
+        f"Depressurize plain-2/2 arm must be byte-equal across the "
+        f"WHOLE field view on BOTH; diffs={diffs}"
+    )
+
+    # ---- COUNTERS (the §2 load-bearing arm): printed 2/2 + 2 net
+    # counters → eff power 2+2−3 = 1 > 0 → SURVIVES on BOTH (a
+    # counters-omitting bug would compute 2−3 = −1 and wrongly
+    # destroy → divergence). The SURVIVAL is the load-bearing §2 pin.
+    diffs, ra, pa = _run_arm(2, 2, 2)
+    assert ra is True and pa is True, (
+        f"counters-inclusive post-UEOT power (2+2−3=1>0) → SURVIVES "
+        f"on BOTH (the §2 pin); rust_alive={ra} py_alive={pa}"
+    )
+    assert diffs == [], (
+        f"Depressurize +2-counter survival arm must be byte-equal "
+        f"(the §2 counters-asymmetry pin); diffs={diffs}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

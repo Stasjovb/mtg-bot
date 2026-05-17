@@ -4531,6 +4531,140 @@ intentionally NOT exercised).
 
 ---
 
+## Depressurize — `DepressurizeEffect { power_penalty }` Effect half shipped byte-equal; full Instant stays loader-gated (no spell-card bench-admit path)
+
+**Location**: `rust/src/cards.rs`
+(`Effect::DepressurizeEffect { power_penalty: i32 }` single-field
+payload variant + `parse_effect` arm `depressurize_effect` +
+`effect_to_pydict` arm) + `rust/src/state_ops_resolve.rs` (the
+resolve match arm beside the Orbital Plunge arm — any-creature scan
+over BOTH bfs in ETB-timestamp order; the
+`UeotModifier::PowerToughnessBonus { power: -pp, toughness: 0 }`
+push; the counters-inclusive post-UEOT effective-power read; the
+indestructible-respecting destroy tail). Bridge arm
+`src/mtg_bot/parity/cross_engine.py` (`depressurize_effect`,
+immediately above the `PHASE5_BRIDGE_ARMS` sentinel). Python class
+(pre-existing, NOT new): `DepressurizeEffect`
+(`src/mtg_bot/effects/bespoke.py:1531`).
+
+**What the shortcut is**: Depressurize (~28,346 17lands decks) is an
+`[Instant] {1}{B}` printing "Target creature gets -3/-0 until end of
+turn. Then if that creature's power is 0 or less, destroy it." The
+genuine parsed printing's `spell_effect` is
+`DepressurizeEffect(power_penalty=3)`. Python's `resolve` does
+`grant_pt_pump_ueot(power=-power_penalty, toughness=0)` then `if
+effective_power(state, obj) <= 0: destroy(state, obj)`. The shipped
+Rust variant carries `power_penalty` (rides through to Python; no
+token pid — this arm mints nothing). The **deliberate divergence is
+NOT in the closed Effect half** but in the **scope**: the **full
+Depressurize Instant is NOT added to the production-deck loader
+`_SAFE_*` allowlist** (no Instant/Sorcery bench-admit path).
+
+**Verified deviation from `PumpTargetCreatureUntilEOT` (pinned)**:
+Python's `DepressurizeEffect.legal_targets` is *any creature*
+(`is_creature`, NO controller restriction —
+`effects/bespoke.py:1545-1552`), unlike the bare
+`PumpTargetCreatureUntilEOT` arm which is controller-restricted. The
+Depressurize arm therefore scans BOTH battlefields in ETB-timestamp
+order (the centralized `state.battlefield` walk + the
+deterministic-first convention). Pinned by a Rust regression that
+confirms the source's OWN creature (the carrier) is a legal target.
+
+**§2 counters-asymmetry (load-bearing, the mini-spec risk)**:
+the conditional reads POST-UEOT EFFECTIVE power. Python's
+`effective_power` (`game._compute_effective_pt`) folds the
+just-pushed UEOT bonus AND `+1/+1` counters (CR 613 layer 7c+7d).
+Rust's combat-side `effective_power` getter folds the UEOT bonus but
+NOT counters. To stay byte-equal with the Python SoT, this arm
+computes the effective power with the counters-INCLUSIVE formula
+re-derived privately (file-isolation) — `base =
+ueot_base_pt_override().p OR printed_power`, plus `obj.counters`,
+plus `obj.ueot_power_bonus()` (which already includes the −pp just
+pushed) — NOT the combat-side getter. A counters-omitting impl would
+silently flip the destroy condition on a counter'd target. Pinned
+both directions: a printed 2/2 with +2 counters → post-UEOT power
+2+2−3 = 1 > 0 → SURVIVES (a combat-getter read would compute 2−3 =
+−1 and wrongly destroy); a printed 4/4 with −2 counters → 4−2−3 =
+−1 ≤ 0 → destroyed (a combat-getter read would compute 4−3 = 1 and
+wrongly survive). The genuine real-EoE probe's COUNTERS arm pins the
++2-counter SURVIVAL cross-engine.
+
+**Indestructible (CR 702.12, pinned)**: Python's `turn.destroy`
+suppresses the destroy for an indestructible creature (the pump
+still applies). The Rust arm checks
+`printing.keywords.contains("indestructible") ||
+obj.ueot_has_keyword("indestructible")` before the conditional
+destroy — the creature is debuffed but survives. Pinned by a Rust
+regression (indestructible 1/1 → eff power −2 ≤ 0 → pumped, NOT
+destroyed).
+
+**Comparator limitation noted (NOT an engine divergence)**: the
+cross-engine field-view comparator's `_zone_signature` reads
+`getattr(obj, "counters", 0)` but a Python `GameObject` has no
+`counters` attribute (split `plus_one_counters`/`minus_one_counters`
+ints) — so the comparator's counters slot is structurally `0` for
+every Python object while Rust emits the real net counters. This is
+the SAME pre-existing comparator counters-blindness documented in
+the Orbital Plunge entry, generalized: it applies to ANY zone
+holding a counter'd object — the Depressurize +2-counter SURVIVAL
+arm surfaces it on the **battlefield** (a living counter'd
+creature), exactly as Orbital Plunge surfaces it on the
+**graveyard** (a dead one). The engines AGREE on counters
+(Depressurize mints none; both engines preserve them); the
+comparator merely cannot read Python's split counter fields. The
+probe filters exactly that shape (a battlefield/graveyard/hand/
+library/exile field whose only per-tuple difference is the counters
+slot, py=0) and relies on the SURVIVAL/DESTROY observable (which
+directly depends on the counters-inclusive post-UEOT power) as the
+load-bearing §2 pin. Orthogonal to Depressurize; a future tooling
+fix would teach `_zone_signature` to read Python's split counter
+fields.
+
+**Why it's OK / which scenarios make it not-OK / failure mode**: the
+honest Effect-half-closes / full-card-stays-gated split established
+by r51..r65 (Monoist..Orbital Plunge). The closed half round-trips
+byte-equal — the genuine real-EoE probe drives the ACTUAL parsed
+Depressurize printing's `spell_effect` cross-engine over two arms
+(PLAIN 2/2 → eff power −1 → destroyed; +2-counter → eff power 1 →
+SURVIVES, the §2 pin), each WHOLE-field byte-equal modulo the
+documented comparator counters-blindness. The NOT-OK scenario is
+admitting the full Instant to the bench loader — structurally
+impossible today (no spell-card admit path); no real-card-exposed
+divergence.
+
+**Fix scope estimate**: the Effect half (the any-creature UEOT
+−pp/−0 debuff + the counters-inclusive post-UEOT
+conditional-destroy, indestructible-respecting) is **complete**.
+Flipping the full Instant into the bench needs the separate shared
+spell-card-bridge lever — the same ~1-2-round shared substrate
+unblocking ALL remaining Effect-uncovered Tier-A cards. Deferred.
+
+**Impact estimate**: zero production strength cost (Depressurize not
+on the loader allowlist; no production exposure). The
+real-card-coverage progress is the honest closure of the closeable
+Effect half (Depressurize leaves the Effect-uncovered Tier-A
+bucket) + honest pinning of the loader-gated spell-card-bridge
+remainder.
+
+**Pinned by**: 4 cross-engine bridge pins
+(`tests/test_cross_engine_etb_triggers.py::test_bridge_depressurize_basic_translation_pp3`
++ `..._power_penalty_rides_through` + `..._default_pp_when_absent` +
+`..._composable_in_sequence`); 7 Rust regression pins
+(`tests/test_parity_smoke.py::test_rust_depressurize_*` — 2/2 →
+destroyed; 5/5 → survives with UEOT mod; +2-counter → survives (§2);
+−2-counter → destroyed (§2); indestructible → pumped not destroyed
+(CR 702.12); ANY-creature scan reaches the source's own creature
+(the verified non-controller-restricted deviation); no-creature
+silent no-op via spell-push); 1 genuine real-EoE cross-engine probe
+(`tests/test_parity_smoke.py::test_cross_engine_real_eoe_depressurize_debuff_then_conditional_destroy_parity`
+— drives the actual parsed Depressurize `spell_effect`
+cross-engine, PLAIN-destroy + +2-counter-SURVIVES (the §2 pin)
+arms, WHOLE field byte-equal modulo the documented comparator
+counters-blindness; the spell-card bench-admit lever intentionally
+NOT exercised).
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,

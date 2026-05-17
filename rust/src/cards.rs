@@ -1308,6 +1308,37 @@ pub enum Effect {
         amount: i32,
         token_printing_id: u32,
     },
+    /// **Effect-uncovered Tier-A — Depressurize.**
+    /// Apply a −`power_penalty`/−0 UEOT modifier to the (single,
+    /// deterministic-first) target creature on EITHER battlefield;
+    /// then if its EFFECTIVE power (post-UEOT, counters-inclusive per
+    /// Python's `effective_power`) is ≤ 0, destroy it (respecting
+    /// indestructible — CR 702.12). Mirrors Python's
+    /// `DepressurizeEffect(power_penalty)`
+    /// (`effects/bespoke.py:1531`): `grant_pt_pump_ueot(power=-pp,
+    /// toughness=0)`; then `if effective_power(state, obj) <= 0:
+    /// destroy(state, obj)`. UEOT-push + the destroy tail are shipped
+    /// primitives; this is the fused composite arm only.
+    ///
+    /// **Verified deviation from `PumpTargetCreatureUntilEOT` (pin
+    /// it):** Python's `DepressurizeEffect.legal_targets` is *any
+    /// creature* (`is_creature`, NO controller restriction —
+    /// `effects/bespoke.py:1545-1552`), so the scan walks BOTH
+    /// battlefields in ETB-timestamp order (NOT controller-only,
+    /// unlike the bare pump arm).
+    ///
+    /// **§2 counters-asymmetry (load-bearing, the mini-spec risk):**
+    /// the conditional reads POST-UEOT EFFECTIVE power. Python's
+    /// `effective_power` folds the just-pushed UEOT bonus AND `+1/+1`
+    /// counters (CR 613 layer 7c+7d). Rust's combat-side
+    /// `effective_power` getter folds the UEOT bonus but NOT counters.
+    /// To stay byte-equal with the Python SoT, this arm computes the
+    /// effective power with the counters-INCLUSIVE formula re-derived
+    /// privately (file-iso): `base = ueot_base_pt_override().p OR
+    /// printed_power`, plus `obj.counters`, plus
+    /// `obj.ueot_power_bonus()` (which already includes the −pp just
+    /// pushed). Python is the SoT; matching it is the rule.
+    DepressurizeEffect { power_penalty: i32 },
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -5179,6 +5210,17 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 token_printing_id,
             })
         }
+        "depressurize_effect" => {
+            // Effect-uncovered Tier-A — Depressurize. Single-field
+            // payload: `power_penalty` (3 for Depressurize). Mirrors
+            // the `pump_target_creature_until_eot` parse arm's
+            // single-i32-key shape. Python's
+            // `DepressurizeEffect(power_penalty=3)` carries the same
+            // single field.
+            let power_penalty: i32 =
+                require(dict, "power_penalty")?.extract()?;
+            Ok(Effect::DepressurizeEffect { power_penalty })
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -7599,6 +7641,10 @@ pub(crate) fn effect_to_pydict<'py>(
             )?;
             d.set_item("amount", *amount)?;
             d.set_item("token_printing_id", *token_printing_id)?;
+        }
+        Effect::DepressurizeEffect { power_penalty } => {
+            d.set_item("kind", "depressurize_effect")?;
+            d.set_item("power_penalty", *power_penalty)?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;

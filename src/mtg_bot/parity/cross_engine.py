@@ -8311,6 +8311,50 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return DealDamageToTargetCreatureWithExcessLanderRider(
             amount=int(eff_dict.get("amount", 6)),
         )
+    if kind == "depressurize_effect":
+        # **Effect-uncovered Tier-A — Depressurize.**
+        # Rust substrate ``Effect::DepressurizeEffect { power_penalty
+        # }`` (cards.rs single-field payload; parser
+        # ``"depressurize_effect"``; resolve in state_ops_resolve.rs
+        # beside the Orbital Plunge arm).
+        #
+        # **Field shape.** ``power_penalty`` (3 for Depressurize)
+        # rides through to the Python class's ``power_penalty`` field.
+        # Python's ``DepressurizeEffect(power_penalty: int = 3)``
+        # (effects/bespoke.py:1531) carries the SAME single field with
+        # the SAME default; the bridge round-trips it directly (no
+        # token pid — this arm mints no token; pure UEOT-debuff +
+        # conditional destroy).
+        #
+        # **Resolve semantics (parity-relevant).** Rust scans BOTH
+        # battlefields in ETB-timestamp order for the first creature
+        # (Python's ``legal_targets`` is ANY creature — NOT
+        # controller-restricted; the centralized
+        # ``state.battlefield`` walk + the deterministic-first
+        # convention), pushes a ``−power_penalty/−0`` UEOT modifier,
+        # then reads POST-UEOT EFFECTIVE power and destroys the
+        # creature iff ``eff_power <= 0`` (respecting indestructible —
+        # CR 702.12; the pump still applies, only the destroy is
+        # suppressed). Python's ``resolve`` does
+        # ``grant_pt_pump_ueot(power=-pp, toughness=0)`` then
+        # ``if effective_power(state, obj) <= 0: destroy(state,
+        # obj)``. The effective power is the counters-INCLUSIVE
+        # Python-SoT view (Python's ``effective_power`` folds the UEOT
+        # bonus AND +1/+1 counters per CR 613 layer 7c+7d; the Rust
+        # arm re-derives ``base + counters + ueot_power_bonus``, NOT
+        # the combat-side getter which omits counters — the
+        # mini-spec's load-bearing §2 risk, pinned).
+        #
+        # **Honest Effect-half split (§2).** The Effect closes + is
+        # genuinely probed (UEOT-debuff + the conditional destroy,
+        # byte-equal); the full Depressurize Instant stays
+        # loader-gated on the not-yet-shipped shared spell-card-bridge
+        # lever (no Instant/Sorcery bench admit path). Mirrors the
+        # r51..r65 Effect-half-vs-full-card precedent.
+        from mtg_bot.effects.bespoke import DepressurizeEffect
+        return DepressurizeEffect(
+            power_penalty=int(eff_dict.get("power_penalty", 3)),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
