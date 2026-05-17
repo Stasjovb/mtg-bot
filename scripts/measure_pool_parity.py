@@ -177,6 +177,9 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT
     / "tests"
     / "test_probe_idiom_unlocked_optional_cost_mirror.py",
+    REPO_ROOT
+    / "tests"
+    / "test_probe_idiom_unlocked_multi_target_picker.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

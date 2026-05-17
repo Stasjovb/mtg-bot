@@ -463,3 +463,147 @@ class _PayOptionalSacFirstAgent(Agent):
         # filter-asymmetry (if any) is documented as a targeted-delta
         # by the consuming probe, NOT hidden here.
         return legal_targets[0] if legal_targets else None
+
+
+class _PickUpToNRustIteratorOrderAgent(Agent):
+    """The MULTI-TARGET PICKER MIRROR shim: drive the
+    ``PutPlusOneCounterOnEachOfUpToNTargetCreatures`` multi-target
+    Decision pipeline IDENTICALLY to Rust's deterministic at-resolve
+    iterator so the up-to-N counter-spread WRAPPER is byte-equal
+    cross-engine.
+
+    THE CROSS-ENGINE ASYMMETRY THIS NEUTRALISES
+    -------------------------------------------
+    ``Effect::PutPlusOneCounterOnEachOfUpToNTargetCreatures { max_n }``
+    (Weftblade-Enhancer shape: "When this creature enters, put a +1/+1
+    counter on each of up to two target creatures") resolves with NO
+    agent ambiguity on the Rust side: ``state_ops_resolve.rs:8731-8805``
+    locates the SOURCE CONTROLLER, then collects the FIRST
+    ``min(max_n, total)`` creatures by walking the source-controller's
+    ``battlefield`` Vec in insertion order FIRST, then the opponent's
+    ``battlefield`` Vec in insertion order — no PendingDecision, no
+    pause, no decline path. Python's
+    ``PutPlusOneCounterOnEachOfUpToNTargetCreatures``
+    (``effects/generic/counters.py``) is instead target-driven:
+    ``requires_target=True``, ``target_count_range=(0, max_n)``; the
+    Decision pipeline (``actions.py`` ETB-trigger path ~3215-3262 and
+    the activated path ~2009-2047) calls
+    ``Agent.choose_target(state, controller_id, pool)`` ONCE PER SLOT
+    (up to ``max_n`` slots), each call's ``pool`` being the legal
+    creature set MINUS the already-picked creatures. Left to the
+    default base ``Agent``, ``choose_target`` raises
+    ``NotImplementedError`` — so a cross-engine probe of any real
+    ``PutPlusOneCounterOnEachOfUpToNTargetCreatures`` card cannot even
+    run, let alone be byte-equal.
+
+    This shim makes Python take the EXACT picks Rust takes
+    deterministically. On each per-slot call it returns, from the
+    offered pool, the creature whose **Rust priority key** is smallest:
+
+      ``(side_rank, per_side_bf_insertion_index)``
+
+    where ``side_rank = 0`` if the candidate's ``controller_id`` equals
+    the resolving source controller (the ``player_id`` the pipeline
+    passes — it is always the source controller for this effect), else
+    ``1``; and ``per_side_bf_insertion_index`` is the candidate's index
+    among ONLY that controller's objects within ``state.battlefield``
+    (mirroring Rust's PER-PLAYER ``players[pidx].battlefield`` Vec —
+    Python keeps a single ``state.battlefield``, so the shim
+    reconstructs the per-side Vec position by filtering on
+    ``controller_id`` and counting in insertion order). Because each
+    pipeline call removes the prior pick from ``pool``, returning the
+    smallest-priority remaining candidate every call reproduces Rust's
+    ``picked_ids`` sequence EXACTLY (controller-bf-order first, then
+    opponent-bf-order, capped at ``max_n``).
+
+    BYTE-EQUAL-SAFETY (no Python-vs-Rust asymmetry introduced)
+    ----------------------------------------------------------
+    This shim does NOT make a choice Rust wouldn't — it forces Python
+    onto Rust's single deterministic at-resolve iterator (the first
+    ``max_n`` creatures, controller-side first by per-side bf order,
+    then opponent-side), exactly the canon the ``_PickFirst*`` /
+    ``_PickFirstBattlefieldCreatureEitherSideAgent`` shims follow
+    (force the Python agent onto Rust's lone at-resolve path). It adds
+    NO degree of freedom: Rust has exactly one behaviour here (a
+    fixed scan order, NOT an agent choice) and this shim reproduces it
+    by computing the SAME ``(side_rank, per_side_bf_index)`` ordering
+    Rust's ``for &pidx in &[cidx, oidx] { for obj in bf.iter() }``
+    nested loop produces. The up-to-N counter WRAPPER is therefore
+    byte-equal by construction — the same set of creatures receives
+    exactly one +1/+1 counter on BOTH engines (verified: a synthetic
+    ``PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=2)`` ETB
+    carrier over a mixed controller/opponent bf yields
+    ``compare_fields == []``; the focused self-test
+    ``test_multi_target_picker_idiom_self_test_byte_equal`` pins this).
+
+    NOT a GLOBAL-bf-index shim (the distinction that makes it exact).
+    ``_PickFirstBattlefieldCreatureEitherSideAgent`` picks by the
+    GLOBAL ``state.battlefield`` index — correct only for its
+    one-pick-per-side ``PairedTargetPumpDebuffUEOT`` consumer. This
+    effect's Rust resolve is SIDE-PARTITIONED (ALL of the controller's
+    creatures, in controller-bf order, BEFORE any opponent creature),
+    so a global index would diverge whenever a controller creature was
+    appended to ``state.battlefield`` AFTER an opponent creature. This
+    shim's two-level key (side first, then per-side index) is the
+    faithful Rust mirror regardless of global insertion interleave —
+    it is a NEW shim, not a reuse, precisely because the ordering
+    contract differs.
+
+    WHAT THIS SHIM DELIBERATELY DOES NOT CLAIM (honest scope)
+    ---------------------------------------------------------
+    It mirrors the up-to-N counter-spread WRAPPER only (which creatures
+    get the +1/+1, in Rust's exact order, capped at ``max_n``). The
+    Weftblade Enhancer real printing is a BARE
+    ``PutPlusOneCounterOnEachOfUpToNTargetCreatures(max_n=2)`` ETB with
+    no rider cascade and no other composed effect (verified
+    verify-first), so the genuine probe asserts FULL
+    ``compare_fields == []`` (the strongest tier). Should a future
+    consumer compose this with a SEPARATE pre-documented asymmetry,
+    that asymmetry is NOT this shim's to launder and the consuming
+    probe must document it as a targeted-delta — the established
+    optional-cost-mirror Selfcraft-Mechan discipline.
+
+    Used by: the genuine real-EoE multi-target picker probe
+    (``tests/test_probe_idiom_unlocked_multi_target_picker.py``):
+    Weftblade Enhancer (the
+    ``PutPlusOneCounterOnEachOfUpToNTargetCreatures`` consumer).
+    """
+
+    def _rust_priority(self, state, source_controller_id, target_id):
+        """Compute Rust's ``(side_rank, per_side_bf_insertion_index)``
+        key for the bf object ``target_id``. ``side_rank`` 0 ==
+        source-controller side, 1 == opponent side (Rust's
+        ``[cidx, oidx]`` loop order). The per-side index is the
+        position of this object among ONLY its controller's objects in
+        ``state.battlefield`` insertion order (Rust's per-player
+        ``battlefield`` Vec position)."""
+        obj = next(
+            (o for o in state.battlefield if o.id == target_id), None
+        )
+        if obj is None:
+            # Not on the bf (should not happen for the creature-target
+            # pools this shim serves) — sort it last, deterministically.
+            return (2, 1 << 30, target_id)
+        side_rank = 0 if obj.controller_id == source_controller_id else 1
+        per_side_idx = 0
+        for o in state.battlefield:
+            if o.id == target_id:
+                break
+            if o.controller_id == obj.controller_id:
+                per_side_idx += 1
+        return (side_rank, per_side_idx, target_id)
+
+    def choose_target(self, state, player_id, legal_targets):
+        if not legal_targets:
+            return None
+        # ``player_id`` is the resolving source controller (the
+        # Decision pipeline passes ``controller_id`` for this effect).
+        # Pick the offered candidate with the smallest Rust priority
+        # key — Rust's NEXT creature in its controller-bf-then-
+        # opponent-bf scan. The pipeline removes this pick from the
+        # next call's pool, so iterating smallest-first reproduces
+        # Rust's ``picked_ids`` sequence exactly.
+        return min(
+            legal_targets,
+            key=lambda t: self._rust_priority(state, player_id, t[1]),
+        )
