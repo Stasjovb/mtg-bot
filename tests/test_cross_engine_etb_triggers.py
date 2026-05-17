@@ -19789,5 +19789,451 @@ def test_r62_rust_bridge_explicit_abilities_follow_per_color_entries():
         "the explicit non-mana ability sits at idx2, not idx1")
 
 
+# ---------------------------------------------------------------------------
+# warp_cost Phase 1 (round-63) — Rust regression + cross-engine bridge
+# pins. Spec: docs/WARP_COST_PHASE1_DESIGN.md §4 pins 1-8.
+# ---------------------------------------------------------------------------
+
+_R63_ZONE_HAND = 0  # state_ops_zones.rs ZONE_HAND
+_R63_ZONE_BF = 2    # ZONE_BATTLEFIELD
+
+
+def _r63_inject_warp_creature(rs, zone=_R63_ZONE_HAND):
+    """Inject a pure-warp Artifact Creature ({3}{R} normal, {1}{R}
+    warp, 3/3) into p0's ``zone`` via the dict registry path. Returns
+    the obj id."""
+    return int(rs.register_and_inject_object(
+        {
+            "name": "WarpBeast",
+            "card_types": ["Artifact", "Creature"],
+            "mana_cost": {"generic": 3, "R": 1},
+            "warp_cost": {"generic": 1, "R": 1},
+            "power": 3,
+            "toughness": 3,
+            "effects": [],
+        },
+        0,
+        zone,
+    ))
+
+
+def test_r63_warp_parse_printing_roundtrips_warp_cost():
+    """Spec §4 pin 1 — ``parse_printing`` with
+    ``warp_cost={"generic":1,"R":1}`` round-trips into
+    ``CardPrinting.warp_cost``; the absent key maps to ``None``
+    (back-compat). Verified via the legal emitter (a printing WITH
+    warp_cost offers the use_warp variant; one WITHOUT does not)."""
+    rs = _r62_fresh_rust_state()
+    wid = _r63_inject_warp_creature(rs)
+    # A vanilla (no warp_cost) creature for the negative half.
+    vid = int(rs.register_and_inject_object(
+        {"name": "Vanilla", "card_types": ["Creature"],
+         "mana_cost": {"generic": 1, "G": 1},
+         "power": 2, "toughness": 2, "effects": []},
+        0, _R63_ZONE_HAND))
+    rs.set_phase(3)  # MAIN1 (sorcery timing)
+    ld = rs.legal_decisions(0)
+    warp_for_w = sorted(
+        a.get("use_warp") for a in ld
+        if a.get("kind") == "cast_spell" and a.get("card_id") == wid
+    )
+    warp_for_v = sorted(
+        a.get("use_warp") for a in ld
+        if a.get("kind") == "cast_spell" and a.get("card_id") == vid
+    )
+    assert warp_for_w == [False, True], (
+        f"warp printing must emit base+warp; got {warp_for_w}")
+    assert warp_for_v == [False], (
+        f"no-warp printing must emit base ONLY; got {warp_for_v}")
+
+
+def test_r63_warp_legal_emits_adjacent_base_then_warp_positional():
+    """Spec §4 pin 2 — a hand with one warp printing emits EXACTLY
+    ``[..., cast_spell(use_warp=False), cast_spell(use_warp=True),
+    ...]`` ADJACENT in that order (positional, not just set). 2x the
+    same warp printing → still exactly one {base, warp} pair (dedup
+    parity with Python's name+flag key)."""
+    rs = _r62_fresh_rust_state()
+    w1 = _r63_inject_warp_creature(rs)
+    rs.set_phase(3)
+    ld = rs.legal_decisions(0)
+    cs = [
+        (a["card_id"], a["use_warp"]) for a in ld
+        if a.get("kind") == "cast_spell"
+    ]
+    assert cs == [(w1, False), (w1, True)], (
+        f"single warp printing: expected adjacent "
+        f"[(id,False),(id,True)]; got {cs}")
+    # 2x the same warp printing name → name-only dedup yields ONE
+    # {base, warp} pair, matching Python's (name, use_warp, ...) key.
+    w2 = _r63_inject_warp_creature(rs)
+    rs.set_phase(3)
+    ld2 = rs.legal_decisions(0)
+    cs2 = [
+        (a["card_id"], a["use_warp"]) for a in ld2
+        if a.get("kind") == "cast_spell"
+    ]
+    warp_count = sum(1 for _, w in cs2 if w)
+    base_count = sum(1 for _, w in cs2 if not w)
+    assert warp_count == 1 and base_count == 1, (
+        f"2x same warp printing must dedup to exactly one "
+        f"{{base, warp}} pair; got {cs2} (w2={w2})")
+
+
+def test_r63_warp_cast_pays_warp_cost_sets_flag_and_pending():
+    """Spec §4 pin 3 — ``Action::CastSpell{use_warp:true}`` on a warp
+    creature pays ``warp_cost`` (pool debited by {1}{R}, NOT the {3}{R}
+    mana_cost), ``spell_warped_this_turn == True``, and the resolved
+    permanent has ``warp_exile_pending == True`` (observed via the
+    end-step exile firing one phase later — see pin 4)."""
+    rs = _r62_fresh_rust_state()
+    wid = _r63_inject_warp_creature(rs)
+    rs.set_phase(3)
+    rs.add_mana(0, "R", 1)
+    rs.add_mana(0, "C", 1)  # {1} generic
+    assert rs.spell_warped_this_turn is False
+    rs.apply_action({
+        "kind": "cast_spell", "card_id": wid, "use_warp": True,
+        "kicked": False, "cast_for_free": False,
+        "use_impending": False, "cast_room_half": None,
+    })
+    pool = dict(rs.get_mana_pool(0))
+    assert sum(pool.values()) == 0, (
+        f"warp cost {{1}}{{R}} must fully drain the 2-mana pool; "
+        f"got {pool} (would be non-empty if it paid the {{3}}{{R}} "
+        f"mana_cost instead)")
+    assert rs.spell_warped_this_turn is True
+    bf = [o for o in rs.battlefield_snapshot()
+          if o["printing_name"] == "WarpBeast"]
+    assert len(bf) == 1, "WarpBeast must be on the battlefield post-cast"
+
+
+def test_r63_warp_end_step_sweep_exiles_with_warped_marker():
+    """Spec §4 pin 4 — advancing to PHASE_END_STEP on the caster's
+    turn exiles the warp-pending permanent (bf → exile),
+    ``warp_exile_pending`` cleared, ``warped`` set (the exile-recast
+    marker)."""
+    rs = _r62_fresh_rust_state()
+    wid = _r63_inject_warp_creature(rs)
+    rs.set_phase(3)
+    rs.add_mana(0, "R", 1)
+    rs.add_mana(0, "C", 1)
+    rs.apply_action({
+        "kind": "cast_spell", "card_id": wid, "use_warp": True,
+        "kicked": False, "cast_for_free": False,
+        "use_impending": False, "cast_room_half": None,
+    })
+    assert any(o["printing_name"] == "WarpBeast"
+               for o in rs.battlefield_snapshot())
+    rs.set_phase(9)        # MAIN2
+    rs.advance_phase()     # → END_STEP (phase 10): warp-exile sweep
+    assert rs.current_phase() == 10
+    bf = [o for o in rs.battlefield_snapshot()
+          if o["printing_name"] == "WarpBeast"]
+    ex = [o for o in rs.exile_snapshot(0)
+          if o["printing_name"] == "WarpBeast"]
+    assert bf == [], "WarpBeast must have left the battlefield"
+    assert len(ex) == 1, (
+        f"WarpBeast must be in p0 exile after the END-step sweep; "
+        f"got exile={[o['printing_name'] for o in rs.exile_snapshot(0)]}")
+
+
+def test_r63_warp_exile_recast_pays_normal_cost_clears_warped():
+    """Spec §4 pin 5 — after the end-step exile, ``legal_decisions``
+    offers a BASE ``cast_spell(use_warp=False)`` for the ``warped``
+    exile object; casting it pays the NORMAL {3}{R} ``mana_cost`` (NOT
+    the {1}{R} warp cost) and clears ``warped`` (object back on bf,
+    exile empty)."""
+    rs = _r62_fresh_rust_state()
+    wid = _r63_inject_warp_creature(rs)
+    rs.set_phase(3)
+    rs.add_mana(0, "R", 1)
+    rs.add_mana(0, "C", 1)
+    rs.apply_action({
+        "kind": "cast_spell", "card_id": wid, "use_warp": True,
+        "kicked": False, "cast_for_free": False,
+        "use_impending": False, "cast_room_half": None,
+    })
+    rs.set_phase(9)
+    rs.advance_phase()  # → END_STEP exiles it
+    assert any(o["printing_name"] == "WarpBeast"
+               for o in rs.exile_snapshot(0))
+    rs.set_phase(3)  # a later MAIN1
+    ld = rs.legal_decisions(0)
+    recast = [
+        (a["card_id"], a["use_warp"]) for a in ld
+        if a.get("kind") == "cast_spell" and a.get("card_id") == wid
+    ]
+    assert recast == [(wid, False)], (
+        f"warp-exiled object must offer a BASE recast only "
+        f"(use_warp=False, normal cost); got {recast}")
+    rs.add_mana(0, "R", 1)
+    rs.add_mana(0, "C", 3)  # {3}{R} normal mana_cost
+    rs.apply_action({
+        "kind": "cast_spell", "card_id": wid, "use_warp": False,
+        "kicked": False, "cast_for_free": False,
+        "use_impending": False, "cast_room_half": None,
+    })
+    pool = dict(rs.get_mana_pool(0))
+    assert sum(pool.values()) == 0, (
+        f"recast must pay the full {{3}}{{R}} (4 mana) — pool should "
+        f"drain to 0; got {pool}")
+    bf = [o for o in rs.battlefield_snapshot()
+          if o["printing_name"] == "WarpBeast"]
+    ex = [o for o in rs.exile_snapshot(0)
+          if o["printing_name"] == "WarpBeast"]
+    assert len(bf) == 1 and ex == [], (
+        "recast WarpBeast must be back on bf with exile cleared")
+
+
+def _r63_warp_synth_deckspec():
+    """A synthetic pure-warp CardDef ({3}{R} normal, {1}{R} warp,
+    3/3) + a Forest-that-taps-R, padded so both engines have enough
+    R mana. Used by the cross-engine bridge pins."""
+    from mtg_bot.parity.cross_engine import CardDef, DeckSpec
+
+    warp = CardDef(
+        name="SynthWarp", card_type="Creature",
+        mana_cost_generic=3, mana_cost_colored=(("R", 1),),
+        power=3, toughness=3,
+        warp_cost_generic=1, warp_cost_colored=(("R", 1),),
+        has_warp=True,
+    )
+    forest = CardDef(name="Forest", card_type="Land",
+                     mana_produced=("R",))
+    lib = ("SynthWarp",) + ("Forest",) * 39
+    return DeckSpec(
+        card_defs=(warp, forest),
+        p0_library=lib,
+        p1_library=("Forest",) * 40,
+    )
+
+
+def test_r63_warp_bridge_both_engines_same_castspell_pair():
+    """Spec §4 pin 6 — a DeckSpec with a synthetic pure-warp CardDef:
+    once the warp cost is PAYABLE, BOTH engines' legal action sets
+    offer the SAME ``{use_warp:False, use_warp:True}`` CastSpell pair
+    for the warp card (action-set + positional byte-equal).
+
+    Mana must be available first: Python's ``legal_actions`` gates
+    BOTH the base and warp cast on ``_can_cast`` (mana payability),
+    whereas Rust's emitter has NO ``_can_cast`` gate (the documented
+    pre-existing "Deliberate divergence" in ``state_ops_legal.rs`` —
+    spec §2.2 caveat 1). At a no-mana state Python emits ``[]`` and
+    Rust ``[False, True]`` for the SAME accepted reason the bench
+    already tolerates for every base cast; that asymmetry is NOT a
+    warp bug and is orthogonal to Phase 1. With the warp cost
+    payable, ``_can_cast`` passes and the two engines' pairs match —
+    which is what THIS pin asserts (the warp variant inherits the
+    base variant's gating consistency)."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        advance_phase_python, step_both,
+    )
+    from mtg_bot.legal import legal_actions
+
+    py, rs = trajectory.setup_matched_game(_r63_warp_synth_deckspec())
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+
+    adv(3)  # turn 1 MAIN1
+    # Build R mana: play a Forest each p0 turn for 3 turns, then tap
+    # two unsick Forests for the {1}{R} warp cost.
+    for _ in range(3):
+        f = next(o for o in py.players[py.active_player_idx].hand
+                 if o.printing.name == "Forest")
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land", "card_id": int(f.id)}).divergences
+        adv(24)
+    f = next(o for o in py.players[py.active_player_idx].hand
+             if o.printing.name == "Forest")
+    assert not step_both(
+        py, rs, {"kind": "play_land", "card_id": int(f.id)}).divergences
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == py.active_player_idx
+                and o.printing.is_land and not o.tapped
+                and not o.summoning_sick and taps < 2):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    ai = py.active_player_idx
+    sw = next(o for o in py.players[ai].hand
+              if o.printing.name == "SynthWarp")
+    py_pairs = sorted(
+        a.use_warp for a in legal_actions(py, ai)
+        if getattr(a, "card_id", None) == sw.id
+    )
+    rs_pairs = sorted(
+        a["use_warp"] for a in rs.legal_decisions(ai)
+        if a.get("kind") == "cast_spell" and a.get("card_id") == sw.id
+    )
+    assert py_pairs == [False, True], (
+        f"Python must offer base+warp once payable; got {py_pairs}")
+    assert rs_pairs == [False, True], (
+        f"Rust must offer base+warp; got {rs_pairs}")
+    assert py_pairs == rs_pairs, (
+        f"cross-engine CastSpell pair mismatch: py={py_pairs} "
+        f"rs={rs_pairs}")
+
+
+def test_r63_warp_bridge_cast_byte_equal_via_step_both():
+    """Spec §4 pin 7 — driving ``CastSpell{use_warp:True}`` via
+    ``step_both``: post-cast state (mana pool, zones,
+    spell_warped_this_turn) is byte-equal across engines (zero
+    field-view divergences)."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import step_both, advance_phase_python
+
+    py, rs = trajectory.setup_matched_game(_r63_warp_synth_deckspec())
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+
+    adv(3)  # turn 1 MAIN1
+    for _ in range(3):
+        f = next(o for o in py.players[py.active_player_idx].hand
+                 if o.printing.name == "Forest")
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land", "card_id": int(f.id)}).divergences
+        adv(24)
+    f = next(o for o in py.players[py.active_player_idx].hand
+             if o.printing.name == "Forest")
+    assert not step_both(
+        py, rs, {"kind": "play_land", "card_id": int(f.id)}).divergences
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == py.active_player_idx
+                and o.printing.is_land and not o.tapped
+                and not o.summoning_sick and taps < 2):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    ai = py.active_player_idx
+    sw = next(o for o in py.players[ai].hand
+              if o.printing.name == "SynthWarp")
+    s = step_both(
+        py, rs,
+        {"kind": "cast_spell", "card_id": int(sw.id), "use_warp": True},
+    )
+    assert not s.divergences, (
+        f"warp cast via step_both surfaced divergences: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+    assert py.spell_warped_this_turn is True
+    assert rs.spell_warped_this_turn is True
+
+
+def test_r63_warp_bridge_end_step_exile_and_recast_byte_equal():
+    """Spec §4 pin 8 — advancing both engines to the end step: the
+    warp permanent is in exile with the warp marker on BOTH;
+    field-view byte-equal. Then recast-from-exile via ``step_both``:
+    byte-equal."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        step_both, advance_phase_python, compare_fields,
+    )
+    from tests.test_trajectory_parity import _step_views
+
+    py, rs = trajectory.setup_matched_game(_r63_warp_synth_deckspec())
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+            pv, rv = _step_views(py, rs)
+            d = compare_fields(pv, rv)
+            assert not d, (
+                f"phase advance ({pv['step']}, turn {pv['turn']}) "
+                f"diverged: "
+                f"{[(x.field, x.py_value, x.rust_value) for x in d]}")
+
+    adv(3)
+    for _ in range(3):
+        f = next(o for o in py.players[py.active_player_idx].hand
+                 if o.printing.name == "Forest")
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land", "card_id": int(f.id)}).divergences
+        adv(24)
+    f = next(o for o in py.players[py.active_player_idx].hand
+             if o.printing.name == "Forest")
+    assert not step_both(
+        py, rs, {"kind": "play_land", "card_id": int(f.id)}).divergences
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == py.active_player_idx
+                and o.printing.is_land and not o.tapped
+                and not o.summoning_sick and taps < 2):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    ai = py.active_player_idx
+    sw = next(o for o in py.players[ai].hand
+              if o.printing.name == "SynthWarp")
+    assert not step_both(
+        py, rs,
+        {"kind": "cast_spell", "card_id": int(sw.id),
+         "use_warp": True}).divergences
+    # Advance to END step on both — the warp-exile sweep fires; adv()
+    # asserts byte-equal at every phase boundary INCLUDING END.
+    adv(7)  # MAIN1 → END
+    py_ex = sorted(o.printing.name for o in py.players[ai].exile)
+    rs_ex = sorted(o["printing_name"] for o in rs.exile_snapshot(ai))
+    assert py_ex == rs_ex == ["SynthWarp"], (
+        f"warp permanent must be in exile on BOTH; "
+        f"py={py_ex} rs={rs_ex}")
+    # Recast from exile at normal cost on a later p0 turn.
+    for _ in range(80):
+        pv, _rv = _step_views(py, rs)
+        if (py.active_player_idx == ai
+                and pv["step"] == "PRECOMBAT_MAIN"
+                and py.players[ai].lands_played_this_turn == 0):
+            break
+        adv(1)
+    fhand = [o for o in py.players[ai].hand
+             if o.printing.name == "Forest"]
+    if fhand:
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land",
+             "card_id": int(fhand[0].id)}).divergences
+    taps = 0
+    for o in list(py.battlefield):
+        if (o.controller_id == ai and o.printing.is_land
+                and not o.tapped and not o.summoning_sick and taps < 4):
+            assert not step_both(
+                py, rs,
+                {"kind": "activate_ability",
+                 "source_id": int(o.id), "ability_index": 0},
+            ).divergences
+            taps += 1
+    rtm_ex = next(o for o in py.players[ai].exile
+                  if o.printing.name == "SynthWarp")
+    s = step_both(
+        py, rs,
+        {"kind": "cast_spell", "card_id": int(rtm_ex.id),
+         "use_warp": False},
+    )
+    assert not s.divergences, (
+        f"warp exile-recast via step_both surfaced divergences: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
