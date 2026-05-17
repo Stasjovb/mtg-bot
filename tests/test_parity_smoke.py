@@ -63883,6 +63883,201 @@ def test_r62_shockland_activate_idx0_no_spurious_second_color_rust(
     assert sum(rust_pool.values()) == 1
 
 
+def test_r66_require_creatures_precondition_default_off_and_reclassifies():
+    """ROUND-66 N1 regression pin — the ``--require-creatures N`` bench
+    precondition (``bench_trajectory_parity.drive_one_game``'s
+    ``require_creatures`` parameter +
+    ``_count_admitted_creature_copies``).
+
+    The round-65 N3 finding (merge ``6568c346``,
+    ``docs/bench_trajectory_parity_smoke.md`` round-65, lever G / r47
+    option 2): the ~42-50% FAIL_TIMEOUT floor is polluted by a
+    structural never-can-close population — archetypes whose
+    post-bridge-filter deck carries too few admitted creature copies
+    to ever reach lethal before the max-turns cap. The
+    ``--require-creatures N`` precondition reclassifies those games
+    ``ARCHETYPE_FILTERED`` (the EXISTING outcome class for a
+    structurally-uncloseable mirror) instead of FAIL_TIMEOUT, BEFORE
+    running them, so the headline FAIL_TIMEOUT %% becomes a true
+    signal-coverage metric. It adds ZERO coverage.
+
+    Four contracts (all pinned on REAL 17lands archetypes — no
+    synthetic mocks; the admitted-copy counts match the round-65 N3
+    sweep data exactly):
+
+    1. **Default-off = byte-for-byte unchanged.** With
+       ``require_creatures=None`` (the default) a <N-admitted-creature
+       archetype (arch 7, 1 admitted copy) still runs and
+       FAIL_TIMEOUTs exactly as before — the precondition block is
+       inert. This is the load-bearing default-off guarantee.
+    2. **<N admitted → ARCHETYPE_FILTERED, NOT FAIL_TIMEOUT, no game
+       run.** With ``require_creatures=3`` the same arch-7 game is
+       classified ``ARCHETYPE_FILTERED`` with ``turns_played == 0``
+       (the game was skipped before the matched state was even built —
+       no wasted play) and the message names the precondition.
+    3. **>=N admitted → runs normally (precondition does NOT touch
+       it).** With ``require_creatures=3`` a >=N archetype (arch 2, 5
+       admitted copies) is NOT reclassified by the precondition — it
+       runs and yields its genuine outcome (a real stall stays
+       FAIL_TIMEOUT; the precondition only filters the structural
+       never-converters, never the genuine-stall population).
+    4. **Engine-symmetric — never introduces a divergence.** The
+       admitted-creature-copy count is a pure function of the raw
+       deck-name list + the deterministic shared bridge-admit filter
+       (``trajectory._printing_is_bridge_simple_creature``); it
+       carries no per-engine state, so it is identical on both
+       engines and the gate decision is engine-agnostic. Pinned by
+       computing the count twice and asserting equality + asserting it
+       matches the round-65 N3 sweep datum for these archetypes.
+    """
+    import sys
+    import pathlib
+
+    from mtg_bot.parity import trajectory
+
+    scripts_dir = pathlib.Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from bench_trajectory_parity import (  # type: ignore[import-not-found]
+        drive_one_game,
+        _count_admitted_creature_copies,
+    )
+
+    # --- CONTRACT 4 (engine-symmetric / count is a pure deterministic
+    # function of the bridge-filtered deck — pinned FIRST so the
+    # archetype selection below is anchored on verified data). The
+    # count carries no per-engine state: recomputing it yields the
+    # IDENTICAL value, and it matches the round-65 N3 sweep datum
+    # (arch 7 = 1 admitted copy, arch 2 = 5).
+    arch_lo_deck = trajectory.load_production_deck(archetype=7)
+    arch_hi_deck = trajectory.load_production_deck(archetype=2)
+    n_lo_a = _count_admitted_creature_copies(arch_lo_deck)
+    n_lo_b = _count_admitted_creature_copies(arch_lo_deck)
+    n_hi_a = _count_admitted_creature_copies(arch_hi_deck)
+    n_hi_b = _count_admitted_creature_copies(arch_hi_deck)
+    assert n_lo_a == n_lo_b, (
+        "the admitted-creature-copy count must be deterministic / "
+        "engine-agnostic (it is a pure function of the raw deck-name "
+        "list + the shared bridge-admit filter — carries no per-engine "
+        f"state); recompute disagreed: {n_lo_a} != {n_lo_b}"
+    )
+    assert n_hi_a == n_hi_b, (
+        f"admitted-copy count not deterministic for arch 2: "
+        f"{n_hi_a} != {n_hi_b}"
+    )
+    assert n_lo_a == 1, (
+        f"round-65 N3 datum drift: arch 7 was 1 admitted creature "
+        f"copy; got {n_lo_a}. Re-pin against a current <3-copy "
+        f"archetype."
+    )
+    assert n_hi_a == 5, (
+        f"round-65 N3 datum drift: arch 2 was 5 admitted creature "
+        f"copies; got {n_hi_a}. Re-pin against a current >=3-copy "
+        f"archetype."
+    )
+    assert n_lo_a < 3 <= n_hi_a, (
+        "test precondition broken: need arch 7 < 3 <= arch 2 admitted "
+        f"copies; got lo={n_lo_a} hi={n_hi_a}"
+    )
+
+    # A short max-turns keeps the test fast; arch 7 has only 1 admitted
+    # creature copy so it cannot close and FAIL_TIMEOUTs regardless of
+    # the cap — the behavior the precondition exists to reclassify.
+    MT = 10
+
+    # --- CONTRACT 1: default-off (require_creatures=None) = unchanged.
+    # arch 7 still runs and FAIL_TIMEOUTs exactly as before the flag
+    # existed. (Also explicitly pass None to pin that an explicit-None
+    # is identical to the default.)
+    r_default = drive_one_game(
+        archetype=7, seed=0, max_turns=MT,
+        combat_strategy="attack_all", mulligans=0,
+    )
+    r_explicit_none = drive_one_game(
+        archetype=7, seed=0, max_turns=MT,
+        combat_strategy="attack_all", mulligans=0,
+        require_creatures=None,
+    )
+    assert r_default.status == "FAIL_TIMEOUT", (
+        "default-off guarantee broken: with no --require-creatures, a "
+        "1-admitted-creature archetype must run and FAIL_TIMEOUT "
+        f"exactly as before; got {r_default.status}"
+    )
+    assert r_explicit_none.status == r_default.status, (
+        "explicit require_creatures=None must be byte-identical to the "
+        f"default; got {r_explicit_none.status} vs {r_default.status}"
+    )
+    assert r_default.turns_played > 0, (
+        "default-off: the game must actually have been played "
+        f"(turns_played>0); got {r_default.turns_played}"
+    )
+
+    # --- CONTRACT 2: <N admitted → ARCHETYPE_FILTERED, not
+    # FAIL_TIMEOUT, and the game was NOT run (turns_played == 0).
+    r_lo = drive_one_game(
+        archetype=7, seed=0, max_turns=MT,
+        combat_strategy="attack_all", mulligans=0,
+        require_creatures=3,
+    )
+    assert r_lo.status == "ARCHETYPE_FILTERED", (
+        "with --require-creatures 3, a 1-admitted-creature archetype "
+        "(structurally uncloseable mirror) must be classified "
+        f"ARCHETYPE_FILTERED, NOT {r_lo.status} — and NOT FAIL_TIMEOUT "
+        "(the whole point: it is reclassified OUT of the headline "
+        "FAIL_TIMEOUT metric)"
+    )
+    assert r_lo.status != "FAIL_TIMEOUT"
+    assert r_lo.turns_played == 0, (
+        "the precondition must gate the game BEFORE running it (no "
+        f"wasted play); got turns_played={r_lo.turns_played}"
+    )
+    assert "require-creatures" in (r_lo.exception_message or ""), (
+        "the ARCHETYPE_FILTERED record must name the precondition so "
+        f"the cause is unambiguous; got {r_lo.exception_message!r}"
+    )
+
+    # --- CONTRACT 3: >=N admitted → runs normally; the precondition
+    # does NOT reclassify a genuine-stall / closing-archetype game.
+    # arch 2 (5 admitted copies) runs to its genuine outcome (it is a
+    # real stall at this short cap → FAIL_TIMEOUT, NOT reclassified by
+    # the precondition — turns_played>0 proves the game actually ran).
+    r_hi = drive_one_game(
+        archetype=2, seed=0, max_turns=MT,
+        combat_strategy="attack_all", mulligans=0,
+        require_creatures=3,
+    )
+    assert r_hi.turns_played > 0, (
+        "a >=N-admitted-creature archetype must RUN (not be gated by "
+        f"the precondition); got turns_played={r_hi.turns_played}"
+    )
+    assert r_hi.status != "ARCHETYPE_FILTERED" or (
+        "require-creatures" not in (r_hi.exception_message or "")
+    ), (
+        "the precondition must NOT reclassify a >=N-admitted-creature "
+        f"archetype; got {r_hi.status} / {r_hi.exception_message!r}"
+    )
+    # arch 2 with the default (no flag) is byte-identical to arch 2
+    # with require_creatures=3 (the precondition is inert for >=N) —
+    # the strongest engine-symmetry / no-trajectory-alteration pin:
+    # the flag gates the game, it never alters the trajectory.
+    r_hi_off = drive_one_game(
+        archetype=2, seed=0, max_turns=MT,
+        combat_strategy="attack_all", mulligans=0,
+    )
+    assert r_hi.status == r_hi_off.status, (
+        "for a >=N archetype the precondition is inert: "
+        "require_creatures=3 must yield the IDENTICAL outcome to "
+        f"default-off (it gates, never alters the trajectory); got "
+        f"{r_hi.status} vs {r_hi_off.status}"
+    )
+    assert r_hi.turns_played == r_hi_off.turns_played, (
+        "for a >=N archetype the trajectory must be byte-identical "
+        "with/without the flag (the precondition gates, never alters "
+        f"play); got {r_hi.turns_played} vs {r_hi_off.turns_played} "
+        "turns"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
