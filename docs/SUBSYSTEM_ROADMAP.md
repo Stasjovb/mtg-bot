@@ -245,6 +245,62 @@ second:
    >   ship the guardrail without this; budget it before/with the
    >   Rust lever round (`SPELL_CARD_BRIDGE_PHASE1_DESIGN.md` §3.6 /
    >   §9 item 5).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 2 — post 4
+   >   Tier-A closes; resync @ `f881e1cd`, parity 298→302/475
+   >   63.6%, PROBED 56→60).** Verify-first sharpened the whole
+   >   leverage map this cycle:
+   >   - **Covered-set-extraction precursor LANDED** (`326023b4` /
+   >     `02bf16bf`) — `src/mtg_bot/parity/effect_coverage.py` is
+   >     production-importable; **no longer on Phase 1's critical
+   >     path** (the bullet above is now historical).
+   >   - **4 Tier-A Effect-uncovered closes** byte-equal: Radiant
+   >     Strike, Seedship Impact, Orbital Plunge, Depressurize
+   >     (`0c795e8c`/`9f107160`/`49c0dfaa`/`f881e1cd`). Cheap
+   >     single-card Tier-A lane **near-exhausted** — only #5 Focus
+   >     Fire, #6 Biosynthic Burst, #7 Diplomatic Relations remain,
+   >     then the lane ends (`_BATCH3` §4 confirms).
+   >   - **spell-card-bridge Phase 1 is now SHIP-ELIGIBLE** (live
+   >     re-verify `72673fb2`, RE-RE-VERIFIED post-rebase). 3+
+   >     covered+bridged single-target Tier-A cards qualify (Radiant
+   >     Strike 17,744 + Seedship 13,908 + Orbital Plunge 28,629 =
+   >     ~60,281 decks day-1, Depressurize +28,346 as #4 closed too);
+   >     **ONE large Rust slice, NOT splittable 1a/1b** (Gate B'/B''/
+   >     bridge/guardrail/bench-spell-cast mutually dependent); honest
+   >     split is only Phase 1 (single-target) vs Phase 2 (Diplomatic
+   >     Relations 2-slot). **This is the DOMINANT remaining Rust
+   >     lever — ~60k+ decks vs +0 for more Tier-A / +0 for Tier-C
+   >     rungs / +8,986 for warp Phase 2.**
+   >   - **Aura-attachment DEPRIORITIZED — confirmed by live
+   >     re-verify** (`024baaa0`): the entire Aura attach substrate
+   >     (Phases 1-3, ~5-8 Rust rounds) flips **0 real-bench decks**;
+   >     the deck-weighty Auras are all gated on non-Aura primary
+   >     substrates. Strike Aura from leverage sequencing entirely
+   >     (parity-distance-metric only — same honest-zero signature as
+   >     cost-reduction round-60 N2).
+   >   - **Tier-C ladder per-rung `_SAFE_TRIGGERS` extension nets
+   >     ~+0 bench decks** — rung-1 verify-first corrected 4 cards/
+   >     11,825 → **2 cards / 6,375 / bench +0** (`f2526960`). The
+   >     existing `_SAFE_TRIGGERS` allowlist was proven byte-equal
+   >     Python↔Rust (`392ea25d`, 6 fire probes — closed the
+   >     load-bearing *asserted-but-unprobed* ATTACKS-dispatch
+   >     premise the whole ladder rested on). The **TRUE Tier-C
+   >     unlock is a target-seating sub-substrate** (Sunset Saboteur
+   >     6,375 + the Hardened-Escort targeted-leaf family — design
+   >     in `docs/TIERC_TARGET_SEATING_SUBSTRATE_DESIGN.md`, in
+   >     flight), NOT any single rung.
+   >   - **warp Phase 2 = Timeline Culler spec READY** (`e850a7fa`,
+   >     +1 card / +8,986 decks, surgical 2-clause guardrail
+   >     widening, one slice, no 2a/2b).
+   >   - **Revised Rust sequencing (highest leverage first):**
+   >     (a) drain remaining cheap Tier-A #5–#7 (they also join the
+   >     spell-card-bridge admit set); (b) **spell-card-bridge
+   >     Phase 1** (dominant ~60k-deck lever); (c) warp Phase 2
+   >     (+8,986); (d) Tier-C target-seating sub-substrate;
+   >     (e) Phase 2 Diplomatic Relations. Aura struck.
+   >   - **Sothera-the-Supervoid** flagged for the next residue
+   >     re-walk cadence (genuinely_missing-shaped, 2,108 decks,
+   >     no planned substrate reaches it — NOT yet a worklist
+   >     entry; honest-residue discipline).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

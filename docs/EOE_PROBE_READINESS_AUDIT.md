@@ -304,24 +304,33 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main ce207345 (post warp_cost Phase 1.5, continuous-
-     pipeline cycle). Counts UNCHANGED (112/114/21/12/9) — warp
-     Phase 1 is a CardDef `warp_cost` field + Action::CastSpell
-     branch + admit guardrail, NOT a new Effect:: variant /
-     _ta_dict kind arm / _SAFE_* entry (cron confirmed no count
-     drift). warp Phase 1 touched cards.rs/cross_engine.py ->
-     cadence re-verify fired; the 7 still-genuinely-missing
-     entries re-stamped verified_absent_at_commit=ce207345
-     (cron structural check re-confirmed absence — no hard-stale).
-     No residue fold (warp-gated cards are loader-gated, not in
-     the residue worklist; warp P1 added its own 3 SEARCH_-
-     LIMITATIONS entries). Honest residue still 6 distinct cards.
-     Pool-parity unchanged 298/475 — warp's +6,450-deck admit is
-     loader/real-game coverage, NOT an Effect+bridge-metric move
-     (same dimension caveat as the round-60 shockland admit;
-     correctly not double-counted). -->
-rust_effect_variants = 112
-bridge_arms = 114
+     Measured at main f881e1cd (continuous-pipeline cycle 2 — 4
+     Tier-A Effect-uncovered closes: Radiant Strike, Seedship
+     Impact, Orbital Plunge, Depressurize). Counts MOVED
+     +4/+4/0/0/0: rust_effect_variants 112->116
+     (DestroyTargetArtifactOrTappedCreature, SeedshipImpactEffect,
+     DealDamageToTargetCreatureWithExcessLanderRider,
+     DepressurizeEffect); bridge_arms 114->118 (the four
+     _ta_dict_to_python_effect kind arms). _SAFE_* UNCHANGED —
+     Tier-A closes are Effect+bridge, not trigger/keyword
+     allowlist moves. The 4 closes touched cards.rs/
+     cross_engine.py -> cadence re-verify fired; the 7 still-
+     genuinely-missing entries re-stamped
+     verified_absent_at_commit=f881e1cd (the 4 shipped Effects
+     are disjoint from all 7 residue Effect signatures —
+     absence preserved, no close). Honest residue still 6
+     distinct cards; Sothera-the-Supervoid flagged for the
+     next residue re-walk cadence (genuinely_missing-shaped,
+     2,108 decks, no planned substrate reaches it — NOT yet
+     a worklist entry). Pool-parity 298/475 -> 302/475
+     (62.7% -> 63.6%); PROBED 56 -> 60 (the 4 new genuine
+     real-EoE Tier-A probes); Effect-uncovered Tier-A bucket
+     drains 4 cards (31 -> 27). The full Instant/Sorcery of
+     each stays loader-gated — no spell-card-bridge yet;
+     Phase 1 is now ship-eligible, the dominant ~60k-deck
+     Rust lever. -->
+rust_effect_variants = 116
+bridge_arms = 118
 safe_triggers = 21
 safe_keywords = 12
 safe_effect_keys = 9
