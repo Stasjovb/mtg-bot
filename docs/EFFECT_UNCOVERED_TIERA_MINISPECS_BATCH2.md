@@ -222,6 +222,25 @@ the Rust anchors are unchanged from `29449569`; use THESE):
   `_ta_dict_to_python_effect` (**line 479**), insert **IMMEDIATELY
   ABOVE** `# === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===`
   (**`cross_engine.py:8171`**) — never below, never delete.
+  **Ship the bridge arm BOTH directions** (the bench-admit spell-card
+  bridge is *bidirectional*, same as the round-64 doc §3): the new
+  `kind` arm is the dict→Python half; **also add the Python→dict
+  sibling** (`isinstance(eff, <PythonClass>) → {"kind": "<kind>",
+  <fields>}`, the exact inverse). This is the spell-card-bridge
+  Phase-1 lever's hard dependency
+  (`docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md` §3.6 / §9 item 2): its
+  `_printing_to_card_def` spell arm reuses these per-card Python→dict
+  siblings rather than inventing a generic reverse serializer, so a
+  card flips to bench-admit only if its per-card round shipped BOTH
+  directions — dict→Python alone silently strands it on the loader
+  gate even after the lever lands. Keeps the codec "bidirectional from
+  one source" per the established `triggered_abilities` /
+  `token_activated_abilities` convention; pin the round-trip in the
+  bridge pin. **B6 Singularity Rupture's** Python→dict sibling is the
+  trivial unit `{"kind": "singularity_rupture_effect"}` even though the
+  card binds an all-players target slot — the player binding is bound
+  at resolve, not carried in the effect dict, so the reverse arm stays
+  field-free (same as every other unit-variant arm in this batch).
 - **bridge pin**: insert ABOVE `# === PHASE5_BRIDGE_PIN_TESTS_INSERT
   _ABOVE_THIS_LINE ===` (**`tests/test_cross_engine_etb_triggers.py
   :20476`**).
@@ -242,10 +261,17 @@ the Rust anchors are unchanged from `29449569`; use THESE):
   `_printing_is_bridge_simple_creature` rejects `spell_effect is not
   None` at `trajectory.py:3305`, and Rust's `Action::CastSpell`
   no-ops a non-creature). State this in the SL-style commit note + the
-  residue fold. Per `SPELL_CARD_BRIDGE_LEVER_DESIGN.md` §7 the lever is
-  a ~2-Rust-round substrate that flips these cards' bench-admit
-  *incrementally as each Effect closes* — the per-card close here is
-  the prerequisite the lever's covered-set guardrail gates on.
+  residue fold. Per `SPELL_CARD_BRIDGE_LEVER_DESIGN.md` §7 (scoping
+  basis) and the now-implement-ready
+  `docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md` (the executable Phase-1
+  spec) the lever is a ~2-Rust-round substrate that flips these cards'
+  bench-admit *incrementally as each Effect closes* — the per-card
+  close here (with **both** bridge directions per the bullet above) is
+  the prerequisite the lever's covered-set guardrail gates on. None of
+  the 6 batch-2 clean picks is in the Phase-1 single-target set (B1/B6
+  are no-target, B2-B5 are `(1,1)`/`()` but rank after the round-64
+  ready 6); they bench-admit under the same lever once Phase 1 — and,
+  for the no-target pair, the lever's untargeted path — ships.
 
 ---
 

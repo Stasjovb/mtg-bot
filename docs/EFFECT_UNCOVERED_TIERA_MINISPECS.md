@@ -208,6 +208,23 @@ Conventions verified live and shared by every spec below:
   `_ta_dict_to_python_effect` (line 453), insert **IMMEDIATELY ABOVE**
   `# === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===`
   (`cross_engine.py:8145`) — never below, never delete.
+  **Ship the bridge arm BOTH directions** (the bench-admit spell-card
+  bridge is *bidirectional*): the new `kind` arm in
+  `_ta_dict_to_python_effect` is the dict→Python half; **also add the
+  Python→dict sibling** (a `_python_spell_effect_to_dict`-dispatchable
+  arm: `isinstance(eff, <PythonClass>) → {"kind": "<kind>", <fields>}`,
+  the exact inverse of the dict→Python arm). This is the
+  spell-card-bridge Phase-1 lever's hard dependency
+  (`docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md` §3.6 / §9 item 2): its
+  `_printing_to_card_def` spell arm reuses these per-card Python→dict
+  siblings rather than inventing a generic reverse serializer, so the
+  lever only flips a card to bench-admit if that card's per-card round
+  shipped BOTH directions. Shipping only dict→Python silently strands
+  the card on the loader gate even after the lever lands (the §2 honest
+  split below would never resolve for it). Keeps the codec
+  "bidirectional from one source" per the established
+  `triggered_abilities` / `token_activated_abilities` convention; pin
+  the Python→dict↔dict→Python round-trip in the bridge pin.
 - **bridge pin**: insert ABOVE
   `# === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===`
   (`tests/test_cross_engine_etb_triggers.py:19792`).
@@ -221,8 +238,14 @@ Conventions verified live and shared by every spec below:
   not a synthetic CardDef), the `cross_engine.py:11032` precedent.
 - **§2 honest split** (every card): the Effect closes + is genuinely
   probed; the **full Instant/Sorcery card stays loader-gated on the
-  separate spell-card-bridge lever** (§1.1). State this in the SL-style
-  note in the slice's commit + the residue fold (§3.x "fold" line).
+  separate spell-card-bridge lever** (§1.1) —
+  `docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md` is the implement-ready
+  Phase-1 spec for that lever. The card flips to bench-admit only once
+  BOTH its per-card Effect close (this spec, **both** bridge
+  directions per the bullet above) AND that lever land; the lever
+  applies the flip *incrementally as each Effect closes* (Phase 1 =
+  the 6 single-target ready cards). State this in the SL-style note in
+  the slice's commit + the residue fold (§3.x "fold" line).
 
 ---
 
