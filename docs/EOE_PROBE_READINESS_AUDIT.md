@@ -304,39 +304,45 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main c44dfeb4 (continuous-pipeline cycle 3 —
-     spell-card-bridge lever Phase 1 REALIZED). Counts
-     UNCHANGED (116/118/21/12/9): Phase 1 is a single-target
-     Instant/Sorcery BENCH-ADMIT CARRIER (new cast_spell_-
-     noncreature + StackItem.target_obj_id + Gate A/B/B'/B''
-     + bidirectional bridge) reusing EXISTING Effect:: variants
-     — NOT a new Effect:: variant / _ta_dict kind arm / _SAFE_*
-     entry (cron confirmed no count drift; same shape as the
-     warp Phase 1 carrier precedent). It touched cards.rs/
-     cross_engine.py -> cadence re-verify fired; the 7 still-
-     genuinely-missing entries re-stamped
-     verified_absent_at_commit=c44dfeb4 (Phase 1's live admit
-     set is EXACTLY {Radiant Strike, Depressurize} — disjoint
-     from all 7 residue Effect signatures; absence preserved,
-     no close). Honest residue still 6 distinct cards;
-     Sothera-the-Supervoid still flagged for the next residue
-     re-walk cadence (genuinely_missing-shaped, 2,108 decks,
-     NOT yet a worklist entry). Pool-parity UNCHANGED
-     302/475 (63.6%), PROBED 60 — the Phase 1 flip is
-     BENCH-ADMIT / loader-real-game-coverage dimension
-     (Radiant Strike + Depressurize loader-drop -> bench-
-     admit), NOT an Effect+bridge-metric move (same dimension
-     caveat as the warp admit / round-60 shockland; correctly
-     NOT double-counted). Seedship Impact / Orbital Plunge
-     positively DECLINED at the bridge (covered+bridged but
-     Rust parse_effect needs a Lander token_printing_id the
-     loader's spell path cannot seat — round-trip-or-bail
-     tooth, SEARCH_LIMITATIONS seam): a Lander-spell-token-
-     seating sub-substrate is the next dominant Rust lever
-     (~42,537 decks: Seedship 13,908 + Orbital 28,629).
-     Close Encounter DECLINED via the covered-set gate
-     (verify-first found the spec ADDENDUM stale: live
-     warp_cost is None, not "not None"). -->
+     Measured at main 30783b57 (continuous-pipeline cycle 4 —
+     Lander-spell-token-seating sub-substrate REALIZED).
+     Counts UNCHANGED (116/118/21/12/9): this slice is
+     trajectory.py + cross_engine.py Python (loader spell-path
+     Lander-token seating) reusing the Rust parse_effect /
+     bridge arms that ALREADY existed at c44dfeb4 — rust/src/
+     UNCHANGED this slice, NOT a new Effect:: variant /
+     _ta_dict kind arm / _SAFE_* entry (cron confirmed no
+     count drift; structural-arm cadence fired only because
+     cross_engine.py was touched — the Pulsar guard). The 7
+     still-genuinely-missing entries re-stamped
+     verified_absent_at_commit=30783b57 (the Lander-seating
+     unlock is disjoint from all 7 residue Effect signatures;
+     absence preserved, no close). Honest residue still 6
+     distinct cards; Sothera-the-Supervoid still flagged for
+     the next residue re-walk cadence (genuinely_missing-
+     shaped, 2,108 decks, NOT yet a worklist entry).
+     Pool-parity UNCHANGED 302/475 (63.6%), PROBED 60 — the
+     spell-card-bridge admit set flipped {Depressurize,
+     Radiant Strike} -> {Depressurize, Orbital Plunge,
+     Radiant Strike, Seedship Impact} (+Seedship 13,908 +
+     Orbital 28,629 = ~42,537 decks), but that is BENCH-ADMIT
+     / loader-real-game-coverage dimension, NOT an Effect+
+     bridge-metric move (same caveat as warp / round-60
+     shockland; correctly NOT double-counted). HONEST
+     MEASUREMENT FLAG: the genuine real-EoE probe batches
+     landed this cycle (covered-unprobed batch A/B + spell-
+     card-bridge-admitted sweep, ~21 cards) did NOT move the
+     PROBED tier — measure_pool_parity.py's PROBED detection
+     does not credit the new probe-module style, so PROBED=60
+     UNDERSTATES actual probe coverage. NOT inflated here; a
+     measurement-tooling reconciliation is flagged in
+     SUBSYSTEM_ROADMAP for a future slice. Verify-first this
+     slice surfaced + fixed 2 pre-existing latent harness
+     bugs BYTE-EQUAL (resolve_top_of_stack_rust missing
+     apply_sbas(); bench agent missing choose_surveil) —
+     new-code-is-right, r72 fixture NOT relaxed. Close
+     Encounter still positively DECLINED via the covered-set
+     gate; Diplomatic Relations declined (Phase 2). -->
 rust_effect_variants = 116
 bridge_arms = 118
 safe_triggers = 21

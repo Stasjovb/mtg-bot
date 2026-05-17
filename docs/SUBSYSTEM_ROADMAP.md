@@ -359,6 +359,56 @@ second:
    >     doc-wide "Headline counts" summary lags cycle-2/3 (a
    >     resync/refresh-cadence bookkeeping line, per the cycle-2
    >     SL audit — per-entry anchors are clean).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 4 —
+   >   Lander-spell-token-seating REALIZED; resync @ `30783b57`,
+   >   counts UNCHANGED 116/118/21/12/9, parity UNCHANGED
+   >   302/475).**
+   >   - **Lander-spell-token-seating sub-substrate SHIPPED**
+   >     (`30783b57`, gate 1488) — trajectory.py + cross_engine.py
+   >     Python only (the Rust parse_effect + bridge arms already
+   >     existed at c44dfeb4; rust/src/ UNCHANGED this slice).
+   >     The spell-card-bridge admit set flipped `{Depressurize,
+   >     Radiant Strike}` -> **`{Depressurize, Orbital Plunge,
+   >     Radiant Strike, Seedship Impact}`** = **+~42,537 decks**
+   >     (Seedship 13,908 + Orbital 28,629), proven byte-equal via
+   >     2 genuine real-EoE loader-admit + cast->resolve probes.
+   >     The prior cycle-3 "dominant Rust lever" is now REALIZED.
+   >   - **Verify-first surfaced + fixed 2 pre-existing latent
+   >     harness bugs BYTE-EQUAL** (resolve_top_of_stack_rust
+   >     lacked `apply_sbas()` vs its Python sibling — unobservable
+   >     until Orbital Plunge's damage->lethal-SBA; bench spell
+   >     agent lacked `choose_surveil` — unreachable until the
+   >     longer spell-bearing games). new-code-is-right, r72
+   >     fixture NOT relaxed. The SEARCH_LIMITATIONS seam was
+   >     rewritten DECLINED -> SEATED.
+   >   - **NEXT Rust lever re-scoped (verify-first):** Tier-A #5
+   >     **Focus Fire** (23,211 decks) is NOT a clean single-card
+   >     close — the sole Rust agent's verify-first probe found no
+   >     simple `Effect::FocusFireEffect` struct field suffices; it
+   >     needs the creatures∪Spacecraft set-union denominator + a
+   >     deeper Rust attacking/blocking combat-predicate model, and
+   >     its mini-spec warns it may grow Tier-C-like. Treat #5 as
+   >     its own substantial slice (combat-predicate investigation
+   >     first), NOT a quick close. Revised Rust sequencing:
+   >     (a) Tier-A #6 **Biosynthic Burst** (the cheaper remaining
+   >     clean single-card close, auto-joins the bridge admit set);
+   >     (b) Tier-A #5 Focus Fire (combat-predicate slice); (c) warp
+   >     Phase 2 (Timeline Culler, +8,986); (d) Tier-C target-
+   >     seating (2 cards/18,855). Aura struck.
+   >   - **HONEST MEASUREMENT-TOOLING FLAG (new follow-on):** the
+   >     genuine real-EoE probe batches landed cycles 3-4
+   >     (covered-unprobed A/B, spell-card-bridge-admitted sweep,
+   >     warp-admitted/batch-C in flight — ~21+ cards) do NOT move
+   >     `docs/POOL_PARITY.md`'s PROBED tier — `measure_pool_-
+   >     parity.py`'s PROBED detection does not recognise the new
+   >     probe-module style, so PROBED=60 UNDERSTATES real probe
+   >     coverage. A measurement-tooling reconciliation slice is
+   >     owed (teach measure_pool_parity to credit the new
+   >     test_probe_*.py modules) — NOT inflated by hand. Until
+   >     then PROBED is a floor, not the true count.
+   >   - Carry-forward: Sothera residue re-walk; the SL doc-wide
+   >     "Headline counts" summary still lags (resync/refresh
+   >     cadence owns it).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
