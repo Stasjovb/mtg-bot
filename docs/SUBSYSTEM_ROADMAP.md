@@ -794,6 +794,48 @@ second:
    >     byte-equal number).
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 13 —
+   >   SoT-FLIP G1 COMPLETE; decision-set contract now COMPLETE
+   >   on BOTH axes; @ `f5c11231`, counts UNCHANGED, parity
+   >   307/475 / PROBED 106 UNCHANGED).**
+   >   - **G1 COMPLETE** (`f5c11231`): Rust `legal_decisions`
+   >     emits FACTORED per-creature `AttackerDecision`/
+   >     `BlockerDecision` byte-compatible with the Python NN/
+   >     MCTS seam (powerset/product caps removed; new Action
+   >     variants dispatch the SAME round-5 declare primitive
+   >     the unchanged whole-action arms loop over — single
+   >     source of truth). The C1-analog for the combat axis,
+   >     **adopted-and-finished** from the prior usage-capped
+   >     agent's verify-first-confirmed-sound WIP (the Radiant
+   >     Strike precedent, not a wasteful redo). Parity-NEUTRAL
+   >     (gate 1537 = 1532 baseline + 5 G1 pins, NO pin
+   >     shifted), negative-control-VERIFIED. state_ops-only ->
+   >     residue cadence did NOT fire (CFI-1 precedent, cron
+   >     exit-0); NO count/POOL_PARITY/PROBED change (C1-class);
+   >     .pyd rebuilt. SEARCH_LIMITATIONS: the 2 former ACCEPTED
+   >     powerset/product entries replaced by the single
+   >     closed-G1 note.
+   >   - **The SoT-flip decision-set contract is COMPLETE on
+   >     BOTH axes** — cast (C1: mana/target/additional-cost) +
+   >     combat (G1: factored attacker/blocker) — with B2/C6
+   >     loader-admit boundary CLOSED. **No known hidden gaps
+   >     remain.** G2 (PlayLand per-turn-limit) interim-maskable
+   >     non-blocker; G3 (Rust atomic resolution, no mid-
+   >     resolution decision nodes) explicitly-accepted
+   >     C6-fenced strength caveat (SL entry owed at B3-impl).
+   >   - **Flip endgame, bounded & mechanical:** B3-impl
+   >     (S1..S4 Python — `RustGameStateAdapter` behind the
+   >     `decision_source: python|rust_shadow|rust` flag,
+   >     default `python`; dict↔Decision adapter; codec
+   >     slot-source switch; determinization-via-Rust; the
+   >     rust_shadow bake-in 4-assertion tripwire) — NOW
+   >     UNBLOCKED -> rust_shadow bake-in **folding the C4
+   >     post-R76 scaled re-sweep** -> B3-S5 atomic SoT-flip
+   >     flag (orchestrator-sequenced) -> Step 5/6
+   >     bridge-vestigialization cleanup. ONE deliberate lane
+   >     at a time; no padding.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

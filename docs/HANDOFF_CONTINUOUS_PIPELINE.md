@@ -138,7 +138,7 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 12, @ `bb29df8d` — READ FIRST.**
+> **⚠ SoT-FLIP PATH — cycle 13, @ `f5c11231` — READ FIRST.**
 > The cycle-11 phase-transition decision is RESOLVED: the user chose
 > **pivot to the SoT-flip path** (deliberate sequenced flip-execution,
 > NOT continuous cheap-refill). The continuous cheap-parallel-refill
@@ -157,12 +157,25 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   PythonCastSpellSet` on the live cast surface, all parity-neutral.
 > - **B2/C6 loader-admit soundness boundary CLOSED** (`66485d6d` —
 >   observable + fail-loud + pinned).
-> - **NEXT (the single genuine flip lane): B3 — the NN↔Rust
->   decision-sourcing wiring SPEC** (now UNBLOCKED; was hard-blocked
->   until C1 fully landed) → B3 impl → C4 post-R76-fix scaled
->   re-sweep on the flip-candidate commit → atomic SoT-flip flag +
->   bake-in → bridge-vestigialization cleanup
->   (`docs/BRIDGE_VESTIGIALIZATION_PLAN.md`).
+> - **G1 factored-combat-decision-set COMPLETE** (`f5c11231` — the
+>   C1-analog for the combat axis; Rust now emits factored
+>   per-creature attacker/blocker decisions byte-compatible with the
+>   NN seam, parity-neutral, negative-control-verified). The
+>   decision-set contract is now COMPLETE on **both** axes (cast +
+>   combat). **B3 wiring SPEC** also done (`302cadf0`,
+>   `docs/NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md`).
+> - **NEXT (the single genuine flip lane): B3-IMPL** — the
+>   mechanical flag-gated Python wiring per the B3 spec:
+>   `RustGameStateAdapter` behind `decision_source:
+>   python|rust_shadow|rust` (default `python`) + dict↔Decision
+>   adapter + codec slot-source switch + determinization-via-Rust +
+>   the rust_shadow 4-assertion bake-in tripwire — NOW UNBLOCKED
+>   (G1 closed) → rust_shadow bake-in **folding the C4 post-R76
+>   scaled re-sweep** → B3-S5 atomic SoT-flip flag → Step 5/6
+>   bridge-vestigialization cleanup
+>   (`docs/BRIDGE_VESTIGIALIZATION_PLAN.md`). No known hidden gaps
+>   remain (G2 interim-maskable non-blocker; G3 accepted C6-fenced
+>   caveat, SL entry owed at B3-impl).
 >
 > **Cadence: ONE genuine flip lane at a time. A re-orienting routine /
 > next session MUST NOT pad the pipeline back to ≤5 with manufactured

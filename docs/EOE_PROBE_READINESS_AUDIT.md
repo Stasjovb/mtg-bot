@@ -304,7 +304,37 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main bb29df8d (continuous-pipeline cycle 12 —
+     Measured at main f5c11231 (continuous-pipeline cycle 13 —
+     SoT-FLIP G1 COMPLETE; decision-set contract now COMPLETE
+     on BOTH axes). G1 (`f5c11231`): Rust legal_decisions now
+     emits FACTORED per-creature AttackerDecision/BlockerDecision
+     byte-compatible with the Python NN/MCTS seam (powerset/
+     product caps removed; new Action variants dispatch the
+     SAME round-5 declare primitive the unchanged whole-action
+     arms use — single source of truth; the C1-analog for the
+     combat axis, adopted-and-finished from the prior usage-
+     capped agent's verify-first-sound WIP). Parity-NEUTRAL
+     (gate 1537 = 1532 baseline + 5 G1 pins, NO pin shifted),
+     negative-control-VERIFIED (pre-G1 FAILS the factored-shape
+     equality at the documented powerset/product divergence;
+     GREEN post-fix). G1 touched state_ops_legal/actions/
+     state_ops_actions.rs ONLY (NOT cards.rs/cross_engine.py)
+     -> residue cadence did NOT fire (CFI-1 precedent, cron
+     verified exit-0); NO count drift; POOL_PARITY/PROBED
+     UNCHANGED 307/475 / 106 (C1-class, regen no-op); .pyd
+     rebuilt; the 8 genuinely_missing residue stamps stay
+     bb29df8d (no re-stamp owed). SEARCH_LIMITATIONS: the 2
+     former ACCEPTED powerset/product entries replaced by the
+     single closed-G1 note. **The SoT-flip decision-set
+     contract is now COMPLETE on BOTH axes: cast (C1) +
+     combat (G1); B2/C6 loader-admit boundary CLOSED. No known
+     hidden gaps remain** (G2 PlayLand-limit interim-maskable
+     non-blocker; G3 atomic-Rust-resolution accepted C6-fenced
+     caveat, SL entry owed at B3-impl). NEXT = B3-impl (the
+     mechanical flag-gated Python wiring, NOW UNBLOCKED) ->
+     rust_shadow bake-in folding C4 post-R76 scaled re-sweep
+     -> atomic SoT-flip flag -> bridge-vestigialization
+     cleanup. PRIOR cycle 12 (@ bb29df8d —
      SoT-FLIP C1 KEYSTONE COMPLETE + B2/C6 CLOSED). The user
      pivoted the campaign to the SoT-flip path; C1 decision-
      sourcing is now COMPLETE at the legal-decision-set level:
