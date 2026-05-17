@@ -63679,6 +63679,210 @@ def test_cross_engine_real_eoe_perigee_beckoner_etb_pump_grant_dies_return_tappe
     assert rs.get_life(1) == py.players[1].life
 
 
+# ===========================================================================
+# Round-62 N1 — 2-color non-basic land (shockland) ACTIVATED-mana-ability
+# cross-engine byte-equal pins. THIS IS THE FLIPPED round-61-N3 DIVERGENCE
+# PROBE: N3 documented (docs + scout_r61_shockland_mana_divergence.py) that
+# `activate_ability(dual_land, 0)` made Python add 1 color but Rust add
+# BOTH (the whole `Sequence(Add c1, Add c2)`) -> a spurious extra mana in
+# the Rust pool (4 FAIL_DIVERGENCE / 112 games). N3 left no structured pin
+# — it only documented the per-engine divergence. Round-62's Rust fix
+# (apply_mana_produced_bridge -> one is_mana_ability ability per color,
+# matching Python's `_card_def_to_python_printing` per-color shape) lets
+# this pin assert the *opposite*: byte-equal `activate_ability` pool state
+# across BOTH engines for EACH color index of a real 2-color shockland,
+# and that idx0/idx1 add the expected single color (no spurious mana).
+# The probe drives the SAME real loader path both engines use in
+# production: the live `OracleParserCardSource` printing ->
+# `trajectory._printing_to_card_def` -> Python via
+# `_card_def_to_python_printing`, Rust via `register_and_inject_object`
+# (which runs the fixed `parse_printing` mana_produced bridge).
+# ===========================================================================
+
+
+def _r62_real_shockland_card_def(name: str):
+    """The REAL shockland CardDef the production loader uses — built
+    from the live ``OracleParserCardSource`` printing through the
+    actual ``trajectory._printing_to_card_def`` arm. Same source as
+    the round-60 N1 pins' ``_r60_real_shockland_card_def`` (kept local
+    here so this probe block is self-contained / sentinel-isolated)."""
+    from mtg_bot.cards.source import OracleParserCardSource
+    from mtg_bot.parity.trajectory import _printing_to_card_def
+
+    by = OracleParserCardSource().get_printings()
+    return _printing_to_card_def(by[name])
+
+
+def _r62_inject_shockland_both(py_state, rust_state, card_def):
+    """Side-channel inject one untapped, non-summoning-sick copy of
+    ``card_def`` (a real 2-color shockland) onto p0's battlefield on
+    BOTH engines, materialized through each engine's real bridge:
+
+      * Python: ``_card_def_to_python_printing`` (the single source of
+        truth for the CardDef -> Python printing shape — builds one
+        ``{T}: Add {C}`` ``is_mana_ability`` ActivatedAbility per
+        color in ``mana_produced`` order).
+      * Rust: ``register_and_inject_object`` with the same registry
+        dict ``build_rust_state`` emits, which runs ``parse_printing``
+        -> the round-62 fixed ``apply_mana_produced_bridge`` (one
+        per-color ``is_mana_ability`` ability, same input order).
+
+    Returns ``(py_obj_id, rust_obj_id)``.
+    """
+    from mtg_bot.parity.cross_engine import _card_def_to_python_printing
+    from mtg_bot.game import Zone
+
+    # ---- Python ----
+    pr = _card_def_to_python_printing(card_def)
+    py_obj = py_state.new_object(pr, owner_id=0, zone=Zone.BATTLEFIELD)
+    py_obj.tapped = False
+    py_obj.summoning_sick = False
+    py_obj.etb_timestamp = py_state.next_timestamp
+    py_state.next_timestamp += 1
+    py_state.battlefield.append(py_obj)
+
+    # ---- Rust ----
+    # Same registry-dict shape build_rust_state emits for a Land
+    # CardDef with mana_produced (cross_engine.py ~L8562). The key
+    # surface under test is the mana_produced bridge.
+    ZONE_BATTLEFIELD = 2
+    rust_obj_id = rust_state.register_and_inject_object(
+        {
+            "name": card_def.name,
+            "card_types": ["Land"],
+            "mana_cost": {},
+            "effects": [],
+            "mana_produced": list(card_def.mana_produced),
+            "supertypes": [],
+        },
+        0,  # controller = p0
+        ZONE_BATTLEFIELD,
+    )
+    return int(py_obj.id), int(rust_obj_id)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Watery Grave", "Breeding Pool", "Stomping Ground",
+     "Godless Shrine", "Sacred Foundry"],
+)
+def test_r62_shockland_activate_ability_per_color_byte_equal_both_engines(
+    parity_smoke, name,
+):
+    """**THE FLIPPED round-61-N3 divergence pin (cross-engine
+    byte-equal).** For each of the 5 real EoE pay-life shocklands:
+    inject the real loader-built CardDef onto p0's battlefield on
+    BOTH engines, then for EACH color index ``k`` drive
+    ``activate_ability(land, k)`` and assert the resulting mana pool
+    is BYTE-EQUAL across Python and Rust, AND that index ``k`` adds
+    exactly the ``k``-th produced color (one coin, no spurious second
+    color).
+
+    Pre-round-62 this was the captured FAIL_DIVERGENCE: Rust's
+    ``apply_mana_produced_bridge`` synthesized ONE ability adding ALL
+    colors (``Sequence(Add c1, Add c2)``) so ``activate_ability(
+    land, 0)`` made Rust add BOTH colors while Python added 1 -> a
+    spurious extra ``c2`` in the Rust pool (the exact ``('U',1)`` vs
+    ``('U',0)`` byte-diff round-61 N3 captured, e.g. arch 37/s3/t9).
+    Post-fix the two bridges build the SAME per-color shape so each
+    index adds exactly its one color on both engines.
+    """
+    from mtg_bot.actions import ActivateAbility as PyActivateAbility
+    from mtg_bot.actions import apply_action as py_apply_action
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec,
+        build_matched_states,
+        _python_mana_pool_signature,
+    )
+
+    cd = _r62_real_shockland_card_def(name)
+    # The sorted dual the loader emits (matches _R60_NONBASIC_SHOCKLANDS).
+    colors = tuple(cd.mana_produced)
+    assert len(colors) == 2 and list(colors) == sorted(colors), (
+        f"{name}: expected sorted 2-color mana_produced, got {colors}"
+    )
+
+    # Empty matched states; we side-channel the land in directly.
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state, rust_state = build_matched_states(spec)
+
+    for idx, expected_color in enumerate(colors):
+        # Fresh untapped copy each index so the tap_self cost on a
+        # prior index can't gate this activation.
+        py_id, rust_id = _r62_inject_shockland_both(
+            py_state, rust_state, cd,
+        )
+        py_state.players[0].mana_pool.clear()
+        rust_state.empty_mana_pool(0)
+
+        py_apply_action(
+            py_state, 0,
+            PyActivateAbility(source_id=py_id, ability_index=idx),
+        )
+        rust_state.apply_action({
+            "kind": "activate_ability",
+            "source_id": rust_id,
+            "ability_index": idx,
+        })
+
+        # Canonical 6-key pool dicts (same shape the bench field-view
+        # compares — `mana_pool_pN`).
+        py_pool = dict(
+            _python_mana_pool_signature(py_state.players[0].mana_pool)
+        )
+        rust_pool = dict(rust_state.get_mana_pool(0))
+
+        assert py_pool == rust_pool, (
+            f"{name} ability_index={idx}: mana pool DIVERGED across "
+            f"engines (round-61 N3's bug shape). py={py_pool} "
+            f"rust={rust_pool}"
+        )
+        # idx k adds exactly the k-th color, exactly one coin.
+        assert py_pool.get(expected_color, 0) == 1, (
+            f"{name} ability_index={idx}: should add 1 "
+            f"{expected_color}; got py={py_pool}"
+        )
+        assert sum(py_pool.values()) == 1, (
+            f"{name} ability_index={idx}: pool must hold exactly 1 "
+            f"mana (the one chosen color — no spurious second color "
+            f"from the old Rust Sequence shape); got {py_pool}"
+        )
+
+
+def test_r62_shockland_activate_idx0_no_spurious_second_color_rust(
+    parity_smoke,
+):
+    """Direct regression on the exact captured byte-diff: a real
+    2-color shockland (Watery Grave B/U — the arch-37/s3 carrier),
+    ``activate_ability(land, 0)`` on the RUST engine, must yield a
+    pool with exactly ``{B:1}`` and ZERO ``U`` — the pre-round-62
+    bug put a spurious ``U:1`` here (Rust ran the whole
+    ``Sequence(Add B, Add U)`` for index 0)."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_matched_states
+
+    cd = _r62_real_shockland_card_def("Watery Grave")
+    assert tuple(cd.mana_produced) == ("B", "U")
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py_state, rust_state = build_matched_states(spec)
+    _py_id, rust_id = _r62_inject_shockland_both(py_state, rust_state, cd)
+    rust_state.empty_mana_pool(0)
+    rust_state.apply_action({
+        "kind": "activate_ability",
+        "source_id": rust_id,
+        "ability_index": 0,
+    })
+    rust_pool = dict(rust_state.get_mana_pool(0))
+    assert rust_pool.get("B", 0) == 1, (
+        f"Rust: idx0 of Watery Grave (B/U) must add B; got {rust_pool}"
+    )
+    assert rust_pool.get("U", 0) == 0, (
+        f"Rust: idx0 must NOT add U (the pre-r62 spurious-extra-mana "
+        f"bug — Rust ran Sequence(Add B, Add U) for index 0); got "
+        f"{rust_pool}"
+    )
+    assert sum(rust_pool.values()) == 1
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
