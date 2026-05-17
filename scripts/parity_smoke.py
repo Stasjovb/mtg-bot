@@ -92,6 +92,25 @@ def _zone_signature(zone: list[Any]) -> tuple:
     ``source_obj_id``. Falling back to ``obj.source.id`` here keeps the
     Python recipe symmetric with :func:`_rust_stack_obj_sig` so the
     cross-engine field-view comparison agrees on stack-entry shape.
+
+    **Counters slot (idx 4) — net +1/+1 counter.** Rust's
+    ``GameObject.counters`` is a single signed ``i32`` (negative ==
+    net -1/-1), and both ``_rust_zone_obj_sig`` and Rust's
+    ``fingerprint()`` emit it directly. A Python ``GameObject`` carries
+    NO ``counters`` attribute — it tracks ``plus_one_counters`` /
+    ``minus_one_counters`` as separate ints. Before this slice the
+    recipe read ``getattr(obj, "counters", 0)``, which was
+    STRUCTURALLY 0 for *every* Python object regardless of its real
+    counter state — a comparator blindness that silently masked any
+    cross-engine OR fingerprint divergence on a counter'd permanent
+    (the Orbital-Plunge slice's forward-flagged tooling gap; it had to
+    work around it with a targeted ``graveyard_p*`` delta filter).
+    We now derive the same signed net Rust emits: an explicit
+    ``counters`` attr wins if present (future-proofing + the Rust
+    dict-shim path), else ``plus_one_counters − minus_one_counters``,
+    else 0 (``StackItem`` / a vanilla object with neither attr — the
+    pinned vanilla fingerprint baselines are unchanged because their
+    objects have net 0 either way).
     """
     sig = []
     for obj in zone:
@@ -108,13 +127,49 @@ def _zone_signature(zone: list[Any]) -> tuple:
                 int(getattr(obj, "tapped", False)),
                 int(getattr(obj, "summoning_sick", False)),
                 getattr(obj, "damage", 0),
-                getattr(obj, "counters", 0),
+                _net_counters(obj),
                 getattr(obj, "attached_to", None),
                 getattr(obj, "controller_id", None),
                 obj_id,
             )
         )
     return tuple(sig)
+
+
+def _net_counters(obj: Any) -> int:
+    """Net signed +1/+1 counter for ``obj``, matching Rust's
+    ``GameObject.counters`` (a single ``i32``; negative == net -1/-1).
+
+    Resolution order:
+
+      1. An explicit ``counters`` attribute, if present — covers any
+         future Python object that adopts the unified field AND the
+         Rust dict-shim path (where ``obj`` is a snapshot dict-like
+         carrying ``counters`` directly).
+      2. ``plus_one_counters − minus_one_counters`` — the real Python
+         ``GameObject`` shape (it has these two ints, never a unified
+         ``counters``). CR 704.5n pairwise cancellation runs in
+         ``state_based_actions`` before this reader, so the post-SBA
+         net is exactly what both engines hold.
+      3. ``0`` — ``StackItem`` (no counters) or a bare object with
+         neither attribute. Vanilla permanents land here too with
+         net 0, so every pinned vanilla fingerprint baseline is
+         byte-unchanged by this slice.
+
+    Before this slice the recipe used ``getattr(obj, "counters", 0)``
+    directly, which always hit the default for Python ``GameObject``s
+    (no ``counters`` attr) — making the counters slot a structural 0
+    and silently masking cross-engine / fingerprint divergence on any
+    counter'd permanent.
+    """
+    c = getattr(obj, "counters", None)
+    if c is not None:
+        return c
+    plus = getattr(obj, "plus_one_counters", None)
+    minus = getattr(obj, "minus_one_counters", None)
+    if plus is not None or minus is not None:
+        return (plus or 0) - (minus or 0)
+    return 0
 
 
 def _hash_parts(parts: list) -> str:
