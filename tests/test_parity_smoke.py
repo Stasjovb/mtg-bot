@@ -65456,6 +65456,479 @@ def test_cross_engine_real_eoe_seedship_impact_destroy_then_conditional_lander_p
     )
 
 
+# =====================================================================
+# Effect-uncovered Tier-A queue #3 — Orbital Plunge (Lander-rider).
+# Effect::DealDamageToTargetCreatureWithExcessLanderRider {amount,
+# token_printing_id} mirrors Python's
+# DealDamageToTargetCreatureWithExcessLanderRider
+# (effects/generic/damage.py:327): deal `amount` damage to the first
+# creature; remaining = max(0, effective_toughness − obj.damage),
+# excess = max(0, amount − remaining), computed BEFORE the damage is
+# applied; if excess > 0 create a Lander under the source's
+# controller. effective_toughness is the counters-INCLUSIVE
+# Python-SoT view.
+#
+# 6 Rust regression pins drive the Rust resolve arm via an ETB
+# trigger; the genuine real-EoE probe drives the ACTUAL parsed
+# Orbital Plunge printing's spell_effect cross-engine.
+# =====================================================================
+
+
+def _build_rust_orbital_state(
+    *,
+    victim_toughness: int = 2,
+    victim_power: int = 2,
+    victim_counters: int = 0,
+    seed_victim: bool = True,
+    victim_card_types=("Creature",),
+):
+    """Build a Rust state: Orbital-Plunge ETB carrier on p0's bf +
+    (optionally) one victim permanent on p1's bf. Lander pid is
+    registered first. Returns ``(rs, lander_pid, victim_id_or_None)``.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    lander_pid = rs.registry_size
+    rs.register_and_inject_object(_RS2_LANDER_DICT, 0, 1)
+    victim_id = None
+    if seed_victim:
+        vd = {
+            "name": "OP Victim",
+            "card_types": list(victim_card_types),
+        }
+        if "Creature" in victim_card_types:
+            vd["power"] = victim_power
+            vd["toughness"] = victim_toughness
+        victim_id = rs.register_and_inject_object(vd, 1, ZB)
+        if victim_counters != 0:
+            assert rs.set_counters(victim_id, victim_counters) is True
+    rs.register_and_inject_object(
+        {
+            "name": "OP Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"R": 1, "generic": 3},
+            "power": 1,
+            "toughness": 1,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": (
+                            "deal_damage_to_target_creature_"
+                            "with_excess_lander_rider"
+                        ),
+                        "amount": 6,
+                        "token_printing_id": lander_pid,
+                    },
+                }
+            ],
+        },
+        0,
+        ZB,
+    )
+    return rs, lander_pid, victim_id
+
+
+def _rs3_lander_count(rs, controller):
+    return sum(
+        1
+        for e in rs.battlefield_snapshot()
+        if e["printing_name"] == "Lander"
+        and e["controller_id"] == controller
+    )
+
+
+def test_rust_orbital_2_2_target_excess_creates_lander():
+    """Rust pin (a): 2/2 target, 6 damage. remaining = 2,
+    excess = max(0, 6−2) = 4 > 0 → a Lander is created under p0."""
+    rs, _pid, vid = _build_rust_orbital_state(
+        victim_toughness=2, victim_power=2
+    )
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    # Target took 6 damage (still on bf until SBA; the arm only marks).
+    rs.apply_sbas()
+    assert vid not in [
+        int(e["id"]) for e in rs.battlefield_snapshot()
+    ], "2/2 dealt 6 → lethal → off bf after SBA"
+    assert _rs3_lander_count(rs, 0) == 1, (
+        "excess (4) > 0 → Lander under p0"
+    )
+
+
+def test_rust_orbital_toughness6_target_no_excess_no_lander():
+    """Rust pin (b): toughness-6 target, 0 prior damage.
+    remaining = 6, excess = max(0, 6−6) = 0 → NO Lander (the target
+    is dealt exactly-lethal 6 but no EXCESS)."""
+    rs, _pid, vid = _build_rust_orbital_state(
+        victim_toughness=6, victim_power=1
+    )
+    rs.resolve_top_of_stack()
+    assert _rs3_lander_count(rs, 0) == 0, (
+        "excess == 0 → NO Lander consolation"
+    )
+    # 6 damage on a 6-toughness creature is lethal → SBA removes it,
+    # but that does not retroactively create a Lander.
+    rs.apply_sbas()
+    assert vid not in [
+        int(e["id"]) for e in rs.battlefield_snapshot()
+    ]
+
+
+def test_rust_orbital_negative_counters_shrink_toughness_excess_lander():
+    """Rust pin (c) — the §2 counters-asymmetry, NEGATIVE direction.
+    A printed-6-toughness creature with −3 net counters has effective
+    toughness 3 (Python's effective_toughness folds counters per CR
+    613 layer 7d). remaining = 3, excess = max(0, 6−3) = 3 > 0 →
+    Lander. A bug that read the combat-side toughness getter (which
+    OMITS counters) would compute remaining=6, excess=0, NO Lander —
+    a silent divergence from the Python source of truth. This pins
+    the counters-inclusive denominator."""
+    rs, _pid, _vid = _build_rust_orbital_state(
+        victim_toughness=6, victim_power=1, victim_counters=-3
+    )
+    rs.resolve_top_of_stack()
+    assert _rs3_lander_count(rs, 0) == 1, (
+        "effective toughness must fold the −3 counters (=3) so "
+        "excess = 6−3 = 3 > 0 → Lander (Python-SoT counters view)"
+    )
+
+
+def test_rust_orbital_positive_counters_grow_toughness_no_excess():
+    """Rust pin (d) — the §2 counters-asymmetry, POSITIVE direction.
+    A printed-2-toughness creature with +4 net counters has effective
+    toughness 6. remaining = 6, excess = max(0, 6−6) = 0 → NO Lander.
+    A bug that omitted counters would read toughness 2, excess = 4,
+    and WRONGLY create a Lander. Pins the counters-inclusive
+    denominator the other way."""
+    rs, _pid, _vid = _build_rust_orbital_state(
+        victim_toughness=2, victim_power=2, victim_counters=4
+    )
+    rs.resolve_top_of_stack()
+    assert _rs3_lander_count(rs, 0) == 0, (
+        "effective toughness must fold the +4 counters (=6) so "
+        "excess = 6−6 = 0 → NO Lander"
+    )
+
+
+def test_rust_orbital_no_creature_silent_noop():
+    """Rust pin (e): NO creature anywhere on the battlefield → silent
+    no-op (no damage, no Lander, no crash). Driven via the SORCERY
+    spell-push path (not an ETB creature carrier — Orbital Plunge can
+    legally target ANY creature including the controller's own, so a
+    creature carrier would always be a valid target; the genuine
+    no-target case needs zero creatures on either bf, which only the
+    spell-push path can set up). Only an Artifact is on p1's bf."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    lander_pid = rs.registry_size
+    rs.register_and_inject_object(_RS2_LANDER_DICT, 0, 1)
+    # A non-creature artifact on p1's bf (not a legal target).
+    rs.register_and_inject_object(
+        {"name": "OP Inert Artifact", "card_types": ["Artifact"]},
+        1, 2,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Orbital Plunge", "card_types": ["Sorcery"],
+         "effects": [{"kind": ("deal_damage_to_target_creature_"
+                               "with_excess_lander_rider"),
+                      "amount": 6, "token_printing_id": lander_pid}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert _rs3_lander_count(rs, 0) == 0, (
+        "no creature anywhere → no damage, no Lander (silent no-op)"
+    )
+    assert any(
+        e["printing_name"] == "OP Inert Artifact"
+        for e in rs.battlefield_snapshot()
+    ), "the non-creature artifact is untouched"
+
+
+def test_rust_orbital_lander_under_source_controller_not_active():
+    """Rust pin (f): the Lander enters under the SOURCE's controller
+    (p0), not active_player. Same-controller here (active=0, source
+    controller=0) — pins the source-controller seat path stays
+    correct for the bespoke arm (current_resolve_source_controller)."""
+    rs, _pid, _vid = _build_rust_orbital_state(
+        victim_toughness=2, victim_power=2
+    )
+    assert rs.active_player == 0
+    rs.resolve_top_of_stack()
+    assert _rs3_lander_count(rs, 0) == 1
+    assert _rs3_lander_count(rs, 1) == 0, (
+        "Lander must NOT enter under p1 — source's controller is p0 "
+        "(CR 111.4)"
+    )
+
+
+def test_cross_engine_real_eoe_orbital_plunge_excess_conditional_lander_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Orbital Plunge
+    (~28,629 17lands decks). Effect-uncovered Tier-A queue #3.**
+
+    Drives the **ACTUAL parsed Orbital Plunge printing** on the Python
+    side: ``get_active_source().get_printings()["Orbital Plunge"]`` —
+    which the live parser maps to a ``spell_effect`` of
+    ``DealDamageToTargetCreatureWithExcessLanderRider(amount=6,
+    targets=(TargetSpec(IsCreature()),))`` (verified below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Sorcery] {3}{R} — Orbital Plunge deals 6 damage to target
+         creature. If excess damage was dealt this way, create a
+         Lander token."
+
+    **Honest split (§2 — Effect-half closes byte-equal; full card
+    stays loader-gated).** The new Effect arm under test —
+    ``Effect::DealDamageToTargetCreatureWithExcessLanderRider {
+    amount, token_printing_id }`` — is shipped this slice (Rust
+    two-field payload variant + parse + to_dict + resolve; damage-
+    apply is the shipped DealDamageAnyTarget shape, the conditional
+    Lander-create block re-derived privately from
+    ``Effect::CreateToken``), bridged via ``cross_engine.py``
+    ``deal_damage_to_target_creature_with_excess_lander_rider`` to the
+    pre-existing Python class (effects/generic/damage.py:327). The
+    Rust variant carries the Lander's Rust-registry
+    ``token_printing_id`` (Rust has no intrinsic Lander); the bridge
+    DROPS the pid (Python mints intrinsically from
+    ``TOKEN_PRINTINGS["Lander"]``). Both engines seat the SAME
+    "Lander" printing so the created token is byte-equal in the
+    name-keyed field view. The full Orbital Plunge **Sorcery** is NOT
+    added to the production-deck loader ``_SAFE_*`` allowlist — no
+    Instant/Sorcery bench-admit path. Mirrors the r51..r65
+    Effect-half-vs-full-card precedent — see
+    ``docs/SEARCH_LIMITATIONS.md`` Orbital-Plunge entry.
+
+    **§2 counters-asymmetry pinned (load-bearing).** Python's
+    ``effective_toughness`` folds +1/+1 counters (CR 613 layer 7d).
+    The NEGATIVE arm uses a printed-8-toughness creature with −4 net
+    counters → effective toughness 4 → remaining 4 → excess =
+    max(0, 6−4) = 2 > 0 → a Lander on BOTH (a counters-omitting bug
+    would read toughness 8, excess 0, NO Lander — diverging). The
+    POSITIVE arm uses a printed-2-toughness creature with 0 counters
+    → remaining 2 → excess 4 > 0 → a Lander on BOTH. The
+    no-excess arm uses a printed-8-toughness creature → remaining 8 →
+    excess 0 → NO Lander on BOTH. All three WHOLE-field byte-equal.
+
+    **Deterministic, no RNG.** p1 (opponent) has exactly one creature;
+    p0 casts the genuine Orbital Plunge (Python: real ``spell_effect``
+    on a ``StackItem`` with the chosen ``("creature", id)`` target;
+    Rust: the bridged synthetic Sorcery carrying the registered
+    Lander pid).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToTargetCreatureWithExcessLanderRider,
+    )
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = get_active_source().get_printings().get("Orbital Plunge")
+    if real is None:
+        pytest.skip("Orbital Plunge absent from active CardSource")
+    assert "Sorcery" in real.card_types
+    se = real.spell_effect
+    assert isinstance(
+        se, DealDamageToTargetCreatureWithExcessLanderRider
+    ), (
+        f"genuine Orbital Plunge spell_effect must be "
+        f"DealDamageToTargetCreatureWithExcessLanderRider; got "
+        f"{type(se).__name__}"
+    )
+    assert se.amount == 6
+
+    def _cp(name, power, toughness):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=power, toughness=toughness, produces=frozenset(),
+        )
+
+    def _run_arm(printed_toughness: int, net_counters: int):
+        """Build matched states with one p1 creature
+        (printed_toughness / net_counters), cast the genuine Orbital
+        Plunge (Python) / bridged synthetic Sorcery (Rust), drain SBAs
+        on both, and return (field_diffs, rust_lander_n, py_lander_n).
+        """
+        spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+        py = build_python_state(spec)
+        rs = build_rust_state(spec)
+        ZB = 2
+
+        # Register the Lander on Rust (pid = registry_size); inert
+        # library seed mirrored on Python (summoning_sick forced False
+        # — Rust register_and_inject_object seats False for all zones;
+        # Python new_object defaults True; the known synthetic-state
+        # fixture nuance, NOT an Orbital-Plunge divergence).
+        lander_pid = rs.registry_size
+        rs.register_and_inject_object(_RS2_LANDER_DICT, 0, 1)
+        from mtg_bot.cards import TOKEN_PRINTINGS
+        py_seed = py.new_object(TOKEN_PRINTINGS["Lander"], owner_id=0,
+                                zone=Zone.LIBRARY)
+        py_seed.summoning_sick = False
+        py.players[0].library.append(py_seed)
+
+        # p1 single creature victim, printed power 1 (irrelevant),
+        # printed toughness `printed_toughness`, `net_counters` net
+        # +1/+1 counters, on BOTH bfs.
+        py_vic = py.new_object(_cp("OP Real Victim", 1,
+                                   printed_toughness),
+                               owner_id=1, zone=Zone.BATTLEFIELD)
+        py_vic.summoning_sick = False
+        if net_counters >= 0:
+            py_vic.plus_one_counters = net_counters
+        else:
+            py_vic.minus_one_counters = -net_counters
+        py.battlefield.append(py_vic)
+        rs_vic_id = rs.register_and_inject_object(
+            {"name": "OP Real Victim", "card_types": ["Creature"],
+             "power": 1, "toughness": printed_toughness}, 1, ZB)
+        if net_counters != 0:
+            assert rs.set_counters(rs_vic_id, net_counters) is True
+
+        # Python: the GENUINE parsed Orbital Plunge printing on a
+        # StackItem, controller p0, chosen target = p1's creature.
+        py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+        py_spell.summoning_sick = False
+        py.stack.append(
+            StackItem(source=py_spell, controller_id=0,
+                      targets=(("creature", py_vic.id),))
+        )
+        resolve_top_of_stack(py)
+        py_sba(py)
+        assert len(py.stack) == 0
+
+        # Rust: bridged synthetic Sorcery carrying the bespoke arm +
+        # the registered Lander pid.
+        rs_spell_id = rs.register_and_inject_object(
+            {"name": "Orbital Plunge", "card_types": ["Sorcery"],
+             "effects": [{"kind": ("deal_damage_to_target_creature_"
+                                   "with_excess_lander_rider"),
+                          "amount": 6,
+                          "token_printing_id": lander_pid}]},
+            0, 0,  # controller p0, ZONE_HAND
+        )
+        rs.push_to_stack(rs_spell_id, 0)
+        rs.resolve_top_of_stack()
+        rs.apply_sbas()
+        assert rs.stack_size() == 0
+
+        diffs = compare_fields(
+            build_python_field_view(py),
+            ce_parity_smoke()._build_field_view(rs),
+        )
+        # KNOWN COMPARATOR LIMITATION (not an engine divergence):
+        # Python's `_zone_signature` reads ``getattr(obj, "counters",
+        # 0)`` but a Python ``GameObject`` has NO ``counters`` attr
+        # (it carries separate ``plus_one_counters`` /
+        # ``minus_one_counters`` ints) — so the comparator's counters
+        # slot is STRUCTURALLY 0 for every Python object, while Rust
+        # emits the real net counters. For a counter'd creature that
+        # then DIES (moves to the graveyard with its net counters
+        # preserved per CR 400.7 on BOTH engines), the comparator
+        # therefore reports a spurious graveyard-counters diff that is
+        # a Python-side comparator blindness, NOT a Seedship/Orbital
+        # engine divergence. Filter exactly that one shape (a
+        # ``graveyard_p*`` field whose ONLY per-tuple difference is
+        # the counters slot, py=0) so the meaningful fields
+        # (battlefield incl. the Lander, lives, the rest) still
+        # assert byte-equal. The §2 counters-asymmetry is pinned by
+        # the LANDER COUNT (rust_n == py_n below) which directly
+        # depends on the counters-inclusive excess computation — that
+        # is the load-bearing assertion the comparator blindness does
+        # not weaken.
+        def _is_known_counters_blind_gy_diff(fd) -> bool:
+            if not str(fd.field).startswith("graveyard_p"):
+                return False
+            pv, rvv = fd.py_value, fd.rust_value
+            if not (isinstance(pv, tuple) and isinstance(rvv, tuple)):
+                return False
+            if len(pv) != len(rvv):
+                return False
+            for pt, rt in zip(pv, rvv):
+                # per-object 8-tuple: idx 4 == counters slot.
+                if len(pt) != 8 or len(rt) != 8:
+                    return False
+                if pt[4] != 0:
+                    return False
+                # every OTHER slot must already agree.
+                if pt[:4] != rt[:4] or pt[5:] != rt[5:]:
+                    return False
+            return True
+
+        meaningful = [
+            fd for fd in diffs
+            if not _is_known_counters_blind_gy_diff(fd)
+        ]
+        rust_n = sum(1 for e in rs.battlefield_snapshot()
+                     if e["printing_name"] == "Lander")
+        py_n = sum(1 for o in py.battlefield
+                   if o.printing.name == "Lander")
+        return meaningful, rust_n, py_n
+
+    # ---- POSITIVE: 2-toughness, no counters → remaining 2,
+    # excess = 6−2 = 4 > 0 → Lander; WHOLE field byte-equal.
+    diffs, rn, pn = _run_arm(printed_toughness=2, net_counters=0)
+    assert rn == 1 == pn, (
+        f"excess>0 → exactly one Lander on BOTH; rust={rn} py={pn}"
+    )
+    assert diffs == [], (
+        f"Orbital Plunge excess-arm must be byte-equal across the "
+        f"WHOLE field view on BOTH; diffs={diffs}"
+    )
+
+    # ---- NEGATIVE counters (the §2 load-bearing arm): printed
+    # toughness 8, −4 counters → effective toughness 4 → remaining 4 →
+    # excess = 6−4 = 2 > 0 → Lander. The LANDER COUNT (rn==pn==1) is
+    # the load-bearing §2 counters-asymmetry pin (a counters-omitting
+    # bug would read toughness 8, excess 0, NO Lander → rn==0). Field
+    # view byte-equal modulo the documented comparator counters-
+    # blindness on the dead counter'd creature.
+    diffs, rn, pn = _run_arm(printed_toughness=8, net_counters=-4)
+    assert rn == 1 == pn, (
+        f"counters-inclusive effective toughness (8−4=4) → excess "
+        f"6−4=2>0 → one Lander on BOTH (the §2 pin); rust={rn} py={pn}"
+    )
+    assert diffs == [], (
+        f"Orbital Plunge counters-shrink arm must be byte-equal "
+        f"(modulo the documented Python comparator counters-blindness "
+        f"on the dead counter'd creature); meaningful diffs={diffs}"
+    )
+
+    # ---- NO-EXCESS: printed toughness 8, no counters → remaining 8 →
+    # excess = max(0, 6−8) = 0 → NO Lander; WHOLE field byte-equal.
+    diffs, rn, pn = _run_arm(printed_toughness=8, net_counters=0)
+    assert rn == 0 == pn, (
+        f"excess==0 → NO Lander on BOTH; rust={rn} py={pn}"
+    )
+    assert diffs == [], (
+        f"Orbital Plunge no-excess arm must be byte-equal across the "
+        f"WHOLE field view on BOTH; diffs={diffs}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

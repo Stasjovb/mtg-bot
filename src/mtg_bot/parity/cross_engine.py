@@ -8258,6 +8258,59 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # Effect-half-vs-full-card precedent.
         from mtg_bot.effects.bespoke import SeedshipImpactEffect
         return SeedshipImpactEffect()
+    if kind == "deal_damage_to_target_creature_with_excess_lander_rider":
+        # **Effect-uncovered Tier-A — Orbital Plunge (Lander-rider).**
+        # Rust substrate
+        # ``Effect::DealDamageToTargetCreatureWithExcessLanderRider {
+        # amount, token_printing_id }`` (cards.rs two-field payload;
+        # parser
+        # ``"deal_damage_to_target_creature_with_excess_lander_rider"``;
+        # resolve in state_ops_resolve.rs beside the Seedship arm).
+        #
+        # **Field shape.** ``amount`` (damage; 6 for Orbital Plunge)
+        # rides through to the Python class's ``amount`` field.
+        # ``token_printing_id`` is the Rust-registry Lander index —
+        # the SAME pid-carrier deviation as
+        # ``seedship_impact_effect``: Rust has no intrinsic Lander, so
+        # a bespoke token-minting arm carries the pid; Python's
+        # ``DealDamageToTargetCreatureWithExcessLanderRider``
+        # (effects/generic/damage.py:327) mints the Lander
+        # intrinsically from ``TOKEN_PRINTINGS["Lander"]`` (no
+        # registry). The bridge **drops** the pid and constructs the
+        # class with just ``amount``. Both engines seat the SAME
+        # "Lander" printing (Rust via the registered pid, Python via
+        # TOKEN_PRINTINGS) → byte-equal in the name-keyed field view.
+        #
+        # **Resolve semantics (parity-relevant).** Rust scans BOTH
+        # battlefields in ETB-timestamp order for the first creature
+        # (Python's centralized ``state.battlefield`` walk +
+        # ``_slot_target_still_legal`` re-check; the deterministic-
+        # first no-callback convention), computes ``remaining =
+        # max(0, effective_toughness − obj.damage)`` and ``excess =
+        # max(0, amount − remaining)`` BEFORE applying damage, applies
+        # ``amount``, and creates one Lander under the source's
+        # controller iff ``excess > 0``. The effective toughness is
+        # the counters-INCLUSIVE Python-SoT view (Python's
+        # ``effective_toughness`` folds +1/+1 counters per CR 613
+        # layer 7d; the Rust arm re-derives the same
+        # ``base + counters + ueot_toughness_bonus`` SBA-side formula,
+        # NOT the combat-side getter that omits counters — the
+        # mini-spec's load-bearing §2 risk, pinned). Lifelink/
+        # deathtouch NOT modeled on either side (the documented
+        # simplification).
+        #
+        # **Honest Effect-half split (§2).** The Effect closes + is
+        # genuinely probed (damage + the excess-conditional Lander,
+        # byte-equal); the full Orbital Plunge Sorcery stays
+        # loader-gated on the not-yet-shipped shared spell-card-bridge
+        # lever (no Instant/Sorcery bench admit path). Mirrors the
+        # r51..r65 Effect-half-vs-full-card precedent.
+        from mtg_bot.effects.generic.damage import (
+            DealDamageToTargetCreatureWithExcessLanderRider,
+        )
+        return DealDamageToTargetCreatureWithExcessLanderRider(
+            amount=int(eff_dict.get("amount", 6)),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

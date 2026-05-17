@@ -4400,6 +4400,137 @@ the spell-card bench-admit lever intentionally NOT exercised).
 
 ---
 
+## Orbital Plunge — `DealDamageToTargetCreatureWithExcessLanderRider { amount, token_printing_id }` Effect half shipped byte-equal; full Sorcery stays loader-gated (no spell-card bench-admit path)
+
+**Location**: `rust/src/cards.rs`
+(`Effect::DealDamageToTargetCreatureWithExcessLanderRider { amount:
+i32, token_printing_id: u32 }` two-field payload variant +
+`parse_effect` arm
+`deal_damage_to_target_creature_with_excess_lander_rider` +
+`effect_to_pydict` arm) + `rust/src/state_ops_resolve.rs` (the
+resolve match arm beside the `SeedshipImpactEffect` arm — first-
+creature scan over BOTH bfs in ETB-timestamp order; the
+counters-inclusive remaining-lethal computation BEFORE damage; the
+`obj.damage.saturating_add` damage-apply from the shipped
+`DealDamageAnyTarget` shape; the conditional Lander-create block
+re-derived privately from `Effect::CreateToken`). Bridge arm
+`src/mtg_bot/parity/cross_engine.py`
+(`deal_damage_to_target_creature_with_excess_lander_rider`,
+immediately above the `PHASE5_BRIDGE_ARMS` sentinel). Python class
+(pre-existing, NOT new):
+`DealDamageToTargetCreatureWithExcessLanderRider`
+(`src/mtg_bot/effects/generic/damage.py:327`).
+
+**What the shortcut is**: Orbital Plunge (~28,629 17lands decks) is
+a `[Sorcery] {3}{R}` printing "Orbital Plunge deals 6 damage to
+target creature. If excess damage was dealt this way, create a
+Lander token." The genuine parsed printing's `spell_effect` is
+`DealDamageToTargetCreatureWithExcessLanderRider(amount=6,
+targets=(TargetSpec(IsCreature()),))`. Python's `resolve` computes
+`remaining = max(0, effective_toughness(state, obj) - obj.damage)`
+then `excess = max(0, self.amount - remaining)` BEFORE applying the
+damage, applies `amount`, and creates a Lander iff `excess > 0`. The
+shipped Rust variant carries `amount` (the damage; rides through to
+Python) + the Lander's Rust-registry `token_printing_id` — the SAME
+pid-carrier deviation as `SeedshipImpactEffect` (Rust has no
+intrinsic Lander; Python's class mints from
+`TOKEN_PRINTINGS["Lander"]`; the bridge DROPS the pid). The
+**deliberate divergence is NOT in the closed Effect half** but in
+the **scope**: the **full Orbital Plunge Sorcery is NOT added to the
+production-deck loader `_SAFE_*` allowlist** (no Instant/Sorcery
+bench-admit path).
+
+**§2 counters-asymmetry (load-bearing, the mini-spec risk)**:
+Python's `effective_toughness` (`game._compute_effective_pt`) folds
+`+1/+1` counters (CR 613 layer 7d). Rust's *combat-side*
+`effective_toughness` getter deliberately does NOT fold counters
+(the documented `state_ops_combat.rs` asymmetry), but the *SBA-side*
+lethal check (`state_ops_sba.rs::collect_sba_victims`) DOES via
+`base_toughness + obj.counters + obj.ueot_toughness_bonus()`. To
+stay byte-equal with the Python source of truth, the Orbital Plunge
+arm computes the remaining-lethal denominator with the
+counters-INCLUSIVE formula re-derived privately (file-isolation) —
+`base = ueot_base_pt_override().t OR printed_toughness`, plus
+`obj.counters`, plus `obj.ueot_toughness_bonus()` — NOT the
+combat-side getter. This is the mandatory mini-spec pin: a
+counters-omitting impl would silently diverge the excess (and hence
+the Lander) on a counter'd target. Pinned both directions (a
+−counters creature whose effective toughness shrinks → excess
+appears → Lander; a +counters creature whose effective toughness
+grows → excess vanishes → NO Lander) on the Rust side, and via the
+genuine real-EoE probe's NEGATIVE-counters arm (printed toughness 8,
+−4 counters → effective 4 → excess 2 → Lander on BOTH; a
+counters-omitting bug → no Lander → divergence). Lifelink/deathtouch
+are NOT modeled on either side (the documented Python parity
+simplification — CR 120.3e is not implemented; comparing amount to
+remaining toughness is the model).
+
+**Comparator limitation noted (NOT an engine divergence)**: the
+cross-engine field-view comparator's `_zone_signature` reads
+`getattr(obj, "counters", 0)` but a Python `GameObject` has no
+`counters` attribute (it carries separate
+`plus_one_counters`/`minus_one_counters` ints) — so the comparator's
+counters slot is structurally `0` for every Python object while Rust
+emits the real net counters. Both engines preserve net counters on a
+creature that dies (CR 400.7 carve-out; Python's
+`move_off_battlefield` does not clear them, Rust's SBA destroy path
+does not either), so the engines AGREE; the comparator merely cannot
+read Python's split counter fields, producing a spurious
+`graveyard_p*` counters diff for a counter'd-then-dead creature. The
+Orbital Plunge probe filters exactly that one shape (a `graveyard_p*`
+field whose only per-tuple difference is the counters slot, py=0) and
+relies on the **Lander count** assertion (which directly depends on
+the counters-inclusive excess) as the load-bearing §2 pin. This
+comparator counters-blindness is pre-existing and orthogonal to
+Orbital Plunge.
+
+**Why it's OK / which scenarios make it not-OK / failure mode**: the
+honest Effect-half-closes / full-card-stays-gated split established
+by r51..r65 (Monoist..Seedship Impact). The closed half round-trips
+byte-equal — the genuine real-EoE probe drives the ACTUAL parsed
+Orbital Plunge printing's `spell_effect` cross-engine over three arms
+(POSITIVE excess → Lander; NEGATIVE-counters excess → Lander, the §2
+pin; NO-excess → NO Lander), each WHOLE-field byte-equal modulo the
+documented comparator counters-blindness. The NOT-OK scenario is
+admitting the full Sorcery to the bench loader — structurally
+impossible today (no spell-card admit path); no real-card-exposed
+divergence.
+
+**Fix scope estimate**: the Effect half (the first-creature damage +
+the counters-inclusive at-resolve excess computation + the
+conditional Lander rider) is **complete**. Flipping the full Sorcery
+into the bench needs the separate shared spell-card-bridge lever (a
+`CardDef` spell shape + a `_printing_is_bridge_spell` predicate) —
+the same ~1-2-round shared substrate unblocking ALL remaining
+Effect-uncovered Tier-A cards. Deferred to that lever.
+
+**Impact estimate**: zero production strength cost (Orbital Plunge
+not on the loader allowlist; no production exposure). The
+real-card-coverage progress is the honest closure of the closeable
+Effect half (Orbital Plunge leaves the Effect-uncovered Tier-A
+bucket — its emitted class becomes a subset of the covered set) +
+honest pinning of the loader-gated spell-card-bridge remainder.
+
+**Pinned by**: 4 cross-engine bridge pins
+(`tests/test_cross_engine_etb_triggers.py::test_bridge_orbital_plunge_basic_translation_amount_6`
++ `..._amount_rides_through` + `..._pid_dropped_equality` +
+`..._composable_in_sequence`); 6 Rust regression pins
+(`tests/test_parity_smoke.py::test_rust_orbital_*` — 2/2 → excess
+4 → Lander; toughness-6 → excess 0 → NO Lander;
+negative-counters-shrink-toughness → excess → Lander (§2);
+positive-counters-grow-toughness → no excess → NO Lander (§2);
+no-creature-anywhere via spell-push → silent no-op; Lander under
+source-controller not active_player); 1 genuine real-EoE
+cross-engine probe
+(`tests/test_parity_smoke.py::test_cross_engine_real_eoe_orbital_plunge_excess_conditional_lander_parity`
+— drives the actual parsed Orbital Plunge `spell_effect`
+cross-engine, POSITIVE excess + NEGATIVE-counters excess (the §2
+pin) + NO-excess arms, WHOLE field byte-equal modulo the documented
+comparator counters-blindness; the spell-card bench-admit lever
+intentionally NOT exercised).
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,
