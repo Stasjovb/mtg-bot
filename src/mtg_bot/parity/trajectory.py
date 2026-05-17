@@ -3331,55 +3331,78 @@ def _printing_is_bridge_simple_creature(printing) -> bool:
 
 
 def _printing_is_bridge_pure_warp_creature(printing) -> bool:
-    """True iff a CardPrinting is a PURE fixed-`ManaCost` warp creature
-    the Phase-1 warp substrate round-trips byte-equal across engines.
+    """True iff a CardPrinting is a warp creature the warp substrate
+    round-trips byte-equal across engines — Phase 1's pure fixed-cost
+    pair PLUS Phase 1.5's safe-trigger+warp residue trio.
 
     Phase-6 warp_cost substrate, **phase 1** (round-63; spec at
-    ``docs/WARP_COST_PHASE1_DESIGN.md`` §3, written round-62 N2).
+    ``docs/WARP_COST_PHASE1_DESIGN.md`` §3, written round-62 N2) +
+    **phase 1.5** (round-65; the safe-trigger+warp residue trio the
+    Phase-1 agent deliberately scoped out — see the live-tree-drift
+    note below).
 
-    Motivating set: Red Tiger Mechan ({1}{R} warp, {3}{R} normal),
-    Bygone Colossus ({3} warp, {9} normal) — both Artifact Creatures,
-    warp is the ONLY blocking feature, no life rider, hand-only, no
-    graveyard recursion. The §2 Class-1 guardrail: it admits ONLY the
-    pure fixed-cost profile and MUST reject Timeline Culler
-    (``warp_additional_life_cost=2``, ``warp_castable_from_graveyard``
-    — Phase 2) and every multi-gated warp card (static / Effect-
-    uncovered — never flips on warp alone).
+    Motivating set:
 
-    The exclusion set is the SAME as
+    * **Phase 1** — Red Tiger Mechan ({1}{R} warp, {3}{R} normal),
+      Bygone Colossus ({3} warp, {9} normal) — both Artifact
+      Creatures, ``triggered_abilities=()``, warp is the ONLY
+      blocking feature, no life rider, hand-only, no graveyard
+      recursion.
+    * **Phase 1.5** — Germinating Wurm ({1}{G} warp; ENTERS/IsSelf/
+      GainLife 2), Knight Luminary ({1}{W} warp; ENTERS/IsSelf/
+      CreateToken Human Soldier 1/1), Starbreach Whale ({1}{U} warp,
+      Flying; ENTERS/IsSelf/Surveil 2) — each carries exactly ONE
+      SAFE ETB trigger (round-trips through
+      :func:`_python_ta_to_safe_dict`) AND ``warp_cost``; warp was
+      the ONLY remaining gate (their trigger half already ships
+      bridge-correct, and the Rust warp-cast primitive
+      ``cast_creature_warp`` fires ENTERS through the SAME
+      ``move_from_hand_to_battlefield`` →
+      ``drain_pending_etb_dispatches`` path as ``cast_creature``, so
+      the ETB fires byte-equal under a warp-cast — pinned by the
+      Phase-1.5 real-EoE probe).
+
+    The §2 Class-1 guardrail: it admits ONLY the pure-fixed-cost
+    profile OR the safe-trigger+warp profile, and MUST reject
+    Timeline Culler (``warp_additional_life_cost=2``,
+    ``warp_castable_from_graveyard`` — Phase 2) and every multi-gated
+    warp card (static / Effect-uncovered — never flips on warp
+    alone). The exclusion set is the SAME as
     :func:`_printing_is_bridge_simple_creature` (so the 7 multi-gated
     warp cards trip one of these and stay filtered) MINUS the
     ``printing.warp_cost`` rejection (which is the whole point — this
-    predicate REQUIRES it) PLUS the two Phase-2-rider positive
+    predicate REQUIRES it), with ``triggered_abilities`` gated to the
+    SAFE set (not hard-rejected), PLUS the two Phase-2-rider positive
     rejections that are the §2 guardrail's teeth.
 
-    **Live-tree drift caught (round-63, the round-60-N1-class catch).**
-    The round-62 design doc (``WARP_COST_PHASE1_DESIGN.md`` §1)
-    enumerated Phase-1's set as exactly Red Tiger Mechan + Bygone
+    **Live-tree drift caught (round-63) → resolved (round-65 Phase
+    1.5).** The round-62 design doc (``WARP_COST_PHASE1_DESIGN.md``
+    §1) enumerated Phase-1's set as exactly Red Tiger Mechan + Bygone
     Colossus, both with ``triggered_abilities=()``. Verifying the
     spec's §3.7 predicate against the LIVE ``OracleParserCardSource``
-    showed THREE more warp creatures now parse with a SINGLE SAFE
-    ETB trigger (Germinating Wurm — ENTERS/IsSelf/GainLife;
-    Knight Luminary — ENTERS/IsSelf/CreateToken; Starbreach Whale —
-    ENTERS/IsSelf/Surveil), so the §3.7 ``_python_ta_to_safe_dict``
-    branch would have admitted FIVE, not 2 — a different card set
-    than the spec authorized (and a Phase-1-boundary expansion the
-    round-62 scout did not cost / pin). These three are the
-    *residue-tier warp-gated cards* the spec §6 explicitly carves
-    out ("warp-gated cards whose Effect/trigger arm already shipped
-    — they live in the residue tier, NOT the 10-card roadmap row").
-    Per the spec's §1 Phase-1 boundary ("the ONLY blocking feature
-    on the two Phase-1 cards is ``warp_cost``;
-    ``triggered_abilities=()``") and the round-59 sub-shape-split
-    discipline (front-load the smallest self-contained slice),
-    Phase 1 is tightened to ``triggered_abilities == ()`` so it
-    admits EXACTLY the 2 spec'd cards. The safe-trigger+warp residue
-    trio is a clean follow-up (their trigger half is already
-    bridge-correct; they just need the warp substrate THIS slice
-    ships + a pin verifying the trigger fires byte-equal under a
-    warp-cast — a Phase-1.5 / Phase-2-sibling slice, not silently
-    folded in here). This keeps the spec's pin #12 ("exactly 2 EoE
-    printings pass") honest.
+    showed THREE more warp creatures parse with a SINGLE SAFE ETB
+    trigger (the trio above). The Phase-1 agent deliberately tightened
+    the guardrail to ``triggered_abilities == ()`` to exclude them —
+    NOT because their trigger was wrong, but because admitting them
+    was a Phase-1-boundary expansion the round-62 scout had not
+    cost / pinned, and the warp-cast path was a NEW cast path the
+    ETB had never fired through. Phase 1.5 (this slice) closes
+    exactly that follow-up: the warp substrate has landed
+    (``cast_creature_warp`` + the END-step exile sweep + the
+    exile-recast), the trio's trigger half was already bridge-correct
+    in :func:`_printing_is_bridge_simple_creature`'s safe-trigger
+    machinery, and a genuine real-EoE probe drives an actual trio
+    card through warp-cast → ETB-fires → END-step-exile → recast
+    byte-equal both engines (the ETB-fires-byte-equal-under-warp-cast
+    assertion is the load-bearing new pin). Quantum Riddler — which
+    ALSO has a safe ETB trigger ({1}{U} warp, Flying; ENTERS/IsSelf/
+    DrawCards 1) — stays correctly DECLINED here on the
+    ``static_abilities`` clause (it carries a ``HandSizeAtMost(1)``
+    draw-replacement static); it is NOT a safe-trigger+warp-ONLY card
+    and is excluded by the general §2 exclusion set, not a
+    special-case (the guardrail is NOT widened beyond the 3 — the
+    Phase-1 agent's tightening intent is preserved for everything
+    whose trigger is not genuinely already-safe+bridged).
     """
     if "Creature" not in printing.card_types:
         return False
@@ -3392,14 +3415,23 @@ def _printing_is_bridge_pure_warp_creature(printing) -> bool:
         return False
     if getattr(printing, "warp_castable_from_graveyard", False):
         return False
-    # Phase-1 boundary (spec §1): the ONLY blocking feature is
-    # warp_cost — NO triggered abilities at all. The
-    # safe-trigger+warp residue trio (Germinating Wurm /
-    # Knight Luminary / Starbreach Whale) is a clean follow-up
-    # slice, not folded into Phase 1 (see the docstring's
+    # Phase-1.5 boundary (round-65): triggered abilities are admitted
+    # ONLY if EVERY one round-trips through the already-bridge-correct
+    # safe-trigger gate (the SAME machinery
+    # _printing_is_bridge_simple_creature uses). Any single unsafe
+    # trigger disqualifies the whole printing — there is no
+    # "partial admit" since the bridge threads the full
+    # triggered-abilities tuple to both engines. Phase 1 (pure
+    # fixed-cost, triggered_abilities==()) is the empty-tuple case of
+    # this gate; Phase 1.5 admits exactly the trio (Germinating Wurm
+    # / Knight Luminary / Starbreach Whale). A warp card with a
+    # NON-safe trigger (Codecracker Hound, Mechanozoa, ...) trips
+    # this and stays declined — the §2 teeth (see the docstring's
     # live-tree-drift note + SEARCH_LIMITATIONS.md).
     if printing.triggered_abilities:
-        return False
+        for ta in printing.triggered_abilities:
+            if _python_ta_to_safe_dict(ta) is None:
+                return False
     # No OTHER blocking feature — same exclusion set as
     # _printing_is_bridge_simple_creature (the 7 multi-gated warp
     # cards trip one of these and stay filtered):
@@ -3593,12 +3625,30 @@ def _printing_to_card_def(printing) -> CardDef:
         # / ``cast_creature_warp`` Creature-gate passes on
         # ('Creature',) alone. ``warp_cost_str`` is parsed into the
         # (generic, colored) codec the bridge carries.
-        # Phase-1 boundary: the guardrail guarantees
-        # ``triggered_abilities == ()`` (the safe-trigger+warp residue
-        # trio is a follow-up), so no trigger threading is needed —
-        # the CardDef gets the default empty ``triggered_abilities``.
+        # Phase-1.5 boundary (round-65): the guardrail admits a warp
+        # creature with EITHER no triggers (Phase-1 pure-fixed-cost
+        # pair) OR a SAFE-trigger set (the residue trio). Thread the
+        # triggered abilities through to the CardDef in their
+        # safe-dict round-trip shape — IDENTICAL to the
+        # _printing_is_bridge_simple_creature arm below. The guardrail
+        # (above) already guarantees every entry round-trips cleanly
+        # via _python_ta_to_safe_dict; the bridge in
+        # cross_engine.build_python_state re-materializes them via
+        # _ta_dict_to_python_triggered_ability and
+        # build_rust_state passes the same dict tuple to Rust's
+        # register_printing(triggered_abilities=) parser. Empty tuple
+        # (the Phase-1 pair) is a no-op — bit-identical to the prior
+        # behavior. The ETB fires byte-equal under the warp-cast path:
+        # Rust's cast_creature_warp routes the freshly-arrived
+        # permanent through the SAME move_from_hand_to_battlefield →
+        # drain_pending_etb_dispatches ENTERS dispatch as
+        # cast_creature (pinned by the Phase-1.5 real-EoE probe).
         generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
         wgen, wcol = _parse_mana_cost_string(printing.warp_cost_str or "")
+        triggered_abilities = tuple(
+            _python_ta_to_safe_dict(ta)
+            for ta in printing.triggered_abilities
+        )
         return CardDef(
             name=printing.name,
             card_type="Creature",
@@ -3607,6 +3657,7 @@ def _printing_to_card_def(printing) -> CardDef:
             power=printing.power,
             toughness=printing.toughness,
             keywords=tuple(sorted(printing.keywords)),
+            triggered_abilities=triggered_abilities,
             warp_cost_generic=wgen,
             warp_cost_colored=wcol,
             has_warp=True,
