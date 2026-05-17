@@ -74,18 +74,36 @@
 //! card (theoretically flash-on-instant — degenerate but harmless) to
 //! a single emission. See I46 in `docs/RUST_PARITY_GAPS.md`.
 //!
-//! **Deferred mana-affordability check.** Python's `_can_cast` (lines
-//! 252-254 / 383-385) calls `state.can_pay_cost(...)` to refuse spells
-//! whose mana cost the player can't pay. Rust's `state_ops_mana.rs`
-//! has only the destructive `pay_mana_cost(player_id, cost_dict)`
-//! primitive — no non-destructive `can_pay_cost` predicate exists
-//! yet. First-slice CastSpell emits for EVERY non-Land in hand
-//! regardless of mana availability; a future slice adds the
-//! affordability check (either by extracting a `can_pay_cost` /
-//! `try_pay_mana_cost`-with-rollback predicate or by snapshotting
-//! the mana pool before each `pay_mana_cost` attempt). Documented
-//! in `docs/SEARCH_LIMITATIONS.md` alongside the one-land-per-turn
-//! gate.
+//! **Mana-affordability check — CLOSED (legal_decisions
+//! mana-awareness Slice 1).** Python's `_can_cast` (lines 252-254 /
+//! 383-385) calls `can_pay_cost(...)` to refuse spells whose mana
+//! cost the player can't pay. Rust now has the non-destructive
+//! `state_ops_mana::can_pay_cost` predicate (composing
+//! `pool_can_cover` + `auto_tap_headroom_pool`, co-located with the
+//! destructive `pay_mana_cost` twin); every live CastSpell emission
+//! site below gates on it (the §3.5.2 `seen_castspell`
+//! add-on-emit ordering preserved). Parity-NEUTRAL by the
+//! single-script-replay §4 proof.
+//!
+//! **Target-satisfiability check — CLOSED (legal_decisions
+//! mana-awareness Slice 2).** Python additionally gates each
+//! CastSpell emission on `_targets_are_satisfiable`
+//! (`legal.py:79-114`, CR 601.2c — a spell whose targeted
+//! `spell_effect` has 0 legal targets is never enumerated). Rust now
+//! has the non-destructive `spell_targets_satisfiable` predicate
+//! (per live bridge-admitted targeted `Effect` variant, scanning for
+//! ≥1 legal target with the SAME `bf_iter_etb_sorted` filter the
+//! matching resolve arm uses — single source of truth); every live
+//! CastSpell emission site gates on it (folded into the same
+//! `*_payable` boolean so the `seen_castspell` ordering is
+//! preserved). Parity-NEUTRAL by the same §4 subset-preserving
+//! argument. Both axes' deliberate identity sub-simplifications
+//! (the `eff()` cost-reduction seam; the conservative
+//! trivially-satisfiable branch for non-admitted targeted shapes)
+//! are recorded in `docs/SEARCH_LIMITATIONS.md`. **Residual
+//! divergence (still deferred):** additional non-mana costs
+//! (Slice 3 — `_additional_costs_payable` analog) + the non-live
+//! alt-cost axes (below).
 //!
 //! **Deferred alt-cost flags.** Python's CastSpell loop emits up to
 //! four extra dicts per card for `kicked=True`, `use_warp=True`,
@@ -618,6 +636,287 @@ fn eff(cost: &crate::cards::ManaCost) -> &crate::cards::ManaCost {
     cost
 }
 
+/// **legal_decisions mana-awareness Slice 2 — target-satisfiability
+/// prune (CR 601.2c).** Returns `true` iff casting the spell printed
+/// by `printing_id`, with the source controlled by `controller_idx`,
+/// has its targeting requirement satisfiable RIGHT NOW — i.e. there
+/// exists at least one legal target for its targeted spell effect.
+/// Mirrors Python `mtg_bot.legal._targets_are_satisfiable`
+/// (`src/mtg_bot/legal.py:79-114`) — the SoT — for the live
+/// bridge-admitted CastSpell surface.
+///
+/// **Python parity contract (verify-first, file:line precise).**
+/// Python's gate (`legal.py:92-114`):
+///   - `effect = card.printing.spell_effect`; if `effect is None or
+///     not effect.requires_target(): return True` (`:92-94`) — a
+///     non-targeting spell / a creature with no `spell_effect`
+///     trivially satisfies. **Every bridge-simple creature has
+///     `spell_effect is None`** so it takes this trivial branch (this
+///     is why Slice 2 is parity-NEUTRAL on the dominant admit axis —
+///     it never prunes a creature cast).
+///   - `legal = effect.legal_targets(state, player_id)`; `if not
+///     legal: return False` (`:95-97`) — the load-bearing CR 601.2c
+///     prune: zero legal targets ⇒ the spell can't be cast at all.
+///   - `min_t, _ = effect.target_count_range(); if min_t <= 1: return
+///     True` (`:98-100`). Every live bridge-admitted targeted spell
+///     is an OLD-shape single-target effect (`target_count_range()`
+///     defaults to `(1,1)` for `requires_target()==True` old-shape
+///     effects — `effects/base.py:163`), so `min_t == 1` and the
+///     per-slot-kind branch (`:101-114`) is UNREACHABLE on the live
+///     surface EXCEPT Diplomatic Relations (the only 2-slot grammar;
+///     `min_t == 2`, `target_slot_kinds() == ("my_creature",
+///     "creature")`) — handled explicitly below.
+///
+/// **Single-source-of-truth discipline (the Slice-1 shape).** Each
+/// arm's legal-target scan uses the SAME object filter the matching
+/// `state_ops_resolve.rs` resolve arm uses (the deterministic-first
+/// `bf_iter_etb_sorted` scan), so the emission-side prune and the
+/// resolve-side CR 608.2b re-check can never disagree about what a
+/// "legal target" is — exactly why Slice 1 reused
+/// `auto_tap_headroom_pool` rather than re-deriving land tapping.
+/// This makes the prune **at-least-as-permissive as Python** (it
+/// returns `false` ONLY when GENUINELY zero legal targets exist), so
+/// it never over-prunes a Python-sourced cast — the parity-neutral
+/// subset-preserving property the single-script-replay §4 proof
+/// needs (`docs/RUST_LEGAL_DECISIONS_MANA_AWARENESS_DESIGN.md` §4).
+///
+/// **Scope (verify-first, evidence-bound).** Covers EXACTLY the live
+/// bridge-admitted targeted-spell `Effect` variants
+/// (`DepressurizeEffect`, `FocusFireEffect`,
+/// `DestroyTargetArtifactOrTappedCreature`, `SeedshipImpactEffect`,
+/// `DealDamageToTargetCreatureWithExcessLanderRider`,
+/// `BiosynthicBurstEffect`, `DiplomaticRelationsEffect`). Any other
+/// `Effect` (untargeted, or a not-yet-admitted targeted shape) takes
+/// the conservative `true` (trivially-satisfiable) branch — NEVER
+/// pruned. Conservative = NEVER narrower than Python ⇒ parity-neutral
+/// by construction; a future targeted-spell admit slice adds its arm
+/// here (the single named extension point).
+fn spell_targets_satisfiable(
+    state: &crate::state::GameState,
+    printing_id: u32,
+    controller_idx: usize,
+) -> bool {
+    use crate::cards::Effect;
+    let Some(printing) = state.registry.lookup(printing_id) else {
+        // Unknown printing — conservative: don't prune (Python's
+        // `card.printing.spell_effect` would be a parser concern, not
+        // a legality one; never narrower than Python).
+        return true;
+    };
+    // Python iterates `card.printing.spell_effect` (a SINGLE effect).
+    // The Rust bridge models the spell body as `printing.effects`
+    // (a Vec). For the bridge-admitted surface the targeted leaf is
+    // `effects[0]` (Sequence-wrapped effects like Radiant Strike's
+    // `Sequence(DestroyTargetArtifactOrTappedCreature, GainLife(3))`
+    // are handled by matching the targeted variant ANYWHERE in the
+    // Vec — see the `find` below — so a Sequence's leading targeted
+    // leaf is still gated). Untargeted bodies fall through to `true`.
+    let controller = controller_idx as u8;
+    for effect in printing.effects.iter() {
+        match effect {
+            // ANY-creature scan (NOT controller-restricted). Mirrors
+            // Python `DepressurizeEffect.legal_targets`
+            // (`effects/bespoke.py:1545-1552`: every creature on
+            // `state.battlefield`) — and the resolve arm's
+            // `bf_iter_etb_sorted` any-creature scan
+            // (`state_ops_resolve.rs:6042`).
+            Effect::DepressurizeEffect { .. }
+            | Effect::DealDamageToTargetCreatureWithExcessLanderRider {
+                ..
+            } => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        state
+                            .registry
+                            .lookup(o.printing_id)
+                            .map(|p| {
+                                p.card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                            })
+                            .unwrap_or(false)
+                    });
+                if !any {
+                    return false;
+                }
+            }
+            // Focus Fire: `IsCreature() & (IsAttacking() |
+            // IsBlocking())` (Python `FocusFireEffect.__post_init__`
+            // TargetSpec, `effects/bespoke.py:1771-1782`). A creature
+            // is attacking iff its id is in `state.attackers`;
+            // blocking iff it appears as a `blocker_id` in
+            // `state.blockers` — the EXACT predicate the resolve arm
+            // uses (`state_ops_resolve.rs` FocusFire arm).
+            Effect::FocusFireEffect { .. } => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        let is_creature = state
+                            .registry
+                            .lookup(o.printing_id)
+                            .map(|p| {
+                                p.card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                            })
+                            .unwrap_or(false);
+                        if !is_creature {
+                            return false;
+                        }
+                        let attacking =
+                            state.attackers.iter().any(|a| *a == o.id);
+                        let blocking = state
+                            .blockers
+                            .iter()
+                            .any(|(_, b)| *b == o.id);
+                        attacking || blocking
+                    });
+                if !any {
+                    return false;
+                }
+            }
+            // Radiant Strike's destroy half: `IsArtifact() |
+            // (IsCreature() & IsTapped())`, non-indestructible
+            // (Python `DestroyTargetArtifactOrTappedCreature`
+            // `effects/generic/destroy.py:487-493`; the resolve arm's
+            // exact typed-OR filter `state_ops_resolve.rs:5548-5567`).
+            Effect::DestroyTargetArtifactOrTappedCreature => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        let Some(p) =
+                            state.registry.lookup(o.printing_id)
+                        else {
+                            return false;
+                        };
+                        let is_artifact = p
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Artifact");
+                        let is_creature = p
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature");
+                        if !(is_artifact || (is_creature && o.tapped)) {
+                            return false;
+                        }
+                        !p.keywords
+                            .iter()
+                            .any(|k| k == "indestructible")
+                    });
+                if !any {
+                    return false;
+                }
+            }
+            // Seedship Impact: `IsArtifact() | IsEnchantment()`,
+            // non-indestructible (Python
+            // `SeedshipImpactEffect.legal_targets`
+            // `effects/bespoke.py:1227-1235`; the resolve arm's exact
+            // filter `state_ops_resolve.rs:5696-5719`).
+            Effect::SeedshipImpactEffect { .. } => {
+                let any = crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .any(|o| {
+                        let Some(p) =
+                            state.registry.lookup(o.printing_id)
+                        else {
+                            return false;
+                        };
+                        let is_artifact = p
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Artifact");
+                        let is_enchantment = p
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Enchantment");
+                        if !(is_artifact || is_enchantment) {
+                            return false;
+                        }
+                        !p.keywords
+                            .iter()
+                            .any(|k| k == "indestructible")
+                    });
+                if !any {
+                    return false;
+                }
+            }
+            // Biosynthic Burst: creature the CONTROLLER controls
+            // (Python `BiosynthicBurstEffect.legal_targets`
+            // `effects/bespoke.py:1478-1485`: `o.controller_id ==
+            // controller_id` — the controller-restricted deviation;
+            // the resolve arm's controller-only scan
+            // `state_ops_resolve.rs:6285-6302`).
+            Effect::BiosynthicBurstEffect => {
+                let any = state.players[controller_idx]
+                    .battlefield
+                    .iter()
+                    .any(|o| {
+                        state
+                            .registry
+                            .lookup(o.printing_id)
+                            .map(|p| {
+                                p.card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                            })
+                            .unwrap_or(false)
+                    });
+                if !any {
+                    return false;
+                }
+            }
+            // Diplomatic Relations: the only 2-slot grammar
+            // (`target_slot_kinds() == ("my_creature", "creature")`,
+            // `min_t == 2`). Python `_targets_are_satisfiable`
+            // `:101-114` per-slot enforcement: each slot-kind needs ≥
+            // its slot-count of legal entries. Mirror the cast-time
+            // 2-slot bind (`state_ops_cast.rs:894-923`): slot 0 = a
+            // creature the caster controls, slot 1 = a creature a
+            // NON-caster controls. Satisfiable iff BOTH exist.
+            Effect::DiplomaticRelationsEffect => {
+                let mut have_mine = false;
+                let mut have_theirs = false;
+                for o in crate::bf_iter::bf_iter_etb_sorted(state) {
+                    let is_creature = state
+                        .registry
+                        .lookup(o.printing_id)
+                        .map(|p| {
+                            p.card_types
+                                .iter()
+                                .any(|t| t == "Creature")
+                        })
+                        .unwrap_or(false);
+                    if !is_creature {
+                        continue;
+                    }
+                    if o.controller == controller {
+                        have_mine = true;
+                    } else {
+                        have_theirs = true;
+                    }
+                    if have_mine && have_theirs {
+                        break;
+                    }
+                }
+                if !(have_mine && have_theirs) {
+                    return false;
+                }
+            }
+            // Every other Effect (untargeted bodies — the dominant
+            // bridge-simple-creature axis whose `spell_effect is
+            // None`; or a not-yet-admitted targeted shape): the
+            // conservative trivially-satisfiable branch. NEVER
+            // pruned ⇒ never narrower than Python ⇒ parity-neutral
+            // by construction (the single-script-replay §4 proof's
+            // subset-preserving property).
+            _ => {}
+        }
+    }
+    true
+}
+
 /// Build a `{"kind": "declare_attackers", "attacker_ids": [...]}` dict.
 /// Mirrors `actions.rs:action_to_pydict`'s `Action::DeclareAttackers`
 /// arm so a dict produced here round-trips through `parse_action` and
@@ -979,12 +1278,35 @@ impl GameState {
             // cost; the identity wrapper is the single named
             // insertion point for a future cost-reduction slice.
             let sk = crate::state_ops_mana::SpellKind::Any;
-            let base_payable = crate::state_ops_mana::can_pay_cost(
-                self,
-                idx,
-                eff(&printing.mana_cost),
-                &sk,
-            );
+            // **legal_decisions mana-awareness Slice 2 —
+            // target-satisfiability prune (CR 601.2c).** Python gates
+            // every CastSpell emission on `_can_cast` AND
+            // `_targets_are_satisfiable` (`legal.py:252-254`); a spell
+            // whose targeted effect has ZERO legal targets is never
+            // enumerated. Computed ONCE and `&&`-ed into BOTH the base
+            // and warp affordability booleans below: warp is an
+            // alternative COST, not a different spell body, so the
+            // SAME spell effect (and thus the SAME target requirement)
+            // applies to the base and warp casts of one card — both
+            // must be target-satisfiable to emit. A non-targeting
+            // spell / bridge-simple creature trivially returns `true`
+            // (Python `:92-94` `effect is None or not
+            // requires_target()`), so this never prunes the dominant
+            // creature-cast axis (parity-neutral on it by
+            // construction). Folding it into `*_payable` (rather than
+            // a separate early `continue`) preserves the Slice-1
+            // `seen_castspell` add-on-emit ordering VERBATIM (the
+            // §3.5.2 load-bearing rule — the insert still happens only
+            // on the path that actually pushes).
+            let targets_ok =
+                spell_targets_satisfiable(self, obj.printing_id, idx);
+            let base_payable = targets_ok
+                && crate::state_ops_mana::can_pay_cost(
+                    self,
+                    idx,
+                    eff(&printing.mana_cost),
+                    &sk,
+                );
             // Warp variant is gated on its OWN cost (`warp_cost`),
             // INDEPENDENT of the base `mana_cost` gate (mirrors
             // Python's separate `_can_cast(warp_cost)` at
@@ -992,11 +1314,15 @@ impl GameState {
             // boolean across base+warp). The warp life gate
             // (`life > warp_additional_life_cost`) is preserved
             // verbatim (warp Phase 2 landed it; mirrors
-            // `legal.py:269`).
+            // `legal.py:269`). The Slice-2 `targets_ok` precondition
+            // applies identically (same spell body) — Python's warp
+            // arm also `&& _targets_are_satisfiable` (`legal.py:267`).
             let warp_payable = match printing.warp_cost.as_ref() {
                 Some(wc) => {
-                    (self.players[idx].life as i64)
-                        > (printing.warp_additional_life_cost as i64)
+                    targets_ok
+                        && (self.players[idx].life as i64)
+                            > (printing.warp_additional_life_cost
+                                as i64)
                         && crate::state_ops_mana::can_pay_cost(
                             self, idx, eff(wc), &sk,
                         )
@@ -1004,14 +1330,16 @@ impl GameState {
                 None => false,
             };
             if !base_payable && !warp_payable {
-                // Nothing affordable for this card — DO NOT insert
-                // into `seen_castspell` (Python only `seen_instant.add`s
-                // inside `_emit_hand_cast`, which is only called after
-                // `_can_cast` passes — `legal.py:241-244`,`:252-255`).
-                // Skipping the insert keeps a later same-named copy in
-                // a payable context still emittable (the §3.5.2
-                // load-bearing ordering rule). Continue WITHOUT
-                // marking the name seen.
+                // Nothing affordable/targetable for this card — DO NOT
+                // insert into `seen_castspell` (Python only
+                // `seen_instant.add`s inside `_emit_hand_cast`, which
+                // is only called after `_can_cast` AND
+                // `_targets_are_satisfiable` pass —
+                // `legal.py:241-244`,`:252-255`). Skipping the insert
+                // keeps a later same-named copy in a payable+targetable
+                // context still emittable (the §3.5.2 load-bearing
+                // ordering rule). Continue WITHOUT marking the name
+                // seen.
                 continue;
             }
             // At least one of base/warp is affordable → the card
@@ -1140,16 +1468,29 @@ impl GameState {
             // warp gated INDEPENDENTLY on `warp_cost` + the preserved
             // life gate.
             let sk = crate::state_ops_mana::SpellKind::Any;
-            let base_payable = crate::state_ops_mana::can_pay_cost(
-                self,
-                idx,
-                eff(&printing.mana_cost),
-                &sk,
-            );
+            // **legal_decisions mana-awareness Slice 2 —
+            // target-satisfiability prune (CR 601.2c).** Same
+            // computed-once + folded-into-both-`*_payable` shape as
+            // the instant-speed pass above (mirrors Python's
+            // sorcery-speed `_can_cast(...) and
+            // _targets_are_satisfiable(...)` at `legal.py:382-385`
+            // base / `:394-397` warp). Preserves the Slice-1
+            // `seen_castspell` add-on-emit ordering verbatim.
+            let targets_ok =
+                spell_targets_satisfiable(self, obj.printing_id, idx);
+            let base_payable = targets_ok
+                && crate::state_ops_mana::can_pay_cost(
+                    self,
+                    idx,
+                    eff(&printing.mana_cost),
+                    &sk,
+                );
             let warp_payable = match printing.warp_cost.as_ref() {
                 Some(wc) => {
-                    (self.players[idx].life as i64)
-                        > (printing.warp_additional_life_cost as i64)
+                    targets_ok
+                        && (self.players[idx].life as i64)
+                            > (printing.warp_additional_life_cost
+                                as i64)
                         && crate::state_ops_mana::can_pay_cost(
                             self, idx, eff(wc), &sk,
                         )
@@ -1157,9 +1498,9 @@ impl GameState {
                 None => false,
             };
             if !base_payable && !warp_payable {
-                // Nothing affordable — skip WITHOUT claiming the
-                // name-dedup slot (the §3.5.2 ordering rule; mirrors
-                // Python's add-on-emit `seen_instant`).
+                // Nothing affordable/targetable — skip WITHOUT
+                // claiming the name-dedup slot (the §3.5.2 ordering
+                // rule; mirrors Python's add-on-emit `seen_instant`).
                 continue;
             }
             seen_castspell.insert(name);
@@ -1231,6 +1572,18 @@ impl GameState {
             ) {
                 continue;
             }
+            // **legal_decisions mana-awareness Slice 2 —
+            // target-satisfiability prune (CR 601.2c).** Python's
+            // graveyard-warp loop also gates on
+            // `_targets_are_satisfiable` (`legal.py:459`). Every
+            // graveyard-warp-castable card in the live pool is a
+            // creature (Timeline Culler — no `spell_effect`), so this
+            // returns `true` trivially; adding it is the faithful
+            // Python mirror + the single named extension point if a
+            // targeted graveyard-warp card is ever admitted.
+            if !spell_targets_satisfiable(self, obj.printing_id, idx) {
+                continue;
+            }
             actions.push(cast_spell_warp_dict(py, obj.id)?);
         }
 
@@ -1265,6 +1618,17 @@ impl GameState {
                 eff(&printing.mana_cost),
                 &sk,
             ) {
+                continue;
+            }
+            // **legal_decisions mana-awareness Slice 2 —
+            // target-satisfiability prune (CR 601.2c).** Python's
+            // exile-recast loop also gates on
+            // `_targets_are_satisfiable` (`legal.py:488`). Both
+            // Phase-1 warp-exile cards are creatures (no
+            // `spell_effect`) so this returns `true` trivially; the
+            // faithful Python mirror + the single named extension
+            // point.
+            if !spell_targets_satisfiable(self, obj.printing_id, idx) {
                 continue;
             }
             actions.push(cast_spell_dict(py, obj.id)?);

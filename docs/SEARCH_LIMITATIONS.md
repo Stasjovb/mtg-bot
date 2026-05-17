@@ -5691,7 +5691,7 @@ boundary and per-game evidence on record".
 
 ---
 
-## Cross-engine legal-decision-set mana-payability asymmetry (PARTIALLY CLOSED — the mana axis is CLOSED Slice 1; residual = target/additional-cost/alt-cost axes)
+## Cross-engine legal-decision-set mana-payability asymmetry (PARTIALLY CLOSED — the mana axis CLOSED Slice 1, the target axis CLOSED Slice 2; residual = additional-cost/alt-cost axes)
 
 **Status**: **PARTIALLY CLOSED.** The **mana-payability axis on the
 live CastSpell sites is CLOSED** by legal_decisions mana-awareness
@@ -5702,26 +5702,41 @@ the already-byte-equal-pinned `pool_can_cover` +
 `auto_tap_headroom_pool`, co-located with the destructive
 `pay_mana_cost` twin) now gates ALL of Rust's live CastSpell
 emission sites — base hand instant/sorcery, their warp variants, the
-warp-from-graveyard loop, and the warp exile-recast. On the live
-cast surface `RustCastSpellSet == PythonCastSpellSet` for the mana
-axis; Rust no longer emits a structurally-legal-but-un-payable cast.
-The change is parity-NEUTRAL under the current single-script-replay
-harness (design-doc §4 proof: the predicate is at-least-as-permissive
-as Python's `can_pay_cost` via the same `auto_tap_headroom_pool`, so
-every Python-sourced replayed action is still emitted by post-fix
-Rust). **Residual divergence (still ACCEPTED, the separate deferred
-surface):** (a) target-satisfiability (Slice 2 — a non-destructive
-Rust `legal_targets`-count analog of `_targets_are_satisfiable`),
-(b) additional non-mana costs (Slice 3 — the
-`_additional_costs_payable` analog), (c) the non-live alt-cost axes
+warp-from-graveyard loop, and the warp exile-recast. **The
+target-satisfiability axis on the live CastSpell sites is ALSO
+CLOSED** by legal_decisions mana-awareness Slice 2 (2026-05-17,
+`feature/rust-legal-decisions-target-satisf`): the non-destructive
+`state_ops_legal::spell_targets_satisfiable` predicate — the Rust
+analog of Python `_targets_are_satisfiable` (CR 601.2c) — gates the
+SAME 6 live CastSpell emission sites; for each live bridge-admitted
+targeted `Effect` variant (`DepressurizeEffect`, `FocusFireEffect`,
+`DestroyTargetArtifactOrTappedCreature`, `SeedshipImpactEffect`,
+`DealDamageToTargetCreatureWithExcessLanderRider`,
+`BiosynthicBurstEffect`, `DiplomaticRelationsEffect`) it scans for ≥1
+legal target using the SAME `bf_iter_etb_sorted` object filter the
+matching `state_ops_resolve.rs` resolve arm uses (single source of
+truth), so Rust no longer emits a `cast_spell` for a spell whose
+targeted effect has zero legal targets. On the live cast surface
+`RustCastSpellSet == PythonCastSpellSet` for BOTH the mana and the
+target axes; Rust no longer emits a structurally-legal-but-un-payable
+NOR a structurally-legal-but-target-unsatisfiable cast. Both changes
+are parity-NEUTRAL under the current single-script-replay harness
+(design-doc §4 proof: each predicate is at-least-as-permissive as its
+Python twin — Slice 1 via the same `auto_tap_headroom_pool`, Slice 2
+via the same resolve-arm object filter — so every Python-sourced
+replayed action is still emitted by post-fix Rust). **Residual
+divergence (still ACCEPTED, the separate deferred surface):**
+(a) additional non-mana costs (Slice 3 — the
+`_additional_costs_payable` analog), (b) the non-live alt-cost axes
 (kicker / impending / granted-warp / Room-half / X — the separate
 `state_ops_legal.rs:90-101` "Deferred alt-cost flags" surface, no
 Rust emission site yet). The earlier history: this entry originally
 existed because `rust/src/state_ops_legal.rs:77-88` *claimed* the
 divergence was "Documented in `docs/SEARCH_LIMITATIONS.md`" with no
 such entry; the characterization + canonicalization pin landed
-2026-05-17 (`feature/cross-engine-legal-set-asymmetry`), and Slice 1
-now closes the mana axis it characterized.
+2026-05-17 (`feature/cross-engine-legal-set-asymmetry`), Slice 1
+closed the mana axis it characterized, and Slice 2 closed the
+target-satisfiability axis.
 
 **Location**:
 - Python (source of truth): `src/mtg_bot/legal.py` —
@@ -5754,21 +5769,24 @@ here was STALE and is struck — verify-first correction per the
 design doc §1.4). **The CastSpell mana axis is now CLOSED too**
 (Slice 1, above): `state_ops_legal.rs:legal_decisions` gates every
 live CastSpell emission site on `state_ops_mana::can_pay_cost`, so it
-no longer emits a `cast_spell` dict for an un-payable card. **What
-remains a divergence** (the residual, still ACCEPTED): Rust still
-does NOT apply Python's *target-satisfiability* prune
-(`_targets_are_satisfiable`, CR 601.2c — Slice 2) nor the
+no longer emits a `cast_spell` dict for an un-payable card. **The
+CastSpell target-satisfiability axis is now CLOSED too** (Slice 2,
+above): `state_ops_legal.rs:legal_decisions` gates every live
+CastSpell emission site on `spell_targets_satisfiable`, so it no
+longer emits a `cast_spell` dict for a spell whose targeted effect
+has 0 legal targets (CR 601.2c). **What remains a divergence** (the
+residual, still ACCEPTED): Rust still does NOT apply Python's
 *additional non-mana cost* prune (`_additional_costs_payable` —
 Slice 3) at the CastSpell emission sites, and the non-live alt-cost
 axes (kicker / impending / granted-warp / Room-half / X) are not yet
 Rust emission sites at all (the separate "Deferred alt-cost flags"
-surface). At a priority point where a hand card is mana-payable but
-has 0 legal targets, the two engines still present different
-legal-decision SETS (Python omits, Rust includes). (Rust DOES filter
-several structural axes at enumeration — the post-CE17 defender
-keyword, and now the mana axis — so the residual is specifically the
-*target / additional-cost / non-live-alt-cost* axes, not "Rust never
-prunes".)
+surface). At a priority point where a hand card is mana-payable and
+target-satisfiable but has an unpayable additional cost, the two
+engines still present different legal-decision SETS (Python omits,
+Rust includes). (Rust DOES filter several structural axes at
+enumeration — the post-CE17 defender keyword, the mana axis, and now
+the target-satisfiability axis — so the residual is specifically the
+*additional-cost / non-live-alt-cost* axes, not "Rust never prunes".)
 
 **Why it's OK (parity-benign by construction — the
 canonicalization)**: every cross-engine harness uses the
@@ -5819,45 +5837,64 @@ within the Rust engine, NOT a cross-engine parity concern, and is
 out of scope of this entry.
 
 **Regression pin**:
-`tests/test_cross_engine_legal_set_asymmetry.py` — 3 tests on a
-minimal real-EoE state (the genuine `Slavering Branchsnapper`
-{4}{G}{G} 7/6 printing in p0's hand at turn-1 PRECOMBAT_MAIN),
-**re-anchored to the CLOSED contract by Slice 1**:
-(1) `..._mana_payability_closed_both_omit_unpayable` — with 0 mana,
-**BOTH** Python and Rust now omit the un-payable CastSpell (was:
-Python omit / Rust structural-emit; FLIPPED by Slice 1 — LOUD on a
-Rust mana-gate regression); (2)
-`..._closed_replay_stays_byte_equal` — the same zero-mana point
-driven by the Python-derived single-script replay stays byte-equal
-every step AND the now-equal sets persist (the §4
-parity-neutrality tripwire — an over-prune would diverge here);
-(3) `..._closed_negative_control_both_emit_when_affordable` — the
-over-prune guard: with 6 G sources BOTH engines emit exactly the
-base cast (proves Slice 1's predicate is at-least-as-permissive as
-Python's — `auto_tap_headroom_pool`, not a pool-only check).
+- `tests/test_cross_engine_legal_set_asymmetry.py` — 3 tests on a
+  minimal real-EoE state (the genuine `Slavering Branchsnapper`
+  {4}{G}{G} 7/6 printing in p0's hand at turn-1 PRECOMBAT_MAIN),
+  **re-anchored to the CLOSED contract by Slice 1**:
+  (1) `..._mana_payability_closed_both_omit_unpayable` — with 0 mana,
+  **BOTH** Python and Rust now omit the un-payable CastSpell (was:
+  Python omit / Rust structural-emit; FLIPPED by Slice 1 — LOUD on a
+  Rust mana-gate regression); (2)
+  `..._closed_replay_stays_byte_equal` — the same zero-mana point
+  driven by the Python-derived single-script replay stays byte-equal
+  every step AND the now-equal sets persist (the §4
+  parity-neutrality tripwire — an over-prune would diverge here);
+  (3) `..._closed_negative_control_both_emit_when_affordable` — the
+  over-prune guard: with 6 G sources BOTH engines emit exactly the
+  base cast (proves Slice 1's predicate is at-least-as-permissive as
+  Python's — `auto_tap_headroom_pool`, not a pool-only check).
+- `tests/test_cross_engine_legal_set_target_satisf.py` — 3 tests on
+  a minimal real-EoE synthetic state (the genuine `Depressurize`
+  {1}{B} `DepressurizeEffect` instant in p0's hand, 2 untapped
+  mono-B lands on p0's bf so the Slice-1 mana gate PASSES — the
+  target axis is the only pruner), **the CLOSED target-axis
+  contract**: (1) `..._closed_both_omit_untargetable` — with 0
+  creatures on the bf, **BOTH** Python and Rust now omit the
+  target-unsatisfiable CastSpell (NEGATIVE-CONTROL-VERIFIED: against
+  a pre-Slice-2 engine this test FAILS at exactly the documented
+  divergence — Rust emits the un-targetable `cast_spell`, Python
+  omits; LOUD on a Rust target-gate regression); (2)
+  `..._negative_control_both_emit` — over-prune guard: with a legal
+  Depressurize target (a vanilla creature) seated, BOTH engines emit
+  exactly the base cast (proves `spell_targets_satisfiable` is
+  at-least-as-permissive as `_targets_are_satisfiable`); (3)
+  `..._only_axis_under_test` — isolation guard: asserts Python's
+  `can_pay_cost` says {1}{B} IS payable in the closed-contract
+  state, so that test prunes on the TARGET axis, not a coincidental
+  mana-unaffordability.
 
-**Fix scope estimate**: the mana axis (this slice) is **DONE**. The
-residual is Slice 2 (target-satisfiability — a non-destructive Rust
-`legal_targets`-count analog of `_targets_are_satisfiable`, CR
-601.2c, gating the same sites) + Slice 3 (`_additional_costs_payable`
-analog) + the bundled alt-cost axes (kicker/impending/granted-warp/
+**Fix scope estimate**: the mana axis (Slice 1) and the
+target-satisfiability axis (Slice 2) are **DONE**. The residual is
+Slice 3 (`_additional_costs_payable` analog — gating the same sites)
++ the bundled alt-cost axes (kicker/impending/granted-warp/
 Room-half/X/restricted-coin/convoke — composes via the designed
 `can_pay_cost` extension points, design doc §2.4/§2.5). ALL must
 land before any NN-drives-Rust (SoT-flip) milestone (design doc §6).
-This entry is RETIRED only when Slices 2–3 + the alt-cost surface
-also close.
+This entry is RETIRED only when Slice 3 + the alt-cost surface also
+close.
 
 **Impact estimate**: zero on cross-engine trajectory parity
 (parity-NEUTRAL by the §4 single-script-replay proof — the existing
 gate + probe modules stay byte-equal; the deliverable is the
 flip-readiness correctness fix). Within the Rust engine the mana-gate
-tightens `legal_decisions` (fewer wasted search visits on un-payable
-casts — a strength gain) and, critically, makes Rust's enumeration
-*correct* for when it becomes the authoritative decision source at
-the SoT flip (the policy head no longer scores / PUCT no longer
-expands illegal-by-mana actions). No Effect / bridge / `_SAFE_*`
-change; no `cards.rs` touch; bench-admit set + POOL_PARITY/PROBED
-headline untouched.
+(Slice 1) + target-satisfiability-gate (Slice 2) tighten
+`legal_decisions` (fewer wasted search visits on un-payable /
+un-targetable casts — a strength gain) and, critically, make Rust's
+enumeration *correct* for when it becomes the authoritative decision
+source at the SoT flip (the policy head no longer scores / PUCT no
+longer expands illegal-by-mana NOR target-unsatisfiable actions). No
+Effect / bridge / `_SAFE_*` change; no `cards.rs` touch; bench-admit
+set + POOL_PARITY/PROBED headline untouched.
 
 **Identity-seam sub-simplifications (deliberate, live-surface,
 parity-safe — recorded per the §3.1/§2.2/§2.3 design):**
