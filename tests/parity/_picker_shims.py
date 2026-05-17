@@ -156,6 +156,36 @@ class _PickFirstLegalTargetAgent(Agent):
             return None
         return legal_targets[0]
 
+    def choose_surveil(self, state, player_id, top_card_id):
+        """Keep every surveilled card on top of the library (return
+        False — do NOT mill).
+
+        Byte-equal cross-engine contract (round-73). This agent is the
+        one the bench installs on BOTH Python players whenever a spell
+        may be cast (``bench_trajectory_parity._try_cast_one_creature``
+        — installed only when ``spells`` is non-empty). Rust's
+        ``resolve_top_of_stack`` / ``_pause`` terminally invoke
+        ``auto_resolve_pending(self, "keep_all_on_top")``
+        (``state_ops_resolve.rs`` 11180/11313), and Python's
+        ``Surveil.resolve`` keep-on-top default is the ``p.agent is
+        None`` short-circuit (``library_lookat.py:605``). A non-None
+        bench agent BYPASSES that short-circuit, so to stay byte-equal
+        with Rust's keep_all_on_top default it MUST answer ``False``
+        (keep on top) — NOT ``True`` (mill), which would diverge from
+        Rust's no-mill default (see the cross-engine default-strategy
+        contract documented at ``cross_engine.py`` ~line 750). Before
+        round-73 this was a latent gap (the base ``Agent.choose_
+        surveil`` raises ``NotImplementedError``): no real bench game
+        cast a spell AND lived long enough to fire a surveil ETB
+        (e.g. Thawbringer's enters→surveil 1). The Lander-spell-token-
+        seating sub-substrate admits Seedship Impact / Orbital Plunge,
+        extending such games past the surveil trigger — surfacing
+        (NOT introducing) the gap. Returning ``False`` is the
+        byte-equal fix (the keep_all_on_top mirror), not a fallback
+        hybrid.
+        """
+        return False
+
 
 class _PickFirstBattlefieldCreatureEitherSideAgent(Agent):
     """Pick the creature with the SMALLEST ``state.battlefield`` index

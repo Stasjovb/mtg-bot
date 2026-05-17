@@ -21013,12 +21013,17 @@ def test_bridge_spell_card_lever_phase1_real_eoe_cast_resolve_parity():
 
 
 def test_spell_card_lever_phase1_negative_pins_decline_set():
-    """**Spell-card-bridge lever Phase 1 (round-70) — negative pins
-    #10-#13 (the §2 guardrail's teeth).** Table-driven assertions
-    that the decline set stays filtered and the admit set is EXACTLY
-    the covered+bridged pid-free single-target Tier-A spells (NOT a
-    static card-name list — the lever is the multiplier; the set
-    auto-grows as each per-card Tier-A close lands)."""
+    """**Spell-card-bridge lever Phase 1 (round-70) + Lander-spell-
+    token-seating sub-substrate (round-73) — pins #10-#13 (the §2
+    guardrail's teeth).** Table-driven assertions that the decline set
+    stays filtered and the admit set is EXACTLY the covered+bridged
+    single-target Tier-A spells whose Effect close landed AND whose
+    token (if any) the loader can seat (NOT a static card-name list —
+    the lever is the multiplier; the set auto-grows as each per-card
+    Tier-A close lands; the round-73 sub-substrate added the two
+    Lander-pid spells once their token became seatable on the spell
+    axis — Pin #12b flipped from DECLINE to SEATED, new-code-is-
+    right)."""
     from mtg_bot.parity import trajectory
     from mtg_bot.cards.source import get_active_source
 
@@ -21066,12 +21071,20 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         assert se.target_count_range() == (2, 2)
         assert se.target_slot_kinds() == ("my_creature", "creature")
 
-    # Pin #12b: Seedship Impact / Orbital Plunge are covered+bridged
-    # at the Effect level but DECLINED in Phase 1 — their Rust
-    # parse_effect requires a Lander token_printing_id the loader's
-    # spell path cannot seat (the round-trip-or-bail tooth: the
-    # reverse serializer does not serialize them). Pin the asymmetry:
-    # covered True, but the guardrail and serializer both decline.
+    # Pin #12b (Lander-spell-token-seating sub-substrate, round-73 —
+    # FLIPPED from DECLINE to SEATED; new-code-is-right per
+    # feedback_parity_new_code_is_right). Seedship Impact / Orbital
+    # Plunge are covered+bridged AND now ADMITTED: their Rust
+    # parse_effect requires a Lander token_printing_id, and the
+    # loader's _seat_token_printings pass now ALSO walks spell_effect
+    # to seat it (the exact triggered-abilities machinery applied to
+    # the spell axis). The reverse serializer emits the symbolic
+    # _token_card_def Lander reference (round-trip-or-bail FLIPPED
+    # POSITIVE — the no-fallback-hybrid discipline preserved: the
+    # symbolic ref is emitted only because the seating pass that
+    # resolves it now exists). Pin the seated round-trip: covered True,
+    # guardrail True, the reverse serializer emits the symbolic Lander
+    # ref, and the loader resolves it to a numeric token_printing_id.
     for nm in ("Seedship Impact", "Orbital Plunge"):
         p = src.get(nm)
         if p is None:
@@ -21079,30 +21092,142 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
         assert (
             trajectory._spell_effect_is_covered_and_bridged(p) is True
         ), f"{nm} Effect must be covered+bridged"
-        assert trajectory._printing_is_bridge_simple_spell(p) is False, (
-            f"{nm} must be DECLINED in Phase 1 (Lander pid unseatable "
-            f"on the spell path)")
-        assert (
-            trajectory._python_spell_effect_to_dict(p.spell_effect)
-            is None
-        ), f"{nm} must NOT round-trip the reverse serializer"
+        assert trajectory._printing_is_bridge_simple_spell(p) is True, (
+            f"{nm} must be ADMITTED post-sub-substrate (the Lander "
+            f"token_printing_id is now seatable on the spell path)")
+        rt = trajectory._python_spell_effect_to_dict(p.spell_effect)
+        assert rt is not None, (
+            f"{nm} must round-trip the reverse serializer post-"
+            f"sub-substrate")
+        # Pre-seating: the dict carries the SYMBOLIC Lander ref (no
+        # numeric pid yet — the loader assigns it once the union
+        # card_defs tuple is frozen, exactly like the create_token
+        # triggered carrier).
+        assert "_token_card_def" in rt and "token_printing_id" not in rt
+        assert rt["_token_card_def"].name == "Lander"
+        # Post-seating (the genuine production loader path): the spell
+        # CardDef's spell_effect carries a NUMERIC token_printing_id ==
+        # the seated Lander's pid, the symbolic ref dropped — the exact
+        # field set the Rust parse_effect arm requires.
+        spec = trajectory.production_deck_to_deckspec(
+            [nm] * 4 + ["Forest"] * 36, ["Forest"] * 40, pad_to_size=40)
+        cds = {cd.name: cd for cd in spec.card_defs}
+        assert nm in cds and "Lander" in cds, (
+            f"{nm} + its seated Lander token must be admitted; "
+            f"got {sorted(cds)}")
+        lander_pid = next(
+            i for i, cd in enumerate(spec.card_defs)
+            if cd.name == "Lander")
+        se_dict = cds[nm].spell_effect
+        assert "_token_card_def" not in se_dict
+        assert se_dict["token_printing_id"] == lander_pid, (
+            f"{nm} spell_effect must carry the numeric seated Lander "
+            f"pid {lander_pid}; got {se_dict}")
+        # The Orbital Plunge two-field arm preserves ``amount``; the
+        # Seedship single-field arm carries no extra field (NO spurious
+        # ``count`` — that would be the silent-mistranslation class the
+        # §2 teeth prevent: the Rust arms don't take one).
+        assert "count" not in se_dict
+        if nm == "Orbital Plunge":
+            assert se_dict["amount"] == 6
 
     # Pin #13: the set of EoE printings passing the guardrail equals
-    # EXACTLY the covered+bridged pid-free single-target Tier-A
-    # spells whose Effect close has landed. Regenerable; auto-grows
-    # as each subsequent per-card Effect closes — that growth IS the
-    # multiplier proof (NOT a static card-name list). At the
-    # implement HEAD that set is {Depressurize, Radiant Strike}.
+    # EXACTLY the covered+bridged single-target Tier-A spells whose
+    # Effect close has landed AND whose token (if any) the loader can
+    # seat. Regenerable; auto-grows as each subsequent per-card Effect
+    # closes — that growth IS the multiplier proof (NOT a static
+    # card-name list). Post-Lander-spell-token-seating sub-substrate
+    # (round-73) that set is {Depressurize, Orbital Plunge, Radiant
+    # Strike, Seedship Impact}.
     admitted = sorted(
         n for n in src
         if trajectory._printing_is_bridge_simple_spell(src[n])
     )
-    assert admitted == ["Depressurize", "Radiant Strike"], (
+    assert admitted == [
+        "Depressurize", "Orbital Plunge", "Radiant Strike",
+        "Seedship Impact",
+    ], (
         f"Phase-1 admit set drifted: {admitted} (expected exactly the "
-        f"2 covered+bridged pid-free single-target Tier-A spells; the "
-        f"set auto-grows as Focus Fire / Biosynthic Burst close AND a "
-        f"Lander-spell-token-seating sub-substrate admits Seedship "
-        f"Impact / Orbital Plunge)")
+        f"4 covered+bridged single-target Tier-A spells whose Effect "
+        f"close landed + whose Lander pid is now seatable; the set "
+        f"auto-grows further as Focus Fire / Biosynthic Burst close)")
+
+
+def test_bridge_lander_spell_token_seating_materialize_byte_equal():
+    """**Lander-spell-token-seating sub-substrate (round-73) — bridge
+    pin #14 (the bidirectional seated round-trip).** Sibling of pin #7
+    (``..._phase1_materialize_byte_equal``) for the two Lander-pid
+    spells. The real Seedship Impact / Orbital Plunge printings routed
+    through the GENUINE loader (``production_deck_to_deckspec`` → the
+    round-73 ``_seat_token_printings`` spell-axis pass →
+    ``_printing_to_card_def``) materialize the SAME printing on both
+    engines:
+
+      * Rust registry-dict side: the spell CardDef's ``spell_effect``
+        carries the NUMERIC seated Lander ``token_printing_id`` (the
+        exact field set Rust's ``parse_effect`` ``require``s — Seedship
+        single-field; Orbital Plunge two-field with ``amount``), NO
+        symbolic ``_token_card_def``, NO spurious ``count``;
+      * Python side: ``_card_def_to_python_printing`` re-materializes
+        the FIELD-FREE Python class (the existing bridge arm DROPS the
+        pid — Python mints the Lander intrinsically), byte-equal to
+        the live-parsed effect type.
+
+    Proves Gate A (guardrail now admits) + Gate B (the spell-axis
+    seating + the bidirectional bridge) round-trip from ONE source —
+    the no-fallback-hybrid discipline: the symbolic ref is emitted
+    AND resolved, never half-wired.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        _card_def_to_python_printing, DeckSpec,
+    )
+    from mtg_bot.cards.source import get_active_source
+
+    src = get_active_source().get_printings()
+    cases = {
+        "Seedship Impact": ("Instant", "seedship_impact_effect", None),
+        "Orbital Plunge": (
+            "Sorcery",
+            "deal_damage_to_target_creature_with_excess_lander_rider",
+            6,
+        ),
+    }
+    for name, (ctype, kind, amount) in cases.items():
+        real = src.get(name)
+        if real is None:
+            import pytest
+            pytest.skip(f"{name} absent from active CardSource")
+        assert trajectory._printing_is_bridge_simple_spell(real), (
+            f"{name} must pass the guardrail post-round-73")
+        # The GENUINE production loader transform (the EXACT path the
+        # bench OR-chain produces for the real printing).
+        spec = trajectory.production_deck_to_deckspec(
+            [name] * 4 + ["Forest"] * 36, ["Forest"] * 40,
+            pad_to_size=40)
+        cds = {cd.name: cd for cd in spec.card_defs}
+        assert name in cds and "Lander" in cds
+        lander_pid = next(
+            i for i, cd in enumerate(spec.card_defs)
+            if cd.name == "Lander")
+        sc = cds[name]
+        assert sc.card_type == ctype
+        # Rust registry-dict side: numeric seated pid, no symbolic ref,
+        # no spurious count (the §2 teeth — the Rust arms don't take
+        # one; injecting one would silently mistranslate).
+        se = sc.spell_effect
+        assert se["kind"] == kind
+        assert se["token_printing_id"] == lander_pid
+        assert "_token_card_def" not in se
+        assert "count" not in se
+        if amount is not None:
+            assert se["amount"] == amount
+        # Python side: the field-free class round-trips byte-equal to
+        # the live-parsed effect type (the bridge DROPS the pid).
+        rt = _card_def_to_python_printing(sc)
+        assert rt.spell_effect is not None
+        assert type(rt.spell_effect) is type(real.spell_effect)
+        assert rt.card_types == (ctype,)
 
 
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===

@@ -2721,6 +2721,48 @@ def _token_with_safe_activated_ability_card_def(
     )
 
 
+def _canonical_lander_token_card_def() -> Optional["CardDef"]:
+    """The canonical bridge-correct ``Lander`` token CardDef, built
+    from the authored ``TOKEN_PRINTINGS["Lander"]`` via the SAME
+    :func:`_token_with_safe_activated_ability_card_def` helper the
+    ``triggered_abilities`` token-seating path uses.
+
+    Lander-spell-token-seating sub-substrate (round-73 — the follow-on
+    the round-70 spell-card-bridge SEARCH_LIMITATIONS seam scoped). The
+    Lander-pid spell effects (Seedship Impact / Orbital Plunge) emit a
+    SYMBOLIC ``_token_card_def`` reference (see
+    :func:`_python_spell_effect_to_dict`); the loader's
+    :func:`_seat_token_printings` pass (extended to walk
+    ``spell_effect``) resolves it to the numeric ``token_printing_id``
+    Rust's ``parse_effect`` requires + registers the matching Python
+    printing into the cross-engine bridge map.
+
+    Using the EXACT helper the ``triggered_abilities`` path uses is the
+    §2 correctness guarantee: the seated Lander's registered Python
+    printing (via :func:`cross_engine.cached_token_printing` →
+    :func:`cross_engine._card_def_to_python_printing`) is byte-equal to
+    what Python's field-free ``SeedshipImpactEffect`` /
+    ``DealDamageToTargetCreatureWithExcessLanderRider`` mint
+    intrinsically from ``TOKEN_PRINTINGS["Lander"]`` — the SAME
+    equivalence the existing Effect-half Seedship/Orbital real-EoE
+    probes already proved byte-equal (Rust seats a minimal ``Lander``
+    via the registered pid, Python the intrinsic
+    ``TOKEN_PRINTINGS["Lander"]``).
+
+    Returns ``None`` (round-trip-or-bail) iff the authored Lander
+    token ever drifts out of the bridge-correct shape the
+    ``_token_with_safe_activated_ability_card_def`` §2 gate accepts —
+    keeping the no-fallback-hybrid discipline: the symbolic ref is
+    emitted ONLY when a byte-correct Lander can be seated.
+    """
+    from mtg_bot.cards.tokens import TOKEN_PRINTINGS
+
+    lander_tp = TOKEN_PRINTINGS.get("Lander")
+    if lander_tp is None:
+        return None
+    return _token_with_safe_activated_ability_card_def(lander_tp)
+
+
 def _python_ta_to_safe_dict(ta) -> Optional[dict]:
     """Convert a Python ``TriggeredAbility`` back to the Rust-shape
     dict iff it matches one of the :data:`_SAFE_TRIGGERS` shapes.
@@ -3511,32 +3553,46 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
 
     **It is part of the §2 teeth.** It only serializes a shape whose
     every node has a covered+bridged ``_ta_dict_to_python_effect``
-    arm AND whose Rust ``parse_effect`` arm needs NO registry pid the
-    loader's spell path cannot seat. Concretely, the Phase-1 admit
-    set at landing is the pid-FREE covered single-target Tier-A
-    spells — Radiant Strike
-    (``Sequence(DestroyTargetArtifactOrTappedCreature, GainLife)``)
-    and Depressurize (``DepressurizeEffect(power_penalty)``).
-    **Seedship Impact / Orbital Plunge are DECLINED in Phase 1**
-    even though their Effect classes are covered+bridged: their Rust
+    arm AND whose Rust ``parse_effect`` arm needs only a registry pid
+    the loader's spell path CAN seat. Concretely, the Phase-1 admit
+    set is the pid-FREE covered single-target Tier-A spells — Radiant
+    Strike (``Sequence(DestroyTargetArtifactOrTappedCreature,
+    GainLife)``) and Depressurize (``DepressurizeEffect``) — PLUS, as
+    of the Lander-spell-token-seating sub-substrate (round-73), the
+    two **Lander-pid** covered single-target Tier-A spells: Seedship
+    Impact (``SeedshipImpactEffect``) and Orbital Plunge
+    (``DealDamageToTargetCreatureWithExcessLanderRider``). Those two
+    were DECLINED at the Phase-1 landing (round-70) because their Rust
     ``parse_effect`` arms ``require("token_printing_id")`` for the
-    Lander, and the loader's spell path has NO Lander-token-seating
-    pass (``_seat_token_printings`` only walks ``triggered_abilities``
-    carriers — verify-first finding). Admitting them would raise in
-    ``parse_effect`` / silently mistranslate — the
-    no-fallback-hybrid / silent-no-op anti-pattern the campaign
-    discipline forbids. The Lander-spell-token-seating sub-substrate
-    is a documented follow-on (SEARCH_LIMITATIONS.md). This
-    recognizer NOT serializing those shapes is the structural decline
-    (the round-trip-or-bail teeth), complementary to the covered-set
-    gate that declines Close Encounter.
+    Lander and the loader's spell path had NO Lander-token-seating
+    pass. The round-73 sub-substrate extends
+    :func:`_seat_token_printings` to ALSO walk ``spell_effect`` for a
+    symbolic ``_token_card_def`` (the EXACT machinery the
+    ``triggered_abilities`` path already uses), so this recognizer
+    now emits the symbolic Lander reference for those two shapes — the
+    round-trip-or-bail tooth FLIPS POSITIVE for them, the
+    no-fallback-hybrid discipline preserved (the symbolic ref is
+    emitted ONLY because the seating pass that resolves it now
+    exists). The teeth STILL positively decline any genuinely
+    unseatable shape: a Sequence with one unrecognized child, any
+    other token-pid Effect whose token is not the bridge-correct
+    Lander (``_canonical_lander_token_card_def`` returns ``None``),
+    and — complementary to this serializer — the covered-set gate
+    still declines Close Encounter (``CloseEncounterEffect`` not
+    covered+bridged).
     """
     from mtg_bot.effects.combinators import Sequence
     from mtg_bot.effects.generic.life import GainLife
     from mtg_bot.effects.generic.destroy import (
         DestroyTargetArtifactOrTappedCreature,
     )
-    from mtg_bot.effects.bespoke import DepressurizeEffect
+    from mtg_bot.effects.bespoke import (
+        DepressurizeEffect,
+        SeedshipImpactEffect,
+    )
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToTargetCreatureWithExcessLanderRider,
+    )
 
     def _leaf(eff) -> Optional[dict]:
         # Pid-free covered leaves only. DestroyTargetArtifactOrTapped
@@ -3551,6 +3607,44 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
             return {
                 "kind": "depressurize_effect",
                 "power_penalty": int(eff.power_penalty),
+            }
+        # Lander-pid spell effects (Seedship Impact / Orbital Plunge) —
+        # the Lander-spell-token-seating sub-substrate (round-73; the
+        # follow-on the round-70 SEARCH_LIMITATIONS seam scoped). Their
+        # Rust ``parse_effect`` arms ``require("token_printing_id")``
+        # for the Lander; the matching dict→Python bridge arms
+        # (cross_engine.py ``seedship_impact_effect`` /
+        # ``deal_damage_to_target_creature_with_excess_lander_rider``)
+        # DROP the pid and construct the FIELD-FREE Python class (which
+        # mints the Lander intrinsically via ``TOKEN_PRINTINGS
+        # ["Lander"]``). The reverse serializer emits a SYMBOLIC
+        # ``_token_card_def`` Lander reference exactly as
+        # :func:`_python_ta_to_safe_dict`'s ``create_token`` arm does;
+        # the loader's :func:`_seat_token_printings` pass (now extended
+        # to walk ``spell_effect`` too) rewrites it to the numeric
+        # ``token_printing_id`` Rust requires + registers the matching
+        # Python printing. round-trip-or-bail preserved: bail if the
+        # authored Lander token ever drifts out of the bridge-correct
+        # shape (``_canonical_lander_token_card_def`` → ``None``).
+        if isinstance(eff, SeedshipImpactEffect):
+            lcd = _canonical_lander_token_card_def()
+            if lcd is None:
+                return None
+            return {
+                "kind": "seedship_impact_effect",
+                "_token_card_def": lcd,
+            }
+        if isinstance(eff, DealDamageToTargetCreatureWithExcessLanderRider):
+            lcd = _canonical_lander_token_card_def()
+            if lcd is None:
+                return None
+            return {
+                "kind": (
+                    "deal_damage_to_target_creature_with_excess_"
+                    "lander_rider"
+                ),
+                "amount": int(eff.amount),
+                "_token_card_def": lcd,
             }
         return None
 
@@ -4235,6 +4329,24 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
     # seating rewrite.
     _TOKEN_CREATE_KINDS = ("create_token", "create_token_tapped")
 
+    # Lander-spell-token-seating sub-substrate (round-73). The two
+    # covered single-target Tier-A Lander-pid SPELL effects whose Rust
+    # ``parse_effect`` arms ``require("token_printing_id")``. Their
+    # reverse serializer (:func:`_python_spell_effect_to_dict`) emits a
+    # symbolic ``_token_card_def`` exactly like the ``create_token``
+    # triggered carrier; the seating pass now ALSO walks
+    # ``spell_effect`` to resolve it. Unlike the triggered
+    # ``create_token`` rewrite (which reconstructs a fixed
+    # ``{kind,count,token_printing_id}`` dict), the spell rewrite
+    # PRESERVES every non-symbolic field (``amount`` for Orbital
+    # Plunge; Seedship Impact has none) and only swaps the symbolic
+    # ``_token_card_def`` for the numeric ``token_printing_id`` — the
+    # exact field set the matching Rust parse arms require.
+    _SPELL_TOKEN_PID_KINDS = (
+        "seedship_impact_effect",
+        "deal_damage_to_target_creature_with_excess_lander_rider",
+    )
+
     def _carrier_token_refs(cd: CardDef):
         """Yield (idx, token_card_def) for each create_token /
         create_token_tapped trigger on ``cd`` that still carries a
@@ -4251,12 +4363,31 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
             if tcd is not None:
                 yield i, tcd
 
-    # Fast path: no create_token carrier -> return the list untouched
-    # (every pre-round-49 production deck). Avoids the dataclasses /
-    # cross_engine import cost on the hot loader path when there's
-    # nothing to seat.
+    def _carrier_spell_token_ref(cd: CardDef):
+        """Return the symbolic ``token_card_def`` from ``cd``'s
+        ``spell_effect`` iff it is a Lander-pid spell effect still
+        carrying a symbolic ``_token_card_def``, else ``None``.
+
+        A spell CardDef carries exactly ONE ``spell_effect`` (the
+        guardrail is single-mode single-effect), so this returns at
+        most one ref — no index needed (the rewrite replaces the whole
+        ``spell_effect`` dict)."""
+        se = cd.spell_effect
+        if not isinstance(se, dict):
+            return None
+        if se.get("kind") not in _SPELL_TOKEN_PID_KINDS:
+            return None
+        return se.get("_token_card_def")
+
+    # Fast path: no create_token carrier AND no Lander-pid spell
+    # carrier -> return the list untouched (every pre-round-49
+    # production deck; every pre-round-73 spell deck). Avoids the
+    # dataclasses / cross_engine import cost on the hot loader path
+    # when there's nothing to seat.
     has_token_carrier = any(
-        any(True for _ in _carrier_token_refs(cd)) for cd in card_defs
+        any(True for _ in _carrier_token_refs(cd))
+        or _carrier_spell_token_ref(cd) is not None
+        for cd in card_defs
     )
     if not has_token_carrier:
         return card_defs
@@ -4264,10 +4395,18 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
     # Stable token order: first appearance across the carrier list
     # (deterministic — card_defs order is the union-dict insertion
     # order, itself deterministic from the deck card-name order).
+    # Triggered-ability carriers and spell carriers share ONE token
+    # namespace (a Lander is a Lander whichever axis spawns it — same
+    # name, same CardDef, ONE pid), so a deck that has BOTH a
+    # triggered Lander carrier and a Lander spell shares a single
+    # Lander pid.
     token_cd_by_name: dict[str, CardDef] = {}
     for cd in card_defs:
         for _idx, tcd in _carrier_token_refs(cd):
             token_cd_by_name.setdefault(tcd.name, tcd)
+        stcd = _carrier_spell_token_ref(cd)
+        if stcd is not None:
+            token_cd_by_name.setdefault(stcd.name, stcd)
 
     # Carriers occupy pids [0, len(card_defs)); tokens get the pids
     # immediately after, in token_cd_by_name insertion order. A token
@@ -4298,34 +4437,56 @@ def _seat_token_printings(card_defs: list[CardDef]) -> list[CardDef]:
         py_printing = cached_token_printing(token_cd_by_name[tname])
         register_token_printing(pid, py_printing)
 
-    # Rewrite every carrier's symbolic create_token triggers into the
-    # numeric token_printing_id shape. CardDef is frozen -> replace.
+    # Rewrite every carrier's symbolic create_token triggers AND/OR
+    # symbolic Lander-pid spell_effect into the numeric
+    # token_printing_id shape. CardDef is frozen -> replace.
     rewritten: list[CardDef] = []
     for cd in result:
         refs = list(_carrier_token_refs(cd))
-        if not refs:
+        stcd = _carrier_spell_token_ref(cd)
+        if not refs and stcd is None:
             rewritten.append(cd)
             continue
-        new_tas = list(cd.triggered_abilities)
-        for idx, tcd in refs:
-            old = new_tas[idx]
-            old_eff = old["effect"]
-            new_eff = {
-                # Preserve the original kind — ``create_token`` (Phase
-                # 1, bare) vs ``create_token_tapped`` (Phase 4) IS the
-                # tapped-vs-untapped choice on the bridge; the seating
-                # pass only swaps the symbolic ``_token_card_def`` for
-                # the numeric ``token_printing_id``, never the kind.
-                "kind": old_eff["kind"],
-                "count": old_eff["count"],
-                "token_printing_id": token_pid_by_name[tcd.name],
+        replace_kwargs: dict = {}
+        if refs:
+            new_tas = list(cd.triggered_abilities)
+            for idx, tcd in refs:
+                old = new_tas[idx]
+                old_eff = old["effect"]
+                new_eff = {
+                    # Preserve the original kind — ``create_token``
+                    # (Phase 1, bare) vs ``create_token_tapped``
+                    # (Phase 4) IS the tapped-vs-untapped choice on
+                    # the bridge; the seating pass only swaps the
+                    # symbolic ``_token_card_def`` for the numeric
+                    # ``token_printing_id``, never the kind.
+                    "kind": old_eff["kind"],
+                    "count": old_eff["count"],
+                    "token_printing_id": token_pid_by_name[tcd.name],
+                }
+                new_ta = dict(old)
+                new_ta["effect"] = new_eff
+                new_tas[idx] = new_ta
+            replace_kwargs["triggered_abilities"] = tuple(new_tas)
+        if stcd is not None:
+            # Spell rewrite: copy the whole spell_effect dict, drop
+            # the symbolic ``_token_card_def``, add the numeric
+            # ``token_printing_id``. EVERY other field is preserved
+            # verbatim (``kind`` + ``amount`` for Orbital Plunge;
+            # ``kind`` only for Seedship Impact) — the field set the
+            # Rust ``parse_effect`` arms require. NO ``count`` is
+            # injected (these arms don't take one — that would be the
+            # silent-mistranslation class the §2 teeth exist to
+            # prevent).
+            old_se = cd.spell_effect
+            new_se = {
+                k: v
+                for k, v in old_se.items()
+                if k != "_token_card_def"
             }
-            new_ta = dict(old)
-            new_ta["effect"] = new_eff
-            new_tas[idx] = new_ta
-        rewritten.append(
-            dataclasses.replace(cd, triggered_abilities=tuple(new_tas))
-        )
+            new_se["token_printing_id"] = token_pid_by_name[stcd.name]
+            replace_kwargs["spell_effect"] = new_se
+        rewritten.append(dataclasses.replace(cd, **replace_kwargs))
     return rewritten
 
 
