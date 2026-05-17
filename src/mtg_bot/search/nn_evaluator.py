@@ -48,6 +48,7 @@ import torch.nn.functional as F
 
 from mtg_bot.features import FEATURE_DIM, extract_features
 from mtg_bot.game import GameState as EngineGameState
+from mtg_bot.search import eval_counters
 from mtg_bot.search.evaluator import Evaluator
 from mtg_bot.search.protocol import GameState, PlayerID
 
@@ -583,6 +584,12 @@ class NNEvaluator(Evaluator):
     def _evaluate_nonterminal(
         self, state: GameState, player_id: PlayerID,
     ) -> float:
+        # Base ``Evaluator.evaluate`` already short-circuited terminals,
+        # so reaching here is exactly one non-terminal NN forward
+        # (whether structured or MLP — counted at the public-method
+        # boundary, not the ``self.model``/``_structured_forward`` site,
+        # so the architecture split can't double- or under-count).
+        eval_counters.record_nn_eval(1)
         if self.is_structured:
             # Tokenize + forward through the StructuredModel. The
             # batched helper handles the structured input pipeline for
@@ -651,6 +658,11 @@ class NNEvaluator(Evaluator):
         out: list[float] = [0.0] * len(states)
         for i, v in terminal_results:
             out[i] = v
+        # One batched forward over the non-terminal subset (structured
+        # or MLP). Terminals were already split out above and never
+        # touch the network, so they must not count.
+        if nonterminal_indices:
+            eval_counters.record_nn_eval(len(nonterminal_indices))
         if self.is_structured:
             if nonterminal_states:
                 values_t, _ = self._structured_forward(
@@ -718,6 +730,9 @@ class NNEvaluator(Evaluator):
             policy = np.zeros(vocab_size, dtype=np.float32)
             return value, policy
 
+        # Past the terminal short-circuit: exactly one non-terminal
+        # (value, policy) forward, structured or MLP.
+        eval_counters.record_nn_eval(1)
         mask_np = ae.legal_action_mask(
             state, player_id, version=self.action_encoding_version,
         )
@@ -828,6 +843,10 @@ class NNEvaluator(Evaluator):
                     extract_features(engine, player_id)
                 )
 
+        # One batched (value, policy) forward over the non-terminal
+        # subset; terminals were split out above and never count.
+        if nonterminal_indices:
+            eval_counters.record_nn_eval(len(nonterminal_indices))
         if self.is_structured:
             if nonterminal_states:
                 values_t, logits_t = self._structured_forward(
@@ -920,6 +939,9 @@ class NNEvaluator(Evaluator):
                 value = 1.0 if winner == player_id else -1.0
             logits = np.zeros(vocab_size, dtype=np.float32)
             return value, logits
+        # Non-terminal value+raw-logits forward (belief / ISMCTS prior
+        # path). One forward per call, structured or MLP.
+        eval_counters.record_nn_eval(1)
         if self.is_structured:
             values_t, logits_t = self._structured_forward(
                 [state], player_id,
@@ -983,6 +1005,10 @@ class NNEvaluator(Evaluator):
                 nonterminal_features.append(
                     extract_features(engine, player_id)
                 )
+        # One batched value+raw-logits forward over the non-terminal
+        # subset; terminals split out above never count.
+        if nonterminal_indices:
+            eval_counters.record_nn_eval(len(nonterminal_indices))
         if self.is_structured:
             if nonterminal_states:
                 values_t, logits_t = self._structured_forward(

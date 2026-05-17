@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from mtg_bot.decks import decks_from_json
+from mtg_bot.search import eval_counters
 from mtg_bot.training import BenchProgress, NNPimcConfig, Registry
 from mtg_bot.training.data_gen import (
     _generate_one_game_data,
@@ -52,7 +53,17 @@ def _init_worker(
 
 
 def _run_one(args):
-    """Time a single NN-PUCT v6-vs-v6 game; return (game_idx, wall_sec, n_samples, status)."""
+    """Time a single NN-PUCT v6-vs-v6 game.
+
+    Returns ``(game_idx, wall_sec, n_samples, status, nodes,
+    nn_eval_states, nn_forward_calls)``. The last three are the
+    depth-invariant search-work units (see ``mtg_bot.search.
+    eval_counters``): they let the report quote ``ms / NN-eval`` and
+    ``ms / search-node``, which — unlike sec/game — are comparable
+    across ``--nodes`` settings and across cpu/cuda/SHM regimes. The
+    counters are process-global; one game runs single-threaded in
+    this pool worker, so ``reset()`` before / ``snapshot()`` after
+    brackets exactly this game even though the worker is reused."""
     game_idx, base_seed = args
     cfg = NNPimcConfig(
         weights_path=_WEIGHTS_PATH,
@@ -64,6 +75,7 @@ def _run_one(args):
         hidden_sizes=_HIDDEN_SIZES,
         device=_DEVICE,
     )
+    eval_counters.reset()
     start = time.perf_counter()
     try:
         chunk = _generate_one_game_data(
@@ -78,10 +90,17 @@ def _run_one(args):
             per_game_timeout_sec=None,  # let everything run to completion
         )
         wall = time.perf_counter() - start
-        return (game_idx, wall, int(chunk[0].shape[0]), "ok")
+        c = eval_counters.snapshot()
+        return (
+            game_idx, wall, int(chunk[0].shape[0]), "ok",
+            c.nodes, c.nn_eval_states, c.nn_forward_calls,
+        )
     except Exception as exc:  # noqa: BLE001
         wall = time.perf_counter() - start
-        return (game_idx, wall, 0, f"err:{type(exc).__name__}")
+        # Crashed games have no meaningful work counts; zero them so
+        # they don't skew the ms/NN-eval aggregate (which is computed
+        # over 'ok' games only anyway).
+        return (game_idx, wall, 0, f"err:{type(exc).__name__}", 0, 0, 0)
 
 
 def main(argv=None) -> None:  # pragma: no cover
@@ -269,6 +288,42 @@ def main(argv=None) -> None:  # pragma: no cover
     print(f"# Throughput (workers={args.workers}):")
     print(f"#   sec/game/worker = {sec_per_game_per_worker:.1f}s")
     print(f"#   games/hour      = {games_per_hour:.1f}")
+    # Depth-invariant search-work units. Computed over 'ok' games
+    # only (crashed games carry zeroed counts and a partial wall, so
+    # mixing them in would corrupt the ms/unit figure). These are the
+    # numbers that stay comparable when --nodes changes or the device
+    # regime changes — see mtg_bot.search.eval_counters and
+    # docs/BENCHMARKING_FINDINGS.md "Units & methodology".
+    ok = [r for r in results if r[3] == "ok"]
+    ok_wall = sum(r[1] for r in ok)
+    tot_nodes = sum(r[4] for r in ok)
+    tot_evals = sum(r[5] for r in ok)
+    tot_calls = sum(r[6] for r in ok)
+    print(f"# Search-work units (depth-invariant, n_ok={len(ok)}):")
+    if ok and ok_wall > 0 and tot_evals > 0 and tot_nodes > 0:
+        print(
+            f"#   ms/NN-eval        = "
+            f"{ok_wall * 1000.0 / tot_evals:.3f}"
+        )
+        print(
+            f"#   ms/search-node    = "
+            f"{ok_wall * 1000.0 / tot_nodes:.3f}"
+        )
+        print(f"#   NN-evals/game     = {tot_evals / len(ok):.0f}")
+        print(f"#   search-nodes/game = {tot_nodes / len(ok):.0f}")
+        print(
+            f"#   states/call (fill)= "
+            f"{tot_evals / tot_calls:.2f}"
+            if tot_calls else "#   states/call (fill)= n/a"
+        )
+        print(
+            f"#   NN-eval fraction  = "
+            f"{tot_evals / tot_nodes:.3f}  "
+            f"(states forwarded / search nodes; >1 ⇒ standalone "
+            f"PUCT root/prior forwards dominate cache+terminal skips)"
+        )
+    else:
+        print("#   (no completed games with work counts)")
     crashed = [r for r in results if r[3] != "ok"]
     if crashed:
         print(f"# crashed: {len(crashed)}")
