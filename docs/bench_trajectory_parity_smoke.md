@@ -2439,3 +2439,202 @@ baseline unchanged). No Rust → no `maturin`. Per the slice spec
    unchanged; not a regression). The §2-honest pool-delta levers
    (Phase 5 `each_player`, Phase 2 non-creature carriers) remain the
    route to creature-dense mirrors and deeper-turn signal.
+
+## Round 65 (2026-05-16) — N3: FAIL_TIMEOUT creature-floor — quantified drag distribution + data-driven lever recommendation
+
+The standing ~50% FAIL_TIMEOUT floor (r56/r58/r61/r62/r63: e.g. r62
+133/240) is the campaign's single biggest **non-divergence signal
+drag** — every timed-out game yields zero trajectory-divergence
+signal. Root cause established r47/r50/r58 (the CardDef bridge-admit
+filter collapses each 17lands archetype to ~1-2 admitted creature
+copies + ~58 lands → near-creatureless mirror → never reaches lethal →
+max-turns cap). This round **quantifies the drag precisely** with
+per-game instrumentation the plain bench doesn't capture, evaluates the
+candidate levers §2-honestly, and recommends the single best one.
+
+`scripts/scout_r64_timeout_creature_floor.py` reuses the bench's exact
+per-step primitives (byte-identical trajectory to a real
+`bench_trajectory_parity.py` run) + the REAL production loader, and
+instruments per-game: admitted creature copies (post-filter, pre-pad —
+exactly what the bench plays), raw distinct creatures dropped from,
+turns played, creatures cast, attack-eligible turns, and a timeout
+cause classification. Artifact `tmp/scout_r64_timeout_floor.json`.
+
+### Sweep — round-62 Batch-A broad-surface grid (HARD ≤3-min cap honored)
+
+```
+PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \
+    scripts/scout_r64_timeout_creature_floor.py \
+    --archetypes 0,1,2,3,4,5,7,8,9,10,11,12,13,40,42 --seeds 0-3 \
+    --max-turns 22 --json-out tmp/scout_r64_timeout_floor.json
+```
+
+60 games, **~78s wall** (well under the 3-min cap). 0 FAIL_DIVERGENCE,
+0 FAIL_EXCEPTION — clean run, the instrumentation does not perturb
+parity.
+
+### The quantified drag distribution
+
+| Status | Count | % |
+|---|---:|---:|
+| PASS | 35 | 58.3% |
+| **FAIL_TIMEOUT** | **25** | **41.7%** |
+| FAIL_DIVERGENCE | 0 | 0% |
+| ARCHETYPE_FILTERED | 0 | 0% |
+| FAIL_EXCEPTION | 0 | 0% |
+
+**Timeout cause split** (of the 25 FAIL_TIMEOUT — the new datum vs r47):
+
+| Cause | Count | % of timeouts |
+|---|---:|---:|
+| `cast_but_stalled` (≥1 creature cast + attacked, too small/slow to close 20 by the cap) | **16** | **64%** |
+| `never_cast_creature` (0 creatures ever cast — lone carrier buried in ~58 lands, never drawn castable) | **9** | **36%** |
+
+This **inverts the round-47 split** (r47: 62% no-cast / 38%
+under-powered). The r48/r50 admit expansions (Icetill Explorer,
+Gravpack Monoist) raised the floor: more decks now cast *something*,
+but it remains too weak/slow — confirming the lever is **more creature
+copies of a closing body**, not "any creature at all".
+
+**Admitted-creature-copy distribution (all 60 games):** 16 games at
+**1 copy**, 20 at **2 copies**, 16 at **3 copies**, 8 at **5 copies**.
+Every archetype with ≥5 admitted copies (arch 2,3 — Galactic Wayfarer
++ Icetill Explorer + Tapestry Warden) went **4/4 PASS, 0 timeout**;
+every 1-copy archetype (7,8,9,42) timed out ≥50%. The
+PASS↔copy-count correlation is monotone and stark.
+
+### The collapse, measured across the full broad surface
+
+A pool-wide walk (36 archetypes spanning the full r62 broad admitted
+surface, idx 0–800) measured the raw→admitted creature-copy collapse
+and classified every dropped copy by its first-failing admit gate:
+
+| Metric | Value |
+|---|---:|
+| Raw creature copies (36 decks) | 489 |
+| **Admitted today** | **93 (19.0%)** |
+| Dropped: **`unsafe_trigger`** | **255 (52% of all raw copies)** |
+| Dropped: `activated_ability` | 69 |
+| Dropped: `warp_cost` | 23 |
+| Dropped: other/mana | 21 |
+| Dropped: `static_ability` | 11 |
+| Dropped: `unsafe_keyword` | 9 |
+| Dropped: `dynamic_pt` | 8 |
+
+**Only 19% of raw creature copies survive the admit gate, and the
+single dominant drop reason — by a 3.7× margin over the next — is
+`unsafe_trigger`** (a triggered ability outside `_SAFE_TRIGGERS`).
+This is the precise mechanism of the creature-floor: it is
+overwhelmingly a **`_SAFE_TRIGGERS` allowlist** coverage gap (HANDOFF
+workstream 2), NOT a keyword/cost/dynamic-P/T gap (those are long-tail).
+
+### Lever evaluation (§2-honest)
+
+The 255 `unsafe_trigger` copies were further classified by
+`(event, predicate, effect)` shape, restricted to creatures whose
+**sole** failing gate is the trigger (all other gates pass — i.e. a
+single `_SAFE_TRIGGERS` entry would flip them). The distribution is a
+**diffuse long tail**, not a single dominant unlock:
+
+| Lever | +creature-copies | TIMEOUT→PASS conversion | §2 bridge-correctness cost | Verdict |
+|---|---|---|---|---|
+| **A. New `_SAFE_TRIGGERS` entry: `ENTERS/IsSelf/PumpTargetCreatureUEOT`** (top shape, Blooming Stinger) | ~20 ability-instances pool-wide (the single biggest shape) | low — ~1 copy/archetype on a few archetypes | **DECLINE**: effect requires an agent target-pick at PUSH time; the production-deck loader seats no agent → silent mistranslation (the exact `deal_damage`/target-pick decline already in the `_SAFE_TRIGGERS` docstring). Not §2-correct. |
+| **B. Other top trigger shapes** (`EachOpponentDiscards`, `DealDamageAnyTarget`, `OptionalSacArtifactForEffect`, `SetBasePTConditionalUntilEOT`, the bespoke composites) | each ≤10 instances; ~80 total across ~15 distinct shapes | low individually; ~15 separate slices to drain | **DECLINE each**: every one needs either an unseated agent (discard/target-pick), a new Rust substrate (`CreateLanderAndScheduleSacrifice`, `SetBasePT*`, the EFFECT_UNCOVERED_TRIAGE Tier-A/C bespoke composites), or a non-§2 gate (`warp_cost`, `activated_abilities`). No single small §2-correct widen exists. |
+| **C. Phase 1 `create_token` (Lander/Robot creature carriers)** — **already shipped** (r49/r50; `ENTERS/IsSelf/create_token` IS a safe trigger) | already in the 93 — Galactic Wayfarer 3/3, Beamsaw Prospector 2/1, Thawbringer, etc. | already counted (it's why Galactic Wayfarer is the most-admitted creature, 11/15 archetypes) | n/a — already done; this is *why* the floor isn't worse. The remaining Lander carriers (Edge Rover DIES, Kav Landseeker `CreateLanderAndScheduleSacrifice`) are blocked on **Phase 5 / new Rust substrate**, not a `_SAFE_TRIGGERS` widen. |
+| **D. Phase 5 (`each_player`→Edge Rover)** | Edge Rover 2/2 + ~6 each-player Lander carriers | medium — adds a 2/2 body to the ~15-deck Edge-Rover-bearing slice | §2-correct *if* Phase 3 (Lander-token activated-ability sub-substrate) lands first — Edge Rover's token is Lander (non-vanilla); `each_player` arm + Rust variant exist (r43) but the loader recognizer + auto-registration + Lander-token-ability round-trip do not. **Multi-round** (Phase 3 ≥1 Rust round + Phase 5 ≥1 round). |
+| **E. Phase 2 (non-creature Lander carriers)** | small — most non-creature carriers also make Lander (gated on Phase 3) | low until Phase 3 | §2-correct but **lower leverage than D and same Phase-3 prerequisite** (TOKEN_PRINTING_SUBSTRATE §Phase 2: "real-card delta still small until Phase 3"). |
+| **F. EFFECT_UNCOVERED_TRIAGE Tier-A single-card Rust lane** (Diplomatic Relations, Orbital Plunge, Depressurize, Focus Fire, …) | each: 1 card → +copies on its carrier archetypes | each ~1 round, ~+1-2 copies/archetype on the carriers | §2-correct per-card (genuine real-EoE probe); but these are mostly **instants/sorceries** (removal/pump spells), NOT creature bodies — they help the *spell* signal, not the creature-floor directly. The creature-bearing Tier-C subgroup (28 cards, `nonsafe_triggered_ability`-co-gated) is a two-lever close. |
+| **G. `--require-creatures N` bench precondition** (r47 option 2) | 0 (no coverage added) | 0 — reclassifies, doesn't convert | §2-neutral (harness-only). Correctly relabels the 36% `never_cast`-population as "filtered, no signal possible" so FAIL_TIMEOUT becomes a truer coverage metric — but it does NOT convert any timeout to PASS/DIV. A reporting honesty improvement, not a drag fix. |
+
+### Recommendation (single best lever, data-driven conversion-per-effort)
+
+**There is no cheap single-slice §2-correct unlock. The creature-floor
+is a structural multi-round substrate cost, and the highest
+conversion-per-effort lever is the TOKEN_PRINTING_SUBSTRATE Phase 3
+(Lander-token activated-ability sub-substrate) → Phase 5
+(`each_player`→Edge Rover) sequence — a minimum of 2 Rust rounds**
+(Phase 3 ≥1 round + Phase 5 1 round; TOKEN_PRINTING_SUBSTRATE §5/§Phase
+5). Rationale, data-driven:
+
+- The drag is 52%-attributable to `unsafe_trigger`, and the trigger
+  tail is **diffuse** (no shape >20 instances; ~15+ distinct shapes,
+  most needing an unseated agent or new Rust substrate). No
+  `_SAFE_TRIGGERS` one-liner converts a meaningful fraction — every
+  near-miss shape (lever A/B) is a documented §2 decline (agent
+  target-pick / new substrate / non-§2 gate). **The cheap lever does
+  not exist; this is established with data, not deferred
+  speculatively.**
+- The **creature** carriers most likely to densify the mirror are the
+  Lander/Robot family — and Phase 1's `create_token` safe trigger
+  already admits the *vanilla-token, bare-ENTERS/DIES* members
+  (Galactic Wayfarer, Beamsaw Prospector — confirmed: they ARE the
+  dominant admitted creatures today, which is why the floor sits at
+  ~42% not ~70%). The **remaining** high-deck Lander creature carriers
+  (Edge Rover 15,271 decks; the `CreateLanderAndScheduleSacrifice`
+  cluster) are blocked on Phase 3's Lander-token-activated-ability
+  round-trip, then Phase 5's `each_player` recognizer — the
+  TOKEN_PRINTING_SUBSTRATE-documented "largest single EoE-pool-delta
+  lever in the whole substrate" (§Phase 3). That is the route that
+  adds the most creature *bodies* per Rust round.
+- Phase 2 (E) is §2-correct but lower-leverage and shares the Phase-3
+  prerequisite. The Tier-A single-card lane (F) is the right parallel
+  Rust lane for *spell* signal but does not directly densify the
+  creature mirror. `--require-creatures N` (G) is a worthwhile
+  **reporting-honesty** add (it would correctly classify the 36%
+  `never_cast` population out of FAIL_TIMEOUT) but converts nothing.
+
+**Exact realistic round-count:** Phase 3 (Lander-token activated-
+ability sub-substrate: CardDef `token_activated_abilities` field +
+Rust token-printing thread + `SearchLibraryForBasicLandTapped`
+agent-seating verification) = **≥1 Rust round** (TOKEN_PRINTING_
+SUBSTRATE §5 estimates it the largest substrate phase; budget 1-2).
+Phase 5 (`each_player` loader recognizer + auto-registration arm; Rust
+variant + bridge arm already exist from r43) = **1 Rust round**, gated
+on Phase 3. Net **2-3 Rust rounds** for the Edge-Rover-class creature
+densification. This is the cheapest *real* lever; it is multi-round,
+stated with the number per the slice brief.
+
+### §2-correct tweak this slice — DECIDED NOT MADE (not deferred speculatively)
+
+Slice §3 permits a minimal §2-correct `_SAFE_*`/filter tweak THIS
+slice if low-risk and in-scope. **Empirically answered NO, with data:**
+every trigger shape on the near-miss creatures (the 255-copy
+`unsafe_trigger` tail) is a standing bridge-correctness decline —
+`PumpTargetCreatureUEOT`/`DealDamageAnyTarget`/`EachOpponentDiscards`
+need an agent the production-deck loader does not seat (silent
+mistranslation — the exact decline already enumerated in the
+`_SAFE_TRIGGERS` docstring); the Lander/composite shapes
+(`CreateLanderAndScheduleSacrifice`, `SetBasePTConditionalUntilEOT`,
+Tier-A composites) need NEW Rust substrate, not an allowlist edit.
+Admitting any of them via a bare `_SAFE_TRIGGERS` widen would ship the
+round-38-E5 count-chasing anti-pattern §2 exists to prevent. **No
+tweak made — the precise required unlock (Phase 3→5, 2-3 Rust rounds)
+is specified above; declining the unbridged shapes is the §2-correct
+outcome.**
+
+### Recommended next bench item
+
+**`--require-creatures N` reporting-honesty harness add** (r47 option
+2, lever G), a contained ~1 Python slice: a bench precondition that
+marks an (archetype, seed) game `ARCHETYPE_FILTERED` instead of
+`FAIL_TIMEOUT` when the post-filter deck carries `< N` admitted
+creature copies (N≈3 from this round's data — the 1-copy archetypes
+are the structural never-converters). It adds **zero coverage** but
+makes the headline FAIL_TIMEOUT % a *truer* signal-coverage metric by
+separating the ~36% structural-no-creature population from genuine
+long-stalls — directly actionable for tracking the Phase-3/5
+substrate's conversion effect when it lands. It is §2-neutral
+(harness-only, no admit-set change), bounded, and the only
+*single-slice* item this analysis surfaces. (The substrate levers D/E
+and the Tier-A lane F are Rust-lane multi-round work, correctly
+out-of-scope for a bench/docs slice.)
+
+### Gate
+
+Pure docs + 1 `scripts/scout_*.py` diagnostic
+(`scout_r64_timeout_creature_floor.py`, read-only — reuses the bench's
+own primitives, modifies no production/`_SAFE_*`/bench-script code) +
+1 `tmp/scout_r64_timeout_floor.json` artifact. **No production /
+harness / `_SAFE_*` / bench-script code changed.** Parity gate **not**
+re-run; nothing in this slice is on its path (baseline **1397**
+unchanged). No Rust → no `maturin`.
