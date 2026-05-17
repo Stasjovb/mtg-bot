@@ -63291,6 +63291,394 @@ def test_r60_genuine_real_eoe_shockland_byte_equal_through_bench(
     )
 
 
+def _r60_perigee_build_rust(power_bonus=2, toughness_bonus=0,
+                            seed_ally=True, ally_is_creature=True,
+                            extra_own_creature=False):
+    """Helper: Rust state with a Perigee-Beckoner-shape ETB source
+    about to enter on p0's bf. Optionally seeds an "another" ally on
+    p0's bf first (so it's bf[0], the deterministic first-OTHER pick).
+    Returns ``(rust_state, source_id, ally_id_or_None)``. The source's
+    ENTERS trigger is the new
+    ``pump_target_creature_until_eot_grant_dies_return_tapped`` kind.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rs = build_rust_state(spec)
+    ZB = 2
+    ally_id = None
+    if seed_ally:
+        ad = {"name": "R60 Ally",
+              "card_types": ["Creature"] if ally_is_creature
+              else ["Artifact"],
+              "power": 2, "toughness": 2}
+        ally_id = rs.register_and_inject_object(ad, 0, ZB)
+    if extra_own_creature:
+        rs.register_and_inject_object(
+            {"name": "R60 Ally2", "card_types": ["Creature"],
+             "power": 1, "toughness": 1}, 0, ZB)
+    source_id = rs.register_and_inject_object(
+        {
+            "name": "Perigee Beckoner",
+            "card_types": ["Creature"],
+            "power": 4,
+            "toughness": 5,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "pump_target_creature_until_eot_grant_dies_return_tapped",
+                        "power_bonus": power_bonus,
+                        "toughness_bonus": toughness_bonus,
+                    },
+                }
+            ],
+        },
+        0,
+        ZB,
+    )
+    return rs, source_id, ally_id
+
+
+def test_r60_rust_perigee_pumps_another_own_creature():
+    """**BLOCKED-RUST-EFFECT slice (round 60) — Perigee Beckoner.**
+    The ETB lands the trigger; resolving it pumps the FIRST OTHER
+    creature on the source-controller's bf (the "another" ally,
+    bf[0]) by +2/+0 and the source itself is NOT pumped (CR 115.4
+    "another" — source-id exclusion)."""
+    rs, src_id, ally_id = _r60_perigee_build_rust(power_bonus=2)
+    assert rs.stack_size() == 1, (
+        "Rust: Perigee ENTERS should fire the SourceIsSelf trigger "
+        f"and land the effect on the stack. Got {rs.stack_size()}")
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    assert rs.effective_power(ally_id) == 4, (
+        "Rust: the 'another' ally must be pumped +2/+0 (2 -> 4)")
+    assert rs.effective_power(src_id) == 4, (
+        "Rust: Perigee itself (printed 4) must NOT be pumped — "
+        "'another' excludes the source")
+
+
+def test_r60_rust_perigee_dies_return_tapped():
+    """Killing the pumped ally (lethal marked damage + SBAs) returns
+    it to its OWNER's battlefield TAPPED, graveyard empty, and it
+    KEEPS the +2/+0 (Python source-of-truth: the returned object
+    retains temp_power_bonus — round-53 effective-state lesson)."""
+    rs, src_id, ally_id = _r60_perigee_build_rust(power_bonus=2)
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs.deal_damage(ally_id, 99)
+    rs.apply_sbas_until_quiescent()
+    bf = {o["id"]: o for o in rs.battlefield_snapshot()}
+    assert ally_id in bf, "Rust: pumped ally must return to bf"
+    assert bf[ally_id]["tapped"] is True, "Rust: returns TAPPED"
+    assert bf[ally_id]["controller_id"] == 0, (
+        "Rust: returns under OWNER's control")
+    assert rs.graveyard_snapshot(0) == [], (
+        "Rust: ally must not stay in graveyard")
+    assert rs.effective_power(ally_id) == 4, (
+        "Rust: returned ally KEEPS +2/+0 (source-of-truth power "
+        "retention — Python re-uses the same object)")
+
+
+def test_r60_rust_perigee_second_death_no_rereturn():
+    """After the first dies-return, a SECOND death of the same ally
+    does NOT re-fire the rider (the GrantedDiesReturnTapped marker was
+    dropped on the first return — mirrors Python's layer-6 grant
+    clear). The ally stays in the graveyard."""
+    rs, src_id, ally_id = _r60_perigee_build_rust(power_bonus=2)
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs.deal_damage(ally_id, 99)
+    rs.apply_sbas_until_quiescent()
+    assert any(o["id"] == ally_id
+               for o in rs.battlefield_snapshot())
+    # Second kill.
+    rs.deal_damage(ally_id, 99)
+    rs.apply_sbas_until_quiescent()
+    assert not any(o["id"] == ally_id
+                   for o in rs.battlefield_snapshot()), (
+        "Rust: ally must NOT re-return on a 2nd death")
+    assert [e["printing_name"]
+            for e in rs.graveyard_snapshot(0)] == ["R60 Ally"], (
+        "Rust: ally stays in p0's graveyard after the 2nd death")
+
+
+def test_r60_rust_perigee_no_other_creature_silent_fizzle():
+    """No OTHER creature on the controller's bf (only the source) →
+    the non-optional 'another target creature you control' resolves
+    as a silent no-op (CR 608.2b): nothing pumped, no marker, the
+    source untouched and NOT self-pumped."""
+    rs, src_id, _ = _r60_perigee_build_rust(power_bonus=2,
+                                            seed_ally=False)
+    assert rs.stack_size() == 1
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    assert rs.effective_power(src_id) == 4, (
+        "Rust: source must NOT be self-pumped when no OTHER creature "
+        "exists ('another' fizzle)")
+    # Killing the un-marked source does NOT return it (no rider).
+    rs.deal_damage(src_id, 99)
+    rs.apply_sbas_until_quiescent()
+    assert not any(o["id"] == src_id
+                   for o in rs.battlefield_snapshot())
+    assert [e["printing_name"]
+            for e in rs.graveyard_snapshot(0)] == ["Perigee Beckoner"]
+
+
+def test_r60_rust_perigee_non_creature_other_not_targeted():
+    """An "other" object that is NOT a creature (an artifact) is not a
+    legal pump target (the resolve arm gates on card_types containing
+    "Creature"); with no creature OTHER than the source the ability
+    fizzles silently — the artifact is unmarked and untouched."""
+    rs, src_id, art_id = _r60_perigee_build_rust(
+        power_bonus=2, ally_is_creature=False)
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    # Artifact not pumped (Rust effective_power returns None for a
+    # non-creature) and source not self-pumped.
+    assert rs.effective_power(src_id) == 4
+    # Kill the artifact — no rider, so no return.
+    rs.deal_damage(art_id, 99)
+    rs.apply_sbas_until_quiescent()
+    # Artifact has 2 toughness, 99 damage → destroyed, stays in gy
+    # (no GrantedDiesReturnTapped marker was ever applied to it).
+    assert not any(o["id"] == art_id
+                   for o in rs.battlefield_snapshot())
+
+
+def test_r60_rust_perigee_picks_first_other_creature_deterministic():
+    """With the source-controller controlling TWO other creatures,
+    the FIRST (smallest bf index = the seeded ally) is the pumped
+    target; the second is untouched. Deterministic, mirrors the bare
+    pump arm's first-creature-on-own-bf convention."""
+    rs, src_id, ally_id = _r60_perigee_build_rust(
+        power_bonus=3, extra_own_creature=True)
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    assert rs.effective_power(ally_id) == 5, (
+        "Rust: first ally (printed 2) pumped +3/+0 -> 5")
+    ally2 = next(o["id"] for o in rs.battlefield_snapshot()
+                 if o["printing_name"] == "R60 Ally2")
+    assert rs.effective_power(ally2) == 1, (
+        "Rust: the SECOND own creature must NOT be pumped")
+
+
+def test_cross_engine_real_eoe_perigee_beckoner_etb_pump_grant_dies_return_tapped_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Perigee Beckoner
+    (~21,131 17lands decks).**
+
+    Drives the **ACTUAL parsed Perigee Beckoner printing** on the
+    Python side: ``get_active_source().get_printings()["Perigee
+    Beckoner"]`` — which the live parser maps to a single
+    ``Event.ENTERS`` ``IsSelf`` trigger whose effect is
+    ``PumpTargetCreatureUntilEOT(power_bonus=2, you_control_only=True,
+    exclude_self=True, granted_triggered_ability=TriggeredAbility(
+    effect=PerigeeBeckonerDiesReturnTappedEffect(), event=Event.DIES,
+    predicate=IsSelf()))`` (verified live, asserted below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "When this creature enters, until end of turn, another target
+         creature you control gets +2/+0 and gains 'When this creature
+         dies, return it to the battlefield tapped under its owner's
+         control.' Warp {1}{B} ..."
+
+    **Honest split (§2 — Effect-half closes byte-equal; full card
+    stays loader-gated).** The Effect arm under test —
+    ``PumpTargetCreatureUntilEotGrantDiesReturnTapped`` — is shipped
+    this round (Rust unit/payload variant + parse + to_dict + resolve
+    + SBA return-tapped honoring), bridged via ``cross_engine.py``
+    ``pump_target_creature_until_eot_grant_dies_return_tapped`` to the
+    EXACT class the genuine printing parses to. The full Perigee
+    Beckoner card is **NOT** added to the production-deck loader
+    ``_SAFE_*`` allowlist: the general nested-trigger-grant subsystem
+    (an arbitrary granted triggered ability via a Rust layer-6
+    registry) is the deferred multi-round half, and ``warp_cost`` (a
+    §2-declined cost-mechanic) gates the loader independently. Mirrors
+    the r51 Monoist / r52 Extinguisher / r53 Mightform / r54 Famished
+    / r56 Dauntless / r57 Faller's "Effect-half-closes /
+    full-card-stays-gated" precedent — see
+    ``docs/SEARCH_LIMITATIONS.md`` round-60 entry.
+
+    **Round-53 effective-state lesson applied.** Python's
+    ``PerigeeBeckonerDiesReturnTappedEffect`` RE-USES the same object
+    (``put_into_battlefield`` does not reset ``temp_power_bonus``), so
+    the returned creature KEEPS the +2/+0 (effective power stays 4,
+    not a clean CR-400.7 new-object 2). Rust matches that
+    source-of-truth behavior; this probe asserts the returned power is
+    byte-equal on BOTH (it does NOT assert a textbook value the source
+    engine does not implement).
+
+    **Deterministic, no RNG.** p0 (controller) controls an "another"
+    2/2 ally (bf[0], the deterministic first-OTHER pick) and ETBs the
+    genuine Perigee printing. Byte-equal observable across the full
+    pump → dies → return-tapped lifecycle on BOTH engines.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import _trigger_etb_abilities, resolve_top_of_stack
+    from mtg_bot.game import Zone, effective_power
+    from mtg_bot.turn import state_based_actions
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
+    from mtg_bot.effects.bespoke import (
+        PerigeeBeckonerDiesReturnTappedEffect,
+    )
+    from mtg_bot.effects.predicates import Event as PEvent, IsSelf
+    from tests.parity._picker_shims import (
+        _PickFirstControlledCreatureAgent,
+    )
+
+    real = get_active_source().get_printings().get("Perigee Beckoner")
+    if real is None:
+        pytest.skip("Perigee Beckoner absent from active CardSource")
+    # Sanity: the genuinely-parsed printing carries a SINGLE ENTERS
+    # trigger whose effect is the pump-with-granted-dies-rider shape
+    # this slice ships.
+    assert real.is_creature
+    assert len(real.triggered_abilities) == 1
+    real_eff = real.triggered_abilities[0].effect
+    assert isinstance(real_eff, PumpTargetCreatureUntilEOT), (
+        f"genuine Perigee Beckoner ETB must be "
+        f"PumpTargetCreatureUntilEOT; got {type(real_eff).__name__}")
+    assert real_eff.power_bonus == 2
+    assert real_eff.you_control_only is True
+    assert real_eff.exclude_self is True
+    gta = real_eff.granted_triggered_ability
+    assert gta is not None
+    assert isinstance(gta.effect, PerigeeBeckonerDiesReturnTappedEffect)
+    assert gta.event == PEvent.DIES
+    assert isinstance(gta.predicate, IsSelf)
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2
+    py.players[0].agent = _PickFirstControlledCreatureAgent()
+
+    def _gp(n):
+        return CardPrinting(
+            name=n, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=2, toughness=2, produces=frozenset(),
+        )
+
+    # ---- p0 "another" 2/2 ally on BOTH bfs (bf[0]).
+    py_ally = py.new_object(_gp("Perigee Ally"), owner_id=0,
+                            zone=Zone.BATTLEFIELD)
+    py.battlefield.append(py_ally)
+    rs_ally = rs.register_and_inject_object(
+        {"name": "Perigee Ally", "card_types": ["Creature"],
+         "power": 2, "toughness": 2}, 0, ZB)
+
+    # ---- Rust side: bridge-dict carrier carrying just the closeable
+    # Effect arm (the loader does NOT admit the real card — the
+    # nested-trigger-grant subsystem + warp_cost are the loader-gated
+    # half; the established Monoist/.../Faller's cross-engine driving
+    # pattern).
+    rs.register_and_inject_object(
+        {
+            "name": "Perigee Beckoner",
+            "card_types": ["Creature"],
+            "power": 4,
+            "toughness": 5,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "pump_target_creature_until_eot_grant_dies_return_tapped",
+                        "power_bonus": 2,
+                        "toughness_bonus": 0,
+                    },
+                }
+            ],
+        },
+        0,
+        ZB,
+    )
+    assert rs.stack_size() == 1
+
+    # ---- Python side: the GENUINE parsed Perigee Beckoner printing.
+    py_src = py.new_object(real, owner_id=0, zone=Zone.BATTLEFIELD)
+    py_src.summoning_sick = False
+    py_src.etb_timestamp = py.next_timestamp
+    py.next_timestamp += 1
+    py.battlefield.append(py_src)
+    _trigger_etb_abilities(py, py_src)
+    assert len(py.stack) == 1, (
+        "Python: the genuine Perigee Beckoner printing's ENTERS "
+        f"trigger should land on the stack. Got {len(py.stack)}")
+
+    # ---- Drain both stacks (the pump resolves).
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    for _ in range(16):
+        if not py.stack:
+            break
+        resolve_top_of_stack(py)
+    assert rs.stack_size() == 0 and len(py.stack) == 0
+
+    # ---- Byte-equal: ally pumped +2/+0 on BOTH; source NOT pumped.
+    py_ally_pow = effective_power(py, py_ally)
+    assert py_ally_pow == 4
+    assert rs.effective_power(rs_ally) == py_ally_pow, (
+        f"pumped-ally power: rust={rs.effective_power(rs_ally)} "
+        f"py={py_ally_pow}")
+    py_src_pow = effective_power(py, py_src)
+    assert py_src_pow == real.power  # 4, NOT self-pumped ("another")
+    rs_src_id = next(o["id"] for o in rs.battlefield_snapshot()
+                     if o["printing_name"] == "Perigee Beckoner")
+    assert rs.effective_power(rs_src_id) == py_src_pow
+
+    # ---- Kill the pumped ally on BOTH → dies-return-tapped.
+    py_ally.damage = 99
+    for _ in range(20):
+        if not state_based_actions(py):
+            break
+        while py.stack:
+            resolve_top_of_stack(py)
+    rs.deal_damage(rs_ally, 99)
+    rs.apply_sbas_until_quiescent()
+
+    # ---- Byte-equal: ally returned TAPPED under OWNER's control,
+    # graveyard empty, KEEPS the +2/+0 (source-of-truth retention),
+    # on BOTH engines.
+    rs_bf = {o["id"]: o for o in rs.battlefield_snapshot()}
+    assert rs_ally in rs_bf, "Rust: ally must return to bf"
+    assert rs_bf[rs_ally]["tapped"] is True
+    assert rs_bf[rs_ally]["controller_id"] == 0
+    assert rs.graveyard_snapshot(0) == []
+
+    py_back = [o for o in py.battlefield
+               if o.printing.name == "Perigee Ally"]
+    assert len(py_back) == 1, "Python: ally must return to bf"
+    assert py_back[0].tapped is True
+    assert py_back[0].controller_id == 0
+    assert list(py.players[0].graveyard) == []
+
+    py_back_pow = effective_power(py, py_back[0])
+    assert py_back_pow == 4, (
+        f"Python source-of-truth: returned ally keeps +2/+0; "
+        f"got {py_back_pow}")
+    assert rs.effective_power(rs_ally) == py_back_pow, (
+        f"returned-ally power must byte-equal: "
+        f"rust={rs.effective_power(rs_ally)} py={py_back_pow}")
+
+    # ---- Lives unchanged on BOTH (this lifecycle moves no life).
+    assert rs.get_life(0) == py.players[0].life
+    assert rs.get_life(1) == py.players[1].life
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
