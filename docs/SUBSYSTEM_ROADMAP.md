@@ -933,6 +933,67 @@ second:
    >     beyond G5 (scoped + reconcilable).
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 16 —
+   >   SoT-FLIP G5 CLOSED via pure-Python alive-skip port + new
+   >   blocker G6 unmasked; @ `ef154a4e`, counts UNCHANGED,
+   >   parity 307/475 / PROBED 106 UNCHANGED).**
+   >   - **G5 CLOSED** (`ef154a4e`, feature `86411a99`):
+   >     `RustGameStateAdapter._next_alive_idx` byte-exactly
+   >     mirrors `simulate._next_alive` (walk `+1 mod n`
+   >     skipping Rust's pre-existing `losers()` set — the eager
+   >     OR'd-three byte-equal analog of Python's eager
+   >     `has_lost`; all-lost → start idx), applied at
+   >     `_reset_priority_to_active` + the sibling no-loss-model
+   >     sites (single-pass priority handoff + `_alive_count`
+   >     pass-round threshold). **PURE PYTHON**
+   >     (`rust_engine_adapter.py` only) — no Rust/`.pyd`/Cargo
+   >     touch, `decision_source=python` byte-unchanged, 4-file
+   >     1532 baseline UNMOVED, residue cadence did NOT fire
+   >     (cron exit-0), NO count drift, POOL_PARITY/PROBED
+   >     UNCHANGED. Pin FLIPPED `_is_surfaced` → `_is_closed`
+   >     (bake-in divergence-clean through the whole post-
+   >     deck-out priority window past the old step-149 trip);
+   >     rust_shadow 13 + rust-adapter 33 = 46 passed; negative
+   >     controls intact. Ledger: SOT_FLIP G5 →
+   >     CLOSED-by-`86411a99`; SL G5 follow-up DONE.
+   >   - **NEW pre-flip blocker G6 (the G5-strengthened
+   >     tripwire's honest find — distinct, pre-existing, NOT
+   >     the G5 `_next_alive` priority axis, NOT the closed G4
+   >     mana axis, NOT introduced by the G5 port).** A
+   >     game-over-detection-TIMING gap: `RustGameStateAdapter`
+   >     does NOT call `apply_sbas()` on the step-end/
+   >     auto-advance path, so `is_over`/`winner_id` lag Python
+   >     by a step post-deck-out vs Python's
+   >     `state_based_actions`-at-`_enter_step` (STATE_EQ
+   >     `is_over` rust=False/python=True + `winner_id`
+   >     rust=None/python=0 at step ~151, turn 8 PRECOMBAT_MAIN;
+   >     verified Rust's own `apply_sbas()` DOES flip them when
+   >     invoked — purely the missing adapter call). NOT a clean
+   >     one-liner (an SBA-timing port across the step-advance/
+   >     auto-advance paths, needs its own verify-first vs the
+   >     1532 baseline) so honestly NOT forced into the G5 lane
+   >     (`feedback_no_fallback_hybrids` / HONEST-PROGRESS).
+   >     Honestly pinned
+   >     `test_post_player_loss_is_over_timing_divergence_is_surfaced`;
+   >     own G6 ledger row + §4 bullet + SL note; todo filed.
+   >     The bake-in now STOPS on G6 → it MUST land before the
+   >     C4 re-sweep.
+   >   - **Unmask chain G4→G5→G6 is CONVERGENT** — all three
+   >     are in the SAME narrow region (the degenerate
+   >     post-deck-out tail of a 3-card synthetic deck: game-end
+   >     mana/priority/SBA bookkeeping), each closure
+   >     CR-correctness-improving + scoped, NO divergence in
+   >     normal admitted gameplay. The bake-in doing its
+   >     designed honest-stop job, not scope creep.
+   >   - **Flip endgame is now: G6 closure (single deliberate
+   >     flip lane, dispatched this cycle) → C4 post-R76 scaled
+   >     re-sweep THROUGH the rust_shadow bake-in (equivalence
+   >     evidence) → ORCHESTRATOR+USER go/no-go on the atomic
+   >     SoT-flip (B3-S5) — explicitly NOT autonomous → bake-in
+   >     period → bridge-vestigialization cleanup.** No known
+   >     hidden gaps beyond G6 (scoped + reconcilable).
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
