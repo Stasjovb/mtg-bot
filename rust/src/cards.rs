@@ -1237,6 +1237,41 @@ pub enum Effect {
     /// `Sequence([DestroyTargetArtifactOrTappedCreature, GainLife{3}])`,
     /// composed entirely from existing arms + this one new arm.
     DestroyTargetArtifactOrTappedCreature,
+    /// **Effect-uncovered Tier-A — Seedship Impact (Lander-rider).**
+    /// Destroy the first battlefield (Artifact OR Enchantment) in
+    /// ETB-timestamp order, skipping indestructible. If it was
+    /// actually destroyed AND its printed mana value ≤ 2, create one
+    /// Lander token under the source's controller. Mirrors Python's
+    /// `SeedshipImpactEffect` (`effects/bespoke.py:1219`): pick target
+    /// (artifact OR `"Enchantment" in card_types`); read
+    /// `mv = obj.printing.mana_cost.total` **before** destroy;
+    /// `destroy(state, obj)` (returns `False` for indestructible →
+    /// **no Lander consolation**); if destroyed AND `mv ≤ 2` →
+    /// `CreateToken(Lander)` for the controller.
+    ///
+    /// **NOT a field-free unit variant (mini-spec deviation,
+    /// documented).** The mini-spec sketched a unit variant, but
+    /// Rust's registry has NO intrinsic Lander concept —
+    /// `RegistryData::is_token` is purely supertype-derived and a
+    /// bespoke token-minting arm must carry the Lander's
+    /// `token_printing_id: u32` exactly as `Effect::CreateToken`
+    /// does (the only bridge-correct option; the bridge ships the pid
+    /// via the round-49/56 `TOKEN_PRINTING_SUBSTRATE`). The Python
+    /// `SeedshipImpactEffect` is still field-free — it resolves the
+    /// Lander intrinsically via `TOKEN_PRINTINGS["Lander"]`; the pid
+    /// is a Rust-side registry-index carrier only, dropped at the
+    /// bridge (the bridge constructs the bare Python class).
+    ///
+    /// **Indestructible parity nuance (§2):** the scan SKIPS
+    /// indestructible permanents (matching the shipped
+    /// `DestroyTargetArtifact` precedent), so an
+    /// indestructible-only board → no target → no destroy → no
+    /// Lander, byte-equal to Python's `destroy()`-returns-False →
+    /// early-return (no Lander consolation). Both engines reach the
+    /// same observable. Re-derive the Lander create block privately
+    /// (file-iso) — do NOT cross-import the `Effect::CreateToken`
+    /// arm.
+    SeedshipImpactEffect { token_printing_id: u32 },
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -5078,6 +5113,19 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             // (artifact-OR-tapped-creature vs artifact-only).
             Ok(Effect::DestroyTargetArtifactOrTappedCreature)
         }
+        "seedship_impact_effect" => {
+            // Effect-uncovered Tier-A — Seedship Impact (Lander-rider).
+            // Single-field payload: the Lander's `token_printing_id`
+            // (registry index). Mirrors the `create_token` parse arm's
+            // `require(dict, "token_printing_id")` shape — the bespoke
+            // arm needs the pid to mint the Lander (Rust has no
+            // intrinsic Lander). Python's `SeedshipImpactEffect` is
+            // field-free; the pid is a Rust-side carrier dropped at
+            // the bridge.
+            let token_printing_id: u32 =
+                require(dict, "token_printing_id")?.extract()?;
+            Ok(Effect::SeedshipImpactEffect { token_printing_id })
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -7483,6 +7531,10 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::DestroyTargetArtifactOrTappedCreature => {
             d.set_item("kind", "destroy_target_artifact_or_tapped_creature")?;
+        }
+        Effect::SeedshipImpactEffect { token_printing_id } => {
+            d.set_item("kind", "seedship_impact_effect")?;
+            d.set_item("token_printing_id", *token_printing_id)?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;

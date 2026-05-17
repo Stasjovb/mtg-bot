@@ -65066,6 +65066,396 @@ def test_cross_engine_real_eoe_radiant_strike_destroy_or_gain_parity(
     )
 
 
+# =====================================================================
+# Effect-uncovered Tier-A queue #2 — Seedship Impact (Lander-rider).
+# Effect::SeedshipImpactEffect { token_printing_id } mirrors Python's
+# SeedshipImpactEffect (effects/bespoke.py:1219): destroy target
+# artifact OR enchantment; if its printed mana value was ≤ 2, create
+# one Lander token under the source's controller. Indestructible
+# targets are skipped by the scan → no destroy, no Lander
+# (byte-equal to Python's destroy()-returns-False early-return).
+#
+# 6 Rust regression pins drive the Rust resolve arm via an ETB
+# trigger; the genuine real-EoE probe drives the ACTUAL parsed
+# Seedship Impact printing's spell_effect cross-engine.
+# =====================================================================
+
+
+_RS2_LANDER_DICT = {
+    # Mirror TOKEN_PRINTINGS["Lander"]: Artifact, Token supertype,
+    # mv 0 (so Rust's RegistryData::is_token is True and the
+    # snapshot/field-view treats it identically to Python's intrinsic
+    # TOKEN_PRINTINGS["Lander"]).
+    "name": "Lander",
+    "card_types": ["Artifact"],
+    "supertypes": ["Token"],
+    "mana_cost": {"generic": 0},
+}
+
+
+def _build_rust_seedship_state(
+    *,
+    target_card_types,
+    target_mv_generic: int = 1,
+    target_indestructible: bool = False,
+    seed_target: bool = True,
+):
+    """Build a Rust state with a Seedship-Impact ETB carrier on p0's
+    bf and (optionally) a single victim permanent on p1's bf with the
+    given card_types / printed mv. The Lander token printing is
+    registered first so the bespoke arm has a valid
+    ``token_printing_id``. Returns ``(rust_state, lander_pid,
+    victim_id_or_None)``.
+    """
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    # Register the Lander printing (gets pid = current registry_size).
+    lander_pid = rs.registry_size
+    # Inject the Lander into p0's LIBRARY purely to register the
+    # printing at a known pid (the bespoke arm mints a FRESH Lander on
+    # the bf; this library copy is inert seed — the Rust regression
+    # pins assert on the bf, not the field view, so the library copy
+    # is harmless here).
+    rs.register_and_inject_object(_RS2_LANDER_DICT, 0, 1)
+    victim_id = None
+    if seed_target:
+        vd = {
+            "name": "RS2 Victim",
+            "card_types": list(target_card_types),
+            "mana_cost": {"generic": target_mv_generic},
+        }
+        if target_indestructible:
+            vd["keywords"] = ["indestructible"]
+        victim_id = rs.register_and_inject_object(vd, 1, ZB)
+    rs.register_and_inject_object(
+        {
+            "name": "RS2 Seedship Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 1,
+            "toughness": 1,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {
+                        "kind": "seedship_impact_effect",
+                        "token_printing_id": lander_pid,
+                    },
+                }
+            ],
+        },
+        0,
+        ZB,
+    )
+    return rs, lander_pid, victim_id
+
+
+def _rs2_lander_count(rust_state, controller):
+    return sum(
+        1
+        for e in rust_state.battlefield_snapshot()
+        if e["printing_name"] == "Lander"
+        and e["controller_id"] == controller
+        # exclude the inert library seed (library snapshot is separate;
+        # battlefield_snapshot only returns bf objects anyway).
+    )
+
+
+def test_rust_seedship_destroys_artifact_mv1_creates_lander():
+    """Rust pin (a): destroy an artifact with mv=1 → destroyed AND a
+    Lander token created under the source's controller (p0)."""
+    rs, _pid, vid = _build_rust_seedship_state(
+        target_card_types=["Artifact"], target_mv_generic=1
+    )
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rs.battlefield_snapshot()]
+    assert vid not in bf_ids, f"artifact mv1 must be destroyed; {bf_ids}"
+    assert vid in [
+        int(e["id"]) for e in rs.graveyard_snapshot(1)
+    ]
+    assert _rs2_lander_count(rs, 0) == 1, (
+        "a Lander must be created under p0 (source's controller) for "
+        "mv≤2"
+    )
+
+
+def test_rust_seedship_destroys_enchantment_mv2_creates_lander():
+    """Rust pin (b): destroy an enchantment with mv=2 → destroyed +
+    Lander (the OR-filter's enchantment leg + the mv==2 boundary)."""
+    rs, _pid, vid = _build_rust_seedship_state(
+        target_card_types=["Enchantment"], target_mv_generic=2
+    )
+    rs.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rs.battlefield_snapshot()]
+    assert vid not in bf_ids, "enchantment mv2 must be destroyed"
+    assert _rs2_lander_count(rs, 0) == 1, "mv==2 is ≤2 → Lander"
+
+
+def test_rust_seedship_destroys_artifact_mv3_no_lander():
+    """Rust pin (c): destroy an artifact with mv=3 → destroyed but NO
+    Lander (the mv≤2 rider is the only new conditional)."""
+    rs, _pid, vid = _build_rust_seedship_state(
+        target_card_types=["Artifact"], target_mv_generic=3
+    )
+    rs.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rs.battlefield_snapshot()]
+    assert vid not in bf_ids, "artifact mv3 must still be destroyed"
+    assert _rs2_lander_count(rs, 0) == 0, (
+        "mv=3 > 2 → NO Lander consolation"
+    )
+
+
+def test_rust_seedship_indestructible_target_skipped_no_lander():
+    """Rust pin (d): an indestructible artifact is skipped by the
+    scan → no destroy, NO Lander (byte-equal to Python's
+    destroy()-returns-False early-return: no Lander consolation)."""
+    rs, _pid, vid = _build_rust_seedship_state(
+        target_card_types=["Artifact"], target_mv_generic=1,
+        target_indestructible=True,
+    )
+    rs.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rs.battlefield_snapshot()]
+    assert vid in bf_ids, (
+        "indestructible artifact must survive (skipped by scan)"
+    )
+    assert _rs2_lander_count(rs, 0) == 0, (
+        "indestructible target → no destroy → NO Lander consolation"
+    )
+
+
+def test_rust_seedship_no_legal_target_silent_noop():
+    """Rust pin (e): no artifact/enchantment on the battlefield → the
+    effect is a silent no-op (no destroy, no Lander, no crash)."""
+    rs, _pid, _vid = _build_rust_seedship_state(
+        target_card_types=["Creature"], target_mv_generic=1,
+        seed_target=True,
+    )
+    # The only non-carrier permanent is a CREATURE (not artifact/
+    # enchantment) → not a legal target.
+    rs.resolve_top_of_stack()
+    assert _rs2_lander_count(rs, 0) == 0, (
+        "no artifact/enchantment target → no Lander"
+    )
+    # The creature is untouched.
+    assert any(
+        e["printing_name"] == "RS2 Victim"
+        for e in rs.battlefield_snapshot()
+    )
+
+
+def test_rust_seedship_lander_under_source_controller_not_active():
+    """Rust pin (f): the Lander enters under the SOURCE's controller
+    (p0), not active_player. Same-controller here (active=0, source
+    controller=0) so this pins the source-controller seat path stays
+    correct for the bespoke arm (the I81 substrate;
+    current_resolve_source_controller)."""
+    rs, _pid, vid = _build_rust_seedship_state(
+        target_card_types=["Artifact"], target_mv_generic=2
+    )
+    assert rs.active_player == 0
+    rs.resolve_top_of_stack()
+    assert _rs2_lander_count(rs, 0) == 1
+    assert _rs2_lander_count(rs, 1) == 0, (
+        "Lander must NOT enter under p1 — it's the source's controller "
+        "(p0) per CR 111.4"
+    )
+    assert vid not in [int(e["id"]) for e in rs.battlefield_snapshot()]
+
+
+def test_cross_engine_real_eoe_seedship_impact_destroy_then_conditional_lander_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Seedship Impact
+    (~13,908 17lands decks). Effect-uncovered Tier-A queue #2.**
+
+    Drives the **ACTUAL parsed Seedship Impact printing** on the
+    Python side: ``get_active_source().get_printings()["Seedship
+    Impact"]`` — which the live parser maps to a ``spell_effect`` of
+    ``SeedshipImpactEffect()`` (field-free unit; verified below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Instant] {1}{G} — Destroy target artifact or enchantment.
+         If its mana value was 2 or less, create a Lander token."
+
+    **Honest split (§2 — Effect-half closes byte-equal; full card
+    stays loader-gated).** The new Effect arm under test —
+    ``Effect::SeedshipImpactEffect { token_printing_id }`` — is
+    shipped this slice (Rust single-field payload variant + parse +
+    to_dict + resolve; the destroy-half clones the shipped
+    ``DestroyTargetArtifact`` body, the conditional Lander-create
+    block is re-derived privately from ``Effect::CreateToken``),
+    bridged via ``cross_engine.py`` ``seedship_impact_effect`` to the
+    pre-existing field-free Python ``SeedshipImpactEffect``
+    (effects/bespoke.py:1219). The Rust variant carries the Lander's
+    Rust-registry ``token_printing_id`` (Rust has no intrinsic
+    Lander); the bridge **drops** the pid (Python mints intrinsically
+    from ``TOKEN_PRINTINGS["Lander"]``). Both engines seat the SAME
+    "Lander" printing (Rust via the registered pid, Python via
+    TOKEN_PRINTINGS) so the created token is byte-equal in the
+    name-keyed field view. The full Seedship Impact **Instant** is
+    NOT added to the production-deck loader ``_SAFE_*`` allowlist —
+    no Instant/Sorcery bench-admit path. Mirrors the r51 Monoist /
+    r52 Extinguisher / r53 Mightform / r54 Famished / r56 Dauntless /
+    r57 Faller's / r60 Perigee / r65 Radiant Strike precedent — see
+    ``docs/SEARCH_LIMITATIONS.md`` Seedship-Impact entry.
+
+    **Deterministic, no RNG.** Two arms, both full-field byte-equal:
+
+      * POSITIVE: p1 (opponent) has a single mv-2 artifact. p0 casts
+        the genuine Seedship Impact (Python: real ``spell_effect`` on
+        a ``StackItem`` with the chosen ``("permanent", id)`` target;
+        Rust: the bridged ``{"kind":"seedship_impact_effect",
+        "token_printing_id":<pid>}`` synthetic Instant). Observable:
+        the artifact destroyed → p1 graveyard; a Lander token created
+        under p0 — the WHOLE field view byte-equal on BOTH.
+
+      * NEGATIVE: p1 has a single mv-3 artifact. Observable: the
+        artifact destroyed (mv is irrelevant to the destroy) but NO
+        Lander (mv 3 > 2) — WHOLE field view byte-equal on BOTH.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.effects.bespoke import SeedshipImpactEffect
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = get_active_source().get_printings().get("Seedship Impact")
+    if real is None:
+        pytest.skip("Seedship Impact absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, SeedshipImpactEffect), (
+        f"genuine Seedship Impact spell_effect must be "
+        f"SeedshipImpactEffect; got {type(se).__name__}"
+    )
+
+    def _ap(name, mv_generic):
+        return CardPrinting(
+            name=name, mana_cost_str="",
+            mana_cost=ManaCost(generic=mv_generic),
+            type_line="Artifact", supertypes=(),
+            card_types=("Artifact",), subtypes=(),
+            power=None, toughness=None, produces=frozenset(),
+        )
+
+    def _run_arm(mv_generic: int):
+        """Build matched states with a single mv-`mv_generic` artifact
+        on p1, cast the genuine Seedship Impact (Python) / bridged
+        synthetic Instant (Rust), drain, and return the field-diff
+        list (empty == byte-equal) plus (rust_lander_n, py_lander_n).
+        """
+        spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+        py = build_python_state(spec)
+        rs = build_rust_state(spec)
+        ZB = 2
+
+        # ---- Register the Lander on Rust (pid = registry_size).
+        # Inert library seed mirrored on Python so the STARTING field
+        # view is symmetric; Seedship mints a FRESH Lander on the bf.
+        # NOTE: Rust's register_and_inject_object seats
+        # summoning_sick=false for ALL zones; Python's new_object
+        # defaults summoning_sick=True — force the seed/victim to
+        # False so the synthetic starting state is symmetric (the
+        # well-known synthetic-state summoning_sick fixture nuance;
+        # NOT a Seedship-arm divergence — the Lander the arm mints is
+        # byte-equal on both engines).
+        lander_pid = rs.registry_size
+        rs.register_and_inject_object(_RS2_LANDER_DICT, 0, 1)
+        from mtg_bot.cards import TOKEN_PRINTINGS
+        py_seed_lander = py.new_object(
+            TOKEN_PRINTINGS["Lander"], owner_id=0, zone=Zone.LIBRARY
+        )
+        py_seed_lander.summoning_sick = False
+        py.players[0].library.append(py_seed_lander)
+
+        # ---- p1 single artifact victim with the requested printed mv,
+        # on BOTH bfs.
+        py_vic = py.new_object(_ap("RS2 Real Artifact", mv_generic),
+                               owner_id=1, zone=Zone.BATTLEFIELD)
+        py_vic.summoning_sick = False
+        py.battlefield.append(py_vic)
+        rs_vic_id = rs.register_and_inject_object(
+            {"name": "RS2 Real Artifact", "card_types": ["Artifact"],
+             "mana_cost": {"generic": mv_generic}}, 1, ZB)
+
+        # ---- Python: the GENUINE parsed Seedship Impact printing on a
+        # StackItem, controller p0, chosen target = p1's artifact.
+        # SeedshipImpactEffect.resolve reads obj.printing.mana_cost
+        # .total BEFORE destroy, then creates the Lander iff mv≤2.
+        py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+        py_spell.summoning_sick = False
+        py.stack.append(
+            StackItem(source=py_spell, controller_id=0,
+                      targets=(("permanent", py_vic.id),))
+        )
+        resolve_top_of_stack(py)
+        py_sba(py)
+        assert len(py.stack) == 0
+
+        # ---- Rust: bridged synthetic Instant carrying the bespoke
+        # arm + the registered Lander pid.
+        rs_spell_id = rs.register_and_inject_object(
+            {"name": "Seedship Impact", "card_types": ["Instant"],
+             "effects": [{"kind": "seedship_impact_effect",
+                          "token_printing_id": lander_pid}]},
+            0, 0,  # controller p0, ZONE_HAND
+        )
+        rs.push_to_stack(rs_spell_id, 0)
+        rs.resolve_top_of_stack()
+        rs.apply_sbas()
+        assert rs.stack_size() == 0
+
+        # Sanity: the artifact is destroyed on BOTH regardless of mv.
+        assert not any(o.id == py_vic.id for o in py.battlefield)
+        assert not any(e["id"] == rs_vic_id
+                       for e in rs.battlefield_snapshot())
+
+        diffs = compare_fields(
+            build_python_field_view(py),
+            ce_parity_smoke()._build_field_view(rs),
+        )
+        rust_n = sum(1 for e in rs.battlefield_snapshot()
+                     if e["printing_name"] == "Lander")
+        py_n = sum(1 for o in py.battlefield
+                   if o.printing.name == "Lander")
+        return diffs, rust_n, py_n
+
+    # ---- POSITIVE: mv 2 → destroyed + Lander; WHOLE field byte-equal.
+    diffs, rn, pn = _run_arm(mv_generic=2)
+    assert rn == 1 == pn, (
+        f"mv≤2 → exactly one Lander on BOTH; rust={rn} py={pn}"
+    )
+    assert diffs == [], (
+        f"Seedship Impact mv-2 (destroy + Lander) must be byte-equal "
+        f"across the WHOLE field view on BOTH engines; diffs={diffs}"
+    )
+
+    # ---- NEGATIVE: mv 3 → destroyed, NO Lander; WHOLE field byte-equal.
+    diffs, rn, pn = _run_arm(mv_generic=3)
+    assert rn == 0 == pn, (
+        f"mv>2 → NO Lander on BOTH; rust={rn} py={pn}"
+    )
+    assert diffs == [], (
+        f"Seedship Impact mv-3 (destroy, no Lander) must be byte-equal "
+        f"across the WHOLE field view on BOTH engines; diffs={diffs}"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
