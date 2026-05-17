@@ -172,6 +172,7 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_b.py",
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_c.py",
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_d.py",
+    REPO_ROOT / "tests" / "test_probe_covered_unprobed_e.py",
 )
 
 # Tier keys (stable — the doc + test reference these verbatim).

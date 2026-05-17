@@ -229,6 +229,7 @@ def test_probe_modules_credited_and_apostrophe_names_not_undercounted(
         "Gravpack Monoist",      # batch B
         "Gravkill",              # batch C
         "Divert Disaster",       # batch D
+        "Lost in Space",         # batch E
     ):
         assert nm in union, f"{nm!r} batch probe not credited PROBED"
 
