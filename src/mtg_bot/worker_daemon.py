@@ -476,6 +476,7 @@ def create_app(
     worker_id: str | None = None,
     n_workers: int = 0,
     deck_pool_path: str | None = None,
+    nn_device: str | None = None,
     repo_root: Path | None = None,
     self_update_reexec: Callable[[], None] | None = None,
     self_update_runner: "_self_update.Runner | None" = None,
@@ -530,6 +531,29 @@ def create_app(
         daemon's ``--deck-pool-path`` CLI flag. ``None`` falls back to
         the runner's system-wide default
         (``data/17lands/eoe_decks.json.gz``).
+    nn_device:
+        Opt-in NN-eval torch device selector from the daemon's
+        ``--nn-device`` flag. Same worker-owned-config principle as
+        ``deck_pool_path`` / ``n_workers`` / ``spot_watch`` (per-machine
+        operational config baked into the native service file, NOT part
+        of the orchestrator's ``/v2/start_*`` body). ``None`` (the
+        default — and what ``--nn-device cpu`` resolves to) keeps the
+        historical CPU-only NN-eval path byte-identical, so every
+        non-GPU worker and the entire existing test suite are
+        unaffected. ``"auto"`` / ``"cuda"`` are carried verbatim
+        through ``ClaimLoopConfig`` into the production runner and
+        resolved per-worker inside ``NNPimcConfig.build()`` — the
+        daemon parent never calls ``auto_device()`` /
+        ``torch.cuda.is_available()``, so the subprocess pool's
+        per-worker CUDA-context init stays Windows-spawn /
+        Linux-fork-safe (the same proven sentinel pattern the
+        distributed shard runners + ``per_game_wall`` bench use).
+        A clean A/B on the production structured-correct config path
+        (inner_nodes=200, samples=4, 14 workers) measured
+        ``device=cuda`` ~2.13x faster per game / ~1.95x higher
+        throughput than ``device=cpu`` — real but OFF by default
+        because per-worker CUDA-context init under Windows-spawn can
+        deadlock; enable only on GPU hosts.
     repo_root:
         The worker's git checkout ``/v2/self_update`` operates on.
         Defaults to the daemon's cwd (the service file's
@@ -592,6 +616,10 @@ def create_app(
     # like the pool size or the deck pool path are decided here.
     app.config["N_WORKERS"] = int(n_workers)
     app.config["DECK_POOL_PATH"] = deck_pool_path
+    # Opt-in NN-eval device (default None == CPU, byte-identical to
+    # the pre-flag behavior). Carried unresolved into the production
+    # runner; resolved per-worker in NNPimcConfig.build().
+    app.config["NN_DEVICE"] = nn_device
 
     # --- self-update wiring -------------------------------------------
     effective_repo_root = (
@@ -675,6 +703,7 @@ def create_app(
             weights_root=effective_weights_root,
             shard_label=resolved_worker_id,
             deck_pool_path=app.config.get("DECK_POOL_PATH"),
+            nn_device=app.config.get("NN_DEVICE"),
             retry_backoff_s=effective_backoff,
         )
         cbs = _state_callbacks()
@@ -1015,6 +1044,30 @@ def _build_parser() -> argparse.ArgumentParser:  # pragma: no cover - argparse
         ),
     )
     parser.add_argument(
+        "--nn-device",
+        choices=("auto", "cpu", "cuda"),
+        default="cpu",
+        help=(
+            "NN-eval torch device. OPT-IN, default 'cpu' so existing "
+            "non-GPU workers and the entire existing test suite are "
+            "byte-unaffected (exactly like --spot-watch). 'cuda' / "
+            "'auto' enable GPU NN-eval — a clean A/B on the production "
+            "structured-correct config path (inner_nodes=200, "
+            "samples=4, 14 workers) measured device=cuda ~2.13x faster "
+            "per game / ~1.95x higher throughput than device=cpu. The "
+            "selector is carried as a string into the per-worker "
+            "subprocess and resolved there inside NNPimcConfig.build() "
+            "(via auto_device() for 'auto'); the daemon parent never "
+            "touches the CUDA driver, so Windows-spawn / Linux-fork "
+            "per-worker context init stays safe. WORKER-OWNED config — "
+            "bake --nn-device cuda into the service file's ExecStart on "
+            "GPU hosts only; leave the 'cpu' default on CPU-only "
+            "workers and in tests. This is PER-PROCESS eval; the "
+            "batched SHM eval server is a separate further "
+            "optimization, not included here."
+        ),
+    )
+    parser.add_argument(
         "--spot-watch",
         action="store_true",
         help=(
@@ -1033,9 +1086,26 @@ def _build_parser() -> argparse.ArgumentParser:  # pragma: no cover - argparse
     return parser
 
 
+def _resolve_nn_device(flag_value: str) -> str | None:
+    """Map the ``--nn-device`` CLI choice to the value threaded into
+    ``create_app`` / ``ClaimLoopConfig`` / ``NNPimcConfig.device``.
+
+    ``"cpu"`` (the default) maps to ``None`` — EXACTLY the value
+    ``_build_nn_pimc_config`` hardcoded before this flag existed. This
+    is the opt-in invariant: a default daemon and the entire existing
+    test suite are byte-identical to pre-flag behavior. ``"auto"`` /
+    ``"cuda"`` pass through verbatim as the deferred sentinel that
+    ``NNPimcConfig.build()`` resolves per-worker (so the daemon parent
+    never primes CUDA).
+    """
+    return None if flag_value == "cpu" else flag_value
+
+
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - argparse
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    resolved_nn_device = _resolve_nn_device(args.nn_device)
 
     # Wire up the production GameRunner factories. Without this the
     # daemon falls into the stub-runner path that transitions states
@@ -1052,6 +1122,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - argparse
                 weights_cache_root=cfg.weights_root,
                 worker_id=cfg.worker_id,
                 deck_pool_path=cfg.deck_pool_path,
+                nn_device=cfg.nn_device,
                 # Phase 2: real multi-core concurrency via N subprocesses.
                 # Without this every claim-loop thread serializes on the
                 # Python GIL during MCTS / game-state work and the
@@ -1069,6 +1140,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - argparse
                 weights_cache_root=cfg.weights_root,
                 worker_id=cfg.worker_id,
                 deck_pool_path=cfg.deck_pool_path,
+                nn_device=cfg.nn_device,
                 use_subprocess_pool=True,
             )
         raise ValueError(f"unknown runner kind: {kind!r}")
@@ -1077,6 +1149,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - argparse
         weights_root=Path(args.weights_cache_root),
         n_workers=args.n_workers,
         deck_pool_path=args.deck_pool_path,
+        nn_device=resolved_nn_device,
         worker_id=args.worker_id,
         runner_factory=_runner_factory,
         spot_watch=args.spot_watch,

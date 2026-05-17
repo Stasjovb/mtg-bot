@@ -721,6 +721,18 @@ class ClaimLoopConfig:
     # response — workers and coordinator already share the file at
     # deploy time, this is just naming.
     deck_pool_path: Optional[str] = None
+    # Worker-owned NN-eval device selector from the daemon's
+    # ``--nn-device`` flag, same plumbing class as ``deck_pool_path`` /
+    # ``n_workers`` (per-machine operational config baked into the
+    # native service file, NOT part of the orchestrator's /v2/start_*
+    # body). ``None`` (== ``--nn-device cpu``) is the historical
+    # CPU-only path and is byte-identical to the pre-flag behavior.
+    # ``"auto"`` / ``"cuda"`` are carried verbatim into the production
+    # runner and resolved per-worker inside ``NNPimcConfig.build()``;
+    # the daemon parent / claim-loop thread never touches the CUDA
+    # driver, so the subprocess pool's per-worker context init stays
+    # Windows-spawn / Linux-fork-safe.
+    nn_device: Optional[str] = None
     # Retry/backoff. Tests slam this to zero.
     retry_backoff_s: tuple[float, ...] = field(
         default_factory=lambda: RETRY_BACKOFF_S

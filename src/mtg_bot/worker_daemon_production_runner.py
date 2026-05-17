@@ -100,10 +100,41 @@ def _read_metadata_json(weights_dir: Path) -> dict[str, Any]:
         return {}
 
 
-def _build_nn_pimc_config(weights_path: Path, metadata: dict[str, Any]):
+def _build_nn_pimc_config(
+    weights_path: Path,
+    metadata: dict[str, Any],
+    *,
+    device: Optional[str] = None,
+):
     """Construct an ``NNPimcConfig`` from the version's metadata
     sidecar. Mirrors the architecture / policy / action-encoding
     auto-discovery the iterate orchestrator does today.
+
+    ``device`` is the worker-owned NN-eval device selector, threaded
+    in from the daemon's ``--nn-device`` CLI flag. It is passed
+    straight through to :attr:`NNPimcConfig.device` WITHOUT being
+    resolved here — the daemon parent / claim-loop thread must never
+    call ``auto_device()`` / ``torch.cuda.is_available()`` before the
+    subprocess pool spawns, or per-worker CUDA-context init under
+    Windows-spawn (deadlock) / Linux-fork ("Cannot re-initialize CUDA
+    in forked subprocess") breaks. This is exactly the constraint the
+    ``device`` field docstring in ``mtg_bot.training.config`` and the
+    CLAUDE.md note describe; the resolution mechanism mirrors the
+    proven one used by the distributed shard runners and the
+    ``per_game_wall`` bench (thread an ``"auto"`` sentinel, resolve
+    inside ``NNPimcConfig.build()`` which runs in the worker process).
+    Accepted values mirror the ``NNPimcConfig.device`` field exactly:
+
+    - ``None`` (default; also what ``--nn-device cpu`` resolves to) —
+      ``NNEvaluator``'s CPU default. Byte-identical to the pre-flag
+      behavior; the entire existing test suite and every non-GPU
+      worker are unaffected.
+    - ``"auto"`` — deferred sentinel. ``NNPimcConfig.build()`` (which
+      runs INSIDE the PPE subprocess, not the daemon parent) calls
+      ``auto_device()`` there to pick ``cuda`` / ``mps`` / ``cpu``
+      per-host.
+    - ``"cuda"`` — pin CUDA; still instantiated per-worker inside
+      ``build()`` for the same fork/spawn-safety reason.
     """
     from mtg_bot.training import NNPimcConfig
 
@@ -136,13 +167,17 @@ def _build_nn_pimc_config(weights_path: Path, metadata: dict[str, Any]):
         with_policy=with_policy,
         puct=with_policy,  # PUCT requires a policy head.
         batch_size=32,
-        # ``device=None`` resolves to NNEvaluator's CPU default — safe
-        # for the daemon, which doesn't pre-prime CUDA on its main
-        # thread. Future optimization: thread an "auto" sentinel and
-        # resolve in build() (matches run_shard_pull's pattern), but
-        # that requires the daemon to never have called
-        # ``torch.cuda.is_available()`` upstream first.
-        device=None,
+        # ``device`` is threaded through verbatim from the daemon's
+        # ``--nn-device`` flag (default ``None`` -> NNEvaluator's CPU
+        # default, byte-identical to the pre-flag behavior). It is NOT
+        # resolved here: an ``"auto"`` / ``"cuda"`` value is carried as
+        # a string into ``NNPimcConfig.build()``, which runs in the PPE
+        # subprocess and is the only place that imports
+        # ``auto_device()`` / touches the CUDA driver — exactly the
+        # established run_shard / per_game_wall-bench pattern. The
+        # daemon parent never primes CUDA, so Windows-spawn /
+        # Linux-fork per-worker context init stays safe.
+        device=device,
     )
 
 
@@ -372,11 +407,19 @@ def _subprocess_play_self_play(
     weights_cache_root: str,
     deck_pool_path: Optional[str],
     write_structured_tokens: bool = False,
+    nn_device: Optional[str] = None,
 ) -> dict[str, Any]:
     """Body of one self-play game, executed in a PPE subprocess.
 
     All args must be picklable. Returns a picklable dict the parent
     decodes into a :class:`GameResult`.
+
+    ``nn_device`` is the picklable device-selector string forwarded
+    from the daemon's ``--nn-device`` flag (``None`` / ``"auto"`` /
+    ``"cuda"``). It is passed straight to ``_build_nn_pimc_config``;
+    the actual ``auto_device()`` resolution / CUDA-context init
+    happens HERE in the subprocess (via ``NNPimcConfig.build()``),
+    never in the daemon parent.
     """
     t0 = time.perf_counter()
 
@@ -408,7 +451,9 @@ def _subprocess_play_self_play(
             weights_root=Path(weights_cache_root),
         )
         metadata = _read_metadata_json(weights_dir)
-        cfg = _build_nn_pimc_config(weights_dir / "weights.pt", metadata)
+        cfg = _build_nn_pimc_config(
+            weights_dir / "weights.pt", metadata, device=nn_device,
+        )
         configs[version] = cfg
 
     nodes = int(claim.get("nodes") or cfg.inner_nodes)
@@ -471,11 +516,15 @@ def _subprocess_play_eval(
     coordinator_url: str,
     weights_cache_root: str,
     deck_pool_path: Optional[str],
+    nn_device: Optional[str] = None,
 ) -> dict[str, Any]:
     """Body of one eval game, executed in a PPE subprocess. Mirror of
     :func:`_subprocess_play_self_play` but loads two NN versions
     (``new`` and ``old``) and routes through
     :func:`_play_eval_game` for the alternation/remap.
+
+    ``nn_device`` carries the daemon's ``--nn-device`` selector; same
+    deferred-resolution contract as the self-play subprocess body.
     """
     t0 = time.perf_counter()
 
@@ -502,7 +551,9 @@ def _subprocess_play_eval(
             weights_root=Path(weights_cache_root),
         )
         metadata = _read_metadata_json(weights_dir)
-        cfg = _build_nn_pimc_config(weights_dir / "weights.pt", metadata)
+        cfg = _build_nn_pimc_config(
+            weights_dir / "weights.pt", metadata, device=nn_device,
+        )
         configs[version] = cfg
         return cfg
 
@@ -583,6 +634,7 @@ def build_self_play_runner(
     log_event: Optional[Callable[[str, dict], None]] = None,
     *,
     deck_pool_path: Optional[str] = None,
+    nn_device: Optional[str] = None,
     http_get: Callable[..., tuple[int, bytes, dict[str, str]]] = _http_get,
     use_subprocess_pool: bool = False,
 ) -> GameRunner:
@@ -619,6 +671,18 @@ def build_self_play_runner(
         Default is ``False`` for back-compat with the existing tests
         that monkeypatch internals — those mocks don't propagate to
         subprocesses, so tests stay on the in-thread path.
+
+    ``nn_device``:
+        Worker-owned NN-eval device selector from the daemon's
+        ``--nn-device`` flag. ``None`` (default; ``--nn-device cpu``)
+        keeps the historical CPU path byte-identical. ``"auto"`` /
+        ``"cuda"`` are carried unresolved into ``NNPimcConfig`` and
+        only resolved per-worker in ``NNPimcConfig.build()`` — this
+        builder, ``_setup``, and the daemon parent never call
+        ``auto_device()`` / ``torch.cuda.is_available()``, so the
+        subprocess pool's per-worker CUDA-context init stays
+        Windows-spawn / Linux-fork-safe (the same proven pattern the
+        distributed shard runners + ``per_game_wall`` bench use).
     """
 
     # In-memory caches. Multiple claim-loop threads dispatch through
@@ -675,7 +739,7 @@ def build_self_play_runner(
             )
             metadata = _read_metadata_json(weights_dir)
             cfg = _build_nn_pimc_config(
-                weights_dir / "weights.pt", metadata,
+                weights_dir / "weights.pt", metadata, device=nn_device,
             )
             state["configs_by_version"][version] = cfg
             _emit(
@@ -734,6 +798,7 @@ def build_self_play_runner(
                 weights_cache_root=str(weights_cache_root),
                 deck_pool_path=deck_pool_path,
                 write_structured_tokens=False,
+                nn_device=nn_device,
             )
             payload = future.result()  # releases GIL while waiting
             _emit(
@@ -882,6 +947,7 @@ def build_eval_runner(
     log_event: Optional[Callable[[str, dict], None]] = None,
     *,
     deck_pool_path: Optional[str] = None,
+    nn_device: Optional[str] = None,
     http_get: Callable[..., tuple[int, bytes, dict[str, str]]] = _http_get,
     use_subprocess_pool: bool = False,
 ) -> GameRunner:
@@ -903,6 +969,12 @@ def build_eval_runner(
     so the Python GIL doesn't serialize parallel claim-loop threads.
     Default ``False`` keeps the in-thread path for the
     monkeypatch-heavy test suite.
+
+    ``nn_device`` mirrors the self-play factory exactly: the daemon's
+    ``--nn-device`` selector, carried unresolved into ``NNPimcConfig``
+    and only resolved per-worker in ``NNPimcConfig.build()`` so the
+    daemon parent never primes CUDA. Default ``None`` (CPU) keeps the
+    historical eval path byte-identical.
     """
 
     state: dict[str, Any] = {
@@ -954,7 +1026,7 @@ def build_eval_runner(
             )
             metadata = _read_metadata_json(weights_dir)
             cfg = _build_nn_pimc_config(
-                weights_dir / "weights.pt", metadata,
+                weights_dir / "weights.pt", metadata, device=nn_device,
             )
             state["configs_by_version"][version] = cfg
             _emit(
@@ -1004,6 +1076,7 @@ def build_eval_runner(
                 coordinator_url=coordinator_url,
                 weights_cache_root=str(weights_cache_root),
                 deck_pool_path=deck_pool_path,
+                nn_device=nn_device,
             )
             payload = future.result()
             winner_remapped = payload["winner"]
