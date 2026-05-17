@@ -35,6 +35,10 @@ structured`, `canonical_v2`)**, the real EoE 17lands deck pool.
   iterations**, not loss curves and not micro-benchmarks in isolation.
 - **No unvalidated multipliers.** If it is not measured here, it is
   not a number.
+- **Count the work, not the games.** sec/game conflates game length ×
+  search budget × device regime; quote `ms/NN-eval` (depth-invariant,
+  now instrumented — §2A) so a `--nodes` change can't silently move
+  the number.
 
 ---
 
@@ -82,6 +86,143 @@ not core-gated). The Mac (M4) is the fastest local node.
   on c7g) barely fits a 1-hr deadline (long tail lost), and ~60–80
   instances ≈ ~1000+ vCPU ≫ the 32-vCPU spot quota. This is the
   regime GPU is for (§4) — but GPU quota is blocked (§5).
+
+---
+
+## 2A. Units & methodology — count NN-evals, not games (instrumented 2026-05-17)
+
+**Problem.** "games/hr" and "sec/game" conflate three independent
+axes, so two runs are never comparable unless all three match:
+
+```
+game_wall ≈ decisions × samples × inner_nodes × cost_per_node  +  non_search_overhead
+            └ game len ┘ └──── search budget ────┘ └ regime ┘     └ mulligans/SBAs/real-move sim ┘
+```
+
+Changing `--nodes` moves the unit; that opacity is a primary reason
+the "3–10×" lore (§3, §7) survived. **The fix: normalise by the work
+actually done.** Two depth-invariant units, now instrumented
+(`mtg_bot.search.eval_counters`, branch
+**`feature/eval-node-counters`**, pushed for review — **not merged**):
+
+- **search nodes** — one `Budget.consume_node()` tick; the unit of
+  intended search work.
+- **NN-evaluated states** — a state that actually went through the
+  network. Terminal leaves (exact ±1/0) and per-search NN-eval cache
+  hits short-circuit *before* the evaluator, so neither counts. This
+  is exactly the work GPU/SHM accelerate, so **`ms / NN-eval` is the
+  cross-device, cross-depth comparison unit** (and `ms / search-node`
+  the intended-work view). Their ratio (`nn_eval_fraction`) is itself
+  the cache/terminal-skip diagnostic.
+
+**Premise 1 — linearity, VERIFIED from code (not assumed).** Each
+tree node stores its own state (`mcts.py:97`); expanding a child is
+exactly one `parent.state.clone()` + one `apply(decision)`
+(`mcts.py:941-942`) — **not** an O(depth) root replay — and the
+search consumes exactly one node per budget tick in both the serial
+(`mcts.py:654-657`) and batched (`mcts.py:725`) paths. So wall-time
+is **linear in `inner_nodes`/`--nodes`**. *Honest nuance:*
+`state.clone()` is O(state size) and state grows over a game
+(permanents, graveyards), so `cost_per_node` drifts **upward within a
+game**. It is constant w.r.t. the depth knob at a fixed decision, but
+you **cannot** reconstruct game-wall as `nodes × constant` — always
+use the *measured* per-game `ms/NN-eval`. The unit is for
+comparison, not analytic extrapolation.
+
+**Premise 2 — chokepoints, VERIFIED + one discovered nuance.**
+Counted at `Budget.consume_node()` (nodes; covers serial/batched
+MCTS *and* ISMCTS, all honour the Budget contract) and at the
+**public evaluator-method boundary** post terminal/cache split — in
+both `NNEvaluator` (6 sites) and `SharedTensorNNEvalClient` (4 sites,
+counted client-side: a game's eval count is the same regardless of
+where the SHM server runs the matmul). Counting at the public
+boundary, not at `self.model(...)`, makes it architecture-agnostic
+(structured-vs-MLP route through `_structured_forward` differently)
+with no double/under-count. **Discovered (test surfaced it,
+mechanism confirmed at `mcts.py:990`):** `nn_eval_states` can
+*slightly exceed* `nodes`. PUCT issues a standalone
+`evaluate_with_policy` forward to populate a node's policy cache on
+first expansion (`_stamp_prior`); the **root** node is created in
+`choose()` and never leaf-evaluated, so its prior forward is real NN
+work with **no** matching budget tick. This is why `skipped` clamps
+at 0 rather than asserting the naive identity `nn_eval_states +
+skipped == nodes` — the clamp is the *designed* handling of this
+(and of belief/opponent-policy forwards), not a fudge.
+`nn_eval_states` remains the correct `ms/NN-eval` denominator (it is
+every real forward); `nodes` is the budget unit; their ratio is a
+diagnostic, **not** an identity. Counter cost is a sub-100ns
+unsynchronised int add per node (no lock — search is single-threaded
+per process; pool workers are separate processes) — <0.1 % of a
+per-node clone+apply+forward, i.e. it does not perturb the very
+measurement it feeds.
+
+**Surfaced in:** `mtg_bot bench per-game-wall` (new "Search-work
+units" stdout block) and `~/.mtg_bot_aws/ab_device.py` (the
+structured-correct retrofit harness — new `ms_per_nn_eval` /
+`ms_per_node` / `states_per_call` per arm + a depth-invariant
+`ms/NN-eval` cross-arm headline).
+
+**Retrofit — MEASURED 2026-05-17.** Gate green
+(`feature/eval-node-counters` @ `40719405`, 12981 passed / 95.62 %);
+box post-gate (not pristine — other engine sessions; *ratios
+within a back-to-back window are the trustworthy quantity, absolutes
+drift*, §0/§9). v6 structured, nodes=200/samples=4, 14 workers, 16
+games/arm, **all arms 16/16 completed, 0 crashed**.
+
+Run A — `ab_device.py`, cpu vs cuda back-to-back:
+
+| arm | mean s/game | **ms/NN-eval** | ms/node | evals/game | states/call | games/hr |
+|---|--:|--:|--:|--:|--:|--:|
+| cpu | 439.9 | **5.21** | 4.61 | 84 420 | 5.89 | 49.8 |
+| cuda | 221.3 | **2.69** | 2.40 | 82 178 | 5.85 | 94.9 |
+
+→ **cpu/cuda = 1.93× in `ms/NN-eval`**, vs 1.99× per-game / 1.91×
+throughput. The three agree (evals/game differ only ~3 %, random),
+which **validates the instrumentation and re-expresses §4's ≈2×
+depth-invariantly** — same conclusion, now portable across `--nodes`.
+
+Run B — `ab_shm.py`, per-process cuda vs SHM-cuda back-to-back,
+phase-tagged `nvidia-smi`:
+
+| arm | mean s/game (p50 / p90) | **ms/NN-eval** | evals/game | games/hr | GPU util mean/max |
+|---|--:|--:|--:|--:|--:|
+| cuda (per-proc) | 186.7 (193 / 263) | **2.54** | 73 578 | 188.4 | **68 % / 93 %** |
+| SHM cuda | 232.6 (179 / 397) | **2.99** | 77 820 | 94.6 | **9 % / 21 %** |
+
+SHM server telemetry: 76 135 batches, 1.245 M requests, **mean batch
+16.35** (real coalescing). Cross-window check: cuda `ms/NN-eval`
+2.69 (A) vs 2.54 (B) ≈ 6 % — the expected contended-box absolute
+drift; the within-window ratios stand.
+
+**The unit sharpened §5 (important).** §5's headline "SHM ≈ 2×
+slower" is a **throughput** figure (`games/hr` 0.50×) and it
+reproduces here — but the depth-invariant unit shows the true
+**per-eval** penalty is only **`ms/NN-eval` 2.99 / 2.54 ≈ 1.18×
+(~18 %), not 2×.** The 2× throughput gap is mostly **latency
+variance / pool-stall** (SHM p90 397 s vs 263 s; GPU starved to 9 %
+mean while the workers wait on slot/RPC round-trips), not per-eval
+compute. §5's verdict (**do not wire SHM at this net scale**) is
+unchanged and reconfirmed; what changes is the *magnitude of the
+barrier a larger trunk must clear* — see below.
+
+**Crossover projection — LABELED, one measured anchor + analytic
+batch-amortization (NOT a measured curve).** Anchor: at v6
+(emb 128 / 2 layers / hidden 256) SHM adds ≈ **+0.45 ms/eval**
+(2.99 − 2.54) of round-trip/slot overhead on a ~2.5 ms amortized
+per-eval-node cost, and the SHM server measured **mean batch ≈
+16.3**. SHM's *served* forward amortizes ~16× across coalesced
+requests while the per-process forward does not, so SHM overtakes
+per-process roughly where the **in-process forward cost exceeds the
+RPC overhead net of batch amortization** — order ~0.4–0.5 ms of
+forward. v6's structured forward is far below that (microseconds —
+why SHM loses by 18 % here). A roadmap **Step-1 larger structured
+trunk plausibly crosses it**; an ~18 % per-eval penalty is *far*
+easier for a heavier forward to overcome than the "2×" the
+throughput headline implied — which is exactly why measuring in the
+right unit matters. **This is a projection, not a result: re-run
+this A/B at Step-1 net scale before acting on it** (no
+unvalidated-multiplier rule, §0; no Step-1 weights exist yet — §10,
+CLAUDE.md).
 
 ---
 
@@ -157,7 +298,12 @@ this net scale. **Verdict: do NOT wire SHM into the daemon at the
 current network scale.** Caveat (preserved, important): specific to
 today's tiny v6 trunk; the roadmap's Step-1 *larger* structured net
 could flip the GPU-compute-vs-RPC balance — **re-run this A/B then**;
-do not generalize to "SHM is always useless."
+do not generalize to "SHM is always useless." **Update (§2A retrofit,
+2026-05-17):** re-expressed in `ms/NN-eval`, the per-*eval* penalty
+is only ~1.18× (~18 %), not 2× — the 2× here is a *throughput*
+artifact (latency variance / GPU-starved pool-stall). Verdict
+unchanged; the barrier a larger trunk must clear is smaller than the
+throughput headline implied. See §2A.
 
 ---
 
@@ -247,8 +393,11 @@ re-litigated:
 Ops scratch harnesses (NOT product code; in `~/.mtg_bot_aws/`):
 `bench_stage.py` (distributed-stage economics), `ab_device.py`
 (per-process cpu-vs-cuda via the production structured-correct config
-builder), `ab_shm.py` (SHM vs per-process, known-good seam),
-`bench_sampler.py` / `gpu_sampler_shm.py` (heartbeat / `nvidia-smi`).
+builder; **now also emits `ms/NN-eval` / `ms/node` / `states/call`
+per arm — §2A**), `ab_run_units.sh` (the §2A retrofit runner; points
+at the instrumented `feature/eval-node-counters` worktree), `ab_shm.py`
+(SHM vs per-process, known-good seam), `bench_sampler.py` /
+`gpu_sampler_shm.py` (heartbeat / `nvidia-smi`).
 
 Methodology requirements (learned the hard way):
 - Construct the eval config via `_build_nn_pimc_config` (reads
@@ -271,6 +420,12 @@ Methodology requirements (learned the hard way):
 
 - `feature/worker-daemon-gpu-device` (opt-in `--nn-device`) — the
   lever that actually captures the validated §4 ~2×. Awaiting review.
+- **§2A retrofit** — ✅ DONE 2026-05-17 (`feature/eval-node-counters`
+  @ `40719405`, gate green): cpu/cuda = 1.93× `ms/NN-eval` (validates
+  §4); SHM per-eval penalty ~1.18× (sharpens §5). Remaining: re-run
+  the SHM crossover A/B **at Step-1 larger-trunk net scale** to
+  confirm/refute the labeled projection (blocked: no Step-1 weights
+  exist yet).
 - Re-run §4 / §5 **isolated** (quiesce other sessions) for a pristine
   absolute, and **at Step-1 larger-trunk net scale** (the §5 SHM
   verdict is net-scale-specific).
