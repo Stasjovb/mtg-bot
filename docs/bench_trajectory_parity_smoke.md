@@ -1642,3 +1642,218 @@ Rust → no `maturin`.
    and **Phase 2** (non-creature Lander carriers → Bioengineered
    Future) remain the next §2-honest pool-delta levers, both unchanged
    by this validation.
+
+---
+
+## Round 58 (2026-05-16) — N3: token-cease-to-exist SBA real-game validation, raw multi-archetype unblock confirmed
+
+The standing open question since round 55: the round-55 N2 Rust
+token-cease-to-exist SBA (CR 111.7 — a token leaving the battlefield
+ceases to exist) is byte-pinned by the round-53 genuine in-test probe
+but has **never been validated in real production-deck games** (round
+55/56: bench never sac-activates Landers, DIES carriers never die in
+the creatureless mirror → token never leaves bf, 0/120; raw
+multi-archetype sweeps were then blocked by the round-56 cross-shape
+token-pid collision). Round-57 N1 closed the pid collision
+(`feature/fix-token-pid-cross-shape-r57`, merge `825e2106`, SHA-fill
+`443e1a22`). This round answers the question definitively on the
+unblocked path.
+
+### Raw multi-archetype is CONFIRMED UNBLOCKED (round-57 N1 fix verified)
+
+The round-57 in-code per-game pid-map reset
+(`_reset_token_printing_pid_map_for_seating_pass`) is verified to make
+the per-game-`clear_token_printings()` workaround **genuinely no longer
+required**. Run **directly through the un-modified
+`bench_trajectory_parity.py` in-process multi-archetype loop** (no
+workaround):
+
+| Sweep | Grid | Games | PASS | FAIL_DIV | TIMEOUT | EXC |
+|---|---|---|---|---|---|---|
+| Round-56 collision repro pair | 37,73 ×s0-5 | 12 | 9 | **0** | 3 | **0** |
+| Raw multi (20 double-token archetypes) | 18,36,37,39,63,64,73,88,91,97,122,123,137,139,152,153,169,170,174,201 ×s0-2 | 60 | 16 | **0** | 44 | **0** |
+
+The exact round-56 collision-trigger order `[(37,s) s0-5]+[(73,s)
+s0-5]` (Lander-carrier + Robot-carrier archetypes, distinct token
+shapes, differing per-game union sizes) — which pre-fix raised the pid
+`ValueError` at 6/12 games — now runs **12/12 clean, 0 FAIL_EXCEPTION**.
+The 60-game raw multi-archetype sweep across 20 distinct
+≥2-distinct-token-shape archetypes (Lander + Robot co-occurring) is
+**0 FAIL_EXCEPTION, 0 FAIL_DIVERGENCE**. **Raw in-process
+multi-archetype bench sweeps of decks carrying ≥2 distinct token
+shapes are confirmed unblocked.** The per-game-clear workaround is
+retired.
+
+### Does the token-cease-to-exist SBA FIRE in real games?
+
+`scripts/scout_r58_token_sba_strategy_probe.py` is the round-56
+lifecycle scan generalized over the `--combat-strategy` axis (same
+bench per-step primitives; Python source of truth for "did it fire",
+the `_DivergenceError`/`AssertionError` gate for cross-engine
+byte-equality). 240 games total across the prime double-DIES-carrier
+archetypes:
+
+| Lifecycle (raw, in-process, no workaround) | `attack_all` 120 | `attack_all_block_smallest` 120 |
+|---|---|---|
+| carrier reached battlefield | 84/120 | 84/120 |
+| token created (Lander/Robot on bf) | 6/120 | 6/120 |
+| **token LEFT bf (round-55 SBA fires)** | **0/120** | **0/120** |
+| token-SBA fired & DIVERGED | **0** | **0** |
+
+**Verdict: the token-cease-to-exist SBA is STRUCTURALLY
+UN-EXERCISABLE by the current bench combat model — and the limitation
+is strategy-INDEPENDENT.** It is NOT real-game-validated; it remains
+pinned ONLY by the round-53 genuine synthetic-injection in-test probe
+(GREEN against the current `.pyd`). Do not fold the SEARCH_LIMITATIONS
+in-test-pinned caveat to validated.
+
+### Root cause — quantified, one tier deeper than round-56 stated
+
+The round-56 doc attributed the non-firing to "bench never
+sac-activates the Lander; DIES carriers never die in the creatureless
+mirror." Round-58 instrumentation pins the **exact two-token
+structural split**:
+
+- **Lander** (Galactic Wayfarer ENTERS / Beamsaw Prospector DIES) is
+  a `Token Artifact` — **NOT a creature** (P/T `None/None`). Its ONLY
+  battlefield-exit is its `{2}, Sacrifice` activated ability. The
+  bench emits `activate_ability` ONLY for mana-tapping lands, never a
+  non-mana sac ability — under **any** combat strategy. A Lander
+  **structurally cannot leave the battlefield** in a bench game;
+  combat strategy is irrelevant to it. (The 6/120 token-created games
+  are all Lander-on-bf, ending with the Lander still on bf — matches
+  the round-56 Sweep-A′ observation.)
+- **Robot** (Gravpack Monoist DIES) IS a `Token Artifact Creature`
+  2/2 — it CAN die in combat. But it spawns only when Gravpack
+  Monoist (2/1) **dies first** (a DIES trigger). Board-development
+  trace (arch 37, all 6 seeds, `attack_all_block_smallest`): final
+  boards are **24–27 permanents that are almost entirely lands**
+  (Forest/Island/Swamp), ≤1–2 creatures ever in play, `block`-log
+  lines 0–2 per game. The bridge-filtered mirror is so creature-sparse
+  that the DIES carrier rarely reaches bf and essentially never trades
+  (no opposing creatures to block / be blocked by). `token created`
+  for the Robot path = **0/120** even with the defender-blocks
+  strategy. This is the round-50/56 creatureless-mirror limitation,
+  now confirmed one tier deeper AND proven strategy-independent (the
+  defender-blocks strategy cannot help when there is nothing on the
+  board to block).
+
+### §2-correct admit/strategy tweak — EVALUATED, NOT a cheap unlock (decided, not deferred)
+
+Slice §3 asked whether a minimal §2-correct admit-filter widen or a
+bench-strategy tweak is the cheap unlock. **Empirically answered NO,
+this round, not deferred speculatively:**
+
+- **Strategy tweak (`attack_all_block_smallest`): tested, does NOT
+  unlock.** 120 games under the defender-blocks strategy →
+  still 0/120 token-LEFT-bf. Strategy cannot manufacture combat trades
+  on a creatureless board, and is wholly irrelevant to the
+  non-creature Lander.
+- **Admit-filter widen: not the lever.** The carriers are ALREADY
+  admitted (round-53 Phase-3a + round-50 Phase-4 — confirmed round 56,
+  §2-maximal). The blocker is board sparsity + the Lander being a
+  non-creature with only a sac-activated exit, neither of which an
+  admit widen of the existing §2-correct shape classes addresses.
+  Widening to non-§2 classes (e.g. carriers gated at
+  `activated_abilities`, `BECOMES_TAPPED` — N1 is concurrently
+  bridging the latter; not depended on here) would be a silent
+  mistranslation and is correctly declined per the standing
+  bridge-correctness discipline.
+
+**No §2-correct tweak made — none is a cheap unlock; the precise
+required unlock is specified below for a future deliberate slice.**
+
+### The EXACT minimal unlock spec (for a future deliberate slice — not this one)
+
+To fire the round-55 token-cease-to-exist SBA in a real bench game,
+ONE of the following dedicated harness extensions is required (all are
+larger than this Python/bench slice and out of scope here — a precise
+deferral):
+
+1. **Lander path — a sac-activation harness path.** Add an opt-in
+   bench driver step that emits `activate_ability` for the Lander's
+   `{2}, Sacrifice` ability when the controller has ≥2 open mana
+   (deterministic, both engines via `step_both`). This is the ONLY
+   way a Lander ever leaves the battlefield; it is the smallest,
+   most-targeted unlock and exercises the SBA directly. Est. ~1
+   focused slice (new bench step + a `RealGameCombatAgent`-sibling
+   "activate sac abilities" toggle + cross-engine pin). Review-gated
+   (touches the bench driver).
+2. **Robot path — a forced-removal / DIES harness OR a creature-dense
+   admit floor.** Either (a) a forced-removal harness path that can
+   destroy a carrier on demand (the round-42+ standing
+   "DIES-event harness, review-gated" recommendation), or (b) widen
+   the admit floor enough that the mirror develops real boards where a
+   2/1 Gravpack Monoist trades in combat → Robot spawns → Robot trades
+   → SBA fires. Path (b) depends on the much larger §2-honest
+   pool-delta levers (Phase 5 `each_player`, Phase 2 non-creature
+   carriers) bringing in enough creatures to make combat routine —
+   indirect and unbounded. Path (a) is the cleaner targeted unlock,
+   shared-shape with the Lander sac path (#1) — a single
+   "harness-driven non-mana activation / forced bf-exit" slice could
+   cover both.
+
+Recommended round-59 deliberate slice (if the campaign wants the SBA
+real-game-validated rather than synthetic-pinned): **option #1 — the
+Lander sac-activation harness step.** It is the minimal, most-direct,
+single-card-deterministic path; the Lander is admitted today and
+spawns reliably (44/44 on Galactic Wayfarer ETB per round-56 Sweep B);
+only the bf-exit emission is missing.
+
+### Validation verdict
+
+| Claim | Verdict |
+|---|---|
+| Raw in-process multi-archetype bench sweeps (≥2 distinct token shapes) unblocked by round-57 N1 fix | **CONFIRMED** — round-56 collision pair 37,73 ×s0-5 → 12/12 clean (was 6/12-then-ValueError pre-fix); 60-game 20-archetype raw sweep 0 FAIL_EXCEPTION / 0 FAIL_DIVERGENCE; per-game-clear workaround retired |
+| Round-55 token-cease-to-exist SBA byte-equal *fired* in a real full-game trajectory | **STRUCTURALLY UN-EXERCISABLE** by the current bench combat model — strategy-INDEPENDENT (0/240 across `attack_all` + `attack_all_block_smallest`). Lander = non-creature, sac-exit-only, no bench `activate_ability` for it; Robot = needs a DIES carrier to trade on a near-creatureless board. NOT real-game-validated; stays round-53 synthetic-in-test-pinned. |
+| §2-correct admit/strategy tweak as a cheap unlock | **NO** — strategy tweak tested (0/120), admit set already §2-maximal; neither addresses the structural cause. Precise harness-extension unlock spec specified above and deferred (a precise deferral is the correct outcome). |
+| New cross-engine divergence | **NONE** — 0 FAIL_DIVERGENCE across all 312 games (12 + 60 bench + 240 lifecycle) |
+| New latent bug surfaced | **NONE** |
+
+Net: round-57 N1's token-pid fix is **real-game-confirmed** —
+raw multi-archetype bench coverage of ≥2-distinct-token decks is
+unblocked with no workaround. The round-55 token-cease-to-exist SBA
+byte-equality stays **synthetic-pinned** (round-53 genuine in-test
+probe); it is structurally un-exercisable by the bench's
+combat+mana-only-activation model independent of combat strategy, and
+the exact minimal unlock (a Lander sac-activation harness step) is
+specified for a future review-gated deliberate slice.
+
+### §2-correct admit widen — NOT NEEDED / NOT a lever this round
+
+The admit set is unchanged and remains §2-maximal (round-53 Phase-3a +
+round-50 Phase-4; the round-56 decline ledger is unchanged — every
+declined carrier would be a silent mistranslation). No `_SAFE_*` /
+harness / bench-script / production code touched. **N1 is concurrently
+bridging `BECOMES_TAPPED`; this slice deliberately does NOT depend on
+it.**
+
+### Gate
+
+Docs + 1 `scripts/scout_*.py` diagnostic
+(`scout_r58_token_sba_strategy_probe.py`) + `tmp/bench_r58.json`
+artifact only. **No production / harness / `_SAFE_*` / bench-script
+code changed** — the bench was run un-modified; the new scout is a
+pure diagnostic. Parity gate **not** re-run; nothing in this slice is
+on the gate's path (baseline **1315** unchanged). No Rust → no
+`maturin`.
+
+### Forward picture for round 59
+
+1. **Token-cease-to-exist SBA real-game validation is BLOCKED on a
+   harness extension, not a bench/filter tweak.** The cheapest unlock
+   is **option #1 above — a Lander `{2},Sac` activation harness step**
+   (review-gated, ~1 slice). Until then the SBA stays correctly
+   round-53 synthetic-in-test-pinned; do not represent it as
+   real-game-validated.
+2. **Raw multi-archetype is now a free coverage lever.** With the
+   round-57 fix real-game-confirmed, future bench rounds can sweep
+   arbitrary ≥2-distinct-token-shape archetype mixes in one process
+   with no workaround — useful for surfacing other divergences as the
+   admit set widens.
+3. **Phase 5** (`each_player` → Edge Rover) and **Phase 2**
+   (non-creature Lander carriers) remain the next §2-honest pool-delta
+   levers; they would also indirectly help the Robot path (#2(b)) by
+   making the mirror creature-dense enough for routine combat — but
+   the targeted Lander sac harness (#1) is the direct,
+   bounded route to real-game SBA validation.
