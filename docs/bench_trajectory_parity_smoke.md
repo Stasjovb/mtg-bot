@@ -4065,18 +4065,54 @@ bench-admitted card exercises them; only the hooks Rust's
 `cleanup_step_for_active_player_inline` actually models are inlined
 (the no-fallback-hybrid discipline preserved).
 
-### Parity-safety — the full round-74 grid re-swept (the deciding evidence)
+### Parity-safety — the rigorous gate-delta proof (the deciding evidence)
 
 The R74-3 fix changes harness phase-advance behavior, so the
 **critical contract** is: every game that currently completes must
 yield the SAME verdict UNLESS it was wrong specifically because of
-the skipped UEOT expiry. The full round-74 sweep
+the skipped UEOT expiry. The decisive, confound-free proof is the
+**gate delta on the IDENTICAL `.pyd`** (the 4-file gate is a
+deterministic full-trajectory cross-engine harness over the
+loader-admitted subset; a verdict shift there is exactly a
+"trajectory changed verdict" event):
+
+* **Clean main `921d759a`, fresh `.pyd`**: gate runs the 4-file
+  set; the same deselected-of-nothing set my branch runs.
+* **This branch (rebased on `921d759a`), same `.pyd`**: gate
+  **GREEN 1520, 0 fail / 0 xfail**.
+* **Exact count delta** (4-file gate, the 6 warp pins were a
+  transient stale-`.pyd`-race artifact on an intermediate
+  orchestrator build — once the orchestrator's post-`f1f09bbb`
+  `.pyd` rebuild (10:05) landed they pass on BOTH main and this
+  branch): main's passing set + **exactly the 2 new R74-3 pins**,
+  **ZERO regressions, ZERO verdict shifts** on any pre-existing
+  gate trajectory. (A measured-on-the-stale-`.pyd` cross-check
+  isolated this precisely: with the 6 transient warp pins
+  deselected, clean main = 1512 passed, this branch = 1514 passed
+  = 1512 + the 2 R74-3 pins, 0 delta on the shared 1512.)
+
+This is the contract proven directly: **every game the gate drives
+that completes yields the SAME verdict; the only additions are the
+2 R74-3 pins.** Games with no cross-turn-surviving UEOT modifier are
+byte-identical (the fix is a no-op on them by construction —
+`expire_continuous_effects("cleanup")` returns the unchanged kept
+list and the zeroing loop writes 0 over already-0 fields); only a
+game wrong *because of* the leaked UEOT modifier can change, and the
+only such game in the entire gate corpus is now covered by the new
+pins.
+
+### Parity-safety — bench grid corroboration (full 360-game round-74 sweep)
+
+Corroborating empirical evidence: the full round-74 sweep
 (`scripts/scout_r74_run_sweep.py`, the UNMODIFIED bench, 360 games
 / 5 disjoint full-pool index bands / 5 disjoint seed offsets /
-cap-120) was re-run post-fix and diffed byte-for-byte against the
-round-74 baseline rollup:
+cap-120) re-run **post-R74-3-fix but pre the independent Rust R74-2
+fix** (`f456ec20`, which landed on `main` from a separate Rust
+slice during this session) and diffed against the round-74
+baseline rollup — isolating R74-3's harness-side effect while R74-2
+was still Rust-unfixed:
 
-| Metric | Round-74 baseline | Post-R74-3-fix | Δ |
+| Metric | Round-74 baseline | Post-R74-3-fix (R74-2 still Rust-unfixed) | Δ |
 |---|---:|---:|---:|
 | total games | 360 | 360 | 0 |
 | PASS | 249 | **259** | **+10** |
@@ -4116,35 +4152,63 @@ bucket:
   Depressurize target's effective power no longer carries a phantom
   debuff, so these specific games no longer reach the R74-2-divergent
   destroy state and converge to PASS. The remaining **43
-  `cast_spell::battlefield`** are pure **R74-2** — **preserved /
-  unmasked**, Rust-side (NEW Rust bug, repro `--archetype 216 --seed
-  0`, already carried forward to the Rust dispatch in round-74).
+  `cast_spell::battlefield`** were pure **R74-2** — **preserved /
+  unmasked** by R74-3, Rust-side (NEW Rust bug, repro
+  `--archetype 216 --seed 0`).
 
-The single-game repros confirm preservation: `--archetype 70 --seed 0`
-still FAIL_DIVERGENCE `combat_phase::life_p0` (R74-1, unmasked);
-`--archetype 216 --seed 0` still FAIL_DIVERGENCE
-`cast_spell::battlefield` (R74-2, unmasked). **The fix masked no
-genuine Rust-side divergence** — it only flipped the games that were
-wrong *because of* the harness's skipped UEOT expiry, exactly the
-contract. New-code-is-right: the harness was buggy, the fix is
-correct, the bench's empirical signal is now strictly cleaner and
-the residual 101 are 100% genuine Rust-side (R74-1 + R74-2),
-sharpening the Rust dispatch's signal rather than diluting it.
+> **Post-R74-2-Rust-fix note.** R74-2 was independently fixed
+> Rust-side (`f456ec20`) and merged to `main` during this session
+> by a separate Rust slice. On the post-R74-2 `.pyd` the residual
+> `cast_spell::battlefield` count drops further (R74-2's 43 are now
+> Rust-fixed — `--archetype 216 --seed 0` now PASSes, confirmed on
+> the stable post-`f1f09bbb` `.pyd`), and a post-R74-2 spot-check
+> on the stable fresh `.pyd` confirms the R74-3 contract holds
+> orthogonally: `--archetype 52329 --seed 7` **PASS** (R74-3 fixed),
+> `--archetype 216 --seed 0` **PASS** (R74-2 Rust-fixed,
+> independent), `--archetype 70 --seed 0` still **FAIL_DIVERGENCE
+> `combat_phase::life_p0`** (R74-1 / I23, the still-open Rust gap —
+> preserved / unmasked). The committed `tmp/bench_r74_*.json`
+> evidence is the pre-R74-2-fix isolation run above (the clean
+> R74-3-only frame); the post-R74-2 numbers are not pinned here
+> because R74-2 is the Rust dispatch's tracked item and its sweep
+> evidence is owned by that slice / the orchestrator resync, not
+> this non-Rust harness slice.
+
+The single-game repros confirm preservation: `--archetype 70 --seed
+0` still FAIL_DIVERGENCE `combat_phase::life_p0` (R74-1, unmasked).
+**The fix masked no genuine Rust-side divergence** — it only flipped
+the games that were wrong *because of* the harness's skipped UEOT
+expiry, exactly the contract. New-code-is-right: the harness was
+buggy, the fix is correct, the bench's empirical signal is now
+strictly cleaner and the residual is 100% genuine Rust-side (R74-1;
+R74-2 now independently Rust-fixed), sharpening the Rust dispatch's
+signal rather than diluting it.
 
 ### Gate + tracking
 
-Gate green **1520** (1518 + the 2 new R74-3 pins —
+Gate green **1520, 0 fail / 0 xfail** (rebased on `main`
+`921d759a`, run against the orchestrator's fresh post-`f1f09bbb`
+`.pyd`) = clean main's passing set + **exactly the 2 new R74-3
+pins**:
 `tests/test_trajectory.py::test_r74_3_advance_phase_python_expires
-_ueot_pt_at_cleanup`, the end-to-end documented-repro pin asserting
-arch 52329 s7 now PASSes, and
+_ueot_pt_at_cleanup` (the end-to-end documented-repro pin asserting
+arch 52329 s7 now PASSes) and
 `::test_r74_3_advance_phase_python_clears_temp_pt_and_cleanup
-_registry`, the unit pin asserting the CLEANUP arm zeros the
+_registry` (the unit pin asserting the CLEANUP arm zeros the
 `temp_*` write-through cache AND drops the `expires_at="cleanup"`
-registry entries). 0 fail / 0 xfail. The round-74 entry left **no
-xfail/tracker** for R74-3 (it was a pure-docs slice that explicitly
-carried R74-3 forward to this dedicated slice), so the
-flip-to-passing here is the creation of these two passing pins, not
-the flip of a pre-existing strict-xfail.
+registry entries). The round-74 entry left **no xfail/tracker** for
+R74-3 (it was a pure-docs slice that explicitly carried R74-3
+forward to this dedicated slice), so the flip-to-passing here is the
+creation of these two passing pins, not the flip of a pre-existing
+strict-xfail. (Note: an intermediate orchestrator `.pyd` build
+between the warp-Phase-2/`f1f09bbb` Rust merges briefly showed 6
+transient warp-pin failures on `main` ITSELF — a documented
+stale-`.pyd`-race artifact, fully disjoint from R74-3 [warp
+legal-emit vs UEOT cleanup-expiry]; the orchestrator's post-merge
+`.pyd` rebuild (10:05) cleared it on both `main` and this branch,
+and the stale-`.pyd` cross-check above [1512 vs 1514 with the 6
+deselected] proved R74-3 added exactly +2 / 0 regressions even
+through the race.)
 
 ### R74-1 / I23 triage verdict (the round-74 carry-forward, non-Rust assessment)
 
