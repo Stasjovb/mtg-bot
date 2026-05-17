@@ -1718,8 +1718,24 @@ def test_cross_engine_resolve_top_of_stack_rust_drains_etb_triggers(parity_smoke
     from mtg_bot.turn import Step
 
     deck_names = trajectory.load_production_deck(archetype=0)
+    # Round-74 re-pin (Biosynthic Burst spell-card-bridge admit):
+    # closing Tier-A #6 Biosynthic Burst auto-joined it to the
+    # spell-card-bridge admit set, which shifted arch-0's
+    # bridge-filtered deck and therefore the seed-deterministic
+    # card-id assignment + playable line — on seed 0 NO
+    # trigger-carrier creature is cast within 10 turns any more
+    # (the documented round-53-class deck-shift drift; the test
+    # correctly failed loudly asking for a re-pin). Verify-first
+    # swept arch/seed: arch=0 **seed=1** reliably casts Thawbringer
+    # at T8 (a real ENTERS+surveil trigger carrier — the same CE5
+    # drain vehicle, the original pre-Phase-3a scenario card). The
+    # CE5 regression contract is UNCHANGED — only the seed that
+    # reaches a trigger-carrier cast moved; new-code-is-right per
+    # feedback_parity_new_code_is_right (the lever growing the admit
+    # set is correct; the regression pin is re-anchored, not the
+    # lever weakened).
     py_state, rust_state = trajectory.setup_matched_game_from_real_decks(
-        deck_names, shared_rng_seed=0, mulligans=False,
+        deck_names, shared_rng_seed=1, mulligans=False,
     )
     combat_agent = trajectory.RealGameCombatAgent(strategy="attack_all")
 
@@ -1741,7 +1757,7 @@ def test_cross_engine_resolve_top_of_stack_rust_drains_etb_triggers(parity_smoke
         _game_over,
     )
 
-    # Drive the seed-0 arch-0 game until a triggered-ability-bearing
+    # Drive the arch-0 seed-1 game until a triggered-ability-bearing
     # creature is cast — its ETB fan-out pushes a trigger onto Rust's
     # stack that the harness drain must clear to byte-match Python.
     #
@@ -1749,15 +1765,20 @@ def test_cross_engine_resolve_top_of_stack_rust_drains_etb_triggers(parity_smoke
     # Thawbringer (card_id 77 on seed 0). Phase 3a admits **Galactic
     # Wayfarer** (a real EoE ENTERS+create_token Lander carrier) into
     # archetype 0's bridge-filtered deck, which shifts the
-    # seed-deterministic card-id assignment AND the playable line — on
-    # seed 0 Thawbringer is no longer cast in the first turns, but
-    # Galactic Wayfarer reliably is (T7). Galactic Wayfarer is an even
-    # better CE5 vehicle: its ETB pushes a real ``create_token``
-    # (Lander) trigger that Rust must drain to byte-match Python's
-    # drain. Detect the cast by PRINTING NAME (robust to Phase-3a /
-    # future card-id shifts) rather than the brittle hardcoded
-    # card_id. The CE5 regression contract is unchanged — the post-
-    # cast view byte-matches via the harness drain on BOTH engines
+    # seed-deterministic card-id assignment AND the playable line.
+    #
+    # Round-74 re-pin: closing Tier-A #6 Biosynthic Burst auto-joined
+    # it to the spell-card-bridge admit set, shifting arch-0's
+    # bridge-filtered deck AGAIN — on seed 0 NO trigger-carrier is
+    # cast within 10 turns now (the test correctly failed loudly
+    # asking for a re-pin; documented round-53-class deck-shift
+    # drift). Verify-first swept arch/seed: **arch=0 seed=1**
+    # reliably casts Thawbringer at T8 (a real ENTERS+surveil
+    # trigger carrier — the original pre-Phase-3a CE5 drain vehicle).
+    # Detect the cast by PRINTING NAME (robust to admit-set / card-id
+    # shifts) rather than a brittle hardcoded card_id. The CE5
+    # regression contract is unchanged — the post-cast view
+    # byte-matches via the harness drain on BOTH engines
     # (``_try_cast_one_creature`` casts via ``step_both``; reaching
     # the success return without a raised divergence IS the pin).
     _TRIGGER_CARRIERS = {"Galactic Wayfarer", "Thawbringer"}
@@ -66411,6 +66432,444 @@ def test_cross_engine_real_eoe_depressurize_debuff_then_conditional_destroy_pari
     assert diffs == [], (
         f"Depressurize +2-counter survival arm must be byte-equal "
         f"(the §2 counters-asymmetry pin); diffs={diffs}"
+    )
+
+
+# ============================================================
+# Effect-uncovered Tier-A #6 — Biosynthic Burst (~22,799 17lands
+# decks). ``{1}{G}`` Instant: "Put a +1/+1 counter on target
+# creature you control. It gains reach, trample, and indestructible
+# until end of turn. Untap it." Rust ``Effect::BiosynthicBurstEffect``
+# (cards.rs field-free UNIT variant; resolve in state_ops_resolve.rs
+# beside Depressurize), bridged via cross_engine.py
+# ``biosynthic_burst_effect`` ↔ Python ``BiosynthicBurstEffect``
+# (effects/bespoke.py:1466). Adding the Effect + bridge + the
+# trajectory.py reverse-serializer leaf flips the printing into the
+# spell-card-bridge admit set (the guardrail queries the LIVE covered
+# set + round-trips the reverse serializer — auto-grow, no hardcoded
+# list).
+# ============================================================
+
+
+def _build_rust_biosynthic_state(
+    *,
+    own_power: int = 2,
+    own_toughness: int = 2,
+    own_tapped: bool = True,
+    own_counters: int = 0,
+    seed_own_creature: bool = True,
+    seed_opp_creature: bool = False,
+):
+    """Build a Rust state: a Biosynthic Burst ETB carrier on p0's bf
+    + (optionally) one own creature on p0's bf + (optionally) an
+    opponent creature on p1's bf. Returns ``(rs, own_id_or_None,
+    opp_id_or_None)``."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    ZB = 2
+    own_id = None
+    opp_id = None
+    if seed_own_creature:
+        own_id = rs.register_and_inject_object(
+            {
+                "name": "BB Own Creature",
+                "card_types": ["Creature"],
+                "power": own_power,
+                "toughness": own_toughness,
+            },
+            0,
+            ZB,
+        )
+        if own_tapped:
+            rs.tap_object(own_id)
+        if own_counters != 0:
+            assert rs.set_counters(own_id, own_counters) is True
+    if seed_opp_creature:
+        opp_id = rs.register_and_inject_object(
+            {
+                "name": "BB Opp Creature",
+                "card_types": ["Creature"],
+                "power": 5,
+                "toughness": 5,
+            },
+            1,
+            ZB,
+        )
+    rs.register_and_inject_object(
+        {
+            "name": "BB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"G": 1, "generic": 1},
+            "power": 1,
+            "toughness": 1,
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": {"kind": "biosynthic_burst_effect"},
+                }
+            ],
+        },
+        0,
+        ZB,
+    )
+    return rs, own_id, opp_id
+
+
+def _bb_bf_ids(rs):
+    return [int(e["id"]) for e in rs.battlefield_snapshot()]
+
+
+def test_rust_biosynthic_burst_counter_keywords_untap():
+    """Rust pin (a): an own TAPPED 2/2 → +1/+1 counter (counters=1,
+    eff P/T fold it), UNTAPPED, gains reach + trample +
+    indestructible (UEOT). The atomic counter→3-kw-grant→untap
+    composite on one own target."""
+    rs, own, _ = _build_rust_biosynthic_state(
+        own_power=2, own_toughness=2, own_tapped=True
+    )
+    assert rs.stack_size() == 1
+    rs.resolve_top_of_stack()
+    e = next(x for x in rs.battlefield_snapshot() if x["id"] == own)
+    assert e["counters"] == 1, (
+        f"+1/+1 counter → counters slot 1; got {e['counters']}"
+    )
+    assert e["tapped"] is False, "Biosynthic Burst untaps the target"
+    for kw in ("reach", "trample", "indestructible"):
+        assert rs.has_keyword(own, kw) is True, (
+            f"target must gain {kw} UEOT"
+        )
+    assert rs.has_keyword(own, "flying") is False, (
+        "only the 3 granted keywords — no spurious grant"
+    )
+
+
+def test_rust_biosynthic_burst_keywords_expire_at_cleanup():
+    """Rust pin (b) — the UEOT drain (the round-39 SBA-on-0/0 class).
+    The 3 granted keywords are present right after resolve and DRAIN
+    at the cleanup step (advance_phase wraps turn 1 CLEANUP). The +1/+1
+    counter is PERMANENT (a counter is not a UEOT modifier) — it stays
+    after cleanup."""
+    rs, own, _ = _build_rust_biosynthic_state(
+        own_power=2, own_toughness=2, own_tapped=True
+    )
+    rs.resolve_top_of_stack()
+    assert rs.has_keyword(own, "indestructible") is True
+    # Walk phases until the UEOT keywords drain (turn-1 CLEANUP wrap).
+    safety = 25
+    n = 0
+    while rs.has_keyword(own, "indestructible") and n < safety:
+        rs.advance_phase()
+        n += 1
+    assert n < safety, (
+        "indestructible UEOT keyword never drained within "
+        f"{safety} advance_phase calls"
+    )
+    for kw in ("reach", "trample", "indestructible"):
+        assert rs.has_keyword(own, kw) is False, (
+            f"{kw} must expire at cleanup (UEOT drain)"
+        )
+    e = next(x for x in rs.battlefield_snapshot() if x["id"] == own)
+    assert e["counters"] == 1, (
+        "the +1/+1 counter is PERMANENT — it survives the cleanup "
+        f"UEOT drain; got counters={e['counters']}"
+    )
+
+
+def test_rust_biosynthic_burst_controller_restricted_target():
+    """Rust pin (c) — the verified deviation from Depressurize. With
+    NO own creature on p0's bf but an opponent creature on p1's bf,
+    Biosynthic Burst is a SILENT NO-OP (legal_targets is
+    controller-restricted: ``o.controller_id == controller_id``,
+    effects/bespoke.py:1484 — UNLIKE Depressurize's ANY-creature
+    scan). The opponent's creature is NOT a legal pick."""
+    rs, _own, opp = _build_rust_biosynthic_state(
+        seed_own_creature=False, seed_opp_creature=True
+    )
+    rs.resolve_top_of_stack()
+    e = next(x for x in rs.battlefield_snapshot() if x["id"] == opp)
+    assert e["counters"] == 0, (
+        "opponent's creature must NOT get the counter — "
+        "controller-restricted scan"
+    )
+    assert rs.has_keyword(opp, "indestructible") is False, (
+        "opponent's creature must NOT gain keywords — "
+        "controller-restricted scan"
+    )
+    assert e["tapped"] is False and not any(
+        rs.has_keyword(opp, k)
+        for k in ("reach", "trample", "indestructible")
+    ), "opponent creature wholly untouched"
+
+
+def test_rust_biosynthic_burst_no_own_creature_silent_noop():
+    """Rust pin (d): NO creature anywhere → silent no-op. Only an
+    Artifact on p1's bf; nothing changes."""
+    from mtg_bot.parity.cross_engine import DeckSpec, build_rust_state
+
+    rs = build_rust_state(
+        DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    )
+    rs.register_and_inject_object(
+        {"name": "BB Inert Artifact", "card_types": ["Artifact"]},
+        1, 2,
+    )
+    spell_id = rs.register_and_inject_object(
+        {"name": "Biosynthic Burst", "card_types": ["Instant"],
+         "effects": [{"kind": "biosynthic_burst_effect"}]},
+        0, 0,
+    )
+    rs.push_to_stack(spell_id, 0)
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert any(
+        e["printing_name"] == "BB Inert Artifact"
+        for e in rs.battlefield_snapshot()
+    ), "no creature anywhere → silent no-op, artifact untouched"
+
+
+def test_biosynthic_burst_auto_joins_spell_card_bridge_admit_set():
+    """The auto-grow §2 tooth. With the Effect + bridge arm + the
+    ``trajectory._python_spell_effect_to_dict`` reverse-serializer
+    leaf landed, the genuine ``{1}{G}`` Biosynthic Burst Instant is
+    now covered+bridged AND round-trips the reverse serializer, so
+    ``_printing_is_bridge_simple_spell`` admits it into the
+    spell-card-bridge bench-admit set (the guardrail queries the LIVE
+    covered set — no hardcoded card list; this is the lever's
+    auto-grow §2 teeth firing on the Tier-A close having LANDED)."""
+    import pytest
+
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity.effect_coverage import covered_python_class_set
+    from mtg_bot.parity.trajectory import (
+        _printing_is_bridge_simple_spell,
+        _python_spell_effect_to_dict,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+    from mtg_bot.effects.bespoke import BiosynthicBurstEffect
+
+    real = get_active_source().get_printings().get("Biosynthic Burst")
+    if real is None:
+        pytest.skip("Biosynthic Burst absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, BiosynthicBurstEffect), (
+        f"genuine Biosynthic Burst spell_effect must be "
+        f"BiosynthicBurstEffect; got {type(se).__name__}"
+    )
+    assert "BiosynthicBurstEffect" in covered_python_class_set(), (
+        "the Rust Effect::BiosynthicBurstEffect variant makes the "
+        "Python class covered"
+    )
+    rt = _python_spell_effect_to_dict(se)
+    assert rt == {"kind": "biosynthic_burst_effect"}, (
+        f"reverse serializer must emit the kind-only dict; got {rt}"
+    )
+    back = _ta_dict_to_python_effect(rt)
+    assert isinstance(back, BiosynthicBurstEffect), (
+        f"dict→Python bridge must round-trip to BiosynthicBurstEffect;"
+        f" got {type(back).__name__}"
+    )
+    assert _printing_is_bridge_simple_spell(real) is True, (
+        "Biosynthic Burst must auto-join the spell-card-bridge admit "
+        "set now that its Effect is covered+bridged + round-trips"
+    )
+
+
+def test_cross_engine_real_eoe_biosynthic_burst_counter_kw_untap_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Biosynthic Burst
+    (~22,799 17lands decks). Effect-uncovered Tier-A queue #6.**
+
+    Drives the **ACTUAL parsed Biosynthic Burst printing** on the
+    Python side: ``get_active_source().get_printings()["Biosynthic
+    Burst"]`` — which the live parser maps to a ``spell_effect`` of
+    ``BiosynthicBurstEffect()`` (verified below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Instant] {1}{G} — Put a +1/+1 counter on target creature
+         you control. It gains reach, trample, and indestructible
+         until end of turn. Untap it."
+
+    **Honest split (§2 — Effect-half closes byte-equal; the full
+    Instant auto-joins the spell-card-bridge admit set).** The new
+    Effect arm under test — ``Effect::BiosynthicBurstEffect`` — is
+    shipped this slice (Rust field-free UNIT variant + parse + to_dict
+    + resolve; the +1/+1 counter is the shipped
+    ``PutPlusOneCounterOnCreatureYouControl`` ``saturating_add``
+    scalar shape, the 3-keyword UEOT grant is the proven
+    ``GrantKeywordsToTargetCreatureUntilEOT`` ``GrantKeyword`` push
+    re-derived privately, untap is ``obj.tapped = false``), bridged
+    via ``cross_engine.py`` ``biosynthic_burst_effect`` to the
+    pre-existing Python ``BiosynthicBurstEffect``
+    (effects/bespoke.py:1466). The full Biosynthic Burst **Instant**
+    auto-joins the spell-card-bridge bench-admit set (pinned in
+    ``test_biosynthic_burst_auto_joins_spell_card_bridge_admit_set``)
+    — the lever's guardrail queries the LIVE covered set, no
+    hardcoded list. Mirrors the r51..r73 Effect-half precedent — see
+    ``docs/SEARCH_LIMITATIONS.md`` Biosynthic Burst entry.
+
+    **§2 controller-restricted scan pinned (the verified deviation).**
+    Python's ``legal_targets`` is ``o.controller_id ==
+    controller_id`` (effects/bespoke.py:1484) — UNLIKE Depressurize's
+    ANY-creature scan. The Rust arm walks ONLY the source-
+    controller's bf (the ``PutPlusOneCounterOnCreatureYouControl`` /
+    ``GrantKeywordsToTargetCreatureUntilEOT`` controller-only scan).
+    The probe seats an opponent creature on p1 that MUST stay
+    untouched on BOTH engines.
+
+    **Deterministic, no RNG.** p0 has a tapped 2/2 own creature + the
+    genuine Biosynthic Burst; p1 has an untouched 5/5. The WHOLE field
+    view is asserted byte-equal both post-resolve AND after the
+    cleanup-step UEOT drain (the round-39 SBA-on-0/0 class — the 3
+    keywords expire at cleanup on BOTH engines; the +1/+1 counter is
+    permanent).
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+        build_python_field_view, compare_fields,
+        advance_phase_python,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba, Step
+    from mtg_bot.effects.bespoke import BiosynthicBurstEffect
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = get_active_source().get_printings().get("Biosynthic Burst")
+    if real is None:
+        pytest.skip("Biosynthic Burst absent from active CardSource")
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, BiosynthicBurstEffect), (
+        f"genuine Biosynthic Burst spell_effect must be "
+        f"BiosynthicBurstEffect; got {type(se).__name__}"
+    )
+
+    def _cp(name, power, toughness):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=power, toughness=toughness, produces=frozenset(),
+        )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    ZB = 2
+
+    # p0 own TAPPED 2/2 target.
+    py_own = py.new_object(
+        _cp("BB Real Own", 2, 2), owner_id=0, zone=Zone.BATTLEFIELD)
+    py_own.summoning_sick = False
+    py_own.tapped = True
+    py.battlefield.append(py_own)
+    rs_own = rs.register_and_inject_object(
+        {"name": "BB Real Own", "card_types": ["Creature"],
+         "power": 2, "toughness": 2}, 0, ZB)
+    rs.tap_object(rs_own)
+
+    # p1 opponent 5/5 — must stay untouched (controller-restricted).
+    py_opp = py.new_object(
+        _cp("BB Real Opp", 5, 5), owner_id=1, zone=Zone.BATTLEFIELD)
+    py_opp.summoning_sick = False
+    py.battlefield.append(py_opp)
+    rs_opp = rs.register_and_inject_object(
+        {"name": "BB Real Opp", "card_types": ["Creature"],
+         "power": 5, "toughness": 5}, 1, ZB)
+
+    # Cast the genuine Biosynthic Burst on the own creature (Python:
+    # real spell_effect on a StackItem; Rust: the bridged synthetic
+    # Instant).
+    py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+    py_spell.summoning_sick = False
+    py.stack.append(
+        StackItem(source=py_spell, controller_id=0,
+                  targets=(("creature", py_own.id),))
+    )
+    resolve_top_of_stack(py)
+    py_sba(py)
+    assert len(py.stack) == 0
+
+    rs_spell = rs.register_and_inject_object(
+        {"name": "Biosynthic Burst", "card_types": ["Instant"],
+         "effects": [{"kind": "biosynthic_burst_effect"}]},
+        0, 0,
+    )
+    rs.push_to_stack(rs_spell, 0)
+    rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert rs.stack_size() == 0
+
+    # FULL byte-equal compare (no targeted-delta filter — the r70
+    # _net_counters fix makes the +1/+1-counter'd creature's
+    # signature compare honestly on BOTH engines). Asserts: own
+    # creature +1 counter / untapped / 3 UEOT keywords; opponent
+    # wholly untouched.
+    diffs = compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+    assert diffs == [], (
+        f"Biosynthic Burst post-resolve must be byte-equal across the "
+        f"WHOLE field view on BOTH engines; diffs={diffs}"
+    )
+    # Observable cross-checks (defense-in-depth on top of the full
+    # field byte-equality).
+    assert py_own.plus_one_counters == 1 and py_own.tapped is False
+    rs_own_e = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == rs_own)
+    assert rs_own_e["counters"] == 1 and rs_own_e["tapped"] is False
+    for kw in ("reach", "trample", "indestructible"):
+        assert rs.has_keyword(rs_own, kw) is True
+    # Opponent untouched on BOTH.
+    assert py_opp.plus_one_counters == 0
+    rs_opp_e = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == rs_opp)
+    assert rs_opp_e["counters"] == 0
+    assert rs.has_keyword(rs_opp, "indestructible") is False
+
+    # ---- Cleanup-step UEOT drain (the round-39 SBA-on-0/0 class).
+    # Advance both engines through turn-1 CLEANUP; the 3 keywords
+    # expire on BOTH; the +1/+1 counter is permanent; the WHOLE field
+    # view stays byte-equal.
+    safety = 25
+    n = 0
+    while rs.has_keyword(rs_own, "indestructible") and n < safety:
+        advance_phase_python(py)
+        rs.advance_phase()
+        n += 1
+    assert n < safety, (
+        "indestructible UEOT keyword never drained within "
+        f"{safety} advance_phase calls"
+    )
+    for kw in ("reach", "trample", "indestructible"):
+        assert rs.has_keyword(rs_own, kw) is False, (
+            f"{kw} must expire at cleanup on Rust (UEOT drain)"
+        )
+    diffs_post = compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+    assert diffs_post == [], (
+        f"Biosynthic Burst post-cleanup-UEOT-drain must stay "
+        f"byte-equal on BOTH engines (the keyword expiry + the "
+        f"permanent +1/+1 counter); diffs={diffs_post}"
+    )
+    rs_own_e2 = next(
+        x for x in rs.battlefield_snapshot() if x["id"] == rs_own)
+    assert rs_own_e2["counters"] == 1 and py_own.plus_one_counters == 1, (
+        "the +1/+1 counter survives the cleanup UEOT drain on BOTH"
     )
 
 

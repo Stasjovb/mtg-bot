@@ -3587,6 +3587,7 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
         DestroyTargetArtifactOrTappedCreature,
     )
     from mtg_bot.effects.bespoke import (
+        BiosynthicBurstEffect,
         DepressurizeEffect,
         SeedshipImpactEffect,
     )
@@ -3608,6 +3609,24 @@ def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
                 "kind": "depressurize_effect",
                 "power_penalty": int(eff.power_penalty),
             }
+        # Biosynthic Burst (Effect-uncovered Tier-A #6; round-74).
+        # Pid-FREE covered unit variant — Rust's ``parse_effect``
+        # ``"biosynthic_burst_effect"`` arm takes NO fields and the
+        # dict→Python bridge arm (cross_engine.py
+        # ``biosynthic_burst_effect``) constructs the field-free
+        # ``BiosynthicBurstEffect()``. No token pid → no
+        # :func:`_seat_token_printings` dependency (unlike Seedship /
+        # Orbital Plunge); the round-trip is trivially clean — emit
+        # the kind-only dict, exactly the
+        # ``destroy_target_artifact_or_tapped_creature`` unit-leaf
+        # idiom. Adding this leaf is what flips Biosynthic Burst into
+        # the spell-card-bridge admit set: with the Rust variant +
+        # bridge arm landed it is now covered+bridged AND round-trips
+        # here, so :func:`_printing_is_bridge_simple_spell` admits the
+        # ``{1}{G}`` single-target Instant (auto-grow, no hardcoded
+        # list — the §2 teeth).
+        if isinstance(eff, BiosynthicBurstEffect):
+            return {"kind": "biosynthic_burst_effect"}
         # Lander-pid spell effects (Seedship Impact / Orbital Plunge) —
         # the Lander-spell-token-seating sub-substrate (round-73; the
         # follow-on the round-70 SEARCH_LIMITATIONS seam scoped). Their

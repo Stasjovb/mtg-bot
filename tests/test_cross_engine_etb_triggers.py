@@ -21137,20 +21137,27 @@ def test_spell_card_lever_phase1_negative_pins_decline_set():
     # seat. Regenerable; auto-grows as each subsequent per-card Effect
     # closes — that growth IS the multiplier proof (NOT a static
     # card-name list). Post-Lander-spell-token-seating sub-substrate
-    # (round-73) that set is {Depressurize, Orbital Plunge, Radiant
-    # Strike, Seedship Impact}.
+    # (round-73) the set was {Depressurize, Orbital Plunge, Radiant
+    # Strike, Seedship Impact}; round-74 closed Tier-A #6 Biosynthic
+    # Burst (``BiosynthicBurstEffect`` unit variant + bridge +
+    # reverse-serializer leaf — pid-free, single-target, covered),
+    # which AUTO-JOINED via the §2 auto-grow teeth (the lever queries
+    # the LIVE covered set, NOT a hardcoded list — new-code-is-right
+    # per ``feedback_parity_new_code_is_right.md``; this guard's
+    # purpose is to be updated when a Tier-A close lands, NOT to
+    # forbid the growth it explicitly anticipates).
     admitted = sorted(
         n for n in src
         if trajectory._printing_is_bridge_simple_spell(src[n])
     )
     assert admitted == [
-        "Depressurize", "Orbital Plunge", "Radiant Strike",
-        "Seedship Impact",
+        "Biosynthic Burst", "Depressurize", "Orbital Plunge",
+        "Radiant Strike", "Seedship Impact",
     ], (
         f"Phase-1 admit set drifted: {admitted} (expected exactly the "
-        f"4 covered+bridged single-target Tier-A spells whose Effect "
+        f"5 covered+bridged single-target Tier-A spells whose Effect "
         f"close landed + whose Lander pid is now seatable; the set "
-        f"auto-grows further as Focus Fire / Biosynthic Burst close)")
+        f"auto-grows further as Focus Fire closes)")
 
 
 def test_bridge_lander_spell_token_seating_materialize_byte_equal():
@@ -21228,6 +21235,64 @@ def test_bridge_lander_spell_token_seating_materialize_byte_equal():
         assert rt.spell_effect is not None
         assert type(rt.spell_effect) is type(real.spell_effect)
         assert rt.card_types == (ctype,)
+
+
+def test_bridge_biosynthic_burst_basic_translation():
+    """Effect-uncovered Tier-A queue #6 — Biosynthic Burst. Rust
+    ``{"kind": "biosynthic_burst_effect"}`` (field-free unit
+    variant) translates to Python ``BiosynthicBurstEffect()``.
+    """
+    from mtg_bot.effects.bespoke import BiosynthicBurstEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "biosynthic_burst_effect"})
+    assert isinstance(e, BiosynthicBurstEffect)
+    assert e == BiosynthicBurstEffect()
+
+
+def test_bridge_biosynthic_burst_composable_in_sequence():
+    """Round-trip the unit bespoke arm through the recursive Sequence
+    translator (forward-compat with any Sequence-wrapped consumer).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.bespoke import BiosynthicBurstEffect
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "biosynthic_burst_effect"},
+                {"kind": "gain_life", "amount": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], BiosynthicBurstEffect)
+    assert isinstance(e.effects[1], GainLife)
+
+
+def test_bridge_biosynthic_burst_bidirectional_round_trip():
+    """Bridge pin: BOTH directions. The reverse serializer
+    ``trajectory._python_spell_effect_to_dict`` emits the kind-only
+    dict for ``BiosynthicBurstEffect()``; that dict round-trips back
+    through ``_ta_dict_to_python_effect`` to an equal
+    ``BiosynthicBurstEffect()``. The bidirectional arm is what lets
+    the spell-card-bridge lever's ``_printing_to_card_def`` reuse the
+    Python→dict sibling — a card flips to bench-admit only if its
+    per-card round shipped BOTH directions.
+    """
+    from mtg_bot.effects.bespoke import BiosynthicBurstEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+    from mtg_bot.parity.trajectory import _python_spell_effect_to_dict
+
+    fwd = _python_spell_effect_to_dict(BiosynthicBurstEffect())
+    assert fwd == {"kind": "biosynthic_burst_effect"}
+    back = _ta_dict_to_python_effect(fwd)
+    assert isinstance(back, BiosynthicBurstEffect)
+    assert back == BiosynthicBurstEffect()
 
 
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===

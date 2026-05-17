@@ -5988,6 +5988,135 @@ fn apply_effect(
                 }
             }
         }
+        // BiosynthicBurstEffect (Effect-uncovered Tier-A — Biosynthic
+        // Burst). Mirrors Python's `BiosynthicBurstEffect.resolve`
+        // (`effects/bespoke.py:1487`): own-creature target;
+        // `add_plus_one_counters(state, obj, 1)`;
+        // `ApplyEffect(GrantKeywords({reach,trample,indestructible}),
+        // EndOfTurn()).resolve(...)`; `obj.tapped = False`.
+        //
+        // **Controller-restricted scan (verified deviation, pinned).**
+        // Python's `legal_targets` IS controller-restricted
+        // (`o.controller_id == controller_id`, bespoke.py:1484) —
+        // UNLIKE `DepressurizeEffect` whose legal_targets is ANY
+        // creature. So this scan walks ONLY the source-controller's
+        // battlefield (the same controller-only first-creature scan
+        // `PutPlusOneCounterOnCreatureYouControl` `:7721` and
+        // `GrantKeywordsToTargetCreatureUntilEOT` `:10509` use), NOT
+        // both bfs via `bf_iter_etb_sorted`. `resolve` also re-guards
+        // `obj.controller_id == controller_id` after target
+        // selection — the scan already enforces it.
+        //
+        // **Counter shape (the established byte-equal mapping).** The
+        // +1/+1 counter is `obj.counters.saturating_add(1)` — the
+        // EXACT shape `PutPlusOneCounterOnCreatureYouControl` `:7780`
+        // uses. Python's `add_plus_one_counters` writes
+        // `obj.plus_one_counters`; the cross-engine bridge maps that
+        // to Rust's signed scalar `obj.counters` (cross_engine.py
+        // ~:1276 "mirrors Rust's scalar"). Python's
+        // counter-doubling-replacement / Terrasymbiosis observer
+        // fan-out is NOT replicated here — the proven sibling arm
+        // makes the identical simplification (no doubler / no
+        // counters-added trigger in the EoE pool); documented in
+        // `docs/SEARCH_LIMITATIONS.md`.
+        //
+        // **3-keyword UEOT grant (the proven push shape).** Re-derive
+        // the `GrantKeywordsToTargetCreatureUntilEOT` `:10559` push
+        // privately: for each of {reach, trample, indestructible}
+        // push `UeotModifier::GrantKeyword { keyword }` (lowercase,
+        // exactly as that arm does). That arm's continuous_effects ↔
+        // ueot_modifiers equivalence is already cross-engine-proven
+        // byte-equal (Python's `GrantKeywords` calls
+        // `state.add_continuous_effect(layer=6, kind="grant_keyword")`
+        // wrapped in `ApplyEffect(..., EndOfTurn())`; the harness
+        // proves the mapping). The UEOT keywords drain at the
+        // cleanup step on BOTH engines (the round-39 SBA-on-0/0
+        // class — indestructible protects THROUGH the end-of-turn
+        // SBA, then the keyword expires at cleanup; pinned).
+        Effect::BiosynthicBurstEffect => {
+            // Locate source controller (5-zone walk; identical to the
+            // `PutPlusOneCounterOnCreatureYouControl` /
+            // `GrantKeywordsToTargetCreatureUntilEOT` siblings).
+            let mut src_controller: Option<u8> = None;
+            'bb_outer: for player in &state.players {
+                for zone in [
+                    &player.hand,
+                    &player.library,
+                    &player.battlefield,
+                    &player.graveyard,
+                    &player.exile,
+                ] {
+                    if let Some(obj) =
+                        zone.iter().find(|o| o.id == source_obj_id)
+                    {
+                        src_controller = Some(obj.controller);
+                        break 'bb_outer;
+                    }
+                }
+            }
+            if src_controller.is_none() {
+                if let Some(item) = state
+                    .stack
+                    .iter()
+                    .find(|i| i.source_obj_id == source_obj_id)
+                {
+                    src_controller = Some(item.controller);
+                }
+            }
+            if let Some(controller) = src_controller {
+                let cidx = controller as usize;
+                // Pick first creature on the CONTROLLER's bf (the
+                // controller-restricted deviation — Python's
+                // legal_targets is controller-only).
+                let target_id: Option<u32> = {
+                    let bf = &state.players[cidx].battlefield;
+                    let registry = &state.registry;
+                    bf.iter().find_map(|obj| {
+                        let printing = registry
+                            .printings
+                            .get(obj.printing_id as usize)?;
+                        if printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            Some(obj.id)
+                        } else {
+                            None
+                        }
+                    })
+                };
+                if let Some(target_id) = target_id {
+                    let zone: &mut Vec<GameObject> = Arc::make_mut(
+                        &mut state.players[cidx].battlefield,
+                    );
+                    for obj in zone.iter_mut() {
+                        if obj.id == target_id {
+                            // +1/+1 counter (the established
+                            // saturating_add scalar shape).
+                            obj.counters =
+                                obj.counters.saturating_add(1);
+                            // 3-keyword UEOT grant (the proven
+                            // GrantKeyword push shape, lowercase).
+                            for kw in
+                                ["reach", "trample", "indestructible"]
+                            {
+                                obj.ueot_modifiers.push(
+                                    UeotModifier::GrantKeyword {
+                                        keyword: kw.to_string(),
+                                    },
+                                );
+                            }
+                            // Untap it.
+                            obj.tapped = false;
+                            break;
+                        }
+                    }
+                }
+                // No own creature → silent no-op (Python returns
+                // early on empty legal_targets / non-creature).
+            }
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared

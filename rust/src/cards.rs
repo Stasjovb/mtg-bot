@@ -1339,6 +1339,39 @@ pub enum Effect {
     /// `obj.ueot_power_bonus()` (which already includes the −pp just
     /// pushed). Python is the SoT; matching it is the rule.
     DepressurizeEffect { power_penalty: i32 },
+    /// **Effect-uncovered Tier-A — Biosynthic Burst.**
+    /// On the first creature the source-controller controls (Python's
+    /// `legal_targets` IS controller-restricted —
+    /// `o.controller_id == controller_id`, `effects/bespoke.py:1484`
+    /// — so this scan is controller-only, UNLIKE `DepressurizeEffect`
+    /// which is ANY-creature; verified deviation, pinned): add 1 to
+    /// `obj.counters` (the +1/+1 counter — the signed-i32 net-counter
+    /// field, the EXACT shape `PutPlusOneCounterOnCreatureYouControl`
+    /// `:7780` writes via `saturating_add`; the established byte-equal
+    /// Python `obj.plus_one_counters` ↔ Rust `obj.counters` mapping);
+    /// push a UEOT `GrantKeyword` modifier for each of
+    /// {reach, trample, indestructible} (the EXACT push shape the
+    /// proven `GrantKeywordsToTargetCreatureUntilEOT` arm `:10559`
+    /// uses — `obj.ueot_modifiers.push(UeotModifier::GrantKeyword)`,
+    /// lowercase; that arm's continuous-effect ↔ ueot_modifiers
+    /// equivalence is already cross-engine-proven byte-equal); set
+    /// `obj.tapped = false`. Atomic, one own target. Field-free unit
+    /// variant. Mirrors Python's `BiosynthicBurstEffect`
+    /// (`effects/bespoke.py:1466`): `add_plus_one_counters(state,
+    /// obj, 1)`; `ApplyEffect(GrantKeywords({reach,trample,
+    /// indestructible}), EndOfTurn()).resolve(...)`; `obj.tapped =
+    /// False`. Counter / multi-kw-UEOT-grant / untap are all shipped
+    /// primitives — this is the fused composite arm only.
+    ///
+    /// **§2 simplification (mirrors the proven sibling, NOT new
+    /// debt).** `PutPlusOneCounterOnCreatureYouControl` `:7780` ALSO
+    /// does a plain `saturating_add` and does NOT replicate Python's
+    /// `add_plus_one_counters` counter-doubling-replacement /
+    /// Terrasymbiosis observer-trigger fan-out (no doubler / no
+    /// "counters added to your creature" trigger exists in the EoE
+    /// pool). This arm follows that identical, already-cross-engine-
+    /// proven shape; documented in `docs/SEARCH_LIMITATIONS.md`.
+    BiosynthicBurstEffect,
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -5221,6 +5254,13 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 require(dict, "power_penalty")?.extract()?;
             Ok(Effect::DepressurizeEffect { power_penalty })
         }
+        "biosynthic_burst_effect" => {
+            // Effect-uncovered Tier-A — Biosynthic Burst. Unit
+            // variant; no fields (mirrors the
+            // `each_opponent_sacrifices_creature` field-free idiom).
+            // Python's `BiosynthicBurstEffect()` carries no fields.
+            Ok(Effect::BiosynthicBurstEffect)
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -7645,6 +7685,11 @@ pub(crate) fn effect_to_pydict<'py>(
         Effect::DepressurizeEffect { power_penalty } => {
             d.set_item("kind", "depressurize_effect")?;
             d.set_item("power_penalty", *power_penalty)?;
+        }
+        Effect::BiosynthicBurstEffect => {
+            // Unit variant — `kind` only (mirrors
+            // `each_opponent_sacrifices_creature`).
+            d.set_item("kind", "biosynthic_burst_effect")?;
         }
         Effect::DealDamageAnyTarget { amount } => {
             d.set_item("kind", "deal_damage_any_target")?;

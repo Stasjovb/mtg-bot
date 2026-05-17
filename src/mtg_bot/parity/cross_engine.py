@@ -8384,6 +8384,61 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return DepressurizeEffect(
             power_penalty=int(eff_dict.get("power_penalty", 3)),
         )
+    if kind == "biosynthic_burst_effect":
+        # **Effect-uncovered Tier-A — Biosynthic Burst.**
+        # Rust substrate ``Effect::BiosynthicBurstEffect`` (cards.rs
+        # field-free UNIT variant; parser ``"biosynthic_burst_effect"``
+        # — the ``each_opponent_sacrifices_creature`` unit-variant
+        # idiom; resolve in state_ops_resolve.rs beside the
+        # Depressurize arm).
+        #
+        # **Field shape.** Unit variant — no payload. Python's
+        # ``BiosynthicBurstEffect()`` (effects/bespoke.py:1466) is a
+        # field-free ``@dataclass(frozen=True)``; the bridge
+        # round-trips it directly (no token pid — this arm mints no
+        # token; pure counter + UEOT-keyword grant + untap on one own
+        # target).
+        #
+        # **Resolve semantics (parity-relevant).** Rust locates the
+        # source controller (5-zone walk) then picks the FIRST creature
+        # on the CONTROLLER's battlefield (controller-restricted — the
+        # verified deviation from Depressurize's ANY-creature scan;
+        # Python's ``legal_targets`` is ``o.controller_id ==
+        # controller_id``, bespoke.py:1484), then: (1) ``obj.counters
+        # += 1`` — the +1/+1 counter via ``saturating_add``, the EXACT
+        # shape ``PutPlusOneCounterOnCreatureYouControl`` uses (Python's
+        # ``add_plus_one_counters`` writes ``obj.plus_one_counters``;
+        # the established byte-equal Python↔Rust scalar mapping); (2)
+        # push a UEOT ``GrantKeyword`` modifier for each of
+        # {reach, trample, indestructible} — the EXACT push the proven
+        # ``GrantKeywordsToTargetCreatureUntilEOT`` arm uses (its
+        # continuous_effects↔ueot_modifiers equivalence is already
+        # cross-engine-proven byte-equal); (3) ``obj.tapped = False``.
+        # The UEOT keywords drain at the cleanup step on BOTH engines.
+        #
+        # **§2 simplification (mirrors the proven sibling, NOT new
+        # debt).** Python's ``add_plus_one_counters`` also applies
+        # counter-doubling replacement effects + fires Terrasymbiosis
+        # "counters added to your creature" observer triggers. The Rust
+        # arm — exactly like its already-cross-engine-proven sibling
+        # ``PutPlusOneCounterOnCreatureYouControl`` — does a plain
+        # ``saturating_add`` only. No counter-doubler / no
+        # counters-added trigger exists in the EoE pool, so the
+        # simplification is bit-equal on the real pool; documented in
+        # ``docs/SEARCH_LIMITATIONS.md``.
+        #
+        # **Honest Effect-half split (§2).** The Effect closes + is
+        # genuinely probed (counter + 3-kw-UEOT + untap composite,
+        # byte-equal incl. the cleanup-step UEOT expiry). The full
+        # Biosynthic Burst **Instant** auto-joins the spell-card-bridge
+        # admit set (the lever's guardrail queries the LIVE covered set
+        # — adding this Effect makes the printing covered+bridged AND
+        # the Python→dict reverse serializer
+        # (``trajectory._python_spell_effect_to_dict``) recognizes it,
+        # so ``_printing_is_bridge_simple_spell`` flips it to
+        # bench-admit; the guardrail auto-grows, no hardcoded list).
+        from mtg_bot.effects.bespoke import BiosynthicBurstEffect
+        return BiosynthicBurstEffect()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
