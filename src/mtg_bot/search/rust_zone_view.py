@@ -219,19 +219,38 @@ class RustZoneView:
         # players ordered by etb_timestamp (CE4) — exactly the
         # Python ``state.battlefield`` centralized append-order the
         # codec's ``_own_battlefield`` / ``_own_creatures`` /
-        # ``_own_spacecraft`` filter on ``controller_id`` / order
-        # (the S2 priority-window codec slots: ActivateAbility /
-        # UnlockRoomHalf / ActivateStation — none of which read
-        # ``.attacking``). ``object_to_pydict`` does NOT carry
-        # ``attacking`` (verified live, state_ops_snapshot.rs:68); the
-        # codec's only ``.attacking`` reader is ``_attacking_creatures``
-        # on the COMBAT-slot path, which is the B3-S3 factored-combat
-        # provider's scope (S3 derives the attacking set from the Rust
-        # combat state). For the S2 priority-window axis ``attacking``
-        # is unread, so leaving it ``False`` here is exact for S2's
-        # scope and is refined by S3.
+        # ``_own_spacecraft`` / ``_attacking_creatures`` filter on.
+        #
+        # B3-S3: ``object_to_pydict`` does NOT carry ``attacking``
+        # (verified live, state_ops_snapshot.rs:68); the codec's
+        # ``_attacking_creatures(eng)`` (the BlockerDecision-slot
+        # path) reads ``o.attacking``. We derive the declared-attacker
+        # set from the Rust combat state via ``get_attackers()``
+        # (``state_ops_combat.rs:837`` — the Vec the active player
+        # committed during DECLARE_ATTACKERS) and stamp ``attacking``
+        # on the matching battlefield cards. ``_attacking_creatures``
+        # then sorts them by id (its own convention), so this is
+        # byte-identical to the Python adapter's
+        # ``[o for o in battlefield if o.attacking]`` source for the
+        # codec's blocker-slot encode.
+        try:
+            attacker_ids = set(int(i) for i in self._rust.get_attackers())
+        except Exception:
+            # Defensive: if the combat accessor is unavailable for a
+            # given build, fall back to no-attackers (the S2
+            # priority-window axis never reads .attacking). Never a
+            # silent wrong-slot — _attacking_creatures would just be
+            # empty, and the BlockerDecision encode path raises
+            # EncodingOverflowError loudly (codec contract) rather
+            # than mis-slotting.
+            attacker_ids = set()
         for d in self._rust.battlefield_snapshot():
-            self._battlefield.append(self._card(dict(d)))
+            dd = dict(d)
+            self._battlefield.append(
+                self._card(
+                    dd, attacking=(int(dd["id"]) in attacker_ids)
+                )
+            )
 
     # ---- the codec-facing surface ------------------------------------
 

@@ -613,4 +613,55 @@ impl GameState {
         }
         false
     }
+
+    /// **B3-pre-EXT (the determinizer-via-Rust write half).** Set the
+    /// `printing_id` of the object with id `obj_id`, searching all
+    /// five tracked zones across both players. Returns `True` on
+    /// success, `False` if no object with that id exists.
+    ///
+    /// This is the Rust analog of the Python determinizer's
+    /// `card.printing = new_printing` reassignment
+    /// (`src/mtg_bot/search/determinize.py:155-157`). Determinization
+    /// is a **hidden-information sampling** operation, NOT a rules
+    /// operation: it re-labels which printing each hidden-zone
+    /// `GameObject` carries within its owner's pool, preserving
+    /// zones / ids / owners / per-zone counts. No rules logic — pure
+    /// state extraction (the spec §3.4 "bounded Rust read+write
+    /// extraction surface, NOT rules logic"). The epistemic
+    /// `viewer_knows` policy stays Python (it is the hidden-info
+    /// model, not engine rules); this is only the data-plumbing
+    /// write the Python policy drives.
+    ///
+    /// CoW-safe: the zone mutation goes through `Arc::make_mut`, so
+    /// cloning a `GameState` then calling this on the clone leaves
+    /// the source state's zone Vecs untouched — exactly the
+    /// `move_object` CoW pattern. PIMC clones the provider then
+    /// determinizes the clone in place; this keeps the source
+    /// god-view state pristine across successive samples.
+    fn set_object_printing_id(
+        &mut self,
+        obj_id: u32,
+        new_printing_id: u32,
+    ) -> PyResult<bool> {
+        for player in self.players.iter_mut() {
+            for zone in [
+                &mut player.hand,
+                &mut player.library,
+                &mut player.battlefield,
+                &mut player.graveyard,
+                &mut player.exile,
+            ] {
+                if zone.iter().any(|o| o.id == obj_id) {
+                    let z = Arc::make_mut(zone);
+                    for obj in z.iter_mut() {
+                        if obj.id == obj_id {
+                            obj.printing_id = new_printing_id;
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
 }
