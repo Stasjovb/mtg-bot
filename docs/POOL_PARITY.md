@@ -123,7 +123,32 @@ _Context (NOT drift): 3 `blocked_non_effect` card(s) have covered/probed Effects
 
 ## BLOCKED — subsystem-gated / Effect-uncovered (169)
 
-The long blocked tail (not itemised in the residue worklist). First 60 shown for auditability; the full set is regenerable from the script:
+The long blocked tail (not itemised in the residue worklist). Round-58 N2 broke this **opaque single bucket** out by gating subsystem so it is the data-driven "which subsystem next" instrument, not one number — see `docs/SUBSYSTEM_ROADMAP.md` for the leverage analysis + recommended sequencing. A card may be **multi-gated** (counted under every gate it trips, so `#cards` does NOT sum to the tier total); `1gate` is the single-gated count (closing that one subsystem flips the card) and reconciles exactly. `decks(1g)` is the cumulative 17lands deck-count of the single-gated members — the honest leverage signal.
+
+| Subsystem | #cards | 1gate | multi | decks(tot) | decks(1g) | Tractability |
+|---|---:|---:|---:|---:|---:|---|
+| BECOMES_TAPPED event (unbridged) | 2 | 0 | 2 | 19,021 | 0 | contained |
+| Non-basic land substrate | 23 | 23 | 0 | 34,575 | 34,575 | medium |
+| Cost-reduction substrate | 5 | 5 | 0 | 53,648 | 53,648 | medium |
+| warp_cost (declined cost-mechanic) | 10 | 3 | 7 | 61,645 | 15,436 | medium |
+| Dynamic-P/T formula (layer 7 CDA) | 3 | 2 | 1 | 20,413 | 5,478 | medium |
+| Ward (declined cost-mechanic) | 1 | 0 | 1 | 14,935 | 0 | medium |
+| Kicker / Impending cost | 1 | 0 | 1 | 6,090 | 0 | medium |
+| Static / layered abilities | 15 | 8 | 7 | 55,577 | 34,526 | sprawling |
+| Aura-attachment substrate | 7 | 4 | 3 | 3,416 | 633 | sprawling |
+| Station / Spacecraft | 9 | 1 | 8 | 54,095 | 5,938 | sprawling |
+| Rooms / doors | 3 | 0 | 3 | 0 | 0 | sprawling |
+| Planeswalker loyalty | 1 | 0 | 1 | 2,311 | 0 | sprawling |
+| Carrier activated abilities | 35 | 0 | 35 | 53,689 | 0 | sprawling |
+| Effect-uncovered (no covered Rust counterpart) | 115 | 31 | 84 | 521,045 | 267,804 | diffuse |
+| Unclassified (honest residual — needs hand re-walk) | 2 | 2 | 0 | 12 | 12 | diffuse |
+| Non-safe triggered ability (unbridged event/shape) | 54 | 0 | 54 | 194,640 | 0 | diffuse |
+
+**Reconciliation:** 169 subsystem-gated = 79 single-gated + 90 multi-gated; the per-subsystem `1gate` column sums to 79 (== single-gated total). The breakout partitions exactly the same 169 cards the opaque tier count above reports (this metric reuses `classify_pool` verbatim — same tier, same pool); the headline is unchanged, only the BLOCKED-tail detail is itemised.
+
+**Honest unclassified bucket (2):** `Deafening Silence`, `Leyline of Mutation` — no taxonomy gate fired; flagged for a hand re-walk rather than force-guessed (see `docs/SUBSYSTEM_ROADMAP.md`).
+
+Full card list (first 60 shown for auditability; the full set + per-card gate attribution is regenerable from `scripts/scout_r58_subsystem_attribution.py`):
 
 - Abandoned Campground
 - Adagia, Windswept Bastion
