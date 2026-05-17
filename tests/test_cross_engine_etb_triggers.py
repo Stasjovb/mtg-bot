@@ -20662,5 +20662,100 @@ def test_bridge_seedship_impact_effect_composable_in_sequence():
     assert isinstance(e.effects[1], GainLife)
 
 
+def test_bridge_orbital_plunge_basic_translation_amount_6():
+    """Effect-uncovered Tier-A queue #3 — Orbital Plunge. Rust
+    ``{"kind": "deal_damage_to_target_creature_with_excess_lander_
+    rider", "amount": 6, "token_printing_id": N}`` translates to
+    Python ``DealDamageToTargetCreatureWithExcessLanderRider(
+    amount=6)`` — the Rust-side Lander pid is DROPPED (Python's class
+    mints intrinsically from TOKEN_PRINTINGS["Lander"]).
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToTargetCreatureWithExcessLanderRider,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_target_creature_with_excess_lander_rider",
+         "amount": 6, "token_printing_id": 42}
+    )
+    assert isinstance(e, DealDamageToTargetCreatureWithExcessLanderRider)
+    assert e.amount == 6
+
+
+def test_bridge_orbital_plunge_amount_rides_through():
+    """Bridge arm pin: the ``amount`` field rides through (not
+    hard-coded to 6); a non-6 amount round-trips faithfully so a
+    future reprint at a different damage value stays correct.
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToTargetCreatureWithExcessLanderRider,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_target_creature_with_excess_lander_rider",
+         "amount": 9, "token_printing_id": 1}
+    )
+    assert e.amount == 9
+
+
+def test_bridge_orbital_plunge_pid_dropped_equality():
+    """Bridge arm pin: the translated effect equals a directly-
+    constructed ``DealDamageToTargetCreatureWithExcessLanderRider(
+    amount=6)`` regardless of the Rust ``token_printing_id`` — the
+    pid is a Rust-registry carrier with no Python mirror, so two
+    different pids round-trip to EQUAL Python effects.
+    """
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToTargetCreatureWithExcessLanderRider,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e1 = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_target_creature_with_excess_lander_rider",
+         "amount": 6, "token_printing_id": 7}
+    )
+    e2 = _ta_dict_to_python_effect(
+        {"kind": "deal_damage_to_target_creature_with_excess_lander_rider",
+         "amount": 6, "token_printing_id": 999}
+    )
+    assert (
+        e1 == e2
+        == DealDamageToTargetCreatureWithExcessLanderRider(amount=6)
+    )
+
+
+def test_bridge_orbital_plunge_composable_in_sequence():
+    """Round-trip the bespoke arm through the recursive Sequence
+    translator (forward-compat with any Sequence-wrapped consumer).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.damage import (
+        DealDamageToTargetCreatureWithExcessLanderRider,
+    )
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": ("deal_damage_to_target_creature_"
+                          "with_excess_lander_rider"),
+                 "amount": 6, "token_printing_id": 3},
+                {"kind": "gain_life", "amount": 2},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(
+        e.effects[0], DealDamageToTargetCreatureWithExcessLanderRider
+    )
+    assert e.effects[0].amount == 6
+    assert isinstance(e.effects[1], GainLife)
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

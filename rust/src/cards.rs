@@ -1272,6 +1272,42 @@ pub enum Effect {
     /// (file-iso) — do NOT cross-import the `Effect::CreateToken`
     /// arm.
     SeedshipImpactEffect { token_printing_id: u32 },
+    /// **Effect-uncovered Tier-A — Orbital Plunge (Lander-rider).**
+    /// Deal `amount` damage to the first targetable creature (the
+    /// IsCreature TargetSpec; deterministic first-creature scan over
+    /// BOTH battlefields in ETB-timestamp order, matching Python's
+    /// centralized `state.battlefield` walk + the
+    /// `_slot_target_still_legal` re-check). If excess damage was
+    /// dealt — `excess = max(0, amount − max(0, eff_tough −
+    /// damage_already_marked))`, evaluated AT RESOLVE *before* the
+    /// damage is added — create one Lander token under the source's
+    /// controller. Mirrors Python's
+    /// `DealDamageToTargetCreatureWithExcessLanderRider`
+    /// (`effects/generic/damage.py:327`). Lifelink/deathtouch NOT
+    /// modeled (Python parity — same documented simplification).
+    /// `amount` (6 for Orbital Plunge) is the only damage payload;
+    /// `token_printing_id` is the Lander's Rust registry index (the
+    /// same pid-carrier deviation as `SeedshipImpactEffect` — Rust
+    /// has no intrinsic Lander; Python's class is field-free + mints
+    /// from `TOKEN_PRINTINGS["Lander"]`; the bridge drops the pid).
+    ///
+    /// **§2 counters-asymmetry (load-bearing).** Python's
+    /// `effective_toughness` (`game._compute_effective_pt`) FOLDS
+    /// `+1/+1` counters (CR 613 layer 7d). Rust's combat-side
+    /// `effective_toughness` getter deliberately does NOT (the
+    /// `state_ops_combat.rs` asymmetry note), but the SBA-side lethal
+    /// check (`state_ops_sba.rs::collect_sba_victims`) DOES via
+    /// `base_toughness + obj.counters + obj.ueot_toughness_bonus()`.
+    /// To stay byte-equal with the Python source of truth, THIS arm
+    /// computes the remaining-lethal denominator with the
+    /// counters-INCLUSIVE formula (re-derived privately per the
+    /// file-isolation rule — base override OR printed toughness, plus
+    /// `obj.counters`, plus `ueot_toughness_bonus()`), NOT the
+    /// combat-side getter. Python is the SoT; matching it is the rule.
+    DealDamageToTargetCreatureWithExcessLanderRider {
+        amount: i32,
+        token_printing_id: u32,
+    },
     /// Deal `amount` damage to any target — creature OR player
     /// (Lightning Bolt pattern, CR 701.4). 7 cards in EoE pool per
     /// round-20 measurement (Debris Field Crusher etc.). Mirrors
@@ -5126,6 +5162,23 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
                 require(dict, "token_printing_id")?.extract()?;
             Ok(Effect::SeedshipImpactEffect { token_printing_id })
         }
+        "deal_damage_to_target_creature_with_excess_lander_rider" => {
+            // Effect-uncovered Tier-A — Orbital Plunge (Lander-rider).
+            // Two-field payload: `amount` (damage; 6 for Orbital
+            // Plunge) + the Lander's `token_printing_id` (registry
+            // index — the same pid-carrier shape as
+            // `seedship_impact_effect`; Rust has no intrinsic Lander,
+            // Python's class is field-free and the bridge drops the
+            // pid). Mirrors the `deal_damage_any_target` + the
+            // `create_token` parse arms.
+            let amount: i32 = require(dict, "amount")?.extract()?;
+            let token_printing_id: u32 =
+                require(dict, "token_printing_id")?.extract()?;
+            Ok(Effect::DealDamageToTargetCreatureWithExcessLanderRider {
+                amount,
+                token_printing_id,
+            })
+        }
         "deal_damage_any_target" => {
             // Python's `DealDamageAnyTarget(DealDamage)` carries the
             // inherited `amount` field plus an `optional: bool` slot
@@ -7534,6 +7587,17 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::SeedshipImpactEffect { token_printing_id } => {
             d.set_item("kind", "seedship_impact_effect")?;
+            d.set_item("token_printing_id", *token_printing_id)?;
+        }
+        Effect::DealDamageToTargetCreatureWithExcessLanderRider {
+            amount,
+            token_printing_id,
+        } => {
+            d.set_item(
+                "kind",
+                "deal_damage_to_target_creature_with_excess_lander_rider",
+            )?;
+            d.set_item("amount", *amount)?;
             d.set_item("token_printing_id", *token_printing_id)?;
         }
         Effect::DealDamageAnyTarget { amount } => {

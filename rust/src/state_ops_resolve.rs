@@ -5684,6 +5684,178 @@ fn apply_effect(
                 }
             }
         }
+        // DealDamageToTargetCreatureWithExcessLanderRider
+        // (Effect-uncovered Tier-A — Orbital Plunge, Lander-rider).
+        // Mirrors Python's
+        // `DealDamageToTargetCreatureWithExcessLanderRider.resolve`
+        // (`effects/generic/damage.py:357`): pick the target creature
+        // (IsCreature slot; deterministic-first scan over BOTH
+        // battlefields in ETB-timestamp order — Python's centralized
+        // `state.battlefield` walk + `_slot_target_still_legal`
+        // re-check, the established no-callback first-creature
+        // campaign convention); compute `remaining = max(0,
+        // effective_toughness − obj.damage)` and `excess = max(0,
+        // amount − remaining)` BEFORE applying damage; apply `amount`
+        // via `obj.damage.saturating_add`; if `excess > 0` create one
+        // Lander under the source's controller. Lifelink/deathtouch
+        // NOT modeled (Python parity — the documented simplification).
+        //
+        // **§2 counters-asymmetry (load-bearing, the mini-spec risk).**
+        // Python's `effective_toughness` folds `+1/+1` counters (CR
+        // 613 layer 7d). The combat-side Rust getter deliberately does
+        // NOT, but the SBA lethal check DOES via `base + obj.counters
+        // + ueot_toughness_bonus()`. To stay byte-equal with the
+        // Python SoT, the remaining-lethal denominator here is
+        // computed with the counters-INCLUSIVE formula re-derived
+        // privately (file-iso): `base = ueot_base_pt_override().t OR
+        // printed_toughness`, then `+ obj.counters +
+        // obj.ueot_toughness_bonus()` — the exact
+        // `state_ops_sba.rs::collect_sba_victims` shape. Pinned by a
+        // +1/+1-counter'd target so a wrong accessor can't silently
+        // diverge the excess.
+        Effect::DealDamageToTargetCreatureWithExcessLanderRider {
+            amount,
+            token_printing_id,
+        } => {
+            if *amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "DealDamageToTargetCreatureWithExcessLanderRider \
+                     amount must be non-negative, got {amount}"
+                )));
+            }
+            let lander_pid: u32 = *token_printing_id;
+            if state.registry.lookup(lander_pid).is_none() {
+                return Err(PyValueError::new_err(format!(
+                    "DealDamageToTargetCreatureWithExcessLanderRider \
+                     token_printing_id {lander_pid} not in registry"
+                )));
+            }
+            let dmg: i32 = *amount;
+            // Target = first creature in ETB-timestamp order across
+            // BOTH bfs (the IsCreature TargetSpec; Python's
+            // `state.battlefield` centralized walk + the
+            // deterministic-first no-callback convention).
+            let target: Option<(usize, u32)> =
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find_map(|obj| {
+                        let printing =
+                            state.registry.lookup(obj.printing_id)?;
+                        if printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            Some((obj.controller as usize, obj.id))
+                        } else {
+                            None
+                        }
+                    });
+            if let Some((pidx, target_id)) = target {
+                // Compute excess BEFORE mutating damage. Counters-
+                // inclusive effective toughness (the Python-SoT view —
+                // collect_sba_victims shape; NOT the combat-side
+                // getter which omits counters).
+                let (eff_tough, prior_damage): (i32, i32) = {
+                    let obj = state.players[pidx]
+                        .battlefield
+                        .iter()
+                        .find(|o| o.id == target_id)
+                        .expect("target_id from scan but not found");
+                    let printing = state
+                        .registry
+                        .lookup(obj.printing_id)
+                        .expect("scanned printing must resolve");
+                    let printed_t = printing.toughness.unwrap_or(0) as i32;
+                    let base_t = obj
+                        .ueot_base_pt_override()
+                        .map(|(_, t)| t)
+                        .unwrap_or(printed_t);
+                    let eff = base_t
+                        + obj.counters
+                        + obj.ueot_toughness_bonus();
+                    (eff, obj.damage as i32)
+                };
+                let remaining: i32 = (eff_tough - prior_damage).max(0);
+                let excess: i32 = (dmg - remaining).max(0);
+                // Apply `amount` damage (DealDamageAnyTarget shape:
+                // saturating_add into the i16 damage field).
+                let dmg_i16 = dmg.min(i16::MAX as i32) as i16;
+                {
+                    let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                        &mut state.players[pidx].battlefield,
+                    );
+                    for o in bf_mut.iter_mut() {
+                        if o.id == target_id {
+                            o.damage = o.damage.saturating_add(dmg_i16);
+                            break;
+                        }
+                    }
+                }
+                // Conditional Lander rider: only when excess damage
+                // was dealt (CR 120.10 — at-resolve excess, NO
+                // damaged-this-turn ledger; the Faller's-r57 lesson).
+                if excess > 0 {
+                    // Source-controller seat (CR 111.4). The in-tree
+                    // stack resolver sets
+                    // `current_resolve_source_controller`; fall back
+                    // to active_player (back-compat for direct
+                    // apply_effect_pub callers).
+                    let recipient: u8 = state
+                        .current_resolve_source_controller
+                        .unwrap_or(state.active_player);
+                    // Fresh-id allocator: max id across every zone on
+                    // both players + 1 (verbatim CreateToken shape).
+                    let mut max_id: u32 = 0;
+                    let mut found_any = false;
+                    for player in &state.players {
+                        for zone in [
+                            &player.hand,
+                            &player.library,
+                            &player.battlefield,
+                            &player.graveyard,
+                            &player.exile,
+                        ] {
+                            for o in zone.iter() {
+                                if !found_any || o.id > max_id {
+                                    max_id = o.id;
+                                    found_any = true;
+                                }
+                            }
+                        }
+                    }
+                    let new_id: u32 =
+                        if found_any { max_id + 1 } else { 0 };
+                    let tok_etb = state.next_etb_timestamp;
+                    state.next_etb_timestamp =
+                        state.next_etb_timestamp.saturating_add(1);
+                    let bf: &mut Vec<GameObject> = Arc::make_mut(
+                        &mut state.players[recipient as usize]
+                            .battlefield,
+                    );
+                    bf.push(GameObject {
+                        id: new_id,
+                        printing_id: lander_pid,
+                        controller: recipient,
+                        zone: ZONE_BATTLEFIELD,
+                        tapped: false,
+                        summoning_sick: true,
+                        damage: 0,
+                        counters: 0,
+                        charge_counters: 0,
+                        loyalty_counters: 0,
+                        attached_to: None,
+                        exiled_with_source: None,
+                        stun_counters: 0,
+                        etb_timestamp: tok_etb,
+                        ueot_modifiers: Vec::new(),
+                        warp_exile_pending: false,
+                        warped: false,
+                    });
+                    state.pending_etb_dispatches.push(new_id);
+                }
+            }
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared
