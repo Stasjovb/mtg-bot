@@ -5713,6 +5713,179 @@ def test_r57_real_cross_shape_multi_archetype_no_registry_conflict():
         clear_token_printings()
 
 
+def test_r74_3_advance_phase_python_expires_ueot_pt_at_cleanup():
+    """Round-74 R74-3 pin: the bench harness's ``advance_phase_python``
+    CLEANUP arm must expire UEOT P/T modifiers, matching Rust's
+    ``advance_phase`` -> ``cleanup_step_for_active_player_inline`` step
+    (3) ``obj.ueot_modifiers.clear()`` (CR 514.3).
+
+    Pre-fix, ``advance_phase_python``'s CLEANUP arm inlined ONLY the
+    CR-514.1 hand-size discard + CR-514.2 damage clear, on a now-false
+    in-code premise that Rust's ``advance_phase`` does NOT do UEOT
+    expiration. Rust's ``cleanup_step_for_active_player_inline``
+    (``rust/src/state_ops_steps.rs``) DOES: step (3) clears every
+    battlefield permanent's ``ueot_modifiers`` on both battlefields.
+    So a UEOT P/T debuff — e.g. Depressurize's ``-3/-0 until end of
+    turn`` — leaked across the turn boundary FOREVER on the harness's
+    Python side while Rust correctly expired it: a HARNESS-induced
+    Python-vs-Rust asymmetry (Rust correct, harness wrong; the core
+    ``turn.run_cleanup_step`` clears it correctly — the bench's phase
+    driver just never called it).
+
+    Surfaced by the FIRST post-spell-admit broad bench sweep (round-74,
+    Depressurize joining the bench-admit set is the first card that
+    places a cross-turn-surviving UEOT P/T modifier; latent until
+    then). Documented minimal repro:
+    ``bench_trajectory_parity --archetype 52329 --seed 7`` — turn 18
+    P1 casts Depressurize on Icecave Crasher (-3/-0 UEOT); turn-19
+    combat the Python harness still applied ``temp_power_bonus=-3``
+    (the debuff leaked) while Rust's ``effective_power`` was correct,
+    flipping ``is_over,winner_id,life_p1``.
+
+    Post-fix the harness CLEANUP arm runs the SAME two-call shape
+    ``turn.run_cleanup_step`` uses (``expire_continuous_effects
+    ("cleanup")`` + the per-object ``temp_power_bonus`` /
+    ``temp_toughness_bonus`` zeroing) so the modifier expires at
+    turn-18 cleanup IDENTICALLY to Rust — and the documented repro
+    runs to a clean ``PASS`` (no divergence). See
+    ``docs/bench_trajectory_parity_smoke.md`` round-74 R74-3.
+    """
+    import sys
+    import pathlib
+
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.parity import trajectory
+
+    # The bench driver lives under scripts/ and lazily imports
+    # `tests.parity._picker_shims`; under pytest the repo root is on
+    # sys.path so that resolves. scripts/ must be importable too.
+    _repo = pathlib.Path(__file__).resolve().parent.parent
+    _scripts = _repo / "scripts"
+    if str(_scripts) not in sys.path:
+        sys.path.insert(0, str(_scripts))
+    import bench_trajectory_parity as bench  # noqa: E402
+
+    pr = get_active_source().get_printings()
+    if pr.get("Depressurize") is None:
+        pytest.skip("Depressurize absent from active CardSource")
+
+    R74_3_ARCH, R74_3_SEED = 52329, 7  # documented minimal repro
+    try:
+        deck_names = trajectory.load_production_deck(archetype=R74_3_ARCH)
+    except (FileNotFoundError, IndexError):
+        pytest.skip(
+            "17lands deck pool unavailable for archetype 52329"
+        )
+    assert "Depressurize" in deck_names, (
+        "archetype 52329 must carry Depressurize (round-74 R74-3 "
+        "scout — the UEOT -3/-0 carrier)"
+    )
+
+    result = bench.drive_one_game(
+        archetype=R74_3_ARCH,
+        seed=R74_3_SEED,
+        max_turns=120,  # the round-72 cap-120 default
+        combat_strategy="attack_all",
+        mulligans=0,
+    )
+
+    # Pre-fix this was FAIL_DIVERGENCE at turn 19 with field shape
+    # ``is_over,winner_id,life_p1`` (the harness leaked the UEOT
+    # debuff across the turn boundary). Post-fix it must run to a
+    # clean natural game end — Python's harness phase driver now
+    # expires the UEOT modifier at turn-18 cleanup exactly as Rust's
+    # advance_phase already did.
+    assert result.status == "PASS", (
+        f"R74-3 repro (archetype {R74_3_ARCH}, seed {R74_3_SEED}) "
+        f"must PASS post-fix; got status={result.status!r} "
+        f"divergence_turn={result.divergence_turn} "
+        f"kind={result.divergence_kind!r} "
+        f"fields={result.divergence_fields!r} "
+        f"exc={result.exception_type!r}:{result.exception_message!r}. "
+        f"A non-PASS here means advance_phase_python's CLEANUP arm is "
+        f"NOT expiring UEOT P/T modifiers in lock-step with Rust's "
+        f"cleanup_step_for_active_player_inline (CR 514.3)."
+    )
+
+
+def test_r74_3_advance_phase_python_clears_temp_pt_and_cleanup_registry():
+    """Round-74 R74-3 unit pin: ``advance_phase_python``'s CLEANUP-entry
+    transition zeros every battlefield permanent's
+    ``temp_power_bonus`` / ``temp_toughness_bonus`` AND drops every
+    ``expires_at="cleanup"`` continuous-effect registry entry — the
+    Python analog of Rust ``cleanup_step_for_active_player_inline``
+    step (3) ``obj.ueot_modifiers.clear()``.
+
+    Drives a minimal 2-player state to the END step, applies a
+    Depressurize-shaped UEOT ``-3/-0`` via the production
+    ``state.grant_pt_pump_ueot`` write-through helper (registry entry
+    tagged ``expires_at="cleanup"`` + mirrored ``temp_power_bonus``
+    field — exactly what ``DepressurizeEffect.resolve`` does), then
+    advances END -> CLEANUP and asserts BOTH the field cache and the
+    registry entry are gone. Guards the fix at the unit level (no
+    17lands pool / Rust dependency) so a regression is caught even if
+    the deck pool is unavailable.
+    """
+    from mtg_bot.parity.cross_engine import advance_phase_python
+    from mtg_bot.turn import Step
+    from mtg_bot.parity import trajectory
+
+    py_state, _rust = trajectory.setup_matched_game_from_real_decks(
+        ["Forest"] * 40, shared_rng_seed=1,
+    )
+    # Seat a stable GameObject (taken from the active player's
+    # library) onto p0's battlefield to host the UEOT modifier.
+    ap = py_state.player_by_id(py_state.active_player_idx)
+    victim = ap.library[0]
+    ap.library.remove(victim)
+    py_state.battlefield.append(victim)
+    victim.controller_id = ap.id
+
+    # Drive to the END step so the next advance enters CLEANUP.
+    while py_state.step != Step.END:
+        advance_phase_python(py_state)
+        if py_state.turn_number > 3:
+            pytest.fail("could not reach END step within 3 turns")
+
+    # Apply a Depressurize-shaped UEOT -3/-0 (the production helper).
+    src_id = victim.id
+    py_state.grant_pt_pump_ueot(
+        source_id=src_id, target_id=victim.id,
+        power=-3, toughness=0, description="R74-3 unit -3/-0 UEOT",
+    )
+    assert victim.temp_power_bonus == -3, (
+        "precondition: grant_pt_pump_ueot must mirror the delta onto "
+        "the temp_power_bonus write-through field"
+    )
+    assert any(
+        ce.expires_at == "cleanup" for ce in py_state.continuous_effects
+    ), (
+        "precondition: grant_pt_pump_ueot must register a "
+        'expires_at="cleanup" continuous-effect entry'
+    )
+
+    # END -> CLEANUP: the fixed arm must expire BOTH halves.
+    new_phase = advance_phase_python(py_state)
+    assert py_state.step == Step.CLEANUP, (
+        f"END advance must land on CLEANUP; got {py_state.step!r} "
+        f"(phase int {new_phase})"
+    )
+    assert victim.temp_power_bonus == 0 and victim.temp_toughness_bonus == 0, (
+        f"R74-3: advance_phase_python CLEANUP arm must zero the "
+        f"temp_power_bonus/temp_toughness_bonus write-through cache "
+        f"(the effective_power read path); got "
+        f"({victim.temp_power_bonus}, {victim.temp_toughness_bonus})"
+    )
+    assert not any(
+        ce.expires_at == "cleanup" for ce in py_state.continuous_effects
+    ), (
+        "R74-3: advance_phase_python CLEANUP arm must drop every "
+        'expires_at="cleanup" continuous-effect registry entry '
+        "(expire_continuous_effects('cleanup')), matching Rust's "
+        "ueot_modifiers.clear()"
+    )
+
+
 # ===========================================================================
 # Phase-6 non-basic-land substrate — PHASE 1 (round-60 N1)
 # Spec: docs/NONBASIC_LAND_SUBSTRATE_PLAN.md §2/§3 (round-59 N2).

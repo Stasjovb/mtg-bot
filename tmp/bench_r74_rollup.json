@@ -5,15 +5,15 @@
       "seeds": "0-2",
       "summary": {
         "total_games": 66,
-        "passes": 37,
-        "fail_divergence": 29,
+        "passes": 38,
+        "fail_divergence": 28,
         "fail_timeout": 0,
         "archetype_filtered": 0,
         "fail_exception": 0,
-        "total_elapsed_seconds": 255.16101159900427,
+        "total_elapsed_seconds": 255.75161280017346,
         "divergence_shape_histogram": {
           "combat_phase::life_p0": 19,
-          "cast_spell::battlefield": 9,
+          "cast_spell::battlefield": 8,
           "combat_phase::life_p1": 1
         },
         "per_archetype": {
@@ -88,8 +88,7 @@
             "PASS": 1
           },
           "1286": {
-            "PASS": 2,
-            "FAIL_DIVERGENCE": 1
+            "PASS": 3
           },
           "1590": {
             "FAIL_DIVERGENCE": 2,
@@ -103,15 +102,15 @@
       "seeds": "3-5",
       "summary": {
         "total_games": 75,
-        "passes": 58,
-        "fail_divergence": 17,
+        "passes": 62,
+        "fail_divergence": 13,
         "fail_timeout": 0,
         "archetype_filtered": 0,
         "fail_exception": 0,
-        "total_elapsed_seconds": 258.04435039963573,
+        "total_elapsed_seconds": 255.53932240069844,
         "divergence_shape_histogram": {
-          "cast_spell::battlefield": 8,
-          "combat_phase::life_p1": 7,
+          "cast_spell::battlefield": 7,
+          "combat_phase::life_p1": 4,
           "combat_phase::life_p0": 2
         },
         "per_archetype": {
@@ -157,15 +156,13 @@
             "PASS": 1
           },
           "26518": {
-            "PASS": 2,
-            "FAIL_DIVERGENCE": 1
+            "PASS": 3
           },
           "26579": {
             "PASS": 3
           },
           "26695": {
-            "FAIL_DIVERGENCE": 1,
-            "PASS": 2
+            "PASS": 3
           },
           "26826": {
             "PASS": 2,
@@ -176,8 +173,8 @@
             "FAIL_DIVERGENCE": 1
           },
           "26996": {
-            "FAIL_DIVERGENCE": 2,
-            "PASS": 1
+            "PASS": 2,
+            "FAIL_DIVERGENCE": 1
           },
           "27151": {
             "PASS": 3
@@ -187,8 +184,7 @@
             "FAIL_DIVERGENCE": 1
           },
           "27916": {
-            "FAIL_DIVERGENCE": 1,
-            "PASS": 2
+            "PASS": 3
           },
           "28379": {
             "FAIL_DIVERGENCE": 2,
@@ -212,19 +208,16 @@
       "seeds": "6-8",
       "summary": {
         "total_games": 66,
-        "passes": 45,
-        "fail_divergence": 21,
+        "passes": 48,
+        "fail_divergence": 18,
         "fail_timeout": 0,
         "archetype_filtered": 0,
         "fail_exception": 0,
-        "total_elapsed_seconds": 242.32232179958373,
+        "total_elapsed_seconds": 242.65324469981715,
         "divergence_shape_histogram": {
           "cast_spell::battlefield": 7,
           "combat_phase::life_p0": 6,
-          "combat_phase::life_p1": 5,
-          "combat_phase::is_over,winner_id,life_p1": 1,
-          "cast_spell::graveyard_p1,battlefield": 1,
-          "cast_spell::graveyard_p0,battlefield": 1
+          "combat_phase::life_p1": 5
         },
         "per_archetype": {
           "52001": {
@@ -256,12 +249,10 @@
             "PASS": 3
           },
           "52329": {
-            "PASS": 2,
-            "FAIL_DIVERGENCE": 1
+            "PASS": 3
           },
           "52374": {
-            "PASS": 1,
-            "FAIL_DIVERGENCE": 2
+            "PASS": 3
           },
           "52402": {
             "PASS": 3
@@ -317,11 +308,11 @@
         "fail_timeout": 0,
         "archetype_filtered": 0,
         "fail_exception": 0,
-        "total_elapsed_seconds": 286.71576830069534,
+        "total_elapsed_seconds": 312.28236609953456,
         "divergence_shape_histogram": {
-          "combat_phase::life_p0": 12,
+          "combat_phase::life_p0": 11,
           "cast_spell::battlefield": 11,
-          "combat_phase::life_p1": 1
+          "combat_phase::life_p1": 2
         },
         "per_archetype": {
           "78003": {
@@ -420,16 +411,16 @@
       "seeds": "12-14",
       "summary": {
         "total_games": 81,
-        "passes": 61,
-        "fail_divergence": 20,
+        "passes": 63,
+        "fail_divergence": 18,
         "fail_timeout": 0,
         "archetype_filtered": 0,
         "fail_exception": 0,
-        "total_elapsed_seconds": 270.5552575988695,
+        "total_elapsed_seconds": 271.87162039987743,
         "divergence_shape_histogram": {
           "cast_spell::battlefield": 10,
-          "combat_phase::life_p0": 8,
-          "combat_phase::life_p1": 2
+          "combat_phase::life_p0": 7,
+          "combat_phase::life_p1": 1
         },
         "per_archetype": {
           "104000": {
@@ -462,8 +453,7 @@
             "PASS": 1
           },
           "104240": {
-            "PASS": 2,
-            "FAIL_DIVERGENCE": 1
+            "PASS": 3
           },
           "104271": {
             "PASS": 3
@@ -499,8 +489,7 @@
             "PASS": 1
           },
           "104738": {
-            "PASS": 2,
-            "FAIL_DIVERGENCE": 1
+            "PASS": 3
           },
           "104813": {
             "PASS": 2,
@@ -535,19 +524,16 @@
   ],
   "aggregate": {
     "total_games": 360,
-    "passes": 249,
-    "fail_divergence": 111,
+    "passes": 259,
+    "fail_divergence": 101,
     "fail_timeout": 0,
     "archetype_filtered": 0,
     "fail_exception": 0,
-    "total_elapsed_seconds": 1312.7987096977886
+    "total_elapsed_seconds": 1338.098166400101
   },
   "divergence_shapes": {
-    "combat_phase::life_p0": 47,
-    "cast_spell::battlefield": 45,
-    "combat_phase::life_p1": 16,
-    "combat_phase::is_over,winner_id,life_p1": 1,
-    "cast_spell::graveyard_p1,battlefield": 1,
-    "cast_spell::graveyard_p0,battlefield": 1
+    "combat_phase::life_p0": 45,
+    "cast_spell::battlefield": 43,
+    "combat_phase::life_p1": 13
   }
 }

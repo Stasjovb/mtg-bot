@@ -10594,12 +10594,52 @@ def advance_phase_python(py_state) -> int:
             py_state.player_by_id(obj.owner_id).exile.append(obj)
 
     if new_step == Step.CLEANUP:
-        # 6. CR 514.1 hand-size discard + CR 514.2 damage clear.
-        #    NOT calling ``run_cleanup_step`` directly because that
-        #    Python primitive composes a much larger surface (UEOT
-        #    expiration, copy reverts, control-change reverts, layer
-        #    cache rebuilds) that Rust's ``advance_phase`` does NOT
-        #    do. We inline only the two CR 514 hooks Rust models.
+        # 6. CR 514.1 hand-size discard + CR 514.2 damage clear +
+        #    CR 514.3 UEOT-modifier expiration.
+        #
+        #    Still NOT calling ``run_cleanup_step`` directly because
+        #    that Python primitive composes a much larger surface
+        #    (layer-1 copy reverts, layer-2 control-change reverts,
+        #    layer-4 add-type cache rebuilds, impulse-cast flag
+        #    expiry) that Rust's ``advance_phase`` does NOT do. We
+        #    inline only the hooks Rust's ``advance_phase`` ->
+        #    ``cleanup_step_for_active_player_inline`` actually models:
+        #    514.1 hand-size discard, 514.2 damage clear, AND — round-
+        #    74 R74-3 fix — 514.3 UEOT P/T-modifier expiration.
+        #
+        #    The previous comment claimed Rust's ``advance_phase``
+        #    does NOT do UEOT expiration; that premise was FALSE and
+        #    is now corrected. ``rust/src/state_ops_steps.rs``'s
+        #    ``cleanup_step_for_active_player_inline`` step (3) does
+        #    ``obj.ueot_modifiers.clear()`` on EVERY battlefield
+        #    permanent on BOTH battlefields (CR 514.3, its round-27
+        #    closure of parity gap G7). With the harness's CLEANUP arm
+        #    skipping it, a UEOT P/T debuff (e.g. Depressurize's
+        #    -3/-0 until end of turn) leaked across the turn boundary
+        #    on the Python side forever while Rust correctly expired
+        #    it — a HARNESS-induced Python-vs-Rust asymmetry (Rust
+        #    correct, harness wrong). Surfaced by the first post-
+        #    spell-admit bench sweep (round-74, repro
+        #    ``--archetype 52329 --seed 7``); see
+        #    ``docs/bench_trajectory_parity_smoke.md`` round-74 R74-3.
+        #
+        #    The Python analog of Rust's single ``ueot_modifiers
+        #    .clear()`` is the EXACT pair the production
+        #    ``turn.run_cleanup_step`` uses (turn.py: the
+        #    ``expire_continuous_effects("cleanup")`` call + the
+        #    per-object ``temp_power_bonus``/``temp_toughness_bonus``
+        #    zeroing loop). ``grant_pt_pump_ueot`` is a write-through
+        #    cache: the registry holds the ``expires_at="cleanup"``
+        #    entry (the layer-7 metadata) while ``effective_power`` /
+        #    ``effective_toughness`` read the mirrored ``temp_*``
+        #    fields, so BOTH must be dropped to fully expire the
+        #    modifier — exactly as ``run_cleanup_step`` does. This
+        #    continuous_effects<->ueot_modifiers equivalence is the
+        #    already-cross-engine-proven byte-equal mapping used by
+        #    the Biosynthic Burst / GrantKeywordsToTargetCreature
+        #    UntilEOT probes. This change makes the harness's Python
+        #    phase driver match Rust's ``advance_phase`` — it REMOVES
+        #    a harness-induced asymmetry, it does not add one.
         from mtg_bot.game import Zone
 
         ap = py_state.player_by_id(py_state.active_player_idx)
@@ -10613,6 +10653,31 @@ def advance_phase_python(py_state) -> int:
         # phase boundary on both sides.
         for obj in py_state.battlefield:
             obj.damage = 0
+        # CR 514.3 — UEOT-modifier expiration (round-74 R74-3 fix).
+        # Mirrors Rust ``cleanup_step_for_active_player_inline`` step
+        # (3) ``obj.ueot_modifiers.clear()`` on both battlefields, via
+        # the same two-call shape ``turn.run_cleanup_step`` uses:
+        #   (a) drop every registry entry tagged
+        #       ``expires_at="cleanup"`` (the layer-7 ``pump_pt`` /
+        #       ``set_base_pt`` UEOT entries + layer-6 ``GrantKeyword``
+        #       UEOT entries), and
+        #   (b) zero the ``temp_power_bonus`` / ``temp_toughness_bonus``
+        #       write-through field cache on every battlefield
+        #       permanent (the read path ``effective_power`` /
+        #       ``effective_toughness`` consults).
+        # Both are needed because ``grant_pt_pump_ueot`` is a
+        # write-through cache (registry holds metadata, field is the
+        # read path). ``expire_continuous_effects`` is a no-op when
+        # nothing is tagged ``"cleanup"``; the zeroing loop writes 0
+        # over already-0 fields when no UEOT P/T modifier is live —
+        # so games with no cross-turn-surviving UEOT modifier are
+        # byte-identical to before this fix (the only games whose
+        # verdict shifts are those that had a UEOT modifier leaking
+        # past cleanup, which was the bug).
+        py_state.expire_continuous_effects("cleanup")
+        for obj in py_state.battlefield:
+            obj.temp_power_bonus = 0
+            obj.temp_toughness_bonus = 0
 
     return new_phase_int
 
