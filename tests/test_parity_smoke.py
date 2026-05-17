@@ -62700,6 +62700,38 @@ def test_cross_engine_real_eoe_seedship_agrarian_becomes_tapped_create_lander_pa
         py_bf_p1_before = len(
             [o for o in py_state.battlefield if o.controller_id == 1]
         )
+        # ---- Symmetric inert library Lander seed (round-r70 — kills
+        # the filler-injection object-id skew). Rust registered the
+        # Lander printing via ``register_and_inject_object(rust_lander
+        # _dict, 1, 1)`` which ALSO injects an inert object into p1's
+        # LIBRARY (Rust obj id 0, printing_id 0) — a Rust-only object
+        # Python never had. That asymmetry (extra ``library_p1`` object
+        # + a shifted Rust ``next_id`` allocator → every subsequent
+        # object id off-by-one vs Python) is exactly why this probe
+        # historically asserted only targeted bf-size / Lander-attr
+        # deltas instead of a full ``compare_fields``. Seat the SAME
+        # inert Lander on Python's p1 library FIRST (id 0, matching
+        # Rust's filler id 0) so the id sequence stays in lockstep:
+        # Seedship carrier → id 1 on BOTH, minted Lander → id 2 on
+        # BOTH. ``summoning_sick`` forced False to match Rust's
+        # ``register_and_inject_object`` (seats False for all zones;
+        # Python ``new_object`` defaults True — the well-known
+        # synthetic-state fixture nuance, irrelevant for a library
+        # object but kept symmetric so the field view is byte-
+        # identical). Mirrors the Seedship Impact / Orbital Plunge
+        # inert-seed recipe; with this + the r70 ``_net_counters``
+        # comparator fix the WHOLE field view is byte-equal-assertable.
+        # INSERT AT LIBRARY TOP — Rust's ``register_and_inject_object``
+        # ZONE_LIBRARY path is ``player.library.insert(0, obj)`` (the
+        # documented post-CE3 test-injection convention,
+        # state_ops_resolve.rs:11522); a tail ``append`` would land
+        # the inert Lander in a different library slot and the
+        # strengthened comparator (correctly) flags the mismatch.
+        py_seed_lander = py_state.new_object(
+            py_lander, owner_id=1, zone=Zone.LIBRARY,
+        )
+        py_seed_lander.summoning_sick = False
+        py_state.players[1].library.insert(0, py_seed_lander)
         # Inject the GENUINE parsed Seedship printing.
         py_seedship = py_state.new_object(
             real, owner_id=0, zone=Zone.BATTLEFIELD,
@@ -62802,6 +62834,30 @@ def test_cross_engine_real_eoe_seedship_agrarian_becomes_tapped_create_lander_pa
     assert py_state.players[0].life == py_p0_life_before
     assert py_state.players[1].life == py_p1_life_before
 
+    # ---- FULL byte-equal compare (round-r70 migration from
+    # targeted-delta). With the symmetric inert Lander seed (object-id
+    # lockstep) + the r70 ``_net_counters`` comparator fix, the WHOLE
+    # field view — every zone incl. ``library_p1`` (the inert Lander
+    # on BOTH), ``battlefield`` (Seedship carrier + the minted Lander
+    # token, ids aligned), lives, the rest — is genuinely byte-equal.
+    # This SUPERSEDES the targeted bf-size / Lander-attr deltas above
+    # (kept as belt-and-suspenders sanity): a real divergence ANYWHERE
+    # outside the old narrow assertion window is now caught. Python is
+    # source of truth.
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view, compare_fields,
+    )
+    full_divs = compare_fields(
+        build_python_field_view(py_state),
+        parity_smoke._build_field_view(rust_state),
+    )
+    assert full_divs == [], (
+        "GENUINE Seedship Agrarian BECOMES_TAPPED→Lander is FULLY "
+        "byte-equal cross-engine (no targeted-delta carve-out). Any "
+        "divergence here is real — Python is source of truth. Got "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in full_divs]}"
+    )
+
 
 def test_cross_engine_real_eoe_seedship_agrarian_both_triggers_full_card_parity(
     parity_smoke,
@@ -62886,6 +62942,8 @@ def test_cross_engine_real_eoe_seedship_agrarian_both_triggers_full_card_parity(
     from mtg_bot.parity.cross_engine import (
         CardDef, DeckSpec, build_python_state, build_rust_state,
         _ta_dict_to_python_triggered_ability,
+        _card_def_to_python_printing,
+        build_python_field_view, compare_fields,
         clear_token_printings, register_token_printing,
     )
 
@@ -62939,6 +62997,13 @@ def test_cross_engine_real_eoe_seedship_agrarian_both_triggers_full_card_parity(
     )
     py_state = build_python_state(spec)
     rust_state = build_rust_state(spec)
+    # The Python Forest printing the spec-library Forests are
+    # materialized from (``build_python_state`` uses the same
+    # ``_card_def_to_python_printing``). The round-r70 symmetric
+    # injected Forest (played to fire landfall) reuses THIS exact
+    # printing so it is byte-identical to the inert spec-library
+    # Forests in the cross-engine field view.
+    forest_printing = _card_def_to_python_printing(forest)
     assert rust_state.active_player == 0
     assert py_state.active_player_idx == 0
     ZONE_HAND = 0
@@ -63045,7 +63110,30 @@ def test_cross_engine_real_eoe_seedship_agrarian_both_triggers_full_card_parity(
         py_bf_p1_before = len(
             [o for o in py_state.battlefield if o.controller_id == 1]
         )
-        # Inject the GENUINE parsed Seedship printing.
+        # ---- Symmetric Python setup mirroring Rust's inject sequence
+        # exactly (round-r70 — kills the filler-injection object-id
+        # skew so the WHOLE field view byte-equals). Rust's injects
+        # after the spec-library build (p0 lib ids 0-2 / p1 lib ids
+        # 3-5 on BOTH engines) were, in order: (a) filler Lander into
+        # p1 LIBRARY (id 6), (b) Seedship into p0 bf (id 7), (c) a
+        # fresh Forest into p0 HAND (id 8) — and Rust PLAYS that id-8
+        # injected Forest. Python historically (i) never seated the
+        # Lander filler and (ii) played a SPEC-library Forest (id 0)
+        # instead of an injected one — a two-axis asymmetry that
+        # forced the targeted-delta assertions. Replay Rust's exact
+        # sequence so every object id is in lockstep:
+        #   (a) inert Lander → p1 library TOP (Python id 6 == Rust id
+        #       6). ``insert(0, ...)`` mirrors Rust's
+        #       ``register_and_inject_object`` ZONE_LIBRARY convention
+        #       (``player.library.insert(0, obj)``,
+        #       state_ops_resolve.rs:11522) — a tail append would land
+        #       the inert Lander in a different library_p1 slot.
+        py_seed_lander = py_state.new_object(
+            py_lander, owner_id=1, zone=Zone.LIBRARY,
+        )
+        py_seed_lander.summoning_sick = False
+        py_state.players[1].library.insert(0, py_seed_lander)
+        #   (b) GENUINE parsed Seedship → p0 bf (id 7 == Rust id 7)
         py_seedship = py_state.new_object(
             real, owner_id=0, zone=Zone.BATTLEFIELD,
         )
@@ -63058,11 +63146,14 @@ def test_cross_engine_real_eoe_seedship_agrarian_both_triggers_full_card_parity(
         assert len(py_state.stack) == 0, (
             "Python: Seedship's own arrival must fire neither trigger"
         )
-        # Move a Forest from library to hand for _play_land.
-        py_forest = py_state.players[0].library[0]
-        assert py_forest.printing.name == "Forest"
-        py_state.players[0].library.remove(py_forest)
-        py_forest.zone = Zone.HAND
+        #   (c) fresh Forest → p0 HAND (id 8 == Rust id 8); play THIS
+        #   one (not the spec-library Forest) so the played-land id
+        #   matches Rust. The 3 spec-library Forests stay inert on
+        #   BOTH engines' p0 libraries (symmetric).
+        py_forest = py_state.new_object(
+            forest_printing, owner_id=0, zone=Zone.HAND,
+        )
+        py_forest.summoning_sick = False
         py_state.players[0].hand.append(py_forest)
 
         # ===== TRIGGER-1: tap Seedship -> BECOMES_TAPPED -> Lander =====
@@ -63221,6 +63312,33 @@ def test_cross_engine_real_eoe_seedship_agrarian_both_triggers_full_card_parity(
     assert rust_state.get_life(1) == rust_p1_life_before
     assert py_state.players[0].life == py_p0_life_before
     assert py_state.players[1].life == py_p1_life_before
+
+    # ---- FULL byte-equal whole-card compare (round-r70 migration
+    # from targeted-delta). The historical per-engine-accessor counter
+    # assertions above (rust ``get_counters`` vs py ``plus_one_
+    # counters``) were a targeted-delta workaround for TWO masks: the
+    # filler-injection object-id skew AND the ``_zone_signature``
+    # counters-blindness (the surviving Seedship carries a +1/+1
+    # counter). Both are now closed — the symmetric inject sequence
+    # keeps every object id in lockstep and the r70 ``_net_counters``
+    # comparator emits the real net counter on the Python side — so
+    # the WHOLE field view (battlefield: counter'd Seedship + Lander
+    # token + played Forest; both libraries incl. the inert seeds;
+    # lives; the rest) is genuinely byte-equal. This SUPERSEDES the
+    # narrow assertions above (kept as belt-and-suspenders): a real
+    # divergence ANYWHERE outside the old window is now caught. Python
+    # is source of truth.
+    full_divs = compare_fields(
+        build_python_field_view(py_state),
+        parity_smoke._build_field_view(rust_state),
+    )
+    assert full_divs == [], (
+        "GENUINE Seedship Agrarian WHOLE-card (BECOMES_TAPPED→Lander + "
+        "landfall +1/+1) is FULLY byte-equal cross-engine (no "
+        "targeted-delta carve-out). Any divergence here is real — "
+        "Python is source of truth. Got "
+        f"{[(d.field, d.py_value, d.rust_value, d.known_gap) for d in full_divs]}"
+    )
 
 
 def test_r59_lander_sac_harness_step_byte_equal_and_default_off():
@@ -65835,58 +65953,34 @@ def test_cross_engine_real_eoe_orbital_plunge_excess_conditional_lander_parity(
         rs.apply_sbas()
         assert rs.stack_size() == 0
 
+        # FULL byte-equal compare (no targeted-delta filter). The
+        # round-r70 ``_zone_signature`` counters-blindness fix
+        # (``scripts/parity_smoke.py`` ``_net_counters``) makes the
+        # Python field view emit the real net +1/+1 counter
+        # (``plus_one_counters − minus_one_counters``), matching Rust's
+        # signed ``GameObject.counters``. Before that fix this probe
+        # had to strip a spurious ``graveyard_p*`` counters-only delta
+        # on the dead counter'd creature (a comparator blindness, not
+        # an engine divergence) with a hand-rolled
+        # ``_is_known_counters_blind_gy_diff`` filter — that weakened
+        # divergence detection on the whole graveyard zone. The
+        # comparator now compares the counters slot honestly on BOTH
+        # engines, so a genuine ``compare_fields == []`` over every
+        # field (battlefield incl. the Lander, BOTH graveyards incl.
+        # the dead creature's preserved net counters per CR 400.7,
+        # lives, the rest) is achievable and asserted directly. The
+        # §2 counters-asymmetry stays double-pinned: the LANDER COUNT
+        # (rust_n == py_n) AND now the graveyard creature's counters
+        # slot itself.
         diffs = compare_fields(
             build_python_field_view(py),
             ce_parity_smoke()._build_field_view(rs),
         )
-        # KNOWN COMPARATOR LIMITATION (not an engine divergence):
-        # Python's `_zone_signature` reads ``getattr(obj, "counters",
-        # 0)`` but a Python ``GameObject`` has NO ``counters`` attr
-        # (it carries separate ``plus_one_counters`` /
-        # ``minus_one_counters`` ints) — so the comparator's counters
-        # slot is STRUCTURALLY 0 for every Python object, while Rust
-        # emits the real net counters. For a counter'd creature that
-        # then DIES (moves to the graveyard with its net counters
-        # preserved per CR 400.7 on BOTH engines), the comparator
-        # therefore reports a spurious graveyard-counters diff that is
-        # a Python-side comparator blindness, NOT a Seedship/Orbital
-        # engine divergence. Filter exactly that one shape (a
-        # ``graveyard_p*`` field whose ONLY per-tuple difference is
-        # the counters slot, py=0) so the meaningful fields
-        # (battlefield incl. the Lander, lives, the rest) still
-        # assert byte-equal. The §2 counters-asymmetry is pinned by
-        # the LANDER COUNT (rust_n == py_n below) which directly
-        # depends on the counters-inclusive excess computation — that
-        # is the load-bearing assertion the comparator blindness does
-        # not weaken.
-        def _is_known_counters_blind_gy_diff(fd) -> bool:
-            if not str(fd.field).startswith("graveyard_p"):
-                return False
-            pv, rvv = fd.py_value, fd.rust_value
-            if not (isinstance(pv, tuple) and isinstance(rvv, tuple)):
-                return False
-            if len(pv) != len(rvv):
-                return False
-            for pt, rt in zip(pv, rvv):
-                # per-object 8-tuple: idx 4 == counters slot.
-                if len(pt) != 8 or len(rt) != 8:
-                    return False
-                if pt[4] != 0:
-                    return False
-                # every OTHER slot must already agree.
-                if pt[:4] != rt[:4] or pt[5:] != rt[5:]:
-                    return False
-            return True
-
-        meaningful = [
-            fd for fd in diffs
-            if not _is_known_counters_blind_gy_diff(fd)
-        ]
         rust_n = sum(1 for e in rs.battlefield_snapshot()
                      if e["printing_name"] == "Lander")
         py_n = sum(1 for o in py.battlefield
                    if o.printing.name == "Lander")
-        return meaningful, rust_n, py_n
+        return diffs, rust_n, py_n
 
     # ---- POSITIVE: 2-toughness, no counters → remaining 2,
     # excess = 6−2 = 4 > 0 → Lander; WHOLE field byte-equal.
@@ -65903,18 +65997,20 @@ def test_cross_engine_real_eoe_orbital_plunge_excess_conditional_lander_parity(
     # toughness 8, −4 counters → effective toughness 4 → remaining 4 →
     # excess = 6−4 = 2 > 0 → Lander. The LANDER COUNT (rn==pn==1) is
     # the load-bearing §2 counters-asymmetry pin (a counters-omitting
-    # bug would read toughness 8, excess 0, NO Lander → rn==0). Field
-    # view byte-equal modulo the documented comparator counters-
-    # blindness on the dead counter'd creature.
+    # bug would read toughness 8, excess 0, NO Lander → rn==0). With
+    # the r70 comparator fix the WHOLE field view (incl. the dead
+    # counter'd creature in p1's graveyard, whose net −4 counters are
+    # now compared honestly on BOTH engines) is byte-equal — no
+    # targeted-delta carve-out.
     diffs, rn, pn = _run_arm(printed_toughness=8, net_counters=-4)
     assert rn == 1 == pn, (
         f"counters-inclusive effective toughness (8−4=4) → excess "
         f"6−4=2>0 → one Lander on BOTH (the §2 pin); rust={rn} py={pn}"
     )
     assert diffs == [], (
-        f"Orbital Plunge counters-shrink arm must be byte-equal "
-        f"(modulo the documented Python comparator counters-blindness "
-        f"on the dead counter'd creature); meaningful diffs={diffs}"
+        f"Orbital Plunge counters-shrink arm must be byte-equal across "
+        f"the WHOLE field view on BOTH (the dead −4-counter creature's "
+        f"graveyard signature included); diffs={diffs}"
     )
 
     # ---- NO-EXCESS: printed toughness 8, no counters → remaining 8 →
@@ -66178,9 +66274,11 @@ def test_cross_engine_real_eoe_depressurize_debuff_then_conditional_destroy_pari
     the −3 UEOT = 2+2−3 = 1 > 0 → SURVIVES on BOTH (a
     counters-omitting bug would read 2−3 = −1 ≤ 0 and WRONGLY destroy
     → divergence). The PLAIN arm uses a 2/2 → eff power −1 ≤ 0 →
-    destroyed on BOTH. Both WHOLE-field byte-equal modulo the
-    documented Python comparator counters-blindness on a dead
-    counter'd creature (orthogonal — see the Orbital Plunge entry).
+    destroyed on BOTH. Both arms assert the WHOLE field view
+    byte-equal with NO targeted-delta carve-out — the r70
+    ``_zone_signature`` ``_net_counters`` fix makes the surviving
+    +2-counter creature's signature compare honestly on BOTH engines
+    (the prior comparator counters-blindness is closed).
 
     **Deterministic, no RNG.** p1 (opponent) has exactly one
     creature; p0 casts the genuine Depressurize (Python: real
@@ -66263,59 +66361,31 @@ def test_cross_engine_real_eoe_depressurize_debuff_then_conditional_destroy_pari
         rs.apply_sbas()
         assert rs.stack_size() == 0
 
+        # FULL byte-equal compare (no targeted-delta filter). The
+        # round-r70 ``_zone_signature`` counters-blindness fix
+        # (``scripts/parity_smoke.py`` ``_net_counters``) makes the
+        # Python field view emit the real net +1/+1 counter
+        # (``plus_one_counters − minus_one_counters``), matching Rust's
+        # signed ``GameObject.counters``. Before that fix this probe
+        # had to strip counters-only deltas across `battlefield`,
+        # `graveyard_p*`, `hand_p*`, `library_p*` AND `exile_p*` with a
+        # hand-rolled `_known_blind` filter — the broadest carve-out in
+        # the suite, weakening divergence detection on every zone the
+        # surviving / dead counter'd creature could land in. The
+        # comparator now compares the counters slot honestly on BOTH
+        # engines, so the WHOLE field view (incl. the +2-counter
+        # creature still on p1's battlefield in the COUNTERS arm) is
+        # genuinely byte-equal-asserted. The §2 counters-asymmetry
+        # stays double-pinned: the SURVIVAL/DESTROY observable
+        # (ra/pa) AND now the surviving creature's counters slot.
         diffs = compare_fields(
             build_python_field_view(py),
             ce_parity_smoke()._build_field_view(rs),
         )
-
-        # Documented Python comparator counters-blindness (see the
-        # Orbital Plunge SL entry, generalized here): the comparator's
-        # `_zone_signature` reads `getattr(obj, "counters", 0)` but a
-        # Python GameObject has NO `counters` attr (it carries split
-        # `plus_one_counters`/`minus_one_counters` ints), so the
-        # counters slot (idx 4) is STRUCTURALLY 0 for every Python
-        # object while Rust emits the real net counters. This is a
-        # PURE COMPARATOR ARTIFACT (the engines agree on counters —
-        # Depressurize/Orbital mint no counters and both engines
-        # preserve them on zone-change) and applies to ANY zone
-        # holding a counter'd object — battlefield (a SURVIVING
-        # counter'd creature) just as much as graveyard (a DEAD one).
-        # Filter exactly that shape (a *_p* or `battlefield` field
-        # whose ONLY per-tuple difference is the counters slot, py=0).
-        # The §2 counters-asymmetry is pinned by the SURVIVAL/DESTROY
-        # observable (ra/pa below), which directly depends on the
-        # counters-inclusive post-UEOT effective power — that is the
-        # load-bearing assertion the comparator blindness cannot
-        # weaken.
-        def _known_blind(fd):
-            fld = str(fd.field)
-            if not (
-                fld == "battlefield"
-                or fld.startswith("graveyard_p")
-                or fld.startswith("hand_p")
-                or fld.startswith("library_p")
-                or fld.startswith("exile_p")
-            ):
-                return False
-            pv, rvv = fd.py_value, fd.rust_value
-            if not (isinstance(pv, tuple) and isinstance(rvv, tuple)):
-                return False
-            if len(pv) != len(rvv):
-                return False
-            for pt, rt in zip(pv, rvv):
-                if len(pt) != 8 or len(rt) != 8:
-                    return False
-                if pt[4] != 0:
-                    return False
-                if pt[:4] != rt[:4] or pt[5:] != rt[5:]:
-                    return False
-            return True
-
-        meaningful = [fd for fd in diffs if not _known_blind(fd)]
         rs_alive = any(e["id"] == rs_vic_id
                        for e in rs.battlefield_snapshot())
         py_alive = any(o.id == py_vic.id for o in py.battlefield)
-        return meaningful, rs_alive, py_alive
+        return diffs, rs_alive, py_alive
 
     # ---- PLAIN: 2/2, no counters → eff power 2−3 = −1 ≤ 0 →
     # destroyed on BOTH; WHOLE field byte-equal.

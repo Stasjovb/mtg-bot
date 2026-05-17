@@ -4465,24 +4465,32 @@ are NOT modeled on either side (the documented Python parity
 simplification — CR 120.3e is not implemented; comparing amount to
 remaining toughness is the model).
 
-**Comparator limitation noted (NOT an engine divergence)**: the
-cross-engine field-view comparator's `_zone_signature` reads
-`getattr(obj, "counters", 0)` but a Python `GameObject` has no
-`counters` attribute (it carries separate
-`plus_one_counters`/`minus_one_counters` ints) — so the comparator's
-counters slot is structurally `0` for every Python object while Rust
-emits the real net counters. Both engines preserve net counters on a
-creature that dies (CR 400.7 carve-out; Python's
-`move_off_battlefield` does not clear them, Rust's SBA destroy path
-does not either), so the engines AGREE; the comparator merely cannot
-read Python's split counter fields, producing a spurious
-`graveyard_p*` counters diff for a counter'd-then-dead creature. The
-Orbital Plunge probe filters exactly that one shape (a `graveyard_p*`
-field whose only per-tuple difference is the counters slot, py=0) and
-relies on the **Lander count** assertion (which directly depends on
-the counters-inclusive excess) as the load-bearing §2 pin. This
-comparator counters-blindness is pre-existing and orthogonal to
-Orbital Plunge.
+**Comparator counters-blindness — CLOSED (round-r70).** This entry
+formerly noted a comparator limitation: the cross-engine field-view
+comparator's `_zone_signature` read `getattr(obj, "counters", 0)`,
+but a Python `GameObject` has no `counters` attribute (it carries
+separate `plus_one_counters`/`minus_one_counters` ints) — so the
+comparator's counters slot was structurally `0` for every Python
+object while Rust emitted the real signed net. Both engines preserve
+net counters on a creature that dies (CR 400.7 carve-out), so the
+ENGINES always agreed; the comparator merely could not read Python's
+split counter fields, producing a spurious `graveyard_p*` counters
+diff for a counter'd-then-dead creature, which the Orbital Plunge
+probe worked around with a targeted-delta `_is_known_counters_blind
+_gy_diff` filter (weakening divergence detection on the whole
+graveyard zone). **Round-r70 fixed the comparator** (`scripts/
+parity_smoke.py` `_net_counters`): `_zone_signature` slot 4 now
+derives the signed net counter (`plus_one_counters −
+minus_one_counters`, with an explicit `counters` attr winning when
+present for the Rust dict-shim path) — byte-aligned with Rust's
+`GameObject.counters`. The targeted-delta filter was deleted; the
+Orbital Plunge probe now asserts the **full `compare_fields == []`**
+across the WHOLE field view including the dead counter'd creature's
+preserved net counters. The Lander-count §2 pin stays as
+belt-and-suspenders. No engine divergence ever lived behind the
+filter (verified by the now-strict probe passing). Pinned vanilla
+fingerprint baselines are byte-unchanged (vanilla objects net 0
+either way).
 
 **Why it's OK / which scenarios make it not-OK / failure mode**: the
 honest Effect-half-closes / full-card-stays-gated split established
@@ -4490,8 +4498,10 @@ by r51..r65 (Monoist..Seedship Impact). The closed half round-trips
 byte-equal — the genuine real-EoE probe drives the ACTUAL parsed
 Orbital Plunge printing's `spell_effect` cross-engine over three arms
 (POSITIVE excess → Lander; NEGATIVE-counters excess → Lander, the §2
-pin; NO-excess → NO Lander), each WHOLE-field byte-equal modulo the
-documented comparator counters-blindness. The NOT-OK scenario is
+pin; NO-excess → NO Lander), each WHOLE-field byte-equal with a strict
+`compare_fields == []` (the r70 `_net_counters` comparator fix closed
+the former counters-blindness — no targeted-delta carve-out). The
+NOT-OK scenario is
 admitting the full Sorcery to the bench loader — structurally
 impossible today (no spell-card admit path); no real-card-exposed
 divergence.
@@ -4598,27 +4608,26 @@ destroy — the creature is debuffed but survives. Pinned by a Rust
 regression (indestructible 1/1 → eff power −2 ≤ 0 → pumped, NOT
 destroyed).
 
-**Comparator limitation noted (NOT an engine divergence)**: the
-cross-engine field-view comparator's `_zone_signature` reads
-`getattr(obj, "counters", 0)` but a Python `GameObject` has no
-`counters` attribute (split `plus_one_counters`/`minus_one_counters`
-ints) — so the comparator's counters slot is structurally `0` for
-every Python object while Rust emits the real net counters. This is
-the SAME pre-existing comparator counters-blindness documented in
-the Orbital Plunge entry, generalized: it applies to ANY zone
-holding a counter'd object — the Depressurize +2-counter SURVIVAL
-arm surfaces it on the **battlefield** (a living counter'd
-creature), exactly as Orbital Plunge surfaces it on the
-**graveyard** (a dead one). The engines AGREE on counters
-(Depressurize mints none; both engines preserve them); the
-comparator merely cannot read Python's split counter fields. The
-probe filters exactly that shape (a battlefield/graveyard/hand/
-library/exile field whose only per-tuple difference is the counters
-slot, py=0) and relies on the SURVIVAL/DESTROY observable (which
-directly depends on the counters-inclusive post-UEOT power) as the
-load-bearing §2 pin. Orthogonal to Depressurize; a future tooling
-fix would teach `_zone_signature` to read Python's split counter
-fields.
+**Comparator counters-blindness — CLOSED (round-r70).** This entry
+formerly noted the same comparator limitation as Orbital Plunge,
+generalized: `_zone_signature` read `getattr(obj, "counters", 0)`
+(structurally `0` for every Python `GameObject`, which carries split
+`plus_one_counters`/`minus_one_counters` ints) while Rust emitted the
+real signed net — so a counter'd object spuriously diffed in ANY zone
+(the Depressurize +2-counter SURVIVAL arm on the **battlefield**, a
+living counter'd creature, exactly as Orbital Plunge on the
+**graveyard**, a dead one). The probe worked around it with the
+broadest targeted-delta filter in the suite (`_known_blind`, stripping
+counters-only diffs across battlefield/graveyard/hand/library/exile),
+weakening divergence detection across every zone. **Round-r70 fixed
+the comparator** (`scripts/parity_smoke.py` `_net_counters`): slot 4
+now derives the signed net counter, byte-aligned with Rust's
+`GameObject.counters`. The `_known_blind` filter was deleted; the
+Depressurize probe now asserts the **full `compare_fields == []`**
+across the WHOLE field view including the surviving +2-counter
+creature on the battlefield. The SURVIVAL/DESTROY §2 pin stays as
+belt-and-suspenders. No engine divergence ever lived behind the
+filter (verified by the now-strict probe passing).
 
 **Why it's OK / which scenarios make it not-OK / failure mode**: the
 honest Effect-half-closes / full-card-stays-gated split established
@@ -4626,8 +4635,10 @@ by r51..r65 (Monoist..Orbital Plunge). The closed half round-trips
 byte-equal — the genuine real-EoE probe drives the ACTUAL parsed
 Depressurize printing's `spell_effect` cross-engine over two arms
 (PLAIN 2/2 → eff power −1 → destroyed; +2-counter → eff power 1 →
-SURVIVES, the §2 pin), each WHOLE-field byte-equal modulo the
-documented comparator counters-blindness. The NOT-OK scenario is
+SURVIVES, the §2 pin), each WHOLE-field byte-equal with a strict
+`compare_fields == []` (the r70 `_net_counters` comparator fix closed
+the former counters-blindness — no targeted-delta carve-out). The
+NOT-OK scenario is
 admitting the full Instant to the bench loader — structurally
 impossible today (no spell-card admit path); no real-card-exposed
 divergence.
@@ -4659,11 +4670,96 @@ silent no-op via spell-push); 1 genuine real-EoE cross-engine probe
 (`tests/test_parity_smoke.py::test_cross_engine_real_eoe_depressurize_debuff_then_conditional_destroy_parity`
 — drives the actual parsed Depressurize `spell_effect`
 cross-engine, PLAIN-destroy + +2-counter-SURVIVES (the §2 pin)
-arms, WHOLE field byte-equal modulo the documented comparator
-counters-blindness; the spell-card bench-admit lever intentionally
-NOT exercised).
+arms, WHOLE field byte-equal with a strict `compare_fields == []`
+(r70 `_net_counters` comparator fix — no targeted-delta carve-out);
+the spell-card bench-admit lever intentionally NOT exercised).
 
 ---
+
+## Cross-engine probe harness — `_zone_signature` counters-blindness FIXED + the symmetric-filler pattern for full `compare_fields` (round-r70)
+
+**Location**: `scripts/parity_smoke.py` `_zone_signature` /
+`_net_counters` (the new helper); the cross-engine field-view
+comparator `compare_fields` reads it via
+`cross_engine.build_python_field_view`. Probe-side pattern in
+`tests/test_parity_smoke.py` (Orbital Plunge / Depressurize / both
+Seedship Agrarian genuine probes).
+
+**What the limitation was / what changed**: the cross-engine
+field-view comparator's per-object 8-tuple slot 4 (`counters`) read
+`getattr(obj, "counters", 0)`. A Python `GameObject` carries NO
+`counters` attribute — it tracks split
+`plus_one_counters`/`minus_one_counters` ints — so the slot was
+**structurally `0` for every Python object** while Rust emits the
+real signed net (`GameObject.counters: i32`). This blinded BOTH the
+cross-engine `compare_fields` AND the `hash_state` fingerprint to ANY
+counter divergence on a counter'd permanent in ANY zone. Genuine
+probes that put a counter'd creature in play (Orbital Plunge's dead
+−4-counter creature; Depressurize's surviving +2-counter creature)
+had to strip the spurious counters-only diffs with hand-rolled
+targeted-delta filters (`_is_known_counters_blind_gy_diff`,
+`_known_blind`) — which weakened divergence detection across whole
+zones (the audit-flagged "targeted-delta instead of full
+`compare_fields`" signal-quality degradation). **Round-r70 derives
+the signed net** in `_net_counters` (`plus_one_counters −
+minus_one_counters`, with an explicit `counters` attr winning when
+present for the Rust dict-shim / future-unified path), byte-aligned
+with Rust. The targeted-delta filters were deleted; those probes now
+assert strict `compare_fields == []`.
+
+**The filler-injection object-id-skew pattern (deprecate for new
+probes)**: `register_and_inject_object(dict, controller, zone)` is a
+Rust-only pymethod — it appends a printing to the *Rust* registry
+(`printing_id = reg.printings.len()`) and allocates an object id as
+`1 + max(obj.id across all zones)`. A probe that builds states from
+an empty/seeded `DeckSpec` and then injects a token-printing **filler
+into the Rust library only** (the `register_and_inject_object(
+token_dict, 1, 1)` idiom) leaves Python without the matching object
+→ a `library_p1` shape diff + a shifted Rust `next_id` allocator
+(every later object id off-by-one) → full `compare_fields` cannot be
+asserted, forcing targeted-delta probes. The clean primitives, in
+order of preference:
+1. **The `_seat_token_printings` `DeckSpec` path** (loader-seated
+   token CardDef registered symmetrically on BOTH engines via
+   `setup_matched_game` / `build_matched_states`) — zero skew, full
+   `compare_fields == []`. Use this for new token-creation probes
+   (Gravpack Monoist / the audit `create_token_tapped` probe are the
+   reference shape).
+2. **Symmetric mirror**: if a probe must use
+   `register_and_inject_object`, mirror EVERY Rust inject on the
+   Python side in the SAME order with `py_state.new_object(...)` so
+   the id sequences stay in lockstep — and match Rust's documented
+   per-zone insertion convention (LIBRARY = `insert(0, ...)` /
+   library TOP per `state_ops_resolve.rs:11522`, not tail
+   `append`; HAND/BATTLEFIELD/GRAVEYARD = tail). Force
+   `summoning_sick=False` on injected objects (Rust seats False;
+   Python `new_object` defaults True). Both Seedship Agrarian genuine
+   probes were migrated to this and now assert full
+   `compare_fields == []`.
+
+**Why it's OK / failure mode**: this is a pure comparator-correctness
+improvement — it can only make the cross-engine / fingerprint signal
+STRONGER (it never masks; it un-masks). Pinned vanilla fingerprint
+baselines are byte-unchanged (vanilla objects have net 0 either way).
+A probe still on the targeted-delta pattern (the many Galactic
+Wayfarer / Beamsaw-class create-Lander probes that stop at the
+documented Rust-lane token-registration boundary) is NOT a
+regression — it is correctly narrowed where a genuine Rust-lane gap
+remains; converting those needs the Rust token-registration follow-up
+(out of scope here), not a comparator change. New probes MUST prefer
+the clean primitives above; do NOT add new filler-skew targeted-delta
+probes.
+
+**Fix scope estimate**: comparator fix COMPLETE (one helper); the
+audit-named token-injection probes migrated (4: Orbital Plunge,
+Depressurize, Seedship Agrarian ×2). Remaining create-token
+targeted-delta probes convert as the Rust token-registration boundary
+closes (Rust-agent follow-up).
+
+**Impact estimate**: zero production strength cost (probe-harness
+only). Strictly increases parity-signal QUALITY campaign-wide — every
+migrated probe now catches a real divergence ANYWHERE in the field
+view, not just inside a narrow asserted window.
 
 ## Adding a new entry
 
