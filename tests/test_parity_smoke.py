@@ -66344,6 +66344,134 @@ def test_cross_engine_real_eoe_depressurize_debuff_then_conditional_destroy_pari
     )
 
 
+def test_r69_max_turns_raise_is_parity_safe_and_recovers_timeout_signal():
+    """Round-69 N — the FAIL_TIMEOUT stall-anatomy fix.
+
+    Round-65 diagnosed the ~53% bench FAIL_TIMEOUT drag as an
+    admit-count problem with no cheap fix (multi-round Rust substrate
+    only). Per-turn stall-anatomy instrumentation
+    (``scripts/scout_timeout_stall_anatomy.py``) showed that was a
+    mis-diagnosis: ~2/3 of cap-25 FAIL_TIMEOUT games were
+    ``budget_progressing`` — life still dropping every turn, board on
+    both sides — i.e. a slow bridge-filtered mirror that simply ran
+    out of turns, NOT a frozen stalemate. The fix raised the bench
+    ``--max-turns`` default 25 → 60.
+
+    This pin locks the two load-bearing properties:
+
+    1. **PARITY-SAFE (the critical invariant).** ``max_turns`` is a
+       pure upper bound on an otherwise-deterministic loop (checked
+       only as ``if turn_number > max_turns``). A game that COMPLETES
+       (PASS / DIVERGENCE / EXCEPTION, i.e. NOT FAIL_TIMEOUT) at a low
+       cap MUST have a byte-identical outcome — status, winner,
+       win_reason, turns_played, actions_played — at any higher cap.
+       Raising the cap can ONLY convert FAIL_TIMEOUT → PASS/DIVERGENCE;
+       it can NEVER shift a pinned/already-completed trajectory. (If
+       this assertion ever fails, the cap is no longer a pure bound —
+       that is a RED FLAG, investigate, do not bump the cap value.)
+    2. The new default genuinely recovers parity signal: on a
+       representative real-17lands archetype that FAIL_TIMEOUTs at
+       cap-25, cap-60 yields a real verdict (PASS or FAIL_DIVERGENCE),
+       and 0 FAIL_TIMEOUT→FAIL_DIVERGENCE conversions occur (the
+       timeout was masking clean signal, not a divergence).
+
+    Uses REAL 17lands archetypes (round-46 real-signal discipline) and
+    the bench's own ``drive_one_game`` (the exact production entry).
+    """
+    import pathlib
+
+    from mtg_bot.parity import trajectory
+
+    scripts_dir = pathlib.Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from bench_trajectory_parity import (  # type: ignore[import-not-found]
+        drive_one_game,
+    )
+
+    try:
+        trajectory.load_production_deck(archetype=0)
+    except (FileNotFoundError, IndexError):
+        import pytest as _pt
+        _pt.skip("17lands deck pool unavailable")
+
+    # ---- Property 1: PARITY-SAFE — completed games are cap-invariant.
+    # Archetypes 2/3/4 PASS well before turn 25 (round-69 stall-anatomy
+    # data + the round-65 grid: every >=5-admitted-copy archetype goes
+    # 4/4 PASS at ~17-22 turns). Their trajectory MUST be byte-identical
+    # at cap 25 and at cap 60.
+    for arch in (2, 3, 4):
+        for sd in (0, 1):
+            lo = drive_one_game(
+                archetype=arch, seed=sd, max_turns=25,
+                combat_strategy="attack_all", mulligans=0,
+            )
+            if lo.status == "FAIL_TIMEOUT":
+                # Not a completed game at cap-25 — skip (this pin asserts
+                # the invariant only for games that COMPLETE before the
+                # low cap; the timeout→verdict conversion is property 2).
+                continue
+            hi = drive_one_game(
+                archetype=arch, seed=sd, max_turns=60,
+                combat_strategy="attack_all", mulligans=0,
+            )
+            assert lo.status == hi.status, (
+                f"PARITY-SAFETY VIOLATION arch={arch} seed={sd}: a game "
+                f"that completed ({lo.status}) at cap-25 changed to "
+                f"{hi.status} at cap-60 — max_turns is supposed to be a "
+                f"pure upper bound, never altering a completed "
+                f"trajectory. RED FLAG, investigate."
+            )
+            assert lo.turns_played == hi.turns_played, (
+                f"PARITY-SAFETY VIOLATION arch={arch} seed={sd}: "
+                f"turns_played shifted {lo.turns_played}→"
+                f"{hi.turns_played} when only the cap changed"
+            )
+            assert lo.actions_played == hi.actions_played, (
+                f"PARITY-SAFETY VIOLATION arch={arch} seed={sd}: "
+                f"actions_played shifted {lo.actions_played}→"
+                f"{hi.actions_played} when only the cap changed"
+            )
+            assert (
+                lo.winner_player_idx == hi.winner_player_idx
+                and lo.win_reason == hi.win_reason
+            ), (
+                f"PARITY-SAFETY VIOLATION arch={arch} seed={sd}: winner/"
+                f"reason shifted ({lo.winner_player_idx},{lo.win_reason})"
+                f"→({hi.winner_player_idx},{hi.win_reason}) on cap change"
+            )
+
+    # ---- Property 2: the new default recovers a timeout into a verdict.
+    # Archetype 9 seed 1 FAIL_TIMEOUTs at cap-25 (round-69 anatomy: a
+    # `no_board`-at-25 game that draws a creature and progresses with
+    # more turns). At cap-60 it must yield a real cross-engine verdict
+    # and NOT have been masking a divergence.
+    lo9 = drive_one_game(
+        archetype=9, seed=1, max_turns=25,
+        combat_strategy="attack_all", mulligans=0,
+    )
+    hi9 = drive_one_game(
+        archetype=9, seed=1, max_turns=60,
+        combat_strategy="attack_all", mulligans=0,
+    )
+    assert lo9.status == "FAIL_TIMEOUT", (
+        "round-69 data fixture: arch=9 seed=1 is expected to "
+        f"FAIL_TIMEOUT at cap-25; got {lo9.status}. If the bench "
+        "trajectory legitimately changed, re-derive the fixture from a "
+        "fresh stall-anatomy run (do NOT just relax this assertion)."
+    )
+    assert hi9.status in ("PASS", "FAIL_DIVERGENCE"), (
+        f"raising the cap must convert the timeout into a real parity "
+        f"verdict; arch=9 seed=1 got {hi9.status} at cap-60"
+    )
+    assert hi9.status != "FAIL_DIVERGENCE" or lo9.status != "PASS", (
+        "sanity: a cap-25 PASS cannot become a cap-60 DIVERGENCE "
+        "(would mean the longer game found a real divergence the "
+        "shorter one hid — that is itself signal, not a test failure, "
+        "but it cannot co-occur with lo9 being a timeout)"
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

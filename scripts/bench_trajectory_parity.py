@@ -12,7 +12,13 @@ Each game produces a pass/fail signal:
     names that disagreed at that step). These are the new round's
     Rust-slice candidates.
   * **FAIL_TIMEOUT** — ``--max-turns`` reached without a loser. Not a
-    parity failure; just a cap on a long stall.
+    parity failure. Round-69 stall-anatomy established that, at the old
+    cap of 25, ~2/3 of these were NOT stalls at all — life was still
+    dropping every turn and the game would have produced a verdict with
+    a larger budget (the bridge-filtered mirror is slow, not frozen).
+    The default cap was raised 25 → 60 to recover that lost signal; a
+    residual FAIL_TIMEOUT at cap 60 is a genuine frozen mirror (no
+    side can damage the other) or an empty-board structural floor.
   * **ARCHETYPE_FILTERED** — the EoE archetype's deck didn't survive
     the production-deck bridge filter (empty post-filter library on
     either side). No game ran.
@@ -28,8 +34,14 @@ Run from a worktree::
 
     PYTHONPATH=src ../../mtg-bot/.venv-py313/Scripts/python.exe \\
         scripts/bench_trajectory_parity.py \\
-        --archetypes 0-50 --seeds 0-10 --max-turns 25 \\
+        --archetypes 0-50 --seeds 0-10 --max-turns 60 \\
         --json-out /tmp/parity_bench.json --verbose
+
+(``--max-turns`` default is 60 as of round-69 — sized to the measured
+bridge-filtered-mirror deck speed; see the argparse help + the
+round-69 entry in ``docs/bench_trajectory_parity_smoke.md``. The old
+cap of 25 was silently discarding ~1/3 of the parity signal as
+FAIL_TIMEOUT on games that were still progressing.)
 
 Reuses production helpers:
 
@@ -988,8 +1000,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="RNG seed range (e.g. '0-10') or comma list.",
     )
     p.add_argument(
-        "--max-turns", type=int, default=25,
-        help="Game-turn cap (FAIL_TIMEOUT if reached without a loser).",
+        # Default raised 25 → 60 (round-69 N: FAIL_TIMEOUT stall-anatomy
+        # finding, docs/bench_trajectory_parity_smoke.md round-69). The
+        # round-65 analysis treated FAIL_TIMEOUT as an *admit-count*
+        # problem and concluded the only lever was a multi-round Rust
+        # substrate. Per-turn instrumentation of the round-65 grid
+        # (scout_timeout_stall_anatomy.py) showed that was a
+        # mis-diagnosis: ~67% of FAIL_TIMEOUT games at cap-25 are
+        # `budget_progressing` (life is STILL dropping every turn, board
+        # on both sides — they simply ran out of turns), and the
+        # remaining `no_board` games were a cap-25 artifact too (they
+        # draw into a castable creature given more turns). The
+        # bridge-filtered near-creatureless mirror is SLOW, not stalled:
+        # 35% of all DECISIVE games finish after turn 25, the slowest at
+        # turn 60. Cap 25 was silently discarding a third of the
+        # available parity signal. Cap 60 captures 100% of decisive
+        # games on the round-65 grid (FAIL_TIMEOUT 35.0% → 0.0%, PASS
+        # 65% → 100%). PARITY-SAFE: `max_turns` is a pure upper bound on
+        # an otherwise-deterministic loop (checked only as
+        # `if turn_number > max_turns`), so raising it can ONLY convert
+        # FAIL_TIMEOUT → PASS/DIVERGENCE; it can NEVER alter a game that
+        # already ended before the old cap (empirically verified: 0
+        # trajectory-shift across all games that completed at cap-25,
+        # caps 25→40→60). Every gate test passes max_turns explicitly
+        # (MT local constant), so no pinned trajectory depends on this
+        # default.
+        "--max-turns", type=int, default=60,
+        help="Game-turn cap (FAIL_TIMEOUT if reached without a loser). "
+             "Default 60: sized to the measured bridge-filtered-mirror "
+             "deck speed (round-69; the slowest decisive game on the "
+             "round-65 grid lands at turn 60). Raising the cap is "
+             "parity-safe — it is a pure upper bound and never alters a "
+             "game that ended before the old cap.",
     )
     p.add_argument(
         "--combat-strategy", default="attack_all",
