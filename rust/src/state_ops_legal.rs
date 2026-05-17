@@ -454,6 +454,26 @@ fn cast_spell_dict(py: Python<'_>, card_id: u32) -> PyResult<Bound<'_, PyDict>> 
     Ok(d)
 }
 
+/// Build a `{"kind":"cast_spell", ..., "use_warp":true, ...}` dict.
+/// **Phase-1 warp substrate (round-63):** the warp-cast variant.
+/// Same 7 keys as `cast_spell_dict` but `use_warp=true`. Round-trips
+/// through `parse_action` (`actions.rs` reads `use_warp`) and
+/// `action_to_pydict` (writes it) byte-equal — the pre-Phase-1 gap
+/// was *semantic* (Rust ignored the parsed flag), never a
+/// serialization gap, so no bridge change is needed for the
+/// round-trip.
+fn cast_spell_warp_dict(py: Python<'_>, card_id: u32) -> PyResult<Bound<'_, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("kind", "cast_spell")?;
+    d.set_item("card_id", card_id)?;
+    d.set_item("use_warp", true)?;
+    d.set_item("kicked", false)?;
+    d.set_item("cast_for_free", false)?;
+    d.set_item("use_impending", false)?;
+    d.set_item("cast_room_half", py.None())?;
+    Ok(d)
+}
+
 /// Build a `{"kind": "activate_ability", "source_id": <id>,
 /// "ability_index": <u32>, "target_creature_id": <Option<u32>>}` dict.
 /// Mirrors `actions.rs:action_to_pydict`'s `Action::ActivateAbility`
@@ -921,6 +941,28 @@ impl GameState {
             }
             seen_castspell.insert(name);
             actions.push(cast_spell_dict(py, obj.id)?);
+            if printing.warp_cost.is_some() {
+                // Phase-1 warp: offer the use_warp=true variant
+                // alongside the base cast, mirroring Python
+                // legal.py:262-271 (instant-speed). Gated on
+                // warp_cost presence ONLY — Rust's CastSpell emitter
+                // has no _can_cast payability gate (module docstring
+                // "Deliberate divergence"); the warp variant inherits
+                // the same shape so its gating stays consistent with
+                // the base CastSpell beside it. Phase-1 deckspec cards
+                // (Red Tiger Mechan, Bygone Colossus) are Artifact
+                // Creatures cast at sorcery speed; the instant-speed
+                // mirror is here for shape-parity with Python's two
+                // emit sites (a future flash-warp card composes
+                // cleanly). The warp dict is intentionally NOT added
+                // to `seen_castspell` (name-only set) — it is a
+                // distinct action (use_warp flag differs); Python's
+                // dedup key is the 6-tuple (name, use_warp, ...). For
+                // 2x the same warp printing Python yields {base, warp}
+                // once and Rust's name-only set yields {base} once +
+                // this warp push once = the same {base, warp} pair.
+                actions.push(cast_spell_warp_dict(py, obj.id)?);
+            }
         }
 
         // Post-instant-speed sorcery-timing gate. Everything after
@@ -1018,6 +1060,41 @@ impl GameState {
                 continue;
             }
             seen_castspell.insert(name);
+            actions.push(cast_spell_dict(py, obj.id)?);
+            if printing.warp_cost.is_some() {
+                // Phase-1 warp (sorcery-speed): mirror Python
+                // legal.py:392-401. This is the LIVE path for the two
+                // Phase-1 Artifact-Creature cards (Red Tiger Mechan,
+                // Bygone Colossus). Same gating + dedup rationale as
+                // the instant-speed mirror above. Emission order:
+                // base cast_spell_dict then cast_spell_warp_dict
+                // immediately after, matching Python's `:386` then
+                // `:401` so the action-list fingerprint matches
+                // positionally, not just as a set.
+                actions.push(cast_spell_warp_dict(py, obj.id)?);
+            }
+        }
+
+        // Phase-1 warp exile-recast (round-63): a warp-exiled
+        // permanent (warped=true) in exile is re-castable at its
+        // NORMAL mana_cost on a later turn. Mirrors Python
+        // legal.py:478-489. Sorcery-speed only (both Phase-1 cards
+        // are creatures; an instant in warp-exile would recast at
+        // instant speed but none exist in the pool). Emits the BASE
+        // cast_spell_dict (use_warp=false) — the recast pays
+        // mana_cost, not warp_cost. The `cast_creature` primitive's
+        // exile branch (state_ops_cast.rs) does the actual pay +
+        // clears `warped`.
+        for obj in self.players[idx].exile.iter() {
+            if !obj.warped {
+                continue;
+            }
+            let Some(printing) = self.registry.lookup(obj.printing_id) else {
+                continue;
+            };
+            if printing.card_types.iter().any(|t| t == "Instant") {
+                continue;
+            }
             actions.push(cast_spell_dict(py, obj.id)?);
         }
 

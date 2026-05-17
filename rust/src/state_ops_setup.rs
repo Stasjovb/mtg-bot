@@ -218,6 +218,10 @@ fn push_object(
         // default 0 is fine for hand / library / starting zones.
         etb_timestamp: 0,
         ueot_modifiers: Vec::new(),
+        // warp_cost substrate (Phase 1, round-63): make_state seeds
+        // hand/library/starting zones; nothing is warp-cast at setup.
+        warp_exile_pending: false,
+        warped: false,
     });
     *next_id += 1;
 }

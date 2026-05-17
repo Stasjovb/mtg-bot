@@ -80,7 +80,9 @@
 //! before walking through the draw step.
 
 use crate::state::{GameObject, GameState, ManaPool};
-use crate::state_ops_zones::{ZONE_GRAVEYARD, ZONE_HAND};
+use crate::state_ops_zones::{
+    mark_left_battlefield_if_nonland, ZONE_EXILE, ZONE_GRAVEYARD, ZONE_HAND,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -335,6 +337,98 @@ fn empty_all_mana_pools_inline(state: &mut GameState) {
     }
 }
 
+/// **Phase-1 warp substrate (round-63).** At the beginning of the
+/// END step, exile every battlefield permanent the active player
+/// controls that was warp-cast (`warp_exile_pending`). Mirrors
+/// Python's `WarpExileSelf` delayed trigger fired by
+/// `run_delayed_end_step_triggers` (turn.py:773) — Rust's no-stack
+/// cast model makes this a deterministic phase-entry sweep instead
+/// of a stack-pushed delayed triggered ability (documented
+/// simplification, `docs/SEARCH_LIMITATIONS.md`). The exiled
+/// permanent gets `warped=true` so the legal emitter offers the
+/// exile-recast at normal cost on a later turn; `warp_exile_pending`
+/// is cleared. CR 400.7 — the exiled card is a brand-new object:
+/// reset the same per-object state the `Effect::ExileTarget` arm
+/// resets (tapped / damage / counters / attached_to /
+/// exiled_with_source). `summoning_sick` is intentionally NOT reset
+/// (CE13 — Python's `move_off_battlefield` omits the clear; sickness
+/// is battlefield-only state). Round-29 Void LTB tracking: a
+/// non-land permanent leaving the battlefield flips
+/// `permanent_left_battlefield_this_turn` (mirrors Python
+/// `move_off_battlefield` turn.py:163-164). No LEAVES/DIES dispatch
+/// is wired here: exile is not a graveyard transit (no DIES per CR),
+/// and no bridge-admitted card carries a LEAVES trigger (the warp
+/// cards have `triggered_abilities=()`; `_SAFE_TRIGGERS` has no
+/// `leaves_battlefield` event) — the documented Phase-1
+/// simplification covers this (`SEARCH_LIMITATIONS.md`). CoW: skip
+/// the `Arc::make_mut` clone when no permanent is warp-pending.
+fn warp_exile_sweep_on_end_step(state: &mut GameState) {
+    let active = state.active_player as usize;
+    if state.players[active]
+        .battlefield
+        .iter()
+        .all(|o| !o.warp_exile_pending)
+    {
+        return;
+    }
+    // Partition: collect the warp-pending permanents off the
+    // battlefield, push them to exile with the CR-400.7 reset.
+    let player = &mut state.players[active];
+    let bf: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+    let mut exiled: Vec<GameObject> = Vec::new();
+    let mut i = 0;
+    while i < bf.len() {
+        if bf[i].warp_exile_pending {
+            let mut obj = bf.remove(i);
+            // CR 400.7 / parity with Python's `move_off_battlefield`
+            // (turn.py:231-240): reset damage / tapped / attached_to.
+            // Python does NOT zero +1/+1 `counters` here and does NOT
+            // clear `summoning_sick` (CE13) — match the source of
+            // truth exactly so the per-object fingerprint 8-tuple is
+            // byte-equal across engines for the warp-exile path
+            // (`counters` IS in the tuple; the Phase-1 cards never
+            // carry +1/+1 counters in the bench, but matching
+            // Python's actual behavior keeps the path forward-
+            // correct, not just coincidentally bit-equal).
+            obj.zone = ZONE_EXILE;
+            obj.tapped = false;
+            obj.damage = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            obj.warp_exile_pending = false;
+            // Python's WarpExileSelf sets obj.warped = True only for
+            // non-tokens (effects/generic/exile.py:170-171). Phase-1
+            // warp cards are never tokens; gate on the printing for
+            // forward-correctness.
+            let is_token = state
+                .registry
+                .lookup(obj.printing_id)
+                .map(|p| {
+                    p.supertypes.iter().any(|s| s == "Token")
+                })
+                .unwrap_or(false);
+            if !is_token {
+                obj.warped = true;
+            }
+            exiled.push(obj);
+        } else {
+            i += 1;
+        }
+    }
+    let exile: &mut Vec<GameObject> = Arc::make_mut(&mut player.exile);
+    let mut leaving_printing_ids: Vec<u32> = Vec::with_capacity(exiled.len());
+    for obj in exiled {
+        leaving_printing_ids.push(obj.printing_id);
+        exile.push(obj);
+    }
+    // Round-29 Void LTB tracking: each non-land bf-exit flips the
+    // flag. Done AFTER the player-mutable borrow drops (the helper
+    // re-borrows `state.registry`).
+    for pid in leaving_printing_ids {
+        mark_left_battlefield_if_nonland(state, pid);
+    }
+}
+
 #[pymethods]
 impl GameState {
     /// Expose `active_player` to Python. The field already exists on
@@ -461,6 +555,28 @@ impl GameState {
             // parity holds bit-for-bit. Inlined draw — see the
             // module docstring for the cross-slice friction note.
             draw_card_inline(self, self.active_player);
+        }
+        if self.phase == PHASE_END_STEP {
+            // **Phase-1 warp substrate (round-63).** At the beginning
+            // of the END step, exile every battlefield permanent the
+            // active player controls that was warp-cast
+            // (`warp_exile_pending`). Mirrors Python's
+            // `WarpExileSelf` delayed trigger fired by
+            // `run_delayed_end_step_triggers` (turn.py:773) with
+            // `offset = 0` for sorcery-speed warps cast on the
+            // caster's own turn — both Phase-1 cards are sorcery-
+            // speed Artifact Creatures, so the warp cast and the
+            // exile happen on the same turn's end step. Active player
+            // here is the player whose turn it is (the turn wrap is
+            // on the CLEANUP -> UNTAP advance, not END_STEP entry).
+            // Rust's no-stack cast model makes this a deterministic
+            // phase-entry sweep instead of a stack-pushed delayed
+            // triggered ability — documented simplification, see
+            // `docs/SEARCH_LIMITATIONS.md`. This END_STEP-entry hook
+            // is new (only UNTAP / DRAW / CLEANUP had entry hooks
+            // pre-Phase-1); it mirrors the PHASE_CLEANUP-entry hook
+            // shape directly below.
+            warp_exile_sweep_on_end_step(self);
         }
         if self.phase == PHASE_CLEANUP {
             // CR 514.1 + CR 514.2 — on entry to the cleanup step,

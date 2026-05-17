@@ -286,7 +286,7 @@ impl GameState {
             }
             Action::CastSpell {
                 card_id,
-                use_warp: _,
+                use_warp,
                 kicked: _,
                 cast_for_free: _,
                 use_impending: _,
@@ -329,8 +329,30 @@ impl GameState {
                 // see ergonomic noise from the deferred-semantics
                 // gap; the gap is documented here + in the variant
                 // docstring + in the porting-status table).
+                //
+                // **Phase-1 warp substrate (round-63): `use_warp` is
+                // now LIVE.** When `use_warp=true`, route to the new
+                // `cast_creature_warp` primitive (pays `warp_cost`,
+                // sets `spell_warped_this_turn`, stamps
+                // `warp_exile_pending` for the end-step exile sweep).
+                // Otherwise the round-4 `cast_creature` path (which
+                // also serves the warp exile-recast: a `warped`
+                // exile object recast at NORMAL `mana_cost` arrives
+                // here with `use_warp=false`). The remaining flags
+                // (kicked / cast_for_free / use_impending /
+                // cast_room_half) stay deferred.
                 let player_id = slf.borrow().priority_player;
-                slf.call_method1("cast_creature", (card_id, player_id))?;
+                if use_warp {
+                    slf.call_method1(
+                        "cast_creature_warp",
+                        (card_id, player_id),
+                    )?;
+                } else {
+                    slf.call_method1(
+                        "cast_creature",
+                        (card_id, player_id),
+                    )?;
+                }
             }
             Action::TurnFaceUp { card_id: _ } => {
                 // First-slice scope (mirrors round-23's ActivateAbility

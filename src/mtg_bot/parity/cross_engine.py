@@ -212,6 +212,28 @@ class CardDef:
     # later slices flip that). See ``docs/TOKEN_PRINTING_SUBSTRATE.md``
     # §6 for the remaining Phase-3 steps.
     token_activated_abilities: tuple[dict, ...] = ()
+    # warp_cost substrate (Phase 1, round-63). Pure fixed-`ManaCost`
+    # warp alt-cost (EoE — Red Tiger Mechan {1}{R}, Bygone Colossus
+    # {3}). Reuses the SAME (generic, colored) codec as
+    # ``mana_cost_generic`` / ``mana_cost_colored`` — frozen, bridge-
+    # serializable. ``has_warp=False`` = no warp (back-compat default;
+    # every pre-Phase-1 CardDef omits it, the registry-dict builder
+    # then omits the ``warp_cost`` key and the Rust parser maps that
+    # absence to ``None``). Phase 1 carries ONLY the pure fixed-cost
+    # shape; the filter guardrail
+    # ``trajectory._printing_is_bridge_pure_warp_creature`` positively
+    # rejects ``warp_additional_life_cost != 0`` /
+    # ``warp_castable_from_graveyard`` (those are Phase 2). The
+    # ``(generic, colored)`` tuple shape, not a ``ManaCost`` object,
+    # keeps CardDef frozen-hashable and matches the existing mana-cost
+    # field convention. The separate ``has_warp`` flag disambiguates
+    # "no warp" from "warp cost {0}" (a free warp — no EoE card has
+    # one today, but the explicit flag matches Python's
+    # ``warp_cost is not None`` semantics, which a ``(0, ())`` tuple
+    # alone could not express).
+    warp_cost_generic: int = 0
+    warp_cost_colored: tuple[tuple[str, int], ...] = ()
+    has_warp: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -8639,6 +8661,20 @@ def build_rust_state(spec: DeckSpec):
             printing_dict["activated_abilities"] = [
                 dict(aa) for aa in card.token_activated_abilities
             ]
+        # warp_cost substrate (Phase 1, round-63): emit the warp_cost
+        # key when the CardDef carries the pure fixed-cost warp shape.
+        # Same mana-dict shape as the base ``mana_cost`` above
+        # (``{"generic":N,"R":1}`` etc.) — exactly what Rust's
+        # ``parse_mana_cost`` consumes. A ``{3}`` warp ->
+        # ``{"generic":3}``; a ``{1}{R}`` warp ->
+        # ``{"generic":1,"R":1}``. ``has_warp=False`` (every pre-
+        # Phase-1 CardDef) omits the key; Rust's parser maps the
+        # absence to ``None`` (back-compat).
+        if card.has_warp:
+            printing_dict["warp_cost"] = dict(
+                (("generic", card.warp_cost_generic),)
+                if card.warp_cost_generic else ()
+            ) | {color: n for color, n in card.warp_cost_colored}
         pid = reg.register_printing(printing_dict)
         name_to_pid[card.name] = pid
 
@@ -8867,6 +8903,21 @@ def _card_def_to_python_printing(card: "CardDef"):
         generic=card.mana_cost_generic,
         colored=tuple(sorted(card.mana_cost_colored)),
     )
+    # warp_cost substrate (Phase 1, round-63): materialize the Python
+    # ``CardPrinting.warp_cost`` from the CardDef warp fields so the
+    # Python side of the bridge produces the warp printing identically
+    # to what the live parser yields. ``warp_cost_str`` is left ""
+    # (cosmetic — the cast path reads ``warp_cost`` (the ManaCost) via
+    # ``effective_warp_cost``, never ``warp_cost_str``; "" is bit-equal
+    # for the bench and matches the existing ``mana_cost_str=""``
+    # convention on every CardDef-materialized printing below).
+    warp_cost = None
+    warp_cost_str = ""
+    if card.has_warp:
+        warp_cost = ManaCost(
+            generic=card.warp_cost_generic,
+            colored=tuple(sorted(card.warp_cost_colored)),
+        )
     # Type-line is reconstructed from card_type + a basic-land
     # subtype heuristic; this is cosmetic for the engine but keeps
     # the printing well-formed.
@@ -8968,6 +9019,11 @@ def _card_def_to_python_printing(card: "CardDef"):
         activated_abilities=activated_abilities,
         triggered_abilities=triggered_abilities,
         keywords=frozenset(card.keywords),
+        # warp_cost substrate (Phase 1, round-63). None for every
+        # non-warp CardDef (back-compat default). Phase-1 guardrail
+        # rejects the life / graveyard riders so they default here.
+        warp_cost=warp_cost,
+        warp_cost_str=warp_cost_str,
     )
 
 

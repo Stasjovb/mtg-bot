@@ -4395,6 +4395,25 @@ pub struct CardPrinting {
     ///
     /// Mirrors Python's `CardPrinting.starting_loyalty: int = 0`.
     pub starting_loyalty: i32,
+    /// **warp_cost substrate (Phase 1, round-63).** EoE "warp"
+    /// alternative cast cost. `Some(cost)` when the printing has a
+    /// pure fixed-`ManaCost` warp (Red Tiger Mechan {1}{R}, Bygone
+    /// Colossus {3}); `None` otherwise (back-compat default — every
+    /// pre-Phase-1 registry dict omits the `warp_cost` key, which the
+    /// parser maps to `None`, identical to the `mana_produced` /
+    /// `power` Option-parse shape). Phase 1 carries ONLY the pure
+    /// fixed-cost shape; `warp_additional_life_cost` /
+    /// `warp_castable_from_graveyard` are Phase 2 (the bridge filter
+    /// `_printing_is_bridge_pure_warp_creature` positively rejects
+    /// them so they never reach this field in a Phase-1 deckspec).
+    ///
+    /// Mirrors Python's `CardPrinting.warp_cost: ManaCost | None`
+    /// at `src/mtg_bot/cards/base.py:515`. The cast pipeline
+    /// (`state_ops_cast.rs::cast_creature_warp`) pays THIS instead of
+    /// `mana_cost` when `Action::CastSpell{use_warp:true}`; the
+    /// legal emitter (`state_ops_legal.rs`) offers the
+    /// `use_warp=true` CastSpell variant iff this is `Some`.
+    pub warp_cost: Option<ManaCost>,
 }
 
 /// Plain Rust container for the printings table. Held behind an
@@ -6488,6 +6507,22 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         }
         None => ManaCost::default(),
     };
+    // warp_cost substrate (Phase 1, round-63). Same dict shape as
+    // `mana_cost` (`{"generic":N,"R":1}`). Missing key -> `None`
+    // (back-compat — every pre-Phase-1 registry dict omits it). This
+    // `match dict.get_item(...)? { Some => ..., None => default }`
+    // shape IS the `#[serde(default)]`-equivalent the existing
+    // optional fields all use; no serde derive needed (CardPrinting
+    // is built via parse_printing from a PyDict, not deserialized).
+    let warp_cost = match dict.get_item("warp_cost")? {
+        Some(wc_any) => {
+            let wc_dict = wc_any.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("warp_cost must be a dict")
+            })?;
+            Some(parse_mana_cost(wc_dict)?)
+        }
+        None => None,
+    };
     let effects = match dict.get_item("effects")? {
         Some(eff_any) => {
             let mut out = Vec::new();
@@ -6716,6 +6751,7 @@ pub fn parse_printing(dict: &Bound<'_, PyDict>) -> PyResult<CardPrinting> {
         triggered_abilities,
         activated_abilities,
         starting_loyalty,
+        warp_cost,
     })
 }
 
