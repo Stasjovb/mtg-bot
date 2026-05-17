@@ -138,26 +138,41 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ PHASE TRANSITION (cycle 11, @ `dea55cff`) — READ FIRST.**
-> The continuous cheap-parallel-refill model has reached genuine
-> exhaustion. As of cycle 11 every agent (both Rust + non-Rust)
-> independently verify-first honest-concluded that **no genuine
-> disjoint single-round Rust slice and no genuine disjoint non-Rust
-> slice remains.** Closed/complete: cheap Tier-A lane; Tier-C
-> target-seating; spell-card-bridge through Phase 2 (admit set 7);
-> warp Phase 1/1.5/2; the round-74/76 bench-divergence trio+residual;
-> the single-clean-probe-idiom frontier; the SoT-flip design corpus +
-> legal_decisions Slice 1 (implemented); the measurement-attribution
-> gap; Aura struck. State: byte-equal **307/475 (64.6%)**, **PROBED
-> 106**, cron exit-0, main green. **The remaining work is a different
-> cadence:** the 8 `genuinely_missing` residue cards are each a
-> MULTI-ROUND, subsystem-entangled, bespoke-Rust project
-> (orchestrator-sequenced ONE AT A TIME — NOT continuous-cheap-refill).
-> A re-orienting routine / next session MUST NOT pad the pipeline back
-> to ≤5 with manufactured marginal slices — that violates the
-> honest-progress discipline every agent has been modeling. This is a
-> deliberate-sequenced-subsystem-cadence vs natural-milestone decision
-> for the orchestrator + user, not an autonomous refill.
+> **⚠ SoT-FLIP PATH — cycle 12, @ `bb29df8d` — READ FIRST.**
+> The cycle-11 phase-transition decision is RESOLVED: the user chose
+> **pivot to the SoT-flip path** (deliberate sequenced flip-execution,
+> NOT continuous cheap-refill). The continuous cheap-parallel-refill
+> model is exhausted (cheap Tier-A; Tier-C target-seating;
+> spell-card-bridge through Phase 2 / admit 7; warp P1/1.5/2; the
+> round-74/76 bench trio+residual; single-clean-probe-idiom frontier;
+> the measurement-attribution gap; Aura struck — all closed). State:
+> byte-equal **307/475 (64.6%)**, **PROBED 106**, cron exit-0, main
+> green.
+>
+> **The SoT-flip is now ~1-2 deliberate orchestrator-sequenced steps,
+> no large hidden gap:**
+> - **C1 decision-sourcing keystone COMPLETE** — Slice 1 mana
+>   (`f1f09bbb`) + Slice 2 target-satisf (`e6e3db58`) + Slice 3
+>   additional-cost (`bb29df8d`); `RustCastSpellSet ==
+>   PythonCastSpellSet` on the live cast surface, all parity-neutral.
+> - **B2/C6 loader-admit soundness boundary CLOSED** (`66485d6d` —
+>   observable + fail-loud + pinned).
+> - **NEXT (the single genuine flip lane): B3 — the NN↔Rust
+>   decision-sourcing wiring SPEC** (now UNBLOCKED; was hard-blocked
+>   until C1 fully landed) → B3 impl → C4 post-R76-fix scaled
+>   re-sweep on the flip-candidate commit → atomic SoT-flip flag +
+>   bake-in → bridge-vestigialization cleanup
+>   (`docs/BRIDGE_VESTIGIALIZATION_PLAN.md`).
+>
+> **Cadence: ONE genuine flip lane at a time. A re-orienting routine /
+> next session MUST NOT pad the pipeline back to ≤5 with manufactured
+> marginal slices** — that violates the honest-progress discipline
+> every agent has modeled. Honest accepted caveat (C6-enforced,
+> visible not silent): post-flip the bot initially plays a reduced
+> ~20%-non-land-slot Forest-padded universe (C4∧C6-fenced; the flip
+> does NOT wait on the whole-pool 64.6% byte-equal number; the 8
+> `genuinely_missing` multi-round subsystem cards remain deliberately
+> deferred, not on the flip critical path).
 
 The campaign **no longer runs synchronized rounds**:
 

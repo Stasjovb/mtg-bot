@@ -753,6 +753,47 @@ second:
    >     orchestrator+user decision, NOT an autonomous pad).
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 12 —
+   >   SoT-FLIP C1 KEYSTONE COMPLETE + B2/C6 CLOSED; @
+   >   `bb29df8d`, counts UNCHANGED, parity 307/475 / PROBED
+   >   106 UNCHANGED).** The user resolved the cycle-11 phase-
+   >   transition decision: **PIVOT TO THE SoT-FLIP PATH**
+   >   (deliberate sequenced flip-execution, NOT continuous
+   >   cheap-refill — do NOT pad the pool).
+   >   - **C1 decision-sourcing keystone COMPLETE at the
+   >     legal-decision-set level:** Slice 1 mana (`f1f09bbb`)
+   >     + Slice 2 target-satisfiability (`e6e3db58`, CR
+   >     601.2c) + Slice 3 additional-cost (`bb29df8d`, CR
+   >     601.2f/h). `RustCastSpellSet == PythonCastSpellSet`
+   >     on the live cast surface; residual = only non-live
+   >     alt-cost axes with NO Rust emission site (no set
+   >     asymmetry). All 3 parity-NEUTRAL (single-script-replay
+   >     subset-preserving proof), negative-control-verified,
+   >     NOT count-shifting. SEARCH_LIMITATIONS legal-set
+   >     entry -> LIVE-SURFACE CLOSED.
+   >   - **B2/C6 loader-admit soundness boundary CLOSED**
+   >     (`66485d6d`): the silent drop+Forest-pad is now an
+   >     observable `LoaderAdmitReport` + fail-loud
+   >     `LoaderAdmitPolicy.RAISE` + pinned invariant;
+   >     parity-neutral default byte-identical. The one
+   >     independent Python-lane hard blocker is gone.
+   >   - **Flip distance: ~1-2 deliberate orchestrator-
+   >     sequenced steps, no large hidden gap.** Critical path:
+   >     **B3 (NN<->Rust decision-sourcing wiring SPEC — now
+   >     UNBLOCKED; was hard-blocked until C1 fully landed)**
+   >     -> B3 impl -> C4 post-R76-fix scaled re-sweep on the
+   >     flip-candidate commit -> atomic SoT-flip flag +
+   >     bake-in -> bridge-vestigialization cleanup
+   >     (`BRIDGE_VESTIGIALIZATION_PLAN.md`). Cadence: ONE
+   >     genuine flip lane at a time; no padding.
+   >   - Honest accepted-staged-flip caveat (now C6-enforced
+   >     & visible, not silent): post-flip the bot initially
+   >     plays a reduced ~20%-non-land-slot Forest-padded
+   >     universe (C4∧C6-fenced; C3 whole-pool admit is a slow
+   >     trajectory — the flip does NOT wait on the 64.6%
+   >     byte-equal number).
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

@@ -304,7 +304,39 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main dea55cff (continuous-pipeline cycle 11 —
+     Measured at main bb29df8d (continuous-pipeline cycle 12 —
+     SoT-FLIP C1 KEYSTONE COMPLETE + B2/C6 CLOSED). The user
+     pivoted the campaign to the SoT-flip path; C1 decision-
+     sourcing is now COMPLETE at the legal-decision-set level:
+     Slice 1 (mana, f1f09bbb) + Slice 2 (target-satisf,
+     e6e3db58, CR 601.2c) + Slice 3 (additional-cost, bb29df8d,
+     CR 601.2f/h) — RustCastSpellSet == PythonCastSpellSet on
+     the live cast surface; residual = only non-live alt-cost
+     axes with NO Rust emission site (no set asymmetry). All 3
+     parity-NEUTRAL, negative-control-verified, NOT count-
+     shifting (Slice-1/CFI-1 class). B2/C6 loader-admit
+     soundness boundary CLOSED (66485d6d: observable
+     LoaderAdmitReport + fail-loud RAISE policy + pinned;
+     parity-neutral default byte-identical). Counts UNCHANGED
+     121/123/23/12/11; POOL_PARITY/PROBED UNCHANGED
+     307/475 / 106 (regen no-op — flip-readiness correctness,
+     not coverage). Slice 3 touched cards.rs (3 back-compat
+     additional_cost_* CardPrinting fields, NOT Effect::
+     variants) -> structural-arm residue cadence fired; all 8
+     genuinely_missing (incl. Sothera) re-stamped
+     verified_absent_at_commit fa3d17b4->bb29df8d (Slices 2/3
+     + C6 ship NO Effect — disjoint from all 8 residue
+     signatures; absence trivially preserved). .pyd rebuilt.
+     **Flip critical path is now ~1-2 deliberate orchestrator-
+     sequenced steps, no large hidden gap:** B3 (NN<->Rust
+     decision-sourcing wiring SPEC — UNBLOCKED now C1 is
+     complete) -> B3 impl -> C4 post-R76-fix scaled re-sweep
+     on the flip-candidate commit -> atomic SoT-flip flag +
+     bake-in -> bridge-vestigialization cleanup. Honest
+     accepted-staged-flip caveat (C6-fenced, visible not
+     silent): post-flip the bot initially plays a reduced
+     ~20%-non-land-slot Forest-padded universe. PRIOR cycle 11
+     (@ dea55cff —
      round-76 confirmed-bug residual FULLY closed + PHASE
      TRANSITION). R76-2 (0627614e: Radiant Strike Destroy* +
      Seedship Impact destroy-half clone now fire DIES byte-equal
