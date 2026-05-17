@@ -613,8 +613,14 @@ def test_self_play_runner_play_one_submits_to_pool_when_enabled(
         lambda **kw: ThreadPoolExecutor(max_workers=kw["max_workers"]),
     )
 
+    seen_nn_device: list = []
+
     def fake_subprocess_play(*, claim, coordinator_url, weights_cache_root,
-                             deck_pool_path, write_structured_tokens=False):
+                             deck_pool_path, write_structured_tokens=False,
+                             nn_device=None):
+        # The runner must forward the daemon's --nn-device selector
+        # into the subprocess body via pool.submit (default None=CPU).
+        seen_nn_device.append(nn_device)
         return {
             "outcome": "completed",
             "winner": 0,
@@ -638,6 +644,7 @@ def test_self_play_runner_play_one_submits_to_pool_when_enabled(
         worker_id="t",
         log_event=lambda n, p: events.append((n, p)),
         deck_pool_path=str(tmp_path / "ignored.json.gz"),
+        nn_device="cuda",
         use_subprocess_pool=True,
     )
     runner.setup("http://test:5099", tmp_path, "self_play", 4)
@@ -650,6 +657,10 @@ def test_self_play_runner_play_one_submits_to_pool_when_enabled(
     assert result.winner == 0
     assert result.n_samples == 7
     assert result.npz_bytes == b"FAKE_NPZ"
+    # The configured --nn-device selector was forwarded into the
+    # subprocess body via pool.submit (deferred-resolution contract:
+    # the parent passes the string, the worker resolves it).
+    assert seen_nn_device == ["cuda"]
     # Subprocess-flagged emit fired (vs the in-thread game_start which
     # doesn't carry mode).
     starts = [p for n, p in events if n == "game_start"]
@@ -669,8 +680,12 @@ def test_eval_runner_play_one_submits_to_pool_when_enabled(
         lambda **kw: ThreadPoolExecutor(max_workers=kw["max_workers"]),
     )
 
+    seen_nn_device: list = []
+
     def fake_subprocess_eval(*, claim, coordinator_url,
-                             weights_cache_root, deck_pool_path):
+                             weights_cache_root, deck_pool_path,
+                             nn_device=None):
+        seen_nn_device.append(nn_device)
         return {
             "outcome": "completed",
             "winner": 0,  # remapped: 0 means "new won"
@@ -692,6 +707,7 @@ def test_eval_runner_play_one_submits_to_pool_when_enabled(
         weights_cache_root=tmp_path,
         worker_id="t",
         deck_pool_path=str(tmp_path / "ignored.json.gz"),
+        nn_device="auto",
         use_subprocess_pool=True,
     )
     runner.setup("http://test:5099", tmp_path, "eval", 4)
@@ -705,6 +721,8 @@ def test_eval_runner_play_one_submits_to_pool_when_enabled(
     assert result.wins_new == 1
     assert result.wins_old == 0
     assert result.draws == 0
+    # --nn-device forwarded into the eval subprocess body too.
+    assert seen_nn_device == ["auto"]
 
 
 def test_self_play_runner_teardown_shuts_down_pool(tmp_path, monkeypatch):

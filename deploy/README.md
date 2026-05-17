@@ -257,6 +257,7 @@ rationale.
 | `--deck-pool-path` | `data/17lands/eoe_decks.json.gz` | Smoke tests against a small pool. |
 | `--weights-cache-root` | `trained_weights` | Shared filesystem deployments where weights live elsewhere. |
 | `--worker-id` | hostname | Two daemons on the same box; otherwise leave alone. |
+| `--nn-device` | `cpu` | **GPU hosts only.** `cuda` (or `auto`) enables GPU NN-eval. See below. |
 | `--spot-watch` | OFF | **AWS EC2 spot workers only.** See below. |
 
 ## AWS EC2 spot workers — `--spot-watch`
@@ -326,6 +327,66 @@ on EC2 and the endpoint is link-local; nothing leaves the instance.
   finish is still lost on that instance and re-queued by the
   coordinator's existing fallback — `--spot-watch` only guarantees
   no *new* work is claimed once the warning lands.
+
+## GPU hosts — `--nn-device`
+
+By default the worker daemon runs NN-eval on **CPU**
+(`--nn-device cpu`, which maps internally to the historical
+`device=None` the production runner has always used). This default
+is deliberate and OFF — every non-GPU worker and the entire existing
+test suite are byte-unaffected, exactly like `--spot-watch`.
+
+On a host with an NVIDIA GPU, `--nn-device cuda` (or `--nn-device
+auto`, which picks `cuda` → `mps` → `cpu` per host) moves NN-eval to
+the GPU. **Validated A/B measured ≈2× per-game at production depth on
+this path:** a clean back-to-back A/B on the production
+structured-correct config path
+(`worker_daemon_production_runner._build_nn_pimc_config`, production
+depth `inner_nodes=200` / `samples=4` / structured v6, 14 workers,
+same box, GPU-util-sampled) measured `device=cuda` ≈ **2.13× faster
+per game** and ≈ **1.95× higher throughput** than `device=cpu`, with
+the GPU genuinely used (42% mean / 93% peak util; the cpu arm's GPU
+idle). Default stays OFF because per-worker CUDA-context init under
+Windows-spawn can deadlock — enable it only on hosts you've confirmed
+have a working CUDA torch build.
+
+**This is PER-PROCESS eval.** Each subprocess-pool worker builds its
+own `NNEvaluator` on the GPU. The batched **SHM eval server** (one
+shared GPU evaluator fanned out to all workers) is a separate,
+further optimization and is **not included here** — this change only
+makes the existing per-process evaluator able to use the GPU.
+
+**Correctness — why this is safe under spawn/fork.** The daemon
+parent / claim-loop thread **never** calls `auto_device()` /
+`torch.cuda.is_available()`. The selector is carried as a plain
+string (`"auto"` / `"cuda"`) through `ClaimLoopConfig` into the
+production runner and only resolved **inside the subprocess** in
+`NNPimcConfig.build()` — the same proven deferred-sentinel pattern
+the distributed shard runners and the `per_game_wall` bench use.
+Priming the CUDA driver in the parent before the subprocess pool
+spawns is exactly what breaks Windows-spawn (deadlock) /
+Linux-fork ("Cannot re-initialize CUDA in forked subprocess"); the
+sentinel pattern structurally avoids it.
+
+**Enable it on the GPU host's service file.** Worker-owned config —
+bake `--nn-device cuda` into the daemon's `ExecStart`, same place as
+`--n-workers` / `--deck-pool-path`:
+
+```ini
+ExecStart=${VENV_PYTHON} -m mtg_bot.worker_daemon \
+  --host ${TAILNET_IP} \
+  --port 5198 \
+  --n-workers ${N_WORKERS} \
+  --deck-pool-path ${REPO_ROOT}/data/17lands/eoe_decks.json.gz \
+  --weights-cache-root ${REPO_ROOT}/trained_weights \
+  --nn-device cuda
+```
+
+(On Windows that's the Task-Scheduler action's argument list; on
+Linux/systemd it's the unit's `ExecStart` as shown.) Leave the `cpu`
+default on CPU-only workers and in tests. Smoke-check the host's
+torch build first:
+`python -c "import torch; print(torch.cuda.is_available())"`.
 
 ## Self-update (`POST /v2/self_update`)
 
