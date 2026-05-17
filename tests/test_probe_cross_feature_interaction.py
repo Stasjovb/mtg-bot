@@ -974,3 +974,323 @@ def test_depressurize_debuffs_surviving_warp_creature_then_sweep_exiles_it():
         f"survivor) FULL compare_fields diverged: "
         f"{[(x.field, x.py_value, x.rust_value) for x in fd]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Interaction 4 — Depressurize DESTROYING a creature that carries a
+# ``DIES`` triggered ability (the round-74 post-spell-admit bench-sweep
+# discovery R74-2; Rust-side, Python ``src/mtg_bot/`` is SoT).
+#
+# **The divergence (R74-2 — NEW, now FIXED Rust-side).** Rust's
+# ``Effect::DepressurizeEffect`` conditional-destroy branch is a
+# HAND-ROLLED destroy (it ``bf.remove``s the object, sets
+# ``zone=GRAVEYARD``, pushes to the graveyard, calls
+# ``mark_left_battlefield_if_nonland``, and pushed ONLY
+# ``pending_leaves_dispatches``). It NEVER pushed
+# ``pending_dies_dispatches`` — so a destroyed creature's
+# ``Event.DIES`` triggered ability silently never fired. Python's
+# ``DepressurizeEffect.resolve`` (``effects/bespoke.py:1589``) calls
+# ``turn.destroy`` → ``move_off_battlefield`` (``turn.py:253-283``)
+# which fires the DIES trigger (``_fire_dies_triggers`` + the
+# predicate-path ``dispatch_event(Event.DIES)``) BEFORE the LEAVES
+# trigger — so Python correctly produces the dies-trigger's token /
+# effect. The generic SBA destroy path (``state_ops_sba.rs``
+# :467-482) ALREADY pushes BOTH ``pending_dies_dispatches`` (creature-
+# gated) and ``pending_leaves_dispatches`` and drains DIES-then-LEAVES
+# (:497/:503); the hand-rolled Depressurize arm diverged from BOTH
+# Python (SoT) AND Rust's own generic destroy path. Empirically
+# surfaced by the round-74 sweep: Depressurize destroying **Gravpack
+# Monoist** (``Event.DIES / IsSelf → CreateToken(Robot, tapped)``)
+# produced the Robot token on Python but not on Rust (single-field
+# ``battlefield`` divergence; no ``graveyard_pX`` component → distinct
+# from CFI-1, which is the SAME arm's separate already-closed stray
+# ``obj.counters = 0;``). Repro
+# ``bench_trajectory_parity --archetype 216 --seed 0``; full
+# diagnosis in ``docs/bench_trajectory_parity_smoke.md`` round-74.
+#
+# **Fix (this slice, Rust-side, new-code-is-right).** The
+# DepressurizeEffect destroy branch now pushes
+# ``pending_dies_dispatches`` (creature-gated, exactly mirroring the
+# SBA path's ``victim_is_creature`` gate) BEFORE the existing
+# ``pending_leaves_dispatches`` push, and the four spell/trigger
+# resolution sites in ``state_ops_resolve.rs`` now drain
+# ``pending_dies_dispatches`` immediately BEFORE
+# ``pending_leaves_dispatches`` (DIES drained then LEAVES → LIFO
+# resolution → LEAVES resolves first, byte-equal to the SBA path +
+# Python's ``move_off_battlefield`` sequence). Outside ``apply_sbas``
+# (which self-drains) the ONLY producer of ``pending_dies_dispatches``
+# is this DepressurizeEffect arm, so the added drains are a verified
+# no-op for every pre-R74-2 resolution. Python untouched (SoT,
+# correct). A faithful parity fix aligning the Rust outlier to Python
+# + Rust's own generic destroy path — NOT a shortcut, so no
+# ``SEARCH_LIMITATIONS.md`` entry is warranted (the CFI-1 precedent).
+#
+# **Disjointness.** A distinct cross-feature dimension from every
+# sibling probe: a removal spell DESTROYING a creature whose own
+# ``DIES`` trigger then resolves. The isolated Depressurize probe
+# (``test_parity_smoke.py``) kills only vanilla / counter'd creatures
+# (no DIES trigger); CFI-1's negative control kills a counter'd
+# creature (no DIES trigger). No isolated probe casts Depressurize at
+# a DIES-trigger creature so the conditional-destroy reaches the
+# dies-dispatch path.
+# ---------------------------------------------------------------------------
+
+
+def _gravpack_dies_token_trigger_dict(robot_pid):
+    """The Gravpack-Monoist-shaped DIES→CreateToken trigger dict
+    (the EXACT parsed shape: ``Event.DIES / IsSelf →
+    CreateToken(Robot, count=1, tapped=True)``; the ``tapped`` rider
+    is a Python-side-only flag with no Rust ``CreateToken`` mirror per
+    the ``create_token`` bridge arm docstring, so it is OMITTED from
+    the cross-engine dict — both engines mint an untapped Robot
+    byte-equal, which is the R74-2 observable). Consumed identically
+    by Rust ``register_and_inject_object`` and the Python bridge
+    translator ``_ta_dict_to_python_triggered_ability``."""
+    return {
+        "event": "dies",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {
+            "kind": "create_token",
+            "count": 1,
+            "token_printing_id": robot_pid,
+        },
+    }
+
+
+def _seat_dies_trigger_creature(py, rs, *, robot_pid):
+    """Seat one identical p0-controlled 2/1 creature carrying the
+    Gravpack-Monoist DIES→CreateToken(Robot) trigger on BOTH engines'
+    battlefields. The Robot token printing is pre-registered at
+    ``robot_pid`` via the ``DeckSpec.card_defs`` path (a registry
+    entry with NO live object on EITHER engine — see the caller), so
+    NO library/id-offset asymmetry is introduced (a registration
+    DUMMY object would diverge a FULL field view). The Python bridge
+    side resolves the same pid via the canonical
+    ``register_token_printing`` +
+    ``_ta_dict_to_python_triggered_ability`` pattern. Returns
+    ``(py_obj, rs_id)``."""
+    from mtg_bot.cards.base import (
+        CardPrinting, ManaCost, make_token_creature,
+    )
+    from mtg_bot.game import Zone
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_triggered_ability,
+        clear_token_printings, register_token_printing,
+    )
+
+    ZONE_BATTLEFIELD = 2
+
+    trig_dict = _gravpack_dies_token_trigger_dict(robot_pid)
+
+    # ---- Rust: inject the DIES-trigger creature onto p0's bf (the
+    # Robot printing is already in the registry at robot_pid via the
+    # caller's card_defs). ----
+    rs_creature_dict = {
+        "name": "Gravpack R74-2 Probe",
+        "card_types": ["Creature"],
+        "power": 2,
+        "toughness": 1,
+        "effects": [],
+        "triggered_abilities": [trig_dict],
+    }
+    rs_id = rs.register_and_inject_object(
+        rs_creature_dict, 0, ZONE_BATTLEFIELD)
+
+    # ---- Python: register the matching Robot token printing against
+    # Rust's pid via the bridge, then assemble the DIES-trigger
+    # creature using the SAME trigger-dict shape Rust consumed (the
+    # canonical cross-engine pattern). ----
+    py_robot_token = make_token_creature(
+        name="Robot R74-2 Probe",
+        power=2,
+        toughness=2,
+        subtypes=("Robot",),
+        artifact=True,
+    )
+    clear_token_printings()
+    register_token_printing(robot_pid, py_robot_token)
+    py_trig = _ta_dict_to_python_triggered_ability(trig_dict)
+    py_printing = CardPrinting(
+        name="Gravpack R74-2 Probe",
+        mana_cost_str="", mana_cost=ManaCost(generic=0),
+        type_line="Creature", supertypes=(),
+        card_types=("Creature",), subtypes=(),
+        power=2, toughness=1, produces=frozenset(),
+        triggered_abilities=(py_trig,),
+    )
+    py_obj = py.new_object(py_printing, owner_id=0, zone=Zone.BATTLEFIELD)
+    py_obj.summoning_sick = False
+    py_obj.tapped = False
+    py_obj.damage = 0
+    py_obj.etb_timestamp = py.next_timestamp
+    py.next_timestamp += 1
+    py.battlefield.append(py_obj)
+    return py_obj, rs_id
+
+
+def _cast_depressurize_then_drain(py, rs, py_obj, rs_id):
+    """Cast genuine Depressurize (Python: the ACTUAL parsed EoE
+    ``spell_effect`` on a ``StackItem``; Rust: the bridged
+    ``depressurize_effect`` synthetic Instant) targeting the seated
+    creature, then FULLY drain both stacks (Depressurize resolves →
+    destroys → the creature's DIES trigger lands on the stack →
+    resolves → Robot token), run SBA on both. Returns the post-drain
+    FULL ``compare_fields`` diff list."""
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.bespoke import DepressurizeEffect
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view, compare_fields,
+        parity_smoke as ce_parity_smoke,
+    )
+    from mtg_bot.turn import state_based_actions as py_sba
+
+    dp = get_active_source().get_printings().get("Depressurize")
+    if dp is None:
+        pytest.skip("Depressurize absent from CardSource")
+    assert isinstance(dp.spell_effect, DepressurizeEffect), (
+        f"genuine Depressurize spell_effect must be DepressurizeEffect;"
+        f" got {type(dp.spell_effect).__name__}"
+    )
+    assert dp.spell_effect.power_penalty == 3
+
+    # ---- Python: genuine Depressurize as a real spell_effect. ----
+    py_spell = py.new_object(dp, owner_id=0, zone=Zone.STACK)
+    py_spell.summoning_sick = False
+    py.stack.append(
+        StackItem(source=py_spell, controller_id=0,
+                  targets=(("creature", py_obj.id),))
+    )
+    while py.stack:
+        resolve_top_of_stack(py)
+    py_sba(py)
+    assert len(py.stack) == 0
+
+    # ---- Rust: bridged depressurize_effect synthetic Instant. ----
+    rs_spell_id = rs.register_and_inject_object(
+        {"name": "Depressurize", "card_types": ["Instant"],
+         "effects": [{"kind": "depressurize_effect",
+                      "power_penalty": 3}]}, 0, 0)
+    rs.push_to_stack(rs_spell_id, 0)
+    while rs.stack_size() > 0:
+        rs.resolve_top_of_stack()
+    rs.apply_sbas()
+    assert rs.stack_size() == 0
+
+    return compare_fields(
+        build_python_field_view(py),
+        ce_parity_smoke()._build_field_view(rs),
+    )
+
+
+def test_depressurize_destroying_dies_trigger_creature_fires_token_r74_2():
+    """**Interaction 4 — Depressurize destroying a ``DIES``-trigger
+    creature MUST fire the dies-trigger byte-equal (R74-2 closed).**
+
+    p0 controls a 2/1 carrying the genuine Gravpack-Monoist-shaped
+    ``Event.DIES / IsSelf → CreateToken(Robot)`` triggered ability.
+    p0 casts the genuine Depressurize on it: -3/-0 UEOT → eff power
+    2-3 = -1 ≤ 0 → ``destroy()``. Python's destroy → the creature's
+    DIES trigger fires → a Robot token enters under p0's control.
+    Pre-R74-2 Rust's hand-rolled DepressurizeEffect destroy arm
+    pushed only ``pending_leaves_dispatches`` and NEVER
+    ``pending_dies_dispatches``, so the Robot token NEVER appeared on
+    Rust — a single-field ``battlefield`` divergence (the R74-2
+    bench-sweep discovery).
+
+    Post-fix the Rust arm pushes ``pending_dies_dispatches``
+    (creature-gated, mirroring the SBA path) and the resolution sites
+    drain DIES-before-LEAVES, so the Robot token appears byte-equal
+    on BOTH engines. Asserts:
+
+      * the original creature is DEAD on BOTH (Depressurize's
+        conditional destroy succeeded — no indestructible);
+      * exactly ONE Robot token on p0's battlefield on BOTH (the
+        dies-trigger fired);
+      * FULL ``compare_fields`` == [] over the WHOLE cross-engine
+        field view (the strongest tier — a missing dies-trigger
+        token, a wrong controller, or a wrong post-destroy zone
+        state on either engine flips this and FAILs loudly).
+
+    This is the permanent regression pin for the CLOSED Rust-side
+    divergence R74-2. Distinct from CFI-1's negative control (a
+    counter'd creature with NO dies-trigger killed by Depressurize)
+    and the isolated Depressurize §2 probes (vanilla / counter'd, no
+    dies-trigger).
+    """
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, build_python_state, build_rust_state,
+    )
+
+    # The Robot token printing is registered via card_defs (NOT in
+    # any library) so BOTH engines get a registry entry at a
+    # deterministic pid with NO live object and NO id consumed — a
+    # registration-DUMMY live object would shift every subsequent
+    # object's id slot and leave an asymmetric library entry,
+    # diverging the FULL field view (the harness-artifact the first
+    # draft of this pin surfaced; fixed new-code-is-right by the
+    # no-dummy card_defs registration, the established
+    # build_rust_state/build_python_state symmetric-id idiom).
+    robot_carddef = CardDef(
+        name="Robot R74-2 Probe",
+        card_type="Creature",
+        extra_card_types=("Artifact",),
+        power=2,
+        toughness=2,
+    )
+    spec = DeckSpec(
+        card_defs=(robot_carddef,), p0_library=(), p1_library=())
+    py = build_python_state(spec)
+    rs = build_rust_state(spec)
+    # The Robot is the SOLE registered printing → its pid is 0
+    # (deterministic: card_defs registration order, empty libraries).
+    assert rs.registry_size == 1, (
+        f"probe pre-condition: Robot must be the only registered "
+        f"printing (pid 0); got registry_size={rs.registry_size}"
+    )
+    robot_pid = 0
+
+    py_obj, rs_id = _seat_dies_trigger_creature(
+        py, rs, robot_pid=robot_pid)
+    diffs = _cast_depressurize_then_drain(py, rs, py_obj, rs_id)
+
+    # The original creature is dead on BOTH (destroy succeeded).
+    py_alive = any(o.id == py_obj.id for o in py.battlefield)
+    rs_alive = any(e["id"] == rs_id
+                   for e in rs.battlefield_snapshot())
+    assert py_alive is False and rs_alive is False, (
+        f"Depressurize -3/-0 on a printed 2/1 → eff power -1 ≤ 0 → "
+        f"destroy() SUCCEEDS → the creature dies on BOTH; "
+        f"py_alive={py_alive} rs_alive={rs_alive}"
+    )
+
+    # Exactly one Robot token on p0's bf on BOTH (the DIES trigger
+    # fired). This is the R74-2 observable: pre-fix Rust had ZERO.
+    py_robots = [
+        o for o in py.battlefield
+        if o.controller_id == 0
+        and o.printing.name == "Robot R74-2 Probe"
+    ]
+    rs_robots = [
+        e for e in rs.battlefield_snapshot()
+        if e.get("printing_name") == "Robot R74-2 Probe"
+    ]
+    assert len(py_robots) == 1, (
+        f"Python: Depressurize-destroyed Gravpack's DIES trigger must "
+        f"create exactly 1 Robot token; got {len(py_robots)}"
+    )
+    assert len(rs_robots) == 1, (
+        f"R74-2 regression — Rust: the Depressurize-destroyed "
+        f"DIES-trigger creature's token MUST fire (the hand-rolled "
+        f"destroy arm now pushes pending_dies_dispatches); got "
+        f"{len(rs_robots)} Robot tokens (pre-fix bug = 0)"
+    )
+
+    # FULL cross-engine field view byte-equal — no carve-out.
+    assert diffs == [], (
+        f"R74-2 regression — a Depressurize-destroyed DIES-trigger "
+        f"creature must be byte-equal across the WHOLE field view "
+        f"(the dies-trigger's Robot token fires on BOTH engines); "
+        f"diffs={diffs}"
+    )
