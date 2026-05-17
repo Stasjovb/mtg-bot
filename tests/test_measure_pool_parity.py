@@ -178,6 +178,138 @@ def test_genuine_probed_cards_real_inventory_nonempty(mod):
     assert probed <= pool
 
 
+# ----------------------- HONEST-MEASUREMENT-TOOLING fix: the dedicated
+# ``tests/test_probe_covered_unprobed_*.py`` batch modules are now
+# credited at the SAME bar as the smoke-file probes (the cycle-4 flag
+# resolution). The integrity guard cuts BOTH ways: genuinely-probed
+# batch cards ARE counted; a synthetic non-probe binding is NOT.
+
+
+def test_probe_modules_credited_and_apostrophe_names_not_undercounted(
+    mod,
+):
+    """The four dedicated batch probe modules' genuine real-EoE
+    ``*_parity`` cards are credited PROBED — including the
+    apostrophe-name cards (``Sami's Curiosity`` / ``Faller's
+    Faithful`` / ``Mm'menon, Uthros Exile``) a function-name-slug
+    match would silently UNDERCOUNT (the precise measurement bug this
+    fix closes). Each named card is verified to be a live pool printing
+    so the assertion can't pass on a stale fixture."""
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+
+    pool = set(OracleParserCardSource().get_printings().keys())
+    smoke_only = mod._smoke_probed_cards(pool, SMOKE_TEST)
+    union = mod.genuine_probed_cards(pool)
+    net_new = union - smoke_only
+    # The fix MUST add the batch modules' genuine cards (the
+    # understatement the cycle-4 flag tracked) — a healthy lower bound
+    # so a regression that silently stops scanning a module fails here.
+    assert len(net_new) >= 25, (
+        f"expected the batch modules to add >=25 net-new genuine "
+        f"PROBED cards; got {len(net_new)} — the probe-module scan "
+        f"regressed (cycle-4 honest-measurement-tooling fix)"
+    )
+    # The apostrophe-name cards the slug rule truncates at the embedded
+    # quote MUST be credited via the genuine-binding detector.
+    for nm in (
+        "Sami's Curiosity",
+        "Faller's Faithful",
+        "Mm'menon, Uthros Exile",
+    ):
+        assert nm in pool, f"{nm!r} drifted out of the live pool — re-pin"
+        assert nm in union, (
+            f"{nm!r} is genuinely real-EoE probed in a batch module "
+            f"but NOT credited — the apostrophe-name undercount the "
+            f"genuine-binding detector exists to fix has regressed"
+        )
+    # And a clean spot-check from each batch module (the idiom is
+    # uniform; pin one representative per file).
+    for nm in (
+        "Embrace Oblivion",      # batch A
+        "Gravpack Monoist",      # batch B
+        "Gravkill",              # batch C
+        "Divert Disaster",       # batch D
+        "Lost in Space",         # batch E
+    ):
+        assert nm in union, f"{nm!r} batch probe not credited PROBED"
+
+
+def test_probe_module_synthetic_nonprobe_is_not_counted(
+    mod, tmp_path
+):
+    """**The integrity guard (the metric's teeth cut BOTH ways).** A
+    function in a probe module that does NOT meet the bar must NOT be
+    credited:
+
+      * a ``*_parity`` function that binds a name which is NOT a live
+        pool card (a synthetic stub / typo) — NOT counted;
+      * a non-``_parity`` function (``*_divergence_pin`` — pins a KNOWN
+        divergence, the opposite of byte-equality) — NOT counted even
+        though it binds a real pool card;
+      * a real-pool ``get_printings()`` binding OUTSIDE any
+        ``*_parity`` function body (module-level / a helper) — NOT
+        counted.
+
+    Only a genuine ``*_parity`` function binding a real pool card is
+    credited — the SAME bar the 60 smoke-file PROBED cards meet."""
+    fake_mod = tmp_path / "test_probe_fake.py"
+    fake_mod.write_text(
+        # (1) genuine *_parity binding a REAL pool card -> CREDITED.
+        "def test_cross_engine_real_eoe_real_card_x_parity():\n"
+        '    real = get_active_source().get_printings().get("Honor")\n'
+        "    assert real\n"
+        # (2) *_parity binding a SYNTHETIC (non-pool) name -> NOT.
+        "def test_cross_engine_real_eoe_fake_y_parity():\n"
+        '    s = get_printings().get("Totally Synthetic Stub")\n'
+        "    assert s\n"
+        # (3) *_divergence_pin binding a real pool card -> NOT.
+        "def test_cross_engine_real_eoe_divpin_z_divergence_pin():\n"
+        '    r = get_printings().get("Bombard")\n'
+        "    assert r\n"
+        # (4) real-pool binding OUTSIDE any *_parity fn -> NOT.
+        '_MODULE_LEVEL = get_printings().get("Gravkill")\n'
+        "def _helper():\n"
+        '    return get_printings().get("Plasma Bolt")\n',
+        encoding="utf-8",
+    )
+    pool = {
+        "Honor",
+        "Bombard",
+        "Gravkill",
+        "Plasma Bolt",
+        # NB: "Totally Synthetic Stub" is intentionally NOT in the pool.
+    }
+    got = mod._probe_module_probed_cards(pool, fake_mod)
+    assert got == {"Honor"}, (
+        f"only the genuine *_parity probe of a REAL pool card may be "
+        f"credited; got {sorted(got)} (synthetic stub / divergence_pin "
+        f"/ out-of-fn binding must all be excluded — the integrity "
+        f"guard)"
+    )
+    # Defensive: a missing module path yields the empty set, never an
+    # error (mirrors the smoke detector's never-block contract).
+    assert mod._probe_module_probed_cards(
+        pool, tmp_path / "does_not_exist.py"
+    ) == set()
+
+
+def test_genuine_probed_cards_union_is_superset_of_smoke_only(mod):
+    """The union detector can only ADD cards (set union) — it must
+    never DROP a card the original smoke-only rule credited (the 60
+    pre-fix PROBED cards are byte-for-byte preserved; the headline
+    byte-equal total is unchanged because the net-new cards merely move
+    from covered-by-construction to the stronger PROBED tier)."""
+    from mtg_bot.cards.parser.source import OracleParserCardSource
+
+    pool = set(OracleParserCardSource().get_printings().keys())
+    smoke_only = mod._smoke_probed_cards(pool, SMOKE_TEST)
+    union = mod.genuine_probed_cards(pool)
+    assert smoke_only <= union, (
+        "the union detector dropped a smoke-only PROBED card — it must "
+        "be strictly additive"
+    )
+
+
 # --------------------------------------------- residue worklist parsing
 
 
