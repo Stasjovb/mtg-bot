@@ -4075,6 +4075,118 @@ general nested-trigger-grant subsystem intentionally NOT exercised).
 
 ---
 
+## Radiant Strike — `DestroyTargetArtifactOrTappedCreature` Effect half shipped byte-equal; full Instant stays loader-gated (no spell-card bench-admit path)
+
+**Location**: `rust/src/cards.rs`
+(`Effect::DestroyTargetArtifactOrTappedCreature` field-free unit
+variant + `parse_effect` arm
+`destroy_target_artifact_or_tapped_creature` +
+`effect_to_pydict` arm) + `rust/src/state_ops_resolve.rs` (the
+resolve match arm beside `Effect::DestroyTargetArtifact` — clones the
+artifact arm's body verbatim, widening only the `find_map` predicate
+from `card_types.contains("Artifact")` to
+`is_artifact || (is_creature && obj.tapped)`; identical
+indestructible-skip / `Arc::make_mut` remove→graveyard /
+`mark_left_battlefield_if_nonland` / `pending_leaves_dispatches` /
+`queue_token_cease` tail). Bridge arm
+`src/mtg_bot/parity/cross_engine.py`
+(`destroy_target_artifact_or_tapped_creature`, immediately above the
+`PHASE5_BRIDGE_ARMS` sentinel). Python class (pre-existing, NOT new):
+`DestroyTargetArtifactOrTappedCreature`
+(`src/mtg_bot/effects/generic/destroy.py:475`) — a `Destroy` subclass
+whose `__post_init__` sets `targets = (TargetSpec(IsArtifact() |
+(IsCreature() & IsTapped())),)`; the exact class the genuine Radiant
+Strike printing's inner `Sequence` leg already parses to.
+
+**What the shortcut is**: Radiant Strike (~17,744 17lands decks) is an
+`[Instant] {3}{W}` printing "Destroy target artifact or tapped
+creature. You gain 3 life." The genuine parsed printing's
+`spell_effect` is
+`Sequence((DestroyTargetArtifactOrTappedCreature(targets=(TargetSpec(
+ObjectOr(IsArtifact(), ObjectAnd(IsCreature(), IsTapped()))),)),
+GainLife(amount=3)))`. The `Sequence` combinator AND `GainLife{3}`
+were already live Rust variants + bridge arms; the **only**
+genuinely-new surface this slice ships is the inner typed-OR destroy
+filter (`DestroyTargetArtifactOrTappedCreature`), a sibling of the
+shipped `DestroyTargetArtifact` / `DestroyTargetNoncreaturePermanent`
+arms with the scan predicate widened to admit artifacts OR *tapped*
+creatures. The `obj.tapped` term is read off the scanned live
+`GameObject` (the round-53 effective-state lesson — the engine has no
+continuous-effect tap-state layer, so `obj.tapped` IS the effective
+tapped state both engines agree on; an untapped non-artifact creature
+is NOT a legal pick — the OR-filter teeth, re-verified at resolution
+per CR 608.2b on both engines). The **deliberate divergence is NOT in
+the closed Effect half** (byte-equal — see below) but in the
+**scope**: the **full Radiant Strike Instant is NOT added to the
+production-deck loader `_SAFE_*` allowlist** (no loader admit). There
+is no Instant/Sorcery bench-admit path at all — `CardDef.card_type` ∈
+{Land, Creature} and `_printing_is_bridge_simple_creature` positively
+rejects `spell_effect is not None`. Every Effect-uncovered Tier-A card
+is an Instant/Sorcery carrying a `spell_effect`, so none is
+bench-admissible until the separate shared spell-card-bridge lever (a
+`CardDef` spell shape + a `_printing_is_bridge_spell` predicate) is
+built.
+
+**Why it's OK / which scenarios make it not-OK / failure mode**: this
+is the honest Effect-half-closes / full-card-stays-gated split
+established by r51 (Monoist), r52 (Extinguisher), r53 (Mightform), r54
+(Famished Worldsire), r56 (Dauntless Scrapbot), r57 (Faller's
+Faithful), r60 (Perigee Beckoner). The closed half round-trips
+byte-equal — the genuine real-EoE probe drives the ACTUAL parsed
+Radiant Strike printing's `spell_effect` (the real `Sequence`) on the
+Python side via a `StackItem` with the chosen object target, vs the
+bridged `{"kind":"sequence","effects":[{"kind":
+"destroy_target_artifact_or_tapped_creature"},{"kind":"gain_life",
+"amount":3}]}` synthetic Instant on Rust, and asserts byte-equality on
+two arms: (POSITIVE) a tapped creature is destroyed → p1 graveyard on
+BOTH and the caster gains 3 life on BOTH; (NEGATIVE) an untapped
+non-artifact creature is NOT a legal pick → the destroy no-ops on
+BOTH but the unconditional +3-life Sequence leg STILL resolves on
+BOTH. The NOT-OK scenario is admitting the full Instant to the bench
+loader, which is structurally impossible today (no spell-card admit
+path) — i.e. there is **no real-card-exposed divergence**: the card is
+not on any `_SAFE_*` allowlist and no production path drives it.
+
+**Fix scope estimate**: the Effect half (the typed-OR destroy filter +
+its composition inside the already-live Sequence + GainLife shell) is
+**complete**. Flipping the full Radiant Strike Instant into the
+production-deck bench needs the separate shared spell-card-bridge
+lever (a `CardDef` spell shape + a `_printing_is_bridge_spell`
+predicate) — one shared ~1-2-round substrate that unblocks ALL ~31
+Effect-uncovered Tier-A cards' bench admit at once (the
+Station-subsystem analogue), recommended to be sequenced after 3-5
+Tier-A Effects are closed. Deferred to that lever; not this slice.
+
+**Impact estimate**: zero production strength cost (Radiant Strike not
+on the loader allowlist; no production exposure). The
+real-card-coverage progress is the honest closure of the closeable
+Effect half (Radiant Strike leaves the Effect-uncovered Tier-A
+bucket — its emitted classes
+`DestroyTargetArtifactOrTappedCreature` / `Sequence` / `GainLife`
+become a subset of the covered set) + honest pinning of the
+loader-gated spell-card-bridge remainder.
+
+**Pinned by**: 5 cross-engine bridge pins
+(`tests/test_cross_engine_etb_triggers.py::test_bridge_destroy_target_artifact_or_tapped_creature_basic_translation`
++ `..._dtaotc_targets_set_to_artifact_or_tapped_creature` +
+`..._dtaotc_extra_keys_silently_ignored` +
+`..._dtaotc_equality_with_default_constructor` +
+`..._dtaotc_composable_in_radiant_strike_sequence`); 6 Rust regression
+pins (`tests/test_parity_smoke.py::test_rust_dtaotc_*` — destroys an
+artifact; destroys a tapped creature; an untapped creature is NOT
+destroyed (the OR-filter teeth); an indestructible artifact survives;
+the full `Sequence([destroy, gain_life{3}])` resolves
+destroy-then-+3-life in order; a destroyed artifact token ceases to
+exist); 1 genuine real-EoE cross-engine probe
+(`tests/test_parity_smoke.py::test_cross_engine_real_eoe_radiant_strike_destroy_or_gain_parity`
+— drives the actual parsed Radiant Strike printing's `spell_effect`
+cross-engine, POSITIVE tapped-creature-destroyed + NEGATIVE
+untapped-creature-survives arms, byte-equal incl. the unconditional
++3-life leg on the fizzle path; the spell-card bench-admit lever
+intentionally NOT exercised).
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,

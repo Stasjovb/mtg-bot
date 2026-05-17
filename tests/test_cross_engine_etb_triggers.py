@@ -20473,5 +20473,117 @@ def test_r65_warp_p15_trio_bridge_offers_same_base_warp_castspell_pair():
         f"py={py_pair} rs={rs_pair}")
 
 
+def test_bridge_destroy_target_artifact_or_tapped_creature_basic_translation():
+    """Effect-uncovered Tier-A queue #1 — Radiant Strike inner half.
+    Rust ``{"kind": "destroy_target_artifact_or_tapped_creature"}``
+    translates to Python ``DestroyTargetArtifactOrTappedCreature()``.
+
+    Mirrors Rust's parse_effect arm (unit variant — no fields).
+    Python's class is a ``Destroy`` subclass that sets ``targets``
+    to ``(TargetSpec(IsArtifact() | (IsCreature() & IsTapped())),)``
+    in ``__post_init__``.
+    """
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetArtifactOrTappedCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_artifact_or_tapped_creature"}
+    )
+    assert isinstance(e, DestroyTargetArtifactOrTappedCreature)
+
+
+def test_bridge_dtaotc_targets_set_to_artifact_or_tapped_creature():
+    """Bridge arm pin: ``__post_init__`` wires the ``targets`` tuple
+    to a single ``TargetSpec(IsArtifact() | (IsCreature() &
+    IsTapped()))``. Pins the typed-OR filter shape — a bug that
+    dropped the ``__post_init__`` would leave ``targets`` empty and
+    make the resolver pick anything (the OR-filter teeth are the
+    whole new behavior).
+    """
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetArtifactOrTappedCreature,
+    )
+    from mtg_bot.effects.object_predicates import (
+        IsArtifact, IsCreature, IsTapped,
+    )
+    from mtg_bot.effects.targets import TargetSpec
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_artifact_or_tapped_creature"}
+    )
+    assert isinstance(e, DestroyTargetArtifactOrTappedCreature)
+    expected = IsArtifact() | (IsCreature() & IsTapped())
+    assert e.targets == (TargetSpec(expected),)
+
+
+def test_bridge_dtaotc_extra_keys_silently_ignored():
+    """Bridge arm pin: extra keys on the dict are silently dropped
+    (mirrors Rust's unit-variant parse arm which takes no fields and
+    simply returns the variant — no extra-key validation; the
+    silent-drop convention shared by sister unit-variant arms).
+    """
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetArtifactOrTappedCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_artifact_or_tapped_creature",
+         "spurious": 42}
+    )
+    assert isinstance(e, DestroyTargetArtifactOrTappedCreature)
+
+
+def test_bridge_dtaotc_equality_with_default_constructor():
+    """Bridge arm pin: round-trip equality. Translated effect equals
+    a directly-constructed ``DestroyTargetArtifactOrTappedCreature()``
+    — the bare unit-shape carries no parameters so equality is
+    structural (including the ``__post_init__``-set ``targets``).
+    """
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetArtifactOrTappedCreature,
+    )
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "destroy_target_artifact_or_tapped_creature"}
+    )
+    assert e == DestroyTargetArtifactOrTappedCreature()
+
+
+def test_bridge_dtaotc_composable_in_radiant_strike_sequence():
+    """Round-trip the FULL Radiant Strike shape through the recursive
+    Sequence translator: ``Sequence([
+    DestroyTargetArtifactOrTappedCreature(), GainLife(3)])``. Pins
+    the new destroy arm composes with the already-live ``sequence``
+    / ``gain_life`` arms end-to-end (the exact dict the Rust
+    ``effect_to_pydict`` emits for the real card).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetArtifactOrTappedCreature,
+    )
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "destroy_target_artifact_or_tapped_creature"},
+                {"kind": "gain_life", "amount": 3},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DestroyTargetArtifactOrTappedCreature)
+    assert isinstance(e.effects[1], GainLife)
+    assert e.effects[1].amount == 3
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
