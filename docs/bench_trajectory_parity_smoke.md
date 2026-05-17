@@ -3993,3 +3993,210 @@ CLEANUP arm must expire UEOT P/T modifiers to match Rust's
 comment); repro `--archetype 52329 --seed 7`. Out of this
 bench-sweep slice's scope (gate-pinned parity module, needs its own
 parity-safety analysis; no-fallback-hybrid discipline).
+
+## Round 75 (2026-05-17) — R74-3 FIXED: `advance_phase_python` CLEANUP arm now expires UEOT P/T modifiers (CR 514.3) IDENTICALLY to Rust's `advance_phase`; the dedicated reviewed non-Rust harness slice round-74 carried forward — parity-safe (every one of the 10 shifted games flipped FAIL_DIVERGENCE → PASS, 0 regressions, R74-1/R74-2 Rust-side divergences fully preserved)
+
+This is the dedicated reviewed non-Rust harness slice the round-74
+entry explicitly carried forward (R74-3 was deliberately NOT folded
+into the bench-sweep slice per no-fallback-hybrid discipline — it
+needed its own parity-safety analysis). It closes R74-3.
+
+### Root cause (verify-first confirmed against the LIVE harness + both engines)
+
+`src/mtg_bot/parity/cross_engine.py::advance_phase_python`'s CLEANUP
+arm inlined ONLY the CR-514.1 hand-size discard + CR-514.2 damage
+clear, on an in-code comment premise that calling `run_cleanup_step`
+would compose "a much larger surface (UEOT expiration, copy reverts,
+control-change reverts, layer cache rebuilds) **that Rust's
+`advance_phase` does NOT do**." That premise is **false for UEOT P/T
+expiration**. Verify-first read of the LIVE source on both engines:
+
+* **Rust DOES expire UEOT at cleanup.**
+  `rust/src/state_ops_steps.rs::advance_phase` calls
+  `cleanup_step_for_active_player_inline` on entry to
+  `PHASE_CLEANUP`; that helper's **step (3)** is CR 514.3 —
+  `obj.ueot_modifiers.clear()` on **every battlefield permanent on
+  BOTH battlefields** (its round-27 closure of parity gap G7,
+  RUST_PARITY_GAPS I23). This is unconditional and always ran.
+* **Core Python DOES expire UEOT at cleanup.**
+  `src/mtg_bot/turn.py::run_cleanup_step` does it via a write-through
+  pair: `state.expire_continuous_effects("cleanup")` (drops the
+  layer-7 `pump_pt` / `set_base_pt` + layer-6 `GrantKeyword`
+  registry entries tagged `expires_at="cleanup"`) **and** the
+  per-object `obj.temp_power_bonus = 0` / `obj.temp_toughness_bonus
+  = 0` zeroing loop. `grant_pt_pump_ueot` (the helper
+  `DepressurizeEffect.resolve` calls) is a write-through cache: the
+  registry holds the layer-7 metadata while `effective_power` /
+  `effective_toughness` read the mirrored `temp_*` fields — BOTH
+  must be dropped to fully expire the modifier.
+* **The bench's `advance_phase_python` did NEITHER.** So a UEOT P/T
+  debuff (Depressurize's `-3/-0` until end of turn) leaked across
+  the turn boundary FOREVER on the harness-driven Python trajectory
+  while Rust correctly expired it at the casting-turn cleanup — a
+  **HARNESS-induced Python-vs-Rust asymmetry** (Rust correct, the
+  bench's Python phase driver wrong; core `run_cleanup_step` is
+  correct, the harness primitive just never called the relevant
+  hooks). Latent until round-74: Depressurize joining the
+  bench-admit set is the first card that places a cross-turn-
+  surviving UEOT P/T modifier. **R74-3 is genuinely harness-side,
+  NOT engine-side** — verify-first confirmed; no `rust/src/` edit.
+
+### The fix (mirrors the real cleanup-step semantics IDENTICALLY on both engines)
+
+`advance_phase_python`'s CLEANUP arm now additionally runs the
+**EXACT two-call shape `turn.run_cleanup_step` uses** —
+`py_state.expire_continuous_effects("cleanup")` + the per-object
+`temp_power_bonus`/`temp_toughness_bonus` zeroing loop over every
+battlefield permanent — the Python analog of Rust's single
+`obj.ueot_modifiers.clear()`. This `continuous_effects ↔
+ueot_modifiers` equivalence is the **already-cross-engine-proven
+byte-equal mapping** the Biosynthic Burst /
+`GrantKeywordsToTargetCreatureUntilEOT` probes pin. It does **not**
+introduce a Python-vs-Rust asymmetry — it **removes** the one the
+skipped expiry created (the harness primitive now matches Rust's
+`advance_phase` cleanup composition for UEOT, exactly as it already
+mirrored the CR-514.1/514.2 hooks). The stale "Rust doesn't do UEOT
+expiration" comment is corrected in place. The other
+`run_cleanup_step` surface (layer-1 copy reverts, layer-2
+control-change reverts, layer-4 add-type cache rebuilds,
+impulse-cast flag expiry) is STILL deliberately NOT inlined —
+Rust's `advance_phase` genuinely does not do those, and no
+bench-admitted card exercises them; only the hooks Rust's
+`cleanup_step_for_active_player_inline` actually models are inlined
+(the no-fallback-hybrid discipline preserved).
+
+### Parity-safety — the full round-74 grid re-swept (the deciding evidence)
+
+The R74-3 fix changes harness phase-advance behavior, so the
+**critical contract** is: every game that currently completes must
+yield the SAME verdict UNLESS it was wrong specifically because of
+the skipped UEOT expiry. The full round-74 sweep
+(`scripts/scout_r74_run_sweep.py`, the UNMODIFIED bench, 360 games
+/ 5 disjoint full-pool index bands / 5 disjoint seed offsets /
+cap-120) was re-run post-fix and diffed byte-for-byte against the
+round-74 baseline rollup:
+
+| Metric | Round-74 baseline | Post-R74-3-fix | Δ |
+|---|---:|---:|---:|
+| total games | 360 | 360 | 0 |
+| PASS | 249 | **259** | **+10** |
+| FAIL_DIVERGENCE | 111 | **101** | **−10** |
+| FAIL_TIMEOUT / FILT / EXC | 0 / 0 / 0 | 0 / 0 / 0 | 0 |
+| `combat_phase::is_over,winner_id,life_p1` | 1 | **0** | −1 |
+| `combat_phase::life_p1` | 16 | 13 | −3 |
+| `combat_phase::life_p0` | 47 | 45 | −2 |
+| `cast_spell::battlefield` | 45 | 43 | −2 |
+| `cast_spell::graveyard_p1,battlefield` | 1 | 0 | −1 |
+| `cast_spell::graveyard_p0,battlefield` | 1 | 0 | −1 |
+
+**Every one of the 10 shifted games flipped FAIL_DIVERGENCE → PASS
+(the correct direction — the harness fix can only make the Python
+trajectory MORE correct). ZERO games regressed PASS → FAIL_*; ZERO
+new divergence shapes; per-band game counts byte-identical (no game
+became unreachable — only divergent games converged).** Each of the
+10 is R74-3-attributable, resolving the round-74 triage's deliberately
+ambiguous "**R74-1 / R74-3 (combat-power)**" label for the `life_pX`
+bucket:
+
+* **1× `combat_phase::is_over,winner_id,life_p1`** — the documented
+  R74-3 minimal repro (`--archetype 52329 --seed 7`), now PASS.
+* **5× `combat_phase::life_p{0,1}`** (−2 p0, −3 p1) — combat games
+  where the leaked UEOT debuff produced a wrong (non-game-ending)
+  combat-power delta. Empirically R74-3, not R74-1. The remaining
+  **58 `life_pX`** are pure **R74-1** (Rust combat-side
+  `battlefield_creature_power` not folding `obj.counters`; the
+  documented & scoped RUST_PARITY_GAPS I23 "future slice once a
+  parity test demands it", now empirically demanded) — **preserved /
+  unmasked**, Rust-side, out of this non-Rust slice's scope.
+* **4× `cast_spell::battlefield` (−2) + the 2 CFI-1 co-occurrence
+  `graveyard_pX,battlefield` games** — games where **R74-2**
+  (Rust's hand-rolled `Effect::DepressurizeEffect` destroy arm
+  dropping the dies-trigger dispatch) co-occurred with a leaked
+  UEOT debuff: with the cross-turn `-3/-0` leak gone, the
+  Depressurize target's effective power no longer carries a phantom
+  debuff, so these specific games no longer reach the R74-2-divergent
+  destroy state and converge to PASS. The remaining **43
+  `cast_spell::battlefield`** are pure **R74-2** — **preserved /
+  unmasked**, Rust-side (NEW Rust bug, repro `--archetype 216 --seed
+  0`, already carried forward to the Rust dispatch in round-74).
+
+The single-game repros confirm preservation: `--archetype 70 --seed 0`
+still FAIL_DIVERGENCE `combat_phase::life_p0` (R74-1, unmasked);
+`--archetype 216 --seed 0` still FAIL_DIVERGENCE
+`cast_spell::battlefield` (R74-2, unmasked). **The fix masked no
+genuine Rust-side divergence** — it only flipped the games that were
+wrong *because of* the harness's skipped UEOT expiry, exactly the
+contract. New-code-is-right: the harness was buggy, the fix is
+correct, the bench's empirical signal is now strictly cleaner and
+the residual 101 are 100% genuine Rust-side (R74-1 + R74-2),
+sharpening the Rust dispatch's signal rather than diluting it.
+
+### Gate + tracking
+
+Gate green **1520** (1518 + the 2 new R74-3 pins —
+`tests/test_trajectory.py::test_r74_3_advance_phase_python_expires
+_ueot_pt_at_cleanup`, the end-to-end documented-repro pin asserting
+arch 52329 s7 now PASSes, and
+`::test_r74_3_advance_phase_python_clears_temp_pt_and_cleanup
+_registry`, the unit pin asserting the CLEANUP arm zeros the
+`temp_*` write-through cache AND drops the `expires_at="cleanup"`
+registry entries). 0 fail / 0 xfail. The round-74 entry left **no
+xfail/tracker** for R74-3 (it was a pure-docs slice that explicitly
+carried R74-3 forward to this dedicated slice), so the
+flip-to-passing here is the creation of these two passing pins, not
+the flip of a pre-existing strict-xfail.
+
+### R74-1 / I23 triage verdict (the round-74 carry-forward, non-Rust assessment)
+
+R74-1 is **Rust-side, already documented & scoped as
+RUST_PARITY_GAPS I23** ("Intentional asymmetry:
+`battlefield_creature_toughness`/`_power` (combat-side) folds the
+UEOT bonus but NOT `obj.counters`; SBA's effective P/T folds BOTH …
+**Future slice can promote combat to fold counters once a parity
+test demands it**"). The post-spell-admit expansion (Biosynthic
+Burst — the first bench-admitted card placing a combat-relevant
++1/+1 counter) makes that documented trigger condition fire in real
+production-deck trajectories: **R74-1 IS that parity test**. It is
+**NOT a new untracked gap** and **NOT a non-Rust fix** — the
+Rust-side promotion (fold `obj.counters` into
+`state_ops_combat.rs::battlefield_creature_power` /
+`battlefield_creature_toughness` + the public `effective_power`
+getter, and correct the stale "mirroring Python's `effective_power`
+shape" comment whose premise is factually wrong — Python's
+`_compute_effective_pt` DOES fold counters into power) is owned by
+the Rust dispatch. The round-74 entry already filed the precise
+carry-forward (repro `--archetype 70 --seed 0`); this re-sweep
+confirms the 58 residual `life_pX` divergences are exactly that,
+fully preserved/unmasked for the Rust dispatch. **No new non-Rust
+action for R74-1 beyond confirming the carry-forward stands and the
+signal is preserved — verdict: Rust-side, correctly tracked, no
+non-Rust slice owed.** Python `src/mtg_bot/` remains the source of
+truth and is correct (its `effective_power` folds counters); no
+Python/SoT churn anywhere in this slice.
+
+### Scope / non-changes
+
+Touched ONLY `src/mtg_bot/parity/cross_engine.py`
+(`advance_phase_python` CLEANUP arm — the +UEOT-expiry hooks +
+corrected comment), `tests/test_trajectory.py` (the 2 new R74-3
+pins), this docs entry, and the regenerated tracked round-evidence
+JSONs (`tmp/bench_r74_{lo,mid1,mid2,mid3,hi}.json` +
+`tmp/bench_r74_rollup.json`, the round-64/68/70/71/74 `tmp/bench_*`
+precedent). **No `rust/src/` / `.pyd` change** (verify-first
+confirmed R74-3 is harness-side; the Rust inspection was strictly
+read-only — non-Rust agent; no `maturin`). Did NOT touch
+`docs/POOL_PARITY.md` / `docs/residue_worklist.json` /
+`docs/SUBSYSTEM_ROADMAP.md` / `docs/EOE_PROBE_READINESS_AUDIT.md` /
+`docs/RUST_PARITY_GAPS.md` (R74-1/I23 recorded here, the canonical
+bench-sweep findings home, per the round-61/62/64/68/74 precedent) /
+`scripts/parity_smoke.py`'s `_zone_signature`/`_net_counters` / the
+round-69/72 max-turns pins / the 6 protected
+`test_audit_safe_trigger_*` tests. `scripts/bench_trajectory_parity.py`
+(round-72 gate-pinned) and `scripts/scout_r74_run_sweep.py` (the
+round-74 wrapper) run UNMODIFIED — the re-sweep is the same
+orchestration wrapper round-74 used. The round-69/72 max-turns pins
+and the audit pins did NOT shift (gate 1520, the 1518 pre-existing
+gate tests all still pass — every game the gate drives that
+completes yields the same verdict; the only deltas are the +2 new
+R74-3 pins and the bench grid's +10 PASS, all R74-3-attributable
+and all in the correct FAIL→PASS direction).
