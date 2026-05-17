@@ -97,9 +97,13 @@ second:
    > round-39-Ward-precedent simplification — parser flattens them to
    > untapped duals, bit-equal both engines). The other 18 DECLINE
    > (real tapped-entry divergence Rust ignores / activated-ability /
-   > clone / Station). Round-60 phase-1 = sub-shape A only
-   > (+5 cards / +18,065 decks). Do NOT act on the headline number —
-   > read the PLAN §2 audit first.
+   > clone / Station). **Sub-shape A REALIZED round-60** (merge
+   > `fb70f69d`, N1): the 5 pay-life shocklands are now admitted as
+   > untapped duals (+18,065 decks), `docs/SEARCH_LIMITATIONS.md`
+   > documents the simplification. The non-basic-land lever's *clean*
+   > yield is now fully realized; the remaining 18 cards (~16,510
+   > decks) stay deferred behind Station/activated/clone substrates —
+   > NOT recommended near-term (≈0 real bench signal).
 
 2. **Cost-reduction substrate — 5 cards, ALL 5 single-gated, 53,648
    cumulative decks, medium tractability.** Fewer cards than non-basic
@@ -109,6 +113,22 @@ second:
    high-pick-rate creatures gated only by `cost_reductions` /
    `external_cost_reductions`. Same cost-mechanic family as
    warp/kicker; a scoped slice.
+
+   > **⚠ Round-60 N2 §2 correction — the card count IS honest (5,
+   > unlike non-basic-land), but the bridge-correct realizable yield
+   > is ZERO in any near-term clean slice.** The parser faithfully
+   > structures every cost-reduction rider, so the 5 / 53,648 / all-
+   > single-gated headline reproduces exactly — but `CardDef` has no
+   > cost-reduction field and Rust *defers* `cost_reductions`
+   > (`rust/src/cards.rs:4123`), so the drop is **asymmetric** (Python
+   > reduces, Rust pays full) AND fires on the cast pipeline the bench
+   > always drives — no symmetric-bit-equality escape hatch like the
+   > round-39/59 simplifications. Admitting any of the 5 ships a
+   > **guaranteed** inter-engine divergence. Cost-reduction is a
+   > genuine multi-round Rust cost-mechanic substrate (needs a
+   > `Condition`-grammar port — strictly larger than `warp_cost`).
+   > **Re-ranked: sequence `warp_cost` (item 3) BEFORE cost-reduction
+   > Phase 1.** Full audit: `docs/COST_REDUCTION_SUBSTRATE_PLAN.md`.
 
 3. **warp_cost — 10 cards, but only 3 single-gated** (Timeline Culler,
    Red Tiger Mechan, Bygone Colossus; 15,436 single-gate decks). The
