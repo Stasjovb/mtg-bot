@@ -1492,6 +1492,55 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     ("enters", "source_is_self", "draw_cards"),
     ("enters", "source_is_self", "gain_life"),
     ("enters", "source_is_self", "scry_n"),
+    # **Tier-C target-seating sub-substrate, lever-a — Exosuit
+    # Savior (the count_min=0 optional-bounce edge; ENTERS sibling
+    # of Sunset Saboteur's ATTACKS targeted entry below).** {2}{W}
+    # Creature — 2/2 ``flying`` (in :data:`_SAFE_KEYWORDS`). "When
+    # Exosuit Savior enters, you may return another target permanent
+    # you control to its owner's hand." — 12,480 17lands decks.
+    # Parsed live as ``(ENTERS, IsSelf,
+    # ReturnTargetPermanentYouControlToOwnersHand)`` with
+    # ``requires_target=False`` (because ``count_min=0`` — the bounce
+    # is OPTIONAL, CR "you may return"), ``count_range=(0,1)``,
+    # ``slot_kinds=()``, slot filter
+    # ``ControlledByYou() & ~IsPlayer() & ~IsSource()``.
+    #
+    # **Reuses the SHARED Tier-C seat shipped with Sunset Saboteur.**
+    # The deterministic push-time first-legal seat
+    # (``first_legal_trigger_target`` on Rust at
+    # ``state_ops_resolve.rs:push_triggered_ability``; the no-agent
+    # ``pool[0]`` seat on Python at
+    # ``actions.py:_put_triggered_ability_on_stack``, gated by
+    # ``_is_target_seated_safe_trigger``) is ALREADY in place — this
+    # entry only adds the per-card Effect (Rust unit variant
+    # ``ReturnTargetPermanentYouControlToOwnersHand`` + the
+    # ``return_target_permanent_you_control`` bridge arm + this
+    # recognizer/triple). The **count_min=0 edge** (the distinct
+    # contribution vs Sunset Saboteur's count_min=1): with NO
+    # eligible own permanent the shared seat returns ``None`` and the
+    # trigger pushes via the UNCHANGED ``new_trigger`` path
+    # (push-with-no-target) → the resolve arm no-ops, byte-equal with
+    # Python's ``targets=()`` ``Bounce.resolve`` early-return — the
+    # optional is DECLINED, NOT fizzle-skipped (contrast Sunset
+    # Saboteur, which IS skip-pushed via
+    # ``lever_trigger_requires_target``). With an eligible permanent
+    # both engines pick the SAME smallest-bf-index own-non-source
+    # permanent and bounce it (the established ``Effect::ReturnToHand``
+    # bounce-to-hand lifecycle + LTB fan-out, byte-equal). The ENTERS
+    # event dispatch itself is already byte-equal-proven (the round-1
+    # ENTERS+IsSelf starter set + every ENTERS probe). The genuine
+    # real-EoE firing-parity probe is in test_parity_smoke.py.
+    #
+    # **Necessary-but-not-sufficient teeth.** Terrapact Intimidator
+    # shares the IDENTICAL ``(ENTERS, source_is_self, targeted)``
+    # shape but its resolve is a modal ``opponent.agent.choose_mode``
+    # (the substrate seats a *target*, not a *mode*) — its
+    # ``TerrapactIntimidatorETBEffect`` leaf is NOT added to the
+    # ENTERS ``safe_effect_kinds``, so it stays declined even though
+    # it shares the exact necessary shape (negative-pinned in
+    # tests/test_trajectory.py — proves the gate is the triple +
+    # bare-shape product, not the bare targeted-ETB shape).
+    ("enters", "source_is_self", "return_target_permanent_you_control"),
     # Surveil extension (round-42 carddef-triggers slice). Adds the
     # bare-shape ``surveil`` effect (``count`` payload key only — no
     # ``use_artifact_count`` rider) under both ENTERS and DIES events
@@ -2440,6 +2489,29 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     "put_plus_one_counter_on_opponents_creature": frozenset(
         {"kind", "amount"}
     ),
+    # ReturnTargetPermanentYouControlToOwnersHand — UNIT shape, the
+    # only payload key is ``kind`` (Tier-C target-seating
+    # sub-substrate, lever-a — Exosuit Savior, the count_min=0
+    # optional-bounce edge). Rust's
+    # ``Effect::ReturnTargetPermanentYouControlToOwnersHand``
+    # (rust/src/cards.rs) is a unit variant — no amount / no rider;
+    # its to_dict emits ``{"kind":
+    # "return_target_permanent_you_control"}`` and the parse arm
+    # tolerates/ignores extra fields. Python's
+    # ``ReturnTargetPermanentYouControlToOwnersHand(optional=True,
+    # exclude_self=True)`` (effects/generic/bounce.py, a ``Bounce``
+    # subclass) is reconstructed by the
+    # ``return_target_permanent_you_control`` cross_engine bridge arm
+    # with the optional/exclude_self flags fixed structurally (they
+    # ARE Exosuit Savior's shape — not caller-varied). The slot
+    # filter (own ∧ ~player ∧ ~source) and count_min=0 are structural
+    # to the effect class / the seat's per-variant scan, NOT dict
+    # payload keys (the recognizer's bare-shape gate enforces the
+    # single implicit-target contract), so the whitelist is the bare
+    # ``{"kind"}``. The recognizer in
+    # :func:`_python_ta_to_safe_dict` gates this whitelist; the
+    # ``_is_safe_trigger_dict`` extra-key refusal is the backstop.
+    "return_target_permanent_you_control": frozenset({"kind"}),
     # CreateToken (round-49 N1 token-printing substrate, Phase 1) —
     # payload keys ``count`` + ``token_printing_id``. This is the
     # POST-SEATING dict shape: the recognizer
@@ -2893,6 +2965,9 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         YOU,
     )
     from mtg_bot.effects.object_predicates import IsLand
+    from mtg_bot.effects.generic.bounce import (
+        ReturnTargetPermanentYouControlToOwnersHand,
+    )
     from mtg_bot.effects.generic.counters import (
         PutPlusOneCounterOnOpponentsCreature,
         PutPlusOneCounterOnSelf,
@@ -2978,9 +3053,22 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # enters, create a tapped token" carrier (substrate-only on
             # ENTERS; the real-card delta is on DIES via Gravpack
             # Monoist, see the DIES arm below).
+            # Tier-C target-seating lever-a (Exosuit Savior) widens
+            # the ENTERS+IsSelf arm with the targeted-safe leaf
+            # ``return_target_permanent_you_control`` (the
+            # count_min=0 optional-bounce edge — the ENTERS sibling
+            # of Sunset Saboteur's ATTACKS
+            # ``put_plus_one_counter_on_opponents_creature``). The
+            # predicate-effect product is still enforced by the
+            # ``("enters", "source_is_self",
+            # "return_target_permanent_you_control")``
+            # ``_SAFE_TRIGGERS`` entry (this list is necessary, not
+            # sufficient); the recognizer's bare-shape gate above is
+            # the §2 teeth.
             safe_effect_kinds = (
                 "draw_cards", "gain_life", "scry_n", "surveil", "mill",
                 "create_token", "create_token_tapped",
+                "return_target_permanent_you_control",
             )
         elif ta.event is Event.ATTACKS:
             # Round-44 widens the ATTACKS arm from {surveil} to
@@ -3405,6 +3493,66 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             "kind": "put_plus_one_counter_on_opponents_creature",
             "amount": int(eff.amount),
         }
+    elif isinstance(eff, ReturnTargetPermanentYouControlToOwnersHand):
+        # **Tier-C target-seating sub-substrate, lever-a (Exosuit
+        # Savior — the count_min=0 optional-bounce edge).** Python's
+        # ``ReturnTargetPermanentYouControlToOwnersHand(optional=True,
+        # exclude_self=True)`` (effects/generic/bounce.py — a
+        # ``Bounce`` subclass whose ``__post_init__`` wires the single
+        # slot ``TargetSpec(ControlledByYou() & ~IsPlayer() &
+        # ~IsSource(), count_min=0, count_max=1)``). Exosuit Savior's
+        # ENTERS trigger is the sole EoE consumer ({2}{W} 2/2
+        # ``flying``, 12,480 17lands decks).
+        #
+        # **The count_min=0 optional edge (contrast Sunset
+        # Saboteur's count_min=1).** ``requires_target()`` reads
+        # ``False`` (CR "you may return") but the slot is a real
+        # ``TargetSpec``. The Tier-C shared seat handles the edge:
+        # no eligible own permanent ⇒ Rust's
+        # ``first_legal_trigger_target`` returns ``None`` and
+        # ``push_triggered_ability`` takes the UNCHANGED
+        # ``new_trigger`` path → push-with-no-target → the resolve
+        # arm no-ops (byte-equal with Python's ``targets=()``
+        # ``Bounce.resolve`` early-return — the optional was simply
+        # declined, NOT fizzled). When an eligible permanent exists
+        # both engines deterministically pick the SAME
+        # smallest-bf-index own-non-source permanent and bounce it.
+        # The ``return_target_permanent_you_control`` bridge arm
+        # round-trips the UNIT shape (no payload field — the filter
+        # is structural to the effect class / the seat's per-variant
+        # scan; the recognizer's bare-shape gate enforces the single
+        # implicit-target contract). See the
+        # ``("enters", "source_is_self",
+        # "return_target_permanent_you_control")`` entry in
+        # :data:`_SAFE_TRIGGERS` for the full cross-engine parity
+        # provenance + the deterministic-first SEARCH_LIMITATIONS
+        # §2.3 entry.
+        #
+        # **Bare-shape gate (§2 silent-mistranslation teeth).** Only
+        # the EXACT single-implicit-target shape is admitted: exactly
+        # one ``TargetSpec`` slot, ``count_min in (0, 1)`` (Exosuit
+        # Savior is the optional ``count_min=0`` — DISTINCT from
+        # Sunset Saboteur's mandatory ``count_min=1``; both ride the
+        # same shared seat), ``count_max==1``, ``slot_kinds()==()``,
+        # no ``SlotRef`` / ``distinct_from``. Any heterogeneous /
+        # multi-slot shape falls through to the filter drop.
+        # (Exosuit Savior's parsed effect satisfies this exactly —
+        # verified live: ``count_range=(0,1)``, ``slot_kinds=()``.)
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        slots = tuple(getattr(eff, "targets", ()) or ())
+        if len(slots) != 1:
+            return None
+        slot = slots[0]
+        if isinstance(slot, SlotRef) or not isinstance(slot, TargetSpec):
+            return None
+        if slot.count_min not in (0, 1) or slot.count_max != 1:
+            return None
+        if getattr(slot, "distinct_from", ()) not in ((), None):
+            return None
+        if eff.target_slot_kinds() != ():
+            return None
+        eff_kind = "return_target_permanent_you_control"
+        eff_dict = {"kind": "return_target_permanent_you_control"}
     else:
         return None
     if eff_kind not in safe_effect_kinds:
@@ -3440,6 +3588,14 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
 # byte-identical while still making the seat surgical.
 _TARGET_SEATED_EFFECT_KINDS: frozenset[str] = frozenset({
     "put_plus_one_counter_on_opponents_creature",
+    # Exosuit Savior (the count_min=0 optional-bounce edge) — joins
+    # via its own per-card slice, reusing the shared seat shipped
+    # with Sunset Saboteur. The gate is the same: the Python no-agent
+    # ``pool[0]`` seat fires for this kind too (and the count_min=0
+    # edge means an empty ``pool`` simply declines the optional —
+    # ``len(chosen_list)=0 >= min_t=0`` — byte-equal with the Rust
+    # no-seat no-op).
+    "return_target_permanent_you_control",
 })
 
 

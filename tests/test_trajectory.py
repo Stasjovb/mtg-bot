@@ -3038,6 +3038,57 @@ def test_tierc_sunset_saboteur_targeted_attacks_trigger_admits():
     assert _printing_is_bridge_simple_creature(real) is True
 
 
+def test_tierc_exosuit_savior_optional_targeted_enters_trigger_admits():
+    """**Tier-C target-seating sub-substrate, lever-a (Exosuit Savior
+    — the count_min=0 optional-bounce edge) — the positive recognizer
+    pin.** The genuine parsed Exosuit Savior printing's single
+    optional-targeted ENTERS trigger ``(ENTERS, IsSelf,
+    ReturnTargetPermanentYouControlToOwnersHand)`` round-trips through
+    ``_python_ta_to_safe_dict`` to the byte-equal UNIT bridge dict
+    AND is flagged ``_is_target_seated_safe_trigger`` (it reuses the
+    SAME shared seat as Sunset Saboteur). Pins the
+    ``count_min in (0, 1)`` bare-shape gate widening (Exosuit Savior
+    is the ``count_min=0`` member — DISTINCT from Sunset Saboteur's
+    ``count_min=1``; both ride the shared seat) + the
+    ``return_target_permanent_you_control`` triple +
+    ``_SAFE_EFFECT_KEYS`` unit whitelist as ONE contract.
+    """
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.effects.predicates import Event, IsSelf
+    from mtg_bot.effects.generic.bounce import (
+        ReturnTargetPermanentYouControlToOwnersHand,
+    )
+    from mtg_bot.parity.trajectory import (
+        _python_ta_to_safe_dict,
+        _is_safe_trigger_dict,
+        _is_target_seated_safe_trigger,
+        _printing_is_bridge_simple_creature,
+    )
+
+    real = get_active_source().get_printings().get("Exosuit Savior")
+    if real is None:
+        import pytest
+        pytest.skip("Exosuit Savior absent from active CardSource")
+    assert len(real.triggered_abilities) == 1
+    ta = real.triggered_abilities[0]
+    assert ta.event is Event.ENTERS
+    assert isinstance(ta.predicate, IsSelf) and ta.predicate.subject is None
+    assert isinstance(ta.effect, ReturnTargetPermanentYouControlToOwnersHand)
+    # count_min=0 ⇒ requires_target() is False, but it carries a real
+    # (0,1) TargetSpec — the optional-bounce edge.
+    assert ta.effect.requires_target() is False
+    assert ta.effect.target_count_range() == (0, 1)
+    dct = _python_ta_to_safe_dict(ta)
+    assert dct == {
+        "event": "enters",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "return_target_permanent_you_control"},
+    }
+    assert _is_safe_trigger_dict(dct) is True
+    assert _is_target_seated_safe_trigger(real, ta) is True
+    assert _printing_is_bridge_simple_creature(real) is True
+
+
 def test_tierc_target_seating_necessary_but_not_sufficient_declines():
     """**Tier-C target-seating §3.5 teeth.** Sharing
     ``(event, source_is_self)`` with Sunset Saboteur is NECESSARY but
