@@ -46705,6 +46705,302 @@ def test_rust_destroy_target_artifact_creatures_untouched():
 
 
 # =====================================================================
+# Effect-uncovered Tier-A queue #1 -- Radiant Strike inner half
+# (Effect::DestroyTargetArtifactOrTappedCreature, unit variant).
+#
+# 6 Rust regression pins below. The typed-OR filter
+# (Artifact) OR (Creature AND tapped) is the only new surface; the
+# Sequence + GainLife{3} outer shell is already live + bridged. The
+# full Radiant Strike effect is
+# Sequence([DestroyTargetArtifactOrTappedCreature, GainLife{3}]).
+# =====================================================================
+
+
+def _build_rust_dtaotc_state(
+    *,
+    n_artifacts: int = 0,
+    n_tapped_creatures: int = 0,
+    n_untapped_creatures: int = 0,
+    artifact_indestructible: bool = False,
+    victim_owner: int = 1,
+    use_sequence_gain_life: bool = False,
+    artifact_is_token: bool = False,
+):
+    """Helper: build a Rust state with an ETB-triggered
+    ``DestroyTargetArtifactOrTappedCreature`` source on p0's bf, plus
+    vanilla artifacts / tapped 2/2 bears / untapped 2/2 bears on
+    ``victim_owner``'s bf. When ``use_sequence_gain_life`` the ETB
+    effect is the FULL Radiant Strike shape
+    ``Sequence([destroy_target_artifact_or_tapped_creature,
+    gain_life{3}])`` (the already-live Sequence + GainLife arms wrap
+    the one new arm). Tapped bears are tapped via the pyo3
+    ``tap_object`` setter AFTER injection (``register_and_inject_object``
+    always seats ``tapped=false``).
+
+    Returns ``(rust_state, source_id, artifact_ids,
+    tapped_creature_ids, untapped_creature_ids)``.
+    """
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_rust_state,
+    )
+
+    spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+    rust_state = build_rust_state(spec)
+    ZONE_BATTLEFIELD = 2
+    artifact_dict = {
+        "name": "RS Bait Artifact",
+        "card_types": ["Artifact"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+    }
+    if artifact_indestructible:
+        artifact_dict = dict(artifact_dict)
+        artifact_dict["name"] = "RS Indestructible Artifact"
+        artifact_dict["keywords"] = ["indestructible"]
+    if artifact_is_token:
+        artifact_dict = dict(artifact_dict)
+        artifact_dict["name"] = "RS Bait Artifact Token"
+        # Rust's ``RegistryData::is_token`` is derived from
+        # ``supertypes`` containing ``"Token"`` (cards.rs:4482) — NOT
+        # an ``is_token`` dict key (the parser silently ignores
+        # unknown keys). The token-cease drain
+        # (``drain_pending_token_cease``) gates on that supertype, so
+        # the artifact must carry ``supertypes: ["Token"]`` to be a
+        # real token. (Documented gotcha — see the ~25846 token
+        # injection precedent.)
+        artifact_dict["supertypes"] = ["Token"]
+    artifact_ids = [
+        rust_state.register_and_inject_object(
+            artifact_dict, victim_owner, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_artifacts)
+    ]
+    tapped_bear = {
+        "name": "RS Tapped Bear (2/2)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    tapped_creature_ids = []
+    for _ in range(n_tapped_creatures):
+        cid = rust_state.register_and_inject_object(
+            tapped_bear, victim_owner, ZONE_BATTLEFIELD,
+        )
+        # register_and_inject_object always seats tapped=false; tap it
+        # via the pyo3 setter so the OR-filter's creature leg fires.
+        assert rust_state.tap_object(cid) is True
+        tapped_creature_ids.append(cid)
+    untapped_bear = {
+        "name": "RS Untapped Bear (2/2)",
+        "card_types": ["Creature"],
+        "mana_cost": {"generic": 1, "G": 1},
+        "effects": [],
+        "power": 2,
+        "toughness": 2,
+    }
+    untapped_creature_ids = [
+        rust_state.register_and_inject_object(
+            untapped_bear, victim_owner, ZONE_BATTLEFIELD,
+        )
+        for _ in range(n_untapped_creatures)
+    ]
+    if use_sequence_gain_life:
+        etb_effect = {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "destroy_target_artifact_or_tapped_creature"},
+                {"kind": "gain_life", "amount": 3},
+            ],
+        }
+    else:
+        etb_effect = {
+            "kind": "destroy_target_artifact_or_tapped_creature"}
+    source_id = rust_state.register_and_inject_object(
+        {
+            "name": "RS Destroy ETB Carrier",
+            "card_types": ["Creature"],
+            "mana_cost": {"W": 1, "generic": 1},
+            "power": 1,
+            "toughness": 1,
+            "effects": [],
+            "triggered_abilities": [
+                {
+                    "event": "enters",
+                    "predicate": {"kind": "source_is_self"},
+                    "effect": etb_effect,
+                }
+            ],
+        },
+        0,
+        ZONE_BATTLEFIELD,
+    )
+    return (rust_state, source_id, artifact_ids,
+            tapped_creature_ids, untapped_creature_ids)
+
+
+def test_rust_dtaotc_destroys_artifact():
+    """Rust regression pin (a): the typed-OR filter's artifact leg.
+    Exactly one artifact on the victim's bf -> destroyed (off bf,
+    into the victim's graveyard). Mirrors
+    ``DestroyTargetArtifact``'s artifact leg; the only new code is
+    the OR-filter ``is_artifact || (is_creature && obj.tapped)``.
+    """
+    (rust_state, _src, artifact_ids, _tc, _uc) = (
+        _build_rust_dtaotc_state(n_artifacts=1)
+    )
+    artifact_id = artifact_ids[0]
+    assert rust_state.stack_size() == 1
+    rust_state.resolve_top_of_stack()
+    assert rust_state.stack_size() == 0
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert artifact_id not in bf_ids, (
+        f"artifact {artifact_id} should be destroyed; bf={bf_ids}"
+    )
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert artifact_id in p1_gy_ids
+
+
+def test_rust_dtaotc_destroys_tapped_creature():
+    """Rust regression pin (b): the typed-OR filter's
+    (Creature AND tapped) leg. A single TAPPED 2/2 bear on the
+    victim's bf (no artifact) -> destroyed. Pins the new
+    ``is_creature && obj.tapped`` predicate term reading the live
+    ``GameObject.tapped`` off the scanned object.
+    """
+    (rust_state, _src, _a, tapped_ids, _uc) = (
+        _build_rust_dtaotc_state(n_tapped_creatures=1)
+    )
+    tapped_id = tapped_ids[0]
+    rust_state.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert tapped_id not in bf_ids, (
+        f"tapped creature {tapped_id} should be destroyed; bf={bf_ids}"
+    )
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert tapped_id in p1_gy_ids
+
+
+def test_rust_dtaotc_untapped_creature_not_destroyed():
+    """Rust regression pin (c): the OR-filter teeth. With ONLY an
+    UNTAPPED non-artifact creature on the victim's bf, the filter
+    finds no legal pick -> silent no-op (the untapped creature
+    stays on bf, out of any graveyard). A bug that dropped the
+    ``obj.tapped`` term (matching on any creature) would wrongly
+    destroy it -- the negative pin both engines must agree on.
+    """
+    (rust_state, _src, _a, _tc, untapped_ids) = (
+        _build_rust_dtaotc_state(n_untapped_creatures=1)
+    )
+    untapped_id = untapped_ids[0]
+    rust_state.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert untapped_id in bf_ids, (
+        f"untapped creature {untapped_id} must survive (not "
+        f"artifact, not tapped); bf={bf_ids}"
+    )
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert untapped_id not in p1_gy_ids
+
+
+def test_rust_dtaotc_indestructible_artifact_survives():
+    """Rust regression pin (d): per the verbatim
+    ``DestroyTargetArtifact`` indestructible-skip clause, an
+    artifact with the ``indestructible`` keyword is filtered out of
+    the scan. With ONLY an indestructible artifact on the bf the
+    destroy is a silent no-op. Pins CR 702.12 at the scan filter
+    (the clause is cloned unchanged from the artifact arm).
+    """
+    (rust_state, _src, artifact_ids, _tc, _uc) = (
+        _build_rust_dtaotc_state(
+            n_artifacts=1, artifact_indestructible=True,
+        )
+    )
+    artifact_id = artifact_ids[0]
+    rust_state.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert artifact_id in bf_ids, (
+        f"indestructible artifact {artifact_id} should survive; "
+        f"bf={bf_ids}"
+    )
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert artifact_id not in p1_gy_ids
+
+
+def test_rust_dtaotc_full_sequence_destroy_then_gain_three_life():
+    """Rust regression pin (e): the FULL Radiant Strike shape
+    ``Sequence([destroy_target_artifact_or_tapped_creature,
+    gain_life{3}])`` resolves destroy-then-+3-life IN ORDER off one
+    StackItem. The Sequence + GainLife arms are already live; this
+    pins they compose with the new destroy arm (CR-order: the
+    tapped creature is destroyed, THEN the source's controller
+    gains 3 life).
+    """
+    (rust_state, _src, _a, tapped_ids, _uc) = (
+        _build_rust_dtaotc_state(
+            n_tapped_creatures=1, use_sequence_gain_life=True,
+        )
+    )
+    tapped_id = tapped_ids[0]
+    life0_before = rust_state.get_life(0)
+    rust_state.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert tapped_id not in bf_ids, (
+        f"tapped creature {tapped_id} should be destroyed by the "
+        f"Sequence's first leg; bf={bf_ids}"
+    )
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert tapped_id in p1_gy_ids
+    # GainLife{3} second leg: p0 (the source's controller) +3.
+    assert rust_state.get_life(0) == life0_before + 3, (
+        f"controller should gain 3 life from the Sequence's second "
+        f"leg; {life0_before} -> {rust_state.get_life(0)}"
+    )
+    # p1 (the victim's controller) life unchanged.
+    assert rust_state.stack_size() == 0
+
+
+def test_rust_dtaotc_destroyed_artifact_token_ceases():
+    """Rust regression pin (f): LTB/token-cease fan-out. A destroyed
+    ARTIFACT TOKEN must cease to exist (CR 111.7 / 704.5d) -- it does
+    NOT linger in the victim's graveyard (a real card would; a token
+    is removed by the unconditional ``queue_token_cease`` tail cloned
+    from the artifact arm). Pins the token-cease sibling of the LEAVES
+    push fires for the new arm.
+    """
+    (rust_state, _src, artifact_ids, _tc, _uc) = (
+        _build_rust_dtaotc_state(
+            n_artifacts=1, artifact_is_token=True,
+        )
+    )
+    artifact_id = artifact_ids[0]
+    rust_state.resolve_top_of_stack()
+    bf_ids = [int(e["id"]) for e in rust_state.battlefield_snapshot()]
+    assert artifact_id not in bf_ids, (
+        f"artifact token {artifact_id} should leave bf; bf={bf_ids}"
+    )
+    # Token ceased -- NOT in p1's graveyard (token-cease drained it).
+    p1_gy_ids = [
+        int(e["id"]) for e in rust_state.graveyard_snapshot(1)
+    ]
+    assert artifact_id not in p1_gy_ids, (
+        f"destroyed artifact TOKEN {artifact_id} must cease, not "
+        f"linger in graveyard; gy={p1_gy_ids}"
+    )
+
+
+# =====================================================================
 # BLOCKED-BRIDGE-ARM slice -- destroy_target_nonland_permanent
 # (round 23).
 #
@@ -64546,6 +64842,228 @@ def test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal(
         assert rs.get_life(ai) == life_before_recast + 2, (
             "Germinating Wurm ETB must fire AGAIN under the "
             "normal-cost exile-recast on Rust")
+
+
+def test_cross_engine_real_eoe_radiant_strike_destroy_or_gain_parity(
+    parity_smoke,
+):
+    """**GENUINE real-EoE cross-engine probe — Radiant Strike
+    (~17,744 17lands decks). Effect-uncovered Tier-A queue #1.**
+
+    Drives the **ACTUAL parsed Radiant Strike printing** on the Python
+    side: ``get_active_source().get_printings()["Radiant Strike"]`` —
+    which the live parser maps to a ``spell_effect`` of
+    ``Sequence((DestroyTargetArtifactOrTappedCreature(targets=(
+    TargetSpec(IsArtifact() | (IsCreature() & IsTapped())),)),
+    GainLife(amount=3)))`` (verified live, asserted below).
+
+    Oracle (verbatim, ``data/edge_of_eternities.json``):
+
+        "[Instant] {3}{W} — Destroy target artifact or tapped
+         creature. You gain 3 life."
+
+    **Honest split (§2 — Effect-half closes byte-equal; full card
+    stays loader-gated).** The new Effect arm under test —
+    ``DestroyTargetArtifactOrTappedCreature`` (the typed-OR filter; the
+    only genuinely-new Rust surface) — is shipped this slice (Rust
+    field-free unit variant + parse + to_dict + resolve beside
+    ``DestroyTargetArtifact``), bridged via ``cross_engine.py``
+    ``destroy_target_artifact_or_tapped_creature`` to the EXACT class
+    the genuine printing's inner Sequence leg parses to. The
+    ``Sequence`` + ``GainLife{3}`` outer shell was already live +
+    bridged. The full Radiant Strike **Instant** is **NOT** added to
+    the production-deck loader ``_SAFE_*`` allowlist — there is no
+    Instant/Sorcery bench-admit path (``CardDef.card_type`` ∈
+    {Land, Creature}; ``_printing_is_bridge_simple_creature`` rejects
+    ``spell_effect is not None``); the full card stays gated on the
+    not-yet-shipped shared spell-card-bridge lever. Mirrors the r51
+    Monoist / r52 Extinguisher / r53 Mightform / r54 Famished / r56
+    Dauntless / r57 Faller's / r60 Perigee "Effect-half-closes /
+    full-card-stays-gated" precedent — see
+    ``docs/SEARCH_LIMITATIONS.md`` round-65/Radiant-Strike entry.
+
+    **Deterministic, no RNG.** Two arms, both byte-equal on BOTH
+    engines:
+
+      * POSITIVE: p1 (opponent) has a single TAPPED 2/2 creature on
+        the battlefield. p0 casts the genuine Radiant Strike printing
+        targeting it (Python: real ``spell_effect`` Sequence on a
+        ``StackItem`` with the chosen object target; Rust: the bridged
+        ``{"kind":"sequence","effects":[{"kind":
+        "destroy_target_artifact_or_tapped_creature"},{"kind":
+        "gain_life","amount":3}]}`` synthetic Instant). Observable:
+        the creature is destroyed → p1 graveyard size 1 on BOTH; p0
+        (caster) life +3 on BOTH; p1 life unchanged on BOTH.
+
+      * NEGATIVE: p1 has ONLY an UNTAPPED 2/2 creature (not an
+        artifact, not tapped → NOT a legal pick — the OR-filter
+        teeth). The destroy is a silent no-op; the +3 life STILL
+        resolves (the Sequence's second leg is unconditional).
+        Observable: creature survives on BOTH; p0 life +3 on BOTH.
+    """
+    import pytest
+
+    from mtg_bot.parity.cross_engine import (
+        DeckSpec, build_python_state, build_rust_state,
+    )
+    from mtg_bot.cards.source import get_active_source
+    from mtg_bot.actions import resolve_top_of_stack
+    from mtg_bot.game import StackItem, Zone
+    from mtg_bot.turn import state_based_actions as py_sba
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetArtifactOrTappedCreature,
+    )
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.cards.base import CardPrinting, ManaCost
+
+    real = get_active_source().get_printings().get("Radiant Strike")
+    if real is None:
+        pytest.skip("Radiant Strike absent from active CardSource")
+    # Sanity: the genuinely-parsed printing carries the
+    # Sequence(DestroyTargetArtifactOrTappedCreature, GainLife{3})
+    # spell_effect this slice ships the inner destroy arm for.
+    assert "Instant" in real.card_types
+    se = real.spell_effect
+    assert isinstance(se, Sequence), (
+        f"genuine Radiant Strike spell_effect must be a Sequence; "
+        f"got {type(se).__name__}"
+    )
+    assert len(se.effects) == 2
+    assert isinstance(se.effects[0], DestroyTargetArtifactOrTappedCreature)
+    assert isinstance(se.effects[1], GainLife)
+    assert se.effects[1].amount == 3
+
+    ZB = 2
+
+    def _gp(name):
+        return CardPrinting(
+            name=name, mana_cost_str="", mana_cost=ManaCost(generic=0),
+            type_line="Creature", supertypes=(),
+            card_types=("Creature",), subtypes=(),
+            power=2, toughness=2, produces=frozenset(),
+        )
+
+    rust_seq_effect = {
+        "kind": "sequence",
+        "effects": [
+            {"kind": "destroy_target_artifact_or_tapped_creature"},
+            {"kind": "gain_life", "amount": 3},
+        ],
+    }
+
+    def _run_arm(victim_tapped: bool):
+        """Build matched states with a single 2/2 p1 creature in the
+        requested tap-state, cast the genuine Radiant Strike (Python)
+        / bridged Sequence (Rust), drain, and return the byte-equal
+        observables ``(rust_alive, py_alive, rust_p1_gy, py_p1_gy,
+        rust_p0_life, py_p0_life, rust_p1_life, py_p1_life)``."""
+        spec = DeckSpec(card_defs=(), p0_library=(), p1_library=())
+        py = build_python_state(spec)
+        rs = build_rust_state(spec)
+
+        # ---- p1 2/2 creature on BOTH bfs (the only legal/illegal
+        # target). Tap it on BOTH when the arm wants the tapped case.
+        py_vic = py.new_object(_gp("RS Real Victim"), owner_id=1,
+                               zone=Zone.BATTLEFIELD)
+        py_vic.tapped = victim_tapped
+        py.battlefield.append(py_vic)
+        rs_vic_id = rs.register_and_inject_object(
+            {"name": "RS Real Victim", "card_types": ["Creature"],
+             "power": 2, "toughness": 2}, 1, ZB)
+        if victim_tapped:
+            assert rs.tap_object(rs_vic_id) is True
+
+        p0_life0_py = py.players[0].life
+        p0_life0_rs = rs.get_life(0)
+        p1_life0_py = py.players[1].life
+        p1_life0_rs = rs.get_life(1)
+
+        # ---- Python side: the GENUINE parsed Radiant Strike printing
+        # on a StackItem, controller p0, with the chosen object target
+        # = p1's creature. Sequence.resolve forwards the target tuple
+        # to the destroy leg (DestroyTargetArtifactOrTappedCreature
+        # re-verifies the IsArtifact() | (IsCreature() & IsTapped())
+        # filter at resolution per CR 608.2b — an untapped non-artifact
+        # creature fails the recheck) and GainLife{3} ignores it.
+        py_spell = py.new_object(real, owner_id=0, zone=Zone.STACK)
+        py_spell.summoning_sick = False
+        py.stack.append(
+            StackItem(source=py_spell, controller_id=0,
+                      targets=(("object", py_vic.id),))
+        )
+        resolve_top_of_stack(py)
+        py_sba(py)
+        assert len(py.stack) == 0
+
+        # ---- Rust side: bridged Sequence([destroy_…, gain_life{3}])
+        # synthetic Instant (the loader does NOT admit the real card —
+        # no Instant/Sorcery bench path; the established
+        # Monoist/.../Perigee cross-engine driving pattern). Rust's
+        # destroy arm scans BOTH bfs in ETB-timestamp order for the
+        # first Artifact OR tapped Creature, non-indestructible.
+        rs_spell_id = rs.register_and_inject_object(
+            {"name": "Radiant Strike", "card_types": ["Instant"],
+             "effects": [rust_seq_effect]},
+            0, 0,  # controller p0, ZONE_HAND
+        )
+        rs.push_to_stack(rs_spell_id, 0)
+        rs.resolve_top_of_stack()
+        rs.apply_sbas()
+        assert rs.stack_size() == 0
+
+        rust_alive = any(o["id"] == rs_vic_id
+                         for o in rs.battlefield_snapshot())
+        py_alive = any(o.id == py_vic.id for o in py.battlefield)
+        rust_p1_gy = [e["printing_name"]
+                      for e in rs.graveyard_snapshot(1)]
+        py_p1_gy = [o.printing.name
+                    for o in py.players[1].graveyard]
+        return (
+            rust_alive, py_alive, rust_p1_gy, py_p1_gy,
+            rs.get_life(0) - p0_life0_rs,
+            py.players[0].life - p0_life0_py,
+            rs.get_life(1) - p1_life0_rs,
+            py.players[1].life - p1_life0_py,
+        )
+
+    # ---- POSITIVE arm: tapped creature → destroyed on BOTH, +3 life.
+    (r_alive, p_alive, r_gy, p_gy, r_d0, p_d0, r_d1, p_d1) = _run_arm(
+        victim_tapped=True
+    )
+    assert r_alive is False and p_alive is False, (
+        f"tapped creature must be destroyed on BOTH; "
+        f"rust_alive={r_alive} py_alive={p_alive}"
+    )
+    assert r_gy == ["RS Real Victim"] == p_gy, (
+        f"victim must be in p1's graveyard on BOTH; rust={r_gy} py={p_gy}"
+    )
+    assert r_d0 == 3 == p_d0, (
+        f"caster (p0) must gain 3 life on BOTH; rust Δ={r_d0} py Δ={p_d0}"
+    )
+    assert r_d1 == 0 == p_d1, (
+        f"p1 life must be unchanged on BOTH; rust Δ={r_d1} py Δ={p_d1}"
+    )
+
+    # ---- NEGATIVE arm: untapped non-artifact creature → NOT a legal
+    # pick (OR-filter teeth); destroy no-ops but +3 life still resolves.
+    (r_alive, p_alive, r_gy, p_gy, r_d0, p_d0, r_d1, p_d1) = _run_arm(
+        victim_tapped=False
+    )
+    assert r_alive is True and p_alive is True, (
+        f"untapped non-artifact creature must survive on BOTH (OR-filter "
+        f"teeth); rust_alive={r_alive} py_alive={p_alive}"
+    )
+    assert r_gy == [] == p_gy, (
+        f"no creature should be destroyed on BOTH; rust={r_gy} py={p_gy}"
+    )
+    assert r_d0 == 3 == p_d0, (
+        f"the +3 life Sequence leg is unconditional — caster gains 3 on "
+        f"BOTH even when the destroy fizzles; rust Δ={r_d0} py Δ={p_d0}"
+    )
+    assert r_d1 == 0 == p_d1, (
+        f"p1 life must be unchanged on BOTH; rust Δ={r_d1} py Δ={p_d1}"
+    )
 
 
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===

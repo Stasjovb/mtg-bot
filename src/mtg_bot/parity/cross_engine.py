@@ -8168,6 +8168,47 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 predicate=IsSelf(),
             ),
         )
+    if kind == "destroy_target_artifact_or_tapped_creature":
+        # **Effect-uncovered Tier-A — Radiant Strike inner half.**
+        # Rust substrate
+        # ``Effect::DestroyTargetArtifactOrTappedCreature`` (cards.rs
+        # unit variant; parser
+        # ``"destroy_target_artifact_or_tapped_creature"``; resolve in
+        # state_ops_resolve.rs beside ``DestroyTargetArtifact``).
+        #
+        # **Field shape (unit variant).** No fields — bare
+        # ``{"kind": "destroy_target_artifact_or_tapped_creature"}``.
+        # Python's ``DestroyTargetArtifactOrTappedCreature``
+        # (effects/generic/destroy.py:475) is a frozen dataclass with
+        # no constructor parameters (``__post_init__`` sets the
+        # ``targets`` tuple to ``TargetSpec(IsArtifact() |
+        # (IsCreature() & IsTapped()))``). Bridge constructs the bare
+        # class — adds NO Python.
+        #
+        # **Resolve semantics (parity-relevant).** Rust scans BOTH
+        # players' battlefield in ETB-timestamp order via
+        # ``bf_iter::bf_iter_etb_sorted`` and picks the first
+        # non-indestructible permanent that is an Artifact OR a
+        # tapped Creature. Python's ``Destroy.resolve`` re-verifies
+        # the ``IsArtifact() | (IsCreature() & IsTapped())`` filter at
+        # resolution per CR 608.2b (a creature that untapped between
+        # cast and resolve fails the recheck; an artifact target is
+        # untap-insensitive and stays legal). Indestructible
+        # permanents survive on both engines. An untapped
+        # non-artifact creature is NOT a legal pick (the OR-filter
+        # teeth).
+        #
+        # **Honest Effect-half split (§2).** The Effect closes + is
+        # genuinely probed; the full Radiant Strike Instant stays
+        # loader-gated on the not-yet-shipped shared spell-card-bridge
+        # lever (no Instant/Sorcery bench admit path). Radiant
+        # Strike's full effect is the already-live ``Sequence`` of
+        # this destroy arm + ``GainLife{3}``; only this destroy arm is
+        # new.
+        from mtg_bot.effects.generic.destroy import (
+            DestroyTargetArtifactOrTappedCreature,
+        )
+        return DestroyTargetArtifactOrTappedCreature()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
