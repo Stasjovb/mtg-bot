@@ -304,19 +304,22 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 134b4778 (round-56 HEAD, post N1+N2+N3),
-     resynced by the round-56 post-merge fold slice. Rust
-     variant + bridge-arm +1 each from N1's ExileEachOpponents-
-     Graveyard (Dauntless Scrapbot effect-half). The 10 still-
-     genuinely-missing entries re-stamped verified_absent_at_-
-     commit=134b4778 (cron structural check re-confirmed
-     absence). Dauntless Scrapbot folded genuinely_missing ->
-     blocked_non_effect (N1 shipped ExileEachOpponentsGraveyard;
-     Sequence+CreateToken pre-shipped; residual = Lander token-
-     registration). Pulsar BLOCKED-PROBE residual discharged
-     (N1 fixed the spacecraft-filter bug, probe byte-equal). -->
-rust_effect_variants = 110
-bridge_arms = 112
+     Measured at main 16dfb76e (round-57 HEAD, post N1+N2+N3),
+     resynced by the round-57 post-merge fold slice. Rust
+     variant + bridge-arm +1 each from N3's
+     DestroyTargetCreatureThenDrawIfUndamaged (Faller's Faithful
+     effect-half). The 8 still-genuinely-missing entries
+     re-stamped verified_absent_at_commit=16dfb76e. Faller's
+     Faithful folded genuinely_missing -> closed (the round-55
+     hardened cron caught it Pulsar-shaped-suspect; N3 shipped
+     the Effect + genuine byte-equal probe; residual = damaged-
+     this-turn ledger subsystem). Tractor Beam folded
+     genuinely_missing -> blocked_non_effect (N3 verify-first:
+     live parse emits only the shipped bare TapEnchantedPermanent;
+     control-swap composition is the Aura subsystem, not a probe-
+     droppable Effect). Honest residue now 7 distinct cards. -->
+rust_effect_variants = 111
+bridge_arms = 113
 safe_triggers = 19
 safe_keywords = 12
 safe_effect_keys = 8

@@ -183,24 +183,37 @@ def test_genuine_probed_cards_real_inventory_nonempty(mod):
 
 def test_residue_blocked_cards_split_and_normalised(mod):
     missing, non_effect = mod.residue_blocked_cards(RESIDUE_WORKLIST)
-    # The honest residue count (round-56): 9 distinct genuinely_missing
-    # cards, the load-bearing "how far from parity" number.
+    # The honest residue, settled at round-57 (the load-bearing "how
+    # far from parity" number). This named-set is a per-round snapshot
+    # the orchestrator post-merge fold updates — pinning exact names is
+    # an intentional tracked snapshot, NOT a brittle gate: the durable
+    # assertions are the structural ones below (disjoint, no qualified
+    # names) which a legitimate fold must never break. Round-57 fold:
+    # Faller's Faithful -> closed (Effect shipped + genuine probe);
+    # Tractor Beam -> blocked_non_effect (only the shipped bare
+    # TapEnchantedPermanent is emitted; control-swap is the Aura
+    # subsystem, not a probe-droppable Effect).
     assert missing == {
         "Astelli Reclaimer",
         "Command Bridge",
-        "Faller's Faithful",
         "Lightstall Inquisitor",
         "Meltstrider's Resolve",
         "Pain for All",
         "Perigee Beckoner",
         "Roving Actuator",
+    }
+    assert non_effect == {
+        "Dauntless Scrapbot",
+        "Seedship Agrarian",
         "Tractor Beam",
     }
-    assert non_effect == {"Dauntless Scrapbot", "Seedship Agrarian"}
-    # The legacy-duplicate row "Monoist Circuit-Feeder (legacy
-    # duplicate row)" is `closed` (not blocked) AND would be normalised
-    # to the bare name — assert the parenthetical-strip didn't leak a
-    # qualified name into either blocked set.
+    # Durable structural invariants (hold every round regardless of
+    # which card is in which bucket):
+    # - a card cannot be both genuinely_missing and blocked_non_effect
+    assert missing.isdisjoint(non_effect)
+    # - the parenthetical-strip (e.g. "Monoist Circuit-Feeder (legacy
+    #   duplicate row)" is `closed`) never leaks a qualified name into
+    #   either blocked set.
     assert not any("(" in c for c in missing | non_effect)
 
 

@@ -90,7 +90,7 @@
         "CastFromExileWithCostHike"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "134b4778",
+      "verified_absent_at_commit": "16dfb76e",
       "note": "No Rust arm. play-from-exile-with-cost-hike permission subsystem; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is a single ETB TriggeredAbility whose effect is the bespoke composite EachOpponentExilesCardFromHandWithCastPermission — no separate shipped Rust Effect arm for the cast-from-exile-with-cost-hike half (no alias resolves to a live Rust variant; printed name 'Lightstall Inquisitor' is in NO bridge arm). TRUE new-Rust-Effect ask. Stamp still cron-fresh (0 commits since 5bd56d4a touched cards.rs/cross_engine.py)."
     },
     {
@@ -101,7 +101,7 @@
         "EachOpponentExilesFromHand"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "134b4778",
+      "verified_absent_at_commit": "16dfb76e",
       "note": "No Rust arm (same card as CastFromExileWithCostHike — second arm of Lightstall Inquisitor; the real parse fuses both halves into the single bespoke EachOpponentExilesCardFromHandWithCastPermission composite, no separate shipped EachOpponentExilesFromHand Effect). Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): no alias resolves to a live Rust variant; printed name in NO bridge arm. TRUE new-Rust-Effect ask."
     },
     {
@@ -113,7 +113,7 @@
         "SacrificeSelfUnlessYouTapAPermanent"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "134b4778",
+      "verified_absent_at_commit": "16dfb76e",
       "name_in_arm_ack": "add_mana_to_pool",
       "note": "No Rust arm. land-ETB trigger path + tap-a-permanent cost decision subsystem; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is ETB → SacrificeSelfUnlessTapPermanent (NOT a live Rust variant, NOT bridged) plus a separate AddManaToPool activated ability. No alias resolves to a live Rust variant. The printed name 'Command Bridge' appears in the wired `add_mana_to_pool` arm, but that is the card's MANA ABILITY ({T}: Add {color}, round-27 mana-ability primitive consumer list) — a DIFFERENT ability than the claimed land-ETB `SacUnlessYouTap` trigger (re-confirmed: the ETB effect is genuinely unshipped). Per-arm ack records that audited re-walk. TRUE new-Rust-Effect ask."
     },
@@ -126,7 +126,7 @@
         "ReturnNoncreatureNonlandFromGYWithMVLEManaSpent"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "134b4778",
+      "verified_absent_at_commit": "16dfb76e",
       "note": "No mana-value-condition GY-return arm. X = mana spent to cast self -> cast-cost-paid ledger subsystem; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is ETB → the bespoke composite AstelliReclaimerETBEffect — no shipped Rust Effect arm; no alias resolves to a live Rust variant; printed name 'Astelli Reclaimer' in NO bridge arm. TRUE new-Rust-Effect ask."
     },
     {
@@ -138,7 +138,7 @@
         "GrantDiesReturnTriggerAndPumpUntilEOT"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "134b4778",
+      "verified_absent_at_commit": "16dfb76e",
       "note": "No nested-trigger-grant substrate (grants a NEW triggered ability onto the target); multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is PumpTargetCreatureUntilEOT carrying a `granted_triggered_ability=TriggeredAbility(effect=PerigeeBeckonerDiesReturnTappedEffect())` parameter. The bare PumpTargetCreatureUntilEOT Effect arm IS shipped+bridged, BUT it does NOT carry the granted_triggered_ability / nested-trigger-grant parameter — extending the Rust arm to grant a new triggered ability onto the target is a Rust-Effect-arm capability extension, NOT a non-Effect gate. So this is NOT blocked_non_effect: it stays a TRUE new-Rust-Effect ask (the needed Effect *shape* — pump-AND-grant-nested-trigger — is genuinely absent). The cards.rs PumpTargetCreatureUntilEOT doc-comment names 'Perigee Beckoner' only as an `another:bool` self-exclusion example the Rust first-slice does NOT carry — not a wired cross_engine.py bridge arm, so the non-lexical name-in-arm signal correctly does not fire."
     },
     {
@@ -162,7 +162,7 @@
         "EnchantedDealsDamageThenPropagate"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "134b4778",
+      "verified_absent_at_commit": "16dfb76e",
       "note": "No self-replicating damage substrate. Aura attached_to + damage-feedback subsystem; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is ETB → bespoke PainForAllETBEffect + a DEALT_DAMAGE → bespoke PainForAllDamageEchoEffect — neither is a shipped Rust Effect arm; no alias resolves to a live Rust variant; printed name 'Pain for All' in NO bridge arm. TRUE new-Rust-Effect ask."
     },
     {
@@ -188,11 +188,14 @@
       "claimed_missing_effect": "DestroyTargetThenDrawIfUndamaged",
       "aliases": [
         "DestroyTargetThenDrawIfUndamaged",
-        "DestroyTargetIfNotDamagedThisTurnDraw"
+        "DestroyTargetIfNotDamagedThisTurnDraw",
+        "DestroyTargetCreatureThenDrawIfUndamaged"
       ],
-      "status": "genuinely_missing",
-      "verified_absent_at_commit": "134b4778",
-      "note": "No damage-this-turn ledger neither engine maintains for this; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is ETB → DestroyTargetCreature(draw_if_undamaged_amount=2, exclude_self, optional). DestroyTargetCreature is NOT a top-level live Rust variant (Rust's generic DestroyTarget maps to it via the coverage override, but carries no draw_if_undamaged / damage-this-turn-ledger rider); the destroy-then-draw-if-undamaged shape is genuinely unshipped. No alias resolves to a live Rust variant; printed name \"Faller's Faithful\" in NO bridge arm. TRUE new-Rust-Effect ask."
+      "status": "closed",
+      "note": "Effect-half CLOSED round 57 N3 (merge 16dfb76e): shipped Effect::DestroyTargetCreatureThenDrawIfUndamaged (cards.rs) + bridge arm destroy_target_creature_then_draw_if_undamaged + GENUINE real-EoE byte-equal probe on the actual parsed printing. Caught by the round-55 hardened cron as Pulsar-shaped-suspect (name in the wired arm, aliases did not lexically resolve) — exactly the structural catch r55 was built for. Full card stays loader-gated: Rust obj.damage vs Python damaged_this_turn asymmetry; byte-equal for the realistic no-prior-damage ETB, the general damaged-this-turn ledger is the deferred multi-round subsystem (SEARCH_LIMITATIONS r57). NOT a new-Rust-Effect ask.",
+      "closed_round": 57,
+      "resolved_variant": "DestroyTargetCreatureThenDrawIfUndamaged",
+      "reclassified_to": "BLOCKED-subsystem (damaged-this-turn ledger)"
     },
     {
       "entry": "AuraShapeFight-MeltstridersResolve",
@@ -202,7 +205,7 @@
         "EnchantedCreatureFightsTarget"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "134b4778",
+      "verified_absent_at_commit": "16dfb76e",
       "name_in_arm_ack": "fight_target_creature_with_target_creature",
       "note": "Bare bilateral Fight shipped (FightTargetCreatureWithTargetCreature); the Aura-shape Effect::EnchantedCreatureFightsTarget (source fighter = Aura's attached_to) is still missing — Aura-attachment subsystem. See SEARCH_LIMITATIONS.md. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is ETB → EnchantedCreatureFightsTargetEffect — the only alias `EnchantedCreatureFightsTarget` does NOT resolve to a live Rust variant. The printed name \"Meltstrider's Resolve\" appears in the wired `fight_target_creature_with_target_creature` arm, but that is the BARE-BILATERAL Fight sibling (a DIFFERENT effect than the claimed Aura-shape); the cards.rs doc-comment itself names \"Meltstrider's Resolve specifically\" as the deferred Aura-shape follow-up. Per-arm ack records that audited re-walk; the Aura-shape Effect is genuinely missing. TRUE new-Rust-Effect ask."
     },
@@ -215,7 +218,7 @@
         "VoidExileFromGYCopyAndCastForFree"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "134b4778",
+      "verified_absent_at_commit": "16dfb76e",
       "note": "Void condition shipped (ConditionalIfVoid r29); the exile-then-cast-copy-for-free half is still new Rust — cast-from-exile-copy subsystem; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is ETB → the bespoke composite RovingActuatorETBEffect(max_mv=2) — no shipped Rust Effect arm for the exile-then-cast-copy half; no alias resolves to a live Rust variant; printed name 'Roving Actuator' in NO bridge arm. TRUE new-Rust-Effect ask."
     },
     {
@@ -241,9 +244,12 @@
         "TapEnchantedYouControlAndDontUntap",
         "TapEnchantedThenControlSwapNoUntap"
       ],
-      "status": "genuinely_missing",
-      "verified_absent_at_commit": "134b4778",
-      "note": "TapEnchantedPermanent shipped; control-swap + don't-untap composition is still new Rust — Aura-attachment subsystem; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse emits only the bare TapEnchantedPermanent() (the control-swap + don't-untap is not modeled on either engine yet); the claimed composed effect TapEnchantedYouControlAndDontUntap is a DISTINCT, genuinely-unshipped Effect shape (the shipped bare TapEnchantedPermanent is a simpler, different effect — not what the full card needs). No non-Effect gate (no unbridged event, no declined cost-mechanic, no token-registration) — the residual is a missing Effect *shape*, so NOT blocked_non_effect. No alias resolves to a live Rust variant; printed name 'Tractor Beam' in NO bridge arm. TRUE new-Rust-Effect ask."
+      "status": "blocked_non_effect",
+      "note": "Folded genuinely_missing -> blocked_non_effect at round-57 post-merge resync (N3 r57 verify-first finding; TapEnchantedPermanent live-verified present at HEAD 16dfb76e).",
+      "shipped_variants": [
+        "TapEnchantedPermanent"
+      ],
+      "non_effect_blocker": "Aura control-swap + don't-untap composition subsystem. N3 r57 verify-first: the live parser emits ONLY the already-shipped+bridged bare Effect::TapEnchantedPermanent (cards.rs:2531, bridge cross_engine.py:5070); the composed control-swap/no-untap shape is modeled by NEITHER engine's parse, so it is not a probe-droppable Effect ask — residual is the Aura control-swap subsystem, a non-Effect gate."
     },
     {
       "entry": "PulsarSquadronAce-Spacecraft-submode",
