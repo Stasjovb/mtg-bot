@@ -5856,6 +5856,138 @@ fn apply_effect(
                 }
             }
         }
+        // DepressurizeEffect (Effect-uncovered Tier-A — Depressurize).
+        // Mirrors Python's `DepressurizeEffect.resolve`
+        // (`effects/bespoke.py:1554`): target = first creature
+        // (Python's `legal_targets` is ANY creature — NOT controller-
+        // restricted, the verified deviation from the bare pump arm;
+        // scan BOTH bfs in ETB-timestamp order, Python's centralized
+        // `state.battlefield` walk + the deterministic-first
+        // convention); push a `−power_penalty/−0` UEOT
+        // `PowerToughnessBonus`; then read POST-UEOT EFFECTIVE power
+        // and `if eff_power <= 0` destroy it (respecting
+        // indestructible — CR 702.12; Python's `turn.destroy` gate).
+        //
+        // **§2 counters-asymmetry (load-bearing, the mini-spec
+        // risk).** Python's `effective_power`
+        // (`game._compute_effective_pt`) folds the just-pushed UEOT
+        // bonus AND `+1/+1` counters (CR 613 layer 7c+7d). Rust's
+        // combat-side `effective_power` getter folds the UEOT bonus
+        // but NOT counters. To stay byte-equal with the Python SoT,
+        // the conditional reads the counters-INCLUSIVE effective
+        // power re-derived privately (file-iso): `base =
+        // ueot_base_pt_override().p OR printed_power`, plus
+        // `obj.counters`, plus `obj.ueot_power_bonus()` (which now
+        // includes the −pp just pushed). A combat-getter read would
+        // silently diverge on a counter'd target — pinned.
+        Effect::DepressurizeEffect { power_penalty } => {
+            let pp: i32 = *power_penalty;
+            // Target = first creature in ETB-timestamp order across
+            // BOTH bfs (any creature — Depressurize's legal_targets
+            // is NOT controller-restricted).
+            let target: Option<(usize, u32)> =
+                crate::bf_iter::bf_iter_etb_sorted(state)
+                    .into_iter()
+                    .find_map(|obj| {
+                        let printing =
+                            state.registry.lookup(obj.printing_id)?;
+                        if printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Creature")
+                        {
+                            Some((obj.controller as usize, obj.id))
+                        } else {
+                            None
+                        }
+                    });
+            if let Some((pidx, target_id)) = target {
+                // Push the −pp/−0 UEOT modifier (verbatim from the
+                // PumpTargetCreatureUntilEOT push shape).
+                {
+                    let zone: &mut Vec<GameObject> = Arc::make_mut(
+                        &mut state.players[pidx].battlefield,
+                    );
+                    for o in zone.iter_mut() {
+                        if o.id == target_id {
+                            o.ueot_modifiers.push(
+                                UeotModifier::PowerToughnessBonus {
+                                    power: -pp,
+                                    toughness: 0,
+                                },
+                            );
+                            break;
+                        }
+                    }
+                }
+                // Read POST-UEOT effective power, counters-inclusive
+                // (the Python-SoT view; NOT the combat-side getter
+                // which omits counters). base = ueot base override
+                // (.p) OR printed power; + obj.counters +
+                // obj.ueot_power_bonus() (now includes the −pp).
+                let (eff_power, is_indestructible): (i32, bool) = {
+                    let o = state.players[pidx]
+                        .battlefield
+                        .iter()
+                        .find(|x| x.id == target_id)
+                        .expect("target_id from scan but not found");
+                    let printing = state
+                        .registry
+                        .lookup(o.printing_id)
+                        .expect("scanned printing must resolve");
+                    let printed_p = printing.power.unwrap_or(0) as i32;
+                    let base_p = o
+                        .ueot_base_pt_override()
+                        .map(|(p, _)| p)
+                        .unwrap_or(printed_p);
+                    let eff =
+                        base_p + o.counters + o.ueot_power_bonus();
+                    let indest = printing
+                        .keywords
+                        .iter()
+                        .any(|k| k == "indestructible")
+                        || o.ueot_has_keyword("indestructible");
+                    (eff, indest)
+                };
+                // "Then if that creature's power is 0 or less,
+                // destroy it." Python's `turn.destroy` respects
+                // indestructible (CR 702.12 — the pump still applied,
+                // only the destroy is suppressed).
+                if eff_power <= 0 && !is_indestructible {
+                    let bf_mut: &mut Vec<GameObject> = Arc::make_mut(
+                        &mut state.players[pidx].battlefield,
+                    );
+                    let pos = bf_mut
+                        .iter()
+                        .position(|o| o.id == target_id)
+                        .expect("target_id present but not found");
+                    let mut obj = bf_mut.remove(pos);
+                    obj.zone = ZONE_GRAVEYARD;
+                    obj.tapped = false;
+                    // CE13: summoning_sick NOT reset (CR 302.1, I35).
+                    obj.damage = 0;
+                    obj.counters = 0;
+                    obj.attached_to = None;
+                    obj.exiled_with_source = None;
+                    let (printing_id, leaving_obj_id) =
+                        (obj.printing_id, obj.id);
+                    Arc::make_mut(
+                        &mut state.players[pidx].graveyard,
+                    )
+                    .push(obj);
+                    mark_left_battlefield_if_nonland(
+                        state, printing_id,
+                    );
+                    state
+                        .pending_leaves_dispatches
+                        .push(leaving_obj_id);
+                    crate::state_ops_zones::queue_token_cease(
+                        state,
+                        leaving_obj_id,
+                    );
+                }
+            }
+        }
         // DestroyTargetLand. CR 701.7 with Land filter — Dust Bowl /
         // Petrified Field pattern. Walks BOTH players' battlefield
         // in ETB-timestamp order via the shared

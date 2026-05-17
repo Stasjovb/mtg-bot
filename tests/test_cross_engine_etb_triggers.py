@@ -20757,5 +20757,70 @@ def test_bridge_orbital_plunge_composable_in_sequence():
     assert isinstance(e.effects[1], GainLife)
 
 
+def test_bridge_depressurize_basic_translation_pp3():
+    """Effect-uncovered Tier-A queue #4 — Depressurize. Rust
+    ``{"kind": "depressurize_effect", "power_penalty": 3}``
+    translates to Python ``DepressurizeEffect(power_penalty=3)``.
+    """
+    from mtg_bot.effects.bespoke import DepressurizeEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "depressurize_effect", "power_penalty": 3}
+    )
+    assert isinstance(e, DepressurizeEffect)
+    assert e.power_penalty == 3
+
+
+def test_bridge_depressurize_power_penalty_rides_through():
+    """Bridge arm pin: ``power_penalty`` rides through (not
+    hard-coded to 3) so a future reprint at a different penalty
+    round-trips faithfully.
+    """
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {"kind": "depressurize_effect", "power_penalty": 5}
+    )
+    assert e.power_penalty == 5
+
+
+def test_bridge_depressurize_default_pp_when_absent():
+    """Bridge arm pin: a missing ``power_penalty`` defaults to 3
+    (mirrors Python's ``DepressurizeEffect(power_penalty: int = 3)``
+    default — the lenient-default convention for partial fixtures).
+    """
+    from mtg_bot.effects.bespoke import DepressurizeEffect
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect({"kind": "depressurize_effect"})
+    assert e == DepressurizeEffect(power_penalty=3)
+
+
+def test_bridge_depressurize_composable_in_sequence():
+    """Round-trip the bespoke arm through the recursive Sequence
+    translator (forward-compat with any Sequence-wrapped consumer).
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.bespoke import DepressurizeEffect
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
+
+    e = _ta_dict_to_python_effect(
+        {
+            "kind": "sequence",
+            "effects": [
+                {"kind": "depressurize_effect", "power_penalty": 3},
+                {"kind": "gain_life", "amount": 1},
+            ],
+        }
+    )
+    assert isinstance(e, Sequence)
+    assert len(e.effects) == 2
+    assert isinstance(e.effects[0], DepressurizeEffect)
+    assert e.effects[0].power_penalty == 3
+    assert isinstance(e.effects[1], GainLife)
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.
