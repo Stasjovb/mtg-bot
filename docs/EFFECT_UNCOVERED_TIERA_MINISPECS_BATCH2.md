@@ -7,7 +7,7 @@ ready 7. It is a **separate file by design** (the round-64 doc is the
 round-64 Rust execution queue — do not collide; this BATCH2 file is
 appended logically after it). Same gold-standard format as the round-64
 doc / `docs/WARP_COST_PHASE1_DESIGN.md`. **Every file:line below is
-verified against the LIVE tree at main HEAD `29449569`** — the
+verified against the LIVE tree at main HEAD `79c707ba`** — the
 round-60-N1 lesson re-applied (labels lie; classify by the live parse
 AND the live `resolve` body, not the loader-gate attribution model —
 this round that distinction is load-bearing: see §1.2).
@@ -189,9 +189,9 @@ resolve; bridge arm; pins; genuine real-EoE probe). The Python class
 imports it. All `.pyd`-rebuild slices serialize through `maturin
 develop --release` (one Rust agent at a time, the `.pyd`-race rule).
 
-**Conventions verified live at HEAD `29449569`** (the round-64 §3
-conventions, re-verified — sentinels/anchors moved since `476e7422`;
-use THESE):
+**Conventions verified live at HEAD `79c707ba`** (the round-64 §3
+conventions, re-verified — Python sentinels moved since `476e7422`;
+the Rust anchors are unchanged from `29449569`; use THESE):
 - **parse_effect** arm: `rust/src/cards.rs` `fn parse_effect`
   (**line 4510**). Field-free unit-variant template: the
   `"exile_each_opponents_graveyard"` arm (**`cards.rs:5851`** —
@@ -219,15 +219,15 @@ use THESE):
   `effective_power`/`effective_toughness`: `state_ops_combat.rs:516`
   / `:557` (the round-64 documented counters-asymmetry caveat applies).
 - **bridge arm**: `src/mtg_bot/parity/cross_engine.py`
-  `_ta_dict_to_python_effect` (**line 475**), insert **IMMEDIATELY
+  `_ta_dict_to_python_effect` (**line 479**), insert **IMMEDIATELY
   ABOVE** `# === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===`
-  (**`cross_engine.py:8167`**) — never below, never delete.
+  (**`cross_engine.py:8171`**) — never below, never delete.
 - **bridge pin**: insert ABOVE `# === PHASE5_BRIDGE_PIN_TESTS_INSERT
   _ABOVE_THIS_LINE ===` (**`tests/test_cross_engine_etb_triggers.py
-  :20238`**).
+  :20476`**).
 - **genuine real-EoE probe**: insert ABOVE `# === PHASE5_PROBES
   _INSERT_ABOVE_THIS_LINE ===` (**`tests/test_parity_smoke.py
-  :64303`**). Probe vehicle: the **synthetic-stack-resolve driver on
+  :64551`**). Probe vehicle: the **synthetic-stack-resolve driver on
   the REAL printing** (`OracleParserCardSource` → `.spell_effect` →
   push a `StackItem` on both engines → `resolve_top_of_stack` →
   byte-equal — the `cross_engine.py:11032` `mass_removal_side_channel`
@@ -307,7 +307,7 @@ ExileAllCreaturesAndSpacecraft,
   controller scan, no target scan (no-target).
 
 **Bridge arm** (`_ta_dict_to_python_effect`, ABOVE the sentinel
-`cross_engine.py:8167`):
+`cross_engine.py:8171`):
 ```python
 if kind == "exile_all_creatures_and_spacecraft":
     # Effect-uncovered Tier-A batch-2 — Beyond the Quiet.
@@ -335,12 +335,12 @@ adds NO Python.)
   destination pin — a graveyard slip silently diverges LTB-graveyard
   triggers).
 - *Cross-engine bridge* (`test_cross_engine_etb_triggers.py`, ABOVE
-  `:20238`): dict round-trip `{"kind":
+  `:20476`): dict round-trip `{"kind":
   "exile_all_creatures_and_spacecraft"}` → Python
   `ExileAllCreaturesAndSpacecraft` → identical state delta on a board
   with creatures + a Spacecraft + a non-victim artifact (artifact
   count unchanged on both; exile zone byte-equal).
-- *Genuine real-EoE probe* (`test_parity_smoke.py`, ABOVE `:64303`):
+- *Genuine real-EoE probe* (`test_parity_smoke.py`, ABOVE `:64551`):
   `test_cross_engine_real_eoe_beyond_the_quiet_mass_exile_parity` —
   load real Beyond the Quiet, take `.spell_effect`, synthetic-stack-
   resolve on BOTH engines vs a board with creatures + a Spacecraft,
@@ -1013,10 +1013,11 @@ table). The §1.2 DROP reasons require reading the live `resolve` body
 `scripts/scout_r63_effect_uncovered_triage.py` for the oracle dump).
 The Rust enum variant count + names: `grep 'pub enum Effect'
 rust/src/cards.rs` then walk the variant list (112 at HEAD
-`29449569`). All §3 file:line refs verified against main HEAD
-`29449569` (sentinels live: `cross_engine.py:8167`,
-`tests/test_cross_engine_etb_triggers.py:20238`,
-`tests/test_parity_smoke.py:64303`; parse_effect `cards.rs:4510`,
+`79c707ba`, unchanged from `29449569`). All §3 file:line refs
+verified against main HEAD `79c707ba` (Python sentinels live:
+`cross_engine.py:8171`,
+`tests/test_cross_engine_etb_triggers.py:20476`,
+`tests/test_parity_smoke.py:64551`; parse_effect `cards.rs:4510`,
 unit template `:5851`, to_dict anchor `:7787`; resolve anchors
 `state_ops_resolve.rs` DestroyAllCreatures `:5148` /
 DestroyTargetArtifact `:5357` / DestroyTargetNoncreaturePermanent
