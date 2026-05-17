@@ -318,6 +318,11 @@ subsystem-entangled: additional-cost-choice + warp_cost → Tier-C).
   *safe-skip* (the orchestrator declines to launch into a slot it
   wrongly thinks is occupied). Safe direction, but run
   `git worktree prune` before trusting the count.
+  *(2026-05-16 cleanup: a conservative per-item-verified sweep removed
+  247 fully-merged + clean abandoned campaign worktrees; registry went
+  297 → ~48 — the residual is the live pipeline set + unmerged/dirty
+  branches, all skip-verified. `prune` itself cleared 0; the pollution
+  was abandoned-but-on-disk worktrees, not deleted-on-disk stale regs.)*
 - **Recurring orphaned-working-tree cruft.** The same pattern recurs:
   a worktree dir hits a transient Windows file-lock during/after
   `worktree remove`, leaving an orphaned dir + a stale registration.
