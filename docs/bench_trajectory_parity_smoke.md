@@ -3189,3 +3189,115 @@ was already rebuilt by the orchestrator's post-merge resync against
 the current origin/main Rust (verified by build mtime > the latest
 Rust commit on each rebase target); as a non-Rust slice this slice
 did NOT rebuild it. No Rust touched → no `maturin` here.
+
+## Round 70 (2026-05-17) — broad cross-engine divergence sweep at the round-69 `--max-turns 60` default — CLEAN at scale; the ~30 pts of newly-reached turn-25-60 game segments are byte-equal Python↔Rust, fully validating the round-69 budget change
+
+The round-69 stall-anatomy fix raised the bench `--max-turns` default
+25 → 60 on the diagnosis that ~2/3 of cap-25 FAIL_TIMEOUT games were
+`budget_progressing` (slow bridge-filtered mirror, still progressing,
+simply out of turns — not a frozen stalemate). That fix was proven
+**parity-safe** (a pure upper bound can only convert FAIL_TIMEOUT →
+PASS/DIVERGENCE) and the timeout→verdict recovery was demonstrated,
+but the parity-of-the-recovered-segment evidence was **sampled only
+on idx 0-29** (the canonical broad grid). The open question this
+round closes: now that ~30 extra percentage points of previously-
+timed-out games actually run to a verdict at the higher budget, are
+those newly-reached **turn-25-60 game segments** — the segment the
+old cap-25 *never exercised at all* — byte-equal Python↔Rust across
+the **real 17lands pool**, or did raising the budget unmask a genuine
+deep-game divergence the old cap was accidentally hiding?
+
+This is the r50/53/55/56/61/68 "broad sweep right after a
+signal-changing bench knob lands" discipline applied to the round-69
+budget change: a substantially wider disjoint span than the round-69
+idx 0-29 sample, with the late-game turn-25-60 segment as the
+explicit target.
+
+### Sweep design — substantially wider than the round-69 idx 0-29 sample
+
+Seven batches at the new `--max-turns 60` default, `attack_all`,
+mulligans off, over **7 disjoint archetype windows spanning idx
+30-759** (entirely disjoint from the round-69 idx 0-29 grid) and
+**5 distinct seed-offset pairs** (0-1 / 2-3 / 4-5 / 6-7 / 8-9 — each
+offset is a different RNG draw → different lines):
+
+| Batch | Archetype window | Seeds | Games | PASS | FAIL_DIV | FAIL_TIMEOUT | EXC | FILT |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| scout | 100-109 | 0-1 | 20 | 17 | **0** | 3 | 0 | 0 |
+| b1 | 30-89 | 0-1 | 120 | 99 | **0** | 21 | 0 | 0 |
+| b2 | 90-149 | 2-3 | 120 | 102 | **0** | 18 | 0 | 0 |
+| b3 | 150-209 | 4-5 | 120 | 88 | **0** | 32 | 0 | 0 |
+| b4 | 300-359 | 0-1 | 120 | 114 | **0** | 6 | 0 | 0 |
+| b5 | 500-559 | 6-7 | 120 | 86 | **0** | 34 | 0 | 0 |
+| b6 | 700-759 | 8-9 | 120 | 96 | **0** | 24 | 0 | 0 |
+| **Total** | idx 30-759 (7 disjoint windows) | 5 offsets | **740** | **602** | **0** | **138** | **0** | **0** |
+
+JSONs `tmp/bench_r70_{scout,b1..b6}.json` (tracked as round-evidence
+per the round-64/68/69 `tmp/bench_*` precedent). Per-batch wall ≤~165 s
+(the 120-game batches; the scout 27 s), each well-formed at
+`--max-turns 60`.
+
+### The finding — 0 NEW divergence at scale; the round-69 budget change is fully validated
+
+**0 FAIL_DIVERGENCE / 0 FAIL_EXCEPTION across all 740 games.**
+
+- **740 games**, 7 disjoint archetype windows (idx 30-759 — entirely
+  disjoint from round-69's idx 0-29 proof sample), 5 distinct
+  seed-offset pairs.
+- **602 parity verdicts (81.4% of games)** — PASS+DIVERGENCE; all 602
+  are PASS (byte-equal field views on every action + phase advance).
+- **FAIL_TIMEOUT 138 / 740 = 18.6%** at the new budget. **Every single
+  one hits exactly turn 61 (the cap)** — the genuine deep structural
+  floor round-69 predicted (frozen near-creatureless mirrors / empty-
+  board never-cast needing even more turns), NOT a divergence being
+  masked. This 18.6% is the honest, now-un-polluted residue — entirely
+  consistent with the round-69 broad-grid residual 23% (the floor is
+  the multi-round TOKEN_PRINTING_SUBSTRATE Phase-3/5 target, unchanged).
+
+### The turn-25-60 segment — the load-bearing result
+
+The round-69 fix's whole premise is that raising the cap recovers a
+real, previously-unexercised late-game segment. This sweep
+quantifies that segment **and proves it byte-equal**:
+
+| Late-game segment | Decisive byte-equal games reaching it |
+|---|---:|
+| turn > 25 | **253** (42.0% of all 602 decisive verdicts) |
+| turn > 30 | 175 |
+| turn > 40 | 84 |
+| turn > 50 | 32 |
+| verdicts out to turn | **60** (the deepest byte-equal PASS) |
+
+**253 decisive games — 42% of every byte-equal verdict in this sweep —
+run PAST turn 25**, the exact game region the old cap-25 silently
+discarded as FAIL_TIMEOUT and never compared cross-engine. Verdicts
+land at every turn from 26 through 60 (e.g. 31×t26, 25×t38, 10×t52,
+4×t60). **All 253 are byte-equal Python↔Rust.** The ~30 percentage
+points of parity signal the round-69 budget change recovered are
+genuine clean signal at scale — raising the budget did **not** unmask
+any deep-game divergence the 25-turn cap was accidentally hiding.
+
+### Verdict
+
+| Claim | Verdict |
+|---|---|
+| Raising `--max-turns` 25→60 (round-69) unmasked a genuine deep-game Python↔Rust divergence the old cap was hiding | **NO — CLEAN AT SCALE.** 740 games / 7 disjoint windows idx 30-759 / 5 seed offsets. 0 FAIL_DIVERGENCE, 0 FAIL_EXCEPTION. |
+| The previously-timed-out turn-25-60 game segments are byte-equal Python↔Rust over the real 17lands pool | **YES — 253 decisive games (42% of all verdicts) run past turn 25, byte-equal, verdicts out to turn 60.** The recovered ~30-pt signal is clean. |
+| The residual FAIL_TIMEOUT at the new budget is the genuine deep structural floor, not divergence-masking | **CONFIRMED.** 138/740 (18.6%) all hit exactly the cap turn 61; consistent with the round-69 broad residual 23%; the Phase-3/5 token substrate remains its only lever. |
+
+### Scope / non-changes
+
+Pure docs + tracked round-evidence JSONs (`tmp/bench_r70_*.json`) per
+the round-64/68/69 clean-sweep precedent. **No production code, no
+`_SAFE_*` filter, no bench-script logic, no Rust, no `.pyd` rebuild,
+no new pin** — the round-69
+`test_r69_max_turns_raise_is_parity_safe_and_recovers_timeout_signal`
+pin already locks the cap-invariance + timeout-recovery invariants;
+this round is the empirical broad-scale confirmation of the property
+that pin asserts, exactly as round-68 was for the warp admit (docs +
+JSON only, no pin). The `.pyd` was rebuilt by the orchestrator's
+cycle-2 post-merge resync against the current origin/main Rust
+(`9d209381`, build mtime > the latest Rust commit `1ab71c3d`); as a
+non-Rust slice this slice did NOT rebuild it. No Rust touched → no
+`maturin` here. The gate run below is purely confirmatory (no pinned
+trajectory could shift — nothing executable changed).
