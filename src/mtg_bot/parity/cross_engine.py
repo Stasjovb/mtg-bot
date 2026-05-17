@@ -8506,6 +8506,54 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # to bench-admit; auto-grow, no hardcoded list).
         from mtg_bot.effects.bespoke import FocusFireEffect
         return FocusFireEffect(base=int(eff_dict.get("base", 2)))
+    if kind == "put_plus_one_counter_on_opponents_creature":
+        # **Tier-C target-seating sub-substrate, lever-a — Sunset
+        # Saboteur.** Single-target +1/+1 counter add restricted to
+        # "target creature an opponent controls" (the opponent-side
+        # mirror of ``put_plus_one_counter_on_creature_you_control``).
+        # Rust's ``Effect::PutPlusOneCounterOnOpponentsCreature
+        # { amount: i32 }`` (rust/src/cards.rs) reads the push-time
+        # SEATED target from ``current_resolve_payload_target_id``
+        # (the Tier-C shared ``first_legal_trigger_target`` seat at
+        # ``state_ops_resolve.rs:push_triggered_ability``) — exactly
+        # like ``Effect::EquipToTargetCreatureYouControl``, NOT a
+        # first-eligible self-scan (a self-scan is precisely the
+        # cross-engine divergence the shared seat eliminates). It adds
+        # ``amount`` to the seated object's signed scalar ``counters``
+        # accumulator after a CR 608.2b resolve-time re-legality check
+        # (target still on a bf, still a creature, still
+        # opponent-controlled → else silent fizzle). ``amount == 0``
+        # short-circuits before lookup; negative raises (caught at
+        # parse time too).
+        #
+        # Python's ``PutPlusOneCounterOnOpponentsCreature(amount:
+        # int = 1)`` class (effects/generic/counters.py) is a
+        # ``PutPlusOneCounters`` subclass whose ``__post_init__``
+        # wires the single slot ``TargetSpec(IsCreature() &
+        # ControlledByOpponent())``; its base-class ``resolve`` walks
+        # the per-slot chosen target (the no-agent ``pool[0]`` seat at
+        # ``actions.py:_put_triggered_ability_on_stack``, gated by
+        # ``trajectory._is_target_seated_safe_trigger``), re-checks
+        # legality per CR 608.2b via ``_slot_target_still_legal``, and
+        # adds ``amount`` to its ``plus_one_counters`` (mirrors Rust's
+        # scalar ``counters`` accumulator — the cross-engine
+        # battlefield_snapshot round-trips "counters"). Both engines
+        # pick the SAME object by construction (the bf-insertion-order
+        # + object-id lockstep the harness maintains), so the
+        # post-resolve fingerprint is byte-equal.
+        #
+        # Mirrors Rust's ``parse_effect`` arm tolerance: a missing
+        # ``amount`` defaults to 1 (matching the Python class's
+        # ``amount: int = 1`` default) and a negative ``amount``
+        # raises at parse time (the resolve arm has a defense-in-depth
+        # negative guard too). Bridge consumers SHOULD pass ``amount``
+        # explicitly so the dict shape stays self-documenting.
+        from mtg_bot.effects.generic.counters import (
+            PutPlusOneCounterOnOpponentsCreature,
+        )
+        return PutPlusOneCounterOnOpponentsCreature(
+            amount=eff_dict.get("amount", 1),
+        )
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.

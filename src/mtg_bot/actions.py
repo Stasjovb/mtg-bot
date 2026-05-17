@@ -3244,8 +3244,46 @@ def push_triggered_ability(
                     pool = remaining
                 if not pool:
                     break
-                if controller.agent is None:  # pragma: no cover
-                    break
+                if controller.agent is None:
+                    # **Tier-C target-seating sub-substrate (Python
+                    # mirror of the Rust shared push-time seat).** The
+                    # production-deck bench loader seats NO agent
+                    # (``controller.agent is None``). Historically this
+                    # ``break``s → the trigger fizzles (``count_min>=1``)
+                    # or no-ops (``count_min==0``); that fizzle/no-op is
+                    # exactly why targeted safe triggers were
+                    # ``_SAFE_TRIGGERS``-declined (Rust's targeted arms
+                    # would pick a real first-eligible target and apply
+                    # the effect → a guaranteed cross-engine
+                    # divergence). For a lever-admitted TARGET-SEATED
+                    # safe trigger ONLY (the ``_is_target_seated_safe_
+                    # trigger`` gate keeps this surgical — every other
+                    # no-agent targeted trigger keeps its existing
+                    # ``break``/fizzle), deterministically pick
+                    # ``pool[0]``. ``pool`` is the un-kind-filtered
+                    # ``remaining`` (lever cards have
+                    # ``slot_kinds()==()``), whose ``[0]`` is exactly
+                    # ``Effect._enumerate_for_filter``'s first entry =
+                    # ``legal_targets[0]`` = the SAME object Rust's
+                    # ``first_legal_trigger_target`` seats (smallest
+                    # bf-index filter-passing object; the cross-engine
+                    # harness keeps bf insertion order + ids in
+                    # lockstep). This is the "behave as if a
+                    # ``_PickFirstLegalTargetAgent`` were seated, WITHOUT
+                    # an agent" contract. Documented in
+                    # ``docs/SEARCH_LIMITATIONS.md`` §2.3 (the
+                    # deterministic-first no-agent target replaces the
+                    # CR 603.3d controller choice — same class as every
+                    # ``_PickFirst*`` convention the campaign already
+                    # documents).
+                    from mtg_bot.parity.trajectory import (
+                        _is_target_seated_safe_trigger,
+                    )
+                    if _is_target_seated_safe_trigger(source, ability):
+                        chosen_list.append(pool[0])
+                        remaining.remove(pool[0])
+                        continue
+                    break  # pragma: no cover
                 pick = controller.agent.choose_target(
                     state, controller_id, pool
                 )

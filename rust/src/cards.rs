@@ -2417,6 +2417,33 @@ pub enum Effect {
     /// the implicit shape via the resolve arm's selection logic.
     /// negative `amount` raises; `amount=0` is a legal no-op.
     PutPlusOneCounterOnCreatureYouControl { amount: i32 },
+    /// **Tier-C target-seating sub-substrate (lever-a, Sunset
+    /// Saboteur).** Put `amount` +1/+1 counter(s) on a target
+    /// creature an OPPONENT of the source's controller controls.
+    /// Mirrors Python's
+    /// `PutPlusOneCounterOnOpponentsCreature(amount: int = 1)`
+    /// (`effects/generic/counters.py` — a `PutPlusOneCounters`
+    /// subclass whose `__post_init__` wires the slot filter
+    /// `IsCreature() & ControlledByOpponent()`). Sunset Saboteur's
+    /// ATTACKS trigger is the sole EoE consumer (6,375 17lands decks).
+    ///
+    /// **Payload-target convention (NOT a self-scan).** Unlike the
+    /// you-control sibling above (which deterministically scans the
+    /// source-controller's own bf at apply time), this variant reads
+    /// the push-time-seated target from
+    /// `state.current_resolve_payload_target_id` exactly like
+    /// `Effect::EquipToTargetCreatureYouControl`
+    /// (`state_ops_resolve.rs`). The seat is computed by
+    /// `first_legal_trigger_target` at `push_triggered_ability` time
+    /// (the Tier-C shared-seat micro-substrate) so BOTH engines pick
+    /// the SAME object — the deterministic smallest-bf-index
+    /// filter-passing creature an opponent controls. A resolve-time
+    /// CR 608.2b re-legality check (target still on a bf, still a
+    /// creature, still opponent-controlled) silently fizzles a target
+    /// that left the bf between push and resolve, byte-equal with
+    /// Python's `PutPlusOneCounters.resolve` `_slot_target_still_legal`
+    /// re-check. `amount=0` is a legal no-op; negative raises.
+    PutPlusOneCounterOnOpponentsCreature { amount: i32 },
     /// **Round 28 coverage extension.** Add `amount` mana of a single
     /// color chosen by the controller at resolution time. Mirrors
     /// Python's `AddNManaOfChosenColor(amount: int, options: tuple[str, ...])`
@@ -6540,6 +6567,27 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             }
             Ok(Effect::PutPlusOneCounterOnCreatureYouControl { amount })
         }
+        "put_plus_one_counter_on_opponents_creature" => {
+            // Tier-C target-seating lever-a (Sunset Saboteur). Python's
+            // PutPlusOneCounterOnOpponentsCreature uses the
+            // PutPlusOneCounters base default of amount=1. Same
+            // tolerate-missing / non-negative contract as the
+            // you-control sibling arm above.
+            let amount: i32 = match dict.get_item("amount")? {
+                Some(a) => a.extract().map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "put_plus_one_counter_on_opponents_creature.amount must be an integer (got: {e})"
+                    ))
+                })?,
+                None => 1,
+            };
+            if amount < 0 {
+                return Err(PyValueError::new_err(format!(
+                    "put_plus_one_counter_on_opponents_creature: amount must be non-negative, got {amount}"
+                )));
+            }
+            Ok(Effect::PutPlusOneCounterOnOpponentsCreature { amount })
+        }
         "pump_creatures_you_control_until_eot" => {
             // Round-28 anthem-shape UEOT effect. Mirrors the
             // PumpSelfUntilEOT / PumpTargetCreatureUntilEOT schema:
@@ -6647,7 +6695,7 @@ fn parse_effect(dict: &Bound<'_, PyDict>) -> PyResult<Effect> {
             Ok(Effect::Sequence { effects: children })
         }
         other => Err(PyValueError::new_err(format!(
-            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard"
+            "unknown effect kind {other:?}; valid: deal_damage, draw_cards, gain_life, return_to_hand, mill, mill_target_player, exile_target, tap_target, untap_target, sacrifice, add_counters, discard_card, scry_n, destroy_target, damage_each_opponent, damage_each_creature, create_token, add_mana_to_pool, search_library_for_basic_land_tapped, put_plus_one_counter_on_self, surveil, counter_target_spell, return_creature_from_your_graveyard_to_battlefield, discard_self, each_opponent_loses_life, lose_life, target_opponent_loses_life, each_opponent_discards, destroy_all_creatures, destroy_target_nonland_permanent, destroy_target_artifact, destroy_target_land, focus_fire_effect, deal_damage_any_target, pump_self_until_eot, pump_target_creature_until_eot, sequence, pump_creatures_you_control_until_eot, return_creature_from_your_graveyard_to_hand, put_plus_one_counter_on_each_creature_you_control, put_plus_one_counter_on_creature_you_control, put_plus_one_counter_on_opponents_creature, add_n_mana_of_chosen_color, search_library_for_card, pump_creatures_opponents_control_until_eot, put_card_from_graveyard_on_bottom_of_library, move_self_counters_to_target_creature_you_control, deal_damage_equal_to_source_power_any_target, tap_target_artifact_or_creature, conditional_on_tapped_creatures, put_plus_one_counter_on_each_of_up_to_n_target_creatures, put_charge_counters_on_self, create_token_copy_of_target_creature_you_control, optional_sac_artifact_for_effect, owner_puts_target_artifact_or_creature_on_top_or_bottom_of_library, attach_to_target_creature_you_control, destroy_enchanted_permanent, tap_enchanted_permanent, put_stun_counter_on_tapped_creature, tap_target_opponent_permanent_and_stun_it, exile_target_creature_until_source_leaves, exile_opponents_nonland_permanent_until_leaves, exile_opponents_nonland_permanent_with_max_mv_until_leaves, may_do, look_top_n_put_one_in_hand_rest_to_graveyard, choose_one_mode, if_you_do, each_opponent_mills_cards, pump_target_artifact_or_creature_until_eot, each_opponent_sacrifices_creature, grant_keyword_to_target_creature_until_eot, grant_keywords_to_target_creature_until_eot, untap_target_other_permanent, tap_another_target_creature, return_all_creatures_from_your_graveyard_to_battlefield, set_base_pt_until_eot, manifest_dread, manifest_dread_then_attach_self, manifest_dread_then_put_plus_one_counters_on_it, conditional_if_void, deal_damage_to_opponent_creature, optional_mana_cost_then_effect, draw_cards_equal_to_resolving_combat_damage, double_target_creatures_power_ueot, deal_damage_to_opponent_creature_by_artifact_count, put_plus_one_counters_on_self_per_other_creature_or_artifact, surveil_x_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_hand, deal_damage_to_opponent_creature_by_lands_controlled, deal_damage_to_opponent_creature_by_creatures_you_control, mill_target_player_equal_to_your_life_total, create_token_each_player, each_opponent_loses_life_equal_to_artifact_count, gain_life_equal_to_artifact_count, deal_damage_to_opponent_creature_by_cards_in_graveyard, deal_damage_to_opponent_creature_by_life_total, exile_each_opponents_graveyard"
         ))),
     }
 }
@@ -7995,6 +8043,10 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::PutPlusOneCounterOnCreatureYouControl { amount } => {
             d.set_item("kind", "put_plus_one_counter_on_creature_you_control")?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::PutPlusOneCounterOnOpponentsCreature { amount } => {
+            d.set_item("kind", "put_plus_one_counter_on_opponents_creature")?;
             d.set_item("amount", *amount)?;
         }
         Effect::AddNManaOfChosenColor { amount, options } => {

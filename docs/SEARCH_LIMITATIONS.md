@@ -5200,6 +5200,64 @@ cross-engine harness use first-legal).
 
 ---
 
+## Tier-C target-seating sub-substrate — deterministic no-agent push-time target seat for SAFE targeted triggered abilities (lever-a: Sunset Saboteur)
+
+**Location**: `rust/src/state_ops_resolve.rs`
+(`first_legal_trigger_target` next to `push_triggered_ability` — the
+gated push-time first-legal seat into the EXISTING
+`TriggerPayload.target_id` via `new_trigger_with_target`; the
+`Effect::PutPlusOneCounterOnOpponentsCreature` resolve arm reading
+`current_resolve_payload_target_id` with a CR 608.2b re-legality
+check) + `src/mtg_bot/actions.py`
+(`_put_triggered_ability_on_stack` — the `controller.agent is None`
+branch's gated `pool[0]` seat) + `src/mtg_bot/parity/trajectory.py`
+(`_is_target_seated_safe_trigger` — the surgical gate).
+
+**What the shortcut is**: real MTG picks a triggered ability's
+target when it is put on the stack (CR 603.3d) by the ability's
+controller's *choice*. The substrate replaces that choice with a
+deterministic first-legal pick (no agent): the smallest-bf-index
+object that passes the slot filter, scanning `state.players` in
+ascending seat index then each player's `battlefield` Vec in
+insertion order (Python's `Effect._enumerate_for_filter` order; the
+`_PickFirstLegalTargetAgent` shim's pick). For Sunset Saboteur
+(`ATTACKS / IsSelf / PutPlusOneCounterOnOpponentsCreature`,
+`count_min=1`) that is the first creature an opponent of the
+source's controller controls; no eligible target ⇒ the trigger
+fizzles (CR 603.3c — not pushed) byte-equal on both engines. The
+seat is **gated** (`_is_target_seated_safe_trigger` /
+`first_legal_trigger_target`'s per-variant match) so it fires ONLY
+for the lever-admitted targeted safe triggers — every existing
+untargeted safe trigger and every non-lever targeted trigger keeps
+its prior behavior byte-identically.
+
+**Why it's OK**: this is the SAME deliberate divergence the campaign
+already documents for every `_PickFirst*`-driven probe, the Rust
+first-eligible resolve arms, and the spell-card-bridge Phase-1
+cast-time seat (the entry directly above) — the campaign-wide
+"no-callback first-legal-target convention". Both engines pick the
+SAME object by construction (the cross-engine harness keeps bf
+insertion order + object ids in lockstep), so the post-resolve
+`counters` fingerprint is byte-equal — which is the property the
+bench measures. The production-deck bench loader has no strategic
+agent at all (the convention is bench/parity context only).
+
+**Failure mode**: a strategically *better* target is never chosen
+(irrelevant to parity; a non-first legal target is never reachable
+in the bench / cross-engine harness — no agent is seated there).
+
+**Fix scope estimate**: seat a real strategic agent in the bench
+loader (a much larger, separate effort — the same fix-scope as the
+spell-target / resolution-decision-vocab entries).
+
+**Impact estimate**: parity-positive, zero strength claim. Flips
+Sunset Saboteur (6,375 17lands decks) from Effect-uncovered /
+bench-dropped to byte-equal bench-admittable; the shared seat is the
+substrate Exosuit Savior (12,480 decks, the `count_min=0`
+optional-bounce edge) reuses in its own slice.
+
+---
+
 ## Spell-card-bridge lever Phase 1 — spell StackItem carries a deterministic target slot (new substrate, not a shortcut)
 
 **Location**: `rust/src/state.rs` (`StackItem.target_obj_id:

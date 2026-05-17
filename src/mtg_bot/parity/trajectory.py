@@ -1641,6 +1641,81 @@ _SAFE_TRIGGERS: frozenset[tuple[str, Optional[str], str]] = frozenset({
     # interaction).
     ("attacks", "source_is_self", "draw_cards"),
     ("attacks", "source_is_self", "gain_life"),
+    # **Tier-C target-seating sub-substrate, lever-a — Sunset
+    # Saboteur (the FIRST targeted-safe-trigger entry in this set).**
+    # ``{1}{B}`` Creature — 4/1 ``menace`` (in :data:`_SAFE_KEYWORDS`).
+    # "Whenever Sunset Saboteur attacks, put a +1/+1 counter on target
+    # creature an opponent controls." — 6,375 17lands decks. Parsed
+    # live as ``(ATTACKS, IsSelf, PutPlusOneCounterOnOpponentsCreature)``
+    # with ``requires_target=True``, ``count_range=(1,1)``,
+    # ``slot_kinds=()``, slot filter
+    # ``IsCreature() & ControlledByOpponent()``, ``amount=1``.
+    #
+    # **Why this needs a NEW substrate (not just a leaf widen).**
+    # Every prior ``_SAFE_TRIGGERS`` leaf is recipient-is-self /
+    # untargeted; the production-deck bench loader seats NO agent, so
+    # a targeted trigger has no one to pick the push-time target. The
+    # ``_SAFE_TRIGGERS`` docstring's decline class
+    # (``deal_damage_any_target`` "target-pick at PUSH time requires
+    # an agent shim — the production-deck loader doesn't seat one")
+    # is exactly this. The Tier-C target-seating shared sub-substrate
+    # (this slice) replaces BOTH engines' no-agent behavior with the
+    # SAME deterministic first-legal pick:
+    #   * **Rust** — ``first_legal_trigger_target`` at
+    #     ``state_ops_resolve.rs:push_triggered_ability`` scans
+    #     ascending seat × bf-Vec order, seats the smallest-bf-index
+    #     opponent-controlled creature into the EXISTING
+    #     ``TriggerPayload.target_id`` via ``new_trigger_with_target``
+    #     (CE20 Slice 4 — no new ``StackItem`` field); the resolve arm
+    #     reads it via ``current_resolve_payload_target_id``
+    #     (the ``EquipToTargetCreatureYouControl`` precedent).
+    #     ``count_min>=1`` + no eligible target ⇒ trigger NOT pushed
+    #     (CR 603.3c fizzle).
+    #   * **Python** — the no-agent ``pool[0]`` seat at
+    #     ``actions.py:_put_triggered_ability_on_stack`` (the
+    #     ``controller.agent is None`` branch), gated to
+    #     ``_is_target_seated_safe_trigger``; ``pool[0]`` IS
+    #     ``Effect._enumerate_for_filter``'s first entry =
+    #     ``legal_targets[0]`` = the same object Rust seats. No legal
+    #     target with ``min_t>0`` ⇒ Python's existing
+    #     "no legal targets; fizzles" ``return False`` — byte-equal
+    #     with the Rust skip-push.
+    # Both directions resolve to the SAME object by construction (the
+    # cross-engine harness keeps bf insertion order + object ids in
+    # lockstep), so the post-resolve ``counters`` fingerprint is
+    # byte-equal. The deterministic-first no-agent target replacing
+    # the CR 603.3d controller choice is documented in
+    # ``docs/SEARCH_LIMITATIONS.md`` §2.3 (same class as every
+    # ``_PickFirst*`` / first-eligible-resolve-arm convention the
+    # campaign already documents).
+    #
+    # **Bridge support (the lockstep contract — both exist before
+    # this entry):**
+    #   * Rust ``Effect::PutPlusOneCounterOnOpponentsCreature
+    #     { amount: i32 }`` variant + parse / to_dict / resolve arms
+    #     (``rust/src/cards.rs`` + ``state_ops_resolve.rs``) — the
+    #     opponent-direction sibling of the existing
+    #     ``PutPlusOneCounterOnCreatureYouControl``, but reading the
+    #     SEATED payload target (NOT a first-eligible self-scan — a
+    #     self-scan is exactly the divergence the shared seat removes).
+    #   * Python ``PutPlusOneCounterOnOpponentsCreature(amount: int =
+    #     1)`` (effects/generic/counters.py — a ``PutPlusOneCounters``
+    #     subclass) + the ``put_plus_one_counter_on_opponents_creature``
+    #     cross_engine bridge arm. Bare ``amount`` payload, identical
+    #     spelling both engines, non-negative-guarded.
+    # The ATTACKS event dispatch itself is already byte-equal-proven
+    # (round-43/44 surveil/draw/gain ATTACKS pins). The genuine
+    # real-EoE firing-parity probe is in test_parity_smoke.py.
+    #
+    # **Necessary-but-not-sufficient teeth.** ``(attacks,
+    # source_is_self)`` is shared by Hardened Escort / Flesh Burrower
+    # (``ATTACKS/source_is_self/PumpTargetCreatureUntilEOT``) — those
+    # are NOT admitted because ``pump_target_creature_until_eot`` is
+    # never added to the ATTACKS ``safe_effect_kinds``. The gate is
+    # the full triple + the recognizer's bare-shape slot check, NOT
+    # the bare targeted-ATTACKS shape (negative-pinned in
+    # tests/test_trajectory.py).
+    ("attacks", "source_is_self", "put_plus_one_counter_on_opponents_creature"),
     # DIES+IsSelf+gain_life extension (this slice — round-47 sister to
     # round-44's ATTACKS+IsSelf+gain_life). Adds the second leaf to the
     # DIES+IsSelf arm (after round-42's surveil), completing the natural
@@ -2337,6 +2412,34 @@ _SAFE_EFFECT_KEYS: dict[str, frozenset[str]] = {
     # or PumpSelf's ``granted_keywords``). The recognizer in
     # :func:`_python_ta_to_safe_dict` gates this whitelist.
     "put_plus_one_counter_on_self": frozenset({"kind", "amount"}),
+    # PutPlusOneCounterOnOpponentsCreature — single ``amount`` payload
+    # key (Tier-C target-seating sub-substrate, lever-a — Sunset
+    # Saboteur). Rust's
+    # ``Effect::PutPlusOneCounterOnOpponentsCreature { amount: i32 }``
+    # (rust/src/cards.rs) is bare: it adds ``amount`` +1/+1 counters
+    # to the push-time-SEATED target (a creature an opponent of the
+    # source's controller controls; the seat is the Tier-C shared
+    # ``first_legal_trigger_target`` / no-agent ``pool[0]`` pick — NOT
+    # a payload field, NOT a self-scan). Its to_dict emits ``{"kind":
+    # "put_plus_one_counter_on_opponents_creature", "amount": <i32>}``
+    # — IDENTICAL spelling to Python's
+    # ``PutPlusOneCounterOnOpponentsCreature(amount: int = 1)``
+    # (effects/generic/counters.py, a ``PutPlusOneCounters``
+    # subclass), round-tripped by the
+    # ``put_plus_one_counter_on_opponents_creature`` cross_engine
+    # bridge arm. The slot filter
+    # (``IsCreature() & ControlledByOpponent()``) is NOT a dict
+    # payload key — it is structural to the effect class on Python and
+    # to the seat's per-variant scan on Rust (the recognizer's
+    # bare-shape gate enforces the single-implicit-target contract),
+    # so the payload whitelist stays the bare ``{"kind", "amount"}``
+    # exactly like the ``put_plus_one_counter_on_self`` sibling. The
+    # recognizer in :func:`_python_ta_to_safe_dict` gates this
+    # whitelist; the ``_is_safe_trigger_dict`` extra-key refusal is
+    # the backstop.
+    "put_plus_one_counter_on_opponents_creature": frozenset(
+        {"kind", "amount"}
+    ),
     # CreateToken (round-49 N1 token-printing substrate, Phase 1) —
     # payload keys ``count`` + ``token_printing_id``. This is the
     # POST-SEATING dict shape: the recognizer
@@ -2790,7 +2893,10 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         YOU,
     )
     from mtg_bot.effects.object_predicates import IsLand
-    from mtg_bot.effects.generic.counters import PutPlusOneCounterOnSelf
+    from mtg_bot.effects.generic.counters import (
+        PutPlusOneCounterOnOpponentsCreature,
+        PutPlusOneCounterOnSelf,
+    )
     from mtg_bot.effects.generic.draw_mill import DrawCards
     from mtg_bot.effects.generic.life import GainLife
     from mtg_bot.effects.generic.library_lookat import (
@@ -2886,7 +2992,19 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # already pins it; a future slice landing such a consumer
             # ships ``scry_n`` under ATTACKS as a single-line edit
             # here AND a single new ``_SAFE_TRIGGERS`` entry.
-            safe_effect_kinds = ("surveil", "draw_cards", "gain_life")
+            # Tier-C target-seating lever-a (Sunset Saboteur) widens
+            # the ATTACKS+IsSelf arm with the FIRST targeted-safe leaf
+            # ``put_plus_one_counter_on_opponents_creature``. The
+            # predicate-effect product is still enforced by the
+            # ``("attacks", "source_is_self",
+            # "put_plus_one_counter_on_opponents_creature")``
+            # ``_SAFE_TRIGGERS`` entry (this list is necessary, not
+            # sufficient); the recognizer's bare-shape gate above is
+            # the §2 teeth.
+            safe_effect_kinds = (
+                "surveil", "draw_cards", "gain_life",
+                "put_plus_one_counter_on_opponents_creature",
+            )
         elif ta.event is Event.DIES:
             # Event.DIES — round-42 shipped the surveil leaf; the
             # round-47 DIES+IsSelf+gain_life entry widened it to
@@ -3217,6 +3335,76 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
             # (which preserves this ``kind``).
             "_token_card_def": token_cd,
         }
+    elif isinstance(eff, PutPlusOneCounterOnOpponentsCreature):
+        # **Tier-C target-seating sub-substrate (lever-a, Sunset
+        # Saboteur).** The FIRST targeted-safe-trigger leaf. Python's
+        # ``PutPlusOneCounterOnOpponentsCreature(amount: int = 1)``
+        # (effects/generic/counters.py — a ``PutPlusOneCounters``
+        # subclass whose ``__post_init__`` wires the single slot
+        # ``TargetSpec(IsCreature() & ControlledByOpponent())``,
+        # ``count_min=1``, ``count_max=1``, ``slot_kinds()==()``).
+        # Sunset Saboteur's ATTACKS trigger is the sole EoE consumer
+        # (``{1}{B}`` 4/1 ``menace``, 6,375 17lands decks).
+        #
+        # **This is a TARGET-SEATED leaf — distinct from every other
+        # arm above (all of which are recipient-is-self / untargeted).**
+        # Both engines pick the target via the Tier-C shared
+        # deterministic push-time seat (``first_legal_trigger_target``
+        # on Rust at ``state_ops_resolve.rs:push_triggered_ability``;
+        # the no-agent ``pool[0]`` seat on Python at
+        # ``actions.py:_put_triggered_ability_on_stack`` — the
+        # ``controller.agent is None`` branch), so NO loader-seated
+        # agent is needed and BOTH engines pick the SAME
+        # smallest-bf-index opponent-controlled creature. The
+        # ``put_plus_one_counter_on_opponents_creature`` bridge arm
+        # (``cross_engine.py``) round-trips the bare ``amount`` payload
+        # IDENTICALLY on both engines (Rust
+        # ``Effect::PutPlusOneCounterOnOpponentsCreature`` to_dict
+        # emits ``{"kind": "put_plus_one_counter_on_opponents_creature",
+        # "amount": <i32>}`` — no ``count``/``amount`` discrepancy;
+        # parse arm tolerates a missing ``amount`` defaulting to 1 and
+        # rejects negatives, mirroring the Python class's
+        # ``amount: int = 1`` default). The resolve-time CR 608.2b
+        # re-legality check (target still on a bf, still a creature,
+        # still opponent-controlled) is byte-equal on both engines
+        # (Python's ``PutPlusOneCounters.resolve``/
+        # ``_slot_target_still_legal``; Rust's resolve arm's explicit
+        # re-check). See the
+        # ``("attacks", "source_is_self",
+        # "put_plus_one_counter_on_opponents_creature")`` entry in
+        # :data:`_SAFE_TRIGGERS` for the full cross-engine parity
+        # provenance + the deterministic-first SEARCH_LIMITATIONS §2.3
+        # entry.
+        #
+        # **Bare-shape gate (§2 silent-mistranslation teeth).** Only
+        # the EXACT single-implicit-target shape is admitted: exactly
+        # one ``TargetSpec`` slot, ``count_min==1``, ``count_max==1``,
+        # ``slot_kinds()==()`` (no ``SlotRef``, no per-slot kind, no
+        # ``distinct_from``). Any heterogeneous / multi-slot shape
+        # falls through to the filter drop — the bridge + the shared
+        # seat both assume the single-bare-slot contract. (Sunset
+        # Saboteur's parsed effect satisfies this exactly — verified
+        # live: ``count_range=(1,1)``, ``slot_kinds=()``.)
+        from mtg_bot.effects.targets import SlotRef, TargetSpec
+        slots = tuple(getattr(eff, "targets", ()) or ())
+        if len(slots) != 1:
+            return None
+        slot = slots[0]
+        if isinstance(slot, SlotRef) or not isinstance(slot, TargetSpec):
+            return None
+        if slot.count_min != 1 or slot.count_max != 1:
+            return None
+        if getattr(slot, "distinct_from", ()) not in ((), None):
+            return None
+        if eff.target_slot_kinds() != ():
+            return None
+        if int(eff.amount) < 0:
+            return None
+        eff_kind = "put_plus_one_counter_on_opponents_creature"
+        eff_dict = {
+            "kind": "put_plus_one_counter_on_opponents_creature",
+            "amount": int(eff.amount),
+        }
     else:
         return None
     if eff_kind not in safe_effect_kinds:
@@ -3231,6 +3419,55 @@ def _python_ta_to_safe_dict(ta) -> Optional[dict]:
         "predicate": pred_dict,
         "effect": eff_dict,
     }
+
+
+# **Tier-C target-seating sub-substrate.** The set of recognizer
+# ``effect.kind`` values that ride the deterministic push-time target
+# seat (a targeted SAFE triggered ability whose target is picked by
+# the no-agent first-legal rule, NOT a loader-seated agent). Every
+# OTHER safe-trigger leaf is recipient-is-self / untargeted and is
+# NOT in this set — so the surgical Python seat (§3.2) fires ONLY for
+# these. ``put_plus_one_counter_on_opponents_creature`` (Sunset
+# Saboteur, lever-a) is the first member; Exosuit Savior's
+# ``return_target_permanent_you_control`` joins in its own slice.
+#
+# This is a SEPARATE module-level signal rather than a top-level
+# ``"target_seated"`` key on the round-trip dict because
+# :func:`_is_safe_trigger_dict` refuses any top-level key beyond
+# ``event`` / ``predicate`` / ``effect`` / ``once_per_turn`` (the
+# schema-extension backstop). Keying the gate off the recognized
+# ``effect.kind`` keeps the cross-engine round-trip dict shape
+# byte-identical while still making the seat surgical.
+_TARGET_SEATED_EFFECT_KINDS: frozenset[str] = frozenset({
+    "put_plus_one_counter_on_opponents_creature",
+})
+
+
+def _is_target_seated_safe_trigger(source, ability) -> bool:
+    """True iff ``ability`` (a parsed ``TriggeredAbility`` on
+    ``source``) round-trips through :func:`_python_ta_to_safe_dict`
+    as a TARGET-SEATED safe trigger — i.e. its recognized
+    ``effect.kind`` is in :data:`_TARGET_SEATED_EFFECT_KINDS`.
+
+    This is the gate that keeps the Tier-C no-agent deterministic
+    target seat (the ``controller.agent is None`` branch of
+    ``actions._put_triggered_ability_on_stack``) **surgical**: it
+    fires ONLY for the lever-admitted targeted safe triggers (Sunset
+    Saboteur today), never for the engine's other targeted triggers
+    (which keep their existing no-agent fizzle/no-op intact) and
+    never for any untargeted safe trigger (those don't reach the
+    target-pick loop at all). ``source`` is accepted for signature
+    symmetry with the call site (the recognizer reads only
+    ``ability``); a future per-source gate can use it without a
+    call-site change.
+    """
+    dct = _python_ta_to_safe_dict(ability)
+    if dct is None:
+        return False
+    eff = dct.get("effect")
+    if not isinstance(eff, dict):
+        return False
+    return eff.get("kind") in _TARGET_SEATED_EFFECT_KINDS
 
 
 def _is_landfall_predicate_python(pred: object) -> bool:
