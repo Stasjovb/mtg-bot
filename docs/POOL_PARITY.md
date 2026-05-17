@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **104 (21.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 203 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **106 (22.3% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 201 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **168 (35.4%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 104 | 21.9% |
-| Effect+bridge covered (not individually probed) | 203 | 42.7% |
+| PROBED byte-equal | 106 | 22.3% |
+| Effect+bridge covered (not individually probed) | 201 | 42.3% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -75,6 +75,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Embrace Oblivion
 - Eumidian Terrabotanist
 - Eusocial Engineering
+- Exosuit Savior
 - Extinguisher Battleship
 - Faller's Faithful
 - Famished Worldsire
@@ -137,6 +138,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Space-Time Anomaly
 - Starbreach Whale
 - Starfighter Pilot
+- Sunset Saboteur
 - Susurian Dirgecraft
 - Susurian Voidborn
 - Tannuk, Memorial Ensign

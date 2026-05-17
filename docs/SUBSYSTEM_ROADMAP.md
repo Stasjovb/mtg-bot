@@ -700,6 +700,59 @@ second:
    >   - Carry-forward: SL doc-wide "Headline counts" lag +
    >     the PROBE_MODULES-registration micro-slice
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 11 —
+   >   round-76 residual FULLY closed + PHASE TRANSITION; @
+   >   `dea55cff`, counts UNCHANGED 121/123/23/12/11, byte-equal
+   >   307/475, PROBED 104->106).**
+   >   - **Round-76 confirmed-bug residual FULLY closed:** R76-2
+   >     (`0627614e`, Rust B — Radiant Strike Destroy* + the
+   >     Seedship Impact destroy-half clone now fire DIES,
+   >     R74-2 class) + R76-1 (`dea55cff` — monotonic
+   >     `next_object_id`, all 6 token-mint sites, CR 111.7) +
+   >     CFI-1 (earlier). Both R76 fixes non-count-shifting
+   >     (behavior fixes, state_ops_*.rs-only; cron verified NO
+   >     residue cadence, NO count drift — the agents'
+   >     "structural arm will fire" was over-cautious, git-log/
+   >     cron disproved it). Rust B independently re-implemented
+   >     R76-1, found the sibling had landed it, and abandoned
+   >     its redundant branch cleanly (no-fallback-hybrid).
+   >   - **PROBED 104->106** — the cycle-10-flagged honest
+   >     measurement correction LANDED (`b82fe8e7`: the Tier-C
+   >     Sunset Saboteur + Exosuit Savior probes conformed to
+   >     the `..._parity` bar — NOT loosened; Diplomatic
+   >     Relations honestly excluded as not-a-real-EoE-probe).
+   >     byte-equal 307/475 unchanged (R76 = behavior fixes).
+   >     Surfaced in this cycle-11 POOL_PARITY regen.
+   >   - **PHASE TRANSITION (load-bearing — the continuous
+   >     cheap-cadence model is genuinely EXHAUSTED).** Every
+   >     agent this cycle — both Rust (A: Tier-C concluded;
+   >     B: spell-card-bridge Phase 2 + R76-2 + honest R76-1
+   >     dedup) and the non-Rust ones — independently
+   >     verify-first honest-concluded: **NO genuine disjoint
+   >     single-round Rust slice and NO genuine disjoint
+   >     non-Rust slice remains.** Closed/complete: cheap
+   >     Tier-A lane EXHAUSTED; Tier-C target-seating COMPLETE;
+   >     spell-card-bridge COMPLETE through Phase 2 (admit 7);
+   >     warp Phase 1/1.5/2 REALIZED; the round-74/76 bench
+   >     divergence trio+residual FULLY closed; the
+   >     single-clean-probe-idiom frontier EXHAUSTED; the
+   >     SoT-flip design corpus COMPLETE + legal_decisions
+   >     Slice 1 IMPLEMENTED; Aura struck; the
+   >     measurement-attribution gap closed. **What remains is
+   >     fundamentally different cadence:** the 8
+   >     `genuinely_missing` residue cards are each a
+   >     MULTI-ROUND, subsystem-entangled, bespoke-Rust
+   >     project (Sothera exile-link composite, Lightstall
+   >     Inquisitor ×2, Command Bridge, Astelli Reclaimer,
+   >     Pain for All, Meltstrider's Resolve, Roving Actuator)
+   >     — orchestrator-sequenced ONE-AT-A-TIME deliberate
+   >     rounds, NOT continuous-cheap-refill. The pipeline
+   >     should STOP padding/refilling and shift to a
+   >     deliberate sequenced-subsystem cadence (or the
+   >     campaign is at a natural milestone/wind-down point —
+   >     orchestrator+user decision, NOT an autonomous pad).
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

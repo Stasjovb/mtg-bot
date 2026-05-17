@@ -304,7 +304,41 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main fa3d17b4 (continuous-pipeline cycle 10 —
+     Measured at main dea55cff (continuous-pipeline cycle 11 —
+     round-76 confirmed-bug residual FULLY closed + PHASE
+     TRANSITION). R76-2 (0627614e: Radiant Strike Destroy* +
+     Seedship Impact destroy-half clone now fire DIES byte-equal
+     w/ Python SoT, R74-2 class) + R76-1 (dea55cff: monotonic
+     next_object_id, all 6 token-mint sites, CR 111.7) — both
+     NON-count-shifting behavior fixes (state_ops_*.rs-only);
+     cron VERIFIED exit-0 / no drift / residue cadence did NOT
+     fire (no cards.rs/cross_engine.py since cycle-10 — the
+     agents' "structural arm will fire" was over-cautious;
+     git-log+cron disproved it; NO residue re-stamp owed; the 8
+     genuinely_missing stamps stay fa3d17b4). Counts UNCHANGED
+     121/123/23/12/11. .pyd rebuilt (R76-1/R76-2 changed
+     rust/src — did not race the now-concluded isolated Rust
+     agents). Byte-equal 307/475 UNCHANGED (R76 = behavior
+     fixes, no new closes). **PROBED 104 -> 106**: the
+     cycle-10-flagged honest measurement correction LANDED
+     (b82fe8e7 — the Tier-C Sunset Saboteur + Exosuit Savior
+     probes conformed to the established `..._parity` bar, NOT
+     loosened; Diplomatic Relations honestly excluded as not a
+     real-EoE cross-engine probe), surfaced in this cycle-11
+     POOL_PARITY regen; covered-not-probed 203 -> 201.
+     **PHASE TRANSITION:** every agent this cycle (both Rust +
+     non-Rust) independently verify-first honest-concluded NO
+     genuine disjoint single-round Rust OR non-Rust slice
+     remains — the continuous cheap-cadence model is EXHAUSTED.
+     Closed/complete: cheap Tier-A lane, Tier-C target-seating,
+     spell-card-bridge through Phase 2 (admit 7), warp P1/1.5/2,
+     round-74/76 bench trio+residual, single-clean-probe-idiom
+     frontier, SoT-flip design corpus + legal_decisions Slice 1,
+     measurement-attribution gap; Aura struck. Remaining = the 8
+     genuinely_missing multi-round subsystem-entangled cards
+     (orchestrator-sequenced one-at-a-time, NOT continuous
+     refill) — a deliberate-cadence / milestone decision, not an
+     autonomous pad. PRIOR cycle 10 (@ fa3d17b4 —
      FIRST count-moving resync in several cycles; the ≤2-Rust
      flip validated in real concurrent practice). THREE
      count-shifting Rust merges consolidated: 5e05cbaa Tier-C

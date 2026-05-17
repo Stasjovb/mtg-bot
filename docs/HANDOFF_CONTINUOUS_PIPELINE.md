@@ -138,10 +138,34 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
+> **⚠ PHASE TRANSITION (cycle 11, @ `dea55cff`) — READ FIRST.**
+> The continuous cheap-parallel-refill model has reached genuine
+> exhaustion. As of cycle 11 every agent (both Rust + non-Rust)
+> independently verify-first honest-concluded that **no genuine
+> disjoint single-round Rust slice and no genuine disjoint non-Rust
+> slice remains.** Closed/complete: cheap Tier-A lane; Tier-C
+> target-seating; spell-card-bridge through Phase 2 (admit set 7);
+> warp Phase 1/1.5/2; the round-74/76 bench-divergence trio+residual;
+> the single-clean-probe-idiom frontier; the SoT-flip design corpus +
+> legal_decisions Slice 1 (implemented); the measurement-attribution
+> gap; Aura struck. State: byte-equal **307/475 (64.6%)**, **PROBED
+> 106**, cron exit-0, main green. **The remaining work is a different
+> cadence:** the 8 `genuinely_missing` residue cards are each a
+> MULTI-ROUND, subsystem-entangled, bespoke-Rust project
+> (orchestrator-sequenced ONE AT A TIME — NOT continuous-cheap-refill).
+> A re-orienting routine / next session MUST NOT pad the pipeline back
+> to ≤5 with manufactured marginal slices — that violates the
+> honest-progress discipline every agent has been modeling. This is a
+> deliberate-sequenced-subsystem-cadence vs natural-milestone decision
+> for the orchestrator + user, not an autonomous refill.
+
 The campaign **no longer runs synchronized rounds**:
 
 - **≤5 concurrent background agents.** The orchestrator keeps the pool
   filled with disjoint slices; an agent finishing frees a slot.
+  *(Cycle-11 caveat: the disjoint-slice frontier is now genuinely
+  exhausted — see the PHASE TRANSITION note above; do not manufacture
+  slices to refill.)*
 - **Rust concurrency — ≤2 Rust ACTIVE (user-decided staged rollout,
   flipped cycle-9; dogfood PASSED).** The old blanket `≤1-Rust` rule
   was verify-first-proven over-broad: the only genuine race is the
