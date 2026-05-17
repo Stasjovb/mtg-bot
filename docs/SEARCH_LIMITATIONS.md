@@ -6152,7 +6152,42 @@ regression.
 
 ---
 
-## B3-S4 G4 — the I20 mana-empty-timing asymmetry diverges the legal CAST SET under the role-swapped (Rust-driven / Python-shadow) contract
+## B3-S4 G4 — the I20 mana-empty-timing asymmetry diverges the legal CAST SET under the role-swapped (Rust-driven / Python-shadow) contract — **CLOSED-by-lockstep (`5a0b966f`)**
+
+> **STATUS: CLOSED (path A — bounded Python-shadow lockstep
+> reconciliation), `5a0b966f`.** The named proper closure below is
+> DONE:
+> `ShadowCheckedRustAdapter._install_i20_phase_exit_mana_mirror`
+> drives the Python shadow's per-phase-exit mana empty in lockstep
+> with the Rust driver's CR-106.4 empty — the SAME
+> `advance_phase_python`-step-1 mana semantics `cross_engine.
+> step_both` already proves (spec §4.3). Pure Python
+> (`rust_shadow.py` only); no Rust / `cards.rs` /
+> `cross_engine.py` / `.pyd`; `decision_source="python"` (the SoT)
+> byte-unchanged. The `_DOCUMENTED_ACCEPTED_FIELDS` mana_pool
+> carve-out is **REMOVED** (now empty) → STATE_EQ asserts FULL
+> mana-pool byte-equality (tripwire STRENGTHENED, not just
+> documented). Pinned
+> `tests/test_rust_shadow_bakein.py::
+> test_g4_i20_cast_set_axis_is_closed_by_lockstep` (the I20
+> cast-set divergence is GONE through the entire mana-floating
+> window, past the old step-143 trip point); negative controls
+> intact (STATE_EQ still fires loudly on a genuine non-accepted
+> divergence). This is a flip **CR-correctness IMPROVEMENT** — the
+> Python hold-mana-until-cleanup simplification is the retired
+> known-wrong side, not a regression. **SEPARATE unmasked
+> follow-up (NOT G4):** the strengthened tripwire now correctly
+> surfaces a distinct pre-existing Rust-driver priority-port gap
+> (`RustGameStateAdapter._reset_priority_to_active` ignores a
+> decked-out active player vs Python's alive-aware `_next_alive`)
+> in the degenerate 3-card-synthetic post-deck-out tail (~turn
+> 6-8). NOT the I20 mana axis, NOT introduced by the mana mirror,
+> in `rust_engine_adapter.py` (out of the G4 lane scope). Honestly
+> pinned `::test_post_player_loss_priority_port_divergence_is_
+> surfaced`, flagged in the `SOT_FLIP_CUTOVER_PLAN.md` ledger G4
+> entry for the orchestrator to sequence before the C4 re-sweep /
+> B3-S5 flip go/no-go. The prose below is the original
+> surfacing/diagnosis evidence, retained for the record.
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 (`ShadowCheckedRustAdapter`); root cause in `src/mtg_bot/turn.py:
@@ -6216,20 +6251,26 @@ a loud LEGAL_SET_EQ raise = an automatic no-flip signal. So G4 is a
 with the reduced-universe rationale + C6 fence, an umbrella
 judgment).
 
-**Fix scope.** Drive the Python checker's phase advancement through
-the existing `cross_engine.advance_phase_python` I20-mirror in
-lockstep with the Rust provider's `advance_phase` (so the Python
-checker's mana matches Rust's CR-correct per-phase empty, exactly as
-the migration-era `step_both` harness already does — the spec §4.3
-"reuses the existing step_both machinery"). This is a bounded,
-well-shaped follow-up — the I20 mirror already exists and is pinned;
-the work is wiring the shadow-checker's Python side to drive it at
-phase boundaries instead of the vanilla `MtgGameStateAdapter`
-priority loop. It is an orchestrator-sequenced bake-in-scaling
-refinement (it precedes the Step-0 C4 scaled re-sweep running
-through the bake-in), explicitly NOT a B3-S4 deliverable
-(`feedback_no_fallback_hybrids` honest-stop: B3-S4 ships the
-harness + the honest G4 evidence, not a wrapper that hides it).
+**Fix scope. — DONE (`5a0b966f`, see the STATUS block above).**
+Drive the Python checker's phase advancement through the existing
+`cross_engine.advance_phase_python` I20-mirror in lockstep with the
+Rust provider's `advance_phase` (so the Python checker's mana matches
+Rust's CR-correct per-phase empty, exactly as the migration-era
+`step_both` harness already does — the spec §4.3 "reuses the existing
+step_both machinery"). As implemented this mirrors ONLY
+`advance_phase_python`'s divergent piece — its step-1 per-phase-exit
+mana empty — at the Python shadow adapter's single phase-tick point
+(`_advance_to_next_step`), rather than calling `advance_phase_python`
+wholesale (the self-driving `MtgGameStateAdapter` already owns the
+non-divergent phase tick / untap / draw / cleanup; calling it
+wholesale would double-tick). Bounded and well-shaped exactly as
+predicted — the I20 mirror semantics already existed and were
+pinned; the work was wiring the shadow-checker's Python side to
+empty mana at phase exits. It was the orchestrator-sequenced
+bake-in-scaling refinement that precedes the Step-0 C4 scaled
+re-sweep, explicitly NOT a B3-S4 deliverable
+(`feedback_no_fallback_hybrids` honest-stop: B3-S4 shipped the
+harness + the honest G4 evidence; this lane shipped the closure).
 
 **Impact.** Zero on `decision_source="python"` (the SoT path is
 untouched — the Python engine's documented hold-until-cleanup model
