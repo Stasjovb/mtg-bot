@@ -304,7 +304,49 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main c3cd126f (continuous-pipeline cycle 9 —
+     Measured at main fa3d17b4 (continuous-pipeline cycle 10 —
+     FIRST count-moving resync in several cycles; the ≤2-Rust
+     flip validated in real concurrent practice). THREE
+     count-shifting Rust merges consolidated: 5e05cbaa Tier-C
+     Sunset Saboteur (+Effect::PutPlusOneCounterOnOpponents-
+     Creature) + fa3d17b4 Tier-C Exosuit Savior
+     (+Effect::ReturnTargetPermanentYouControlToOwnersHand) —
+     Rust agent A; c2f8170c spell-card-bridge Phase 2 /
+     Diplomatic Relations 2-slot grammar — Rust agent B
+     (concurrent; the routine cross-cards.rs adjacent-insert
+     rebase was union-resolved, gate re-verified GREEN, both
+     on Mechanism-A isolated .venv-wt — the flip working).
+     Counts MOVED: rust_effect_variants 118->121 (+3),
+     bridge_arms 120->123 (+3), _SAFE_TRIGGERS 21->23 (+2),
+     _SAFE_EFFECT_KEYS 9->11 (+2) — the Tier-C target-seating
+     shared sub-substrate's 2 targeted safe-trigger triples;
+     safe_keywords 12 unchanged. .pyd rebuilt (shared
+     .venv-py313; did NOT race the isolated Rust agents —
+     Mechanism A). Pool-parity byte-equal **304 -> 307/475
+     (64.0% -> 64.6%, +3)**: Sunset Saboteur + Exosuit Savior
+     + Diplomatic Relations all close at Effect+bridge.
+     **PROBED UNCHANGED 104** — the recurring honest
+     measurement-attribution gap: the new Tier-C/Phase-2
+     genuine real-EoE probe modules are not yet registered in
+     measure_pool_parity PROBE_MODULES, so the 3 land in
+     covered-not-probed (200->203) NOT PROBED; a future
+     registration slice credits them at the established bar —
+     NOT hand-inflated here. Tier-C target-seating CONCLUDED:
+     2 cards / +18,855 17lands decks (Sunset Saboteur 6,375 +
+     Exosuit Savior 12,480), honestly NOT the optimistic ~39k
+     (3 verify-first 2nd-blocking-substrate exclusions).
+     Diplomatic Relations: spell-card-bridge admit set 6->7
+     (+29,818 decks bench-admit dimension). All 8
+     genuinely_missing residue (incl. Sothera) re-stamped
+     verified_absent_at_commit c3cd126f->fa3d17b4 (the 3 new
+     Effects are disjoint from all 8 residue signatures;
+     neither Tier-C card nor Diplomatic Relations in residue;
+     absence preserved). Round-74 trio resolved at scale
+     (Round-76 re-sweep 249/111->340/20); 2 NEW un-masked
+     Rust-side divergences R76-1 (token-id non-monotonic
+     reuse, CR 111.7) + R76-2 (Radiant Strike Destroy*
+     drops DIES-trigger, R74-2 class diff arm) tracked,
+     next Rust priority. PRIOR cycle 9 (@ c3cd126f —
      R74-1/I23 FIXED (c3cd126f: Rust combat power/toughness now
      fold obj.counters byte-equal with Python SoT; the
      documented-scoped I23 asymmetry, empirically demanded by
@@ -391,11 +433,11 @@ narrative); the cron then re-baselines automatically on the next
      NOT count-shifting, implement-ready spec landed) AHEAD of
      Tier-C target-seating. Close Encounter / Diplomatic
      Relations still DECLINED. -->
-rust_effect_variants = 118
-bridge_arms = 120
-safe_triggers = 21
+rust_effect_variants = 121
+bridge_arms = 123
+safe_triggers = 23
 safe_keywords = 12
-safe_effect_keys = 9
+safe_effect_keys = 11
 <!-- STALENESS-SENTINEL:END -->
 
 **The BLOCKED-RUST-EFFECT headline did NOT move materially over

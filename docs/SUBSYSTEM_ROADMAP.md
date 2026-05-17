@@ -651,6 +651,55 @@ second:
    >     closes. Aura struck.
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 10 —
+   >   FIRST count-moving resync in several cycles; ≤2-Rust
+   >   validated in real concurrent practice; @ `fa3d17b4`).**
+   >   - **≤2-Rust WORKED concurrently:** Rust A (Tier-C) +
+   >     Rust B (spell-card-bridge Phase 2) ran simultaneously
+   >     on Mechanism-A isolated `.venv-wt`, both merged; the
+   >     expected cross-`cards.rs`/`cross_engine.py` adjacent-
+   >     insert rebase was union-resolved with the gate
+   >     re-verified GREEN — the throughput flip delivering
+   >     ~2× as designed, friction routine.
+   >   - **Tier-C target-seating CONCLUDED** (`5e05cbaa`
+   >     Sunset Saboteur + `fa3d17b4` Exosuit Savior): the
+   >     combined shared-seat + lever-a rounds three agents had
+   >     verify-first honest-stopped as un-bisectable are now
+   >     shipped. **2 cards / +18,855 17lands decks** (6,375 +
+   >     12,480) — honestly NOT the optimistic ~39k (Terrapact
+   >     Intimidator/Genemorph Imago/Boilerbilges Ripper each
+   >     verify-first-confirmed to carry a 2nd blocking
+   >     substrate; honest exclusions).
+   >   - **spell-card-bridge Phase 2 / Diplomatic Relations
+   >     LANDED** (`c2f8170c`): the explicitly-deferred 2-slot
+   >     heterogeneous-target grammar; **admit set 6 -> 7**
+   >     (+29,818 decks bench-admit dimension).
+   >   - Counts MOVED: rust_effect_variants 118->121,
+   >     bridge_arms 120->123, _SAFE_TRIGGERS 21->23,
+   >     _SAFE_EFFECT_KEYS 9->11 (safe_keywords 12 unch).
+   >     **Byte-equal 304 -> 307/475 (64.6%, +3)** (all 3 new
+   >     close at Effect+bridge). **PROBED UNCHANGED 104** —
+   >     the recurring measurement-attribution gap recurs: the
+   >     new Tier-C/Phase-2 probe modules aren't registered in
+   >     `measure_pool_parity` PROBE_MODULES, so the 3 land in
+   >     covered-not-probed (200->203) not PROBED. A future
+   >     PROBE_MODULES-registration micro-slice credits them at
+   >     the established bar — explicitly NOT hand-inflated.
+   >     (Owed alongside the SL "Headline counts" lag as
+   >     resync/refresh-cadence bookkeeping.)
+   >   - **Next Rust priority — R76-1 + R76-2** (confirmed
+   >     active divergences un-masked by the Round-76 re-sweep;
+   >     R74-2/CFI-1 precedent — outrank coverage): R76-1 Rust
+   >     token-id non-monotonic reuse (CR 111.7, fundamental —
+   >     any token-minting Effect); R76-2 `Effect::Destroy-
+   >     TargetArtifactOrTappedCreature` (Radiant Strike,
+   >     flagship-admit) drops DIES-trigger — R74-2 class,
+   >     different arm. Then future Effect closes; the
+   >     not-yet-bench-demanded Fight-arm counter-omission
+   >     stays deferred (I23 precedent). Aura struck.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag +
+   >     the PROBE_MODULES-registration micro-slice
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
