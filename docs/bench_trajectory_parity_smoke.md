@@ -2305,3 +2305,137 @@ Rust-lane slice (in progress concurrently).
    unchanged; not a regression). The §2-honest pool-delta levers
    (Phase 5 `each_player`, Phase 2 non-creature carriers) remain the
    route to creature-dense mirrors and deeper-turn signal.
+
+## Round 64 (2026-05-16) — N3: post-r62-fix BROAD full-admitted-surface divergence sweep — clean broad validation; round-62 shockland fix CONFIRMED HELD (0 recurrence), 0 NEW divergence
+
+Round-61 N3 found the 2-color shockland mana-ability bridge
+divergence; round-62 N1 **fixed** it (rewrote
+`apply_mana_produced_bridge` to emit one `is_mana_ability`
+`ActivatedAbility` per produced color, matching Python — see the
+`SEARCH_LIMITATIONS.md` "✅ CLOSED round-62 (N1)" block). Round-62 N3
+ran the broad sweep concurrently with N1's fix still in flight and
+classified the 6 surviving FAIL_DIVERGENCE as `known-r61-N1-owned`
+(plus the new datum that the bench-level surfacing is
+non-deterministic / order-dependent — gate on the deterministic pins,
+not flaky sweeps). Round-64 N3 ran the **post-fix** broad sweep over
+the full admitted surface to (a) confirm the round-62 fix held at
+both the deterministic and bench levels and (b) surface any *other*
+latent cross-engine divergence on the current admit set.
+
+### Round-62 shockland fix — CONFIRMED HELD (the regression check)
+
+Per the round-62 non-determinism datum, the **deterministic pins are
+the authoritative gate** (a full-game sweep re-run flakes green even
+with the bug present). All 11 round-62 N1 regression pins re-run on
+the current `.pyd` → **11 passed**:
+
+- `tests/test_parity_smoke.py::test_r62_shockland_activate_ability_per_color_byte_equal_both_engines`
+  (parametrized over all 5 shocklands — drives `activate_ability` for
+  each color index on both engines, asserts byte-equal pool + exactly
+  the k-th single color)
+- `tests/test_parity_smoke.py::test_r62_shockland_activate_idx0_no_spurious_second_color_rust`
+- 5 × `tests/test_cross_engine_etb_triggers.py::test_r62_rust_bridge_*`
+  (single-color unchanged / two-color one-per-color-in-order /
+  order-follows-input / three-color / explicit-abilities)
+
+The deterministic shockland bridge shape is now correct on BOTH
+engines (Python idx0=`Add B`/idx1=`Add U`; Rust now emits the same
+per-color shape — `scout_r61_shockland_mana_divergence.py`'s Python
+side shows `idx0=AddManaToPool(('B',1))`, `idx1=AddManaToPool(('U',1))`;
+that scout's `.pyd` introspection path is a no-op on this build but
+the 11 cross-engine pins drive `activate_ability` on Rust directly
+and assert byte-equality — they are the reliable gate). **The
+round-61 divergence is GONE; this is a fix-held confirmation, not a
+regression.**
+
+### Scouted surface — the full admitted span (unchanged from r62)
+
+`scripts/scout_r62_broad_admit_surface.py` re-walked the 17lands pool
+in 10 evenly-spaced archetype-index windows (starts
+`0,40,80,120,160,200,300,400,600,800`, 14 arches each), deep-loaded
+each through the REAL production loader: **108 sweepable archetypes**
+(idx 0–812) exercising the whole admitted surface — keyword `trample`
+29 / `flying` 23 / `deathtouch` 19 / `defender` 8 / `vigilance` 6 /
+`reach` 3; trigger `enters` 159 (78 arches) / `dies` 78 (64 arches) /
+`becomes_tapped` 20 (20 arches); 22 dual-land (shockland) carriers;
+21 vanilla creatures. Admit surface unchanged since r62 (no new
+filter extensions landed between r62 and r64 on the bench path).
+
+### Sweeps + full result counts (3 batches, ≤60 games each, HARD cap honored)
+
+| Batch | Span / feature focus | Grid | Games | PASS | FAIL_DIV | TIMEOUT | EXC | FILTERED |
+|---|---|---|---|---|---|---|---|---|
+| A | low-index broad (vanilla + ETB/DIES + becomes_tapped + dual 46) | arch 0,1,2,3,5,9,10,11,12,40,46,49,52,86,88 ×s0-3 | 60 | 31 | **0** | 29 | 0 | 0 |
+| B | mid-index dual-land + dies + becomes_tapped heavy (r61/r62 shockland carriers 122,123,124,125,130,131,132) | arch 122,123,124,125,130,131,132,160,165,167,200,201,203,204,205 ×s1-4 | 60 | 27 | **0** | 33 | 0 | 0 |
+| C | high-index keyword-rich + dual + becomes_tapped, far from low carriers | arch 300,304,307,400,403,409,600,602,604,802,804,805,808,809,811 ×s2-5 | 60 | 17 | **0** | 43 | 0 | 0 |
+| **Total** | full admitted surface, idx 0–811, 3 disjoint seed offsets | | **180** | **75** | **0** | **105** | **0** | **0** |
+
+Plus a targeted **single-process re-run of the exact round-61/62
+divergent shockland carriers** `arch 37,46,69,122,123,130 ×s0-1`
+(12 games) → **0 FAIL_DIVERGENCE** (11 PASS / 1 TIMEOUT). These are
+the precise (arch) that produced the r61/r62 FAIL_DIVERGENCE; they
+now run byte-equal.
+
+`attack_all`, max-turns 22, mulligans off. JSONs
+`tmp/bench_broad_batch{A,B,C}.json` + `tmp/bench_broad_r6162_carriers.json`.
+Every batch wall ≤~3 min, under the cap.
+
+### Divergence triage — ZERO divergence across all 192 games
+
+**0 FAIL_DIVERGENCE / 0 FAIL_EXCEPTION across all 180 broad-sweep
+games + the 12 targeted r61/r62-carrier re-run games (192 total).**
+Batch B and the targeted re-run both heavily exercise the exact
+2-color shockland carriers that produced the round-61 (arch
+37/46/69) and round-62 (arch 46/122/123/130) FAIL_DIVERGENCE — every
+one now PASSes. No new divergence shape on any other admitted feature
+class (vanilla, flying/trample/deathtouch/defender/vigilance/reach,
+ETB/DIES/becomes_tapped triggers, basics+dual manabases).
+
+### Verdict
+
+| Claim | Verdict |
+|---|---|
+| Round-62 shockland fix held (0 recurrence of the r61 2-color mana-ability divergence) | **YES — CONFIRMED HELD.** 11/11 round-62 N1 deterministic regression pins green on the current `.pyd` (the authoritative gate per the r62 non-determinism datum). The exact r61/r62 divergent shockland carriers (arch 37/46/69/122/123/130) re-run byte-equal in a single process (0 FAIL_DIVERGENCE / 11 PASS / 1 TIMEOUT). Batch-B's 7 dual-land carriers (122–132) → 0 divergence. No flake observed in either direction (the r62 non-determinism was the *bug present*; with the fix the path is correct, so it is stable). |
+| Broad full-admitted-surface sweep surfaces a NEW latent cross-engine divergence | **NO — CLEAN BROAD VALIDATION.** 180 broad games + 12 targeted across idx 0–811 / every admitted feature class. 0 NEW divergence shapes, 0 FAIL_DIVERGENCE, 0 FAIL_EXCEPTION. |
+| Seedship Agrarian / becomes_tapped surface clean at broad scale | **VALIDATED CLEAN** — becomes_tapped carriers (5,40,46,50,53,86,122,123,130,171,200,205,…) across Batches A/B/C produced 0 becomes_tapped-specific divergence; the r58/r59 surface continues to hold. |
+
+### Gate
+
+Pure docs + 0 new scout scripts (reused `scout_r62_broad_admit_surface.py`
+and `scout_r61_shockland_mana_divergence.py` verbatim — both already
+committed) + 4 `tmp/bench_broad_*.json` artifacts (gitignored). **No
+production / harness / `_SAFE_*` / bench-script / scout code changed**
+— the bench and the 11 round-62 regression pins were run un-modified.
+Parity gate **not** re-run (nothing in this slice is on its path;
+baseline unchanged). No Rust → no `maturin`. Per the slice spec
+(pure docs + bench JSON, no scout added) **no gate run is needed**.
+
+### Forward picture for round 65
+
+1. **The round-62 shockland fix is fully validated** — deterministic
+   pins green + bench-level 0-recurrence across the precise divergent
+   carriers + the broad span. The shockland surface's
+   *activated-mana-ability* path is byte-equal-validated at scale; the
+   `SEARCH_LIMITATIONS.md` CLOSED-round-62 block stands confirmed.
+   (The pay-life / tapped-entry *replacement* drop remains the
+   separate, symmetric shared CR-incompleteness deferred to the
+   Phase-3 `enters_tapped` substrate — unchanged, not a divergence.)
+2. **The broad admitted surface is byte-equal-validated** — 192 games
+   across the full feature span, 0 latent divergence. The campaign's
+   empirical pipeline is at a clean broad point on the *current*
+   admit set. Recurring broad sweeps now have a diminishing latent-bug
+   yield on the unchanged admit set; the highest-signal lever shifts
+   to **running the sweep right after each new filter extension /
+   Rust substrate lands** (a new code path is what surfaces the next
+   real bug — the round-50/53/55/56/61 pattern) rather than re-sweeping
+   the same surface.
+3. **Recommended next bench item**: gate the *next* admit-widening or
+   Rust-substrate slice with an immediate post-merge broad sweep over
+   the newly-admitted carriers (the r61-style scoped sweep), then a
+   broad re-sweep. Until a new admit lands, a periodic broad sweep is
+   confirmation-only (this round) — keep cadence but expect clean.
+4. **Timeout note**: 105/180 FAIL_TIMEOUT (creature-sparse bridged
+   mirrors at max-turns=22 — the standing round-50/58 limitation,
+   unchanged; not a regression). The §2-honest pool-delta levers
+   (Phase 5 `each_player`, Phase 2 non-creature carriers) remain the
+   route to creature-dense mirrors and deeper-turn signal.
