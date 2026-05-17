@@ -90,7 +90,7 @@
         "CastFromExileWithCostHike"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "289f0285",
+      "verified_absent_at_commit": "11bb2ecc",
       "note": "No Rust arm. play-from-exile-with-cost-hike permission subsystem; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is a single ETB TriggeredAbility whose effect is the bespoke composite EachOpponentExilesCardFromHandWithCastPermission — no separate shipped Rust Effect arm for the cast-from-exile-with-cost-hike half (no alias resolves to a live Rust variant; printed name 'Lightstall Inquisitor' is in NO bridge arm). TRUE new-Rust-Effect ask. Stamp still cron-fresh (0 commits since 5bd56d4a touched cards.rs/cross_engine.py)."
     },
     {
@@ -101,7 +101,7 @@
         "EachOpponentExilesFromHand"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "289f0285",
+      "verified_absent_at_commit": "11bb2ecc",
       "note": "No Rust arm (same card as CastFromExileWithCostHike — second arm of Lightstall Inquisitor; the real parse fuses both halves into the single bespoke EachOpponentExilesCardFromHandWithCastPermission composite, no separate shipped EachOpponentExilesFromHand Effect). Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): no alias resolves to a live Rust variant; printed name in NO bridge arm. TRUE new-Rust-Effect ask."
     },
     {
@@ -113,7 +113,7 @@
         "SacrificeSelfUnlessYouTapAPermanent"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "289f0285",
+      "verified_absent_at_commit": "11bb2ecc",
       "name_in_arm_ack": "add_mana_to_pool",
       "note": "No Rust arm. land-ETB trigger path + tap-a-permanent cost decision subsystem; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is ETB → SacrificeSelfUnlessTapPermanent (NOT a live Rust variant, NOT bridged) plus a separate AddManaToPool activated ability. No alias resolves to a live Rust variant. The printed name 'Command Bridge' appears in the wired `add_mana_to_pool` arm, but that is the card's MANA ABILITY ({T}: Add {color}, round-27 mana-ability primitive consumer list) — a DIFFERENT ability than the claimed land-ETB `SacUnlessYouTap` trigger (re-confirmed: the ETB effect is genuinely unshipped). Per-arm ack records that audited re-walk. TRUE new-Rust-Effect ask."
     },
@@ -126,7 +126,7 @@
         "ReturnNoncreatureNonlandFromGYWithMVLEManaSpent"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "289f0285",
+      "verified_absent_at_commit": "11bb2ecc",
       "note": "No mana-value-condition GY-return arm. X = mana spent to cast self -> cast-cost-paid ledger subsystem; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is ETB → the bespoke composite AstelliReclaimerETBEffect — no shipped Rust Effect arm; no alias resolves to a live Rust variant; printed name 'Astelli Reclaimer' in NO bridge arm. TRUE new-Rust-Effect ask."
     },
     {
@@ -135,11 +135,14 @@
       "claimed_missing_effect": "PumpAndGrantDiesReturnTrigger",
       "aliases": [
         "PumpAndGrantDiesReturnTrigger",
-        "GrantDiesReturnTriggerAndPumpUntilEOT"
+        "GrantDiesReturnTriggerAndPumpUntilEOT",
+        "PumpTargetCreatureUntilEotGrantDiesReturnTapped"
       ],
-      "status": "genuinely_missing",
-      "verified_absent_at_commit": "289f0285",
-      "note": "No nested-trigger-grant substrate (grants a NEW triggered ability onto the target); multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is PumpTargetCreatureUntilEOT carrying a `granted_triggered_ability=TriggeredAbility(effect=PerigeeBeckonerDiesReturnTappedEffect())` parameter. The bare PumpTargetCreatureUntilEOT Effect arm IS shipped+bridged, BUT it does NOT carry the granted_triggered_ability / nested-trigger-grant parameter — extending the Rust arm to grant a new triggered ability onto the target is a Rust-Effect-arm capability extension, NOT a non-Effect gate. So this is NOT blocked_non_effect: it stays a TRUE new-Rust-Effect ask (the needed Effect *shape* — pump-AND-grant-nested-trigger — is genuinely absent). The cards.rs PumpTargetCreatureUntilEOT doc-comment names 'Perigee Beckoner' only as an `another:bool` self-exclusion example the Rust first-slice does NOT carry — not a wired cross_engine.py bridge arm, so the non-lexical name-in-arm signal correctly does not fire."
+      "status": "closed",
+      "note": "ROUND-60 N3 Effect-half CLOSED (verify-first: bare PumpTargetCreatureUntilEOT was shipped+bridged; the genuinely-unshipped part was the granted_triggered_ability rider). Shipped dedicated Effect::PumpTargetCreatureUntilEotGrantDiesReturnTapped + dies-return-tapped marker; applied the round-53 effective-state lesson proactively (Python keeps the +2/+0 on the returned creature - a naive CR-400.7 UEOT-clear made Rust 2/2 vs Python 4/2; matched Python source of truth). Genuine real-EoE Perigee Beckoner probe byte-equal across the full pump->dies->return-tapped lifecycle. Full card stays loader-gated on the general nested-trigger-grant subsystem + warp_cost (decline documented SEARCH_LIMITATIONS round-60). NOT in the genuine-Rust-Effect how-far count anymore.",
+      "closed_round": 60,
+      "resolved_variant": "PumpTargetCreatureUntilEotGrantDiesReturnTapped",
+      "reclassified_to": "BLOCKED-subsystem (general nested-trigger-grant + warp_cost loader-gated). Effect-half closed round-60 N3."
     },
     {
       "entry": "TwoMobileSubjects-residual",
@@ -162,7 +165,7 @@
         "EnchantedDealsDamageThenPropagate"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "289f0285",
+      "verified_absent_at_commit": "11bb2ecc",
       "note": "No self-replicating damage substrate. Aura attached_to + damage-feedback subsystem; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is ETB → bespoke PainForAllETBEffect + a DEALT_DAMAGE → bespoke PainForAllDamageEchoEffect — neither is a shipped Rust Effect arm; no alias resolves to a live Rust variant; printed name 'Pain for All' in NO bridge arm. TRUE new-Rust-Effect ask."
     },
     {
@@ -205,7 +208,7 @@
         "EnchantedCreatureFightsTarget"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "289f0285",
+      "verified_absent_at_commit": "11bb2ecc",
       "name_in_arm_ack": "fight_target_creature_with_target_creature",
       "note": "Bare bilateral Fight shipped (FightTargetCreatureWithTargetCreature); the Aura-shape Effect::EnchantedCreatureFightsTarget (source fighter = Aura's attached_to) is still missing — Aura-attachment subsystem. See SEARCH_LIMITATIONS.md. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is ETB → EnchantedCreatureFightsTargetEffect — the only alias `EnchantedCreatureFightsTarget` does NOT resolve to a live Rust variant. The printed name \"Meltstrider's Resolve\" appears in the wired `fight_target_creature_with_target_creature` arm, but that is the BARE-BILATERAL Fight sibling (a DIFFERENT effect than the claimed Aura-shape); the cards.rs doc-comment itself names \"Meltstrider's Resolve specifically\" as the deferred Aura-shape follow-up. Per-arm ack records that audited re-walk; the Aura-shape Effect is genuinely missing. TRUE new-Rust-Effect ask."
     },
@@ -218,7 +221,7 @@
         "VoidExileFromGYCopyAndCastForFree"
       ],
       "status": "genuinely_missing",
-      "verified_absent_at_commit": "289f0285",
+      "verified_absent_at_commit": "11bb2ecc",
       "note": "Void condition shipped (ConditionalIfVoid r29); the exile-then-cast-copy-for-free half is still new Rust — cast-from-exile-copy subsystem; multi-round. Re-verified genuinely absent at 31ef47ff (round-56 N2 verify-first re-walk): the live Python parse is ETB → the bespoke composite RovingActuatorETBEffect(max_mv=2) — no shipped Rust Effect arm for the exile-then-cast-copy half; no alias resolves to a live Rust variant; printed name 'Roving Actuator' in NO bridge arm. TRUE new-Rust-Effect ask."
     },
     {

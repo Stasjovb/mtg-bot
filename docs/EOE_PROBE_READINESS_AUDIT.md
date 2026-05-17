@@ -304,23 +304,24 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 915155ea (round-59 HEAD, post N1+N2+N3),
-     resynced by the round-59 post-merge fold slice. _SAFE_-
-     TRIGGERS +1 (N1's landfall/land_enters_controlled_by_you/
-     put_plus_one_counter_on_self admit); Rust variant + bridge-
-     arm counts UNCHANGED (Effect+bridge pre-shipped r22; this
-     was a Python safe-leaf widen, no cards.rs/cross_engine.py
-     touch — no cadence re-verify fired). No re-stamp needed.
-     MILESTONE: Seedship Agrarian folded blocked_non_effect ->
-     closed — first non-Effect-gate fully closed (both triggers
-     now bridged: BECOMES_TAPPED r58 + landfall+counter r59; N1
-     genuine whole-card probe byte-equal). N3: token-cease-to-
-     exist SBA REAL-GAME VALIDATED byte-equal (round-53/55 in-
-     test-pinned caveat folded -> validated). Honest residue
-     still 7 distinct cards (Seedship was never in that count).
-     -->
-rust_effect_variants = 111
-bridge_arms = 113
+     Measured at main 11bb2ecc (round-60 HEAD, post N1+N2+N3),
+     resynced by the round-60 post-merge fold slice. Rust
+     variant +1 (N3 Effect::PumpTargetCreatureUntilEotGrant-
+     DiesReturnTapped) + bridge-arm +1. N3 touched cards.rs/
+     cross_engine.py -> cadence re-verify fired; the 7 still-
+     genuinely-missing entries re-stamped verified_absent_at_-
+     commit=11bb2ecc. Perigee Beckoner folded genuinely_missing
+     -> closed (Effect-half shipped + genuine probe; full card
+     stays loader-gated on nested-trigger-grant + warp_cost).
+     N1: non-basic-land substrate phase-1 shipped (5 pay-life
+     shocklands admitted, +18,065 decks; documented simplifi-
+     cation per round-39 Ward precedent — NOT a _SAFE_*/Effect
+     change, an admit-filter predicate). N2: cost-reduction
+     scoped — honest realizable yield 0 near-term (multi-round
+     Rust substrate, re-ranked behind warp_cost). Honest
+     residue 7 -> 6 distinct cards. -->
+rust_effect_variants = 112
+bridge_arms = 114
 safe_triggers = 21
 safe_keywords = 12
 safe_effect_keys = 9

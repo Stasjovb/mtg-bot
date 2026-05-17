@@ -183,23 +183,22 @@ def test_genuine_probed_cards_real_inventory_nonempty(mod):
 
 def test_residue_blocked_cards_split_and_normalised(mod):
     missing, non_effect = mod.residue_blocked_cards(RESIDUE_WORKLIST)
-    # The honest residue, settled at round-59 (the load-bearing "how
+    # The honest residue, settled at round-60 (the load-bearing "how
     # far from parity" number). This named-set is a per-round snapshot
     # the orchestrator post-merge fold updates — pinning exact names is
     # an intentional tracked snapshot, NOT a brittle gate: the durable
     # assertions are the structural ones below (disjoint, no qualified
-    # names) which a legitimate fold must never break. Round-59 fold:
-    # Seedship Agrarian blocked_non_effect -> closed (both triggers
-    # bridged: BECOMES_TAPPED r58 + landfall+counter r59; first
-    # non-Effect-gate fully closed). `missing` (the 7 genuine
-    # new-Rust-Effect asks) is unchanged from round 57.
+    # names) which a legitimate fold must never break. Round-60 fold:
+    # Perigee Beckoner genuinely_missing -> closed (Effect-half shipped
+    # `PumpTargetCreatureUntilEotGrantDiesReturnTapped` + genuine
+    # probe; full card stays nested-trigger-grant/warp_cost gated) ⇒
+    # `missing` drops to 6 distinct genuine new-Rust-Effect asks.
     assert missing == {
         "Astelli Reclaimer",
         "Command Bridge",
         "Lightstall Inquisitor",
         "Meltstrider's Resolve",
         "Pain for All",
-        "Perigee Beckoner",
         "Roving Actuator",
     }
     assert non_effect == {
