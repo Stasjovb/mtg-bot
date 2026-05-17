@@ -304,45 +304,54 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 770d4a04 (continuous-pipeline cycle 6 —
-     Tier-A #5 Focus Fire Effect close + the corrected PROBED
-     measurement tooling now on main). Counts MOVED +1/+1/0/0/0:
-     rust_effect_variants 117->118 (new Effect::FocusFireEffect),
-     bridge_arms 119->120 (new focus_fire_effect arm); _SAFE_*
-     UNCHANGED. Focus Fire is a genuine Effect+bridge close
-     (new variant + arm + canonical probe; first effect-resolve
-     arm to READ combat-declaration state; Creature∪Spacecraft
-     set-union denominator counted once). cards.rs +
-     state_ops_resolve.rs + cross_engine.py + trajectory.py
-     touched -> structural-arm cadence; the 7 still-genuinely-
-     missing entries re-stamped verified_absent_at_commit=
-     770d4a04 (Focus Fire disjoint from all 7 residue Effect
-     signatures; absence preserved, no close). Honest residue
-     still 6 distinct cards; Sothera-the-Supervoid still flagged
-     for the next residue re-walk (NOT yet a worklist entry).
-     Pool-parity 303/475 -> 304/475 (63.8% -> 64.0%).
-     **PROBED 61 -> 96** (+35): +1 is Focus Fire's own
-     canonical probe; the OTHER +34 is the HONEST-MEASUREMENT
-     CORRECTION — the measurement-tooling reconciliation
-     LANDED (97069ef1) so measure_pool_parity now credits the
-     ~70 genuine real-EoE batch probes (covered-unprobed A-F +
-     the registered modules) at the SAME established bar
-     (integrity-guarded; warp/spell-bridge modules honestly
-     excluded as already-PROBED-via-smoke; NOT hand-inflated).
-     The strongest-evidence tier is now 20.2% of the pool
-     (was a 12.8% understatement); covered-not-probed 242->208.
-     The spell-card-bridge admit set grew 5 -> 6 — {Biosynthic
-     Burst, Depressurize, Focus Fire, Orbital Plunge, Radiant
-     Strike, Seedship Impact} (+~23,211 decks bench-admit
-     dimension, correctly NOT double-counted into the +1
-     Effect-metric move). The cheap single-card Tier-A lane is
-     now EXHAUSTED (#5/#6 closed; #7 Diplomatic Relations is
-     2-slot Phase-2). KNOWN Rust-side divergence CFI-1 (stray
-     `obj.counters=0` in Effect::DepressurizeEffect destroy
-     arm, state_ops_resolve.rs ~5969) is tracked strict-xfail
-     + in-module note — the NEXT Rust dispatch's first slice
-     (one-line fix + xfail->pin flip), ahead of warp Phase 2.
-     Close Encounter / Diplomatic Relations still DECLINED. -->
+     Measured at main 85d51879 (continuous-pipeline cycle 7 —
+     CFI-1 fix + warp Phase 2 / Timeline Culler + Sothera
+     residue entry added). Counts UNCHANGED (118/120/21/12/9):
+     NEITHER count-shifting merge added an Effect:: variant /
+     bridge arm / _SAFE_* entry. CFI-1 (8a2a8d84) deleted a
+     stray `obj.counters=0` in Effect::DepressurizeEffect's
+     destroy arm (state_ops_resolve.rs:5969) — a byte-equal
+     correctness fix on an ALREADY-covered Effect; the
+     strict-xfail CFI-1 tracker was flipped to a passing pin
+     (CLOSED). warp Phase 2 (4df5365c) added Timeline Culler
+     to the WARP admit set (warp_cost rider fields + a
+     graveyard-warp cast path) — +1 card / +~8,986 decks of
+     WARP-admit/loader-coverage dimension, NOT an Effect+bridge
+     headline move (same caveat as warp Phase 1 / round-60
+     shockland; correctly NOT double-counted; Timeline Culler
+     is a zero-Effect vanilla 2/2). Both merges touched
+     state_ops_*.rs/cards.rs/cross_engine.py/trajectory.py ->
+     structural-arm cadence; residue re-stamped
+     verified_absent_at_commit 770d4a04->85d51879.
+     **Honest residue 7 -> 8 cards**: the ~5-cycle-carried
+     Sothera-the-Supervoid carry-forward is DISCHARGED — a
+     verify-first residue investigation
+     (docs/SOTHERA_RESIDUE_INVESTIGATION.md) confirmed
+     genuinely_missing (3-class exile-link composite; no Rust
+     variant/arm/substrate reaches it; 2,108 decks) and its
+     schema-correct entry is now IN residue_worklist.json
+     (cron residue-consistency invariants verified clean; the
+     8 genuinely_missing stamps all at 85d51879). Pool-parity
+     UNCHANGED 304/475 (64.0%) — no new Effect+bridge close.
+     **PROBED 96 -> 104** (+8): the corrected measure_pool_-
+     parity now credits the registered probe modules
+     accumulated since cycle-6 (optional-cost-mirror +3,
+     multi-target-picker +1, warp-admitted/Timeline-Culler,
+     etc.) at the SAME established bar — an HONEST regen
+     pickup, NOT hand-inflated; strongest-evidence tier
+     20.2% -> 21.9%, covered-not-probed 208 -> 200. The
+     cheap single-card Tier-A lane stays EXHAUSTED; the
+     single-clean-probe-idiom frontier is also EXHAUSTED
+     (2 idioms shipped: optional-cost-mirror + multi-target-
+     picker; remainder Rust-gated/composite/known-xfail).
+     KNOWN-open Rust-side gap: the pre-documented bare
+     add_counters blind-bf[0] vs Python IsCreature() filter
+     (pinned strict-delta @ Selfcraft Mechan) — awaiting a
+     Rust slice. NEXT Rust priority: legal_decisions Slice 1
+     (the SoT-flip decision-sourcing keystone — parity-neutral,
+     NOT count-shifting, implement-ready spec landed) AHEAD of
+     Tier-C target-seating. Close Encounter / Diplomatic
+     Relations still DECLINED. -->
 rust_effect_variants = 118
 bridge_arms = 120
 safe_triggers = 21

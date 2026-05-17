@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **304 / 475 EoE cards (64.0%) are byte-equal at the Effect+bridge level**; of those, **96 (20.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 208 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **304 / 475 EoE cards (64.0%) are byte-equal at the Effect+bridge level**; of those, **104 (21.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 200 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **171 (36.0%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 96 | 20.2% |
-| Effect+bridge covered (not individually probed) | 208 | 43.8% |
+| PROBED byte-equal | 104 | 21.9% |
+| Effect+bridge covered (not individually probed) | 200 | 42.1% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 6 | 1.3% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -91,11 +91,13 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Hardlight Containment
 - Honor
 - Honored Knight-Captain
+- Hullcarver
 - Hymn of the Faller
 - Icecave Crasher
 - Icetill Explorer
 - Interceptor Mechan
 - Kav Landseeker
+- Kavaron Harrier
 - Knight Luminary
 - Lost in Space
 - Luxknight Breacher
@@ -106,12 +108,15 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Mental Modulation
 - Mightform Harmonizer
 - Mm'menon, Uthros Exile
+- Mm'menon, the Right Hand
 - Monoist Circuit-Feeder
+- Monoist Sentry
 - Mouth of the Storm
 - Nanoform Sentinel
 - Nebula Dragon
 - Nova Hellkite
 - Orbital Plunge
+- Oreplate Pangolin
 - Perigee Beckoner
 - Pinnacle Kill-Ship
 - Plasma Bolt
@@ -127,6 +132,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Seedship Agrarian
 - Seedship Broodtender
 - Seedship Impact
+- Selfcraft Mechan
 - Sinister Cryologist
 - Space-Time Anomaly
 - Starbreach Whale
@@ -134,6 +140,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Susurian Dirgecraft
 - Susurian Voidborn
 - Tannuk, Memorial Ensign
+- Tapestry Warden
 - Thawbringer
 - Tragic Trajectory
 - Unravel
@@ -142,6 +149,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Vote Out
 - Warmaker Gunship
 - Wedgelight Rammer
+- Weftblade Enhancer
 - Weftstalker Ardent
 - Wurmwall Sweeper
 - Zealous Display

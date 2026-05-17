@@ -486,6 +486,61 @@ second:
    >     Aura struck.
    >   - Carry-forward: Sothera residue re-walk; SL doc-wide
    >     "Headline counts" lag (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 7 —
+   >   CFI-1 + warp Phase 2 REALIZED; resync @ `85d51879`,
+   >   counts UNCHANGED 118/120, parity UNCHANGED 304/475,
+   >   PROBED 96 -> 104).**
+   >   - **The cycle-6 "CFI-1 FIRST" next-Rust line is now
+   >     HISTORICAL** — CFI-1 LANDED `8a2a8d84` (deleted the
+   >     stray `obj.counters=0` in Effect::DepressurizeEffect's
+   >     destroy arm; byte-equal fix on an already-covered
+   >     Effect; strict-xfail tracker flipped to a passing pin
+   >     — CLOSED). NOT count-shifting.
+   >   - **warp Phase 2 / Timeline Culler REALIZED** (`4df5365c`)
+   >     — whole, not stubbed (warp_cost rider fields + a
+   >     graveyard-warp cast path + surgical 2-clause guardrail
+   >     widening; the 26 multi-gated warp cards incl. the
+   >     Quantum Riddler trap stay declined). +1 card /
+   >     +~8,986 decks WARP-admit dimension (Timeline Culler =
+   >     zero-Effect vanilla 2/2) — NOT an Effect+bridge
+   >     headline move, NOT double-counted. No new Effect::
+   >     variant / bridge arm.
+   >   - **Sothera carry-forward DISCHARGED** — verify-first
+   >     residue investigation confirmed genuinely_missing
+   >     (3-class exile-link composite, 2,108 decks, no Rust
+   >     variant/arm/substrate reaches it); schema-correct
+   >     entry now IN residue_worklist.json (honest residue
+   >     7 -> 8; cron invariants verified clean).
+   >   - **PROBED 96 -> 104** — honest regen pickup (corrected
+   >     measure_pool_parity crediting the registered probe
+   >     modules accrued since cycle-6 at the established bar;
+   >     not hand-inflated). The single-clean-probe-idiom
+   >     frontier is now EXHAUSTED (optional-cost-mirror +
+   >     multi-target-picker shipped, ~68k decks of cards
+   >     probed; remainder Rust-gated / multi-idiom-composite /
+   >     known-xfail — concluded honestly, not padded).
+   >   - **SoT-flip design corpus LANDED:** `SOT_FLIP_CUTOVER_-
+   >     PLAN.md` (criteria C1-C6 + ordered cutover + 10-row
+   >     blocker ledger + rollback), `RUST_LEGAL_DECISIONS_-
+   >     MANA_AWARENESS_DESIGN.md` (the C1 keystone — verify-
+   >     first NARROWED to 5 CastSpell sites, parity-neutral,
+   >     NOT count-shifting, 3 sub-slices), `LOADER_ADMIT_-
+   >     COMPLETENESS_ANALYSIS.md` (honest scale: 48/475 cards
+   >     = 10.1% pool-admittable; 0/129,996 decks fully
+   >     admittable — the true whole-pool-full-trajectory
+   >     distance), bridge-vestigialization spec in flight.
+   >   - **Revised Rust sequencing:** (a) **legal_decisions
+   >     Slice 1** — the SoT-flip decision-sourcing keystone;
+   >     parity-neutral, NOT count-shifting, orthogonal,
+   >     implement-ready — AHEAD of Tier-C; (b) Tier-C
+   >     target-seating (3-cycle SPLIT: shared
+   >     first_legal_trigger_target micro-slice — needs a
+   >     per-card lever-a Effect consumer first — then Sunset
+   >     Saboteur then Exosuit Savior; payoff 2 cards/18,855);
+   >     (c) the I73 bare-add_counters blind-bf[0] Rust gap
+   >     (pinned strict-delta @ Selfcraft Mechan). Aura struck.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
