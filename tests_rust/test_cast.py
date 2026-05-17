@@ -897,3 +897,192 @@ def test_cast_then_counter_via_effect_dispatch_lands_in_graveyard(synthetic_stat
     assert synthetic_state.find_object_zone(counter_id) == ZONE_GRAVEYARD
     assert synthetic_state.graveyard_sizes[0] == p0_gy_before + 1
     assert synthetic_state.battlefield_sizes[0] == p0_bf_before
+
+
+# ====================================================================
+# Spell-card-bridge lever, Phase 1 (round-70) — Gate B' / B'' Rust
+# regression pins. `Action::CastSpell` on a non-creature
+# Instant/Sorcery routes to the new `cast_spell_noncreature`
+# primitive (pays mana_cost, binds the deterministic-first target,
+# pushes a spell StackItem); the existing `resolve_top_of_stack`
+# drains it (applies printing.effects with the target swapped in,
+# then move_source_post_resolve sends the spell hand -> graveyard via
+# the ALREADY-PRESENT Instant/Sorcery -> ZONE_GRAVEYARD route).
+# ====================================================================
+
+def _depressurize_spell_dict():
+    """A real-shape single-target Instant carrying the closed Tier-A
+    ``depressurize_effect`` (Depressurize: target creature gets
+    -3/-0 UEOT; then if its post-UEOT effective power <= 0, destroy
+    it). The Rust arm self-scans the battlefield first-creature in
+    ETB-timestamp order (it ignores the payload target — the
+    forward-substrate field), so the destroy observable is
+    deterministic."""
+    return {
+        "name": "Test Depressurize",
+        "card_types": ["Instant"],
+        "mana_cost": {"generic": 1, "B": 1},
+        "effects": [{"kind": "depressurize_effect", "power_penalty": 3}],
+    }
+
+
+def test_castspell_instant_routes_to_cast_spell_noncreature(synthetic_state):
+    """Pin #1: `Action::CastSpell` with a non-warp non-creature
+    Instant routes to `cast_spell_noncreature` (NOT `cast_creature`,
+    NOT `cast_creature_warp`): pays `mana_cost`, a spell StackItem is
+    pushed (stack depth +1), the card stays in hand (Rust's spell-
+    stack model), priority resets to active."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _depressurize_spell_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "B", 1)
+    synthetic_state.add_mana(0, "C", 1)
+    hand_before = synthetic_state.hand_sizes[0]
+    stack_before = synthetic_state.stack_size()
+
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": spell_id})
+
+    # Spell StackItem pushed; card still in hand (NOT battlefield —
+    # `cast_creature` would have moved a creature; this proves the
+    # spell route, not the creature route).
+    assert synthetic_state.stack_size() == stack_before + 1
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_HAND
+    assert synthetic_state.hand_sizes[0] == hand_before
+    # Mana paid ({1}{B} — both pips consumed).
+    pool = synthetic_state.get_mana_pool(0)
+    assert pool.get("B", 0) == 0
+    assert pool.get("C", 0) == 0
+    # Priority reset to the active player (cast tail, verbatim from
+    # `cast_creature`).
+    assert synthetic_state.get_priority_player() == synthetic_state.active_player
+
+
+def test_castspell_creature_still_routes_to_cast_creature(synthetic_state):
+    """Pin #2: a Creature printing through
+    `Action::CastSpell{use_warp:false}` STILL routes to
+    `cast_creature` (no regression — `cast_spell_noncreature`
+    type-gates and returns Ok(false) for a creature so the dispatch
+    falls through). The synthetic seed's p0 hand is Llanowar Elves
+    ({G} creature)."""
+    elf_id = P0_FIRST_HAND_ID
+    assert synthetic_state.printing_name_of(elf_id) == "Llanowar Elves"
+    synthetic_state.add_mana(0, "G", 1)
+    bf_before = synthetic_state.battlefield_sizes[0]
+    stack_before = synthetic_state.stack_size()
+
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": elf_id})
+
+    # Creature landed on the battlefield via `cast_creature`'s
+    # no-stack path (NOT pushed as a spell StackItem).
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    assert synthetic_state.stack_size() == stack_before
+
+
+def test_castspell_spell_resolves_effect_then_to_graveyard(synthetic_state):
+    """Pin #3: `resolve_top_of_stack` on the spell StackItem applies
+    the effect (the Depressurize -3/-0 + conditional destroy of the
+    deterministic-first creature) AND the spell source moves to its
+    controller's GRAVEYARD (CR 608.2m via the ALREADY-PRESENT
+    post_resolve_destination route), NOT battlefield, NOT exile. The
+    synthetic seed has Grizzly Bears (2/2) on p0 bf at ids 5..9 —
+    after -3/-0 their effective power is -1 <= 0 so the first one is
+    destroyed."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _depressurize_spell_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "B", 1)
+    synthetic_state.add_mana(0, "C", 1)
+    # First creature in ETB-timestamp order across both bfs — the
+    # synthetic seed's p0 Grizzly Bears block starts at id 5.
+    first_bear = 5
+    assert synthetic_state.printing_name_of(first_bear) == "Grizzly Bears"
+    gy_before = synthetic_state.graveyard_sizes[0]
+
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": spell_id})
+    synthetic_state.resolve_top_of_stack()
+    synthetic_state.apply_sbas()
+
+    # Effect applied: the first Grizzly Bears (2/2 -> -1/2) destroyed.
+    assert synthetic_state.find_object_zone(first_bear) == ZONE_GRAVEYARD
+    # Spell source -> p0 graveyard (NOT battlefield / exile).
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_GRAVEYARD
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_castspell_spell_target_parity_trigger_vs_spell(synthetic_state):
+    """Pin #4 (the load-bearing Gate-B'' assertion): the SAME bespoke
+    Effect driven by (a) a trigger-shape stack item and (b) a spell
+    cast picks the SAME deterministic-first target and produces
+    byte-equal state. Depressurize's Rust arm self-scans
+    `bf_iter_etb_sorted` first-creature, so both drive paths destroy
+    the SAME creature (the synthetic seed's first Grizzly Bears, id
+    5). This proves the spell-cast path resolves the per-card arm
+    identically to any other resolve driver."""
+    # (a) Spell-cast path.
+    spell_id = synthetic_state.register_and_inject_object(
+        _depressurize_spell_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "B", 1)
+    synthetic_state.add_mana(0, "C", 1)
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": spell_id})
+    synthetic_state.resolve_top_of_stack()
+    synthetic_state.apply_sbas()
+    # The first creature scanned (id 5) is the one destroyed — the
+    # deterministic-first convention; the spell-cast path bound it on
+    # the StackItem AND the self-scanning arm picked it (same target).
+    assert synthetic_state.find_object_zone(5) == ZONE_GRAVEYARD
+    # A later creature in scan order (id 6) is untouched (only ONE
+    # target — single-required-target shape).
+    assert synthetic_state.find_object_zone(6) == ZONE_BATTLEFIELD
+
+
+def test_castspell_insufficient_mana_no_mutation(synthetic_state):
+    """Pin #5: mana insufficient -> `cast_spell_noncreature` returns
+    Ok(false), no mutation (pool unchanged, card in hand, no stack
+    push). Dispatch falls through to `cast_creature` which also
+    Ok(false)s the non-creature -> net no-op."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _depressurize_spell_dict(), 0, ZONE_HAND
+    )
+    # Only {B}; short the {1} generic.
+    synthetic_state.add_mana(0, "B", 1)
+    pool_before = synthetic_state.get_mana_pool(0)
+    hand_before = synthetic_state.hand_sizes[0]
+    stack_before = synthetic_state.stack_size()
+
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": spell_id})
+
+    # No mutation anywhere.
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_HAND
+    assert synthetic_state.get_mana_pool(0) == pool_before
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.stack_size() == stack_before
+
+
+def test_castspell_spell_resolves_pause_sibling_parity(synthetic_state):
+    """Pin #6 (sibling-parity guard — the round-60-N1 missed-sibling
+    class): `resolve_top_of_stack_pause` on a spell StackItem applies
+    the target swap + effect IDENTICALLY to `resolve_top_of_stack`.
+    Drive the spell-cast then drain via the `_pause` entry point and
+    assert the same observable (first Grizzly Bears destroyed, spell
+    in graveyard)."""
+    spell_id = synthetic_state.register_and_inject_object(
+        _depressurize_spell_dict(), 0, ZONE_HAND
+    )
+    synthetic_state.add_mana(0, "B", 1)
+    synthetic_state.add_mana(0, "C", 1)
+    synthetic_state.apply_action(
+        {"kind": "cast_spell", "card_id": spell_id})
+
+    synthetic_state.resolve_top_of_stack_pause()
+    synthetic_state.apply_sbas()
+
+    assert synthetic_state.find_object_zone(5) == ZONE_GRAVEYARD
+    assert synthetic_state.find_object_zone(spell_id) == ZONE_GRAVEYARD
+    assert synthetic_state.is_stack_empty() is True

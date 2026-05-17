@@ -203,9 +203,68 @@ def _try_cast_one_creature(py_state, rust_state) -> Optional[dict]:
         o for o in p.hand
         if "Creature" in o.printing.card_types
     ]
-    if not creatures:
+    # Spell-card-bridge lever, Phase 1 (round-70): ALSO admit a pure
+    # single-target Instant/Sorcery in hand that survived the loader
+    # guardrail (``_printing_is_bridge_simple_spell`` — only such
+    # spells reach the bench; every other spell was stripped from the
+    # deck) AND for which a legal target exists right now. This is the
+    # third lever surface the lever-doc §7 flagged as in-slice (a
+    # bench spell-cast loop added BEFORE the Rust lever existed would
+    # be unreachable dead code that, if reachable, would inject a
+    # guaranteed _DivergenceError on every spell cast — the
+    # silent-no-op / no-fallback-hybrid anti-pattern; it is correct
+    # and reachable ONLY now that Gate A/B/B'/B'' all land together).
+    # The Rust cast-time deterministic-first scan binds the target on
+    # the StackItem; Python's ``_select_spell_targets`` binds
+    # ``legal_targets[0]`` via the first-legal agent installed below
+    # — the campaign-wide no-callback first-legal convention (the
+    # ~30 trigger/activated probes + the _PickFirst* shims). The CE5
+    # cast-vs-resolve mirror in ``step_both`` drains BOTH stacks
+    # before the field-view compare so the post-resolve state
+    # (effect applied + spell in graveyard) is what is compared.
+    from mtg_bot.parity.trajectory import _printing_is_bridge_simple_spell
+
+    spells: list = []
+    for o in p.hand:
+        pr = o.printing
+        if "Creature" in pr.card_types:
+            continue
+        if not _printing_is_bridge_simple_spell(pr):
+            continue
+        se = pr.spell_effect
+        if se is None:
+            continue
+        # Only attempt a cast when a legal target currently exists —
+        # a fizzle-on-no-target spell would still resolve byte-equal
+        # (both engines no-op), but gating on a live target keeps the
+        # bench exercising the load-bearing target-binding path.
+        try:
+            if not se.legal_targets(py_state, active):
+                continue
+        except Exception:
+            continue
+        spells.append(o)
+    if not creatures and not spells:
         return None
+    # Install the first-legal target agent on BOTH Python players so
+    # ``_select_spell_targets`` binds ``legal_targets[0]`` (matching
+    # Rust's ``bf_iter_etb_sorted`` first-creature cast-time scan —
+    # the equivalence the Tier-A real-EoE probes already proved
+    # byte-equal). Idempotent + only installed when a spell may be
+    # cast; the creature path never touches ``choose_target`` so
+    # pre-lever creature-only bench games are bit-identical.
+    if spells:
+        from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+        for pl in py_state.players:
+            if pl.agent is None:
+                pl.agent = _PickFirstLegalTargetAgent()
     creatures.sort(key=lambda o: getattr(o.printing, "cmc", 0) or 0)
+    spells.sort(key=lambda o: getattr(o.printing, "cmc", 0) or 0)
+    # Try creatures first (board presence), then spells. Both share
+    # the mana-payment + cast machinery below — a spell's
+    # ``mana_cost`` is single-mode (the guardrail rejected X / kicker
+    # / warp) so the exact creature mana logic applies unchanged.
+    creatures = creatures + spells
 
     # Untapped+unsick lands controlled by active. Group by mana color.
     # CardDef-backed basic lands produce a single color via the auto-

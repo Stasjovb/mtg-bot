@@ -20822,5 +20822,288 @@ def test_bridge_depressurize_composable_in_sequence():
     assert isinstance(e.effects[1], GainLife)
 
 
+def test_bridge_spell_card_lever_phase1_materialize_byte_equal():
+    """**Spell-card-bridge lever Phase 1 (round-70) — bridge pin #7.**
+    A real single-target Tier-A spell printing (Depressurize —
+    ``DepressurizeEffect(power_penalty=3)``, covered+bridged, pid-free)
+    routed through ``_printing_to_card_def`` materializes the SAME
+    printing on both engines: Python's ``CardPrinting.spell_effect``
+    is non-None (round-trips byte-equal to the live parse); the Rust
+    registry dict carries a non-empty ``effects`` list (the
+    ``depressurize_effect`` dict the Rust ``parse_effect`` consumes).
+    Proves Gate A (guardrail admit) + Gate B (CardDef.spell_effect
+    field + the bidirectional bridge arms) round-trip from ONE source.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import _card_def_to_python_printing
+    from mtg_bot.cards.source import get_active_source
+
+    src = get_active_source().get_printings()
+    real = src.get("Depressurize")
+    if real is None:
+        import pytest
+        pytest.skip("Depressurize absent from active CardSource")
+    # Verify-against-live: genuinely the Phase-1 admit shape.
+    assert trajectory._printing_is_bridge_simple_spell(real), (
+        "Depressurize must pass the Phase-1 spell guardrail")
+    cd = trajectory._printing_to_card_def(real)
+    assert cd.card_type == "Instant"
+    # Rust registry-dict side: spell_effect dict is the single
+    # effect (the schema Rust's parse_effect consumes).
+    assert cd.spell_effect == {
+        "kind": "depressurize_effect", "power_penalty": 3}
+    # Python side: materialized CardPrinting.spell_effect round-trips
+    # byte-equal to the live-parsed effect.
+    rt = _card_def_to_python_printing(cd)
+    assert rt.spell_effect is not None
+    assert repr(rt.spell_effect) == repr(real.spell_effect)
+    assert rt.card_types == ("Instant",)
+    assert rt.is_instant is True
+
+
+def test_bridge_spell_card_lever_phase1_real_eoe_cast_resolve_parity():
+    """**Spell-card-bridge lever Phase 1 (round-70) — bridge pins
+    #8 + #9 (the genuine full-card admit / acceptance probe).** Drive
+    the ACTUAL parsed Depressurize printing through the genuine loader
+    admit transform (``_printing_to_card_def`` — the EXACT CardDef the
+    production-deck loader's bridge OR-chain produces for this real
+    printing; pin #7 proved that transform byte-equal) into a
+    DETERMINISTIC matched game (no shuffle — the
+    ``production_deck_to_deckspec`` library order is preserved when no
+    ``shared_rng_seed`` is set), then via ``step_both``: the cast
+    (``CastSpell`` -> ``cast_spell_noncreature`` -> spell StackItem)
+    AND the resolve (the harness CE5 cast-vs-resolve mirror drains
+    both stacks: ``DepressurizeEffect`` applies to the deterministic-
+    first creature, then ``move_source_post_resolve`` sends the spell
+    hand -> graveyard via the ALREADY-PRESENT Instant/Sorcery ->
+    ZONE_GRAVEYARD route) surface ZERO field-view divergences.
+    Asserts post-cast AND post-resolve byte-equal + the spell source
+    in the controller's graveyard on BOTH engines + the effect
+    observably resolved (the targeted Bear destroyed)."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        CardDef, DeckSpec, step_both, advance_phase_python,
+        compare_fields,
+    )
+    from tests.test_trajectory_parity import _step_views
+    from tests.parity._picker_shims import _PickFirstLegalTargetAgent
+    from mtg_bot.cards.source import get_active_source
+
+    src = get_active_source().get_printings()
+    real = src.get("Depressurize")
+    if real is None:
+        import pytest
+        pytest.skip("Depressurize absent from active CardSource")
+    # Verify-against-live: genuinely the Phase-1 admit shape.
+    assert trajectory._printing_is_bridge_simple_spell(real), (
+        "Depressurize must pass the Phase-1 spell guardrail")
+
+    # The genuine loader admit transform — the EXACT CardDef the
+    # production bridge OR-chain produces for the real Depressurize
+    # printing (pin #7 proved this round-trips byte-equal). A vanilla
+    # 2/2 Grizzly Bears is the target; Forest produces {B} so both
+    # engines afford the {1}{B} costs. Deterministic library (no
+    # shuffle): opening hand draws Grizzly Bears + Depressurize +
+    # Forests, the rest Forest.
+    dep_cd = trajectory._printing_to_card_def(real)
+    bear = CardDef(name="Grizzly Bears", card_type="Creature",
+                   mana_cost_generic=1, mana_cost_colored=(("B", 1),),
+                   power=2, toughness=2)
+    forest = CardDef(name="Forest", card_type="Land",
+                     mana_produced=("B",))
+    spec = DeckSpec(
+        card_defs=(dep_cd, bear, forest),
+        p0_library=tuple(
+            ["Grizzly Bears", "Depressurize"] + ["Forest"] * 58),
+        p1_library=tuple(["Forest"] * 60),
+    )
+    py, rs = trajectory.setup_matched_game(spec)
+    # First-legal target agent (the campaign no-callback convention —
+    # matches Rust's bf_iter_etb_sorted first-creature cast-time scan;
+    # the equivalence the Tier-A real-EoE probes proved byte-equal).
+    for pl in py.players:
+        pl.agent = _PickFirstLegalTargetAgent()
+
+    def adv(n):
+        for _ in range(n):
+            advance_phase_python(py)
+            rs.advance_phase()
+            pv, rv = _step_views(py, rs)
+            d = compare_fields(pv, rv)
+            assert not d, (
+                f"phase advance ({pv['step']}, turn {pv['turn']}) "
+                f"diverged: "
+                f"{[(x.field, x.py_value, x.rust_value) for x in d]}")
+
+    def tap_n(n):
+        ai = py.active_player_idx
+        taps = 0
+        for o in list(py.battlefield):
+            if (o.controller_id == ai and o.printing.is_land
+                    and not o.tapped and not o.summoning_sick
+                    and taps < n):
+                assert not step_both(
+                    py, rs,
+                    {"kind": "activate_ability",
+                     "source_id": int(o.id),
+                     "ability_index": 0}).divergences
+                taps += 1
+        assert taps == n, f"need {n} mana; tapped {taps}"
+
+    adv(3)  # turn 1 MAIN1
+    # Play one Forest each of p0's first 4 turns (deterministic ramp:
+    # adv(24) = +2 turns, back to p0 MAIN1).
+    for t in range(4):
+        ai = py.active_player_idx
+        hf = [o for o in py.players[ai].hand
+              if o.printing.name == "Forest"]
+        assert hf, "Forest must be in hand each ramp turn"
+        assert not step_both(
+            py, rs,
+            {"kind": "play_land", "card_id": int(hf[0].id)}).divergences
+        if t < 3:
+            adv(24)
+    ai = py.active_player_idx
+    # Cast the Bear (the target). {1}{B} = tap 2 lands.
+    tap_n(2)
+    bear_obj = next(o for o in py.players[ai].hand
+                    if o.printing.name == "Grizzly Bears")
+    assert not step_both(
+        py, rs,
+        {"kind": "cast_spell",
+         "card_id": int(bear_obj.id)}).divergences
+    adv(24)  # next p0 turn — the Bear is no longer summoning-sick
+    ai = py.active_player_idx
+    bears_bf = [o for o in py.battlefield
+                if o.printing.name == "Grizzly Bears"]
+    assert bears_bf, "Grizzly Bears must be on the battlefield"
+    target_bear_id = bears_bf[0].id
+    gy_py_before = len(py.players[ai].graveyard)
+
+    # Cast Depressurize at the Bear. {1}{B} = tap 2 lands.
+    tap_n(2)
+    spell = next(o for o in py.players[ai].hand
+                 if o.printing.name == "Depressurize")
+    s = step_both(
+        py, rs, {"kind": "cast_spell", "card_id": int(spell.id)})
+    # Pin #8: post-cast AND post-resolve byte-equal (the CE5
+    # cast-vs-resolve mirror drains both stacks before the compare).
+    assert not s.divergences, (
+        "Depressurize cast->resolve diverged: "
+        f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}")
+    # Pin #9: the spell source is in the controller's graveyard on
+    # BOTH engines post-resolve (zero divergence already proves Rust
+    # agrees; assert the Python observable explicitly).
+    py_spell = next((o for o in py.players[ai].graveyard
+                     if o.printing.name == "Depressurize"), None)
+    assert py_spell is not None, (
+        "Depressurize must be in p%d graveyard post-resolve" % ai)
+    # The resolve adds TWO cards to p%d's graveyard: the destroyed
+    # Grizzly Bears (CR 704 — it is p0's own creature, the target) AND
+    # the Depressurize spell itself (CR 608.2m). Both controller-side.
+    # The byte-equal compare above already proved Rust agrees; assert
+    # the Python observable count delta explicitly.
+    assert len(py.players[ai].graveyard) == gy_py_before + 2
+    # Effect observably resolved: the deterministic-first Grizzly
+    # Bears (2/2 -3/-0 -> eff power -1 <= 0) was destroyed.
+    assert not [o for o in py.battlefield
+                if o.id == target_bear_id], (
+        "the deterministic-first Grizzly Bears must be destroyed by "
+        "Depressurize (-3/-0 -> eff power -1 <= 0)")
+
+
+def test_spell_card_lever_phase1_negative_pins_decline_set():
+    """**Spell-card-bridge lever Phase 1 (round-70) — negative pins
+    #10-#13 (the §2 guardrail's teeth).** Table-driven assertions
+    that the decline set stays filtered and the admit set is EXACTLY
+    the covered+bridged pid-free single-target Tier-A spells (NOT a
+    static card-name list — the lever is the multiplier; the set
+    auto-grows as each per-card Tier-A close lands)."""
+    from mtg_bot.parity import trajectory
+    from mtg_bot.cards.source import get_active_source
+
+    src = get_active_source().get_printings()
+
+    def g(name):
+        p = src.get(name)
+        if p is None:
+            import pytest
+            pytest.skip(f"{name} absent from active CardSource")
+        return trajectory._printing_is_bridge_simple_spell(p)
+
+    # Pin #10: a covered+bridged pid-free single-target Tier-A spell
+    # is ADMITTED (Radiant Strike — Sequence(DestroyTargetArtifactOr
+    # TappedCreature, GainLife); Depressurize — DepressurizeEffect).
+    # The covered-set gate is the multiplier: these flipped to True
+    # exactly when their per-card Effect close landed.
+    assert g("Radiant Strike") is True
+    assert g("Depressurize") is True
+
+    # Pin #11: Close Encounter stays DECLINED (the
+    # necessary-but-not-sufficient card). Verify-first at the
+    # implement HEAD: live ``Close Encounter.warp_cost is None`` (the
+    # spec ADDENDUM's "warp_cost is not None" reason is STALE) — the
+    # robust, load-bearing decline is the covered-set gate:
+    # ``CloseEncounterEffect`` is NOT covered+bridged (no additional-
+    # cost-choice substrate ships it). Stays Tier-C.
+    ce = src.get("Close Encounter")
+    if ce is not None:
+        assert trajectory._printing_is_bridge_simple_spell(ce) is False
+        assert ce.warp_cost is None  # verify-first: the spec is stale
+        assert (
+            trajectory._spell_effect_is_covered_and_bridged(ce)
+            is False
+        ), "CloseEncounterEffect must NOT be covered+bridged (Tier-C)"
+
+    # Pin #12: Diplomatic Relations stays DECLINED in Phase 1 — it is
+    # Phase 2 of THIS lever (the 2-slot grammar). Pin BOTH rejection
+    # reasons fire: (2,2) target_count_range AND non-empty
+    # target_slot_kinds.
+    dr = src.get("Diplomatic Relations")
+    if dr is not None:
+        assert trajectory._printing_is_bridge_simple_spell(dr) is False
+        se = dr.spell_effect
+        assert se.target_count_range() == (2, 2)
+        assert se.target_slot_kinds() == ("my_creature", "creature")
+
+    # Pin #12b: Seedship Impact / Orbital Plunge are covered+bridged
+    # at the Effect level but DECLINED in Phase 1 — their Rust
+    # parse_effect requires a Lander token_printing_id the loader's
+    # spell path cannot seat (the round-trip-or-bail tooth: the
+    # reverse serializer does not serialize them). Pin the asymmetry:
+    # covered True, but the guardrail and serializer both decline.
+    for nm in ("Seedship Impact", "Orbital Plunge"):
+        p = src.get(nm)
+        if p is None:
+            continue
+        assert (
+            trajectory._spell_effect_is_covered_and_bridged(p) is True
+        ), f"{nm} Effect must be covered+bridged"
+        assert trajectory._printing_is_bridge_simple_spell(p) is False, (
+            f"{nm} must be DECLINED in Phase 1 (Lander pid unseatable "
+            f"on the spell path)")
+        assert (
+            trajectory._python_spell_effect_to_dict(p.spell_effect)
+            is None
+        ), f"{nm} must NOT round-trip the reverse serializer"
+
+    # Pin #13: the set of EoE printings passing the guardrail equals
+    # EXACTLY the covered+bridged pid-free single-target Tier-A
+    # spells whose Effect close has landed. Regenerable; auto-grows
+    # as each subsequent per-card Effect closes — that growth IS the
+    # multiplier proof (NOT a static card-name list). At the
+    # implement HEAD that set is {Depressurize, Radiant Strike}.
+    admitted = sorted(
+        n for n in src
+        if trajectory._printing_is_bridge_simple_spell(src[n])
+    )
+    assert admitted == ["Depressurize", "Radiant Strike"], (
+        f"Phase-1 admit set drifted: {admitted} (expected exactly the "
+        f"2 covered+bridged pid-free single-target Tier-A spells; the "
+        f"set auto-grows as Focus Fire / Biosynthic Burst close AND a "
+        f"Lander-spell-token-seating sub-substrate admits Seedship "
+        f"Impact / Orbital Plunge)")
+
+
 # === PHASE5_BRIDGE_PIN_TESTS_INSERT_ABOVE_THIS_LINE ===
 # New bridge-arm pin tests go IMMEDIATELY ABOVE this marker.

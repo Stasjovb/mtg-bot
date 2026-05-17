@@ -630,6 +630,24 @@ pub struct StackItem {
     /// post-resolve permanent to place — its source lives wherever
     /// the trigger fired from).
     pub trigger_payload: Option<TriggerPayload>,
+    /// **Spell-card-bridge lever, Phase 1 (round-70).** The
+    /// deterministic-first bound target for a `StackItemKind::Spell`
+    /// whose `spell_effect` is single-required-target. Computed at
+    /// cast time in `cast_spell_noncreature` (the cast-time
+    /// first-legal scan, mirroring Python's `_select_spell_targets`
+    /// binding one target onto the StackItem at cast time) and
+    /// swapped into `current_resolve_payload_target_id` by both
+    /// resolve entry points so any per-card bespoke Effect arm that
+    /// reads the payload-target convention resolves byte-equal
+    /// whether driven by a trigger OR a spell cast. `None` for every
+    /// pre-lever spell push (back-compat — the discriminant-plus-
+    /// optional pattern this struct's doc comment already
+    /// establishes; the closed Tier-A spell arms self-scan the
+    /// battlefield first-creature and IGNORE this field, so the swap
+    /// is a correct no-op for them — it is the forward substrate for
+    /// targeted arms that opt into the payload-target convention,
+    /// e.g. `EquipToTargetCreatureYouControl`).
+    pub target_obj_id: Option<u32>,
 }
 
 impl StackItem {
@@ -642,6 +660,29 @@ impl StackItem {
             controller,
             kind: StackItemKind::Spell,
             trigger_payload: None,
+            target_obj_id: None,
+        }
+    }
+
+    /// **Spell-card-bridge lever, Phase 1 (round-70).** Spell-shape
+    /// constructor that carries a deterministic-first bound target.
+    /// Used by `cast_spell_noncreature` for a single-required-target
+    /// Instant/Sorcery. Mirrors the existing
+    /// `new_trigger` / `new_trigger_with_target` pair (CE20 Slice 4):
+    /// the bare `new_spell` stays the back-compat path (every
+    /// pre-lever spell push is untargeted) and this sibling carries
+    /// the cast-time chosen target for the spell-cast pipeline.
+    pub(crate) fn new_spell_with_target(
+        source_obj_id: u32,
+        controller: u8,
+        target_obj_id: Option<u32>,
+    ) -> Self {
+        Self {
+            source_obj_id,
+            controller,
+            kind: StackItemKind::Spell,
+            trigger_payload: None,
+            target_obj_id,
         }
     }
 
@@ -668,6 +709,10 @@ impl StackItem {
                 ability_index,
                 target_id: None,
             }),
+            // Spell-card-bridge lever (round-70): the spell-target
+            // slot is Spell-kind-only; a trigger carries its target
+            // on `trigger_payload.target_id` instead.
+            target_obj_id: None,
         }
     }
 
@@ -696,6 +741,10 @@ impl StackItem {
                 ability_index,
                 target_id: Some(target_id),
             }),
+            // Spell-card-bridge lever (round-70): Spell-kind-only
+            // slot — a trigger's target rides on
+            // `trigger_payload.target_id`.
+            target_obj_id: None,
         }
     }
 }

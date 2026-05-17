@@ -11213,12 +11213,28 @@ impl GameState {
         // below covers the success path.
         let saved_ctrl = self.current_resolve_source_controller;
         self.current_resolve_source_controller = Some(top.controller);
+        // Spell-card-bridge lever (round-70): swap in the spell's
+        // deterministic-first bound target so any per-card bespoke
+        // Effect resolve arm that reads the target via the SAME
+        // `current_resolve_payload_target_id` swap the
+        // `TriggeredAbility` path uses (above; today only
+        // `EquipToTargetCreatureYouControl`) resolves byte-equal
+        // whether driven by a trigger OR a spell cast. `None` for
+        // every pre-lever spell push (back-compat — the field
+        // defaults `None`; the closed Tier-A spell arms self-scan the
+        // battlefield and ignore this, so the swap is a correct no-op
+        // for them). Save → set → restore bracketing the apply
+        // closure exactly as `saved_ctrl` does, so no observable
+        // state leaks across resolution boundaries (pin #4 / #6).
+        let saved_target = self.current_resolve_payload_target_id;
+        self.current_resolve_payload_target_id = top.target_obj_id;
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_payload_target_id = saved_target;
         self.current_resolve_source_controller = saved_ctrl;
         effects_result?;
 
@@ -11363,12 +11379,22 @@ impl GameState {
         // as `resolve_top_of_stack` above.
         let saved_ctrl = self.current_resolve_source_controller;
         self.current_resolve_source_controller = Some(top.controller);
+        // Spell-card-bridge lever (round-70): the SAME spell-target
+        // swap as `resolve_top_of_stack`'s spell arm. The two resolve
+        // entry points MUST stay in lockstep — a missed sibling here
+        // is exactly the round-60-N1-class transcription bug the
+        // verify-first discipline guards against (pin #6 is the
+        // sibling-parity guard). See the longer comment in
+        // `resolve_top_of_stack` for the rationale.
+        let saved_target = self.current_resolve_payload_target_id;
+        self.current_resolve_payload_target_id = top.target_obj_id;
         let effects_result: PyResult<()> = (|| {
             for effect in &effects {
                 apply_effect(self, effect, top.source_obj_id)?;
             }
             Ok(())
         })();
+        self.current_resolve_payload_target_id = saved_target;
         self.current_resolve_source_controller = saved_ctrl;
         effects_result?;
         let post_resolve_zone = move_source_post_resolve(self, top.source_obj_id);

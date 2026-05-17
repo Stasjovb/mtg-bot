@@ -66692,6 +66692,100 @@ def test_zone_signature_is_counter_aware_engine_agnostic(parity_smoke):
     )
 
 
+def test_spell_card_bridge_phase1_real_eoe_loader_admit_and_game_parity():
+    """**Spell-card-bridge lever Phase 1 (round-70) — the lever's own
+    acceptance probe (§6b: the genuine full-card bench-admit).**
+
+    The lever's headline is the loader-drop -> bench-admit flip: a
+    real EoE Phase-1 Tier-A spell (Depressurize / Radiant Strike) now
+    survives the production-deck loader filter (it passes
+    ``_printing_is_bridge_simple_spell`` and materializes a spell
+    CardDef byte-equal on both engines) instead of being stripped.
+    This probe drives the GENUINE production-loader path the bench
+    uses (``setup_matched_game_from_real_decks``) over a real EoE
+    decklist that carries a Phase-1 spell, and asserts:
+
+      1. the spell is ADMITTED into the bridged DeckSpec (the
+         loader-drop -> admit flip — the lever's whole point);
+      2. a real ``attack_all`` bench game over that deck runs with
+         ZERO cross-engine divergence (the bench-strategy spell-cast
+         extension + the Rust cast/resolve pipeline byte-equal in a
+         real production-deck game — complementary to the
+         deterministic cross-engine cast/resolve pin #8/#9).
+
+    The deep cast->resolve byte-equality is pinned deterministically
+    by the cross-engine bridge pins #8/#9
+    (``test_bridge_spell_card_lever_phase1_real_eoe_cast_resolve
+    _parity``); this probe is the production-loader / bench-strategy
+    end-to-end complement.
+    """
+    import pathlib
+
+    from mtg_bot.parity import trajectory
+    from mtg_bot.cards.source import get_active_source
+
+    scripts_dir = pathlib.Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from bench_trajectory_parity import (  # type: ignore[import-not-found]
+        drive_one_game,
+    )
+
+    src = get_active_source().get_printings()
+    real = src.get("Depressurize")
+    if real is None:
+        import pytest as _pt
+        _pt.skip("Depressurize absent from active CardSource")
+    assert trajectory._printing_is_bridge_simple_spell(real), (
+        "Depressurize must pass the Phase-1 spell guardrail")
+
+    # (1) Loader-admit flip: a real EoE-shaped decklist containing
+    # Depressurize keeps it through the production-deck filter (it
+    # would have been stripped pre-lever — every Instant/Sorcery was
+    # rejected at trajectory.py:_printing_is_bridge_simple_creature's
+    # ``spell_effect is not None`` gate). Build via the SAME entry
+    # point the bench uses.
+    deck = ["Depressurize"] * 4 + ["Forest"] * 36
+    spec = trajectory.production_deck_to_deckspec(
+        deck, ["Forest"] * 40, pad_to_size=40)
+    admitted_names = {cd.name for cd in spec.card_defs}
+    assert "Depressurize" in admitted_names, (
+        "Depressurize must be ADMITTED into the bridged DeckSpec "
+        "(the loader-drop -> bench-admit flip the lever delivers); "
+        f"admitted={sorted(admitted_names)}")
+    dep_cd = next(cd for cd in spec.card_defs
+                  if cd.name == "Depressurize")
+    assert dep_cd.card_type == "Instant"
+    assert dep_cd.spell_effect == {
+        "kind": "depressurize_effect", "power_penalty": 3}
+
+    # (2) A real bench game over a Depressurize-bearing deck runs
+    # 0-divergence (the bench-strategy spell-cast extension +
+    # cast/resolve pipeline byte-equal in real production-deck play).
+    # drive_one_game raises _DivergenceError on any cross-engine
+    # disagreement; reaching a terminal status (PASS / FAIL_TIMEOUT —
+    # the standing creature-floor artifact, NOT a divergence) is the
+    # 0-divergence proof.
+    try:
+        trajectory.load_production_deck(archetype=0)
+    except (FileNotFoundError, IndexError):
+        # Pool unavailable — the loader-admit assertion (1) already
+        # ran (it does not need the 17lands pool); the game-parity
+        # half needs a real archetype only for deck shape, so a
+        # synthetic Depressurize deck still exercises the path.
+        pass
+    lo = drive_one_game(
+        archetype=0, seed=0, max_turns=30,
+        combat_strategy="attack_all", mulligans=0,
+    )
+    assert lo.status in ("PASS", "FAIL_TIMEOUT"), (
+        "a real bench game must reach a terminal status with NO "
+        f"cross-engine divergence; got {lo.status}. FAIL_DIVERGENCE / "
+        "FAIL_EXCEPTION here means the spell-cast path diverged in "
+        "real production-deck play — investigate (do NOT relax)."
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.

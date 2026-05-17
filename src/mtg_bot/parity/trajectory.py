@@ -3467,6 +3467,201 @@ def _printing_is_bridge_pure_warp_creature(printing) -> bool:
     return True
 
 
+def _spell_effect_is_covered_and_bridged(printing) -> bool:
+    """True iff every Effect class the printing's ``spell_effect``
+    emits is in the LIVE covered+bridged set.
+
+    Reuses the canonical effect-coverage classifier
+    (:mod:`mtg_bot.parity.effect_coverage`, the production-importable
+    extraction merged ``326023b4``, hardened to 100% branch coverage
+    ``02bf16bf``) so the lever auto-gates on each per-card Tier-A
+    close having LANDED — NOT a hardcoded card-name list (the §2
+    teeth; the lever-doc §2.1 / round-64 §5 "queries the live covered
+    set" requirement). ``card_effect_classes`` walks ``spell_effect``
+    (+ triggered/activated/static) and returns the distinct Python
+    Effect class names; ``covered_python_class_set`` is the EXACT
+    ``py_class_set ∩ rust_py_name_set`` the pool-parity gate reports
+    (the single canonical definition of "covered").
+    """
+    from mtg_bot.parity.effect_coverage import (
+        covered_python_class_set,
+        card_effect_classes,
+    )
+
+    emitted = card_effect_classes(printing)
+    if not emitted:
+        return False  # no introspectable effect — never spuriously OK
+    return emitted.issubset(covered_python_class_set())
+
+
+def _python_spell_effect_to_dict(spell_effect) -> Optional[dict]:
+    """Convert a Python spell ``Effect`` back to the Rust-shape effect
+    dict (the SAME schema Rust's ``parse_effect`` consumes and
+    :func:`cross_engine._ta_dict_to_python_effect` bridges), iff it is
+    one of the spell-card-bridge Phase-1 admissible shapes. Returns
+    ``None`` for any shape this recognizer does not serialize.
+
+    Spell-card-bridge lever, **Phase 1** (round-70; spec
+    ``docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md`` §3.6). The Python↔dict
+    reverse of :func:`cross_engine._ta_dict_to_python_effect`
+    (verify-first RE-CONFIRMED at the live HEAD: NO generic reverse
+    serializer exists — only the dict→Python direction). Mirrors the
+    established :func:`_python_ta_to_safe_dict` "recognize → emit the
+    round-trip dict, else bail" convention.
+
+    **It is part of the §2 teeth.** It only serializes a shape whose
+    every node has a covered+bridged ``_ta_dict_to_python_effect``
+    arm AND whose Rust ``parse_effect`` arm needs NO registry pid the
+    loader's spell path cannot seat. Concretely, the Phase-1 admit
+    set at landing is the pid-FREE covered single-target Tier-A
+    spells — Radiant Strike
+    (``Sequence(DestroyTargetArtifactOrTappedCreature, GainLife)``)
+    and Depressurize (``DepressurizeEffect(power_penalty)``).
+    **Seedship Impact / Orbital Plunge are DECLINED in Phase 1**
+    even though their Effect classes are covered+bridged: their Rust
+    ``parse_effect`` arms ``require("token_printing_id")`` for the
+    Lander, and the loader's spell path has NO Lander-token-seating
+    pass (``_seat_token_printings`` only walks ``triggered_abilities``
+    carriers — verify-first finding). Admitting them would raise in
+    ``parse_effect`` / silently mistranslate — the
+    no-fallback-hybrid / silent-no-op anti-pattern the campaign
+    discipline forbids. The Lander-spell-token-seating sub-substrate
+    is a documented follow-on (SEARCH_LIMITATIONS.md). This
+    recognizer NOT serializing those shapes is the structural decline
+    (the round-trip-or-bail teeth), complementary to the covered-set
+    gate that declines Close Encounter.
+    """
+    from mtg_bot.effects.combinators import Sequence
+    from mtg_bot.effects.generic.life import GainLife
+    from mtg_bot.effects.generic.destroy import (
+        DestroyTargetArtifactOrTappedCreature,
+    )
+    from mtg_bot.effects.bespoke import DepressurizeEffect
+
+    def _leaf(eff) -> Optional[dict]:
+        # Pid-free covered leaves only. DestroyTargetArtifactOrTapped
+        # Creature is a unit variant (intrinsic filter — Rust's
+        # parse arm takes NO fields, the bridge arm constructs the
+        # field-free Python class). GainLife carries ``amount``.
+        if isinstance(eff, DestroyTargetArtifactOrTappedCreature):
+            return {"kind": "destroy_target_artifact_or_tapped_creature"}
+        if isinstance(eff, GainLife):
+            return {"kind": "gain_life", "amount": int(eff.amount)}
+        if isinstance(eff, DepressurizeEffect):
+            return {
+                "kind": "depressurize_effect",
+                "power_penalty": int(eff.power_penalty),
+            }
+        return None
+
+    # Sequence composer (Radiant Strike): recurse into each child
+    # leaf; bail if ANY child is unrecognized (the round-trip-or-bail
+    # teeth — a partially-serializable Sequence would silently drop a
+    # child on Rust).
+    if isinstance(spell_effect, Sequence):
+        children: list[dict] = []
+        for child in spell_effect.effects:
+            cd = _leaf(child)
+            if cd is None:
+                return None
+            children.append(cd)
+        return {"kind": "sequence", "effects": children}
+    return _leaf(spell_effect)
+
+
+def _printing_is_bridge_simple_spell(printing) -> bool:
+    """True iff a CardPrinting is a PURE single-target Instant/Sorcery
+    the spell-card-bridge lever round-trips byte-equal across engines.
+
+    Spell-card-bridge lever, **Phase 1** (round-70; spec at
+    ``docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md`` §3; scoping basis
+    ``docs/SPELL_CARD_BRIDGE_LEVER_DESIGN.md``).
+
+    Motivating set: the single-target Tier-A spells whose bespoke
+    Effect close has landed AND whose effect carries no loader-
+    unseatable token pid — at landing that is Radiant Strike +
+    Depressurize. Seedship Impact / Orbital Plunge are covered but
+    DECLINED in Phase 1 (Lander ``token_printing_id`` unseatable on
+    the spell path — see :func:`_python_spell_effect_to_dict`).
+    Diplomatic Relations (2-slot grammar) is Phase 2; Close Encounter
+    (additional-cost-choice + the ``CloseEncounterEffect`` not
+    covered) is the §2.2-declined Tier-C card.
+
+    The §2 teeth: it admits ONLY a spell whose ``spell_effect`` is a
+    COVERED+BRIDGED effect (queried against the LIVE covered set, NOT
+    a hardcoded list — so it auto-gates on each per-card Tier-A close
+    having LANDED) AND round-trips through the reverse serializer
+    (which structurally declines the unseatable-token-pid shapes),
+    single-mode, no X / kicker / warp / additional-cost-choice,
+    exactly one required target, an implicit (homogeneous) target
+    slot the deterministic-first convention drives byte-equal. Every
+    other spell shape stays filtered (the decline set, §2.2).
+    """
+    if not (
+        "Instant" in printing.card_types
+        or "Sorcery" in printing.card_types
+    ):
+        return False
+    if "Creature" in printing.card_types:
+        return False  # permanent-spell rider — other substrate
+    se = printing.spell_effect
+    if se is None:
+        return False
+    # Phase-2+ / declined alt-cost & mode shapes — positively
+    # rejected (the §2 teeth). Mirrors the warp guardrail's
+    # rider-rejection block.
+    if printing.warp_cost is not None:
+        return False  # warp-entangled — warp substrate Phase 2
+    if printing.kicker_cost or printing.impending_cost:
+        return False
+    if printing.room_halves:
+        return False
+    mc = printing.mana_cost
+    if mc is not None and getattr(mc, "x_pips", 0):
+        return False  # X-cost — a later spell-lever phase
+    # Additional-cost-choice (Close Encounter): the live printing
+    # exposes NO ``additional_cost_choice`` attribute (verify-first
+    # at the implement HEAD — the spec ADDENDUM's "warp_cost is not
+    # None" Close-Encounter reason is ALSO stale: live
+    # ``Close Encounter.warp_cost is None``). The robust, load-
+    # bearing decline for Close Encounter is the covered-set gate
+    # below (``CloseEncounterEffect`` is NOT covered+bridged until an
+    # additional-cost-choice substrate ships it). The explicit attr
+    # reject is kept defensively (future-proof; harmless no-op while
+    # the attr is absent) so the rejection is not solely implicit via
+    # coverage if a future parser starts structuring the marker.
+    if getattr(printing, "additional_cost_choice", None) is not None:
+        return False
+    from mtg_bot.effects.combinators import ModalChooseOne
+    if isinstance(se, ModalChooseOne):
+        return False  # modal — later phase
+    # Phase-1 single-target ONLY — Phase 2 widens to the 2-slot
+    # grammar (Diplomatic Relations: (2,2) / heterogeneous slots).
+    min_t, max_t = se.target_count_range()
+    if (min_t, max_t) != (1, 1):
+        return False  # Phase 1 = exactly one required target
+    if se.target_slot_kinds():
+        return False  # heterogeneous-slot grammar is Phase 2
+    # The load-bearing §2 gate: the effect must be COVERED + BRIDGED
+    # (its emitted Effect classes ⊆ the LIVE covered set AND each has
+    # a _ta_dict_to_python_effect bridge arm + a Rust variant). This
+    # is what makes the lever gate on the per-card Tier-A close
+    # having LANDED — admitting a card before its Effect's Rust+bridge
+    # exists would silently mistranslate to an effectless spell. NOT
+    # a hardcoded card-name list — the §2 teeth.
+    if not _spell_effect_is_covered_and_bridged(printing):
+        return False
+    # Second §2 tooth (verify-first surfaced): the effect must
+    # ROUND-TRIP through the Python→dict reverse serializer with NO
+    # loader-unseatable token pid. This structurally declines
+    # Seedship Impact / Orbital Plunge (covered, but their Rust
+    # parse_effect requires a Lander token_printing_id the spell-path
+    # loader cannot seat) — the no-fallback-hybrid discipline.
+    if _python_spell_effect_to_dict(se) is None:
+        return False
+    return True
+
+
 def _printing_is_bridge_basic_land(printing) -> bool:
     """True if a CardPrinting is a basic Land the harness can model.
 
@@ -3661,6 +3856,33 @@ def _printing_to_card_def(printing) -> CardDef:
             warp_cost_generic=wgen,
             warp_cost_colored=wcol,
             has_warp=True,
+        )
+    if _printing_is_bridge_simple_spell(printing):
+        # Spell-card-bridge lever, Phase 1 (round-70): a pure
+        # single-target Instant/Sorcery routes to the spell CardDef
+        # BEFORE the plain simple-creature arm (which has no
+        # spell_effect and would mis-materialize a spell as an
+        # effectless permanent). ``card_type`` is "Instant" /
+        # "Sorcery" — Python's CardPrinting is_instant/is_sorcery
+        # derive from card_types; Rust's post_resolve_destination
+        # routes the resolved spell → graveyard (FREE, CR 608.2m).
+        # ``spell_effect`` is the Python→dict reverse-serialized
+        # effect dict; the guardrail already proved it round-trips
+        # (covered+bridged AND _python_spell_effect_to_dict is not
+        # None — so this call cannot return None here).
+        generic, colored = _parse_mana_cost_string(
+            printing.mana_cost_str or "")
+        spell_type = (
+            "Instant" if "Instant" in printing.card_types
+            else "Sorcery"
+        )
+        return CardDef(
+            name=printing.name,
+            card_type=spell_type,
+            mana_cost_generic=generic,
+            mana_cost_colored=colored,
+            spell_effect=_python_spell_effect_to_dict(
+                printing.spell_effect),
         )
     if _printing_is_bridge_simple_creature(printing):
         generic, colored = _parse_mana_cost_string(printing.mana_cost_str or "")
@@ -4133,6 +4355,12 @@ def _filter_deck_to_bridge_supported(
             or _printing_is_bridge_nonbasic_mana_land(printing)
             or _printing_is_bridge_pure_warp_creature(printing)
             or _printing_is_bridge_simple_creature(printing)
+            # Spell-card-bridge lever, Phase 1 (round-70): the 5th
+            # disjunct admits a pure single-target Instant/Sorcery
+            # whose bespoke Effect close has landed (covered+bridged)
+            # and round-trips through the reverse serializer. Wired
+            # exactly like the round-63 pure-warp-creature predicate.
+            or _printing_is_bridge_simple_spell(printing)
         ):
             continue
         if name not in seen_card_defs:

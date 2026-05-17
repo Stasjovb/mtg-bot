@@ -4764,6 +4764,198 @@ only). Strictly increases parity-signal QUALITY campaign-wide — every
 migrated probe now catches a real divergence ANYWHERE in the field
 view, not just inside a narrow asserted window.
 
+---
+
+## Spell-card-bridge lever Phase 1 — bench-admit is single-required-target-only
+
+**Location**: `src/mtg_bot/parity/trajectory.py`
+(`_printing_is_bridge_simple_spell` + its OR-chain entry in
+`_filter_deck_to_bridge_supported` + its `_printing_to_card_def`
+arm).
+
+**What the shortcut is**: the spell-card-bridge lever (round-70,
+spec `docs/SPELL_CARD_BRIDGE_PHASE1_DESIGN.md`) admits ONLY a pure
+single-required-target (`target_count_range()==(1,1)`),
+homogeneous-slot (`target_slot_kinds()==()`), single-mode
+Instant/Sorcery whose bespoke Effect close has landed
+(covered+bridged) AND whose effect round-trips the
+`_python_spell_effect_to_dict` reverse serializer. Multi-slot
+(Diplomatic Relations — `(2,2)`/heterogeneous slots), modal
+(`ModalChooseOne`), X-cost (`mana_cost.x_pips>0`), kicker/impending,
+warp-entangled (`warp_cost is not None`), additional-cost-choice
+(Close Encounter) spells stay filtered.
+
+**Why it's OK**: each declined sub-shape is a separate
+phase/substrate and is *positively rejected* (no silent
+mistranslation — the round-38-E5 / count-chasing anti-pattern this
+discipline exists to prevent). Diplomatic Relations is Phase 2 of
+this lever (the 2-slot grammar). Close Encounter stays Tier-C
+(`CloseEncounterEffect` not covered+bridged — the robust decline;
+note its live `warp_cost is None` at the implement HEAD, so the spec
+ADDENDUM's "warp_cost is not None" Close-Encounter reason is stale —
+the covered-set gate is the load-bearing teeth, verify-first
+corrected).
+
+**Failure mode**: none today — the rejected cards never enter the
+bench (they are stripped by the loader filter exactly as every
+non-bridge-supported card is). A future probe needing a declined
+shape on the bench would simply not find it admitted.
+
+**Fix scope estimate**: Phase 2 (the 2-slot grammar for Diplomatic
+Relations — extend `StackItem.target_obj_id` to a 2-slot payload) +
+later phases for modal / X / additional-cost-choice.
+
+**Impact estimate**: the lever flips the covered+bridged pid-free
+single-target Tier-A spells from loader-drop -> bench-admit (at the
+implement HEAD: Radiant Strike + Depressurize; the set auto-grows as
+Focus Fire / Biosynthic Burst close, and as a Lander-spell-token-
+seating sub-substrate admits Seedship Impact / Orbital Plunge — see
+the dedicated entry below).
+
+---
+
+## Spell-card-bridge lever Phase 1 — Rust spell-target binding via deterministic-first on the spell StackItem
+
+**Location**: `rust/src/state_ops_cast.rs`
+(`cast_spell_noncreature` — the cast-time `bf_iter_etb_sorted`
+first-creature scan bound onto `StackItem.target_obj_id`) +
+`rust/src/state_ops_resolve.rs` (the `current_resolve_payload_
+target_id` swap for `StackItemKind::Spell` in BOTH
+`resolve_top_of_stack` and `resolve_top_of_stack_pause`).
+
+**What the shortcut is**: Rust binds a single-target spell's target
+via the no-callback deterministic-first scan at cast time (no agent
+`choose_target` decision for spells), mirroring the campaign-wide
+first-legal-target convention the harness drives (the ~30
+trigger/activated probes + the `_PickFirst*` shims; Python's
+`_select_spell_targets` coerces a `None`/declined agent pick to the
+first legal pool entry, and the bench installs
+`_PickFirstLegalTargetAgent`). The closed Tier-A spell Effect arms
+(`DepressurizeEffect` etc.) self-scan the battlefield first-creature
+and IGNORE `current_resolve_payload_target_id` — the swap is a
+correct no-op for them; it is the forward substrate for arms that
+opt into the payload-target convention (today only
+`EquipToTargetCreatureYouControl`).
+
+**Why it's OK**: the bench strategy + the cross-engine harness both
+use first-legal; Python's `legal_targets[0]` == Rust's
+`bf_iter_etb_sorted` first-creature is the EXACT equivalence the
+closed Tier-A real-EoE probes already proved byte-equal (they drive
+the actual parsed `spell_effect`). The save/restore bracketing of
+the swap (mirroring the existing `saved_ctrl` controller swap)
+prevents any leak across resolution boundaries.
+
+**Failure mode**: a future probe needing a NON-first target on a
+spell would diverge (the agent has no say in the spell's target).
+
+**Fix scope estimate**: thread an agent target decision for spells
+(a larger follow-on, same shape as the trigger target decision /
+the Phase-2 2-slot grammar).
+
+**Impact estimate**: 0 today (every Phase-1 card + the bench /
+cross-engine harness use first-legal).
+
+---
+
+## Spell-card-bridge lever Phase 1 — spell StackItem carries a deterministic target slot (new substrate, not a shortcut)
+
+**Location**: `rust/src/state.rs` (`StackItem.target_obj_id:
+Option<u32>` + the `new_spell_with_target` constructor) + the
+resolve-time swap for `StackItemKind::Spell` in both
+`resolve_top_of_stack` and `resolve_top_of_stack_pause`
+(`rust/src/state_ops_resolve.rs`).
+
+**What it is**: a new `StackItem` field (defaults `None`; every
+pre-lever `new_spell` push stays untargeted — the discriminant-plus-
+optional pattern the struct doc comment already establishes) plus
+the resolve-time swap into `current_resolve_payload_target_id`,
+mirroring the existing `TriggeredAbility` `trigger_payload.target_id`
+swap. This is genuinely-new Rust substrate, NOT a deliberate
+divergence — recorded here per the spec §3.7 requirement so a future
+reader sees the field's intent.
+
+**Why it's OK**: back-compat by construction (the field defaults
+`None`; only `cast_spell_noncreature` sets it). The swap is
+save/restore-bracketed exactly like the controller swap. The
+spell->graveyard post-resolve move is NOT a shortcut and needs no
+entry: `move_source_post_resolve` / `post_resolve_destination`
+(`state_ops_resolve.rs:251-256`, UNCHANGED) already implement CR
+608.2m correctly for Instant/Sorcery — Phase 1 adds ZERO
+graveyard-move code (noted explicitly so a future reader does not
+re-derive it).
+
+**Failure mode**: none today.
+
+**Fix scope estimate**: none (this IS the substrate; Phase 2 widens
+it to a 2-slot payload).
+
+**Impact estimate**: enables all single-target Tier-A bench-admit
+(the carrier the per-card Effect closes ride into the bench).
+
+---
+
+## Spell-card-bridge lever Phase 1 — Lander-pid spell Effects DECLINED (Seedship Impact / Orbital Plunge): no spell-path token-seating sub-substrate
+
+**Location**: `src/mtg_bot/parity/trajectory.py`
+(`_python_spell_effect_to_dict` — the reverse serializer
+deliberately does NOT serialize `SeedshipImpactEffect` /
+`DealDamageToTargetCreatureWithExcessLanderRider`; the
+`_printing_is_bridge_simple_spell` second tooth
+`if _python_spell_effect_to_dict(se) is None: return False`).
+
+**What the shortcut is (verify-first-surfaced, NOT in the spec)**:
+Seedship Impact + Orbital Plunge are covered+bridged at the Effect
+level (their Effect classes are in `covered_python_class_set()`), so
+the spec's covered-set gate alone would admit them. **But their Rust
+`parse_effect` arms `require("token_printing_id")`** for the Lander
+token, and the production-deck loader's spell path has **NO
+Lander-token-seating pass**: `_seat_token_printings` only walks
+`triggered_abilities` carriers (the `_token_card_def` key emitted by
+`_python_ta_to_safe_dict`), never `spell_effect`. Admitting them
+would raise in `parse_effect` (require fails — there is no Lander pid
+to seat) or silently mistranslate. Phase 1 therefore **positively
+declines** both via the reverse-serializer round-trip-or-bail tooth,
+keeping the admit set to the pid-FREE covered single-target Tier-A
+spells (Radiant Strike — `Sequence(DestroyTargetArtifactOrTapped
+Creature, GainLife)`; Depressurize — `DepressurizeEffect`).
+
+**Why it's OK**: this is the no-fallback-hybrid / silent-no-op
+discipline (`feedback_no_fallback_hybrids` /
+`feedback_silent_noop_pipelines`) applied honestly — a half-wired
+spell path that admits a card whose Rust parser cannot construct the
+effect is exactly the diverging-stub anti-pattern the task forbids.
+Declining is correct, not a regression: Seedship Impact / Orbital
+Plunge still have their Effect halves shipped + genuinely probed
+byte-equal (their own SEARCH_LIMITATIONS entries); only the
+*bench-admit* of the full card waits. The decline is structural (the
+serializer does not emit those shapes) AND pinned (negative pin
+#12b: covered True, guardrail False, serializer None).
+
+**Failure mode**: none today — both cards are declined cleanly (no
+bench entry, no parse raise). The risk this entry guards against is
+a future widening of the covered-set gate (or a per-card round
+shipping a Python->dict sibling) silently re-admitting them WITHOUT
+the spell-path token-seating substrate, which would re-introduce the
+parse-raise / mistranslation.
+
+**Fix scope estimate**: a Lander-spell-token-seating sub-substrate —
+extend `_seat_token_printings` (or a sibling pass) to ALSO walk a
+carrier's `spell_effect` for a symbolic Lander token, seat the
+Lander CardDef + rewrite the spell_effect dict's `token_printing_id`
++ `register_token_printing` — the exact `triggered_abilities`
+machinery, applied to the `spell_effect` axis. One focused
+Python-lane slice (the Rust + bridge arms already exist; this is
+loader plumbing). The reverse serializer then gains the two arms +
+the guardrail tooth admits them automatically.
+
+**Impact estimate**: deferred +2 single-target Tier-A bench-admits
+(Seedship Impact ~13,908 + Orbital Plunge ~28,629 17lands decks)
+until the spell-path token-seating sub-substrate lands. The lever
+itself (the carrier) is unaffected — it flips Radiant Strike +
+Depressurize on landing and auto-grows as the gate widens.
+
+---
+
 ## Adding a new entry
 
 When you take a deliberate shortcut (heuristic, approximation,
