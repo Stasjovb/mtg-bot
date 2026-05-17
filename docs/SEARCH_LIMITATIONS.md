@@ -1202,122 +1202,107 @@ token-ceases-to-exist SBA gap (`graveyard_p0`), tracked separately.
 
 ---
 
-## Rust port — `legal_decisions` DeclareAttackers powerset emission
+## Rust port — `legal_decisions` factored combat emission (G1 — CLOSED)
+
+> **CLOSED by `legal_decisions` factored-combat (G1 — the C1-analog
+> for the combat axis;
+> `feature/rust-legal-decisions-factored-combat`).** This entry
+> replaces the two former ACCEPTED divergences ("DeclareAttackers
+> powerset emission" + "DeclareBlockers product-space emission"). It
+> is the combat-axis sibling of the legal-set mana/target/cost
+> closures (C1 Slices 1–3) — the same non-destructive,
+> parity-NEUTRAL, subset-preserving, negative-control-verified
+> discipline.
 
 **Location**: `rust/src/state_ops_legal.rs:legal_decisions` — the
-DeclareAttackers emission block (search for "DeclareAttackers
-extension" in the module docstring + the gated block under
-`if self.phase == PHASE_DECLARE_ATTACKERS`).
+factored-emission blocks (search for "G1 — factored per-attacker
+emission" / "G1 — factored per-blocker emission" + the
+factored-emission module-docstring sections); `Action::Attacker
+Decision` / `Action::BlockerDecision` in `rust/src/actions.rs`;
+their apply arms in `rust/src/state_ops_actions.rs`.
 
-**What we do today**: during the `DECLARE_ATTACKERS` phase, the Rust
-`legal_decisions` enumerator emits one Python dict per subset of
-eligible attackers (the powerset). With N eligible attackers and
-N ≤ 4, all 2^N subsets emit. With N > 4, only the empty + full
-subsets emit (a hard cap, `DECLARE_ATTACKERS_POWERSET_CAP = 4`).
+**What we used to do (the divergence, now CLOSED)**: during
+`DECLARE_ATTACKERS` Rust emitted a Rust-only **capped `2^n`
+powerset** of whole `declare_attackers` actions
+(`DECLARE_ATTACKERS_POWERSET_CAP = 4`); during `DECLARE_BLOCKERS` a
+Rust-only **capped `(M+1)^N` product** of whole `declare_blockers`
+assignments (`DECLARE_BLOCKERS_PRODUCT_CAP = 3`,
+`DECLARE_BLOCKERS_MAX_ATTACKERS = 3`). Python's `legal_actions`
+emits NEITHER (`engine.py:10-19` — combat declarations "aren't
+enumerable ... combinatorial"); Python's search uses a FACTORED
+per-creature decomposition (`search/combat_decisions.py`:
+`AttackerDecision(attacker_id, attack)` / `BlockerDecision(
+blocker_id, attacker_id)`) surfaced by
+`MtgGameStateAdapter.legal_decisions` (`engine_adapter.py:808-828`)
+and accumulated to a single engine-level `DeclareAttackers` /
+`DeclareBlockers` at finalize (`engine_adapter.py:1080-1144`). The
+Rust powerset/product set was **neither a superset nor byte-equal**
+to that factored set — the G1 flip-blocker
+(`docs/NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md` §2.4 G1).
 
-**Why this diverges from Python**: Python's `legal_actions` (in
-`src/mtg_bot/legal.py`) does NOT emit DeclareAttackers at all — the
-engine.py docstring (lines 10-19) is explicit that combat-declaration
-actions "aren't enumerable as legal moves because their decision
-space is combinatorial," and Python uses a factored search-side
-approach in `src/mtg_bot/search/combat_decisions.py`
-(`AttackerDecision` — one per eligible attacker, 2 branches each)
-that feeds MCTS at search time. The adapter accumulates per-attacker
-decisions into a single engine-level
-`DeclareAttackers(frozenset[int])` once all per-creature choices are
-collected.
+**What we do now (the byte-compatible factored emission)**: Rust
+`legal_decisions` emits, for the HEAD pending creature, the SAME
+factored per-creature decision shape Python's search seam consumes:
+- DECLARE_ATTACKERS → exactly two `{"kind":"attacker_decision",
+  "attacker_id":head,"attack":<bool>}` dicts (`attack=true` then
+  `false`), `head` = smallest-id eligible (matches the adapter's
+  `_pending_attackers = sorted(...)` `engine_adapter.py:1315` + the
+  codec's `_pending_attacker_head` `min(...)`
+  `action_encoding.py:990-995`), mapping 1:1 to the codec's
+  `SLOT_ATTACKER_ATTACK` / `SLOT_ATTACKER_SKIP`.
+- DECLARE_BLOCKERS → one `{"kind":"blocker_decision","blocker_id":
+  head,"attacker_id":<atk>}` per live attacker (in `self.attackers`
+  declaration order) then a final `…,"attacker_id":None` ("don't
+  block"); the codec recovers `SLOT_BLOCKER_BASE + atk_pos` from the
+  `attacker_id` VALUE via `_attacking_creatures`
+  (`action_encoding.py:714-733`) so branch list order is
+  slot-irrelevant.
+The B3 Python provider (sibling slice — NOT this one) owns the
+per-creature accumulation + finalize via the UNCHANGED whole-action
+`apply_action({"kind":"declare_attackers"/"declare_blockers",…})`
+arm (which keeps the CE16 menace post-validation). For round-trip
+completeness `apply_action` also accepts a single
+`attacker_decision`/`blocker_decision` dict directly, dispatching
+the SAME round-5 `declare_attacker`/`declare_blocker` primitives the
+whole-action arms loop over (single source of truth — a factored
+sequence applies byte-identically to the accumulated whole;
+`attack=false` / `attacker_id=None` are no-ops, mirroring the
+adapter's `_apply_*_decision` `engine_adapter.py:1095-1128`).
 
-**Failure mode**:
-- Wide boards (N > 4 eligible attackers) lose the middle subsets —
-  the only emitted choices are "attack with nothing" or "attack with
-  everyone." Strategically valuable partial attacks (e.g. "attack
-  with the 5/5 and the 2/1 hasty but keep the wall back") aren't in
-  the enumeration.
-- The parity-smoke harness must skip emission-set comparison during
-  the DECLARE_ATTACKERS phase (Python's side emits no
-  DeclareAttackers; Rust's side emits up to 2^N).
+**Why this is parity-NEUTRAL (the honest argument — C1 §4 shape)**:
+every cross-engine harness replays a **Python-derived**
+`action_dict` on BOTH engines via `cross_engine.step_both` and
+NEVER sources an agent choice from `rust_state.legal_decisions`
+(verified `cross_engine.py:10443-10448`). The Python-derived combat
+dict is the whole-action `{"kind":"declare_attackers",…}` /
+`{"kind":"declare_blockers",…}` (`_dict_to_python_action`,
+`cross_engine.py:10155-10173`), and the whole-action `apply_action`
+arms are UNCHANGED. So every Python-sourced replayed combat action
+still applies byte-identically; the change only swaps a Rust-only
+*emission* set no harness agent ever picks. Empirically validated:
+every existing trajectory/probe/combat pin is UNCHANGED (a pinned
+trajectory shift would be a RED FLAG — none occurred).
 
-**When it matters**: any DECLARE_ATTACKERS phase with more than 4
-eligible attackers where a partial attack is the right play. Common
-late-game scenario; rarer early-game. Pre-trained NN search will
-plateau early until the factored shape lands.
+**Accepted residuals (honest, bounded — NOT new divergences)**:
+- The stateless-Rust / stateful-provider split: Rust emits the HEAD
+  pending creature's factored options; the B3 provider owns the
+  pending-pop walk (ports `engine_adapter.py:1080-1144` verbatim).
+  This is the design's specified shape
+  (`NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md` §3.3), not a gap.
+- Block-legality keyword filters (flying/reach/protection/skulk)
+  remain deferred to the apply-time `declare_blocker` per-pair gate
+  (the SEPARATE entry below — unchanged by G1; same silent-skip
+  pattern, now per factored decision instead of per product cell).
 
-**Fix scope when prioritized**:
-- Port `search/combat_decisions.py`'s `AttackerDecision` shape to
-  Rust as a new `Action::AttackerDecision { attacker_id, attack }`
-  variant.
-- Replace the powerset emission with one `AttackerDecision` per
-  eligible attacker. The adapter (or a search-side accumulator)
-  collects all N decisions and dispatches a single
-  `DeclareAttackers(frozenset[int])` at apply time.
-- The `declare_attacker` primitive stays unchanged.
-- The `DECLARE_ATTACKERS_POWERSET_CAP` constant goes away.
-
-**Impact estimate**: ~moderate strength cost on wide-board late-game
-scenarios. Negligible during early training where most games end
-before either side has 5+ untapped creatures. Will likely be a
-visible regression once self-play games push deeper.
-
----
-
-## Rust port — `legal_decisions` DeclareBlockers product-space emission
-
-**Location**: `rust/src/state_ops_legal.rs:legal_decisions` — the
-DeclareBlockers emission block (search for "DeclareBlockers
-extension" in the module docstring + the gated block under
-`if self.phase == PHASE_DECLARE_BLOCKERS`).
-
-**What we do today**: during the `DECLARE_BLOCKERS` phase (priority
-on the defender, stack empty), the Rust `legal_decisions` enumerator
-emits one Python dict per legal blocker-to-attacker assignment. With
-`n_blockers <= DECLARE_BLOCKERS_PRODUCT_CAP` (3) AND `m_attackers <=
-DECLARE_BLOCKERS_MAX_ATTACKERS` (3), all `(M+1)^N` assignments emit
-— each blocker independently picks one of M attackers OR "don't
-block." With either dimension over its cap, only the canonical "no
-blocks" assignment (an empty Vec) emits.
-
-**Why this diverges from Python**: same factored-search story as
-DeclareAttackers above — Python's `legal_actions` does NOT emit
-DeclareBlockers (engine.py:10-19 is explicit) and instead uses
-`BlockerDecision`s (one per eligible blocker, one branch per
-attacker plus a "don't block" branch) in
-`src/mtg_bot/search/combat_decisions.py`. The adapter accumulates
-per-blocker decisions into a single engine-level
-`DeclareBlockers(assignments=...)` at apply time.
-
-**Failure mode**:
-- Wide boards (N > 3 blockers OR M > 3 attackers) lose all middle
-  assignments — the only emitted choice is "no blocks." All
-  partial-blocking strategy (chump-blocking the big attacker,
-  multi-block to kill a 3/3, leaving small attackers through to save
-  the wall) is unreachable from `legal_decisions`.
-- The parity-smoke harness must skip emission-set comparison during
-  the DECLARE_BLOCKERS phase (Python's side emits no
-  DeclareBlockers; Rust's side emits up to `(M+1)^N`).
-
-**When it matters**: any DECLARE_BLOCKERS phase with > 3 blockers
-or > 3 attackers. Most early-game scenarios stay under both caps;
-mid-to-late game with built-out boards trips the cap regularly.
-Pre-trained NN search will plateau on defensive play until the
-factored shape lands.
-
-**Fix scope when prioritized**:
-- Port `search/combat_decisions.py`'s `BlockerDecision` shape to
-  Rust as a new `Action::BlockerDecision { blocker_id, target:
-  Option<u32> }` variant.
-- Replace the product emission with one `BlockerDecision` per
-  eligible blocker (with branches over attackers + None). The
-  adapter / search-side accumulator collects all N decisions and
-  dispatches a single `DeclareBlockers(assignments=...)` at apply
-  time.
-- The `declare_blocker` primitive stays unchanged.
-- Both `DECLARE_BLOCKERS_PRODUCT_CAP` and
-  `DECLARE_BLOCKERS_MAX_ATTACKERS` constants go away.
-
-**Impact estimate**: moderate-to-large strength cost in any state
-with non-trivial combat. Combinatorial growth `(M+1)^N` is harder
-than DeclareAttackers's `2^N`, so the caps fire sooner and the
-information loss is bigger per affected decision.
+**Impact estimate**: ZERO on cross-engine trajectory parity (the
+parity-neutral proof above; no sentinel-count / Effect / bridge /
+`_SAFE_*` move). STRENGTH: strictly POSITIVE vs the pre-G1 caps —
+the powerset/product caps collapsed every non-trivial combat board
+to "all-or-nothing" / "no-blocks-only"; the factored shape reaches
+every attack/block pattern through MCTS depth with a fixed tiny
+fan-out (the `combat_decisions.py` design rationale: deep narrow
+trees, UCB1 doesn't degrade with depth). The capped-emission
+strength cost the two former entries flagged is REMOVED.
 
 ---
 

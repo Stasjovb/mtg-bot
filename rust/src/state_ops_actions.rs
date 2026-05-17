@@ -1330,6 +1330,70 @@ impl GameState {
                 // activate happens at the post-arm reset block
                 // (below) — same shape as every other non-pass arm.
             }
+            Action::AttackerDecision {
+                attacker_id,
+                attack,
+            } => {
+                // G1 factored per-attacker sub-decision apply
+                // (the C1-analog for the combat axis). Faithful
+                // mirror of Python's `_apply_attacker_decision`
+                // (`engine_adapter.py:1080-1099`): on `attack=true`
+                // record the creature as an attacker; on
+                // `attack=false` do NOTHING (the adapter only
+                // appends to `_chosen_attackers` when
+                // `decision.attack`, `:1095-1096` — a "don't
+                // attack" decision contributes no state change).
+                //
+                // **Single source of truth with the whole-action
+                // path.** `attack=true` dispatches the EXACT same
+                // round-5 `declare_attacker(obj_id)` primitive the
+                // whole-action `DeclareAttackers { attacker_ids }`
+                // arm above loops over — so applying a factored
+                // sequence
+                // `[AttackerDecision(c1,T), AttackerDecision(c2,F),
+                //  AttackerDecision(c3,T)]` is byte-identical to
+                // applying the accumulated whole
+                // `DeclareAttackers({c1, c3})`. The primitive's
+                // `bool` return (eligible/ineligible) is discarded
+                // exactly as the whole-action arm discards it
+                // (the eligible-set filter is implicit via the
+                // per-id gate — mirrors Python's adapter, which
+                // walks `eligible_attackers`-derived pending ids).
+                if attack {
+                    slf.call_method1("declare_attacker", (attacker_id,))?;
+                }
+            }
+            Action::BlockerDecision {
+                blocker_id,
+                attacker_id,
+            } => {
+                // G1 factored per-blocker sub-decision apply.
+                // Faithful mirror of Python's
+                // `_apply_blocker_decision`
+                // (`engine_adapter.py:1114-1131`): record the block
+                // ONLY when `attacker_id is not None` (`:1127-1128`
+                // — the "don't block" branch contributes no state
+                // change). `Some(atk)` dispatches the EXACT same
+                // round-5 `declare_blocker(blocker_id, atk)`
+                // primitive the whole-action `DeclareBlockers`
+                // arm loops over, so a factored sequence applies
+                // byte-identically to the accumulated whole. The
+                // whole-action arm's post-validation `.retain`
+                // (menace single-blocker unwind, CE16) is NOT
+                // re-run per factored decision — that final-state
+                // validation belongs at the accumulation boundary
+                // (the B3 provider finalizes via the whole-action
+                // `DeclareBlockers` arm, which keeps the CE16
+                // post-validation; a single factored decision is
+                // an intermediate accumulation step, exactly as
+                // Python's per-blocker `_apply_blocker_decision`
+                // does no menace post-validation — that lives in
+                // the engine's `_declare_blockers` finalize,
+                // `actions.py:2555-2566`).
+                if let Some(atk) = attacker_id {
+                    slf.call_method1("declare_blocker", (blocker_id, atk))?;
+                }
+            }
         }
         // Round-27 G3 + G4 post-arm reset (CR 117.1c).
         //
