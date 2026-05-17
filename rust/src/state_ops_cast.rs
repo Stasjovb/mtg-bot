@@ -601,4 +601,154 @@ impl GameState {
         self.consecutive_passes = 0;
         Ok(true)
     }
+
+    /// **Spell-card-bridge lever, Phase 1 (round-70).** Cast a
+    /// non-creature Instant/Sorcery from `player_id`'s hand. Sibling
+    /// of `cast_creature` / `cast_creature_warp` with these deltas
+    /// (verified against both live bodies):
+    ///
+    /// 1. **Hand lookup only** (no exile-recast branch — that is
+    ///    warp-specific). Mirrors `cast_creature_warp`'s simple
+    ///    `hand.iter().find(...).map(|o| o.printing_id)` shape.
+    /// 2. **Type gate inverted:** require `"Instant"` OR `"Sorcery"`
+    ///    in `card_types` AND NOT `"Creature"` (the dual of
+    ///    `cast_creature`'s `:444` Creature gate). Same pre-mutation
+    ///    `Ok(false)` bail shape so a non-spell never has its mana
+    ///    speculatively debited. Returning `Ok(false)` for a creature
+    ///    lets the `Action::CastSpell` dispatch try this primitive
+    ///    first-after-warp then fall through to `cast_creature`.
+    /// 3. **Pay `printing.mana_cost`** (the guardrail rejected
+    ///    X / kicker / warp / additional-cost-choice, so `mana_cost`
+    ///    is the whole cost). Exact `cast_creature:453-457` shape.
+    /// 4. **Push a spell `StackItem`, do NOT move to battlefield.**
+    ///    The spell GameObject stays in the hand zone (Rust's
+    ///    pre-existing spell-stack model — `find_source_printing_id` /
+    ///    `take_source` search hand; the existing
+    ///    `mass_removal_side_channel` / Doom-Blade resolve path relies
+    ///    on this). `resolve_top_of_stack` then applies
+    ///    `printing.effects` and `move_source_post_resolve` takes the
+    ///    card from hand → graveyard via the ALREADY-PRESENT
+    ///    Instant/Sorcery → ZONE_GRAVEYARD route
+    ///    (`post_resolve_destination:251-256`, UNCHANGED — the
+    ///    spell→graveyard move is FREE; CR 608.2m already handled).
+    /// 5. **Bind the single target at cast time** via the same
+    ///    deterministic-first scan the per-card bespoke Effect resolve
+    ///    arms apply (the no-callback first-legal-target campaign
+    ///    convention; mirrors Python's `_select_spell_targets`
+    ///    binding ONE target onto the StackItem at cast time). Stored
+    ///    in `StackItem.target_obj_id` (Gate B'', §3.4). The closed
+    ///    Tier-A spell arms self-scan the battlefield and ignore the
+    ///    payload target, so the swap is a correct no-op for them
+    ///    (byte-equality is delivered by self-scan == Python
+    ///    first-legal, proven by the Tier-A real-EoE probes); the
+    ///    field is the forward substrate for targeted arms that opt
+    ///    into the payload-target convention.
+    /// 6. **Fire the `Event::Cast` dispatch** before the stack push,
+    ///    same ordering as `cast_creature:470-474` /
+    ///    `cast_creature_warp:585-589`.
+    /// 7. **Resolve is NOT fused.** The primitive pushes the
+    ///    StackItem and returns; the harness drives
+    ///    `resolve_top_of_stack` separately (CE5 cast-vs-resolve
+    ///    mirror — `step_both` drains both stacks before the
+    ///    field-view compare, so the mid-stack card-in-hand asymmetry
+    ///    vs Python is never compared; the compare is post-resolve).
+    ///
+    /// Returns `true` on success, `false` on the same precondition
+    /// failures as `cast_creature` (object not in hand, no such
+    /// printing, insufficient mana) PLUS "the printing is not a
+    /// non-creature Instant/Sorcery".
+    fn cast_spell_noncreature(
+        &mut self,
+        obj_id: u32,
+        player_id: u8,
+    ) -> PyResult<bool> {
+        let idx = check_player_id(player_id)?;
+        // Delta 1: hand lookup only.
+        let printing_id = match self.players[idx]
+            .hand
+            .iter()
+            .find(|o| o.id == obj_id)
+            .map(|o| o.printing_id)
+        {
+            Some(pid) => pid,
+            None => return Ok(false),
+        };
+        // Delta 2: inverted type gate — Instant/Sorcery AND NOT
+        // Creature. Bail (no mutation) on anything else so the
+        // dispatch can fall through to `cast_creature`.
+        let cost = match self.registry.lookup(printing_id) {
+            Some(p) => {
+                let is_spell = p
+                    .card_types
+                    .iter()
+                    .any(|t| t == "Instant" || t == "Sorcery");
+                let is_creature = p
+                    .card_types
+                    .iter()
+                    .any(|t| t == "Creature");
+                if !is_spell || is_creature {
+                    return Ok(false);
+                }
+                p.mana_cost.clone()
+            }
+            None => return Ok(false),
+        };
+        // Delta 3: pay `mana_cost` on a pool copy; commit or bail.
+        let mut pool_copy = self.players[idx].mana_pool;
+        if !pay_mana_cost(&mut pool_copy, &cost) {
+            return Ok(false);
+        }
+        self.players[idx].mana_pool = pool_copy;
+        // Delta 6: CAST event before the stack push, same ordering as
+        // `cast_creature` / `cast_creature_warp`. The subject is the
+        // card still in hand (the push leaves it there); predicate
+        // matchers walk all zones so the hand-zone lookup finds it.
+        crate::state_ops_resolve::dispatch_event(
+            self,
+            crate::cards::Event::Cast,
+            obj_id,
+        )?;
+        // Delta 5: bind the deterministic-first legal target. Phase-1
+        // scope is the `target_slot_kinds()==()` single-creature/
+        // permanent slot; the same `bf_iter_etb_sorted` first-creature
+        // scan the per-card bespoke Effect resolve arms use (Python's
+        // centralized `state.battlefield` walk + the deterministic-
+        // first convention). Bound at cast time so the chosen target
+        // is fixed when the spell goes on the stack (matching Python's
+        // separate `_select_spell_targets` decision producing one
+        // bound target on the StackItem). The closed Tier-A spell
+        // arms self-scan and ignore this; it is the forward substrate
+        // for payload-target-reading arms (pin #4 / #6).
+        let bound_target: Option<u32> =
+            crate::bf_iter::bf_iter_etb_sorted(self)
+                .into_iter()
+                .find_map(|o| {
+                    let printing =
+                        self.registry.lookup(o.printing_id)?;
+                    if printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Creature")
+                    {
+                        Some(o.id)
+                    } else {
+                        None
+                    }
+                });
+        // Delta 4: push the spell StackItem (card stays in hand —
+        // Rust's pre-existing spell-stack model). The existing
+        // `resolve_top_of_stack` drains it: applies `printing.effects`
+        // with the target swapped in, then `move_source_post_resolve`
+        // sends the spell hand → graveyard (FREE — CR 608.2m).
+        self.stack.push(crate::state::StackItem::new_spell_with_target(
+            obj_id,
+            player_id,
+            bound_target,
+        ));
+        // Delta 7: priority/passes reset, verbatim from
+        // `cast_creature` / `cast_creature_warp`.
+        self.priority_player = self.active_player;
+        self.consecutive_passes = 0;
+        Ok(true)
+    }
 }

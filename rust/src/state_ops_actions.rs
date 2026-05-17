@@ -341,6 +341,22 @@ impl GameState {
                 // here with `use_warp=false`). The remaining flags
                 // (kicked / cast_for_free / use_impending /
                 // cast_room_half) stay deferred.
+                //
+                // **Spell-card-bridge lever (round-70): the non-warp
+                // `else` now routes a non-creature Instant/Sorcery to
+                // the new `cast_spell_noncreature` primitive.** The
+                // dispatch stays a thin delegator (the landed warp
+                // pattern): try `cast_spell_noncreature` first; it
+                // type-gates INSIDE the primitive (exactly as
+                // `cast_creature` / `cast_creature_warp` do) and
+                // returns `Ok(false)` for a creature — in which case
+                // we fall through to the round-4 `cast_creature` path
+                // (which also serves the warp exile-recast). The
+                // primitive pays `mana_cost`, binds the
+                // deterministic-first target, pushes a spell
+                // `StackItem`, and returns; the harness drives the
+                // resolve (CE5 cast-vs-resolve mirror). Mirrors
+                // Python's `_cast_spell` instant/sorcery branch.
                 let player_id = slf.borrow().priority_player;
                 if use_warp {
                     slf.call_method1(
@@ -348,10 +364,18 @@ impl GameState {
                         (card_id, player_id),
                     )?;
                 } else {
-                    slf.call_method1(
-                        "cast_creature",
-                        (card_id, player_id),
-                    )?;
+                    let cast_spell_ok: bool = slf
+                        .call_method1(
+                            "cast_spell_noncreature",
+                            (card_id, player_id),
+                        )?
+                        .extract()?;
+                    if !cast_spell_ok {
+                        slf.call_method1(
+                            "cast_creature",
+                            (card_id, player_id),
+                        )?;
+                    }
                 }
             }
             Action::TurnFaceUp { card_id: _ } => {
