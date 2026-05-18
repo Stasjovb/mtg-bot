@@ -1798,6 +1798,48 @@ second:
    >     `rust_engine_adapter` `_next_alive`/`86411a99`-shape
    >     fix); **Lane B continues frontier (a) = Class A** (in
    >     flight, S6-validated). Then C → E → A → D → **S7 LAST**.
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 32 —
+   >   G7 frontier (a) = S6-Class-A CLOSED; cron IN-SYNC,
+   >   counts UNCHANGED 121/123/23/12/11, parity 307/475 /
+   >   PROBED 106 UNCHANGED; 4-file 1536 UNMOVED).**
+   >   - **Class A CLOSED** (`72420b8a`, engine
+   >     `state_ops_actions.rs`+`state_ops_cast.rs`).
+   >     **Verify-first INVERTED the brief:** the
+   >     `ActivateAbility` legal-emit gate ALREADY matched
+   >     Python (`state_ops_legal.rs:2105` = `can_pay_cost`,
+   >     byte-equal `legal.py:653`) — narrowing it (the brief's
+   >     hypothesis) would have created a WORSE `LEGAL_SET_EQ`.
+   >     The real bug = the **§2-4 analog for
+   >     `ActivateAbility`**: Rust `apply_action` paid pool-only
+   >     (no auto-tap) + raw-rejected while Python
+   >     `_activate_ability` uses the SAME `auto_tap_for_cost`
+   >     as `_cast_spell`. Fix (new-code-is-right): route the
+   >     Rust apply mana-pay through
+   >     `state_ops_cast::auto_tap_pay_for_cost` (promoted
+   >     `pub(crate)`); strict `pay_mana_cost_pub` kept
+   >     `#[allow(dead_code)]` ZERO live callers (no fallback
+   >     hybrid). arch2/s1 step-318 raw-ValueError
+   >     RED→resolved, runs 318→320.
+   >   - **HONEST-STOP:** closing (a) unmasks a NEW distinct
+   >     library-SHUFFLE-ORDER frontier @ arch2/s1 step 320
+   >     (the Lander "search a basic land then shuffle" —
+   >     identical multiset / per-engine post-search shuffle
+   >     RNG not lockstep). Characterized + LOUD-pinned; todo
+   >     `b3f7c0a9` filed; NOT force-fixed. Pin renamed
+   >     surfaced→closure; arch5/s0 frontier (b) row UNCHANGED;
+   >     2 `tests_rust/test_activated.py` pins closure-flipped
+   >     pool-only→auto-tap-succeeds (new-code-is-right).
+   >   - Shared `.pyd` rebuilt (real codegen);
+   >     `state_ops_actions`/`state_ops_cast`-only → no
+   >     structural-arm fire; `tests_rust` zero-newly-failing.
+   >   - NEXT (2 continuous lanes): **Lane A = Class B** (the
+   >     DOMINANT 138/300 G5-family priority-port — pure-Python
+   >     `rust_engine_adapter` `_next_alive`/`86411a99`-shape);
+   >     **Lane B = Class C** (= S4b/warp-EMISSION — the
+   >     S1/S5a treatment for `cast_creature_warp`: stack-push
+   >     + `stack_objects` re-home, Rust `state_ops_cast.rs`,
+   >     44/300). Then E → D → **S7 LAST**; the shuffle-order
+   >     `b3f7c0a9` folds into the arch2/s1 sequence.
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
