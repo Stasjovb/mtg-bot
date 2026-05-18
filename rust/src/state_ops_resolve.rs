@@ -12118,20 +12118,23 @@ fn apply_effect(
         // against future control-change effects between cast and
         // end-step.
         //
-        // **Reset shape** mirrors `Effect::ExileTarget`'s reset shape
-        // above + Python's `WarpExileSelf.resolve` body: damage = 0,
-        // tapped = false, attached_to = None, exiled_with_source =
-        // None, counters = 0 (Python's `move_off_battlefield` resets
-        // damage/tapped/attached_to but does NOT zero counters; we
-        // zero them here to match the existing `Effect::ExileTarget`
-        // arm above — Phase-1 warp cards never carry counters in the
-        // bench so this is byte-equal to the Python behavior for the
-        // admitted set, and forward-correct for any future warp
-        // creature that does). `summoning_sick` is NOT cleared
-        // (CE13). `warp_exile_pending` is cleared (the cast-time
-        // marker has discharged its obligation). `warped = true` if
-        // non-token — same gate as the deterministic-sweep arm and
-        // Python's `if not obj.printing.is_token: obj.warped = True`.
+        // **Reset shape** mirrors Python's `WarpExileSelf.resolve`
+        // body, which routes through `turn.move_off_battlefield`:
+        // damage = 0, tapped = false, attached_to = None,
+        // exiled_with_source = None. **Counters are NOT cleared**
+        // (R77-CFI1 — Python's `move_off_battlefield` deliberately
+        // clears combat marks but leaves `+1/+1` counters intact;
+        // the SBA destroy / sacrifice / DepressurizeEffect arms all
+        // follow this same byte-equal contract). The prior stray
+        // `obj.counters = 0;` here diverged from the Python SoT for
+        // a counter'd warp-cast creature (surfaced by S6 scale-verify
+        // v2 arch=14/seed=4: Germinating Wurm carrying a +1/+1
+        // counter into warp-exile — Python net=1, Rust net=0).
+        // `summoning_sick` is NOT cleared (CE13). `warp_exile_pending`
+        // is cleared (the cast-time marker has discharged its
+        // obligation). `warped = true` if non-token — same gate as
+        // the deterministic-sweep arm and Python's
+        // `if not obj.printing.is_token: obj.warped = True`.
         Effect::WarpExileSelf => {
             let mut found_at: Option<(usize, usize)> = None;
             for (pidx, player) in state.players.iter().enumerate() {
@@ -12152,12 +12155,12 @@ fn apply_effect(
             let player = &mut state.players[pidx];
             let bf: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
             let mut obj = bf.remove(idx);
-            // CR 400.7 reset — mirrors `Effect::ExileTarget` arm above
-            // and Python's `turn.move_off_battlefield` body.
+            // CR 400.7 reset — mirrors Python's
+            // `turn.move_off_battlefield` body (R77-CFI1: counters
+            // NOT cleared).
             obj.zone = ZONE_EXILE;
             obj.tapped = false;
             obj.damage = 0;
-            obj.counters = 0;
             obj.attached_to = None;
             obj.exiled_with_source = None;
             obj.warp_exile_pending = false;
