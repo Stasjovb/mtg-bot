@@ -268,6 +268,80 @@ def test_train_structured_model_rejects_invalid_val_split(
         )
 
 
+def test_train_structured_model_rejects_non_positive_patience(
+    tmp_path: Path,
+) -> None:
+    ds = _make_dataset(n_rows=8, seq_len=3)
+    for bad in (0, -3):
+        with pytest.raises(ValueError, match="early_stop_patience"):
+            train_structured_model(
+                ds,
+                weights_out_path=tmp_path / "w.pt",
+                config=_tiny_cfg(),
+                epochs=2,
+                batch_size=4,
+                val_split=0.25,
+                device="cpu",
+                early_stop_patience=bad,
+            )
+
+
+def test_train_structured_model_early_stop_disabled_runs_all_epochs(
+    tmp_path: Path,
+) -> None:
+    # Back-compat: ``early_stop_patience=None`` (the trainer-function
+    # default) runs the full --epochs budget. Catches a regression where
+    # adding the early-stop branch would short-circuit a None-disabled
+    # run.
+    ds = _make_dataset(n_rows=16, seq_len=4)
+    history = train_structured_model(
+        ds,
+        weights_out_path=tmp_path / "w.pt",
+        config=_tiny_cfg(),
+        epochs=5,
+        batch_size=4,
+        learning_rate=1e-2,
+        val_split=0.25,
+        device="cpu",
+        rng_seed=0,
+        early_stop_patience=None,
+    )
+    assert len(history.train_losses) == 5
+
+
+def test_train_structured_model_early_stop_fires_on_plateau(
+    tmp_path: Path,
+) -> None:
+    # The structured-trainer mirror of
+    # ``test_early_stop_fires_when_val_loss_plateaus``. With a small
+    # synthetic dataset whose val loss plateaus within a few epochs,
+    # ``early_stop_patience=2`` MUST stop training before the full
+    # --epochs budget (50). This is the lever the D3 ablation
+    # (docs/SCALING_DIAGNOSTICS.md) requires; without an early-stop
+    # break the structured-CLI flag was a dead flag.
+    ds = _make_dataset(n_rows=16, seq_len=4, seed=0)
+    history = train_structured_model(
+        ds,
+        weights_out_path=tmp_path / "w.pt",
+        config=_tiny_cfg(),
+        epochs=50,
+        batch_size=4,
+        learning_rate=1e-2,
+        val_split=0.25,
+        device="cpu",
+        rng_seed=0,
+        early_stop_patience=2,
+    )
+    # Tiny network on a tiny dataset hits best val within ~1-3 epochs,
+    # then plateaus; patience=2 should fire well before 50.
+    assert len(history.train_losses) < 50, (
+        f"early-stop did not fire; ran all {len(history.train_losses)} epochs"
+    )
+    # The trained history is contiguous and val data is populated.
+    assert len(history.val_losses) == len(history.train_losses)
+    assert history.best_val_epoch >= 0
+
+
 def test_train_structured_model_emits_failed_on_exception(
     tmp_path: Path, monkeypatch,
 ) -> None:
