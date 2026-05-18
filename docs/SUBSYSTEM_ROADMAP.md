@@ -1620,6 +1620,38 @@ second:
    >     (resync/refresh-cadence owned); `tests_rust/`
    >     baseline-rot ~30 (pre-existing, outside the 4-file gate,
    >     todo filed, non-blocking).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 27 —
+   >   G7 S5a LANDED + orchestrator-merged @ `302a5fc5`,
+   >   Option β; 4-file 1534 UNMOVED; cron IN-SYNC, counts
+   >   UNCHANGED 121/123/23/12/11; parity 307/475 / PROBED 106
+   >   UNCHANGED).**
+   >   - **S5a engine (Option β):** `GameState.stack_objects`
+   >     store (`ZONE_STACK=4` live), `StackItem` id-only, cast
+   >     moves the spell hand→store byte-Python
+   >     (`actions.py:1403`/`:1751`/`:1752`); 3 source walks +
+   >     counterspell-gy route + (design §5.2-risk-3) the 3
+   >     `cards.rs` predicate subject/controller helpers
+   >     extended → the silent CAST-trigger regression that
+   >     materialized was fixed IN-slice, not deferred.
+   >   - **§5.3 baseline-rebase orchestrator-INDEPENDENTLY-
+   >     VERIFIED = EXACTLY the hand_p0/spell-stack
+   >     reconciliation, nothing else moved:** tests_rust
+   >     `ZONE_HAND`→`ZONE_STACK` + hand−1 (test_cast×5/
+   >     actions×1/priority×2) + the cycle-25 honest-stop
+   >     bake-in pin surfaced→closure-flip (still asserts the
+   >     exact tripwire/shape/asymmetry + a stronger boundary —
+   >     no negative control weakened); NO Python/CE5/4-file-
+   >     gate-test touched. Shared `.pyd` rebuilt on main;
+   >     residue re-stamped `bb29df8d`→`302a5fc5` (S5a ships
+   >     ZERO Effect — predicate zone-walk only; cron in-sync).
+   >   - **S5a is the hard prerequisite for S7 — satisfied.**
+   >     SEPARATE UNMASKED follow-up (NOT S5a's scope): a
+   >     pre-existing C1-class combat-blocker `LEGAL_SET_EQ`
+   >     (arch2/s1 273→312 N=9, arch5/s0 322→344 N=12) pinned
+   >     LOUD by the flipped closure pin; sequence after S5b.
+   >   - NEXT = S5b (pure-Python codec/determinizer verify —
+   >     DISPATCHED) → S5c → S5 triggers-verify → S6 → **S7 CE5
+   >     removal LAST** → CE5-free re-proof + fresh CE5-free C4.
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
