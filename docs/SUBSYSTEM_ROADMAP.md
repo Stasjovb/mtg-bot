@@ -1763,6 +1763,41 @@ second:
    >     analog, earliest unmasked tripwire @ step 318).
    >     Distinct STILL-OPEN: frontier (b) G5-family
    >     `priority_player`, S4b, warp-EMISSION.
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 31 —
+   >   G7 S6 SCALE-VERIFY LANDED; S7-readiness = GO; cron
+   >   IN-SYNC, counts UNCHANGED 121/123/23/12/11, parity
+   >   307/475 / PROBED 106 UNCHANGED; 4-file 1536 UNMOVED;
+   >   ZERO engine — no `.pyd`/residue/structural-arm).**
+   >   - **S6 (`136957b6`, pure-Python verify+docs):** 300-game
+   >     scaled `rust_shadow` bake-in @ `a9126b06` (real 17lands,
+   >     NO CE5). The **S7 linchpin HOLDS AT SCALE — 0/300 show
+   >     `hand_p0` or `('blocker',...)`** (S5a/S5-triggers +
+   >     combat-blocker genuinely closed the dominant C4 axis
+   >     across the real-deck population). **NO NEW MASKING**
+   >     (empty accepted-fields + 15/15 negative controls fire
+   >     LOUD + zero unclassified shapes).
+   >   - **0/300 is now FINITE + enumerated, 5 classes
+   >     (priority-ordered):** B=138 G5-family priority-port
+   >     STATE_EQ (DOMINANT; = cycle-30 frontier (b)) → C=44
+   >     warp-EMISSION/S4b → E=31 C1 mana-source color on
+   >     `ActivateAbility` → A=21 B1-axis `ActivateAbility`
+   >     affordability (= cycle-30 frontier (a), Lane B
+   >     in-flight) → D=23 B1/C1 cast-set (= the C4 22/300
+   >     co-blocker, its own B1/C1-Slices-2/3 lane) + 43
+   >     degenerate land-walk FAIL_TIMEOUT (not a verdict).
+   >   - **S7-readiness = GO** — gated ONLY on closing the
+   >     finite set, NO structural/masking blocker; sequence
+   >     **B→C→E→A→D→S7** (S7 = CE5 removal + CE5-free re-proof
+   >     + fresh CE5-free C4 = the final flip gate). Flip GO
+   >     needs BOTH the G7 chain AND B1 (D) — independently
+   >     re-confirmed at scale; the GO call is the USER's.
+   >     cycle-30's narrower 2-frontier todo SUPERSEDED by S6's
+   >     5-class todo `9b3e7f1d`.
+   >   - NEXT (2 continuous lanes): **Lane A = Class B** (the
+   >     DOMINANT 138/300 G5-family priority-port — pure-Python
+   >     `rust_engine_adapter` `_next_alive`/`86411a99`-shape
+   >     fix); **Lane B continues frontier (a) = Class A** (in
+   >     flight, S6-validated). Then C → E → A → D → **S7 LAST**.
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
