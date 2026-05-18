@@ -606,7 +606,18 @@ def test_cast_spell_failure_does_not_touch_priority(synthetic_state):
     so future cast slices don't accidentally fire the reset before
     validating preconditions."""
     elf_id = 10
-    # Don't add mana — the cast will fail at the pay_mana_cost gate.
+    # **G7 mid-game STATE_EQ closure-flip (auto-tap-from-lands).** The
+    # failed-cast no-op (priority untouched only on a SUCCESSFUL cast)
+    # is unchanged, but "don't add mana" no longer makes the cast fail
+    # — the synthetic state's 5 untapped Forests now auto-tap to pay
+    # (byte-mirroring Python's ``_cast_spell`` -> ``auto_tap_for_
+    # cost``). Tap every p0 land so the cast genuinely fails its mana
+    # gate, then the failure-path priority no-op still holds,
+    # new-code-is-right.
+    for o in synthetic_state.battlefield_snapshot():
+        if o["controller_id"] == 0 and o["printing_name"] == "Forest":
+            synthetic_state.tap_object(o["id"])
+    # No mana, no land headroom — the cast fails at the pay gate.
     synthetic_state.give_priority_to(1)
     assert synthetic_state.get_priority_player() == 1
     assert synthetic_state.cast_creature(elf_id, 0) is False
