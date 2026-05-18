@@ -200,15 +200,34 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         (1, 1, 169, "STATE_EQ", "Starbreach Whale",
          "warp-EXILE delayed-trigger-vs-deterministic-sweep "
          "(SEARCH_LIMITATIONS documented divergence; NOT atomic-cast)"),
-        # Class D — B1/C1 keystone: Rust legal_decisions offers a
-        # plain CastSpell (no warp/kick/free/impending flags) Python's
-        # raw legal_actions does not — the C1
+        # Class D — CLOSED (verify-first @ feature/g7-classd-castset;
+        # see test_rust_shadow_bakein.py::
+        # test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier).
+        # The S6-evidence label "the secondary 22/300 C4 LEGAL_SET_EQ
+        # shape; the already-OPEN B1 keystone co-blocker (C1
         # legal_decisions==legal_actions mana/target/additional-cost
-        # asymmetry (the secondary 22/300 C4 LEGAL_SET_EQ shape; the
-        # already-OPEN B1 keystone co-blocker, NOT a new G-axis).
-        (7, 0, 453, "LEGAL_SET_EQ",
-         "('cast_spell', 76, False, False, False, False, None)",
-         "B1-keystone/C1 (legal_decisions==legal_actions cast set)"),
+        # asymmetry); co-evolves its own B1 lane" is INVERTED:
+        # verify-first found 22/23 are a SINGLE genuine in-scope
+        # C1-Slice-2 bug — spell_targets_satisfiable did NOT recurse
+        # Effect::Sequence, so Radiant Strike's
+        # Sequence(DestroyTargetArtifactOrTappedCreature, GainLife{3})
+        # (whose targeted leaf has ZERO legal targets — CR 601.2c) was
+        # NEVER pruned (the flat loop hit the _ => {} catch-all on the
+        # Sequence wrapper → conservative true). FIXED by depth-first
+        # flattening Sequence children (new-code-is-right toward
+        # Python's SoT; parity-neutral — only ADDS pruning Python also
+        # does; all 10 C1 Slice-1/2/3 pins green). 1/23 (arch30/s1) is
+        # a DISTINCT mana sub-axis (Thawbringer {2}{G}, can_pay_cost,
+        # NOT the target gate) — separate filed follow-up, NOT closed
+        # here. Closing the 22 unmasks the already-tracked Class-C
+        # warp-EXILE axis (todo 8d353e80) deeper in arch7/s0 (step
+        # 453→700; the cast-set asymmetry was UPSTREAM, masking it).
+        # The inventory ROW is flipped to the closure contract: arch7/
+        # s0 proceeds PAST 453 and trips the Class-C warp-EXILE
+        # STATE_EQ @700 (NOT the old cast_spell LEGAL_SET_EQ).
+        (7, 0, 700, "STATE_EQ", "('exile_p1'",
+         "Class D CLOSED (Sequence-recursion target-satisf fix) → "
+         "Class-C warp-EXILE surfaced behind it (todo 8d353e80)"),
         # Class E — RE-CHARACTERIZED (verify-first @ main 430f3b39;
         # see test_rust_shadow_bakein.py::
         # test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned).

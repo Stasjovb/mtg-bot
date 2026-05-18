@@ -748,13 +748,48 @@ fn spell_targets_satisfiable(
     // Python iterates `card.printing.spell_effect` (a SINGLE effect).
     // The Rust bridge models the spell body as `printing.effects`
     // (a Vec). For the bridge-admitted surface the targeted leaf is
-    // `effects[0]` (Sequence-wrapped effects like Radiant Strike's
+    // `effects[0]` UNLESS the spell body is `Sequence`-wrapped: the
+    // bridge's `sequence` arm (`cross_engine.py:1494`) sends the whole
+    // body as ONE `{"kind":"sequence","effects":[...]}` dict, which
+    // `cards.rs` `parse_effect` materializes as a SINGLE nested
+    // `Effect::Sequence { effects: vec![...] }` element — NOT a
+    // flattened Vec. Radiant Strike's
     // `Sequence(DestroyTargetArtifactOrTappedCreature, GainLife(3))`
-    // are handled by matching the targeted variant ANYWHERE in the
-    // Vec — see the `find` below — so a Sequence's leading targeted
-    // leaf is still gated). Untargeted bodies fall through to `true`.
+    // is therefore `printing.effects == [Effect::Sequence{..}]`; the
+    // targeted leaf `DestroyTargetArtifactOrTappedCreature` is a CHILD
+    // of that Sequence, not a top-level element. Python's SoT looks
+    // THROUGH the Sequence (its `spell_effect` IS the Sequence, whose
+    // `requires_target()`/`legal_targets()` delegate to the targeted
+    // child — `effects/combinators.py` Sequence protocol). So the gate
+    // MUST recurse into `Effect::Sequence` to find the targeted leaf
+    // ANYWHERE in the (possibly nested) effect tree — flattening the
+    // tree into the targeted-leaf scan below. (Pre-fix the flat loop
+    // matched only top-level variants, hit the `_ => {}` catch-all on
+    // the Sequence wrapper, and fell through to the conservative
+    // `true` — never pruning a zero-legal-target Sequence-wrapped
+    // spell ⇒ the G7 S6 Class-D `cast_spell` LEGAL_SET_EQ asymmetry.)
+    // Untargeted bodies still fall through to `true`.
     let controller = controller_idx as u8;
-    for effect in printing.effects.iter() {
+    // Depth-first flatten: descend `Effect::Sequence` children so the
+    // targeted-leaf match arms below see the leaves Python's Sequence
+    // protocol delegates to. Bounded by the registry's finite parsed
+    // effect tree (no cycles — `parse_effect` builds a tree).
+    fn flatten_effects<'e>(
+        effs: &'e [crate::cards::Effect],
+        out: &mut Vec<&'e crate::cards::Effect>,
+    ) {
+        use crate::cards::Effect;
+        for e in effs.iter() {
+            if let Effect::Sequence { effects } = e {
+                flatten_effects(effects, out);
+            } else {
+                out.push(e);
+            }
+        }
+    }
+    let mut flat: Vec<&Effect> = Vec::new();
+    flatten_effects(&printing.effects, &mut flat);
+    for effect in flat.into_iter() {
         match effect {
             // ANY-creature scan (NOT controller-restricted). Mirrors
             // Python `DepressurizeEffect.legal_targets`
