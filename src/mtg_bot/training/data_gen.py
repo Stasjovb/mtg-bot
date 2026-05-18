@@ -153,15 +153,24 @@ def _pad_and_stack_structured_rows(
     suppressed).
     """
     if not rows:
+        # The trailing dim must match the populated-rows path so empty
+        # timeout/crash npzs can be stacked alongside real ones in the
+        # dataset loader. Shape-(0,0,0) used to leak through here and
+        # crash train_nn.py at "could not broadcast input array from
+        # shape (0,0,0) into shape (0,0,N_EMB_FIELDS)" — the iter_004
+        # workaround was to quarantine the empties before training.
+        from mtg_bot.training.structured_model import (
+            N_EMB_FIELDS, N_SCALAR_FIELDS,
+        )
         return {
             "structured_token_type": np.zeros(
                 (0, 0), dtype=_DTYPE_STRUCT_TOKEN_TYPE,
             ),
             "structured_token_emb_ids": np.zeros(
-                (0, 0, 0), dtype=_DTYPE_STRUCT_EMB_IDS,
+                (0, 0, N_EMB_FIELDS), dtype=_DTYPE_STRUCT_EMB_IDS,
             ),
             "structured_token_scalars": np.zeros(
-                (0, 0, 0), dtype=_DTYPE_STRUCT_SCALARS,
+                (0, 0, N_SCALAR_FIELDS), dtype=_DTYPE_STRUCT_SCALARS,
             ),
             "structured_attention_mask": np.zeros(
                 (0, 0), dtype=_DTYPE_STRUCT_MASK,

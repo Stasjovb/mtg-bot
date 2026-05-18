@@ -41,10 +41,16 @@ from tests._test_decks import simple_test_deck_pool
 
 
 def test_pad_and_stack_with_empty_input_returns_empty_arrays() -> None:
+    # The trailing token-field dim must match the populated path
+    # (N_EMB_FIELDS / N_SCALAR_FIELDS) so empty timeout/crash chunks
+    # can be stacked alongside real ones in the dataset loader.
+    # Old behavior returned (0,0,0) which broadcast-failed against
+    # (n, max_len, N_EMB_FIELDS) at train time — the iter_004
+    # workaround was to quarantine the empties before training.
     out = _pad_and_stack_structured_rows([])
     assert out["structured_token_type"].shape == (0, 0)
-    assert out["structured_token_emb_ids"].shape == (0, 0, 0)
-    assert out["structured_token_scalars"].shape == (0, 0, 0)
+    assert out["structured_token_emb_ids"].shape == (0, 0, N_EMB_FIELDS)
+    assert out["structured_token_scalars"].shape == (0, 0, N_SCALAR_FIELDS)
     assert out["structured_attention_mask"].shape == (0, 0)
 
 
