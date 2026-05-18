@@ -221,19 +221,25 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         # field {bf, exile_p1, stack} STATE_EQ). With the new Rust
         # state.delayed_triggers + Effect::WarpExileSelf +
         # run_delayed_end_step_triggers landed, arch1/s1 runs MANY
-        # steps past 169 (the warp creature stays on the bf with the
-        # WarpExileSelf trigger on the stack — byte-equal Python at
-        # the end step) and then trips on the SAME next-frontier the
-        # Class-B canonical arch5/s0 trips on: a priority_player
-        # STATE_EQ at a DECLARE_ATTACKERS window (the G5-family
-        # priority-port lane in state_ops_actions.rs:1444-1446 /
-        # state_ops_legal.rs:1199 — the dominant 138/300 lane;
-        # sibling-owned feature/g7-classb-engine). The library_pX
-        # sub-variants remain a SEPARATE shuffle-order axis (todo
-        # b3f7c0a9), not Class C.
-        (1, 1, 351, "STATE_EQ", "('priority_player', 0, 1)",
-         "G5-family priority-port (next-frontier after warp-EXILE "
-         "closure via delayed-trigger port; same axis as Class B)"),
+        # steps past 169.  RE-CHARACTERIZED at merge-time (cycle-37
+        # serial-merge pipeline, post-Class-B+Class-C lanes both
+        # landed): Class-B closure (priority-port axis at @367 now
+        # CLOSED on this seed too) shifts the next-frontier from the
+        # previously-pinned priority_player STATE_EQ @351 to a NEW
+        # life-total STATE_EQ at step 356 ('life_p0', 17, 20).  This
+        # is a genuine cross-lane interaction: neither Class-B nor
+        # Class-C alone surfaces it (a 3-life delta from a divergent
+        # damage/effect application that only the random walk's
+        # post-Class-B+Class-C path reaches). NOT a regression — the
+        # warp-EXILE closure-progress contract (run past step 169) +
+        # the priority-port closure (no priority_player divergence)
+        # both hold; this is the new axis surfaced behind the joint
+        # closure.  The library_pX sub-variants remain a SEPARATE
+        # shuffle-order axis (todo b3f7c0a9), not Class C.
+        (1, 1, 356, "STATE_EQ", "('life_p0', 17, 20)",
+         "life-total STATE_EQ (next-frontier after BOTH warp-EXILE "
+         "(Class-C) AND priority-port (Class-B) closures landed; "
+         "cross-lane surfaced axis — neither alone reveals it)"),
         # Class D — CLOSED (verify-first @ feature/g7-classd-castset;
         # see test_rust_shadow_bakein.py::
         # test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier).
@@ -253,15 +259,25 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         # does; all 10 C1 Slice-1/2/3 pins green). 1/23 (arch30/s1) is
         # a DISTINCT mana sub-axis (Thawbringer {2}{G}, can_pay_cost,
         # NOT the target gate) — separate filed follow-up, NOT closed
-        # here. Closing the 22 unmasks the already-tracked Class-C
-        # warp-EXILE axis (todo 8d353e80) deeper in arch7/s0 (step
-        # 453→700; the cast-set asymmetry was UPSTREAM, masking it).
-        # The inventory ROW is flipped to the closure contract: arch7/
-        # s0 proceeds PAST 453 and trips the Class-C warp-EXILE
-        # STATE_EQ @700 (NOT the old cast_spell LEGAL_SET_EQ).
-        (7, 0, 700, "STATE_EQ", "('exile_p1'",
-         "Class D CLOSED (Sequence-recursion target-satisf fix) → "
-         "Class-C warp-EXILE surfaced behind it (todo 8d353e80)"),
+        # here.  RE-CHARACTERIZED at merge-time (cycle-37 serial-merge
+        # pipeline): Class-C warp-EXILE delayed-trigger port has now
+        # ALSO landed in main, so the @700 STATE_EQ ('exile_p1', ...)
+        # next-frontier behind Class-D closure is itself closed; the
+        # run proceeds PAST 700 to step 757 where it surfaces the
+        # SAME G1 stateless-Rust attack=False re-emission axis the
+        # Class-B canonical arch5/s0 row surfaces at step 369:
+        # LEGAL_SET_EQ rust\py=["('attacker', 120, False)", "('attacker',
+        # 120, True)"] py\rust=["('pass',)"]. The arch7/s0 attacker_id
+        # 120 happens to be the same Knight Luminary that was on Rust
+        # exile_p1 at the old @700 pin, but the new divergence shape
+        # is the unrelated G1 attacker-decision axis (B3-S3
+        # provider-accumulation port; same lane as the Class-B
+        # @369-surfaced row).  Filed follow-up: f5145c1d (the Class-D
+        # 1/23 Thawbringer mana sub-axis remains separate).
+        (7, 0, 757, "LEGAL_SET_EQ", "('attacker', 120, False)",
+         "G1 stateless-Rust attack=False re-emission (same axis as "
+         "Class-B @369 row; unmasked deeper in arch7/s0 by stacking "
+         "Class-D + Class-C closures)"),
         # Class E — RE-CHARACTERIZED (verify-first @ main 430f3b39;
         # see test_rust_shadow_bakein.py::
         # test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned).

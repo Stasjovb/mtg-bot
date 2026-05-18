@@ -363,34 +363,50 @@ def test_g7_classc_warpexile_delayed_trigger_root_cause_closed_then_next_frontie
         f"{str(raised)[:300] if raised else None!r}"
     )
 
-    # (3) NEXT-FRONTIER SURFACED: the run must STILL trip on the
-    # Class-B priority-port lane (which is open / sibling-owned —
-    # NOT this lane). Silent pass would mean another axis got
-    # masked.
+    # (3) NEXT-FRONTIER SURFACED: the run must STILL trip somewhere
+    # past the warp-EXILE closure window. Silent pass would mean
+    # another axis got masked.
+    #
+    # RE-CHARACTERIZED at merge-time (cycle-37 serial-merge pipeline,
+    # post-Class-B + Class-C lanes both landed): the original
+    # contract here expected the next-frontier to be the Class-B
+    # priority-port lane (``priority_player`` STATE_EQ at a
+    # DECLARE_ATTACKERS window). Class-B has ALSO landed in main
+    # (cycle-37 merge #2), so the priority-port axis is CLOSED too,
+    # and the bake-in now runs PAST what would have been the Class-B
+    # trip and surfaces a NEW life-total STATE_EQ at step ~356:
+    # ``('life_p0', 17, 20)`` — a 3-life delta that ONLY shows up
+    # when BOTH the warp-EXILE closure (this lane) AND the
+    # priority-port closure stack (the random walk reaches a new
+    # code path that neither lane alone reveals). This is a genuine
+    # cross-lane surfaced axis, NOT a regression of either lane's
+    # closure contract: the warp-creature-on-stack window proof (1)
+    # and the past-step-200 closure-progress proof (2) both hold.
     assert raised is not None, (
-        "NEXT-FRONTIER GUARD: Class B is OPEN (sibling lane "
-        "feature/g7-classb-engine) so the run MUST still trip "
-        "somewhere downstream of the warp-exile closure. A clean "
-        "to-terminal run on arch1/s1 would mean Class B was closed "
-        "elsewhere (great, but flip this assertion to the closed "
-        "contract) OR an axis was silently masked (bad — the S6 "
-        "discipline forbids it)."
+        "NEXT-FRONTIER GUARD: the cross-lane life-total axis is OPEN "
+        "(surfaced at merge-time, post-Class-B+Class-C closures) so "
+        "the run MUST still trip somewhere downstream of the "
+        "warp-exile closure. A clean to-terminal run on arch1/s1 "
+        "would mean the surfaced life-total axis was closed elsewhere "
+        "(re-characterize this pin to the new next-frontier) OR an "
+        "axis was silently masked (bad — the S6 discipline forbids "
+        "it)."
     )
     assert raised.tripwire == "STATE_EQ", (
-        f"expected the Class-B priority-port STATE_EQ next-frontier "
-        f"shape, got {raised.tripwire}: {str(raised)[:300]!r}"
+        f"expected the merge-surfaced life-total STATE_EQ "
+        f"next-frontier shape, got {raised.tripwire}: "
+        f"{str(raised)[:300]!r}"
     )
     msg = str(raised)
 
-    # (4) The surfaced divergence is the Class-B priority-port
-    # frontier — the dominant 138/300 lane (sibling-owned, NOT this
-    # lane). Pin its known shape so a future regression can't drift
-    # to a different unexpected axis.
-    assert "priority_player" in msg, (
+    # (4) The surfaced divergence is the merge-time life-total axis
+    # (cycle-37 serial-merge-pipeline cross-lane surface). Pin its
+    # known shape so a future regression can't drift to a different
+    # unexpected axis.
+    assert "life_p0" in msg, (
         f"NEXT-FRONTIER SHAPE GUARD: the surfaced divergence must "
-        f"be the Class-B priority-port lane (priority_player "
-        f"STATE_EQ at a DECLARE_ATTACKERS window). Got: "
-        f"{msg[:400]!r}"
+        f"be the merge-time cross-lane life-total axis "
+        f"('life_p0' STATE_EQ). Got: {msg[:400]!r}"
     )
 
     # (5) REGRESSION GUARDS — the surfaced shape must NOT be the
@@ -429,10 +445,19 @@ def test_g7_classc_warpexile_delayed_trigger_root_cause_closed_then_next_frontie
         f"atomic-cast hand_p0 axis must NOT appear. Got: "
         f"{msg[:400]!r}"
     )
-    # (6) Priority_player is the diverging field — pin the specific
+    # Closed-axis regression guard: the priority_player axis (the
+    # cycle-37 Class-B closure) must NOT reappear as the surfaced
+    # field — if it does, the Class-B closure regressed.
+    assert "priority_player" not in divs, (
+        f"REGRESSION GUARD (Class-B priority-port closure): "
+        f"priority_player must NOT appear in the compare_fields "
+        f"divergence set (it is CLOSED post-cycle-37 merge #2). "
+        f"Got divs.keys()={list(divs.keys())}"
+    )
+    # (6) life_p0 is the diverging field — pin the specific
     # closed-vs-next-frontier shape.
-    assert "priority_player" in divs, (
-        f"NEXT-FRONTIER FIELD GUARD: priority_player must be in the "
+    assert "life_p0" in divs, (
+        f"NEXT-FRONTIER FIELD GUARD: life_p0 must be in the "
         f"compare_fields divergence set. Got divs.keys()={list(divs.keys())}"
     )
 
@@ -1023,10 +1048,27 @@ def test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier():
     )
 
     # arch7/s0: Class-D Radiant-Strike Sequence-target axis CLOSED at
-    # its old step-453 boundary → next = the already-tracked Class-C
-    # warp-EXILE STATE_EQ @700 (Knight Luminary on Rust exile_p1).
+    # its old step-453 boundary.
+    #
+    # RE-CHARACTERIZED at merge-time (cycle-37 serial-merge pipeline):
+    # the original pin expected the next-frontier to be the
+    # already-tracked Class-C warp-EXILE STATE_EQ @700
+    # ('exile_p1', ...) — Knight Luminary on Rust's exile_p1 vs the
+    # battlefield on Python. Class-C delayed-trigger port has now
+    # ALSO landed in main (cycle-37 merge #3), so the warp-EXILE axis
+    # is CLOSED on arch7/s0 too; the bake-in runs PAST step 700 and
+    # surfaces at step 757 on the SAME G1 stateless-Rust
+    # ``attack=False`` re-emission LEGAL_SET_EQ axis the Class-B
+    # canonical arch5/s0 surfaces at step 369:
+    # ``LEGAL_SET_EQ rust\py=["('attacker', 120, False)",
+    # "('attacker', 120, True)"] py\rust=["('pass',)"]``. The
+    # attacker is the same Knight Luminary that was on Rust exile_p1
+    # at the old @700 pin (obj id 120), but the new divergence shape
+    # is the unrelated G1 attacker-decision axis (B3-S3
+    # provider-accumulation port; sibling lane the cycle-37 Class-B
+    # row at @369 surfaces).
     arch, seed, old_boundary, exp_step, kind, needle = (
-        7, 0, 453, 700, "STATE_EQ", "('exile_p1'"
+        7, 0, 453, 757, "LEGAL_SET_EQ", "('attacker', 120, False)"
     )
     names = trajectory.load_production_deck(archetype=arch)
     spec = trajectory.production_deck_to_deckspec(
@@ -1097,7 +1139,8 @@ def test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier():
     )
     assert needle in str(raised), (
         f"arch{arch}/s{seed}: the surfaced {kind} must be PRECISELY "
-        f"the characterized Class-C warp-EXILE {needle!r}. Got: "
+        f"the characterized G1 attacker-decision re-emission "
+        f"{needle!r} (cycle-37 cross-lane next-frontier). Got: "
         f"{str(raised)[:300]!r}."
     )
 
