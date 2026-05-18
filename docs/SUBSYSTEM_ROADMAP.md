@@ -1554,6 +1554,72 @@ second:
    >     baseline-rot ~30 byte-identical on clean main
    >     (pre-existing, NOT introduced, outside the 4-file gate;
    >     todo filed, non-blocking).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 26 —
+   >   S5 spell-stack-source-zone re-homing SCOPED: verdict =
+   >   option (B) irreducibly-ATOMIC core S5a + thin verify
+   >   S5b/S5c; @ `c6cbb5bc`, DOCS-ONLY, counts UNCHANGED,
+   >   parity 307/475 / PROBED 106 UNCHANGED).**
+   >   - **S5 scoping/design lane (`c6cbb5bc`, docs-only — no
+   >     `rust/src`, no `.pyd` rebuild, no residue cadence, cron
+   >     exit-0):** new owner doc
+   >     `docs/RUST_SPELL_STACK_SOURCE_ZONE_DESIGN.md`.
+   >   - **Architectural crux (verify-first, file:line):**
+   >     Python's `StackItem` OWNS the card by reference
+   >     (`actions.py:1759-1767`; `hand.remove` :1403;
+   >     `card.zone=Zone.STACK` :1751; resolve `card=item.source`
+   >     :2708 — no zone lookup); Rust's `StackItem` carries only
+   >     `source_obj_id` (`state.rs:648-694`) and EVERY
+   >     resolve-time source op finds it by id WALKING the 4
+   >     Player zone Vecs (`state_ops_resolve.rs:205-332`); NO
+   >     stack-object store (ZONE_STACK is dead_code). 7 surfaces
+   >     all read the ONE hand-residency invariant — no
+   >     sub-ordering leaves an intermediate both byte-equal to
+   >     Python AND baseline-unmoved → **core is irreducibly
+   >     ATOMIC = S5a** (+ thin independent S5b codec/determinizer
+   >     verify, S5c cleanup/SL-flip).
+   >   - **Recommended Option β:** add a `ZONE_STACK` stack-object
+   >     store, keep `StackItem` id-only, extend ONLY the 3
+   >     source-resolution walks (minimizes serialization blast
+   >     radius; preserves S2's proven-byte-equal
+   >     `move_source_post_resolve` shape).
+   >   - **⚠⚠ S5a WILL DELIBERATELY MOVE THE 4-FILE 1532 BASELINE
+   >     — the FIRST baseline move in the entire G7 campaign**
+   >     (every prior slice kept 1532 UNMOVED as the
+   >     parity-neutrality proof). Per design §5.3 BASELINE-REBASE
+   >     PROTOCOL: ANNOUNCED, single-commit,
+   >     new-code-is-right-justified, EXACTLY the
+   >     hand_p0/fingerprint reconciliation (every changed test =
+   >     a byte that now correctly matches Python; NOTHING else
+   >     moves); the orchestrator INDEPENDENTLY verifies the delta
+   >     is precisely that (verify-don't-assume — the single
+   >     riskiest merge of the campaign; prominently flagged to
+   >     the user, driven autonomously per the standing ops mode).
+   >   - **S5a is the HARD PREREQUISITE for S7** — CE5 masks the
+   >     hand-residency window by draining both stacks
+   >     pre-compare; S7 can only DELETE CE5 once S5a makes both
+   >     engines 'spell on stack, not in hand' at every per-apply
+   >     compare so CE5's drain is a true no-op.
+   >   - Determinizer + codec-slot + v1/v2-action-encoding
+   >     concerns all fixed FOR FREE by the single hand-membership
+   >     correction (NOT separate slices — why the core is atomic
+   >     + high value); **NOT a v-chain break, NO retraining**
+   >     (corrects WHICH cards are in the hand list, not the
+   >     v1-vs-v2 ordering within it). Magnitude ~3-5 cycles
+   >     (S5a 2-3 + S5b 1 + S5c 0-1); HIGH-blast-radius/
+   >     atomic-core, mitigated by the rebase protocol.
+   >   - **NEXT = dispatch S5a** (the irreducibly-atomic Option-β
+   >     lane) with the rigorous baseline-rebase protocol +
+   >     honest-stop if the delta is not exactly the
+   >     reconciliation → S5b/S5c verify → S5 triggers-verify →
+   >     S6 bake-in scale verify → **S7 CE5 removal LAST** →
+   >     CE5-FREE re-proof + fresh CE5-FREE C4 clean (also the
+   >     definitive fully-unmasked B1 LEGAL_SET_EQ confirmation)
+   >     → ORCHESTRATOR+USER go/no-go on the atomic SoT-flip
+   >     (B3-S5). Flip NO-GO until all hold.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned); `tests_rust/`
+   >     baseline-rot ~30 (pre-existing, outside the 4-file gate,
+   >     todo filed, non-blocking).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

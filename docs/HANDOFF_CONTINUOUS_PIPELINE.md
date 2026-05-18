@@ -138,54 +138,8 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 25, @ `4c8bd33c` — READ FIRST.**
-> **G7 S1..S4 DONE + the mid-game-STATE_EQ DIAGNOSTIC lane
-> found+fixed a GENUINE Rust ENGINE BUG (`4c8bd33c`, real Rust,
-> state_ops_cast.rs ONLY).** Diagnosis = class (c) engine bug,
-> NOT a harness artifact: the 3 stack-push cast primitives paid
-> STRICTLY from the floating mana pool while the legal emitter
-> permissively counts pool + auto-tappable lands (mirroring
-> Python `can_pay_cost`); Python `_cast_spell` pays via
-> `auto_tap_for_cost`. So an ordinary production cast (`{2}{G}`
-> with 1 floating + 2 untapped Forests) was emitted-legal then
-> **silently dropped** on apply. **It reproduces under
-> `cross_engine.step_both` too — the 4-file gate stayed green
-> ONLY because its scenarios pre-populate the Rust pool, so the
-> role-swapped scaled bake-in caught a real engine bug the 4-file
-> gate STRUCTURALLY COULD NOT** (concrete validation of the
-> CE5-free-at-scale requirement). Fixed by `auto_tap_pay_for_cost`
-> (byte-mirror of Python `auto_tap_for_cost`, plan-then-commit so
-> an unpayable over-emit still bails honest). Orchestrator
-> independently verified: the cast now succeeds byte-perfectly,
-> divergence collapses **4 fields → 1** (`hand_p0` only;
-> mana/battlefield/stack MATCH); deterministic 7/7. Shared `.pyd`
-> rebuilt on main; 4-file **1534 = 1532 core UNMOVED + 2 S4
-> probes** (deselect-verified); state_ops-only (no residue
-> cadence); counts UNCHANGED; cron exit-0; CE5 + the pop-only G3
-> composer untouched. **HONEST (no overclaim): the bake-in step
-> did NOT advance — it trips at the SAME step 273/322, NARROWED
-> to the single residual `hand_p0`** = the documented S1/S4
-> spell-stack-source-zone invariant (Rust keeps the cast spell
-> in the hand Vec for `take_source` at resolve; Python removes
-> it + `zone=STACK`). Agent honest-stopped (NOT papered):
-> re-homing it is HIGH-BLAST-RADIUS (`take_source`/
-> `move_source_post_resolve` + hand-snapshot codec slot source +
-> determinizer + the 4-file field view + 3 legal-emit sites);
-> with it resolved the games run 273→281/322→344 then hit a
-> C1/S3-region LEGAL_SET_EQ (a further frontier behind it).
-> Pinned + `G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` + SL note.
-> Distinct co-blockers still open: **S4b** (non-creature-perm
-> routing + aura-attach), **warp-legal-EMISSION** (pre-existing
-> C1-warp over-emission). NET flip NO-GO list = **"the S1/S4
-> spell-stack-source-zone re-homing + S5..S7 + S4b +
-> warp-EMISSION + CE5-FREE C4"** (the auto-tap engine bug is
-> CLOSED). NEXT = a verify-first SCOPING/design-refinement lane
-> for the high-blast-radius S1/S4 spell-stack-source-zone
-> re-homing (produce a precise sub-design + honest-stop if too
-> large for one safe slice — do NOT force a sprawling risky
-> change). CARRY-FORWARD: `tests_rust/` baseline-rot ~30
-> byte-identical on clean main (pre-existing, NOT introduced,
-> outside the 4-file gate; todo filed, non-blocking). G3 fork
+> **⚠ SoT-FLIP PATH — cycle 26, @ `c6cbb5bc` — READ FIRST.**
+> **G7 S1..S4 + the auto-tap engine-bug fix DONE. The S5 spell-stack-source-zone re-homing is now SCOPED (`c6cbb5bc`, DOCS-ONLY; owner doc `docs/RUST_SPELL_STACK_SOURCE_ZONE_DESIGN.md`).** Verdict = option (B) NOT cleanly sliceable: the 7 dependent surfaces all read ONE hand-residency invariant (Python's `StackItem` owns the card by ref, card leaves hand + `zone=STACK`; Rust's `StackItem` is id-only + finds the source by walking the 4 player-zone Vecs — no stack-object store) so the core is **irreducibly ATOMIC = S5a** (+ thin verify S5b/S5c). Recommended **Option β**: add a `ZONE_STACK` object store, keep `StackItem` id-only, extend only the 3 source-resolution walks (minimizes serialization blast radius; preserves S2's proven-byte-equal `move_source_post_resolve`). **⚠⚠ S5a WILL DELIBERATELY MOVE THE 4-FILE 1532 BASELINE — the FIRST baseline move in the whole G7 campaign** (every prior slice kept 1532 UNMOVED as the parity-neutrality proof). Per the design's §5.3 BASELINE-REBASE PROTOCOL it must be ANNOUNCED, single-commit, new-code-is-right-justified, and EXACTLY the hand_p0/fingerprint reconciliation (every changed test = a byte that now correctly matches Python; NOTHING else moves); the orchestrator INDEPENDENTLY verifies the delta is precisely that (verify-don't-assume — the single riskiest merge of the campaign; prominently flagged to the user, driven autonomously per the standing ops mode). **S5a is the HARD PREREQUISITE for S7** (CE5 masks the hand-residency window; S7 can only DELETE CE5 once S5a makes both engines 'spell on stack, not in hand' so CE5's drain is a true no-op). Determinizer + codec-slot + v1/v2 concerns all fixed FOR FREE by the single hand-membership correction — **NOT a v-chain break, NO retraining**. Magnitude ~3-5 cycles; HIGH-blast-radius/atomic-core, mitigated by the rebase protocol. NEXT = dispatch S5a (the irreducibly-atomic Option-β lane) with the rigorous baseline-rebase protocol + honest-stop if the delta is not exactly the reconciliation → S5b/S5c verify → S5 triggers-verify → S6 → **S7 CE5 removal LAST** → CE5-FREE re-proof + fresh CE5-FREE C4 = the final flip gate; S4b + warp-EMISSION close in parallel/before the final C4. CARRY-FORWARD: `tests_rust/` baseline-rot ~30 (pre-existing, outside the 4-file gate, todo filed, non-blocking). G3 fork
 > RESOLVED (Rust implements the stack; fully autonomous);
 > `docs/RUST_STACK_RESOLUTION_DESIGN.md` is the canonical G7
 > owner.**
