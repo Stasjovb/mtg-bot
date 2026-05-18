@@ -1,0 +1,347 @@
+{
+  "round": 77,
+  "date": "2026-05-18",
+  "description": "Round-77 post-R76-fixes RE-SWEEP VALIDATION \u2014 identical round-76 360-game/5-disjoint-band/5-seed-offset grid on the c2c9c624 shared .pyd (R76-1 6dc57fc4 + R76-2 fee2e5fc both fixed). scripts/scout_r74_run_sweep.py + scripts/bench_trajectory_parity.py run UNMODIFIED.",
+  "build_pyd_commit": "c2c9c624 (last rust-touching ancestor 6a1b5f29; zero rust commits between 6a1b5f29 and c2c9c624; R76-1/R76-2 both ancestors)",
+  "before_round76": {
+    "total_games": 360,
+    "passes": 340,
+    "fail_divergence": 20,
+    "fail_timeout": 0,
+    "archetype_filtered": 0,
+    "fail_exception": 0,
+    "divergence_shapes": {
+      "cast_spell::battlefield": 18,
+      "cast_spell::graveyard_p1": 2
+    }
+  },
+  "after_round77": {
+    "total_games": 360,
+    "passes": 358,
+    "fail_divergence": 2,
+    "fail_timeout": 0,
+    "archetype_filtered": 0,
+    "fail_exception": 0,
+    "divergence_shapes": {
+      "cast_spell::graveyard_p1": 2
+    },
+    "wall_seconds": 1628.5
+  },
+  "delta": {
+    "passes": "+18",
+    "fail_divergence": "-18",
+    "cast_spell::battlefield": "-18 (R76-1+R76-2 resolved)",
+    "cast_spell::graveyard_p1": "0 (CFI-1, already-tracked, NOT re-filed)"
+  },
+  "round76_residual_disposition": [
+    {
+      "archetype": 216,
+      "seed": 2,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 32,
+        "action": 69,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 815,
+      "seed": 2,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 15,
+        "action": 34,
+        "fields": [
+          "graveyard_p1"
+        ]
+      },
+      "r77_status": "FAIL_DIVERGENCE",
+      "flipped_to_pass": false
+    },
+    {
+      "archetype": 1126,
+      "seed": 2,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 14,
+        "action": 29,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 28379,
+      "seed": 3,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 40,
+        "action": 83,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 28379,
+      "seed": 4,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 16,
+        "action": 34,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 28711,
+      "seed": 5,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 27,
+        "action": 55,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 52021,
+      "seed": 7,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 15,
+        "action": 33,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 52463,
+      "seed": 6,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 42,
+        "action": 88,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 54024,
+      "seed": 7,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 15,
+        "action": 32,
+        "fields": [
+          "graveyard_p1"
+        ]
+      },
+      "r77_status": "FAIL_DIVERGENCE",
+      "flipped_to_pass": false
+    },
+    {
+      "archetype": 78097,
+      "seed": 9,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 10,
+        "action": 21,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 78097,
+      "seed": 11,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 27,
+        "action": 54,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 78128,
+      "seed": 10,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 49,
+        "action": 103,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 78213,
+      "seed": 9,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 51,
+        "action": 105,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 78213,
+      "seed": 11,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 54,
+        "action": 111,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 78339,
+      "seed": 9,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 10,
+        "action": 22,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 78475,
+      "seed": 11,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 12,
+        "action": 25,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 79920,
+      "seed": 11,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 27,
+        "action": 54,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 104676,
+      "seed": 12,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 21,
+        "action": 43,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 104676,
+      "seed": 14,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 28,
+        "action": 56,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    },
+    {
+      "archetype": 105548,
+      "seed": 14,
+      "r76": {
+        "status": "FAIL_DIVERGENCE",
+        "turn": 39,
+        "action": 83,
+        "fields": [
+          "battlefield"
+        ]
+      },
+      "r77_status": "PASS",
+      "flipped_to_pass": true
+    }
+  ],
+  "regressions_pass_to_fail": [],
+  "round77_residual_fails": [
+    {
+      "archetype": 815,
+      "seed": 2,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 15,
+      "action": 34,
+      "fields": [
+        "graveyard_p1"
+      ],
+      "attribution": "CFI-1 (already-tracked Rust-side stray obj.counters=0 in a hand-rolled destroy arm; byte-identical to round-76; NOT re-filed per campaign directive)"
+    },
+    {
+      "archetype": 54024,
+      "seed": 7,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 15,
+      "action": 32,
+      "fields": [
+        "graveyard_p1"
+      ],
+      "attribution": "CFI-1 (already-tracked Rust-side stray obj.counters=0 in a hand-rolled destroy arm; byte-identical to round-76; NOT re-filed per campaign directive)"
+    }
+  ],
+  "canonical_repro_flips": {
+    "R76-1 arch1126 s2": "FAIL_DIVERGENCE(t14 a29 battlefield) -> PASS",
+    "R76-2 arch52021 s7": "FAIL_DIVERGENCE(t15 a33 battlefield) -> PASS"
+  }
+}

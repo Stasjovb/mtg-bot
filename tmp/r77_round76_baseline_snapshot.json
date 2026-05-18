@@ -1,0 +1,497 @@
+{
+  "round": "76",
+  "bands": {
+    "lo": {
+      "summary": {
+        "total_games": 66,
+        "passes": 63,
+        "fail_divergence": 3,
+        "divergence_shape_histogram": {
+          "cast_spell::battlefield": 2,
+          "cast_spell::graveyard_p1": 1
+        }
+      },
+      "fails": [
+        {
+          "archetype": 216,
+          "seed": 2,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 32,
+          "action": 69,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 815,
+          "seed": 2,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 15,
+          "action": 34,
+          "fields": [
+            "graveyard_p1"
+          ]
+        },
+        {
+          "archetype": 1126,
+          "seed": 2,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 14,
+          "action": 29,
+          "fields": [
+            "battlefield"
+          ]
+        }
+      ]
+    },
+    "mid1": {
+      "summary": {
+        "total_games": 75,
+        "passes": 72,
+        "fail_divergence": 3,
+        "divergence_shape_histogram": {
+          "cast_spell::battlefield": 3
+        }
+      },
+      "fails": [
+        {
+          "archetype": 28379,
+          "seed": 3,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 40,
+          "action": 83,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 28379,
+          "seed": 4,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 16,
+          "action": 34,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 28711,
+          "seed": 5,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 27,
+          "action": 55,
+          "fields": [
+            "battlefield"
+          ]
+        }
+      ]
+    },
+    "mid2": {
+      "summary": {
+        "total_games": 66,
+        "passes": 63,
+        "fail_divergence": 3,
+        "divergence_shape_histogram": {
+          "cast_spell::battlefield": 2,
+          "cast_spell::graveyard_p1": 1
+        }
+      },
+      "fails": [
+        {
+          "archetype": 52021,
+          "seed": 7,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 15,
+          "action": 33,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 52463,
+          "seed": 6,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 42,
+          "action": 88,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 54024,
+          "seed": 7,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 15,
+          "action": 32,
+          "fields": [
+            "graveyard_p1"
+          ]
+        }
+      ]
+    },
+    "mid3": {
+      "summary": {
+        "total_games": 72,
+        "passes": 64,
+        "fail_divergence": 8,
+        "divergence_shape_histogram": {
+          "cast_spell::battlefield": 8
+        }
+      },
+      "fails": [
+        {
+          "archetype": 78097,
+          "seed": 9,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 10,
+          "action": 21,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 78097,
+          "seed": 11,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 27,
+          "action": 54,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 78128,
+          "seed": 10,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 49,
+          "action": 103,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 78213,
+          "seed": 9,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 51,
+          "action": 105,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 78213,
+          "seed": 11,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 54,
+          "action": 111,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 78339,
+          "seed": 9,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 10,
+          "action": 22,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 78475,
+          "seed": 11,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 12,
+          "action": 25,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 79920,
+          "seed": 11,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 27,
+          "action": 54,
+          "fields": [
+            "battlefield"
+          ]
+        }
+      ]
+    },
+    "hi": {
+      "summary": {
+        "total_games": 81,
+        "passes": 78,
+        "fail_divergence": 3,
+        "divergence_shape_histogram": {
+          "cast_spell::battlefield": 3
+        }
+      },
+      "fails": [
+        {
+          "archetype": 104676,
+          "seed": 12,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 21,
+          "action": 43,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 104676,
+          "seed": 14,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 28,
+          "action": 56,
+          "fields": [
+            "battlefield"
+          ]
+        },
+        {
+          "archetype": 105548,
+          "seed": 14,
+          "status": "FAIL_DIVERGENCE",
+          "turn": 39,
+          "action": 83,
+          "fields": [
+            "battlefield"
+          ]
+        }
+      ]
+    }
+  },
+  "aggregate": {
+    "total_games": 360,
+    "passes": 340,
+    "fail_divergence": 20,
+    "fail_timeout": 0,
+    "archetype_filtered": 0,
+    "fail_exception": 0
+  },
+  "all_fails": [
+    {
+      "band": "lo",
+      "archetype": 216,
+      "seed": 2,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 32,
+      "action": 69,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "lo",
+      "archetype": 815,
+      "seed": 2,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 15,
+      "action": 34,
+      "fields": [
+        "graveyard_p1"
+      ]
+    },
+    {
+      "band": "lo",
+      "archetype": 1126,
+      "seed": 2,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 14,
+      "action": 29,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid1",
+      "archetype": 28379,
+      "seed": 3,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 40,
+      "action": 83,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid1",
+      "archetype": 28379,
+      "seed": 4,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 16,
+      "action": 34,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid1",
+      "archetype": 28711,
+      "seed": 5,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 27,
+      "action": 55,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid2",
+      "archetype": 52021,
+      "seed": 7,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 15,
+      "action": 33,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid2",
+      "archetype": 52463,
+      "seed": 6,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 42,
+      "action": 88,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid2",
+      "archetype": 54024,
+      "seed": 7,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 15,
+      "action": 32,
+      "fields": [
+        "graveyard_p1"
+      ]
+    },
+    {
+      "band": "mid3",
+      "archetype": 78097,
+      "seed": 9,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 10,
+      "action": 21,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid3",
+      "archetype": 78097,
+      "seed": 11,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 27,
+      "action": 54,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid3",
+      "archetype": 78128,
+      "seed": 10,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 49,
+      "action": 103,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid3",
+      "archetype": 78213,
+      "seed": 9,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 51,
+      "action": 105,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid3",
+      "archetype": 78213,
+      "seed": 11,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 54,
+      "action": 111,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid3",
+      "archetype": 78339,
+      "seed": 9,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 10,
+      "action": 22,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid3",
+      "archetype": 78475,
+      "seed": 11,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 12,
+      "action": 25,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "mid3",
+      "archetype": 79920,
+      "seed": 11,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 27,
+      "action": 54,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "hi",
+      "archetype": 104676,
+      "seed": 12,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 21,
+      "action": 43,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "hi",
+      "archetype": 104676,
+      "seed": 14,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 28,
+      "action": 56,
+      "fields": [
+        "battlefield"
+      ]
+    },
+    {
+      "band": "hi",
+      "archetype": 105548,
+      "seed": 14,
+      "status": "FAIL_DIVERGENCE",
+      "turn": 39,
+      "action": 83,
+      "fields": [
+        "battlefield"
+      ]
+    }
+  ]
+}

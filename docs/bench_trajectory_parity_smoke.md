@@ -4566,3 +4566,229 @@ the R74-2 `f456ec20` shape transplanted to this arm (+ audit the
 other hand-rolled destroy arms incl. Seedship Impact's destroy-half
 clone). Repro `--archetype 52021 --seed 7`. CFI-1 (the 2
 `graveyard_p1`) already owned — NOT re-filed.
+
+## Round 77 (2026-05-18) — the post-R76-fixes round-76 RE-SWEEP VALIDATION: identical 360-game / 5-disjoint-band / 5-seed-offset grid on the `c2c9c624` `.pyd` (R76-1 + R76-2 BOTH Rust-fixed). **340 PASS / 20 FAIL_DIVERGENCE → 358 PASS / 2 FAIL_DIVERGENCE (−18, 90% of the residual resolved at scale)**; **ALL 18 round-76 `cast_spell::battlefield` residuals flip FAIL_DIVERGENCE → PASS** (the R76-1 + R76-2 fixes resolved them); the 2 remaining are **100% the already-tracked CFI-1** `cast_spell::graveyard_p1` (byte-identical to round-76 — same arch/seed/turn/action/object/counter-values), **NOT re-filed** per the campaign directive; **0 NEW divergence, 0 regression, 0 untriaged, 0 FAIL_TIMEOUT/FILT/EXC**
+
+This is the genuine post-fix validation the round-76 entry carried
+forward (NOT confirmation-padding): it verifies the two NEW Rust-side
+divergences round-76 isolated underneath the R74-2 fix are actually
+resolved **at scale** and surfaces any residual or newly-unmasked
+divergence. Context: both round-76 root causes are now fixed on
+`main` — **R76-1** (`6dc57fc4`, a monotonic `next_object_id` counter
+on the Rust `GameState`; token-mint sites no longer reuse a ceased
+object's id, byte-equal with Python's `GameState.new_object`, CR
+111.7) and **R76-2** (`fee2e5fc`,
+`Effect::DestroyTargetArtifactOrTappedCreature` [Radiant Strike] +
+the Seedship Impact destroy-half clone now fire the DIES-triggered
+ability byte-equal with the Python SoT). Both are ancestors of the
+resync `c2c9c624` (HEAD). The earlier round-74 trio (R74-1
+`c3cd126f` / R74-2 `f456ec20` / R74-3 `e4d4a50e`) and CFI-1's
+Depressurize-arm instance (`8a2a8d84`) were resolved before round-76.
+
+### Re-sweep design — IDENTICAL to round-74/76 (the same orchestration wrapper, byte-for-byte comparable)
+
+Re-ran `scripts/scout_r74_run_sweep.py` **UNMODIFIED** (the round-74
+wrapper that closed the `tests`-import gap making the spell-cast
+path reachable; `scripts/bench_trajectory_parity.py` round-72
+gate-pinned, run UNMODIFIED) against the `c2c9c624` shared
+`.venv-py313` `.pyd`. Same 5 disjoint full-pool index bands × 5
+disjoint seed-offset triples × cap-120 × `attack_all` × mulligans
+off × the bench-admitted spell set — the **exact round-76
+coverage**, so the before→after delta is confound-free (same
+archetypes, same seeds, same driver; only the `.pyd` advanced from
+the round-76 `fc430262` build to `c2c9c624`). **`.pyd`-build
+provenance verified:** the shared `.pyd` (LastWriteTimeUtc
+2026-05-18 05:28:12) was built after the last rust-touching commit
+reachable from `c2c9c624` (`6a1b5f29`, 2026-05-17 22:03 PDT) and
+there are **zero** rust-touching commits between `6a1b5f29` and
+`c2c9c624` (and zero between `c2c9c624` and `main` HEAD); R76-1
+`6dc57fc4` + R76-2 `fee2e5fc` are both earlier ancestors of
+`6a1b5f29`. The shared `.pyd` therefore faithfully carries the
+`c2c9c624` Rust source including BOTH R76 fixes. Run from a fresh
+worktree off `main`@`c2c9c624` with a per-worktree isolated
+`.venv-py313` (Python 3.13.13) whose `mtg_bot_engine` is a
+**read-only copy** of the shared canonical `.pyd` (consumed, never
+rebuilt) and whose `mtg_bot` resolves to the worktree's pure-Python
+source.
+
+| Band | Index window | Seeds | Games | R76 PASS | R76 DIV | **R77 PASS** | **R77 DIV** |
+|---|---|---|---:|---:|---:|---:|---:|
+| lo | [0, 26000) | 0-2 | 66 | 63 | 3 | **65** | **1** |
+| mid1 | [26000, 52000) | 3-5 | 75 | 72 | 3 | **75** | **0** |
+| mid2 | [52000, 78000) | 6-8 | 66 | 63 | 3 | **65** | **1** |
+| mid3 | [78000, 104000) | 9-11 | 72 | 64 | 8 | **72** | **0** |
+| hi | [104000, 130000) | 12-14 | 81 | 78 | 3 | **81** | **0** |
+| **Total** | full pool, 5 disjoint windows | 5 offsets | **360** | **340** | **20** | **358** | **2** |
+
+JSONs `tmp/bench_r74_{lo,mid1,mid2,mid3,hi}.json` +
+`tmp/bench_r74_rollup.json` regenerated (the
+round-64/68/70/71/74/75/76 `tmp/bench_*` tracked-round-evidence
+precedent — they overwrite the round-76 evidence) + a discrete
+round-77 before→after artifact `tmp/bench_r77_resweep.json` and the
+preserved round-76 baseline `tmp/r77_round76_baseline_snapshot.json`
+(so the per-game disposition is committed, not just derivable).
+Wall 1628.5 s. **0 / 360 FAIL_TIMEOUT / 0 ARCHETYPE_FILTERED / 0
+FAIL_EXCEPTION** — the round-72 cap-120 default continues to fully
+recover the deck-out tail on the post-spell-admit pool.
+
+### Before → after
+
+| Metric | Round-76 baseline (`fc430262`) | Round-77 re-sweep (`c2c9c624`, R76-1+R76-2 fixed) | Δ |
+|---|---:|---:|---:|
+| total games | 360 | 360 | 0 |
+| **PASS** | **340** | **358** | **+18** |
+| **FAIL_DIVERGENCE** | **20** | **2** | **−18 (90% of residual resolved)** |
+| FAIL_TIMEOUT / FILT / EXC | 0 / 0 / 0 | 0 / 0 / 0 | 0 |
+| `cast_spell::battlefield` | 18 | **0** | **−18** |
+| `cast_spell::graveyard_p1` (CFI-1) | 2 | 2 | 0 |
+
+### The residual-resolved verdict — the 2 fixes resolved the round-76 `battlefield` residual at scale (expected ~18 → 0)
+
+**ALL 18 round-76 `cast_spell::battlefield` divergences are GONE
+(18 → 0).** Those were the entire R76-1 (Rust non-monotonic
+token-id reuse) + R76-2 (Rust Radiant Strike
+`DestroyTargetArtifactOrTappedCreature` DIES-trigger drop) bucket —
+every one is now PASS. Per-game disposition of the **20 round-76
+residuals** (`tmp/r77_round76_baseline_snapshot.json` vs the
+regenerated `tmp/bench_r74_*.json`): **18/18 `battlefield` games
+flip FAIL_DIVERGENCE → PASS**; the 2 `graveyard_p1` (CFI-1) games
+stay FAIL at the **byte-identical** turn/action/field. The two
+round-76 **canonical minimal repros**, re-run on the `c2c9c624`
+`.pyd`, **both flip FAIL_DIVERGENCE → PASS**:
+
+| Repro | Round-76 shape | Round-77 on `c2c9c624` | Resolved by |
+|---|---|---|---|
+| `--archetype 1126 --seed 2` (R76-1) | `cast_spell::battlefield` (t14 a29) | **PASS** | `6dc57fc4` (monotonic `next_object_id`) |
+| `--archetype 52021 --seed 7` (R76-2) | `cast_spell::battlefield` (t15 a33) | **PASS** | `fee2e5fc` (Radiant Strike DIES-trigger) |
+
+Every secondary round-76 repro also flips (verified individually
+via the round-76 tracer **and** at scale in the sweep): **R76-1** —
+arch 1126 s2, 52463 s6, 78213 s9 → PASS; **R76-2** — arch 52021 s7,
+28711 s5, 28379 s4, 78097 s9, 104676 s12 → PASS. Plus the other
+round-76 `battlefield` residuals (arch 216 s2, 28379 s3/s4, 78097
+s11, 78128 s10, 78213 s11, 78339 s9, 78475 s11, 79920 s11, 104676
+s14, 105548 s14) all flip → PASS.
+
+**Verdict: YES — the 2 fixes resolved the round-76 `battlefield`
+residual at scale.** 20 → 2 is the expected "~18 → 0 for R76-1+R76-2"
+plus the residual that is **100% NOT R76-1/R76-2** (verified below).
+The 18-game swing is all in the correct FAIL→PASS direction; **0
+games regressed PASS→FAIL**, **0 new untriaged shapes**, per-band
+game counts byte-identical to round-76 (66/75/66/72/81 = 360 — no
+game became unreachable; only divergent games converged to PASS).
+
+### Residual triage — 1 class (CFI-1, already-tracked), every game attributed, 0 untriaged, 0 NEW
+
+The 2 residuals (`tmp/bench_r74_{lo,mid2}.json`) are **both
+`cast_spell::graveyard_p1`** — the only divergence shape in the
+entire 360-game sweep. Each isolated via the UNMODIFIED round-76
+tracer (`scripts/scout_r76_repro_tracer.py`, read-only diagnostic).
+Python `src/mtg_bot/` is the source of truth and is **correct** in
+both.
+
+| Class (count) | Shape | Side / verdict |
+|---|---|---|
+| **CFI-1** (2: arch 815 s2, arch 54024 s7) | `cast_spell::graveyard_p1`, the destroyed object's net +1/+1 counters field PY≠0 / RST=0 | already-tracked Rust-side, **NOT re-filed** per directive |
+
+> **Why these are the SAME already-tracked CFI-1, not new and not
+> "R76 fix incomplete".** R76-1 and R76-2 ARE fully Rust-fixed —
+> both canonical repros now PASS and the entire `cast_spell::
+> battlefield` bucket is zero. The 2 residual games are
+> **byte-identical to round-76's CFI-1 characterization**: same
+> archetypes (815 s2 / 54024 s7), same divergence turn/action
+> (t15 a34 / t15 a32), same field (`graveyard_p1`), same object ids
+> (Galactic Wayfarer id 72 / Germinating Wurm id 66), same
+> counter-value delta (PY 3 / RST 0 and PY 1 / RST 0). They did not
+> "start failing" and they are not a new bug — they are the
+> already-tracked CFI-1 stray `obj.counters = 0;` in a hand-rolled
+> destroy arm, which round-76 already surfaced standalone (it was
+> only ever a co-occurrence component before R74-2's fix). Note the
+> `Effect::DepressurizeEffect` conditional-destroy arm's CFI-1
+> instance is now closed in-tree (`state_ops_resolve.rs` ≈6128-6142
+> documents the removed stray `obj.counters = 0;`); the 2 residual
+> games are killed via a different destroy path (a -X/-X →
+> destroy on a counter'd creature) whose hand-rolled destroy arm
+> still zeroes counters — the SAME CFI-1 class, a still-live sibling
+> site (e.g. the `state_ops_resolve.rs` ≈5297 / ≈5373 hand-rolled
+> destroy arms still carry `obj.counters = 0;`). Already owned by
+> the Rust dispatch / orchestrator resync — per the campaign
+> directive **NOT re-filed**; recorded here as a named, attributed,
+> not-re-filed item.
+
+#### CFI-1 (the 2 `cast_spell::graveyard_p1`) — already-tracked, NOT re-filed
+
+arch 815 s2 (`Galactic Wayfarer` id 72: net counters PY 3 / RST 0)
+and arch 54024 s7 (`Germinating Wurm` id 66: net counters PY 1 /
+RST 0) — each byte-identical except the net-counters field on a
+destroyed object: Python preserves the dead object's net +1/+1
+counters in the graveyard signature (the `turn.move_off_battlefield`
+"counters retained on the dead object" byte-equal contract — the
+established Orbital Plunge-probe-pinned observable), Rust zeroed
+them in a hand-rolled destroy arm. This is the already-tracked
+Rust-side stray `obj.counters = 0;` (the round-74 CFI-1
+co-occurrence component, surfaced standalone since round-76 now that
+R74-2/R76-2 no longer dominate the same games). Per the campaign
+directive **NOT re-filed** — already owned by the Rust dispatch /
+orchestrator resync.
+
+### Verdict
+
+| Claim | Verdict |
+|---|---|
+| The 2 fixes (R76-1 `6dc57fc4` / R76-2 `fee2e5fc`) resolved the round-76 `battlefield` residual at scale (expect ~18 → 0) | **YES.** Identical 360-game / 5-disjoint-band / 5-seed-offset grid on `c2c9c624`: **340 → 358 PASS, 20 → 2 FAIL_DIVERGENCE (−18, 90% of the residual)**. ALL 18 `cast_spell::battlefield` (the entire R76-1+R76-2 bucket) → 0. Both canonical repros (+ every secondary repro) flip FAIL→PASS. 0 PASS→FAIL regressions, per-band game counts byte-identical, 0 new untriaged shapes. |
+| The residual 2 is a residual of R76-1/R76-2 (incomplete fix) | **NO.** Both R76-1/R76-2 canonical repros PASS; the entire `cast_spell::battlefield` bucket is zero. The residual is the **already-tracked CFI-1** (byte-identical to round-76 — same arch/seed/turn/action/object/counter-values), surfaced standalone since round-76, **NOT** caused by an incomplete R76 fix. Plus it is **NOT a new divergence** — 0 NEW shapes in the entire sweep. |
+| Python `src/mtg_bot/` (SoT) is correct | **YES in all.** CFI-1: Python preserves the dead object's net +1/+1 counters (the `turn.move_off_battlefield` byte-equal contract); Rust's hand-rolled destroy arm zeroed them. No Python/SoT churn anywhere. |
+| The round-72 cap-120 holds on the post-spell-admit pool at the deeper game reach | **YES — 0/360 FAIL_TIMEOUT/FILT/EXC.** |
+
+### Scope / non-changes
+
+Pure docs (this entry) + the regenerated tracked round-evidence
+JSONs (`tmp/bench_r74_{lo,mid1,mid2,mid3,hi}.json` +
+`tmp/bench_r74_rollup.json`, the round-64/68/70/71/74/75/76
+`tmp/bench_*` precedent — they overwrite the round-76 evidence) + 2
+new committed sweep artifacts (`tmp/bench_r77_resweep.json` — the
+discrete before→after + per-game disposition; and
+`tmp/r77_round76_baseline_snapshot.json` — the preserved round-76
+baseline). **`scripts/bench_trajectory_parity.py` (round-72
+gate-pinned), `scripts/scout_r74_run_sweep.py` (the round-74
+wrapper), and `scripts/scout_r76_repro_tracer.py` (the round-76
+read-only tracer) were all run UNMODIFIED** — the re-sweep is the
+same orchestration wrapper round-74/76 used, so the before→after
+delta is confound-free. **No production / harness / `_SAFE_*` /
+Rust / `.pyd` change**; the `rust/src/` inspection was strictly
+read-only (non-Rust agent; this is a pure-Python sweep — R76-1/R76-2
+were FIXED on `main` before this round, NOT here; CFI-1 is a
+Rust-dispatch carry-forward NOT fixed here per the directive; no
+`maturin`, the shared canonical `.pyd` consumed read-only). Did NOT
+touch `docs/SEARCH_LIMITATIONS.md` / `docs/SOT_FLIP_CUTOVER_PLAN.md`
+/ the G7 design docs (the concurrent S5a lane + the orchestrator own
+those — findings reported to the orchestrator for the ledger/SL
+fold) / `docs/POOL_PARITY.md` / `docs/RUST_PARITY_GAPS.md` /
+`scripts/parity_smoke.py`'s `_zone_signature`/`_net_counters` / the
+round-69/72 max-turns pins / the 6 protected
+`test_audit_safe_trigger_*` tests / the concurrent Rust agents'
+surfaces (the G7 S5a slice's `state_ops_resolve.rs` /
+`state_ops_resolve.rs`-family edits — fully isolated: this sweep
+consumed the `c2c9c624` shared `.pyd` via a per-worktree read-only
+copy). The 4-file core gate
+(`test_parity_smoke + test_cross_engine_etb_triggers +
+test_trajectory_parity + test_trajectory`, `--no-cov -n 4`) was run
+as the merge precondition — UNMOVED (nothing executable on the gate
+path moved; the diagnostic scripts are not imported by any test).
+
+**Carry-forward for the Rust dispatch:** **CFI-1** — a still-live
+hand-rolled-destroy-arm stray `obj.counters = 0;`
+(`state_ops_resolve.rs` ≈5297 / ≈5373 sibling arms; the
+`DepressurizeEffect` ≈6128 instance is already closed) zeroes a
+destroyed creature's net +1/+1 counters, diverging from Python's
+`turn.move_off_battlefield` "counters retained on the dead object"
+byte-equal contract. Repros `--archetype 815 --seed 2` (Galactic
+Wayfarer id 72, PY 3 / RST 0) and `--archetype 54024 --seed 7`
+(Germinating Wurm id 66, PY 1 / RST 0). **Already owned — NOT
+re-filed** (the round-76 directive); the fix shape is "remove the
+stray `obj.counters = 0;` from the remaining hand-rolled destroy
+arms so a counter'd creature destroyed by a -X/-X effect carries its
+counters into the graveyard byte-equal, matching the already-closed
+`DepressurizeEffect` arm and Rust's own SBA destroy path." **This
+fix touches `state_ops_resolve.rs` — it CONTENDS with the concurrent
+G7 S5a slice and must serialize AFTER S5a.**
