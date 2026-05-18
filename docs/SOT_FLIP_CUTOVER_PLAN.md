@@ -4,13 +4,18 @@ this slice; docs-only, no gate run needed beyond the clean-confirm.**
 This is a **verify-first re-verification + honest refresh** of the
 plan against the much-more-complete live tree. The doc was originally
 authored at `c1815ebf` (older anchor `d4014cdf` in the prior pass);
-every blocker / criterion / count / SHA below is **re-verified against
-the LIVE tree at `main 4704ca3e`** (`git rev-parse HEAD`;
-`resync: cycle 11 — round-76 residual fully closed + PROBED 104->106
-+ PHASE TRANSITION (@ dea55cff)`), NOT inherited from the plan's stale
-prose — the round-67-class lesson (labels and prior design docs drift;
-the Python `src/mtg_bot/` tree + the live Rust enum/bridge + git
-history are canonical).
+the §1/§2/§4/§6/§7 verify-first refresh that produced the
+"4704ca3e" prose ran at the live cycle-11 PHASE TRANSITION state.
+**This is the cycle-37 doc-resync slice (`feature/docs-sot-flip-
+cutover-plan-resync`):** the §1 C1/C6 status blocks + §2 Step 1/2/3
++ §4 B1/B2/B3 rows + §4 summary + §6 link list + §7 verdict are
+re-verified against the LIVE tree at `main 89a4f32b` (`git rev-parse
+HEAD`; "Merge feature/g7-classd-1of23-thawbringer-mana-affordability
+…"), 2026-05-18, NOT inherited from the prior pass's stale prose —
+the round-67-class lesson (labels and prior design docs drift; the
+Python `src/mtg_bot/` tree + the live Rust enum/bridge + git history
+are canonical). The G7 row narrative in §4 below is preserved verbatim
+(it accumulated through cycles 17–37 of the G7 lane).
 
 # Source-of-Truth Flip Cutover Plan — the consolidated umbrella
 
@@ -41,11 +46,12 @@ its own piece. In particular:
 
 - `docs/RUST_LEGAL_DECISIONS_MANA_AWARENESS_DESIGN.md` (the
   `legal_decisions` mana-awareness / decision-sourcing sub-spec) —
-  **landed on `main` at `27396c1d`**; its **Slice 1 is IMPLEMENTED
-  and merged** (`f1f09bbb`); **Slices 2/3 are IN FLIGHT** via a
-  sibling Rust agent (active worktree `feature/rust-legal-decisions-
-  target-satisf`). It owns C1/B1/Step-1 internals; this doc references
-  it as the hard keystone dependency and does NOT re-specify it.
+  **landed on `main` at `27396c1d`**; all 3 sub-slices are now
+  merged (Slice 1 `f1f09bbb`, Slice 2 `e6e3db58`, Slice 3
+  `bb29df8d`) + Class-D follow-ups (`deee7ff4`/`89a4f32b`). It owns
+  C1/B1/Step-1 internals; **C1 is LIVE-SURFACE CLOSED** (residual =
+  the non-live alt-cost axes only); this doc references it as the
+  (now-met) hard keystone dependency and does NOT re-specify it.
 - `docs/BRIDGE_VESTIGIALIZATION_PLAN.md` — **landed at `3e5bc6fe`**;
   it OWNS the Step-6 cross_engine.py retirement inventory detail.
 - `docs/LOADER_ADMIT_COMPLETENESS_ANALYSIS.md` — **landed at
@@ -132,38 +138,55 @@ Rust-only structural-superset emission becomes a reachable agent
 choice that pollutes self-play data and trips Python's stricter
 `apply_action` invariants. This is the keystone HARD gate.
 
-**Status: PARTIALLY CLOSED — Slice 1 DONE, Slices 2/3 IN FLIGHT.**
+**Status: LIVE-SURFACE CLOSED — Slices 1+2+3 all DONE on main `89a4f32b`.**
 The sibling sub-spec `RUST_LEGAL_DECISIONS_MANA_AWARENESS_DESIGN.md`
-landed (`27396c1d`) and split the work into 3 sub-slices:
+landed (`27396c1d`) and split the work into 3 sub-slices; all 3 are
+now merged + closure-pinned. Authoritative state: `SEARCH_LIMITATIONS.
+md:5734` header now reads "Cross-engine legal-decision-set
+mana-payability asymmetry (**LIVE-SURFACE CLOSED** — mana axis Slice
+1, target axis Slice 2, additional-cost axis Slice 3; residual = the
+non-live alt-cost axes only, no Rust emission site)".
 
-- **Slice 1 (mana-payability) — IMPLEMENTED, merged `f1f09bbb`**
+- **Slice 1 (mana-payability) — CLOSED, merged `f1f09bbb`**
   (cycle-8 fold `921d759a`). `state_ops_mana::can_pay_cost`
-  (`rust/src/state_ops_mana.rs:460`, wrapping the already-shipped
-  `pool_can_cover` + `auto_tap_headroom_pool`) gates all 5 live
-  CastSpell emission sites (`state_ops_legal.rs:982`, `:1000`,
-  `:1143`, `:1153`, + warp-exile-recast). Parity-neutral by the §4
-  single-script-replay proof (gate GREEN 1521 at merge). The SL
-  entry moved ACCEPTED → **PARTIALLY CLOSED**
-  (`SEARCH_LIMITATIONS.md:5694`); the pin test FLIPPED to the closed
-  contract (`tests/test_cross_engine_legal_set_asymmetry.py:225`/`:295`/
-  `:351`, "BOTH engines omit the un-payable cast").
-- **Slice 2 (target-satisfiability) — IN FLIGHT.** Active sibling-Rust
-  worktree `feature/rust-legal-decisions-target-satisf` (verified via
-  `git worktree list`; no merge in `git log --all` yet). A
-  non-destructive Rust `legal_targets`-count analog of
-  `legal.py:_targets_are_satisfiable` (CR 601.2c), gating the same 5
-  sites.
-- **Slice 3 (additional-cost) — NOT STARTED.** The smallest sub-slice
-  (`legal.py:_additional_costs_payable` analog); lowest live-surface
-  incidence.
+  gates all live CastSpell emission sites. Pin test FLIPPED to the
+  closed contract (`tests/test_cross_engine_legal_set_asymmetry.py`).
+- **Slice 2 (target-satisfiability) — CLOSED, merged `e6e3db58`**
+  (2026-05-17 12:59, branch tip `60a94b2e`). Rust
+  `spell_targets_satisfiable` (CR 601.2c) gates all 6 live CastSpell
+  emission sites. Closure pin:
+  `tests/test_cross_engine_legal_set_target_satisf.py` GREEN.
+- **Slice 3 (additional-cost) — CLOSED, merged `bb29df8d`**
+  (2026-05-17 13:20, branch tip `5771cc62`). Rust
+  `additional_costs_payable` (CR 601.2f/601.2h) gates all 6 live
+  CastSpell sites; 3 new `CardPrinting.additional_cost_*` fields.
+  Closure pin: `tests/test_cross_engine_legal_set_addcost.py` GREEN.
+- **Class-D 22/23 follow-up (Sequence-recursion fix) — CLOSED,
+  merged `deee7ff4`** (2026-05-18). Extended Slice 2's
+  `spell_targets_satisfiable` to depth-first flatten `Effect::Sequence`
+  wrappers (Radiant Strike sequence-recursion hole). Closure pin:
+  `tests/test_rust_shadow_bakein.py::test_g7_classd_castset_seqwrap_
+  targets_closed_then_next_frontier`.
+- **Class-D 1/23 follow-up (Thawbringer set-based mana-affordability)
+  — CLOSED, merged `89a4f32b`** (2026-05-18). Extended Slice 1's
+  `can_pay_cost` with set-based dual-land mana-affordability port
+  (lands-by-id used at most once, byte-mirroring `actions.py:336-403`).
+  Closure pin: `tests/test_rust_shadow_bakein.py::
+  test_g7_classd_1of23_thawbringer_mana_affordability_closed_then_
+  next_frontier`.
 
-**C1 closes when Slices 2 AND 3 land green.** Slice 1 closed the
-named SL-note problem ("no non-destructive `can_pay_cost`"); C1 is NOT
-fully met until the full `legal_decisions == legal_actions` contract
-holds on the 5 live axes (mana ∧ target ∧ additional-cost). This is
-**the keystone remaining hard flip-blocker** and the head of the
-critical path. Owner: the sibling sub-spec (this doc does NOT
-re-spec it).
+**C1 is CLOSED on the live cast surface.** All Python prune axes with
+a live Rust CastSpell emission site (mana ∧ target ∧ additional-cost)
+are gated. Residual: the non-live alt-cost axes only
+(kicker/impending/granted-warp/Room-half/X/restricted-coin/convoke) —
+Rust emits NONE of those dicts at all yet, so there is no live SET
+asymmetry; the Slice-1/2/3 predicates compose via the designed
+extension points (sub-spec §2.4/§2.5) the instant those axes become
+emission sites. **C1 is no longer the keystone remaining hard
+flip-blocker.** The remaining keystone is **G7** (real Rust
+stack-and-priority `CastSpell` resolution; see B3/G7 rows below + the
+dedicated owner doc `docs/RUST_STACK_RESOLUTION_DESIGN.md`). Owner
+of C1: the sibling sub-spec (this doc does NOT re-spec it).
 
 ### C2 (HARD, standing) — Zero open Rust-side parity divergences
 
@@ -266,19 +289,22 @@ C6 hard-boundary pin to make the acceptance enforceable.
 **Criterion.** A card the loader does NOT admit MUST be unable to
 enter a flipped (Rust-sourced) game — a *hard* boundary, not advisory.
 
-**Status: STILL OPEN (hard gate).** Verify-first re-confirmed:
-`trajectory._filter_deck_to_bridge_supported`
-(`src/mtg_bot/parity/trajectory.py`, the 5-disjunct chokepoint) today
-**silently drops** a non-admitted card and **Forest-pads to
-`pad_to_size`** (`LOADER_ADMIT_COMPLETENESS_ANALYSIS.md:98-112`,
-verified live). There is **no flip-time invariant test that a
-non-admitted printing RAISES rather than silently degrading on the
-Rust-sourced path** (grep over `tests/` finds no such pin). Today the
-silent-drop is benign (Python is SoT and the bench plays the admitted
-residue); post-flip it is the soundness boundary and MUST be a hard
-raise. **This remains a small, well-scoped Python-lane slice (§2
-Step 2) and is a genuine remaining hard flip-blocker** — it makes
-C5's residue-acceptance sound.
+**Status: CLOSED — pin landed `66485d6d`, merged via `60806863`**
+(SoT-flip cycle-12 resync `6c5b0941`). The C6 hard-boundary pin
+landed as a small Python-lane slice (zero Rust): the 5-disjunct
+chokepoint at `trajectory._filter_deck_to_bridge_supported` is now
+**observable** (`LoaderAdmitReport` names every dropped slot +
+Forest-pad count, with multiplicity) and **fail-loud-enforceable**
+(`LoaderAdmitPolicy.RAISE` raises `NonAdmittedCardError` instead of
+silently degrading — the post-flip Rust-sourced path sets this).
+The default `production_deck_to_deckspec` silent-drop path stays
+bit-identical (parity-neutral for the pre-flip Python-SoT default).
+Pinned by `tests/test_c6_loader_admit_boundary.py` (observable
+not-silent, fail-loud RAISE, parity-neutral default-path-bit-identical).
+SL note: `docs/SEARCH_LIMITATIONS.md:6110` "Loader-admit gate is a
+reduced-card-universe boundary (DOCUMENTED + ENFORCEABLE — C6 pin
+landed)". **This was the smallest hard flip-blocker; it is now
+closed and makes C5's residue-acceptance sound.**
 
 ### 1.1 The measurability gap — NOW MEASURED (was unmeasurable)
 
@@ -340,43 +366,43 @@ smoke.md`). **This step is gated behind Step 1 (no point re-running
 the C4 sweep until the flip-candidate commit — i.e. post-C1 — exists).**
 
 **Step 1 — Land the decision-sourcing correctness fix (C1).**
-**Slice 1 DONE** (`f1f09bbb`). **Remaining: Slices 2 (target-
-satisfiability — IN FLIGHT, sibling worktree `feature/rust-legal-
-decisions-target-satisf`) + 3 (additional-cost — not started).**
-Owner: `docs/RUST_LEGAL_DECISIONS_MANA_AWARENESS_DESIGN.md` (sibling
-sub-spec — this doc does NOT re-spec it). Closure is observable: the
-Slice-2/3 sites gate identically to Slice 1's pattern; the SL entry's
-"residual = target/additional-cost" narrows to retired at full
-closure. **This is the head of the critical path and the hard
-dependency for Steps 3–6.** Count-shifting Rust merges → orchestrator
-post-merge cron resync applies.
+**CLOSED on main `89a4f32b`** — Slices 1 (`f1f09bbb`) + 2
+(`e6e3db58`) + 3 (`bb29df8d`) all merged + closure-pinned + Class-D
+follow-ups landed (`deee7ff4`/`89a4f32b`); SL entry header now
+"LIVE-SURFACE CLOSED" (`SEARCH_LIMITATIONS.md:5734`). Owner:
+`docs/RUST_LEGAL_DECISIONS_MANA_AWARENESS_DESIGN.md` (sibling
+sub-spec — this doc does NOT re-spec it). **Step 1 is no longer
+the head of the critical path; G7 / Step 3 now is.** Residual is
+the non-live alt-cost axes only (no Rust emission site → no live
+SET asymmetry); the Slice-1/2/3 predicates compose via designed
+extension points as those axes become emission sites.
 
-**Step 2 — Land the C6 hard-boundary invariant pin.** Add a regression
-test that a non-loader-admitted EoE printing CANNOT be silently seated
-into a Rust-authoritative game (it raises loudly rather than
-Forest-padding-degrading at `trajectory._filter_deck_to_bridge_
-supported` on the Rust-sourced path). Python-lane test slice (no Rust
-change); makes C5's residue-acceptance sound. **Owner: a new pin under
-`tests/` + a one-line `SEARCH_LIMITATIONS.md` note if the boundary is
-itself a documented simplification.** Independent of Step 1 (can land
-in parallel — it has NO dependency on C1); both gate Step 3. **This is
-the single smallest genuinely-actionable remaining hard blocker and
-the lowest-risk next step.**
+**Step 2 — Land the C6 hard-boundary invariant pin.**
+**CLOSED — pin landed `66485d6d`, merged `60806863`** (cycle-12
+resync `6c5b0941`). `tests/test_c6_loader_admit_boundary.py`
+pins the boundary: a non-loader-admitted EoE printing CANNOT be
+silently seated into a Rust-authoritative game
+(`LoaderAdmitPolicy.RAISE` raises `NonAdmittedCardError` instead
+of silently Forest-padding). Default
+`production_deck_to_deckspec` path stays bit-identical
+(parity-neutral). SL note: `SEARCH_LIMITATIONS.md:6110`. Step 2
+no longer gates Step 3.
 
 **Step 3 — Wire NN/MCTS to source decisions from Rust
-`legal_decisions`.** Replace the Python-derived single-script-replay
-decision source with Rust's own enumeration as the agent-choice
-source. **Owner: a new design doc (NOT this one) — recommended
-`docs/RUST_DECISION_SOURCING_WIRING_DESIGN.md`**, scoped against the
-NN-search seam (`src/mtg_bot/search/` — `engine_adapter.py` /
-`mcts.py` / `ismcts.py` / `pimc.py` / `nn_evaluator.py`).
-**HARD-BLOCKED on Step 1 fully closing (C1 = Slices 1+2+3 green)** —
-sourcing from a not-yet-target/cost-aware Rust set before C1 fully
-lands would feed the NN illegal casts. **This boundary spec is the
-next un-progressed flip-critical DESIGN item; it is correctly NOT
-started (both the sibling spec §7 and `BRIDGE_VESTIGIALIZATION_
-PLAN.md` §7 independently flag it BLOCKED on Slices 2/3 —
-`feedback_no_fallback_hybrids` honest-stop).**
+`legal_decisions`.** **Spec LANDED (`1d3ba046` / `302cadf0`) +
+B3-S1..S4 LANDED**: the wiring spec is at
+`docs/NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md` and the
+implementation sub-slices through B3-S4 (the `rust_shadow`
+shadow-checker bake-in) are all merged on main. **Remaining: B3-S5
+(the atomic SoT flip itself, = Step 4)**, gated on closing the
+G7 chain (the dominant remaining flip blocker — see B3/G7 row in
+§4) and a clean CE5-free bake-in (`docs/RUST_STACK_RESOLUTION_
+DESIGN.md` Part 3). The wiring spec's §2.4 surfaced G1 (factored
+Rust combat) as a then-new blocker; the G7 chain surfaced by the
+C4 post-R76-fix scaled re-sweep (`4876bf08`/`1b692ff1`) is the
+current dominant set of work-in-flight (G7 owner doc + the S6
+Class-A/B/C/D/E + frontier slices, mostly CLOSED on main). The
+B3-S5 atomic flip waits on the G7 chain closing CE5-free.
 
 **Step 4 — Switch the harness / SoT designation.** Flip the
 `cross_engine` contract from "Python drives, Rust mirrors" to "Rust
@@ -401,16 +427,30 @@ the survives/vestigial/judgment classification + the R0–R6 retirement
 order + the LOADER-INTACT invariant). Depends on Step 5. The *forward*
 Python→dict serializers stay (the loader/parser stays — §5).
 
-**Dependency graph (summary, refreshed):**
+**Dependency graph (summary, refreshed for post-G7-S6 main `89a4f32b`):**
 
 ```
-Step 1 (C1: Slice 1 DONE; Slices 2/3 IN FLIGHT) ─┐
-                                                 ├─→ Step 3 (wire NN→Rust, design BLOCKED on C1) ─→ Step 4 (flip SoT)
-Step 2 (C6 pin — actionable NOW, no C1 dep)    ──┘                                                       │
-Step 0 (C4 re-run — gated behind Step 1)  ──────────────────────────────────────────────────────────────┤
-                                                                                                         ▼
-                                                                          (bake-in, §3) ─→ Step 5 (retire Py rules)
-                                                                                          ─→ Step 6 (BRIDGE_VESTIGIALIZATION_PLAN)
+Step 1 (C1 CLOSED `89a4f32b` — Slices 1+2+3) ──┐
+                                               │
+Step 2 (C6 pin CLOSED `66485d6d`)        ──────┤
+                                               │
+Step 3 spec LANDED `1d3ba046` + B3-S1..S4 LANDED (rust_shadow bake-in) ──┐
+                                                                         │
+G7 chain (the current dominant flip blocker — owner doc:                 │
+RUST_STACK_RESOLUTION_DESIGN.md; S1–S6 landed, S7 = CE5 removal          │
+GATES the final flip; B / C / E LANDED on main, A LANDED, D = C1         │
+which is also LANDED; remaining lanes: @369 G1 stateless-attacker        │
+provider + library-shuffle-order parity + ordered-pool aftershocks) ─────┤
+                                                                         ▼
+                                                          Step 4 (= B3-S5 the atomic SoT flip)
+                                                                         │
+                                                            Step 0 (C4 re-run on flip-candidate
+                                                            commit, folded into the §4 bake-in
+                                                            exit per the wiring spec §4)
+                                                                         │ green CE5-free
+                                                                         ▼
+                                                          (bake-in, §3) ─→ Step 5 (retire Py rules)
+                                                                          ─→ Step 6 (BRIDGE_VESTIGIALIZATION_PLAN)
 ```
 
 ---
@@ -452,9 +492,9 @@ Tagged HARD vs ACCEPT. **Every status re-verified against `4704ca3e`
 
 | # | Blocker | Class | Status @ `4704ca3e` (verify-first evidence) |
 |---|---|---|---|
-| B1 | `legal_decisions` mana/target/cost asymmetry (the decision-sourcing correctness fix; C1) | **HARD** | **PARTIALLY CLOSED — Slice 1 DONE (`f1f09bbb`: `state_ops_mana.rs:460` `can_pay_cost` gates 5 CastSpell sites; SL entry → PARTIALLY CLOSED `SEARCH_LIMITATIONS.md:5694`; pin flipped `test_cross_engine_legal_set_asymmetry.py:225`). Slice 2 (target-satisfiability) IN FLIGHT (sibling worktree `feature/rust-legal-decisions-target-satisf`). Slice 3 (additional-cost) NOT STARTED.** OPEN until Slices 2+3 land — **the keystone remaining flip-blocker / head of critical path.** |
-| B2 | C6 hard-boundary invariant pin (non-admitted card cannot enter a Rust-authoritative game) absent | **HARD** | **OPEN.** Verify-first re-confirmed: the loader silently drops + Forest-pads (`LOADER_ADMIT_COMPLETENESS_ANALYSIS.md:98-112`); no flip-time raise pin exists (grep `tests/`). Small Python-lane slice (Step 2), **no C1 dependency — the most actionable remaining hard blocker.** |
-| B3 | NN/MCTS still sources from Python-derived replay, not Rust `legal_decisions` (the wiring itself) | **HARD** | **OPEN — the architectural inversion.** Its design doc (`RUST_DECISION_SOURCING_WIRING_DESIGN.md`, Step 3) is **correctly NOT-STARTED**: hard-blocked on C1 fully closing (Slices 2/3). Both the sibling spec §7 and `BRIDGE_VESTIGIALIZATION_PLAN.md` §7 independently flag it BLOCKED (honest-stop). The true critical path is B1→B3→flip. |
+| B1 | `legal_decisions` mana/target/cost asymmetry (the decision-sourcing correctness fix; C1) | **HARD** | **LIVE-SURFACE CLOSED on main `89a4f32b`** — Slice 1 (mana, `f1f09bbb`) + Slice 2 (target, `e6e3db58`) + Slice 3 (additional-cost, `bb29df8d`) all merged + closure-pinned 2026-05-17. Class-D follow-ups (22/23 Sequence-recursion `deee7ff4`; 1/23 Thawbringer set-based mana-affordability `89a4f32b`) merged 2026-05-18. SL header (`SEARCH_LIMITATIONS.md:5734`) updated to "LIVE-SURFACE CLOSED — mana axis Slice 1, target axis Slice 2, additional-cost axis Slice 3; residual = the non-live alt-cost axes only, no Rust emission site". 10/10 closure pins green (`test_cross_engine_legal_set_asymmetry.py` + `..._target_satisf.py` + `..._addcost.py` + 2 Class-D bake-in pins). Residual = the non-live alt-cost axes (kicker/impending/granted-warp/Room-half/X/restricted-coin/convoke); Rust emits none yet → no live SET asymmetry; Slice-1/2/3 predicates compose via the designed extension points when those axes become emission sites. **B1 is no longer the keystone remaining flip-blocker.** |
+| B2 | C6 hard-boundary invariant pin (non-admitted card cannot enter a Rust-authoritative game) absent | **HARD** | **CLOSED — pin landed `66485d6d`, merged `60806863`** (SoT-flip cycle-12 resync `6c5b0941`). `tests/test_c6_loader_admit_boundary.py` pins the boundary: a non-loader-admitted EoE printing CANNOT be silently seated into a Rust-authoritative game (`LoaderAdmitPolicy.RAISE` → `NonAdmittedCardError`). Default silent-drop `production_deck_to_deckspec` path stays bit-identical (parity-neutral pre-flip; the post-flip Rust-sourced path sets the RAISE policy). SL note: `SEARCH_LIMITATIONS.md:6110` "Loader-admit gate is a reduced-card-universe boundary (DOCUMENTED + ENFORCEABLE — C6 pin landed)". Makes C5's residue-acceptance sound. |
+| B3 | NN/MCTS still sources from Python-derived replay, not Rust `legal_decisions` (the wiring itself) | **HARD** | **SPEC + B3-S1..S4 LANDED; remaining: B3-S5 (the atomic SoT flip, = Step 4), gated on G7 chain closing CE5-free.** Design spec at `docs/NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md` landed (`1d3ba046` / `302cadf0`). Impl: B3-S1 `RustGameStateAdapter` + `decision_source` flag (`d2a392be`/`0d3c6a9f`); B3-S2 codec slot-source switch (RustZoneView, v-chain-SAFE) + G2 PlayLand interim mask (`a000f446`/`6413dbea`); B3-S3 factored-combat provider + determinization-via-Rust (`293ad60d`/`fab19c14`); B3-S4 `rust_shadow` shadow-checker bake-in + 4-assertion tripwire (`d93e341f`/`92fc03d3`). The B3-S4 bake-in surfaced G4/G5/G6 (post-deck-out tail) — all CLOSED (`5a0b966f`/`86411a99`/`4d7c8ab3`) — then surfaced G7 (Rust resolves `CastSpell` atomically vs Python's stack-and-priority model) via the C4 post-R76-fix scaled re-sweep (`4876bf08`/`1b692ff1`). **G7 is now the dominant remaining flip blocker.** Owner: `docs/RUST_STACK_RESOLUTION_DESIGN.md` (USER decision: Rust MUST implement real stack-and-priority `CastSpell` resolution; CE5 must be REMOVED with parity holding WITHOUT it). G7 chain progress on main: S1–S6 LANDED; S6 scale-verify (`136957b6`/`0afd8769`) enumerated the finite frontier; S6 Classes A/B/C/D/E all LANDED on main (the G7 row below has the full closure history). Remaining critical path: close the @369 G1 stateless-attacker provider lane (sibling, in flight on `feature/g7-g1-stateless-attacker-decision-port`) + library-shuffle-order parity (sibling, in flight on `feature/g7-b3f7c0a9-library-shuffle-order-parity`) + S7 (CE5 removal) + CE5-free re-proof + fresh CE5-free C4 → B3-S5 atomic flip. |
 | B4 | Effect-uncovered subsystem-gated tail (whole-pool 163-card frontier) | **ACCEPT** (whole-pool, NOT flip-gating; loader DECLINES these) | Open as *campaign frontier*, NOT a flip-blocker. Owner `SUBSYSTEM_ROADMAP.md`. The PHASE TRANSITION note re-confirms this tail is now the multi-round subsystem cadence, not continuous-refill. |
 | B5 | `genuinely_missing` residue + `blocked_non_effect` | **ACCEPT** w/ rationale (C5, conditional on B2/C6) | **Re-counted: 8 `genuinely_missing` + 2 `blocked_non_effect`** (`residue_worklist.json`; `POOL_PARITY.md:159` shows 7 via the Lightstall-2-arms-collapse). Verify-first-confirmed genuine + loader-DECLINED → ACCEPT stands. |
 | B6 | Sothera, the Supervoid — verify-first 8th `genuinely_missing` | **ACCEPT** w/ rationale (subset of B5) | **CLOSED-as-applied:** Sothera is now APPLIED to `residue_worklist.json` (was "recommended, not yet applied" in the stale plan — the resync the plan anticipated has happened). Accepted permanent-residue, loader-DECLINED. |
@@ -514,14 +554,34 @@ Tagged HARD vs ACCEPT. **Every status re-verified against `4704ca3e`
   controls intact. **No G7 unmasked** — the bake-in now reaches the
   natural terminal state clean, so the **G4→G5→G6 chain is fully
   CONVERGENT and CLOSED**. Todo filed → DONE.
-- **B1 is PARTIALLY CLOSED** — Slice 1 (the keystone named SL-note
-  problem) DONE; only Slices 2/3 remain (Slice 2 IN FLIGHT).
-- **The genuine remaining hard critical path is exactly: B1 (C1
-  Slices 2/3 land) → B3 (NN↔Rust wiring spec+impl, design-blocked on
-  B1) → flip**, with **B2 (the C6 hard-boundary pin) the one small
-  independent Python-lane blocker that can land in parallel NOW**, and
-  B8 honestly downgraded from "unmeasurable %" to "measured trajectory,
-  flip relies on C4∧C6".
+- **B1 is LIVE-SURFACE CLOSED on main `89a4f32b`** — Slices 1
+  (`f1f09bbb`) + 2 (`e6e3db58`) + 3 (`bb29df8d`) all merged
+  2026-05-17; Class-D follow-ups (`deee7ff4`/`89a4f32b`) merged
+  2026-05-18. SL header is "LIVE-SURFACE CLOSED" on all 3 axes.
+  Residual = the non-live alt-cost axes only (no Rust emission
+  site).
+- **B2 is CLOSED** — the C6 hard-boundary pin landed `66485d6d`,
+  merged `60806863`. `tests/test_c6_loader_admit_boundary.py`
+  enforces `LoaderAdmitPolicy.RAISE` on the Rust-sourced path.
+- **B3 spec + B3-S1..S4 LANDED.** Wiring spec at
+  `docs/NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md` (`1d3ba046`);
+  S1–S4 sub-slices all merged (the `rust_shadow` shadow-checker
+  bake-in is live at `92fc03d3`). The B3-S4 bake-in surfaced the
+  G4/G5/G6 chain (all CLOSED) and then surfaced **G7** (Rust resolves
+  `CastSpell` atomically vs Python's locked-in stack-and-priority
+  model) via the C4 post-R76-fix scaled re-sweep.
+- **The genuine remaining hard critical path is now: the G7 chain
+  closing CE5-free → B3-S5 (the atomic SoT flip, = Step 4) → flip.**
+  G7 owner doc: `docs/RUST_STACK_RESOLUTION_DESIGN.md` (USER
+  decision: Rust MUST implement real stack-and-priority `CastSpell`
+  resolution; CE5 must be REMOVED, parity must hold WITHOUT it). G7
+  chain status on main `89a4f32b`: S1–S6 LANDED; S6 Class-A/B/C/D/E
+  + Class-D 1/23 all LANDED; remaining critical path is S7 (CE5
+  removal) + CE5-free re-proof + fresh CE5-free C4 + the @369 G1
+  stateless-attacker provider follow-up (sibling lane in flight) +
+  the library-shuffle-order parity follow-up (sibling lane in
+  flight) → B3-S5 atomic flip. B8 stays "measured trajectory, flip
+  relies on C4∧C6".
 
 ---
 
@@ -555,9 +615,24 @@ serializers stay.
 ## 6. How this doc relates to its dependencies (refreshed link state)
 
 - **`docs/RUST_LEGAL_DECISIONS_MANA_AWARENESS_DESIGN.md`** — LANDED
-  (`27396c1d`). Owns C1/B1/Step-1 internals. **Cross-checked: its
-  Slice 1 is implemented (`f1f09bbb`); Slices 2/3 in flight.** This
-  doc does NOT re-spec it.
+  (`27396c1d`). Owns C1/B1/Step-1 internals. **Cross-checked: all 3
+  sub-slices are merged on main `89a4f32b` (Slice 1 `f1f09bbb`,
+  Slice 2 `e6e3db58`, Slice 3 `bb29df8d`); C1 is LIVE-SURFACE
+  CLOSED.** This doc does NOT re-spec it.
+- **`docs/NN_RUST_DECISION_SOURCING_WIRING_DESIGN.md`** — LANDED
+  (`1d3ba046` / `302cadf0`). Owns Step-3/B3 internals (the NN↔Rust
+  decision-sourcing wiring). B3-S1..S4 sub-slices all merged; the
+  `rust_shadow` shadow-checker bake-in (`92fc03d3`) is the live
+  pre-flip tripwire. Remaining: B3-S5 (= Step 4, the atomic SoT
+  flip) — gated on the G7 chain closing CE5-free.
+- **`docs/RUST_STACK_RESOLUTION_DESIGN.md`** — LANDED. Owner of G7
+  (the dominant remaining flip blocker — real Rust stack-and-priority
+  `CastSpell` resolution + CE5 removal). USER decision: CE5 must be
+  REMOVED and parity must hold WITHOUT it. G7 S1–S6 LANDED on main;
+  S6 Class-A/B/C/D/E + Class-D 1/23 LANDED; remaining: @369 G1
+  stateless-attacker provider (sibling lane in flight) +
+  library-shuffle-order parity (sibling lane in flight) + S7 (CE5
+  removal) + CE5-free re-proof + fresh CE5-free C4.
 - **`docs/BRIDGE_VESTIGIALIZATION_PLAN.md`** — LANDED (`3e5bc6fe`).
   Owns Step-6's cross_engine.py retirement inventory + the R0–R6
   order + the LOADER-INTACT invariant. This doc references it as the
@@ -572,11 +647,12 @@ serializers stay.
 - **`docs/residue_worklist.json`** — owns the machine-readable residue
   (B5/B6 — Sothera now applied).
 - **`docs/SEARCH_LIMITATIONS.md`** — owns the divergence ledger incl.
-  the legal-set asymmetry entry (now PARTIALLY CLOSED, `:5694`).
+  the legal-set asymmetry entry (now **LIVE-SURFACE CLOSED**, `:5734`)
+  and the C6 loader-admit-boundary closure (`:6110`).
 - **`docs/bench_trajectory_parity_smoke.md`** — owns the empirical
   full-trajectory bench history (C4/B8 trailing evidence; latest
   scaled = round-76 `ce158d9e`, predates the R76 fixes → Step-0
-  re-run owed).
+  re-run owed at flip-candidate commit).
 
 ---
 
@@ -586,74 +662,92 @@ serializers stay.
    RESOLVED). It is a deck-weighted *trajectory* (non-land admit
    17.31% → 19.74% since `c1815ebf`), not a static %. The flip rests
    on C4∧C6, honestly stated — not on the 64.6% whole-pool number.
-2. **Step 3's wiring entanglement is still unknown until scoped.**
-   Whether the NN/MCTS seam can source from `rust.legal_decisions`
-   behind a single atomic-revert flag without a deeper `search/`
-   refactor is NOT verified — it needs its own verify-first design
-   slice (`RUST_DECISION_SOURCING_WIRING_DESIGN`), correctly
-   **NOT-STARTED** because it is hard-blocked on C1 (Slices 2/3). This
-   doc asserts the dependency ordering, not that Step 3 is small. This
-   is the single largest *unscoped* item between here and the flip.
+2. **Step 3's wiring spec is LANDED** (the prior pass's #2 open
+   question is RESOLVED). `docs/NN_RUST_DECISION_SOURCING_WIRING_
+   DESIGN.md` (`1d3ba046` / `302cadf0`) verified the seam against
+   `MtgGameStateAdapter` file:line-precise and dependency-ordered the
+   sub-slices; B3-S1..S4 (provider + codec + determinizer +
+   `rust_shadow` shadow-checker bake-in) are all merged on main. The
+   single-atomic-flag rollback constraint is met
+   (`decision_source` flag + the bake-in mode). The largest
+   *unscoped* downstream piece is now feature-extraction-from-pure-
+   Rust-state (NN-representation-roadmap territory; gates Step 5
+   Python deletion, NOT Steps 3/4).
 3. **The staged-flip card-universe reduction is an accepted
    consequence.** Day-1 post-flip the bot plays ~52% of real deck-
    slots (~20% of non-land slots), Forest-padded, with the admit gate
    (C6) as the soundness fence; admit coverage grows monotonically as
-   the campaign's Rust sequencing lands. This is acceptable IFF C6 is
-   a hard boundary — which is exactly why **B2/Step-2 (the C6 pin) is
-   load-bearing and must land before flip.**
+   the campaign's Rust sequencing lands. C6 is **CLOSED**
+   (`66485d6d`), making this conditional acceptance enforceable.
+4. **G7 is now the dominant remaining flip blocker** — the
+   B3-S4 bake-in surfaced it via the C4 post-R76-fix scaled re-sweep
+   (`4876bf08`/`1b692ff1`, 0/300 PASS): Rust resolves `CastSpell`
+   atomically vs Python's locked-in stack-and-priority model. The
+   USER decision is settled: Rust MUST implement real
+   stack-and-priority `CastSpell` resolution; CE5 must be REMOVED
+   with parity holding WITHOUT it. Owner doc:
+   `docs/RUST_STACK_RESOLUTION_DESIGN.md`. G7 S1–S6 LANDED on main;
+   S6 scale-verify enumerated the finite frontier; S6 Class A/B/C/D/E
+   + Class-D 1/23 all LANDED. Remaining: @369 G1 stateless-attacker
+   provider (sibling lane) + library-shuffle-order parity (sibling
+   lane) + S7 (CE5 removal) + CE5-free re-proof + fresh CE5-free C4
+   re-sweep = the final flip gate. The GO decision itself is the
+   USER's.
 
-### Distance-to-flip verdict (honest)
+### Distance-to-flip verdict (honest, refreshed at `89a4f32b`)
 
 **The flip is genuinely close — it is a small number of deliberate,
 orchestrator-sequenced steps away, NOT a large hidden gap.** The
-evidence:
+refreshed evidence:
 
-- **Almost every blocker the original plan listed is CLOSED.** The
+- **Every original-plan blocker is now CLOSED or LANDED.** The
   entire confirmed-divergence surface (CFI-1, the round-74 trio, the
-  round-76 residual R76-1/R76-2) is fixed + merged + consolidated
-  (`4704ca3e`). C2/B10 standing-green. The measurement gap (B8) is
-  measured. Sothera (B6) applied. I73/I23 (B7) closed. Slice 1 of the
-  keystone C1 fix — the named SL-note problem, the historically
-  load-bearing unknown — is **implemented and parity-neutral-merged**.
-- **The remaining hard critical path is short and named:**
-  1. **B1: C1 Slices 2 (target-satisfiability — IN FLIGHT) + 3
-     (additional-cost — small, not started) land.** Owner: the sibling
-     sub-spec. This is the keystone; everything downstream waits on it.
-  2. **B2: the C6 hard-boundary pin** — a small independent Python-
-     lane test slice, **no C1 dependency, actionable in parallel
-     NOW**, the lowest-risk next step.
-  3. **B3: the NN↔Rust decision-sourcing wiring** — needs its own
-     `RUST_DECISION_SOURCING_WIRING_DESIGN.md` (design + impl),
-     **hard-blocked until C1 fully lands** (correctly not started —
-     starting it now inverts the dependency order). This is the
-     largest remaining *unscoped* piece, but it is well-understood in
-     shape (the architectural inversion of the single-script-replay
-     contract) and its prerequisite is in flight.
-  4. Then Step 0 (C4 post-R76-fix scaled re-run on the flip-candidate
-     commit) + Step 4 (the one-flag SoT switch) + the bake-in, then
-     the Steps 5/6 cleanup (owned, inventoried).
-- **No large hidden gap.** The honest caveats are stated, not hidden:
-  (a) the post-flip card universe is reduced to the loader-admit set
-  (~20% non-land deck content) — an explicitly accepted staged-flip
-  consequence fenced by C6; (b) Step 3's wiring is the one unscoped
-  piece, but its shape is understood and its blocker (C1) is the only
-  thing gating its design start; (c) Step 0's C4 sweep must be
-  re-run post-R76-fix (the latest scaled sweep predates the fixes) —
-  a mechanical re-verify, not new engine work.
+  round-76 residual R76-1/R76-2) is fixed + merged + consolidated.
+  C2/B10 standing-green. The measurement gap (B8) is measured.
+  Sothera (B6) applied. I73/I23 (B7) closed. **B1 (C1 keystone) is
+  LIVE-SURFACE CLOSED** (Slices 1+2+3 + Class-D follow-ups). **B2
+  (C6 hard-boundary pin) is CLOSED.** **B3 spec is LANDED and
+  B3-S1..S4 are merged** (the `rust_shadow` shadow-checker bake-in
+  is the pre-flip tripwire).
+- **The remaining hard critical path is the G7 chain → S7 → B3-S5:**
+  1. **G7 S7 (CE5 removal) + CE5-free re-proof + fresh CE5-free C4
+     re-sweep.** Owner: `docs/RUST_STACK_RESOLUTION_DESIGN.md`. G7
+     S1–S6 LANDED; S6 Class-A/B/C/D/E + Class-D 1/23 LANDED on main.
+     Remaining sibling lanes: @369 G1 stateless-attacker provider
+     (`feature/g7-g1-stateless-attacker-decision-port`) and
+     library-shuffle-order parity
+     (`feature/g7-b3f7c0a9-library-shuffle-order-parity`).
+  2. **B3-S5 (the atomic SoT flip, = Step 4)** — orchestrator-
+     sequenced after a clean CE5-free C4. One-flag enum switch from
+     `decision_source="python"` to `decision_source="rust"`; the
+     `rust_shadow` bake-in continues as the shadow checker during
+     bake-in (§3).
+  3. Then Steps 5/6 cleanup (owned, inventoried) after a clean
+     bake-in.
+- **No large hidden gap.** Honest caveats: (a) the post-flip card
+  universe is reduced to the loader-admit set (~20% non-land deck
+  content) — an explicitly accepted staged-flip consequence fenced
+  by C6 (CLOSED); (b) feature-extraction-from-pure-Rust-state gates
+  Step 5 deletion (not Steps 3/4); (c) CE5 removal will invalidate
+  the existing parity-evidence base (the 307/475 byte-equal
+  headline + the trajectory-parity smoke history were generated WITH
+  CE5 active) — Part 3 of the G7 owner doc owns the CE5-free re-proof
+  plan.
 
-**Verdict: 2–3 deliberate sequenced steps from flip-ready** — C1
-completion (Slices 2/3, in flight) → the C6 pin (parallelizable now) →
-the NN↔Rust wiring spec+impl (design-unblocks the moment C1 lands) →
-Step-0 C4 re-run → the atomic SoT switch + bake-in. The next actions
-are orchestrator-sequenced Rust/spec work (Slice 2/3 + the
-wiring-design slice + the C6 pin), **not more analysis** — this
-re-verification concludes here.
+**Verdict: G7-chain completion + S7 + a single atomic flag flip
+from flip-ready.** The G7 chain is the load-bearing remaining work
+(S1–S6 LANDED; the finite frontier is enumerated); CE5 removal is a
+single, deliberate, orchestrator-sequenced slice once the frontier
+closes. The next actions are orchestrator-sequenced Rust + bake-in
+work, **not more analysis** — this re-verification concludes here.
 
 ---
 
-*Re-verified against live `main 4704ca3e` (cycle-11 PHASE TRANSITION
-state). This is the index + criteria + sequencing over the cited
-owners; it confers no authorization to flip — the flip is gated on §1
-and is a judgment call with the recommended thresholds + rationale
-stated above. Original authoring anchor: `c1815ebf`; prior-pass
-anchor: `d4014cdf`.*
+*Re-verified against live `main 89a4f32b` (post the G7 S6 cluster
+merge pipeline + Class-D 1/23 close, 2026-05-18). This is the index
++ criteria + sequencing over the cited owners; it confers no
+authorization to flip — the flip is gated on §1 and is a judgment
+call with the recommended thresholds + rationale stated above.
+Original authoring anchor: `c1815ebf`; prior-pass anchor:
+`d4014cdf`; immediately-prior re-verification anchor: `4704ca3e`
+(cycle-11 PHASE TRANSITION).*
