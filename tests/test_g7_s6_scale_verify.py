@@ -101,30 +101,27 @@ def _drive_to_trip(arch: int, seed: int, max_steps: int = 4000):
         # raise to NO_RAISE; a Rust-side raise propagates raw).
         (2, 1, 318, "raw",
          "ActivateAbility: source 121 cost is unaffordable"),
-        # Frontier (b) — CLOSURE-FLIPPED (this slice). The cycle-37
-        # S6 Class-B option-β engine+adapter slice closed the
-        # @367 ``priority_player`` axis; the immediate next-frontier
-        # @369 (``LEGAL_SET_EQ py\rust=["('pass',)"]`` — the G1
-        # stateless-Rust ``attack=False`` re-emission gap, todo
-        # ``a92e7d4f``) has NOW been closed by the present B3-S3
-        # provider-accumulation port
-        # (``rust_engine_adapter.py``
-        # ``_finalize_attacker_phase``/``_finalize_blocker_phase`` +
-        # entry-only ``_refresh_combat_phase`` — byte-mirror of
-        # Python ``_apply_attacker_decision`` /
-        # ``_apply_blocker_decision`` +
-        # ``_finalize_attacker_phase``/``_finalize_blocker_phase``,
-        # ``engine_adapter.py:1080-1144``). Step 369 no longer trips
-        # (nor does step 367). The run proceeds PAST to a NEW
-        # distinct frontier @504: ``STATE_EQ`` on
-        # ``('graveyard_p0', ...)`` + ``('graveyard_p1', ...)`` +
-        # ``('battlefield', ...)`` — a combat-damage outcome / SBA
-        # divergence (Python killed Icecave Crasher + Seedship
-        # Agrarian via lethal damage; Rust kept them on battlefield).
-        # NEW G-axis distinct from the closed Class-B priority axis
-        # AND the closed @369 attacker-decision axis. Filed as the
-        # next G7 follow-up.
-        (5, 0, 504, "STATE_EQ", "('graveyard_p0'"),
+        # Frontier (b) — TRIPLE-CLOSURE-FLIPPED (the present G2 slice
+        # extends the prior closure stack). The cycle-37 S6 Class-B
+        # option-β engine+adapter slice closed the @367
+        # ``priority_player`` axis; the cycle-38 B3-S3
+        # provider-accumulation port closed the @369 G1 stateless-Rust
+        # ``attack=False`` re-emission gap; the present G2 slice
+        # (``feature/g7-g2-combat-damage-sba-axis``,
+        # ``rust_engine_adapter.py::_run_step_enter_sbas``: add
+        # ``deal_combat_damage()`` BEFORE the SBA at COMBAT_DAMAGE
+        # entry + add ``clear_combat()`` at END_OF_COMBAT entry)
+        # closes the @504 ``STATE_EQ`` combat-damage outcome / SBA
+        # divergence (todo ``504a1c7d``). Step 504 no longer trips.
+        # The run proceeds PAST 504 to step 512 surfacing the
+        # b3f7c0a9 library-SHUFFLE-ORDER axis ``('library_p1', ...)``
+        # — SIBLING-OWNED
+        # (``feature/g7-b3f7c0a9-library-shuffle-order-parity``,
+        # LANDED on its branch, NOT MERGED at the time of the present
+        # G2 slice). NOT a regression of @367 / @369 / @504 — the
+        # surfaced axis is the next per-repro frontier the sibling
+        # lane owns.
+        (5, 0, 512, "STATE_EQ", "('library_p1'"),
     ],
 )
 def test_s6_known_frontiers_reproduce_byte_exactly(
@@ -193,20 +190,27 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         (2, 1, 318, "raw",
          "ActivateAbility: source 121 cost is unaffordable",
          "B1-axis (ActivateAbility affordability)"),
-        # Class B — DOUBLE-CLOSURE-FLIPPED. The cycle-37 Class-B
+        # Class B — TRIPLE-CLOSURE-FLIPPED. The cycle-37 Class-B
         # option-β engine+adapter slice closed the @367 priority axis;
-        # the present B3-S3 provider-accumulation port closes the
-        # @369 G1 stateless-Rust ``attack=False`` re-emission axis
-        # (todo ``a92e7d4f``). The arch5/s0 row proceeds PAST 369
-        # to a NEW distinct frontier @504: ``STATE_EQ`` on
-        # ``('graveyard_p0', ...)`` + ``('graveyard_p1', ...)`` +
-        # ``('battlefield', ...)`` — a combat-damage outcome / SBA
-        # divergence (Python killed Crasher + Seedship Agrarian; Rust
-        # kept them on battlefield). NEW G-axis filed as the next G7
-        # follow-up (combat-damage outcome / SBA divergence).
-        (5, 0, 504, "STATE_EQ", "('graveyard_p0'",
-         "combat-damage outcome / SBA divergence (G1 attack=False "
-         "re-emission CLOSED; new G-axis surfaced past @369)"),
+        # the cycle-38 B3-S3 provider-accumulation port closed the
+        # @369 G1 stateless-Rust ``attack=False`` re-emission axis;
+        # the present G2 slice closes the @504 combat-damage outcome
+        # / SBA divergence (todo ``504a1c7d``;
+        # ``feature/g7-g2-combat-damage-sba-axis``; adds
+        # ``deal_combat_damage()`` BEFORE the SBA at COMBAT_DAMAGE
+        # entry + adds ``clear_combat()`` at END_OF_COMBAT entry in
+        # ``rust_engine_adapter.py::_run_step_enter_sbas``). The
+        # arch5/s0 row proceeds PAST step 504 to step 512 surfacing
+        # the b3f7c0a9 library-SHUFFLE-ORDER axis ``('library_p1',
+        # ...)`` — SIBLING-OWNED
+        # (``feature/g7-b3f7c0a9-library-shuffle-order-parity``,
+        # LANDED on its branch, NOT MERGED at the time of the present
+        # G2 slice). The next per-repro frontier the sibling lane
+        # owns.
+        (5, 0, 512, "STATE_EQ", "('library_p1'",
+         "b3f7c0a9 library-shuffle-order axis (Class-B priority @367 "
+         "+ G1 attack=False @369 + G2 combat-damage @504 ALL CLOSED; "
+         "sibling-owned next-frontier)"),
         # Class C — CLOSED via the delayed-trigger port
         # (feature/g7-classc-warp-delayed-trigger). The warp-EXILE
         # delayed-trigger-vs-deterministic-sweep axis previously
@@ -214,25 +218,28 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         # field {bf, exile_p1, stack} STATE_EQ). With the new Rust
         # state.delayed_triggers + Effect::WarpExileSelf +
         # run_delayed_end_step_triggers landed, arch1/s1 runs MANY
-        # steps past 169.  RE-CHARACTERIZED at merge-time (cycle-37
-        # serial-merge pipeline, post-Class-B+Class-C lanes both
-        # landed): Class-B closure (priority-port axis at @367 now
-        # CLOSED on this seed too) shifts the next-frontier from the
-        # previously-pinned priority_player STATE_EQ @351 to a NEW
-        # life-total STATE_EQ at step 356 ('life_p0', 17, 20).  This
-        # is a genuine cross-lane interaction: neither Class-B nor
-        # Class-C alone surfaces it (a 3-life delta from a divergent
-        # damage/effect application that only the random walk's
-        # post-Class-B+Class-C path reaches). NOT a regression — the
-        # warp-EXILE closure-progress contract (run past step 169) +
-        # the priority-port closure (no priority_player divergence)
-        # both hold; this is the new axis surfaced behind the joint
-        # closure.  The library_pX sub-variants remain a SEPARATE
-        # shuffle-order axis (todo b3f7c0a9), not Class C.
-        (1, 1, 356, "STATE_EQ", "('life_p0', 17, 20)",
-         "life-total STATE_EQ (next-frontier after BOTH warp-EXILE "
-         "(Class-C) AND priority-port (Class-B) closures landed; "
-         "cross-lane surfaced axis — neither alone reveals it)"),
+        # steps past 169.  RE-CHARACTERIZED at G7 G2 combat-damage /
+        # SBA closure (this slice,
+        # ``feature/g7-g2-combat-damage-sba-axis``): the prior
+        # cross-lane life-total STATE_EQ at step 356 (`('life_p0',
+        # 17, 20)`) had the G2 combat-damage outcome / SBA divergence
+        # as its UNDERLYING root cause — the Rust bridge's
+        # ``_run_step_enter_sbas`` at COMBAT_DAMAGE entry mirrored
+        # Python's ``state_based_actions`` call but not Python's
+        # preceding ``resolve_combat_damage`` call
+        # (``engine_adapter.py:1261-1264``). G2 fix closes the
+        # life-total divergence: arch1/s1 runs PAST step 356 and
+        # surfaces at step 460 on the b3f7c0a9 library-SHUFFLE-ORDER
+        # axis ``('library_p1', ...)`` — SIBLING-OWNED
+        # (``feature/g7-b3f7c0a9-library-shuffle-order-parity``,
+        # LANDED on its branch, NOT MERGED at the time of the present
+        # G2 slice). NOT a regression of Class-C / Class-B / G2 — the
+        # surfaced axis is the next per-repro frontier the sibling
+        # lane owns.
+        (1, 1, 460, "STATE_EQ", "('library_p1'",
+         "b3f7c0a9 library-shuffle-order axis (warp-EXILE Class-C + "
+         "priority-port Class-B + G2 combat-damage life-total ALL "
+         "CLOSED; sibling-owned next-frontier)"),
         # Class D — CLOSED (verify-first @ feature/g7-classd-castset;
         # see test_rust_shadow_bakein.py::
         # test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier).
