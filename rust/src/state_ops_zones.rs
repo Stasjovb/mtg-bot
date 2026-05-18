@@ -41,7 +41,12 @@ pub const ZONE_HAND: u8 = 0;
 pub const ZONE_LIBRARY: u8 = 1;
 pub const ZONE_BATTLEFIELD: u8 = 2;
 pub const ZONE_GRAVEYARD: u8 = 3;
-#[allow(dead_code)]
+// G7 S5a (Option β) made `ZONE_STACK` genuinely live: the centralized
+// `state.stack_objects` spell-stack-source-zone store stamps
+// `obj.zone = ZONE_STACK`, `find_object_zone` returns it (see :263),
+// `take_source` reports it (`state_ops_resolve.rs:263`), and it is a
+// `use`-imported source-resolution zone in `state_ops_resolve.rs:176`.
+// The S1/S4-era `#[allow(dead_code)]` is now obsolete (S5c cleanup).
 pub const ZONE_STACK: u8 = 4;
 #[allow(dead_code)]
 pub const ZONE_EXILE: u8 = 5;

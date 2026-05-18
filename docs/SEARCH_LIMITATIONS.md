@@ -6522,8 +6522,16 @@ gate signal (correctly loud). The proper closure is parity-positive
 > is a distinct S5+/legal-axis owner, NOT S4's.
 >
 > **G7 mid-game STATE_EQ — auto-tap-from-lands CLOSED (this lane,
-> `feature/g7-midgame-stateeq`); S1 spell-stack-source-zone honest-
-> stopped.** The orchestrator's post-S1/S4 bake-in probe surfaced a
+> `feature/g7-midgame-stateeq`); spell-stack-source-zone `hand_p0`
+> axis S5a/S5b CLOSED (S5c: this "honest-stopped" header flipped to
+> CLOSED — the `hand_p0` spell-stack-source-zone axis is closed by
+> S5a's `state.stack_objects` re-home and proven byte-equal across
+> codec / determinizer / fingerprint by S5b; see the `[G7 S5a
+> CLOSED ...]` + `[G7 S5b LANDED ...]` blocks below. The SEPARATE
+> unmasked C1-class combat-blocker `LEGAL_SET_EQ` follow-up + S4b +
+> the warp-cast legal-EMISSION axis remain OPEN — those are NOT
+> closed by S5/S5c).** The orchestrator's post-S1/S4 bake-in probe
+> surfaced a
 > NEW mid-game STATE_EQ on non-warp production decks (arch2/s1 @ step
 > 273 `Galactic Wayfarer` `{2}{G}`; arch5/s0 @ step 322 `Icecave
 > Crasher`). **Verify-first diagnosis (class c, genuine engine bug,
@@ -6674,10 +6682,39 @@ gate signal (correctly loud). The proper closure is parity-positive
 > residue-stamp drift (verified present at base `302a5fc5`
 > independent of the S5b file — orchestrator-owned STALENESS-
 > SENTINEL; S5b changes zero Rust so the structural arm is
-> unaffected by S5b). Remaining: **S5c** (dead-code/`ZONE_STACK`
-> attr cleanup + this note's "honest-stopped"→"S5a/S5b closed"
-> flip) + the orchestrator's `.pyd`-rebuild-on-main + the separate
-> unmasked combat-blocker LEGAL_SET follow-up.
+> unaffected by S5b). Remaining (post-S5c): the orchestrator's
+> `.pyd`-rebuild-on-main + the separate unmasked combat-blocker
+> LEGAL_SET follow-up + S4b + warp-EMISSION (S5c does NOT close
+> those).
+>
+> **[G7 S5c LANDED — `feature/g7-s5c-deadcode-sl-flip`, dead-code
+> attr cleanup + this SL note flip; NO `.pyd`/behavior change.]**
+> The now-obsolete S1/S4-era `#[allow(dead_code)]` on
+> `state_ops_zones.rs` `ZONE_STACK` was removed — S5a made the
+> constant genuinely live (`state.stack_objects` store stamps
+> `obj.zone = ZONE_STACK`; `find_object_zone` returns it,
+> `state_ops_zones.rs:263`; `take_source` reports it,
+> `state_ops_resolve.rs:263`; `use`-imported as a source-resolution
+> zone, `state_ops_resolve.rs:176`). **Proof the allow was
+> genuinely obsolete (not a silent removal of a still-needed
+> allow):** `cargo build --lib` is warning-clean (0 warn / 0 err)
+> AND clippy total warnings are byte-identical before→after (79→79,
+> all the pre-existing `doc list item without indentation` style
+> lint) with **zero `dead_code` diagnostic anywhere** and
+> `ZONE_STACK` in no clippy diagnostic — i.e. removing the allow
+> introduced no warning because the item is used; S5a left nothing
+> unwired. The sibling `#[allow(dead_code)]` on `ZONE_EXILE` was
+> deliberately LEFT (out of S5c's design-doc scope — `ZONE_EXILE`
+> became live at round-14, long pre-S5a; its stale allow is not an
+> S5a-created obsolescence — a separate non-blocking cleanup
+> opportunity, not force-folded). This SL header was flipped from
+> "S1 spell-stack-source-zone honest-stopped" → "spell-stack-
+> source-zone `hand_p0` axis S5a/S5b CLOSED". Parity-neutral:
+> docs + one Rust attribute line only, ZERO behavior change, **4-
+> file core gate 1534 UNMOVED**, `tests_rust` zero-newly-failing vs
+> `dba2ff5b`. The attribute removal does NOT shift the Rust-Effect-
+> variant inventory (it is a zone-id `const`, not an `Effect`), so
+> `check_audit_coverage_staleness.py` counts are unchanged.
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both
