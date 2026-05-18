@@ -309,19 +309,24 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         # provider-accumulation port; same lane as the Class-B
         # @369-surfaced row).  Filed follow-up: f5145c1d (the Class-D
         # 1/23 Thawbringer mana sub-axis remains separate).
-        # Class D — TRIPLE-CLOSURE-FLIPPED. Class-D Sequence-target
-        # axis (was @453) + Class-C warp-EXILE @700 + the present
-        # @757 G1 attack=False axis are now ALL closed; arch7/s0
-        # proceeds PAST 757 to step 808 on a NEW distinct G-axis:
-        # ``STATE_EQ`` ``('priority_player', 0, 1)`` + a battlefield
-        # diff on Knight Luminary's tapped state (obj id 70:
-        # ``tapped=0`` py vs ``tapped=1`` rust). NEW G-axis (priority
-        # + tapped state divergence in the post-combat-damage tail);
-        # filed as the next G7 follow-up.
-        (7, 0, 808, "STATE_EQ", "('priority_player', 0, 1)",
-         "priority + tapped-state STATE_EQ (G1 attack=False @757 + "
-         "Class-D Sequence-target @453 + Class-C @700 ALL CLOSED; "
-         "new G-axis surfaced past @757)"),
+        # Class D — QUAD-CLOSURE-FLIPPED. Class-D Sequence-target
+        # axis (was @453) + Class-C warp-EXILE @700 + the @757 G1
+        # attack=False axis + the @808 G3 priority/tapped-state axis
+        # are now ALL closed; arch7/s0 proceeds PAST 808 to step
+        # 817 on a NEW distinct G-axis: ``STATE_EQ``
+        # ``('life_p0', 19, 20)`` — a 1-life delta (py p0=19 vs
+        # rust p0=20) consistent with a combat-damage outcome
+        # divergence. SIBLING-OWNED axis (combat-damage outcome /
+        # SBA — the @504/@431 lane); arch7/s0 now reaches the same
+        # post-combat-damage tail those rows surface in. NOT a new
+        # G-axis — the same combat-damage axis the sibling agent
+        # owns; filed as a row on the sibling todos
+        # (``504a1c7d``/``431b7e2a``).
+        (7, 0, 817, "STATE_EQ", "('life_p0', 19, 20)",
+         "life-total STATE_EQ (G1 attack=False @757 + Class-D "
+         "Sequence-target @453 + Class-C @700 + G3 priority/tapped "
+         "@808 ALL CLOSED; combat-damage outcome / SBA axis — "
+         "sibling-owned, same axis as @504/@431)"),
         # Class E — CLOSED by the ordered-pool `ManaPool`
         # representation (rust/src/state.rs::ManaPool now carries
         # `coins: Vec<ManaCoin>` as Python-parity insertion-ordered SoT;

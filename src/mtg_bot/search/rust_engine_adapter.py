@@ -550,66 +550,53 @@ class RustGameStateAdapter:
                 if int(self._rust.get_priority_player()) != target:
                     self._rust.give_priority_to(target)
         else:
-            d = decision_to_rust_dict(decision)
-            # G2 interim mask bookkeeping: record the land drop so the
-            # next legal_decisions() filters the structurally-over-
-            # offered extra PlayLand(s) (Rust has no
-            # lands_played_this_turn field). Recorded BEFORE apply so a
-            # mid-apply raise still marks the attempt consistently
-            # (apply is the hard gate either way).
-            if d.get("kind") == "play_land":
-                self._land_played_on_turn = int(self._rust.turn_number)
-            self._rust.apply_action(d)
-            self._rust.apply_sbas()
-            self._pass_count = 0
-            # **G7 @369 G1 stateless-Rust attack=False re-emission /
-            # B3-S3 provider-accumulation port.** Faithful mirror of
-            # Python's ``MtgGameStateAdapter._apply_attacker_decision``
-            # / ``_apply_blocker_decision`` (``engine_adapter.py:
-            # 1080-1131``): after the engine apply, pop the decided
-            # head from the adapter-side pending queue. When the queue
-            # is empty -> finalize the factored-combat window (reset
-            # combat-phase bookkeeping + enter the step's priority
-            # window). Rust's apply is the single accumulation site
-            # for ``attack=True`` (``declare_attacker`` taps + appends
-            # to ``state.attackers``,
-            # ``state_ops_actions.rs:1382-1384``) and a no-op for
-            # ``attack=False`` (``state_ops_actions.rs:1357-1384``) —
-            # so the ADAPTER's queue-pop is the single source of truth
-            # for "this head is done" on either branch (including
-            # vigilance, where ``attack=True`` keeps the creature
-            # untapped — Python's pop / Rust adapter's pop both
-            # advance the head past the vigilant declared attacker).
-            #
-            # ``_chosen_attackers`` is kept in sync (only appended on
-            # ``attack=True``, byte-mirroring
-            # ``engine_adapter.py:1095-1096``) for parity-bookkeeping;
-            # Rust's ``state.attackers`` is the authoritative apply
-            # store. ``decision_to_rust_dict`` validated this is an
-            # AttackerDecision / BlockerDecision and Rust's apply
-            # already accepted it — we are safe to consume the pending
-            # head here.
+            # **G7 @808 G3 deferred-batch combat-decision apply / B3-S3
+            # provider-accumulation port (phase 2).** For
+            # ``AttackerDecision`` / ``BlockerDecision`` the engine
+            # apply is **deferred to finalize** — adapter-side
+            # bookkeeping only, NO per-decision engine call. Python's
+            # SoT (``MtgGameStateAdapter._apply_attacker_decision`` /
+            # ``_apply_blocker_decision``, ``engine_adapter.py:
+            # 1080-1131``) does ZERO engine mutation per factored
+            # decision; the only engine write is the batched
+            # ``apply_action(state, ap.id, DeclareAttackers(frozenset(
+            # _chosen_attackers)))`` call inside
+            # ``_finalize_attacker_phase``
+            # (``engine_adapter.py:1101-1108``). The pre-G3 G1 port
+            # mirrored Python's queue-pop / finalize boundary but
+            # still routed each ``AttackerDecision`` through Rust's
+            # ``apply_action(Action::AttackerDecision)`` — which
+            # per-decision calls ``declare_attacker(obj_id)``
+            # (``state_ops_actions.rs:1382-1384`` →
+            # ``state_ops_combat.rs:declare_attacker``), tapping the
+            # creature + appending to ``state.attackers`` EAGERLY. So
+            # for a factored sequence like
+            # ``[AttackerDecision(70,True), AttackerDecision(120,?),
+            #   AttackerDecision(121,?)]`` Rust had Knight Luminary
+            # tapped + on ``state.attackers`` AFTER step 1 while
+            # Python kept it untapped + bookkept in
+            # ``_chosen_attackers`` until finalize — surfaced as the
+            # arch7/s0 step-808 ``STATE_EQ`` ``('priority_player',
+            # 0, 1)`` + Knight Luminary battlefield ``tapped`` diff
+            # divergence (Rust per-decision ``apply_sbas`` /
+            # ``_reset_priority_to_active`` ALSO ran per decision, so
+            # the priority axis tracked the tap eagerly). G3 routes
+            # both factored decisions through adapter-only
+            # bookkeeping; the batched
+            # ``{"kind":"declare_attackers","attacker_ids":[...]}`` /
+            # ``{"kind":"declare_blockers","assignments":[...]}``
+            # engine call happens ONCE in
+            # ``_finalize_attacker_phase`` /
+            # ``_finalize_blocker_phase`` exactly mirroring Python.
+            # Per-decision priority resets are removed too — Python's
+            # ``_apply_attacker_decision`` does not touch priority,
+            # only finalize's ``_enter_priority_for_current_step``
+            # does.
             if isinstance(decision, AttackerDecision):
-                # The decided id must equal our queue head — same
-                # contract Python's adapter enforces
-                # (``engine_adapter.py:1088-1094`` raises ValueError on
-                # mismatch). Out-of-order is a search-side bug.
-                if (
+                if not (
                     self._pending_attackers
                     and self._pending_attackers[0] == int(decision.attacker_id)
                 ):
-                    if decision.attack:
-                        self._chosen_attackers.append(int(decision.attacker_id))
-                    self._pending_attackers.pop(0)
-                    if not self._pending_attackers:
-                        self._finalize_attacker_phase()
-                        # _finalize_attacker_phase resets priority +
-                        # pass_count; skip the post-non-pass reset
-                        # below (mirroring Python's
-                        # _enter_priority_for_current_step path, which
-                        # also handles priority + pass_count itself).
-                        return
-                else:
                     # **Loud failure** (feedback_silent_noop_pipelines):
                     # An ``AttackerDecision`` for an id that isn't the
                     # pending head means either a stale apply (the
@@ -624,23 +611,32 @@ class RustGameStateAdapter:
                         f"{self._pending_attackers[0] if self._pending_attackers else None} "
                         f"(queue={self._pending_attackers}). The "
                         f"adapter-side _pending_attackers must stay in "
-                        f"lock-step with Rust's apply — re-derivation "
-                        f"is forbidden within a factored-combat window."
+                        f"lock-step with the deferred-batch apply — "
+                        f"re-derivation is forbidden within a "
+                        f"factored-combat window."
                     )
-            elif isinstance(decision, BlockerDecision):
-                if (
+                if decision.attack:
+                    self._chosen_attackers.append(int(decision.attacker_id))
+                self._pending_attackers.pop(0)
+                if not self._pending_attackers:
+                    # Finalize: the single batched
+                    # ``declare_attackers`` apply lives here.
+                    self._finalize_attacker_phase()
+                # **NO per-decision priority reset, NO per-decision
+                # apply_sbas, NO _pass_count reset** — Python's
+                # ``_apply_attacker_decision`` does not touch any of
+                # those. The factored window is a sub-decision
+                # axis inside DECLARE_ATTACKERS; the priority window
+                # opens (with its priority reset + pass_count=0)
+                # ONLY at finalize via
+                # ``_enter_priority_for_current_step`` in
+                # ``_finalize_attacker_phase``.
+                return
+            if isinstance(decision, BlockerDecision):
+                if not (
                     self._pending_blockers
                     and self._pending_blockers[0] == int(decision.blocker_id)
                 ):
-                    if decision.attacker_id is not None:
-                        self._chosen_blocks[int(decision.blocker_id)] = int(
-                            decision.attacker_id
-                        )
-                    self._pending_blockers.pop(0)
-                    if not self._pending_blockers:
-                        self._finalize_blocker_phase()
-                        return
-                else:
                     raise ValueError(
                         f"RustGameStateAdapter: BlockerDecision for "
                         f"id={decision.blocker_id} but pending queue "
@@ -648,9 +644,31 @@ class RustGameStateAdapter:
                         f"{self._pending_blockers[0] if self._pending_blockers else None} "
                         f"(queue={self._pending_blockers}). The "
                         f"adapter-side _pending_blockers must stay in "
-                        f"lock-step with Rust's apply — re-derivation "
-                        f"is forbidden within a factored-combat window."
+                        f"lock-step with the deferred-batch apply — "
+                        f"re-derivation is forbidden within a "
+                        f"factored-combat window."
                     )
+                if decision.attacker_id is not None:
+                    self._chosen_blocks[int(decision.blocker_id)] = int(
+                        decision.attacker_id
+                    )
+                self._pending_blockers.pop(0)
+                if not self._pending_blockers:
+                    self._finalize_blocker_phase()
+                return
+
+            d = decision_to_rust_dict(decision)
+            # G2 interim mask bookkeeping: record the land drop so the
+            # next legal_decisions() filters the structurally-over-
+            # offered extra PlayLand(s) (Rust has no
+            # lands_played_this_turn field). Recorded BEFORE apply so a
+            # mid-apply raise still marks the attempt consistently
+            # (apply is the hard gate either way).
+            if d.get("kind") == "play_land":
+                self._land_played_on_turn = int(self._rust.turn_number)
+            self._rust.apply_action(d)
+            self._rust.apply_sbas()
+            self._pass_count = 0
             # CR 117.3c / engine_adapter.py:985-987: priority returns
             # to the active player after any non-pass action. Rust's
             # apply_action does not guarantee this; mirror it.
@@ -1130,29 +1148,42 @@ class RustGameStateAdapter:
         """Exit the factored-attacker window after the queue is
         exhausted.
 
-        **G7 @369 G1 stateless-Rust attack=False re-emission /
-        B3-S3 provider-accumulation port.** Faithful mirror of
-        Python ``MtgGameStateAdapter._finalize_attacker_phase``
-        (``engine_adapter.py:1101-1112``). Three load-bearing actions:
+        **G7 @808 G3 deferred-batch combat-decision apply / B3-S3
+        provider-accumulation port (phase 2).** Faithful byte-mirror
+        of Python ``MtgGameStateAdapter._finalize_attacker_phase``
+        (``engine_adapter.py:1101-1112``). Four load-bearing actions
+        in Python's order:
 
-        1. Reset combat-phase bookkeeping (``_combat_phase = None``,
-           ``_chosen_attackers = []``). Rust already accumulated the
-           declared attackers internally (``state.attackers``) via the
-           per-decision ``declare_attacker`` calls in
-           ``state_ops_actions.rs::Action::AttackerDecision`` —
-           there is NO whole-action ``DeclareAttackers`` to apply on
-           the Rust side (the stateless-Rust split — Python's
-           equivalent ``apply_action(DeclareAttackers(chosen))`` call
-           at ``engine_adapter.py:1103-1108`` is the single
-           accumulation site Python needs precisely because Python's
-           apply arm is the only batch-time write).
-        2. Enter the priority window for the current step
+        1. **Apply the batched ``DeclareAttackers`` to the engine.**
+           Python calls
+           ``apply_action(state, ap.id, DeclareAttackers(frozenset(
+           _chosen_attackers)))`` (``engine_adapter.py:1103-1108``)
+           which dispatches to ``actions._declare_attackers`` →
+           ``combat.declare_attackers``, which sets
+           ``obj.attacking = True``, taps the creature (modulo
+           vigilance), and fires the per-attacker
+           ``BECOMES_TAPPED`` + ``ATTACKS`` triggers. Mirror this on
+           the Rust side by calling
+           ``apply_action({"kind":"declare_attackers",
+           "attacker_ids":[...]})``, which dispatches to
+           ``Action::DeclareAttackers`` →
+           ``state_ops_combat.rs::declare_attacker`` per id (same
+           per-attacker tap + ``Event::Attacks`` dispatch the Python
+           SoT performs). The pre-G3 G1 port routed each factored
+           ``AttackerDecision`` through Rust's apply per-decision,
+           leaving the engine state out-of-sync with Python's batched
+           apply mid-queue (the @808 ``priority_player`` + Knight
+           Luminary tapped divergence). The batched call here is
+           the SINGLE accumulation site, byte-mirroring Python.
+        2. Reset combat-phase bookkeeping
+           (``_combat_phase = None``, ``_chosen_attackers = []``).
+        3. Enter the priority window for the current step
            (``_enter_priority_for_current_step``,
            ``engine_adapter.py:1112``). Rust's priority is set by
            ``_reset_priority_to_active`` here — byte-mirroring
            ``self._state.priority_player_idx = _next_alive(...,
            active_player_idx)`` (``engine_adapter.py:1151-1153``).
-        3. Reset the pass-priority counter to 0 — Python's
+        4. Reset the pass-priority counter to 0 — Python's
            ``_enter_priority_for_current_step`` does this via
            ``self._pass_count = 0`` (``engine_adapter.py:1150``).
 
@@ -1160,6 +1191,31 @@ class RustGameStateAdapter:
         arm exactly when ``_pending_attackers`` becomes empty after
         the pop (mirrors ``engine_adapter.py:1098-1099``).
         """
+        # Phase 1: batched engine apply. Sort the chosen ids so the
+        # per-attacker dispatch order is deterministic across runs
+        # (Python's frozenset has no stable iteration order; sorted
+        # matches the Rust whole-action arm's ``Vec`` order from
+        # ``extract::<Vec<u32>>()`` and lines up the per-attacker
+        # ``ATTACKS`` trigger stack-push order). ``apply_sbas`` after
+        # so state-based actions process any tap-induced changes
+        # (mirrors the same ``apply_sbas`` Python's
+        # ``apply_action`` calls after every action arm via
+        # ``actions.py`` post-apply hook). Skip the engine apply
+        # when no attackers were chosen — Rust's
+        # ``Action::DeclareAttackers`` with an empty ``attacker_ids``
+        # is a no-op (``state_ops_actions.rs:216-218`` iterates an
+        # empty Vec), and Python's
+        # ``apply_action(DeclareAttackers(frozenset()))`` is a
+        # benign-but-real call that emits an empty
+        # ``combat.declare_attackers(state, [])`` — equivalent. We
+        # call only when non-empty to avoid the unnecessary engine
+        # round-trip.
+        if self._chosen_attackers:
+            self._rust.apply_action({
+                "kind": "declare_attackers",
+                "attacker_ids": sorted(self._chosen_attackers),
+            })
+            self._rust.apply_sbas()
         self._combat_phase = _COMBAT_NONE
         self._chosen_attackers = []
         self._pass_count = 0
@@ -1176,15 +1232,31 @@ class RustGameStateAdapter:
 
     def _finalize_blocker_phase(self) -> None:
         """Exit the factored-blocker window after the queue is
-        exhausted. Mirror of ``_finalize_attacker_phase`` for the
-        blocker side. Byte-mirrors Python
+        exhausted.
+
+        **G7 @808 G3 deferred-batch combat-decision apply (phase 2).**
+        Byte-mirror of Python
         ``MtgGameStateAdapter._finalize_blocker_phase``
-        (``engine_adapter.py:1133-1144``) — Rust accumulated the
-        declared blocks via per-decision ``declare_blocker`` calls
-        (``state_ops_actions.rs::Action::BlockerDecision``), so no
-        whole-action ``DeclareBlockers`` apply is needed on the Rust
-        side; just reset combat bookkeeping + enter the
-        DECLARE_BLOCKERS priority window."""
+        (``engine_adapter.py:1133-1144``): batched
+        ``apply_action(state, defender_id, DeclareBlockers(
+        assignments=tuple(_chosen_blocks.items())))`` call at
+        ``engine_adapter.py:1135-1139``. Mirror by calling Rust's
+        whole-action ``Action::DeclareBlockers`` with the same
+        ``(blocker_id, attacker_id)`` pairs — which dispatches to
+        ``state_ops_combat.rs::declare_blocker`` per pair and runs
+        the CE16 post-validation menace unwind
+        (``state_ops_actions.rs:262-275``), exactly mirroring
+        ``actions._declare_blockers``'s ``validated.pop(...)`` pass
+        (``actions.py:2555-2566``)."""
+        if self._chosen_blocks:
+            self._rust.apply_action({
+                "kind": "declare_blockers",
+                "assignments": [
+                    (int(bid), int(aid))
+                    for bid, aid in self._chosen_blocks.items()
+                ],
+            })
+            self._rust.apply_sbas()
         self._combat_phase = _COMBAT_NONE
         self._chosen_blocks = {}
         self._pass_count = 0
