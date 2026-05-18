@@ -7056,6 +7056,63 @@ gate signal (correctly loud). The proper closure is parity-positive
 > play; the FS-pass-SBA interleave is tracked separately as a known
 > documented limitation.]**
 
+> **[G7 UNCLASSIFIED life_p1 (CR 510.1c blocked-attacker-stays-
+> blocked) — CLOSED by the `deal_combat_damage` gate flip from
+> live-blocker-presence to declared-blocker-presence
+> (`feature/g7-unclassified-life-p1-combat-damage` off main
+> `b6316e65`).** Surfaced as the lone S6 scale-verify v2
+> `STATE_EQ::fields:life_p1` divergence (arch=9 seed=1 step 875 —
+> `('life_p1', 20, 18)`). Verify-first repro: turn 33 DECLARE_BLOCKERS,
+> p1 (defender) declared Gravpack Monoist (id 63) as blocker for
+> p0's Gravpack Monoist (id 3) attacker; p0 then cast Focus Fire
+> targeting the blocker (id 63), which resolves on the stack between
+> DECLARE_BLOCKERS and COMBAT_DAMAGE and kills the blocker; at
+> COMBAT_DAMAGE entry Python applies 0 combat damage to p1
+> (CR 510.1c: attacker stays blocked even when all blockers die),
+> Rust applies 2 (attacker's full power) to p1. **Root cause** in
+> `rust/src/state_ops_combat.rs::deal_combat_damage`: the
+> "blocked vs unblocked" gate at line ~1015 was
+> `if let Some(_first_blocker_id) = first_blocker {`, where
+> `first_blocker = bf_ordered_blockers.first().copied()` and
+> `bf_ordered_blockers` was the **live-battlefield intersection** of
+> the declared `self.blockers` Vec — so when every declared blocker
+> died on the stack, the live set was empty, `first_blocker` was
+> `None`, and control fell to the `else if attacker_power > 0`
+> unblocked branch which spilled the attacker's full power to the
+> defending player. Diverged from Python's `combat.py:417`
+> `was_blocked = len(attacker.blocked_by) > 0` gate (computed from
+> declared `blocked_by`, NOT pruned when individual blockers die —
+> see the explicit comment block at `combat.py:405-417` which calls
+> out exactly this case as CR 510.1c). **Fix** (`rust/src/
+> state_ops_combat.rs::deal_combat_damage`, +37 LOC of comment, +1
+> LOC of code, -1 LOC of removed `first_blocker` local): introduced
+> `was_blocked = !attacker_blocker_ids.is_empty()` (the declared-
+> blocker-presence gate) and switched the outer gate to
+> `if was_blocked {`. Inside the blocked branch, the existing
+> `bf_ordered_blockers` walk naturally degenerates to the correct
+> CR 510.1c behavior when every blocker is dead: (a) the no-trample
+> loop body never executes on an empty `bf_ordered_blockers`, so no
+> plan entries are emitted — byte-equivalent of Python's
+> `combat.py:431-453` "assignment lands on the dead blocker as a
+> no-op for player life" fall-through; (b) the trample branch's
+> trample-through tail `if remaining > 0` then spills the full
+> power to the defender — byte-equivalent of Python's
+> `combat.py:454-458` `if has_trample and remaining > 0` block.
+> The fix is the gate flip; the inner branches' empty-blockers
+> behavior falls out byte-equivalent. Pinned RED-before/GREEN-after
+> by the targeted scale repro at arch=9 seed=1 (terminal at step
+> 5028 post-fix vs STATE_EQ tripwire at step 875 pre-fix). Zero
+> Rust-engine semantic change outside the gate: the existing
+> CE14/CE15 multi-blocker walks, the FS pass-2 redirect
+> (`combat.rs:1318+` which already handles "blocker died in FS
+> pass" correctly per CR 510.1c with the same trample-only-spillover
+> rule), and the back-damage emission are all untouched. **The
+> double-strike spillover fix earlier in this function (the comment
+> block at lines ~1265-1283) already encoded the correct rule for
+> the post-FS-substep case; this slice closes the parallel
+> pre-COMBAT_DAMAGE case by extending the same gate to the outer
+> entry point.**]**
+
 > **[Pre-fix RE-CHARACTERIZATION framing (verify-first @ `main` @
 > `430f3b39`; superseded above):]** The S6 evidence
 > (`docs/G7_S6_SCALE_VERIFY_EVIDENCE.md` + `s6_scale_verify.json`)
