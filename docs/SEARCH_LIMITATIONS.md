@@ -6776,7 +6776,29 @@ gate signal (correctly loud). The proper closure is parity-positive
 > priority-player divergence, G5-family region). Both pinned LOUD by
 > the flipped closure pin; filed as the next G7 follow-up (todo
 > below / SOT_FLIP §4). NOT force-fixed in this lane
-> (`feedback_no_fallback_hybrids` honest-stop).
+> (`feedback_no_fallback_hybrids` honest-stop). [Combat-blocker
+> merged @ `f521501d` (cycle 30).]
+
+> **[S5 TRIGGERS-VERIFY LANDED + orchestrator-merged (cycle 30) —
+> `feature/g7-s5-triggers-verify`, pure-Python VERIFY, ZERO
+> engine/`rust/src`/`.pyd`.]** The full faithfully-bridgeable trigger
+> surface composes byte-equal Python↔Rust through the S5a re-homed
+> `stack_objects` source — **CLEAN VERIFY, claim HOLDS, no hole, no
+> fix slice** (`tests/test_g7_s5_triggers_verify.py`, 6 pins:
+> ETB-on-resolve `source_is_self` trigger, multi-ETB resolve-time
+> push ORDER, respond-to-trigger nested window — all byte-equal
+> mid-stack + post-resolve; negative control LOUD-then-heal). One
+> honestly-documented harness-bridge limitation (the 2-subject
+> `Event.IS_CAST` is not slot-targetable through the cross-engine
+> `triggered_abilities` predicate bridge — NOT an S5a engine hole;
+> the CAST axis reads the SAME re-homed store as ETB, proven by
+> S5a's `tests_rust` closure-flips + pins 2/3/4; documented, not
+> papered). 4-file core 1536 UNMOVED; `tests_rust`
+> zero-newly-failing; cron exit 0; isolation clean. S5/S5c do NOT
+> close the SEPARATE combat-blocker-unmasked frontiers / S4b /
+> warp-EMISSION (no overclaim). NEXT per the G7 owner doc: **S6**
+> (`rust_shadow` bake-in scale verify, NO new masking) → **S7 CE5
+> removal LAST** → CE5-free re-proof + fresh CE5-free C4.
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both

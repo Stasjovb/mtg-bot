@@ -143,6 +143,98 @@
 > S5 triggers-verify → S6 → S7 (S5a is the satisfied hard
 > prerequisite for S7 CE5-removal).
 
+> **STATUS UPDATE — S5 TRIGGERS-VERIFY LANDED (pure-Python VERIFY, no
+> engine / `rust/src/` / `src/` / `.pyd` change) on branch
+> `feature/g7-s5-triggers-verify`.** The comprehensive verification
+> that the FULL faithfully-bridgeable trigger surface composes
+> **byte-equal Python↔Rust through the S5a re-homed `stack_objects`
+> source** is **a CLEAN VERIFY — the claim HOLDS, no hole.** Added
+> `tests/test_g7_s5_triggers_verify.py` (6 pins). The pins drive a
+> trigger-bearing creature (a `Grizzly Bears`-named CardDef carrying
+> `triggered_abilities`) through cast→on-stack→resolve on BOTH
+> engines and compare at the same per-apply moment the role-swapped
+> `rust_shadow` bake-in uses (apply-to-both, **NO CE5 post-cast
+> drain** — the cast→on-stack→resolve window S5a re-homed), reusing
+> the S5b `_drive_to_spell_on_stack` driver verbatim:
+> 1. **window sanity** — the cast creature spell sits on the re-homed
+>    `stack_objects` source on BOTH engines + is out of every hand
+>    projection + the window is byte-equal BEFORE any trigger
+>    resolves (the S5a/S5b floor this slice builds on).
+> 2. **ETB-on-resolve self trigger byte-equal** (the core G7 owner-doc
+>    Slice S5 deliverable) — a `source_is_self` ENTERS trigger on the
+>    cast creature fires at `move_source_post_resolve` →
+>    `dispatch_event(Enters)` reading the re-homed source; the FULL
+>    field view is byte-equal Python↔Rust at the mid-stack AND
+>    post-resolve compare points; the carrier reaches bf + the ETB
+>    draw fires on BOTH (hand sizes byte-equal).
+> 3. **multi-ETB resolve-time push ORDERING byte-equal** — TWO
+>    `source_is_self` ENTERS triggers (draw + scry); both are pushed
+>    when the spell resolves through the re-homed source; the pushed
+>    ORDER (asserted at the post-spell-resolve stack-signature
+>    window) + the resolved results are byte-equal (the §S5 "verify
+>    the trigger push-ordering vs Python `put_into_battlefield`
+>    ETB-on-stack ordering").
+> 4. **respond-to-trigger window byte-equal** — after resolving
+>    EXACTLY the spell, the ETB triggered ability sits ALONE on the
+>    stack as a respondable object on BOTH engines (same
+>    `stack_size`, byte-equal stack signature — the §S5 "an opponent
+>    can respond to a triggered ability on the stack" / S3-risk
+>    nested window), then resolves byte-equal.
+> 5. **negative control** — a simulated S5a re-homed-source hole
+>    (Rust's resolve-time ETB trigger never fires) produces a LOUD
+>    3-field divergence (`stack` + `hand_pX`/`library_pX`); completing
+>    the Rust resolution heals it cleanly — so the byte-equality pins
+>    genuinely discriminate (not trivially-passing; S5b discipline).
+> 6. **CAST-predicate bridge limitation, honestly documented** — the
+>    §1.4 CAST observer-walk surface cannot be faithfully exercised
+>    through the cross-engine `triggered_abilities` predicate bridge:
+>    `Event.IS_CAST` is a 2-subject event (`("spell","controller")`),
+>    so the bridge's slot-None `subject_*`/`controlled_by_you`
+>    mapping (correct for single-subject ENTERS/DIES) makes
+>    `_resolve_subject(subjects, None)` return `None` → the Python
+>    trigger no-ops while Rust resolves the on-stack spell as the
+>    subject and DOES fire — a **harness-fixture-bridge** divergence,
+>    NOT an S5a engine hole (real card data uses `Subject("spell",…)`
+>    / `Controlled(YOU, subject="controller")`,
+>    `cards/parser/triggers.py:728-760`; the bridge has no mechanism
+>    to target the `"spell"` slot for IS_CAST). The §1.4 Rust CAST
+>    observer walk + the `cards.rs` helper stack-store extension are
+>    proven by **S5a's own `tests_rust` closure-flips** (the
+>    silent-CAST-trigger regression S5a fixed) AND by Pins 2/3/4 here
+>    — the ENTERS-through-re-homed-source path reads the **SAME
+>    re-homed `stack_objects` store** the CAST observer walk reads
+>    (`state_ops_resolve.rs:480-517` — the CAST and ENTERS extra-
+>    observer / stack-store lookups share the one re-homed store), so
+>    the CAST axis has no SEPARATE re-homed-source code path left
+>    unverified. Documented, not papered (`feedback_silent_noop_
+>    pipelines`).
+> **4-file core gate 1536 UNMOVED** (verified — S5 triggers-verify
+> adds one pure-Python test file, touches zero `src/`/`rust/src/`/
+> `parity_smoke.py`/`cross_engine.py`; the gate is
+> `tests/test_parity_smoke.py` + `test_cross_engine_etb_triggers.py`
+> + `test_trajectory_parity.py` + `test_trajectory.py`, all green at
+> exactly 1536 = 1532-core + 2 S4 + 2 R77-CFI1, the
+> `24776ae0` baseline). Broader cross-engine ETB/trigger + rust_shadow
+> bake-in + triggers-on-stack + S5b suites green (S5b 9 + S5 6 +
+> bake-in/triggers-on-stack 19 = 34; broader ETB/trigger 747).
+> `tests_rust` 30 failed / 2312 passed — failing set **byte-identical**
+> to the `24776ae0` baseline (zero newly-failing; the 30 pre-existing
+> factored-combat/observer reds, todo `feedcf93`, untouched).
+> `scripts/check_audit_coverage_staleness.py` exit 0 (zero Effect /
+> zero `rust/src/` touch — no structural-arm fire). Isolation
+> self-check PASSED (shared canonical `.venv-py313` `.pyd` mtime+size
+> byte-identical before/after — worktree-isolated build only; no
+> shared/main `.pyd` rebuild by this lane). NOT merged / NOT pushed
+> (orchestrator owns the merge; this lane ships zero Rust so NO `.pyd`
+> rebuild / NO residue cadence / NO cron resync is owed — exactly the
+> S5b zero-engine pattern). Recommended NEXT per the G7 owner doc:
+> **S6** (the `rust_shadow` bake-in scale verify, NO new masking) →
+> **S7 CE5 removal LAST** → CE5-free re-proof + fresh CE5-free C4 (the
+> final flip gate). The separate unmasked combat-blocker `LEGAL_SET`
+> follow-up + S4b + warp-cast legal-EMISSION axis remain distinct
+> STILL-OPEN lanes (S5 triggers-verify does NOT close those — no
+> overclaim).
+
 > **Status: DESIGN / SCOPING (verify-first). Docs-only.** This is the
 > canonical owner doc for the **S5 spell-stack-source-zone
 > re-homing** — the single residual `hand_p0` divergence the
