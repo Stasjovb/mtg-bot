@@ -1918,6 +1918,33 @@ second:
    >     `ActivateAbility` 31/300 — `auto_tap_pay_for_cost`
    >     color/source order vs Python `ManaCost.colored`). Then
    >     C (`8d353e80`) → D (B1/C1) → **S7 LAST** + `b3f7c0a9`.
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 35 —
+   >   G7 S6-Class-E verify-first HONEST-STOP, ZERO engine; cron
+   >   IN-SYNC, counts UNCHANGED 121/123/23/12/11, parity
+   >   307/475 / PROBED 106 UNCHANGED; 4-file 1536 UNMOVED).**
+   >   - **5th campaign verify-first refinement.** Brief
+   >     hypothesized Class-E (31/300) = mana-source/land-tap
+   >     COLOR pick order; verify-first REFINED: that order
+   >     already matches Python — the REAL root = the
+   >     **GENERIC-cost drain ORDER from the floating pool**
+   >     (Python `auto_tap_for_cost` FIFO/insertion-order;
+   >     Rust `auto_tap_pay_for_cost` fixed `C→W→U→B→R→G`).
+   >     RED-before arch1/s0 step 598 (pure-generic, pool
+   >     `[G,G,U,U]` → Py keeps U:2 / Rust G:2). HOMOGENEOUS
+   >     31/31. 0/31 by code (correct — the faithful fix needs
+   >     pool insertion-order but Rust `ManaPool` is a per-color
+   >     COUNT struct; the only faithful fix = an ordered-pool
+   >     `ManaPool` repr, 186 refs/9 files incl `cards.rs`,
+   >     >1 safe slice → honest-stopped, todo `553f5b29`).
+   >     +1 LOUD root-cause pin; agent disciplined
+   >     (git-verified, no over-reports).
+   >   - NEXT (2 continuous lanes): **Lane A = the re-scoped
+   >     Class-B coordinated engine+adapter priority-model
+   >     slice** (cycle-36 — see below); **Lane B = Class D**
+   >     (B1/C1 Slices 2/3 cast-set asymmetry, 23/300, the B1
+   >     co-blocker flip-GO prerequisite; verify-first first).
+   >     Then C (`8d353e80`) + Class-E ordered-pool (`553f5b29`)
+   >     + `b3f7c0a9` → **S7 LAST**.
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
