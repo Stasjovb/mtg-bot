@@ -4141,6 +4141,20 @@ fn subject_has_card_type(
 }
 
 /// Shared body for `source_has_card_type` / `subject_has_card_type`.
+///
+/// **G7 S5a:** also walks `state.stack_objects` (the
+/// spell-stack-source-zone store, zone=ZONE_STACK). A spell being cast
+/// is moved hand → `stack_objects` BEFORE the CAST event dispatches
+/// (mirroring Python's `card.zone = Zone.STACK` at `actions.py:1751`
+/// preceding the `StackItem` append at `:1759`). Python's CAST
+/// predicate dispatch evaluates `subject_is_creature` etc. against the
+/// live `card` reference (`dispatch_event(..., spell=card)`,
+/// `actions.py:1795`) which is off-hand on the stack — so the Rust
+/// subject lookup MUST reach the stack-resident object or the
+/// `SubjectIsCreature`/`SubjectIsLand`/`SubjectIsArtifact` CAST
+/// triggers (and `SourceIsCreature` respond-to-cast) silently stop
+/// firing (`feedback_silent_noop_pipelines`; design §5.2-risk-3 —
+/// fixed IN S5a, not deferred).
 fn object_has_card_type(
     state: &crate::state::GameState,
     obj_id: u32,
@@ -4166,6 +4180,15 @@ fn object_has_card_type(
                     return false;
                 }
             }
+        }
+    }
+    // G7 S5a 5th zone: the spell-stack-source-zone store.
+    for obj in state.stack_objects.iter() {
+        if obj.id == obj_id {
+            if let Some(printing) = state.registry.lookup(obj.printing_id) {
+                return printing.card_types.iter().any(|t| t == card_type);
+            }
+            return false;
         }
     }
     false
@@ -4212,6 +4235,17 @@ fn subject_has_subtype(
             }
         }
     }
+    // G7 S5a 5th zone: the spell-stack-source-zone store (a cast
+    // spell with a `SubjectHasSubtype` CAST trigger lives here at
+    // dispatch time — same rationale as `object_has_card_type`).
+    for obj in state.stack_objects.iter() {
+        if obj.id == obj_id {
+            if let Some(printing) = state.registry.lookup(obj.printing_id) {
+                return printing.subtypes.iter().any(|s| s == subtype);
+            }
+            return false;
+        }
+    }
     false
 }
 
@@ -4219,6 +4253,17 @@ fn subject_has_subtype(
 /// players and return its controller id. Returns `None` when the
 /// object isn't found in any of those zones (already moved off-bf
 /// in a way the dispatch caller didn't expect, or an id mismatch).
+///
+/// **G7 S5a:** also walks `state.stack_objects` so `ControlledByYou`
+/// on a cast-spell subject (an on-stack spell, e.g. a
+/// `subject_is_creature AND controlled_by_you` CAST observer) resolves
+/// the subject's controller. Python's `_cast_spell` sets
+/// `card.controller_id = player_id` (`actions.py:1752`) before the
+/// CAST dispatch, so the by-reference `card` subject carries the
+/// caster's controller; the Rust stack-store object's `controller`
+/// was set identically at cast (byte-mirror). Without this the
+/// `ControlledByYou` arm returns `None`→`false` and the trigger
+/// silently stops firing (design §5.2-risk-3).
 fn find_object_controller(
     state: &crate::state::GameState,
     obj_id: u32,
@@ -4235,6 +4280,12 @@ fn find_object_controller(
                     return Some(obj.controller);
                 }
             }
+        }
+    }
+    // G7 S5a 5th zone: the spell-stack-source-zone store.
+    for obj in state.stack_objects.iter() {
+        if obj.id == obj_id {
+            return Some(obj.controller);
         }
     }
     None

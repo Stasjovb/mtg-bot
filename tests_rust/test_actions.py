@@ -140,6 +140,7 @@ def test_apply_action_on_clone_pass_priority_is_noop_on_both(synthetic_state):
 
 ZONE_HAND = 0
 ZONE_BATTLEFIELD = 2
+ZONE_STACK = 4  # G7 S5a: the spell-stack-source-zone store.
 P0_FIRST_BATTLEFIELD_ID = 0
 P0_FIRST_BEARS_ID = 5
 P0_FIRST_HAND_ID = 10  # Llanowar Elves
@@ -1281,26 +1282,32 @@ def test_apply_action_cast_spell_kicked_true_dispatches_unchanged(synthetic_stat
 
 
 def test_apply_action_cast_spell_cast_for_free_true_still_pays_mana(synthetic_state):
-    """First-slice contract: ``cast_for_free=True`` is parsed as data
-    but has NO observable effect — the base mana cost is STILL paid
-    (the flag would normally bypass the mana payment, but the
-    primitive can't honor that yet). A cast with the flag set but
-    NO mana in pool still fails the same way an unflagged cast
-    would. A future slice plumbing the flag will flip this test."""
+    """``cast_for_free=True`` is parsed as data but has NO observable
+    effect — the base mana cost is STILL paid. **Post cycle-25
+    auto-tap:** the empty floating pool no longer blocks the cast —
+    ``cast_creature`` auto-taps an untapped p0 Forest to pay the {G}
+    (byte-Python ``auto_tap_for_cost``), so the cast SUCCEEDS and the
+    `cast_for_free` flag is demonstrably ignored (the spell is paid
+    via land-tap, not bypassed). **G7 S5a closure-flip:** the cast
+    re-homes the spell hand → the stack-object store, so
+    ``find_object_zone`` reports ``ZONE_STACK`` (byte-Python
+    ``card.zone = Zone.STACK``); pre-S5a the S1 model kept it in the
+    hand Vec (``ZONE_HAND``) — the now-corrected divergence. A future
+    slice plumbing the flag's mana-bypass will refine this."""
     elf_id = P0_FIRST_HAND_ID
-    # Pool is empty; flag would normally bypass payment.
+    # Pool is empty; the flag would (eventually) bypass payment, but
+    # the cycle-25 auto-tap pays {G} from an untapped Forest anyway.
     assert synthetic_state.get_mana_pool(0)["G"] == 0
 
-    # No exception — cast_creature returns False silently when mana
-    # is insufficient; apply_action discards the bool.
     synthetic_state.apply_action(
         {"kind": "cast_spell", "card_id": elf_id, "cast_for_free": True}
     )
 
-    # Cast did not happen — elf still in hand. Pins that
-    # cast_for_free was ignored (flag's purpose would be to make
-    # this succeed with empty pool).
-    assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
+    # Cast succeeded (auto-tap paid {G}); the spell is on the stack-
+    # object store (zone == ZONE_STACK) — byte-Python, NOT the pre-S5a
+    # hand-resident S1 model. The `cast_for_free` flag was ignored
+    # (mana was actually paid via land-tap).
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_STACK
 
 
 def test_apply_action_cast_spell_use_impending_true_dispatches_unchanged(synthetic_state):

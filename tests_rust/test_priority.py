@@ -891,6 +891,7 @@ _PHASE_MAIN1 = 3
 _ZONE_HAND = 0
 _ZONE_BATTLEFIELD = 2
 _ZONE_GRAVEYARD = 3
+_ZONE_STACK = 4  # G7 S5a: the spell-stack-source-zone store.
 # Synthetic seed: p0 hand[0] is a Llanowar Elves ({G} creature).
 _P0_ELF_ID = 10
 
@@ -913,12 +914,15 @@ def _response_instant_dict():
 def test_s3_permanent_spell_sits_on_stack_opponent_gets_response_window(
     synthetic_state,
 ):
-    """S3 deliverable (a)+(b): a creature spell cast by p0 SITS on the
-    stack (no atomic resolve — the S1 contract), and p1's response
-    window emits an instant-speed CastSpell via `legal_decisions(1)`
-    WHILE the creature spell is on the stack. This is the I46
-    two-pass instant-speed emission composing with a non-empty stack
-    — the surface that did not exist pre-S1.
+    """S3 deliverable (a)+(b), G7 S5a closure-flip: a creature spell
+    cast by p0 SITS on the stack (no atomic resolve — the S1/S3
+    contract; S5a re-homes the spell hand → the stack-object store so
+    ``find_object_zone`` reports ``ZONE_STACK``, byte-Python
+    ``card.zone = Zone.STACK``), and p1's response window emits an
+    instant-speed CastSpell via `legal_decisions(1)` WHILE the creature
+    spell is on the stack. This is the I46 two-pass instant-speed
+    emission composing with a non-empty stack — the surface that did
+    not exist pre-S1.
 
     **Byte-equal priority-window model (the verify-first-confirmed
     sequence).** A response window opens for p1 only when priority is
@@ -946,9 +950,10 @@ def test_s3_permanent_spell_sits_on_stack_opponent_gets_response_window(
     assert synthetic_state.cast_creature(_P0_ELF_ID, 0) is True
     assert synthetic_state.stack_size() == 1
     assert synthetic_state.is_stack_empty() is False
-    assert synthetic_state.find_object_zone(_P0_ELF_ID) == _ZONE_HAND, (
-        "S1 contract: the creature spell sits on the stack (still in "
-        "hand, NOT atomic-resolved to the battlefield)"
+    assert synthetic_state.find_object_zone(_P0_ELF_ID) == _ZONE_STACK, (
+        "S5a contract: the creature spell sits on the stack-object "
+        "store (zone == ZONE_STACK, off-hand — byte-Python "
+        "card.zone=Zone.STACK), NOT atomic-resolved to the battlefield"
     )
     assert synthetic_state.get_priority_player() == 0, (
         "post-cast priority is the active player (p0) — Python "
@@ -986,12 +991,16 @@ def test_s3_permanent_spell_sits_on_stack_opponent_gets_response_window(
 def test_s3_response_resolves_lifo_then_permanent_spell_lands(
     synthetic_state,
 ):
-    """S3 deliverable (c): the opponent's response goes on TOP of the
-    permanent spell and resolves FIRST (LIFO — CR 405.5 /
-    `simulate.py:priority_loop:254-267` resolves the TOP item per
-    completed pass round); then the permanent spell resolves and the
-    creature lands on the battlefield. The nested-window resolution
-    order is byte-equal to Python's stack discipline."""
+    """S3 deliverable (c), G7 S5a closure-flip: the opponent's
+    response goes on TOP of the permanent spell and resolves FIRST
+    (LIFO — CR 405.5 / `simulate.py:priority_loop:254-267` resolves
+    the TOP item per completed pass round); then the permanent spell
+    resolves and the creature lands on the battlefield. The
+    nested-window resolution order is byte-equal to Python's stack
+    discipline. **S5a baseline move:** while pending, the creature
+    spell is on the stack-object store (``zone == ZONE_STACK``,
+    off-hand — byte-Python ``card.zone=Zone.STACK``); pre-S5a the S1
+    model kept it in the hand Vec."""
     synthetic_state.set_phase(_PHASE_MAIN1)
     resp_id = synthetic_state.register_and_inject_object(
         _response_instant_dict(), 1, _ZONE_HAND
@@ -1012,8 +1021,8 @@ def test_s3_response_resolves_lifo_then_permanent_spell_lands(
         "(stack depth 2)"
     )
     # Creature still pending (NOT prematurely resolved by the response
-    # cast).
-    assert synthetic_state.find_object_zone(_P0_ELF_ID) == _ZONE_HAND
+    # cast) — on the stack-object store, off-hand (byte-Python).
+    assert synthetic_state.find_object_zone(_P0_ELF_ID) == _ZONE_STACK
     assert synthetic_state.battlefield_sizes[0] == bf_p0_before
 
     # Resolve TOP (the response instant) first — LIFO.
@@ -1024,8 +1033,9 @@ def test_s3_response_resolves_lifo_then_permanent_spell_lands(
     )
     assert synthetic_state.find_object_zone(resp_id) == _ZONE_GRAVEYARD
     assert synthetic_state.graveyard_sizes[1] == gy_p1_before + 1
-    # Permanent spell still pending until ITS resolution.
-    assert synthetic_state.find_object_zone(_P0_ELF_ID) == _ZONE_HAND
+    # Permanent spell still pending until ITS resolution — on the
+    # stack-object store, off-hand (byte-Python card.zone=STACK).
+    assert synthetic_state.find_object_zone(_P0_ELF_ID) == _ZONE_STACK
     assert synthetic_state.battlefield_sizes[0] == bf_p0_before
 
     # Resolve the permanent spell — the creature lands.

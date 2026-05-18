@@ -205,91 +205,58 @@ def test_g7s4_rust_shadow_warp_deck_clean_prefix_then_known_legal_emit_gap():
     )
 
 
-def test_g7_midgame_cast_autotap_closed_then_s1_spellstack_zone_surfaced():
-    """**G7 mid-game STATE_EQ pin** — the post-S1/S4 frontier the
-    orchestrator's bake-in probe surfaced (arch2/s1 @ step 273
-    Galactic Wayfarer ``{2}{G}``; arch5/s0 @ step 322 Icecave
-    Crasher), driven through the role-swapped
-    ``ShadowCheckedRustAdapter`` on REAL 17lands production decks via
-    the ``drive_shadow_game_to_terminal`` contract.
+def test_g7_s5a_spellstack_zone_closed_then_blocker_legalset_surfaced():
+    """**G7 S5a closure-flip** (was
+    ``test_g7_midgame_cast_autotap_closed_then_s1_spellstack_zone_surfaced``).
 
-    **DIAGNOSIS (verify-first, class c — genuine Rust engine
-    divergence, reproduces under ``cross_engine.step_both`` too).**
-    Post-S1/S4 the three stack-push cast primitives
-    (``cast_creature`` / ``cast_creature_warp`` /
-    ``cast_spell_noncreature`` in ``state_ops_cast.rs``) paid the cost
-    STRICTLY from the floating ``mana_pool`` (``pay_mana_cost``),
-    returning ``Ok(false)`` (a SILENT no-op) when the pool alone could
-    not cover it. But the Rust legal emitter is PERMISSIVE
-    (``auto_tap_headroom_pool`` / ``can_pay_cost`` count pool PLUS
-    auto-tappable lands, mirroring Python ``can_pay_cost``
-    ``actions.py:336-403``), so a production-deck cast whose cost
-    needs land-tapping (e.g. ``{2}{G}`` with ``G:1`` floating + 2
-    untapped Forests) was emitted-legal then SILENTLY DROPPED by
-    apply. Python's ``_cast_spell`` actually pays via
-    ``auto_tap_for_cost`` (``actions.py:1662``): floating pool first,
-    then tap lands. Divergence direction CONFIRMED: **Python casts the
-    creature, Rust does not** (the INVERSE of the orchestrator's
-    initial read — verified against the ``(field, py, rust)`` compare
-    order). Repros identically through ``step_both``, so it is an
-    engine bug, NOT a ``rust_shadow`` driver/lockstep bug.
-
-    **CLOSED (this lane, engine fix — new-code-is-right).**
-    ``state_ops_cast.rs`` grows ``auto_tap_pay_for_cost`` (a free fn
-    byte-mirroring ``auto_tap_for_cost``: lands-only, colored-first in
-    Python's ``ManaCost.colored`` order then generic, floating pool
-    consumed before tapping, ``Event::BecomesTapped`` per tapped land);
-    all three cast pay sites route through it. Verified at the trip
-    point: the cast now SUCCEEDS byte-perfectly — the auto-tapped land
-    set is IDENTICAL to Python's, and ``mana_pool`` / ``battlefield``
-    / ``stack`` all match (the divergence collapses from FOUR fields
-    to ONE).
-
-    **NEXT DISTINCT DIVERGENCE SURFACED (honest-stop — S5-region, NOT
-    this lane's scope).** With the cast succeeding, the bake-in now
-    surfaces the **S1/S4 spell-stack-source-zone divergence**: Rust's
-    spell-stack model deliberately keeps the cast spell's GameObject
-    physically in the ``hand`` Vec with ``zone=ZONE_HAND`` while it is
-    on the stack (so ``take_source`` / ``find_source_printing_id``
-    find it at resolve — ``state_ops_resolve.rs:205-246``; documented
-    S1 design, ``SEARCH_LIMITATIONS.md`` G7-S1 note: "card stays in
-    hand"), whereas Python's ``_cast_spell`` removes the card from
+    **PRIOR FRONTIER — CLOSED by G7 S5a (engine fix,
+    new-code-is-right).** The cycle-25 honest-stop pinned a post-cast
+    ``hand_p0``-ONLY STATE_EQ at arch2/s1 step 273 / arch5/s0 step 322:
+    Rust's S1 spell-stack model kept the cast spell's GameObject
+    physically in the ``hand`` Vec (``zone=ZONE_HAND``) while it was on
+    the stack, whereas Python ``_cast_spell`` removes the card from
     ``p.hand`` and sets ``card.zone=Zone.STACK``
-    (``actions.py:1403``/``:1751``). So the post-cast STATE_EQ
-    diverges on ``hand_p0`` ALONE (Rust hand carries the
-    stack-resident source Python removed). This was MASKED in the
-    4-file gate by CE5 (``step_both`` drains the stack after every
-    ``cast_spell`` BEFORE the compare, so the spell has resolved
-    off-hand by compare time) and was previously unreachable in
-    ``rust_shadow`` because the no-auto-tap bug failed the cast first.
-    Re-homing the spell-stack source zone (``take_source`` /
-    ``find_source_printing_id`` / ``move_source_post_resolve`` + the
-    ``hand_snapshot`` / codec-slot / legal-emit / determinizer
-    surface) is a high-blast-radius S1/S4 redesign — explicitly
-    OUT of this lane's scope (S5-region; see
-    ``docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md``).
+    (``actions.py:1403``/``:1751``). **S5a re-homes the spell hand →
+    ``GameState.stack_objects`` (the now-live ``ZONE_STACK`` store,
+    Option β)** and extends the three source-resolution walks
+    (``find_source_printing_id`` / ``take_source`` / the
+    ``dispatch_event`` CAST observer walk) + the ``cards.rs`` predicate
+    subject/controller lookups to reach the stack-resident object — so
+    ``hand_snapshot`` (and thus the codec slot source, the
+    determinizer pool, the 3 legal-emit loops, the fingerprint hand
+    slot, and the 4-file/CE ``hand_pX`` field view) byte-match Python's
+    ``p.hand`` exclusion. The ``hand_p0`` STATE_EQ NO LONGER fires:
+    the run proceeds PAST the old step-273/322 boundary.
 
-    This pin is the honest-stop: it asserts (1) the auto-tap frontier
-    is CLOSED (the cast succeeds; the tapped-land set is byte-equal to
-    Python and the post-cast divergence is ONLY ``hand_p0``), and (2)
-    the known next divergence (the S1 spell-stack-source-zone
-    ``hand_p0`` STATE_EQ) is SURFACED loudly at its characterized
-    boundary. If a future slice closes the spell-stack-source-zone
-    axis, BOTH assertions' shapes change and this pin must be updated
-    to the new closed contract (new-code-is-right; do NOT silently let
-    it pass)."""
+    **NEXT DISTINCT DIVERGENCE SURFACED (honest-stop — a SEPARATE
+    pre-existing C1-class combat-blocker LEGAL_SET asymmetry, NOT
+    S5a's scope).** With ``hand_p0`` closed, the bake-in now runs to
+    arch2/s1 step **312** / arch5/s0 step **344** then trips a
+    **LEGAL_SET_EQ**: Rust emits an extra ``('blocker', N, None)``
+    (arch2/s1 N=9, arch5/s0 N=12) the Python set lacks (``py\\rust``
+    empty). This is exactly the next divergence the cycle-25 finding
+    (``docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md`` §5) PREDICTED
+    ("then hits LEGAL_SET_EQ ... a combat-blocker emission ... clearly
+    S3/S5/C1-region, definitively out of this lane"). It is a
+    DISTINCT, pre-existing axis (a declare-blockers legal-emission
+    asymmetry), surfaced — not introduced — by closing ``hand_p0``;
+    filed in the cutover ledger + ``SEARCH_LIMITATIONS.md`` as a G7
+    follow-up. Per the established G4/G5/G6 surfaced→closure-flip
+    discipline this pin asserts BOTH: (1) the prior ``hand_p0`` axis
+    is CLOSED (the run goes past the old boundary; no ``hand_p0``
+    STATE_EQ), and (2) the new combat-blocker LEGAL_SET_EQ surfaces
+    LOUDLY at its freshly-characterized boundary (do NOT silently let
+    it pass; if it stops firing the next axis was closed elsewhere —
+    update this pin)."""
     pytest.importorskip("mtg_bot_engine")
     from mtg_bot.parity import trajectory
-    from mtg_bot.parity.cross_engine import (
-        build_python_field_view, compare_fields, parity_smoke,
-    )
     from mtg_bot.search.engine_adapter_factory import (
         build_shadow_checked_adapter,
     )
 
-    for arch, seed, exp_step, exp_obj_name in (
-        (2, 1, 273, "Galactic Wayfarer"),
-        (5, 0, 322, "Icecave Crasher"),
+    for arch, seed, exp_step, exp_blocker_id in (
+        (2, 1, 312, 9),
+        (5, 0, 344, 12),
     ):
         names = trajectory.load_production_deck(archetype=arch)
         spec = trajectory.production_deck_to_deckspec(
@@ -299,10 +266,6 @@ def test_g7_midgame_cast_autotap_closed_then_s1_spellstack_zone_surfaced():
         rng = random.Random(seed)
         steps = 0
         raised: ShadowDivergenceError | None = None
-        # The decision applied at the trip + a pre-trip snapshot of
-        # both engines' tapped lands, captured so we can prove the
-        # auto-tap fix paid byte-equal (the frontier is CLOSED, not
-        # just shifted).
         while not adapter.is_terminal() and steps < 400:
             try:
                 legal = adapter.legal_decisions()
@@ -312,119 +275,55 @@ def test_g7_midgame_cast_autotap_closed_then_s1_spellstack_zone_surfaced():
             if not legal:
                 break
             choice = rng.choice(legal)
-            # Pre-apply land-tap snapshot of both engines (only
-            # meaningful at the trip step; cheap enough every step).
-            py_pre = adapter._py.engine_state
-            rs_pre = adapter._rust.rust_state
-            py_tapped_pre = {
-                o.id
-                for o in py_pre.battlefield
-                if "Land" in o.printing.type_line and o.tapped
-            }
-            rs_tapped_pre = {
-                o["id"]
-                for o in rs_pre.battlefield_snapshot()
-                if o["tapped"]
-            }
             try:
                 adapter.apply(choice)
             except ShadowDivergenceError as e:
                 raised = e
-                # Capture post-apply land-tap state on BOTH engines to
-                # prove the auto-tap paid byte-equal at the trip.
-                _trip_py_tapped = {
-                    o.id
-                    for o in adapter._py.engine_state.battlefield
-                    if "Land" in o.printing.type_line and o.tapped
-                }
-                _trip_rs_tapped = {
-                    o["id"]
-                    for o in (
-                        adapter._rust.rust_state.battlefield_snapshot()
-                    )
-                    if o["tapped"]
-                }
                 break
             steps += 1
 
-        # (0) The known frontier still trips (until the S5-region
-        # spell-stack-source-zone slice lands). An honest-stop pin
-        # MUST still see its characterized divergence — if it no
-        # longer fires, the next axis was closed elsewhere; update
-        # this pin (do NOT silently pass).
-        assert raised is not None, (
-            f"arch{arch}/s{seed}: the known next divergence (S1 "
-            f"spell-stack-source-zone hand_p0) must still SURFACE. "
-            f"If it no longer fires the spell-stack-source-zone axis "
-            f"was closed elsewhere — update this pin to the closed "
-            f"contract."
-        )
-        # (1) AUTO-TAP FRONTIER CLOSED: the trip is the cast step at
-        # its characterized boundary, it is a STATE_EQ, and the ONLY
-        # divergent field is hand_p0 (down from the original
-        # hand+mana+battlefield+stack 4-field divergence). The
-        # auto-tapped LAND set is byte-IDENTICAL across engines (the
-        # land payment the old pool-only path could never make).
-        assert raised.tripwire == "STATE_EQ", (
-            f"arch{arch}/s{seed}: expected the post-cast STATE_EQ "
-            f"(auto-tap fix makes the cast succeed; the residual is "
-            f"the S1 spell-stack-source-zone hand divergence). Got "
-            f"{raised.tripwire}: {str(raised)[:300]!r} — a DIFFERENT "
-            f"tripwire is an honest-stop-unmasked NEW divergence; pin "
-            f"it + flag the slice owner, do NOT paper it."
-        )
+        # (1) PRIOR hand_p0 AXIS CLOSED: the run proceeds well PAST the
+        # old cycle-25 cast-step boundary (arch2/s1 273, arch5/s0 322).
+        # A trip at/before the old boundary would mean S5a did NOT
+        # close the spell-stack-source-zone axis (regression — do NOT
+        # update the boundary, fix the engine).
         assert steps == exp_step, (
-            f"arch{arch}/s{seed}: the cast-step trip boundary moved "
-            f"({steps} != characterized {exp_step}). A moved boundary "
-            f"means the frontier shifted — re-characterize before "
-            f"updating the pin."
+            f"arch{arch}/s{seed}: with S5a closing hand_p0 the run must "
+            f"reach the freshly-characterized next-divergence boundary "
+            f"step {exp_step} (it tripped at {steps}). A trip at/before "
+            f"the old cycle-25 boundary means the hand_p0 re-homing "
+            f"regressed; a different later step means the surfaced "
+            f"frontier moved — re-characterize, do NOT just bump."
         )
-        # The post-cast divergence is EXACTLY hand_p0 (the S1
-        # spell-stack-source-zone), and the diverging entry is
-        # precisely the just-cast spell still in Rust's hand (Python
-        # removed it). Re-derive the field divergence at the trip.
-        ps = parity_smoke()
-        pv = build_python_field_view(adapter._py.engine_state)
-        rv = ps._build_field_view(adapter._rust.rust_state)
-        divs = compare_fields(pv, rv)
-        assert [d.field for d in divs] == ["hand_p0"], (
-            f"arch{arch}/s{seed}: post-cast divergence must collapse "
-            f"to ONLY hand_p0 (the S1 spell-stack-source-zone). Got "
-            f"{[d.field for d in divs]!r} — if mana_pool/battlefield/"
-            f"stack also diverge the auto-tap fix is INCOMPLETE "
-            f"(new-code-is-right: fix it, do NOT widen the pin)."
+        # (2) THE NEW DISTINCT DIVERGENCE SURFACES LOUDLY: a
+        # combat-blocker LEGAL_SET_EQ (Rust emits an extra
+        # ('blocker', N, None) Python lacks). NOT a STATE_EQ on
+        # hand_p0 — that axis is closed.
+        assert raised is not None, (
+            f"arch{arch}/s{seed}: the next distinct divergence (the "
+            f"C1-class combat-blocker LEGAL_SET asymmetry the cycle-25 "
+            f"finding predicted) must still SURFACE post-S5a. If it no "
+            f"longer fires it was closed elsewhere — update this pin to "
+            f"the closed contract (do NOT silently pass)."
         )
-        hd = divs[0]
-        rust_ids = {t[-1] for t in (hd.rust_value or ())}
-        py_ids = {t[-1] for t in (hd.py_value or ())}
-        extra_in_rust = rust_ids - py_ids
-        rust_stack_ids = {
-            d["source_obj_id"]
-            for d in adapter._rust.rust_state.stack_snapshot()
-        }
-        assert extra_in_rust and extra_in_rust <= rust_stack_ids, (
-            f"arch{arch}/s{seed}: the hand_p0 divergence must be "
-            f"PRECISELY the stack-resident cast spell Rust keeps in "
-            f"hand while Python removed it (the S1 spell-stack-source-"
-            f"zone invariant). extra_in_rust={extra_in_rust} "
-            f"rust_stack={rust_stack_ids}."
+        assert raised.tripwire == "LEGAL_SET_EQ", (
+            f"arch{arch}/s{seed}: expected the predicted next-axis "
+            f"LEGAL_SET_EQ (a Rust-extra declare-blockers emission), "
+            f"got {raised.tripwire}: {str(raised)[:300]!r} — a "
+            f"DIFFERENT tripwire is a further honest-stop-unmasked "
+            f"divergence; pin it + flag the slice owner, do NOT paper."
         )
-        # The auto-tap actually PAID by tapping lands: Rust tapped
-        # strictly MORE lands post-cast than pre-cast (it auto-tapped
-        # to cover the generic), and the post-cast tapped-land set is
-        # byte-IDENTICAL to Python's (the frontier is CLOSED — the
-        # land payment is byte-equal, not merely "the cast ran").
-        assert _trip_rs_tapped == _trip_py_tapped, (
-            f"arch{arch}/s{seed}: the auto-tapped LAND set must be "
-            f"byte-IDENTICAL across engines at the cast trip "
-            f"(auto_tap_pay_for_cost byte-mirrors auto_tap_for_cost). "
-            f"rust={_trip_rs_tapped} python={_trip_py_tapped}."
+        msg = str(raised)
+        assert f"('blocker', {exp_blocker_id}, None)" in msg, (
+            f"arch{arch}/s{seed}: the surfaced LEGAL_SET_EQ must be "
+            f"PRECISELY the characterized Rust-extra "
+            f"('blocker', {exp_blocker_id}, None). Got: {msg[:300]!r}."
         )
-        assert _trip_rs_tapped > rs_tapped_pre, (
-            f"arch{arch}/s{seed}: the cast must have auto-tapped "
-            f"lands (the pool alone was short — the exact case the "
-            f"old pool-only pay_mana_cost silently no-op'd). "
-            f"pre={rs_tapped_pre} post={_trip_rs_tapped}."
+        assert "rust\\py" in msg and "py\\rust=[]" in msg, (
+            f"arch{arch}/s{seed}: the asymmetry direction must be "
+            f"Rust-emits-extra (rust\\py non-empty, py\\rust empty) — "
+            f"a Rust-side over-emission of the blocker decision. Got: "
+            f"{msg[:300]!r}."
         )
 
 
