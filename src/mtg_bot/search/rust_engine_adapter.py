@@ -469,7 +469,47 @@ class RustGameStateAdapter:
                     # advancing to BEGINNING_OF_COMBAT, whose SBA flips
                     # ``is_over``/``winner_id`` on the Python SoT.
                     self._run_step_enter_sbas()
-                    if not self._rust.is_over():
+                    # **G7 S6 Class-B option-β — the coordinated
+                    # adapter half (DEFERRED priority reset).** Python's
+                    # source-of-truth does NOT reset priority when the
+                    # step it just advanced into is a factored-combat
+                    # step: ``_advance_to_next_step`` ->
+                    # ``_enter_step(DECLARE_ATTACKERS / DECLARE_BLOCKERS)``
+                    # dispatches to ``_enter_declare_attackers`` /
+                    # ``_enter_declare_blockers``
+                    # (``engine_adapter.py:1312-1316/:1358-1361``),
+                    # which — when there is an eligible factored
+                    # decision — set ``_combat_phase`` and RETURN
+                    # WITHOUT ``_enter_priority_for_current_step``. So
+                    # ``priority_player_idx`` stays CARRIED through the
+                    # whole factored-combat decision window (the
+                    # ``simulate.py`` SoT: ``run_step(DECLARE_ATTACKERS)``
+                    # does NOT touch ``priority_player_idx``; only the
+                    # subsequent ``priority_loop``'s first pass resets
+                    # it, AFTER the attacker decision —
+                    # ``simulate.py:222-247``). The pre-option-β
+                    # unconditional reset here forced
+                    # ``priority_player = active``, diverging from the
+                    # SoT's carried value (the arch5/s0 step-367
+                    # ``STATE_EQ ('priority_player',1,0)``). Mirror
+                    # Python: skip the reset iff the just-entered step
+                    # is a factored-combat window with a pending
+                    # factored decision for the structural
+                    # decision-maker (the same structural test the
+                    # option-β engine gate embodies — if Rust emits NO
+                    # factored decision, e.g. no eligible
+                    # attackers/blockers, Python's ``_enter_declare_*``
+                    # ITSELF falls through to
+                    # ``_enter_priority_for_current_step``, so we still
+                    # reset). Outside a factored-combat window the reset
+                    # is unchanged (every prior G3/G4/G5/G6 closure
+                    # depends on it). See
+                    # ``docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md``
+                    # §9/§9.1.
+                    if (
+                        not self._rust.is_over()
+                        and self._combat_decision_maker() is None
+                    ):
                         self._reset_priority_to_active()
             else:
                 # Single in-round pass — Python sets
@@ -540,19 +580,101 @@ class RustGameStateAdapter:
         c._chosen_blocks = dict(self._chosen_blocks)
         return c
 
+    def _combat_decision_maker(self) -> Optional[int]:
+        """The factored-combat decision-maker, or ``None`` if this is
+        NOT a factored-combat decision window.
+
+        **G7 S6 Class-B option-β — the coordinated adapter half.**
+        Byte-mirror of Python ``MtgGameStateAdapter.active_player()``'s
+        ``_COMBAT_*`` overrides (``engine_adapter.py:762-766``): during
+        DECLARE_ATTACKERS the decision-maker is the active player; during
+        DECLARE_BLOCKERS it is the structural defender
+        (``_combat_defender_id = _next_alive(state,(active+1)%n)``, which
+        in the loader-admitted no-loss 2-player model is
+        ``1 - active``). The Rust ENGINE's option-β
+        ``legal_decisions`` now keys the factored-combat emission on
+        exactly that structural decision-maker (attackers:
+        ``active_player == player_id``; blockers:
+        ``player_id == 1 - active_player`` — the SAME
+        ``1 - self.active_player`` Rust's combat-damage plan uses,
+        ``state_ops_combat.rs:941``); the eager
+        ``_reset_priority_to_active`` is deferred for these windows so
+        Rust's ``priority_player`` stays CARRIED like the
+        ``simulate.py`` SoT (and like Python's ``_enter_declare_*``
+        which return WITHOUT ``_enter_priority_for_current_step``). So
+        — exactly as Python's adapter computes the decision-maker
+        independent of ``priority_player_idx`` during the
+        factored-combat window — we resolve it structurally here:
+        confirm the phase is a combat-declare phase AND Rust actually
+        emits a factored decision for the structural decision-maker
+        (the same existence check the option-β engine gate embodies;
+        if Rust emits NOTHING — e.g. no eligible attackers/blockers —
+        this is NOT a factored-combat window and the priority holder
+        is the decision-maker, mirroring Python's ``_enter_declare_*``
+        falling through to ``_enter_priority_for_current_step``)."""
+        ph = self._phase()
+        if ph not in _COMBAT_DECLARE_PHASES:
+            return None
+        act = int(self._rust.active_player_idx)
+        if ph == _PHASE_DECLARE_ATTACKERS:
+            dm = act
+            kind = "attacker_decision"
+        else:  # _PHASE_DECLARE_BLOCKERS — structural defender
+            dm = 1 - act
+            kind = "blocker_decision"
+        for d in self._legal_dicts_cached(dm):
+            if d.get("kind") == kind:
+                return dm
+        return None
+
     def active_player(self) -> PlayerID:
-        # Rust resolves priority/active internally; the priority holder
-        # is the decision-maker. For the factored-combat windows Rust's
-        # legal_decisions already gates emission on active==priority
-        # (attackers) / active!=priority (blockers), so the priority
-        # holder is still the right decision-maker key. The S3
-        # combat-accumulation port refines the active/defender split.
+        # **G7 S6 Class-B option-β (coordinated adapter half).** Byte-
+        # mirror Python ``MtgGameStateAdapter.active_player()``
+        # (``engine_adapter.py:753-767``): during the factored-combat
+        # windows the decision-maker is NOT whoever holds engine
+        # priority — it is the active player (attacker decisions) or
+        # the structural defender (blocker decisions); only outside a
+        # factored-combat window is the priority holder the
+        # decision-maker. Pre-option-β this returned ``_priority_pid()``
+        # unconditionally, which was correct ONLY because the
+        # Rust-driver adapter forced ``priority_player == active``
+        # during combat. With the coordinated change carrying
+        # ``priority_player`` like the SoT, the priority holder is no
+        # longer the combat decision-maker — so resolve it structurally
+        # (the ``_combat_decision_maker`` helper), exactly as Python's
+        # adapter does via its ``_combat_phase`` overrides.
+        dm = self._combat_decision_maker()
+        if dm is not None:
+            return dm
         return self._priority_pid()
 
     def legal_decisions(self) -> list[Decision]:
         if self._rust.is_over():
             return []
-        pid = self._priority_pid()
+        # **G7 S6 Class-B option-β (coordinated adapter half).** Query
+        # Rust for the DECISION-MAKER, not the raw priority holder.
+        # Pre-option-β ``pid = self._priority_pid()`` was correct only
+        # because the adapter forced ``priority_player == active``
+        # during the factored-combat window, so the priority holder
+        # WAS the decision-maker. With the coordinated change carrying
+        # ``priority_player`` like the ``simulate.py`` SoT, the
+        # priority holder is no longer the combat decision-maker — the
+        # option-β Rust ``legal_decisions`` keys the factored-combat
+        # emission on the STRUCTURAL decision-maker (attackers: active;
+        # blockers: ``1 - active``), so querying Rust with the carried
+        # priority pid would suppress the factored emission entirely
+        # (Rust would return just ``[PassPriority]`` for the
+        # non-decision-maker). ``active_player()`` already resolves to
+        # the combat decision-maker during a factored-combat window
+        # (else the priority holder) — byte-mirroring Python
+        # ``MtgGameStateAdapter.legal_decisions()`` which emits the
+        # factored decisions off ``_combat_phase`` for the
+        # decision-maker and the priority-window set for the priority
+        # holder. ``_combat_decision_maker()`` (called inside
+        # ``active_player()``) primes the per-decision legal cache for
+        # the decision-maker, so this is a single Rust round-trip. See
+        # ``docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md`` §9/§9.1.
+        pid = self.active_player()
         dicts = self._legal_dicts_cached(pid)
         # G2 interim mask (spec §2.4-G2): if a land was already
         # played this turn, filter the structurally-over-offered
@@ -584,6 +706,37 @@ class RustGameStateAdapter:
         # codec reads. Stateless-Rust / stateful-codec-view split, per
         # the G1 emission docstring.
         self._refresh_combat_phase(dicts)
+        # **G7 S6 Class-B option-β (coordinated adapter half).** During
+        # a factored-combat decision window Python's
+        # ``MtgGameStateAdapter.legal_decisions()`` returns EXACTLY the
+        # factored ``AttackerDecision`` / ``BlockerDecision`` list —
+        # NO ``PassPriority`` (``engine_adapter.py:808-828``: the
+        # ``_combat_phase`` branches ``return`` only the factored
+        # options). Rust's ``state_ops_legal.rs:legal_decisions``
+        # ALWAYS pushes ``PassPriority`` at index 0
+        # (``state_ops_legal.rs:1194-1195``) before any factored dict,
+        # so the raw Rust combat-window set carries an extra
+        # ``('pass',)`` vs the Python adapter's factored emission. The
+        # ``rust_shadow`` LEGAL_SET_EQ reference for a combat window IS
+        # the Python adapter's factored ``legal_decisions()``
+        # (``rust_shadow.py:281-286``), so the Rust-driver adapter must
+        # mirror Python and drop the structural ``PassPriority`` while
+        # a factored-combat decision is pending. (Other comparison
+        # contexts already filter Rust's combat dicts to the
+        # ``attacker_decision``/``blocker_decision`` kind explicitly —
+        # e.g. ``tests/test_cross_engine_legal_set_factored_combat``'s
+        # ``_rs_combat_dicts`` — confirming Rust's raw set legitimately
+        # includes the structural Pass; the Python ADAPTER's combat
+        # emission is the byte-faithful target here.) This was masked
+        # while arch5/s0 tripped at step 344/367 before any
+        # combat-window-WITH-attackers; closing step 367 surfaced it.
+        # Outside a factored-combat window the set is UNCHANGED (the
+        # genuine priority-window Pass is preserved). See
+        # ``docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md`` §9/§9.1.
+        if self._combat_phase in (_COMBAT_ATTACKERS, _COMBAT_BLOCKERS):
+            dicts = [
+                d for d in dicts if d.get("kind") != "pass_priority"
+            ]
         return [rust_dict_to_decision(d) for d in dicts]
 
     def _refresh_combat_phase(self, dicts: list[dict]) -> None:

@@ -101,9 +101,25 @@ def _drive_to_trip(arch: int, seed: int, max_steps: int = 4000):
         # raise to NO_RAISE; a Rust-side raise propagates raw).
         (2, 1, 318, "raw",
          "ActivateAbility: source 121 cost is unaffordable"),
-        # Frontier (b) — the G5-family priority-port STATE_EQ
-        # (deeper production-deck manifestation than the synthetic G5).
-        (5, 0, 367, "STATE_EQ", "('priority_player', 1, 0)"),
+        # Frontier (b) = S6 Class B — CLOSURE-FLIPPED. The dominant
+        # 138/300 ``STATE_EQ ('priority_player', 1, 0)`` @367 is
+        # CLOSED by the coordinated G7 S6 Class-B option-β
+        # engine+adapter slice (``state_ops_legal.rs`` option-β +
+        # ``rust_engine_adapter.py`` deferred-priority-reset /
+        # combat-decision-maker ``active_player()``+``legal_decisions()``
+        # / factored-combat ``PassPriority`` strip). The run proceeds
+        # PAST 367 to a NEW distinct frontier @369: ``LEGAL_SET_EQ``
+        # ``py\rust=["('pass',)"]`` — the pre-existing **G1
+        # stateless-Rust ``attack=False`` re-emission gap** (Rust's
+        # ``apply_action(AttackerDecision, attack=false)`` is a
+        # deliberate no-op and the ``RustGameStateAdapter`` does not
+        # port Python's provider-side ``_pending_attackers.pop(0)`` +
+        # ``_finalize_attacker_phase`` — the B3-S3 sibling slice the
+        # G1 design defers), unmasked — NOT introduced — by closing
+        # 367 (zero provider accumulation at ``dc22ebc4``; arch5/s0
+        # never reached a factored ``attack=False`` before, blocked at
+        # 344/367). Filed as the next G7 follow-up.
+        (5, 0, 369, "LEGAL_SET_EQ", "py\\rust=[\"('pass',)\"]"),
     ],
 )
 def test_s6_known_frontiers_reproduce_byte_exactly(
@@ -172,9 +188,32 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         (2, 1, 318, "raw",
          "ActivateAbility: source 121 cost is unaffordable",
          "B1-axis (ActivateAbility affordability)"),
-        # Class B — G5-family priority-port STATE_EQ.
-        (5, 0, 367, "STATE_EQ", "('priority_player', 1, 0)",
-         "G5-family (priority-port)"),
+        # Class B — CLOSURE-FLIPPED. The dominant 138/300 G5-family
+        # ``STATE_EQ ('priority_player', 1, 0)`` @367 is CLOSED by the
+        # coordinated G7 S6 Class-B option-β engine+adapter slice
+        # (carry ``priority_player`` through the factored-combat
+        # window byte-faithful to the ``simulate.py`` SoT — relocate
+        # the factored-combat emission above the ``state_ops_legal.rs``
+        # line-1199 priority gate keyed on the structural
+        # decision-maker; defer the adapter's eager
+        # ``_reset_priority_to_active`` for factored-combat steps; make
+        # ``active_player()``/``legal_decisions()`` resolve the combat
+        # decision-maker; strip the structural ``PassPriority`` from
+        # the factored-combat set). The run proceeds PAST 367 to a NEW
+        # distinct frontier @369: ``LEGAL_SET_EQ``
+        # ``py\rust=["('pass',)"]`` — the pre-existing **G1
+        # stateless-Rust ``attack=False`` re-emission gap** (the
+        # ``RustGameStateAdapter`` does not port Python's provider-side
+        # ``_pending_attackers.pop(0)`` + ``_finalize_attacker_phase``
+        # accumulation — the B3-S3 sibling slice the G1 design
+        # defers), unmasked — NOT introduced — by closing 367 (zero
+        # provider accumulation at ``dc22ebc4``; arch5/s0 never reached
+        # a factored ``attack=False`` before, blocked at 344/367).
+        # Filed as the next G7 follow-up (G1 provider-accumulation /
+        # B3-S3 port).
+        (5, 0, 369, "LEGAL_SET_EQ", "py\\rust=[\"('pass',)\"]",
+         "G1 stateless-Rust attack=False re-emission (B3-S3 "
+         "provider-accumulation port; Class-B priority axis CLOSED)"),
         # Class C — RE-CHARACTERIZED (verify-first @ main 3a963e0f;
         # see test_rust_shadow_bakein.py::
         # test_g7_classc_warpexile_delayed_trigger_root_cause_pinned).

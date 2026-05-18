@@ -670,13 +670,44 @@ def test_g7_activateability_affordability_closed_then_next_frontier_surfaced():
       IS the divergence). A NEW G7 frontier (search-then-shuffle
       library-order parity) — distinct from (a) (closed) and from (b).
 
-    * **arch5/s0 — step 367:** a ``ShadowDivergenceError`` tripwire
-      ``STATE_EQ`` on ``('priority_player', 1, 0)`` (Python=1,
-      Rust=0) on a ``PassPriority()`` at a DECLARE_ATTACKERS step — a
-      distinct priority-player STATE_EQ divergence (G5-family
-      priority-port region, a deeper production-deck manifestation).
-      **UNCHANGED by the frontier-(a) fix** — frontier (b), a distinct
-      STILL-OPEN follow-up (NOT closed in this lane).
+    * **arch5/s0 — step 367 → CLOSED; new frontier @369:** frontier
+      (b) = S6 Class B (the dominant 138/300
+      ``STATE_EQ ('priority_player', 1, 0)`` @367) is now **CLOSED**
+      by the coordinated G7 S6 Class-B **option-β engine+adapter
+      slice** (``state_ops_legal.rs`` option-β: relocate the
+      factored-combat DECLARE_ATTACKERS/DECLARE_BLOCKERS emission
+      above the line-1199 priority gate, keyed on the structural
+      decision-maker, the relocated ``is_priority_holder`` early
+      return fencing only the genuine priority-window emission; +
+      the coordinated ``rust_engine_adapter.py`` half: defer
+      ``_reset_priority_to_active`` for factored-combat steps so
+      Rust's ``priority_player`` stays CARRIED like the
+      ``simulate.py`` SoT, make ``active_player()`` /
+      ``legal_decisions()`` resolve the combat decision-maker
+      (active/structural-defender) instead of the carried priority,
+      and strip the structural ``PassPriority`` from the
+      factored-combat set to byte-mirror Python's adapter combat
+      emission). Step 367 no longer trips (nor the step-368
+      combat-window ``('pass',)`` follow-on the engine half alone
+      would have surfaced). The run proceeds PAST to a NEW distinct
+      frontier @369: a ``LEGAL_SET_EQ`` tripwire —
+      ``py\rust=["('pass',)"]`` while Rust still emits the factored
+      ``attacker_decision`` pair for the lone declined attacker. This
+      is the **pre-existing G1 stateless-Rust ``attack=False``
+      re-emission gap** (Rust's ``apply_action(AttackerDecision,
+      attack=false)`` is a deliberate no-op and the
+      ``RustGameStateAdapter`` does not port Python's provider-side
+      ``_pending_attackers.pop(0)`` + ``_finalize_attacker_phase``
+      accumulation — the B3-S3 sibling slice the G1 design defers),
+      unmasked — NOT introduced — by closing 367 (zero provider
+      accumulation at ``dc22ebc4``; arch5/s0 simply never reached a
+      factored-attacker ``attack=False`` before, blocked at 344/367).
+      Honest count: the coordinated fix closes the Class-B
+      ``priority_player`` axis broadly (a representative
+      arch5/s0-family Class-B re-sweep: 25/25 first-25 CLOSED_PAST,
+      0 STILL_PRIORITY, 0 REGRESSED; full 138 re-characterized in
+      the report). DISTINCT, pre-existing axis filed as the next G7
+      follow-up (G1 provider-accumulation / B3-S3 port).
 
     Both are DISTINCT, pre-existing axes filed as the next G7
     follow-up in ``SOT_FLIP_CUTOVER_PLAN.md`` §4 +
@@ -715,9 +746,44 @@ def test_g7_activateability_affordability_closed_then_next_frontier_surfaced():
         # the step + tripwire + field are deterministic, only the
         # library content order varies run-to-run = the divergence).
         (2, 1, 318, 320, "STATE_EQ", "('library_p1'"),
-        # arch5/s0: UNCHANGED by the frontier-(a) fix — frontier (b),
-        # a distinct STILL-OPEN priority-player STATE_EQ follow-up.
-        (5, 0, 344, 367, "STATE_EQ", "('priority_player', 1, 0)"),
+        # arch5/s0: frontier (b) = S6 Class B (the dominant 138/300
+        # ``('priority_player', 1, 0)`` STATE_EQ @367) CLOSED by the
+        # coordinated G7 S6 Class-B option-β engine+adapter slice
+        # (``state_ops_legal.rs`` option-β + the
+        # ``rust_engine_adapter.py`` deferred-priority-reset /
+        # combat-decision-maker ``active_player()`` /
+        # decision-maker ``legal_decisions()`` query /
+        # factored-combat ``PassPriority`` strip). The carried-priority-
+        # through-factored-combat axis now byte-mirrors the
+        # ``simulate.py`` SoT; step 367 no longer trips (nor the
+        # step-368 combat-window ``('pass',)`` follow-on the engine
+        # half alone would have surfaced). The run proceeds PAST to a
+        # NEW distinct frontier @369: ``LEGAL_SET_EQ`` —
+        # ``py\rust=["('pass',)"]`` while Rust still emits the
+        # factored ``attacker_decision`` pair for the lone declined
+        # attacker (obj 12). This is the **pre-existing G1
+        # stateless-Rust ``attack=False`` re-emission gap**: Rust's
+        # ``apply_action(AttackerDecision, attack=false)`` is a
+        # deliberate no-op (the G1 stateless-Rust /
+        # stateful-provider split, ``state_ops_legal.rs``
+        # ~1283-1294 / ``state_ops_actions.rs:1356-1385``), and the
+        # ``RustGameStateAdapter`` does NOT port Python's provider-side
+        # ``_apply_attacker_decision`` ``_pending_attackers.pop(0)`` +
+        # ``_finalize_attacker_phase`` accumulation
+        # (``engine_adapter.py:1080-1108`` — the B3-S3 "sibling slice"
+        # the G1 design explicitly defers), so a factored
+        # ``attack=False`` on the LAST eligible attacker leaves the
+        # creature eligible and Rust re-emits the same head forever
+        # while Python finalizes combat and moves to the priority
+        # window (``[PassPriority]``). DISTINCT from Class-B's
+        # priority axis, pre-existing (zero provider accumulation at
+        # ``dc22ebc4``), unmasked — NOT introduced — by closing 367
+        # (arch5/s0 never reached a factored-attacker ``attack=False``
+        # before; blocked at 344/367). Filed as the next G7 follow-up
+        # (the G1 provider-accumulation / B3-S3 port). Boundary +
+        # tripwire + the ``py\rust=["('pass',)"]`` signature are
+        # deterministic across runs.
+        (5, 0, 367, 369, "LEGAL_SET_EQ", "py\\rust=[\"('pass',)\"]"),
     ):
         names = trajectory.load_production_deck(archetype=arch)
         spec = trajectory.production_deck_to_deckspec(
@@ -754,18 +820,20 @@ def test_g7_activateability_affordability_closed_then_next_frontier_surfaced():
         # (1) PRIOR PER-REPRO AXIS CLOSED: the run proceeds PAST its
         # old boundary. arch2/s1: PAST step 318 — the frontier-(a)
         # ActivateAbility apply pool-only raw-reject, closed by the
-        # auto_tap_pay_for_cost reroute. arch5/s0: PAST step 344 — the
-        # combat-blocker LEGAL_SET_EQ (unchanged by the (a) fix). A
-        # trip at/before the old boundary means the relevant axis
-        # regressed (do NOT bump the boundary — fix the engine).
+        # auto_tap_pay_for_cost reroute. arch5/s0: PAST step 367 — the
+        # S6 Class-B ``('priority_player', 1, 0)`` STATE_EQ, closed by
+        # the coordinated option-β engine+adapter slice. A trip
+        # at/before the old boundary means the relevant axis regressed
+        # (do NOT bump the boundary — fix the engine).
         assert steps > old_boundary, (
             f"arch{arch}/s{seed}: the prior per-repro axis must be "
             f"CLOSED — the run must proceed PAST its old boundary step "
             f"{old_boundary} (it stopped at {steps}). A stop at/before "
             f"{old_boundary} means the closed axis regressed "
             f"(arch2/s1: the ActivateAbility apply auto-tap; arch5/s0: "
-            f"the combat-blocker no-attackers gate) — fix the engine, "
-            f"do NOT bump the boundary. err={raised!r} raw={raw_exc!r}"
+            f"the coordinated Class-B option-β engine+adapter slice) — "
+            f"fix the engine, do NOT bump the boundary. "
+            f"err={raised!r} raw={raw_exc!r}"
         )
         assert steps == exp_step, (
             f"arch{arch}/s{seed}: expected the freshly-characterized "
