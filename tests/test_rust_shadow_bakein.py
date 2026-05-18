@@ -205,6 +205,229 @@ def test_g7s4_rust_shadow_warp_deck_clean_prefix_then_known_legal_emit_gap():
     )
 
 
+def test_g7_midgame_cast_autotap_closed_then_s1_spellstack_zone_surfaced():
+    """**G7 mid-game STATE_EQ pin** — the post-S1/S4 frontier the
+    orchestrator's bake-in probe surfaced (arch2/s1 @ step 273
+    Galactic Wayfarer ``{2}{G}``; arch5/s0 @ step 322 Icecave
+    Crasher), driven through the role-swapped
+    ``ShadowCheckedRustAdapter`` on REAL 17lands production decks via
+    the ``drive_shadow_game_to_terminal`` contract.
+
+    **DIAGNOSIS (verify-first, class c — genuine Rust engine
+    divergence, reproduces under ``cross_engine.step_both`` too).**
+    Post-S1/S4 the three stack-push cast primitives
+    (``cast_creature`` / ``cast_creature_warp`` /
+    ``cast_spell_noncreature`` in ``state_ops_cast.rs``) paid the cost
+    STRICTLY from the floating ``mana_pool`` (``pay_mana_cost``),
+    returning ``Ok(false)`` (a SILENT no-op) when the pool alone could
+    not cover it. But the Rust legal emitter is PERMISSIVE
+    (``auto_tap_headroom_pool`` / ``can_pay_cost`` count pool PLUS
+    auto-tappable lands, mirroring Python ``can_pay_cost``
+    ``actions.py:336-403``), so a production-deck cast whose cost
+    needs land-tapping (e.g. ``{2}{G}`` with ``G:1`` floating + 2
+    untapped Forests) was emitted-legal then SILENTLY DROPPED by
+    apply. Python's ``_cast_spell`` actually pays via
+    ``auto_tap_for_cost`` (``actions.py:1662``): floating pool first,
+    then tap lands. Divergence direction CONFIRMED: **Python casts the
+    creature, Rust does not** (the INVERSE of the orchestrator's
+    initial read — verified against the ``(field, py, rust)`` compare
+    order). Repros identically through ``step_both``, so it is an
+    engine bug, NOT a ``rust_shadow`` driver/lockstep bug.
+
+    **CLOSED (this lane, engine fix — new-code-is-right).**
+    ``state_ops_cast.rs`` grows ``auto_tap_pay_for_cost`` (a free fn
+    byte-mirroring ``auto_tap_for_cost``: lands-only, colored-first in
+    Python's ``ManaCost.colored`` order then generic, floating pool
+    consumed before tapping, ``Event::BecomesTapped`` per tapped land);
+    all three cast pay sites route through it. Verified at the trip
+    point: the cast now SUCCEEDS byte-perfectly — the auto-tapped land
+    set is IDENTICAL to Python's, and ``mana_pool`` / ``battlefield``
+    / ``stack`` all match (the divergence collapses from FOUR fields
+    to ONE).
+
+    **NEXT DISTINCT DIVERGENCE SURFACED (honest-stop — S5-region, NOT
+    this lane's scope).** With the cast succeeding, the bake-in now
+    surfaces the **S1/S4 spell-stack-source-zone divergence**: Rust's
+    spell-stack model deliberately keeps the cast spell's GameObject
+    physically in the ``hand`` Vec with ``zone=ZONE_HAND`` while it is
+    on the stack (so ``take_source`` / ``find_source_printing_id``
+    find it at resolve — ``state_ops_resolve.rs:205-246``; documented
+    S1 design, ``SEARCH_LIMITATIONS.md`` G7-S1 note: "card stays in
+    hand"), whereas Python's ``_cast_spell`` removes the card from
+    ``p.hand`` and sets ``card.zone=Zone.STACK``
+    (``actions.py:1403``/``:1751``). So the post-cast STATE_EQ
+    diverges on ``hand_p0`` ALONE (Rust hand carries the
+    stack-resident source Python removed). This was MASKED in the
+    4-file gate by CE5 (``step_both`` drains the stack after every
+    ``cast_spell`` BEFORE the compare, so the spell has resolved
+    off-hand by compare time) and was previously unreachable in
+    ``rust_shadow`` because the no-auto-tap bug failed the cast first.
+    Re-homing the spell-stack source zone (``take_source`` /
+    ``find_source_printing_id`` / ``move_source_post_resolve`` + the
+    ``hand_snapshot`` / codec-slot / legal-emit / determinizer
+    surface) is a high-blast-radius S1/S4 redesign — explicitly
+    OUT of this lane's scope (S5-region; see
+    ``docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md``).
+
+    This pin is the honest-stop: it asserts (1) the auto-tap frontier
+    is CLOSED (the cast succeeds; the tapped-land set is byte-equal to
+    Python and the post-cast divergence is ONLY ``hand_p0``), and (2)
+    the known next divergence (the S1 spell-stack-source-zone
+    ``hand_p0`` STATE_EQ) is SURFACED loudly at its characterized
+    boundary. If a future slice closes the spell-stack-source-zone
+    axis, BOTH assertions' shapes change and this pin must be updated
+    to the new closed contract (new-code-is-right; do NOT silently let
+    it pass)."""
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view, compare_fields, parity_smoke,
+    )
+    from mtg_bot.search.engine_adapter_factory import (
+        build_shadow_checked_adapter,
+    )
+
+    for arch, seed, exp_step, exp_obj_name in (
+        (2, 1, 273, "Galactic Wayfarer"),
+        (5, 0, 322, "Icecave Crasher"),
+    ):
+        names = trajectory.load_production_deck(archetype=arch)
+        spec = trajectory.production_deck_to_deckspec(
+            names, shared_rng_seed=seed
+        )
+        adapter = build_shadow_checked_adapter(spec)
+        rng = random.Random(seed)
+        steps = 0
+        raised: ShadowDivergenceError | None = None
+        # The decision applied at the trip + a pre-trip snapshot of
+        # both engines' tapped lands, captured so we can prove the
+        # auto-tap fix paid byte-equal (the frontier is CLOSED, not
+        # just shifted).
+        while not adapter.is_terminal() and steps < 400:
+            try:
+                legal = adapter.legal_decisions()
+            except ShadowDivergenceError as e:
+                raised = e
+                break
+            if not legal:
+                break
+            choice = rng.choice(legal)
+            # Pre-apply land-tap snapshot of both engines (only
+            # meaningful at the trip step; cheap enough every step).
+            py_pre = adapter._py.engine_state
+            rs_pre = adapter._rust.rust_state
+            py_tapped_pre = {
+                o.id
+                for o in py_pre.battlefield
+                if "Land" in o.printing.type_line and o.tapped
+            }
+            rs_tapped_pre = {
+                o["id"]
+                for o in rs_pre.battlefield_snapshot()
+                if o["tapped"]
+            }
+            try:
+                adapter.apply(choice)
+            except ShadowDivergenceError as e:
+                raised = e
+                # Capture post-apply land-tap state on BOTH engines to
+                # prove the auto-tap paid byte-equal at the trip.
+                _trip_py_tapped = {
+                    o.id
+                    for o in adapter._py.engine_state.battlefield
+                    if "Land" in o.printing.type_line and o.tapped
+                }
+                _trip_rs_tapped = {
+                    o["id"]
+                    for o in (
+                        adapter._rust.rust_state.battlefield_snapshot()
+                    )
+                    if o["tapped"]
+                }
+                break
+            steps += 1
+
+        # (0) The known frontier still trips (until the S5-region
+        # spell-stack-source-zone slice lands). An honest-stop pin
+        # MUST still see its characterized divergence — if it no
+        # longer fires, the next axis was closed elsewhere; update
+        # this pin (do NOT silently pass).
+        assert raised is not None, (
+            f"arch{arch}/s{seed}: the known next divergence (S1 "
+            f"spell-stack-source-zone hand_p0) must still SURFACE. "
+            f"If it no longer fires the spell-stack-source-zone axis "
+            f"was closed elsewhere — update this pin to the closed "
+            f"contract."
+        )
+        # (1) AUTO-TAP FRONTIER CLOSED: the trip is the cast step at
+        # its characterized boundary, it is a STATE_EQ, and the ONLY
+        # divergent field is hand_p0 (down from the original
+        # hand+mana+battlefield+stack 4-field divergence). The
+        # auto-tapped LAND set is byte-IDENTICAL across engines (the
+        # land payment the old pool-only path could never make).
+        assert raised.tripwire == "STATE_EQ", (
+            f"arch{arch}/s{seed}: expected the post-cast STATE_EQ "
+            f"(auto-tap fix makes the cast succeed; the residual is "
+            f"the S1 spell-stack-source-zone hand divergence). Got "
+            f"{raised.tripwire}: {str(raised)[:300]!r} — a DIFFERENT "
+            f"tripwire is an honest-stop-unmasked NEW divergence; pin "
+            f"it + flag the slice owner, do NOT paper it."
+        )
+        assert steps == exp_step, (
+            f"arch{arch}/s{seed}: the cast-step trip boundary moved "
+            f"({steps} != characterized {exp_step}). A moved boundary "
+            f"means the frontier shifted — re-characterize before "
+            f"updating the pin."
+        )
+        # The post-cast divergence is EXACTLY hand_p0 (the S1
+        # spell-stack-source-zone), and the diverging entry is
+        # precisely the just-cast spell still in Rust's hand (Python
+        # removed it). Re-derive the field divergence at the trip.
+        ps = parity_smoke()
+        pv = build_python_field_view(adapter._py.engine_state)
+        rv = ps._build_field_view(adapter._rust.rust_state)
+        divs = compare_fields(pv, rv)
+        assert [d.field for d in divs] == ["hand_p0"], (
+            f"arch{arch}/s{seed}: post-cast divergence must collapse "
+            f"to ONLY hand_p0 (the S1 spell-stack-source-zone). Got "
+            f"{[d.field for d in divs]!r} — if mana_pool/battlefield/"
+            f"stack also diverge the auto-tap fix is INCOMPLETE "
+            f"(new-code-is-right: fix it, do NOT widen the pin)."
+        )
+        hd = divs[0]
+        rust_ids = {t[-1] for t in (hd.rust_value or ())}
+        py_ids = {t[-1] for t in (hd.py_value or ())}
+        extra_in_rust = rust_ids - py_ids
+        rust_stack_ids = {
+            d["source_obj_id"]
+            for d in adapter._rust.rust_state.stack_snapshot()
+        }
+        assert extra_in_rust and extra_in_rust <= rust_stack_ids, (
+            f"arch{arch}/s{seed}: the hand_p0 divergence must be "
+            f"PRECISELY the stack-resident cast spell Rust keeps in "
+            f"hand while Python removed it (the S1 spell-stack-source-"
+            f"zone invariant). extra_in_rust={extra_in_rust} "
+            f"rust_stack={rust_stack_ids}."
+        )
+        # The auto-tap actually PAID by tapping lands: Rust tapped
+        # strictly MORE lands post-cast than pre-cast (it auto-tapped
+        # to cover the generic), and the post-cast tapped-land set is
+        # byte-IDENTICAL to Python's (the frontier is CLOSED — the
+        # land payment is byte-equal, not merely "the cast ran").
+        assert _trip_rs_tapped == _trip_py_tapped, (
+            f"arch{arch}/s{seed}: the auto-tapped LAND set must be "
+            f"byte-IDENTICAL across engines at the cast trip "
+            f"(auto_tap_pay_for_cost byte-mirrors auto_tap_for_cost). "
+            f"rust={_trip_rs_tapped} python={_trip_py_tapped}."
+        )
+        assert _trip_rs_tapped > rs_tapped_pre, (
+            f"arch{arch}/s{seed}: the cast must have auto-tapped "
+            f"lands (the pool alone was short — the exact case the "
+            f"old pool-only pay_mana_cost silently no-op'd). "
+            f"pre={rs_tapped_pre} post={_trip_rs_tapped}."
+        )
+
+
 def test_g4_i20_cast_set_axis_is_closed_by_lockstep():
     """G4 CLOSURE PIN. G4 (the C1/G1-analog for the I20 axis: the
     documented Python mana-hold-until-cleanup simplification,

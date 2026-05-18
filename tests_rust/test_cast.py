@@ -236,9 +236,22 @@ def test_cast_creature_pays_mana_and_moves_to_battlefield(synthetic_state):
 
 
 def test_cast_creature_insufficient_mana_returns_false(synthetic_state):
-    """Empty pool, no mana to spend. cast_creature returns False and
-    leaves every observable bit of state untouched."""
+    """**G7 mid-game STATE_EQ closure-flip (auto-tap-from-lands).**
+    The "insufficient mana -> clean no-op" invariant still holds, but
+    under the NEW byte-Python-mirroring payment model the synthetic
+    state's 5 untapped Forests would auto-tap to pay (exactly Python's
+    ``_cast_spell`` -> ``auto_tap_for_cost``). To exercise GENUINE
+    insufficient mana we first tap every p0 land so neither the pool
+    NOR auto-tappable lands can cover the cost — then ``cast_creature``
+    correctly returns ``False`` and leaves every observable bit
+    untouched (the pre-fix pool-only ``is False`` here was a
+    false-pass: the lands could always pay; the new model is correct,
+    new-code-is-right)."""
     elf_id = P0_FIRST_HAND_ID
+    # Genuinely unpayable: empty pool AND no untapped mana lands.
+    for o in synthetic_state.battlefield_snapshot():
+        if o["controller_id"] == 0 and o["printing_name"] == "Forest":
+            synthetic_state.tap_object(o["id"])
     pool_before = synthetic_state.get_mana_pool(0)
     hand_before = synthetic_state.hand_sizes[0]
     bf_before = synthetic_state.battlefield_sizes[0]
@@ -557,7 +570,19 @@ def test_cast_creature_flash_still_respects_mana_cost(synthetic_state):
     obj_id = synthetic_state.register_and_inject_object(
         _flash_bear_dict(), 0, ZONE_HAND
     )
-    # Only one G — short by one generic pip.
+    # **G7 mid-game STATE_EQ closure-flip (auto-tap-from-lands).** The
+    # "flash lifts timing, NOT the mana cost" invariant is unchanged,
+    # but the pre-fix scenario (one G + a generic short) is now
+    # PAYABLE because the synthetic state's 5 untapped Forests
+    # auto-tap (byte-mirroring Python's ``_cast_spell`` ->
+    # ``auto_tap_for_cost``). Tap every p0 land so the cost is
+    # genuinely unaffordable (one G floating, no land headroom) —
+    # then the flash creature is still correctly rejected for
+    # insufficient mana (the gate the test pins), new-code-is-right.
+    for o in synthetic_state.battlefield_snapshot():
+        if o["controller_id"] == 0 and o["printing_name"] == "Forest":
+            synthetic_state.tap_object(o["id"])
+    # Only one G — short by one generic pip, and no land headroom.
     synthetic_state.add_mana(0, "G", 1)
     pool_before = synthetic_state.get_mana_pool(0)
     bf_before = synthetic_state.battlefield_sizes[0]
@@ -1168,7 +1193,18 @@ def test_castspell_insufficient_mana_no_mutation(synthetic_state):
     spell_id = synthetic_state.register_and_inject_object(
         _depressurize_spell_dict(), 0, ZONE_HAND
     )
-    # Only {B}; short the {1} generic.
+    # **G7 mid-game STATE_EQ closure-flip (auto-tap-from-lands).** The
+    # cast-spell-noncreature insufficient-mana no-op invariant is
+    # unchanged, but {B} + a generic short is now PAYABLE via the
+    # synthetic state's untapped Forests (auto-tap byte-mirrors
+    # Python's ``auto_tap_for_cost``; Forests pay generic). Tap every
+    # p0 land so the cost is genuinely unaffordable — then the
+    # net no-op contract (no zone / pool / stack mutation) still
+    # holds, new-code-is-right.
+    for o in synthetic_state.battlefield_snapshot():
+        if o["controller_id"] == 0 and o["printing_name"] == "Forest":
+            synthetic_state.tap_object(o["id"])
+    # Only {B}; short the {1} generic, and no land headroom.
     synthetic_state.add_mana(0, "B", 1)
     pool_before = synthetic_state.get_mana_pool(0)
     hand_before = synthetic_state.hand_sizes[0]

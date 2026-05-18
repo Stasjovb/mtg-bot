@@ -196,6 +196,242 @@ fn pay_mana_cost(pool: &mut ManaPool, cost: &crate::cards::ManaCost) -> bool {
     true
 }
 
+/// **G7 mid-game STATE_EQ closure — apply-side auto-tap-from-lands
+/// payment, byte-mirroring Python's `auto_tap_for_cost`.**
+///
+/// The three stack-push cast primitives (`cast_creature`,
+/// `cast_creature_warp`, `cast_spell_noncreature`) previously paid
+/// `cost` STRICTLY from the controller's floating `mana_pool`
+/// (`pay_mana_cost`), bailing `Ok(false)` (a silent no-op) when the
+/// pool alone could not cover it. But the Rust legal emitter is
+/// PERMISSIVE: `auto_tap_headroom_pool` (`state_ops_legal.rs:622`) /
+/// `can_pay_cost` (`state_ops_mana.rs:460`) offer a `CastSpell` whenever
+/// floating pool **plus auto-tappable lands** could pay — exactly
+/// Python's `can_pay_cost` (`actions.py:336-403`). Python's
+/// `_cast_spell` then ACTUALLY pays by `auto_tap_for_cost`
+/// (`actions.py:919-986`): consume floating pool first, then tap lands
+/// for the remainder. Rust's apply path had no such auto-tap, so a
+/// production-deck cast whose cost needs land-tapping (pool alone
+/// insufficient) was emitted-legal-then-silently-dropped — the
+/// post-S1/S4 mid-game STATE_EQ frontier (arch2/s1 step 273
+/// Galactic Wayfarer `{2}{G}`; arch5/s0 step 322 Icecave Crasher).
+///
+/// This helper closes that gap: it pays `cost` for `player_id` by
+/// **byte-mirroring `auto_tap_for_cost`'s algorithm exactly** —
+///
+///   1. Each colored requirement, in Python's `ManaCost.colored`
+///      iteration order (alphabetical by symbol: **B, G, R, U, W** —
+///      `cards.parse_mana_cost` sorts the pairs), is paid from the
+///      matching floating-pool slot FIRST, then by tapping untapped
+///      controller lands that produce that color (in `battlefield`
+///      iteration order, `[:need]` — the same selection
+///      `auto_tap_for_cost` makes via `_untapped_lands` +
+///      `effective_land_produces`).
+///   2. Generic (`cost.generic`) is paid from the remaining floating
+///      pool (deterministic C→W→U→B→R→G drain, matching
+///      `pay_mana_cost`'s post-colored generic order), then by tapping
+///      the remaining untapped lands `[:generic_need]`.
+///   3. Each tapped land has `tapped = true` set and fires
+///      `Event::BecomesTapped` via the SAME post-borrow inline
+///      dispatch `tap_for_mana` uses (`state_ops_mana.rs:369-393`) —
+///      Python routes every tapped land through `turn.tap_permanent`
+///      which fires `Event.BECOMES_TAPPED` (`actions.py:981-985`).
+///
+/// **Lands only — NOT mana creatures.** Python's `auto_tap_for_cost`
+/// AND its `can_pay_cost` predicate both source from `_untapped_lands`
+/// (`actions.py:196-200`, `o.printing.is_land` only), NOT mana
+/// creatures. The Rust legal-side `auto_tap_headroom_pool` is broader
+/// (it also counts non-sick mana creatures) — that emission-side
+/// over-permissiveness vs Python's lands-only is a DISTINCT C1 axis
+/// (`RUST_LEGAL_DECISIONS_MANA_AWARENESS_DESIGN.md`), out of scope
+/// here and not exercised by these repros. This apply-side helper is
+/// deliberately lands-only so it byte-matches the apply SoT
+/// (`auto_tap_for_cost`).
+///
+/// **Land detection / produced colors.** A land is
+/// `printing.card_types` containing `"Land"` (Python's
+/// `printing.is_land`). Its produced colors come from
+/// `printing.mana_produced` — the SAME field the legal-side
+/// `auto_tap_headroom_pool` (`state_ops_legal.rs:631`) and
+/// `tap_for_mana` (`state_ops_mana.rs:328`) read; the registry stores
+/// a single-color land like Forest as `Some(vec!["G"])`
+/// (`cards.rs:4566-4574`). On the live bridge-admitted surface there
+/// are no layer-3/4 land-type rewrites, so `mana_produced` is exactly
+/// Python's `effective_land_produces` produced-color set for the
+/// lands these casts auto-tap.
+///
+/// Returns `true` and commits (pool debited, lands tapped, events
+/// dispatched) iff payable; `false` with NO mutation otherwise (the
+/// caller bails exactly as the old pool-only `pay_mana_cost` did, so
+/// the unpayable path is unchanged).
+fn auto_tap_pay_for_cost(
+    state: &mut GameState,
+    idx: usize,
+    cost: &crate::cards::ManaCost,
+) -> PyResult<bool> {
+    // Colored requirements in Python's `ManaCost.colored` order
+    // (alphabetical by symbol). Each entry: (count, the produced
+    // symbol a land must list to pay it). B, G, R, U, W.
+    let colored: [(u8, &str); 5] = [
+        (cost.black, "B"),
+        (cost.green, "G"),
+        (cost.red, "R"),
+        (cost.blue, "U"),
+        (cost.white, "W"),
+    ];
+
+    // Snapshot the untapped controller lands in battlefield order,
+    // recording each land's produced color symbols. Mirrors Python's
+    // `lands = _untapped_lands(state, player_id)` (battlefield order,
+    // controller-owned, `is_land`, not tapped). Produced colors come
+    // from `printing.mana_produced` (the same field the legal-side
+    // `auto_tap_headroom_pool` / `tap_for_mana` read; a single-color
+    // land like Forest is `Some(vec!["G"])`).
+    let mut lands: Vec<(u32, Vec<String>)> = Vec::new();
+    for obj in state.players[idx].battlefield.iter() {
+        if obj.tapped {
+            continue;
+        }
+        let Some(printing) = state.registry.lookup(obj.printing_id) else {
+            continue;
+        };
+        if !printing.card_types.iter().any(|t| t == "Land") {
+            continue;
+        }
+        let symbols: Vec<String> = match &printing.mana_produced {
+            Some(v) => v.clone(),
+            None => Vec::new(),
+        };
+        lands.push((obj.id, symbols));
+    }
+
+    // ---- Phase 1: PLAN (no mutation). Decide which pool mana is
+    // consumed and which land ids are tapped. Bail with no mutation if
+    // the plan cannot be completed — byte-equivalent to
+    // `auto_tap_for_cost` being reachable only after `can_pay_cost`
+    // (Python) / the permissive legal emit (Rust) said yes, but
+    // strictly self-checked so an over-permissive emit degrades to the
+    // same honest `false`-bail the old `pay_mana_cost` produced (NOT a
+    // partial spend). ----
+    let pool = state.players[idx].mana_pool;
+    // Working copy of the pool's per-color counts.
+    let mut pw = pool.white;
+    let mut pu = pool.blue;
+    let mut pb = pool.black;
+    let mut pr = pool.red;
+    let mut pg = pool.green;
+    let mut pc = pool.colorless;
+    let mut used_land: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
+    let mut tapped_plan: Vec<u32> = Vec::new();
+
+    for (need_count, sym) in colored {
+        let mut need = need_count as u32;
+        if need == 0 {
+            continue;
+        }
+        // Pool coins of the matching color first.
+        let slot = match sym {
+            "W" => &mut pw,
+            "U" => &mut pu,
+            "B" => &mut pb,
+            "R" => &mut pr,
+            "G" => &mut pg,
+            _ => unreachable!("colored symbol vocabulary is W/U/B/R/G"),
+        };
+        let from_pool = (*slot as u32).min(need);
+        *slot -= from_pool as u8;
+        need -= from_pool;
+        if need == 0 {
+            continue;
+        }
+        // Then tap matching untapped lands, in battlefield order,
+        // `[:need]` (Python's `matching[:need]`).
+        for (lid, syms) in lands.iter() {
+            if need == 0 {
+                break;
+            }
+            if used_land.contains(lid) {
+                continue;
+            }
+            if syms.iter().any(|s| s == sym) {
+                used_land.insert(*lid);
+                tapped_plan.push(*lid);
+                need -= 1;
+            }
+        }
+        if need > 0 {
+            // Unpayable (an over-permissive emit). No mutation.
+            return Ok(false);
+        }
+    }
+
+    // Generic: remaining pool (deterministic C→W→U→B→R→G drain,
+    // matching `pay_mana_cost`'s post-colored generic order), then
+    // remaining untapped lands `[:generic_need]`.
+    let mut generic_need = cost.generic as u32;
+    for slot in [&mut pc, &mut pw, &mut pu, &mut pb, &mut pr, &mut pg] {
+        if generic_need == 0 {
+            break;
+        }
+        let take = (*slot as u32).min(generic_need);
+        *slot -= take as u8;
+        generic_need -= take;
+    }
+    if generic_need > 0 {
+        for (lid, _syms) in lands.iter() {
+            if generic_need == 0 {
+                break;
+            }
+            if used_land.contains(lid) {
+                continue;
+            }
+            used_land.insert(*lid);
+            tapped_plan.push(*lid);
+            generic_need -= 1;
+        }
+    }
+    if generic_need > 0 {
+        // Unpayable. No mutation.
+        return Ok(false);
+    }
+
+    // ---- Phase 2: COMMIT. The plan is complete; debit the pool to
+    // the planned residual and tap the planned lands. ----
+    {
+        let mp = &mut state.players[idx].mana_pool;
+        mp.white = pw;
+        mp.blue = pu;
+        mp.black = pb;
+        mp.red = pr;
+        mp.green = pg;
+        mp.colorless = pc;
+    }
+    for lid in tapped_plan {
+        {
+            let bf = Arc::make_mut(&mut state.players[idx].battlefield);
+            for obj in bf.iter_mut() {
+                if obj.id == lid {
+                    obj.tapped = true;
+                    break;
+                }
+            }
+        }
+        // Same post-borrow inline BECOMES_TAPPED dispatch
+        // `tap_for_mana` uses (`state_ops_mana.rs:369-393`): the flip
+        // is committed above (the bf mut-borrow is released), and the
+        // Phase-1 plan only ever scheduled UNTAPPED lands, so this is
+        // exactly the "state actually changed" branch Python's
+        // `tap_permanent` dispatches on.
+        crate::state_ops_resolve::dispatch_event(
+            state,
+            crate::cards::Event::BecomesTapped,
+            lid,
+        )?;
+    }
+    Ok(true)
+}
+
 /// Move the GameObject with id `obj_id` out of `state.players[idx].hand`
 /// and onto `state.players[idx].battlefield`, stamping its `zone`
 /// field to battlefield. Returns the moved object on success, or
@@ -556,13 +792,20 @@ impl GameState {
             }
             None => return Ok(false),
         };
-        // Phase 2: try the mana spend on a copy of the pool. If it
-        // succeeds, commit; otherwise return false with no mutation.
-        let mut pool_copy = self.players[idx].mana_pool;
-        if !pay_mana_cost(&mut pool_copy, &cost) {
+        // Phase 2: pay the cost. Python's `_cast_spell` pays via
+        // `auto_tap_for_cost` (`actions.py:1662`) — floating pool
+        // FIRST, then tap lands for the remainder. `auto_tap_pay_for_
+        // cost` byte-mirrors that (lands-only, colored-then-generic,
+        // BECOMES_TAPPED per land); it commits iff payable, else
+        // `false` with NO mutation — the exact bail the prior
+        // pool-only `pay_mana_cost` produced, just no longer
+        // false-negative when the pool alone is short but the
+        // controller's lands cover it (the G7 mid-game STATE_EQ
+        // frontier: legal emitted the cast counting auto-tap headroom,
+        // apply must actually auto-tap).
+        if !auto_tap_pay_for_cost(self, idx, &cost)? {
             return Ok(false);
         }
-        self.players[idx].mana_pool = pool_copy;
         // **G7 S1 exile-recast zone normalization.** Python's
         // exile-recast (`actions.py:1501-1502`) does
         // `p.exile.remove(card)` then `card.warped = False` AT CAST
@@ -783,11 +1026,14 @@ impl GameState {
             }
             None => return Ok(false),
         };
-        let mut pool_copy = self.players[idx].mana_pool;
-        if !pay_mana_cost(&mut pool_copy, &cost) {
+        // Pay the (warp) cost via the auto-tap-from-lands path —
+        // Python's `_cast_spell` pays the warp cost through the SAME
+        // `auto_tap_for_cost` (`actions.py:1662`, the cost var holds
+        // the selected warp cost). Floating pool first, then tap
+        // lands; commit iff payable, else `false` no-mutation.
+        if !auto_tap_pay_for_cost(self, idx, &cost)? {
             return Ok(false);
         }
-        self.players[idx].mana_pool = pool_copy;
         // Delta 2: production write of `spell_warped_this_turn`
         // (mirrors Python actions.py:1427 hand / :1457 graveyard —
         // BOTH branches set it). Plain bool on GameState, no CoW.
@@ -997,12 +1243,14 @@ impl GameState {
             }
             None => return Ok(false),
         };
-        // Delta 3: pay `mana_cost` on a pool copy; commit or bail.
-        let mut pool_copy = self.players[idx].mana_pool;
-        if !pay_mana_cost(&mut pool_copy, &cost) {
+        // Delta 3: pay `mana_cost` via the auto-tap-from-lands path
+        // (Python's instant/sorcery branch of `_cast_spell` pays
+        // through the SAME `auto_tap_for_cost`, `actions.py:1662`).
+        // Floating pool first, then tap lands; commit iff payable,
+        // else `false` no-mutation.
+        if !auto_tap_pay_for_cost(self, idx, &cost)? {
             return Ok(false);
         }
-        self.players[idx].mana_pool = pool_copy;
         // Delta 6: CAST event before the stack push, same ordering as
         // `cast_creature` / `cast_creature_warp`. The subject is the
         // card still in hand (the push leaves it there); predicate
