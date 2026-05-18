@@ -17058,3 +17058,208 @@ def test_resolve_create_token_each_player_skips_lost_players(synthetic_state):
     # Only p0 (living) got a token; p1 (lost) bf unchanged.
     assert bf_after[0] == bf_before[0] + 1
     assert bf_after[1] == bf_before[1]
+
+
+# --- G7 Slice S2 — resolver permanent-spell byte-equality pins -------
+#
+# S2 is a VERIFY-FIRST slice. The verify-first read (see the merge
+# message + `docs/RUST_STACK_RESOLUTION_DESIGN.md` S2) concluded the
+# resolver is ALREADY byte-equal with Python `put_into_battlefield`
+# (`src/mtg_bot/actions.py:2969`) on the THREE S2 axes for the only
+# permanent-spell type S1 can stack — a CREATURE spell cast through
+# `cast_creature` (`state_ops_cast.rs:492`, hard `Creature` type gate
+# at `:541-542`). Non-creature permanents (bare Artifact / Enchantment
+# / Planeswalker / Aura) fall through BOTH Rust cast primitives
+# (`cast_spell_noncreature` requires Instant|Sorcery; `cast_creature`
+# requires Creature) and so CANNOT be stacked in the post-S1 build —
+# their resolve-time provenance (the `move_source_post_resolve`
+# `&& creature` summoning-sick guard vs Python's UNCONDITIONAL
+# `summoning_sick = True` at `actions.py:2993`; aura attach at
+# `actions.py:2720-2758`) is LATENT/UNREACHABLE, S4+ territory per the
+# design doc ("auras may be S4/out-of-scope first cut"). S2 therefore
+# adds NO resolver code change — it is a clean-verify; these pins lock
+# the byte-equal conclusion and the unreachable-boundary so a future
+# S4 lane that opens non-creature-permanent casting trips the boundary
+# pin and is forced to revisit the guard (new-code-is-right).
+#
+# Axis 1 (ETB-timestamp monotonicity): the parity contract reads bf
+#   ORDER (`battlefield_snapshot` stable-sorts by `etb_timestamp`;
+#   `state_ops_snapshot.rs:211`), never absolute counter values, so a
+#   monotonic per-resolve stamp is byte-equal to Python's
+#   shared-counter `etb_timestamp` for relative bf ordering.
+# Axis 2 (ENTERS push-ordering): both engines dispatch ENTERS only
+#   after the resolving spell's StackItem is popped AND the object is
+#   on the battlefield — the ETB trigger lands on the
+#   now-empty-of-this-spell stack, byte-equal.
+# Axis 3 (aura attach): unreachable via S1 primitives — pinned as the
+#   non-creature-permanent boundary (test_..._non_creature_permanent_*
+#   below).
+
+
+def _s2_etb_self_draw_creature_dict(count=1):
+    """A Creature with a self-ETB DrawCards trigger — exercises the
+    full S2 resolve path: cast -> stack -> resolve (bf entry +
+    summoning sickness + ETB timestamp) -> ENTERS dispatch (the
+    trigger goes on the now-empty stack)."""
+    return {
+        "name": "Test S2 ETB Bear",
+        "card_types": ["Creature"],
+        "mana_cost": {"G": 1},
+        "power": 2,
+        "toughness": 2,
+        "keywords": [],
+        "effects": [],
+        "triggered_abilities": [
+            {
+                "event": "enters",
+                "predicate": {"kind": "source_is_self"},
+                "effect": {"kind": "draw_cards", "count": count},
+            }
+        ],
+    }
+
+
+def test_s2_creature_resolve_summoning_sick_byte_equal_python(
+    synthetic_state,
+):
+    """S2 axis 1 verify-confirm. A creature spell resolving through
+    `cast_creature` -> `resolve_top_of_stack` ->
+    `move_source_post_resolve` lands on the battlefield with
+    `summoning_sick = True` — byte-equal with Python
+    `put_into_battlefield` (`actions.py:2993`, which sets it
+    unconditionally for every permanent; for the CREATURE case Rust's
+    `&& creature` guard at `state_ops_resolve.rs:301-303` agrees). NO
+    stamp at cast time on either engine (Python `_cast_spell` doesn't
+    stamp; Rust `cast_creature` doesn't either)."""
+    elf_id = 10  # P0 synthetic-seed hand is Llanowar Elves, cost {G}
+    synthetic_state.add_mana(0, "G", 1)
+    assert synthetic_state.cast_creature(elf_id, 0) is True
+    # On the stack: still in hand, NOT yet stamped (not-on-bf sentinel).
+    assert synthetic_state.is_summoning_sick(elf_id) is None
+    synthetic_state.resolve_top_of_stack()
+    # Stamped at RESOLUTION (the byte-equal-to-Python axis).
+    assert synthetic_state.is_summoning_sick(elf_id) is True
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+
+
+def test_s2_etb_timestamp_monotonic_bf_order_byte_equal(synthetic_state):
+    """S2 axis 1 verify-confirm (the monotonicity contract). Two
+    creature spells cast + resolved in sequence land in the
+    battlefield snapshot in CAST/RESOLVE order — the parity contract
+    reads bf ORDER via the `etb_timestamp` stable-sort
+    (`state_ops_snapshot.rs:211`), NOT absolute counter values, so
+    Rust's per-resolve monotonic stamp is byte-equal to Python's
+    shared-`next_timestamp` `etb_timestamp` for relative bf ordering.
+    A continuous-effect timestamp interleaving between the two ETBs
+    (Python's shared counter) cannot reorder them because BOTH
+    counters are strictly monotonic and ETB stamps only ever increase
+    in ETB order on both engines."""
+    first = synthetic_state.register_and_inject_object(
+        _s2_etb_self_draw_creature_dict(count=0)
+        | {"name": "S2 First", "triggered_abilities": []},
+        0,
+        ZONE_HAND,
+    )
+    second = synthetic_state.register_and_inject_object(
+        _s2_etb_self_draw_creature_dict(count=0)
+        | {"name": "S2 Second", "triggered_abilities": []},
+        0,
+        ZONE_HAND,
+    )
+    # Resolve FIRST, then SECOND — the bf order must reflect that.
+    synthetic_state.push_to_stack(first, 0)
+    synthetic_state.resolve_top_of_stack()
+    synthetic_state.push_to_stack(second, 0)
+    synthetic_state.resolve_top_of_stack()
+
+    snap = synthetic_state.battlefield_snapshot()
+    ids_in_order = [d["id"] for d in snap]
+    pos_first = ids_in_order.index(first)
+    pos_second = ids_in_order.index(second)
+    assert pos_first < pos_second, (
+        "ETB-timestamp monotonicity broken: the earlier-resolved "
+        "creature must sort BEFORE the later-resolved one in the "
+        "battlefield snapshot (byte-equal to Python's append-order)"
+    )
+
+
+def test_s2_enters_dispatch_push_ordering_byte_equal(synthetic_state):
+    """S2 axis 2 verify-confirm. The ENTERS trigger of a resolving
+    creature spell is pushed onto the stack ONLY after the resolving
+    spell's own StackItem is popped AND the creature is on the
+    battlefield — byte-equal with Python, where
+    `resolve_top_of_stack` (`actions.py:2655`) pops the item, then
+    `put_into_battlefield` runs and `_trigger_etb_abilities`
+    (`actions.py:3440` -> `dispatch_event(ENTERS)`) is the LAST thing.
+    Post-resolve the stack carries EXACTLY the ETB trigger (size 1),
+    never the spell + trigger together."""
+    obj_id = synthetic_state.register_and_inject_object(
+        _s2_etb_self_draw_creature_dict(count=1), 0, ZONE_HAND
+    )
+    bf_before = synthetic_state.battlefield_sizes[0]
+    synthetic_state.push_to_stack(obj_id, 0)
+
+    resolved_cast = synthetic_state.resolve_top_of_stack()
+    assert resolved_cast is not None
+    assert resolved_cast["source_obj_id"] == obj_id
+    # Creature on bf, AND the ETB trigger on the now-empty-of-the-spell
+    # stack (size exactly 1 — the spell popped before ENTERS fired).
+    assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    assert synthetic_state.stack_size() == 1, (
+        "ENTERS push-ordering broken: post-resolve stack must hold "
+        "exactly the ETB trigger (spell popped first, then ENTERS "
+        "dispatched onto the now-empty stack) — byte-equal to Python"
+    )
+    # Draining the trigger draws 1 (DrawCards(1) payload fired).
+    hand_before = synthetic_state.hand_sizes[0]
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.hand_sizes[0] == hand_before + 1
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_s2_non_creature_permanent_cannot_be_stacked_boundary(
+    synthetic_state,
+):
+    """S2 axis 3 boundary pin (the unreachable-divergence tripwire).
+
+    A BARE Enchantment / Artifact / Planeswalker (no Creature, no
+    Instant/Sorcery type) falls through BOTH Rust cast primitives:
+    `cast_spell_noncreature` requires Instant|Sorcery
+    (`state_ops_cast.rs:891-901`) and `cast_creature` requires
+    Creature (`:541-542`). So such a permanent CANNOT be cast through
+    the post-S1 surface — which is exactly why the
+    `move_source_post_resolve` `&& creature` summoning-sick guard
+    (`state_ops_resolve.rs:301-303`) diverging from Python's
+    UNCONDITIONAL `summoning_sick = True` (`actions.py:2993`) for
+    non-creature permanents, and the absence of aura-attach at resolve
+    (Python `actions.py:2720-2758`), are LATENT/UNREACHABLE in S2 —
+    S4+ territory per the design doc.
+
+    This pin LOCKS the boundary: a bare Enchantment is rejected by
+    both primitives (returns False, no mutation). If a future S4 lane
+    opens non-creature-permanent casting, the `assert ... is False`
+    here flips and the lane is FORCED to revisit the guard + aura
+    attach (new-code-is-right — Python is the SoT). This is NOT a
+    tripwire weakening: it asserts the CURRENT honest boundary."""
+    ench = synthetic_state.register_and_inject_object(
+        {
+            "name": "S2 Bare Enchantment",
+            "card_types": ["Enchantment"],
+            "mana_cost": {"G": 1},
+            "effects": [],
+        },
+        0,
+        ZONE_HAND,
+    )
+    synthetic_state.add_mana(0, "G", 1)
+    pool_before = synthetic_state.get_mana_pool(0)
+    hand_before = synthetic_state.hand_sizes[0]
+    # Neither primitive accepts a bare Enchantment — no stack push, no
+    # mana spend, no zone move.
+    assert synthetic_state.cast_spell_noncreature(ench, 0) is False
+    assert synthetic_state.cast_creature(ench, 0) is False
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.get_mana_pool(0) == pool_before
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.find_object_zone(ench) == ZONE_HAND
