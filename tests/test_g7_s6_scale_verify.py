@@ -208,6 +208,33 @@ def test_s6_known_frontiers_reproduce_byte_exactly(arch, seed):
         # G2 merge. Now runs to TERMINAL CLEANLY (~918 steps).
         (1, 0, "Class E (ordered-pool ManaPool) + b3f7c0a9 + G2 "
                "combat-damage — ALL CLOSED; runs cleanly to terminal"),
+        # G7 UNCLASSIFIED life_p1 (CR 510.1c) — CLOSED. arch9/s1
+        # was the lone S6 scale-verify v2 STATE_EQ::life_p1
+        # divergence (step 875, life_p1=20/18). Verify-first
+        # confirmed the root cause: at turn-33 DECLARE_BLOCKERS,
+        # p1 declared Gravpack Monoist (id 63) as blocker for p0's
+        # Gravpack Monoist (id 3); p0 cast Focus Fire targeting
+        # the blocker, killing it on the stack between
+        # DECLARE_BLOCKERS and COMBAT_DAMAGE. Python's combat.py
+        # `was_blocked = len(attacker.blocked_by) > 0` gate kept
+        # the attacker blocked per CR 510.1c (damage wasted on
+        # the dead blocker — 0 to p1). Rust's `deal_combat_damage`
+        # gate was `bf_ordered_blockers.first().is_some()` (the
+        # LIVE-battlefield intersection of declared blockers), so
+        # with the lone blocker dead the gate flipped to
+        # "unblocked" and Rust applied the attacker's full 2
+        # damage to p1. **Fix** at `rust/src/state_ops_combat.rs`
+        # `deal_combat_damage`: gate flipped to declared-blocker
+        # presence (`was_blocked = !attacker_blocker_ids
+        # .is_empty()`); inside the blocked branch, an empty
+        # `bf_ordered_blockers` falls through to the correct CR
+        # 510.1c behavior (no plan entries for no-trample,
+        # trample-spill-to-defender for trample). arch9/s1 now
+        # runs cleanly past step 875 (terminal at ~5028, exceeds
+        # the 4000-step max_steps cap so the driver returns with
+        # terminal=False / raised=None — see `test_s6_unclassified
+        # _life_p1_arch9s1_runs_clean_through_4000` for the
+        # explicit closure pin).
     ],
 )
 def test_s6_complete_frontier_inventory(arch, seed, axis_class):
@@ -272,6 +299,72 @@ def test_s6_classc_warp_exile_counter_preserved_arch14_seed4_closed():
         f"arch14/s4 (Class-C warp-exile counter-preserved): expected "
         f"CLEAN run to terminal. Raw exception at step {steps}: "
         f"{raw_exc!r}."
+    )
+
+
+def test_s6_unclassified_life_p1_arch9s1_runs_clean_through_4000():
+    """G7 UNCLASSIFIED life_p1 (CR 510.1c blocked-attacker-stays-
+    blocked) — CLOSED regression pin.
+
+    arch9/s1 was the lone S6 scale-verify v2 STATE_EQ::life_p1
+    divergence at step 875 (life_p1=20/18). Verify-first
+    characterization: at turn-33 DECLARE_BLOCKERS, p1 declared
+    Gravpack Monoist (id 63) as a blocker for p0's Gravpack
+    Monoist (id 3); p0 cast Focus Fire targeting the blocker; the
+    spell resolved on the stack between DECLARE_BLOCKERS and
+    COMBAT_DAMAGE, killing the blocker; at COMBAT_DAMAGE entry,
+    Python applied 0 damage to p1 (CR 510.1c: attacker stays
+    blocked even when all of its blockers die — `was_blocked` is
+    computed from the declared `blocked_by` list, not pruned when
+    individual blockers die; without trample the damage assignment
+    lands on the dead blocker as a no-op for player life), Rust
+    applied 2 (attacker's full power, falling through to the
+    "unblocked" branch because the live-battlefield intersection
+    of declared blockers was empty).
+
+    **Fix** at `rust/src/state_ops_combat.rs::deal_combat_damage`:
+    the "blocked vs unblocked" gate was flipped from live-blocker
+    presence (`bf_ordered_blockers.first().is_some()`) to declared-
+    blocker presence (`was_blocked =
+    !attacker_blocker_ids.is_empty()`). Inside the blocked branch
+    the existing `bf_ordered_blockers` walk degenerates correctly
+    when every blocker is dead — no-trample emits zero plan
+    entries (Python's "wasted on dead blocker" fall-through),
+    trample's existing trample-through tail spills the full power
+    to the defender (CR 702.19b).
+
+    Post-fix, arch9/s1 reaches terminal at ~step 5028 with no
+    divergence. The 4000-step max_steps cap in `_drive_to_trip`
+    means the driver exits with `terminal=False / raised=None`
+    here (extended run); the load-bearing assertion is **no
+    tripwire fires** through step 4000 (which is well past the
+    875-step boundary where v2 tripped). If this test STARTS
+    tripping, the gate flip regressed — re-characterize the new
+    boundary before silencing.
+    """
+    pytest.importorskip("mtg_bot_engine")
+    steps, raised, raw_exc = _drive_to_trip(9, 1)
+    assert raised is None, (
+        f"G7 UNCLASSIFIED life_p1 regression: arch9/s1 expected "
+        f"NO tripwire through 4000 steps post-fix (the v2 trip "
+        f"was at step 875). Tripwire fired at step {steps}: "
+        f"{str(raised)[:400]!r}."
+    )
+    assert raw_exc is None, (
+        f"G7 UNCLASSIFIED life_p1 regression: arch9/s1 expected "
+        f"NO raw exception through 4000 steps post-fix. Got "
+        f"raw exception at step {steps}: {raw_exc!r}."
+    )
+    # The trip was at 875; we must drive PAST that boundary. The
+    # max_steps cap is 4000 — if the driver stopped before that
+    # AND it's not terminal, that's a different regression (legal-
+    # decisions emptied unexpectedly), which would surface as
+    # `steps < 4000 and not terminal` — guard against that.
+    assert steps >= 876, (
+        f"G7 UNCLASSIFIED life_p1 regression: arch9/s1 expected "
+        f"to drive PAST step 875 (the v2 trip boundary). Driver "
+        f"stopped at step {steps} — investigate why legal "
+        f"decisions emptied early."
     )
 
 

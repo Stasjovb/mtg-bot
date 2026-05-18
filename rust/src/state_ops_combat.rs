@@ -990,6 +990,37 @@ impl GameState {
                 .iter()
                 .filter_map(|(a, b)| if *a == attacker_id { Some(*b) } else { None })
                 .collect();
+            // G7 UNCLASSIFIED life_p1 fix (arch=9 seed=1 @875): the
+            // "blocked vs unblocked" gate must check the DECLARED
+            // blocker list (`self.blockers`), NOT the live-battlefield
+            // intersection. Per CR 510.1c, a creature is "blocked" if
+            // any blocker was declared against it at declare-blockers
+            // time; the attacker STAYS blocked even when all of its
+            // declared blockers later die / leave the battlefield
+            // (Focus Fire on the blocker between DECLARE_BLOCKERS and
+            // COMBAT_DAMAGE, mass-removal on the stack, etc.). The
+            // pre-fix gate `bf_ordered_blockers.first().is_some()`
+            // tripped to the `else if attacker_power > 0` unblocked
+            // branch whenever the live intersection was empty, applying
+            // the attacker's full power to the defending player —
+            // diverged from Python's `was_blocked = len(attacker.
+            // blocked_by) > 0` gate in combat.py:417 which is computed
+            // from declared blocked_by (not pruned when individual
+            // blockers die). Now we gate on declared-blocker presence
+            // (`was_blocked`) and split the previously-unified blocked
+            // branch into (a) "blocked, live blockers remain" (the
+            // CE14/CE15 multi-blocker walk, unchanged) and (b)
+            // "blocked, all blockers dead" (no plan entries, except
+            // trample spills the full power to the defender per
+            // CR 702.19b — mirrors Python's combat.py:436-440 +
+            // 459-462 fall-through where the no-trample branch's
+            // assignment lands on a dead blocker as a no-op for player
+            // life). The Python source-of-truth is explicit at
+            // combat.py:405-417 — "CR 510.1c: ... the gate is on
+            // whether the attacker WAS blocked (at declare-blockers
+            // time), not on whether any blockers are still alive
+            // RIGHT NOW".
+            let was_blocked = !attacker_blocker_ids.is_empty();
             let bf_ordered_blockers: Vec<u32> = crate::bf_iter::bf_iter_etb_sorted(self)
                 .into_iter()
                 .filter_map(|obj| {
@@ -1000,19 +1031,16 @@ impl GameState {
                     }
                 })
                 .collect();
-            let first_blocker: Option<u32> = bf_ordered_blockers.first().copied();
             let attacker_has_deathtouch =
                 battlefield_has_keyword(self, attacker_id, "deathtouch");
-            // The `first_blocker.is_some()` check gates "blocked vs
-            // unblocked": when at least one blocker exists, we enter
-            // the multi-block damage assignment walk (CE14/CE15);
-            // otherwise we fall through to the `else if attacker_power
-            // > 0` unblocked branch. The actual loop iterates
-            // `bf_ordered_blockers` directly — `first_blocker` itself
-            // is no longer used inside either branch (pre-CE15 both
-            // branches assigned damage to `first_blocker` as a
-            // shortcut; post-CE15 both walk every blocker).
-            if let Some(_first_blocker_id) = first_blocker {
+            // The `was_blocked` check gates "blocked vs unblocked"
+            // per CR 510.1c (see the long comment block above the
+            // attacker_blocker_ids computation). Inside the blocked
+            // branch, `bf_ordered_blockers.is_empty()` distinguishes
+            // the "all declared blockers dead" sub-case (CR 510.1c:
+            // damage wasted unless trample) from the normal multi-
+            // blocker walk.
+            if was_blocked {
                 if attacker_power > 0 {
                     // Trample (CR 702.19): the attacker is required
                     // to assign at least lethal (= blocker.toughness)
@@ -1031,6 +1059,25 @@ impl GameState {
                     // remainder (mirrors Python's
                     // combat.py:419-435 "is_last gets remaining" tail).
                     if attacker_has_trample {
+                        // G7 UNCLASSIFIED life_p1 (arch=9 seed=1 @875):
+                        // when the attacker was blocked but every
+                        // declared blocker is dead by COMBAT_DAMAGE,
+                        // the live-blocker walk below assigns zero
+                        // damage to blockers and the trample-through
+                        // tail spills the full power to the defender.
+                        // That matches Python's combat.py:454-458
+                        // `if has_trample and remaining > 0` tail
+                        // (with the loop body having absorbed nothing
+                        // because the live `blockers` list was empty),
+                        // so no separate branch is needed here — the
+                        // trample-through code path below handles it
+                        // correctly. The fix this slice makes is the
+                        // gate flip from live-blocker-presence to
+                        // declared-blocker-presence (`was_blocked`,
+                        // above); the trample math under
+                        // bf_ordered_blockers.is_empty() falls out as
+                        // the byte-equivalent player-spill emission.
+                        //
                         // CE15 closure: walk ALL blockers (not just
                         // first_blocker), mirroring Python's
                         // combat.py:419-435 loop shape under
@@ -1101,6 +1148,27 @@ impl GameState {
                             }
                         }
                     } else {
+                        // G7 UNCLASSIFIED life_p1 (arch=9 seed=1 @875):
+                        // when the attacker was blocked but every
+                        // declared blocker is dead by COMBAT_DAMAGE
+                        // (e.g. Focus Fire killed the lone blocker
+                        // during the DECLARE_BLOCKERS priority window),
+                        // `bf_ordered_blockers` is empty so the loop
+                        // body never executes and no plan entries are
+                        // emitted — the byte-equivalent of Python's
+                        // combat.py:431-453 "Walk LIVE blockers...
+                        // if all blockers died (live `blockers` is
+                        // empty) the damage is wasted under no-trample
+                        // (assignment lands on the dead blocker, which
+                        // is a no-op for player life)" fall-through.
+                        // No defender spillover under no-trample is
+                        // EXACTLY CR 510.1c. The fix this slice makes
+                        // is the gate flip from live-blocker-presence
+                        // to declared-blocker-presence (`was_blocked`,
+                        // above); reaching this empty-loop branch
+                        // instead of the previous unblocked-attacker
+                        // fall-through is the closed case.
+                        //
                         // CE14 closure: walk ALL blockers (not just
                         // first_blocker), mirroring Python's
                         // combat.py:419-435 loop shape. Per CR 702.2b
