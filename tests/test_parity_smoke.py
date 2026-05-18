@@ -69152,6 +69152,130 @@ def test_cross_engine_real_eoe_exosuit_savior_etb_seats_first_own_permanent_pari
     )
 
 
+# ---------------------------------------------------------------------------
+# RUST-SIDE FINDINGS NOTE — Divergence R77-CFI1: **CLOSED** (this slice).
+#
+# **The divergence (R77-CFI1 — round-77 post-R76-fix bench re-sweep
+# residual; CFI-1 class; Rust-side, Python ``src/mtg_bot/`` is SoT).**
+# Round-77's 360-game grid came back 358 PASS / 2 FAIL — the 2 failures
+# were ``cast_spell::graveyard_p1``: a counter-bearing creature
+# destroyed through a HAND-ROLLED destroy arm in
+# ``rust/src/state_ops_resolve.rs`` had its ``+1/+1`` counters spuriously
+# zeroed by a stray ``obj.counters = 0;`` on the way to the graveyard.
+# Python's ``turn.move_off_battlefield`` (``turn.py:231-240``) clears
+# combat marks (damage / tapped / attached_to) but DELIBERATELY leaves
+# ``obj.counters`` intact ("counters retained on the dead object"); the
+# generic ``turn.destroy`` (``turn.py:522-539``) AND sacrifice both
+# route through ``move_off_battlefield`` (the docstring is explicit:
+# *"sacrifice ... calls move_off_battlefield directly"*). Rust's own SBA
+# destroy path (``state_ops_sba.rs`` ~:417) and the already-closed
+# ``Effect::DepressurizeEffect`` arm both follow that same observable —
+# the stray ``obj.counters = 0;`` in the OTHER hand-rolled
+# destroy/sacrifice arms was the outlier, diverging from BOTH Python
+# (SoT) AND Rust's own SBA destroy path. Same class as the closed CFI-1
+# (a DIFFERENT set of Effect arms — the DepressurizeEffect instance was
+# closed in-tree; this slice closes the live siblings).
+#
+# Concretely round-77 saw: archetype 815 / seed 2 — Galactic Wayfarer
+# (obj 72): Python graveyard counters = 3, Rust = 0; archetype 54024 /
+# seed 7 — same shape (Germinating Wurm). Repros:
+# ``bench_trajectory_parity --archetypes 815 --seeds 2`` and
+# ``--archetypes 54024 --seeds 7`` → FAIL_DIVERGENCE
+# ``cast_spell::graveyard_p1`` (red-before).
+#
+# **Fix (this slice, Rust-side, new-code-is-right).** The stray
+# ``obj.counters = 0;`` was DELETED from every hand-rolled
+# death-to-graveyard arm so each matches Python (SoT) + Rust's own SBA
+# destroy path + the closed ``DepressurizeEffect`` arm: the 10 destroy
+# arms (helper ``destroy_first_defender_creature_then_draw_if_undamaged``,
+# ``Effect::DestroyTarget`` AnyCreature, ``DestroyAllCreatures``,
+# ``DestroyTargetNonlandPermanent``, ``DestroyTargetNoncreature
+# Permanent``, ``DestroyTargetArtifact``, ``DestroyTargetArtifactOr
+# TappedCreature``, ``SeedshipImpactEffect``, ``DestroyTargetLand``,
+# ``DestroyEnchantedPermanent``) PLUS the 3 audited sacrifice siblings
+# (``Effect::Sacrifice``, ``OptionalSacArtifactForEffect``,
+# ``EachOpponentSacrificesCreature``) — a sacrifice is a death that
+# routes through the SAME ``move_off_battlefield`` contract. The
+# non-death graveyard-bound sites (Mill from library, Discard from
+# hand) were AUDITED and left untouched: a milled/discarded card was
+# never a battlefield permanent (no ``+1/+1`` counters) and Python's
+# mill/discard does NOT call ``move_off_battlefield`` — clearing
+# ``obj.counters`` there is a harmless no-op, NOT the CFI-1 class.
+# Bounce/exile/library-move/reanimation sites are different
+# zone-change semantics (fresh object) and are correctly untouched.
+# Python untouched (SoT, correct). A faithful parity fix aligning the
+# Rust outliers to Python + Rust's own generic SBA destroy path — NOT
+# a shortcut, so no ``SEARCH_LIMITATIONS.md`` entry is warranted (the
+# R74-2 / R76-2 / CFI-1 precedent).
+#
+# The two pins below are the permanent regression guard: each runs the
+# EXACT minimal deterministic repro through the bench's own
+# ``drive_one_game`` (the production entry) and asserts a clean PASS
+# (red-before: FAIL_DIVERGENCE ``cast_spell::graveyard_p1``;
+# green-after: PASS). ``drive_one_game`` raises ``_DivergenceError`` on
+# ANY cross-engine field disagreement, so a PASS is a FULL-field
+# byte-equality assertion over the whole trajectory (the dead
+# counter'd creature's graveyard counter slot included) — the
+# established R74-2/R76-2 full-compare pin style.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "archetype,seed",
+    [
+        pytest.param(815, 2, id="r77_cfi1_archetype_815_seed_2"),
+        pytest.param(54024, 7, id="r77_cfi1_archetype_54024_seed_7"),
+    ],
+)
+def test_r77_cfi1_counter_retained_on_destroyed_creature_full_trajectory(
+    archetype, seed
+):
+    """**R77-CFI1 regression pin — a counter-bearing creature destroyed
+    via a hand-rolled destroy arm must carry its ``+1/+1`` counters into
+    the graveyard byte-equal across the WHOLE cross-engine field view.**
+
+    The exact round-77 minimal deterministic repros (archetype 815 /
+    seed 2 and archetype 54024 / seed 7). Pre-fix Rust's hand-rolled
+    destroy arms had a stray ``obj.counters = 0;`` that zeroed the dead
+    creature's counters on the way to the graveyard — a
+    ``cast_spell::graveyard_p1`` single-field divergence (Galactic
+    Wayfarer obj 72: Python graveyard counters = 3, Rust = 0). The
+    stray line was DELETED from every hand-rolled death-to-graveyard
+    arm so it matches Python's ``turn.move_off_battlefield`` (SoT) +
+    Rust's own SBA destroy path + the closed ``DepressurizeEffect``
+    arm. ``drive_one_game`` raises ``_DivergenceError`` on ANY
+    cross-engine disagreement, so reaching ``PASS`` is the FULL-field
+    byte-equal proof (red-before: FAIL_DIVERGENCE; green-after: PASS).
+    """
+    import pathlib
+
+    scripts_dir = pathlib.Path(__file__).resolve().parents[1] / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from bench_trajectory_parity import (  # type: ignore[import-not-found]
+        drive_one_game,
+    )
+
+    r = drive_one_game(
+        archetype=archetype, seed=seed, max_turns=120,
+        combat_strategy="attack_all", mulligans=0,
+    )
+    assert r.status == "PASS", (
+        f"R77-CFI1 regression — the round-77 repro (archetype "
+        f"{archetype} / seed {seed}) must run the FULL mirror "
+        f"trajectory with ZERO cross-engine divergence (a counter'd "
+        f"creature destroyed via a hand-rolled destroy/sacrifice arm "
+        f"retains its +1/+1 counters on the dead graveyard object "
+        f"byte-equal on BOTH engines — the established "
+        f"move_off_battlefield contract). Got status={r.status} "
+        f"turn={r.divergence_turn} action={r.divergence_action_index} "
+        f"kind={r.divergence_kind} fields={r.divergence_fields} "
+        f"msg={r.exception_message!r}. A FAIL_DIVERGENCE here means "
+        f"the stray Rust obj.counters=0 regressed — do NOT relax this "
+        f"pin; fix the Rust destroy arm."
+    )
+
+
 # === PHASE5_PROBES_INSERT_ABOVE_THIS_LINE ===
 # New real-EoE parity probes go IMMEDIATELY ABOVE this marker.
 # Append-only convention prevents merge collisions when multiple agents add probes in parallel.
