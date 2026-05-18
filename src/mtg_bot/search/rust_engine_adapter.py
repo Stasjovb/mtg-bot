@@ -78,6 +78,7 @@ _PHASE_BEGINNING_OF_COMBAT = 4
 _PHASE_DECLARE_ATTACKERS = 5
 _PHASE_DECLARE_BLOCKERS = 6
 _PHASE_COMBAT_DAMAGE = 7
+_PHASE_END_OF_COMBAT = 8
 _PHASE_POSTCOMBAT_MAIN = 9
 _PHASE_END = 10
 _PHASE_CLEANUP = 11
@@ -102,9 +103,15 @@ _COMBAT_DECLARE_PHASES = frozenset(
 #   BEGINNING_OF_COMBAT   (engine_adapter.py:1238)            -> always
 #   POSTCOMBAT_MAIN       (engine_adapter.py:1244)            -> always
 #   END                   (engine_adapter.py:1268[, :1271])   -> always
-#   COMBAT_DAMAGE         (engine_adapter.py:1264)            -> ONLY
-#       when there are attackers (Python guards the SBA with
-#       ``if any(o.attacking for o in self._state.battlefield)``)
+#   COMBAT_DAMAGE         (engine_adapter.py:1261-1264)        -> ONLY
+#       when there are attackers (Python guards BOTH the
+#       ``resolve_combat_damage`` call AND the SBA with
+#       ``if any(o.attacking for o in self._state.battlefield)``).
+#       The Rust mirror runs ``deal_combat_damage()`` BEFORE the
+#       SBA — same order, same guard, byte-equivalent to Python's
+#       ``resolve_combat_damage`` + ``state_based_actions`` pair
+#       (the G2 @504/@431 combat-damage outcome / SBA divergence
+#       closure).
 #
 # DRAW / PRECOMBAT_MAIN / END_OF_COMBAT / the two combat-DECLARE
 # phases are priority/decision steps but Python's ``_enter_step`` runs
@@ -384,15 +391,67 @@ class RustGameStateAdapter:
         if phase in _ENTER_STEP_SBA_PHASES:
             self._rust.apply_sbas()
         elif phase == _PHASE_COMBAT_DAMAGE:
-            # COMBAT_DAMAGE: Python guards the SBA with
+            # COMBAT_DAMAGE: Python's source-of-truth
+            # ``_enter_step(COMBAT_DAMAGE)`` runs
+            # ``resolve_combat_damage(state, defender_id)`` FOLLOWED
+            # by ``state_based_actions(state)``, both guarded by
             # ``if any(o.attacking for o in self._state.battlefield)``
-            # (engine_adapter.py:1255-1264 — SBA runs only when combat
-            # damage was actually resolved). Mirror that exact guard
-            # via Rust's ``get_attackers()`` so the cadence stays 1:1
-            # (no SBA at COMBAT_DAMAGE entry when no creature attacked,
-            # matching Python).
+            # (engine_adapter.py:1255-1264). Mirror that BOTH-PARTS
+            # cadence here — the SBA-only port was the @504/@431
+            # combat-damage outcome / SBA divergence root cause: Rust
+            # ran SBAs over a battlefield that had NOT been damaged,
+            # so lethally-damaged creatures stayed alive (arch5/s0
+            # step 504 STATE_EQ ('graveyard_p0', ...) — Python killed
+            # Icecave Crasher + Seedship Agrarian; Rust did not.
+            # arch30/s1 step 431 STATE_EQ ('life_p0', 16, 20) —
+            # Python applied 4 damage from unblocked Thawbringer; Rust
+            # did not).
+            #
+            # ``deal_combat_damage`` (state_ops_combat.rs:923) runs
+            # the byte-equivalent two-pass damage application
+            # (first-strike + regular substeps, CR 702.7/702.4) —
+            # documented limitation: no SBA between substeps (Python
+            # runs one at combat.py:318); that documented divergence
+            # is out of scope for this slice (no first-strike at play
+            # in @504/@431) and tracked separately.
+            #
+            # Same ``get_attackers()`` guard as the SBA call: when no
+            # creature attacked, ``deal_combat_damage`` walks an empty
+            # plan (no-op) and SBA is skipped — matching Python's
+            # ``if any(o.attacking ...)`` short-circuit precisely.
             if list(self._rust.get_attackers()):
+                self._rust.deal_combat_damage()
                 self._rust.apply_sbas()
+        elif phase == _PHASE_END_OF_COMBAT:
+            # END_OF_COMBAT post-hook — mirror Python's
+            # ``engine_adapter.py:1282-1283`` (which mirrors
+            # ``simulate.run_step``'s END_OF_COMBAT tail at
+            # ``simulate.py:404-405``): ``clear_combat_state`` resets
+            # ``attacking`` / ``blocking`` / ``blocked_by`` on every
+            # battlefield object + expires "until end of combat"
+            # continuous effects + processes
+            # ``pending_end_of_combat_sacrifices``. Rust's
+            # ``clear_combat()`` (state_ops_combat.rs:1381) clears
+            # the equivalent Rust state — ``self.attackers`` and
+            # ``self.blockers`` Vecs (Rust models combat as Vecs on
+            # the GameState; the field-view fingerprint reads
+            # ``attacking`` etc. straight off those Vecs via
+            # ``state_ops_snapshot``).
+            #
+            # The pre-fix bridge skipped this entirely — Rust's
+            # ``self.attackers`` Vec stayed populated turn-to-turn,
+            # invisible at most field-views (because no consumer
+            # walked it) UNTIL the @504/@431 sibling slice added a
+            # ``deal_combat_damage()`` call at every COMBAT_DAMAGE
+            # entry. Without this END_OF_COMBAT clear, the stale Vec
+            # fires phantom damage on the NEXT turn's COMBAT_DAMAGE
+            # even when the new active player declared zero attackers
+            # (arch30/s1 trace step 458: ``rust.attackers=[80]`` from
+            # the prior turn's Thawbringer attack, ``py.attackers=[]``
+            # — Rust applied 4 phantom damage to p1; Python applied
+            # zero). Same fix surface as the @504/@431 closure: this
+            # branch IS the second half of the same one-axis G2 fix.
+            self._rust.clear_combat()
 
     def _advance_to_next_decision(self) -> None:
         """Drive Rust forward until the game ends or the next

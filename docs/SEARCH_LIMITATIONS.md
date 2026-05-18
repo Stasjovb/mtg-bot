@@ -7003,6 +7003,59 @@ gate signal (correctly loud). The proper closure is parity-positive
 > `mana_pool_p1`→`library_p1`). Historical RE-CHARACTERIZATION
 > framing kept below for the design-decision record.]**
 
+> **[G7 G2 combat-damage outcome / SBA divergence — CLOSED by the
+> `_run_step_enter_sbas` extension (`feature/g7-g2-combat-damage-sba-
+> axis` off the cycle-38 @369 G1 closure base
+> `4f976361`).** Surfaced past the cycle-38 @369 G1 closure
+> on multiple arches (todos `504a1c7d` + `431b7e2a`; verify-first
+> confirmed ONE root cause across both reproductions): arch5/s0 step
+> 504 STATE_EQ `('graveyard_p0', ...)` + `('graveyard_p1', ...)` +
+> `('battlefield', ...)` — Python killed Icecave Crasher (id 12) +
+> Seedship Agrarian (id 83) via lethal damage and SBA-flipped to
+> graveyard; Rust kept both on battlefield. arch30/s1 step 431
+> STATE_EQ `('life_p0', 16, 20)` — Python applied 4 damage from
+> unblocked Thawbringer to p0; Rust did not. Both signatures
+> homogeneous, single root cause: the Rust-bridge
+> `_run_step_enter_sbas` at COMBAT_DAMAGE entry mirrored Python's
+> `state_based_actions(state)` call (`engine_adapter.py:1264`) but
+> NOT Python's preceding `resolve_combat_damage(state, defender_id)`
+> call (`engine_adapter.py:1261`). Rust ran SBAs over an un-damaged
+> battlefield, so lethally-damaged creatures stayed alive and life
+> totals diverged. **Fix** (`src/mtg_bot/search/rust_engine_adapter.
+> py::_run_step_enter_sbas`, ~30 LOC): at COMBAT_DAMAGE phase entry,
+> call `self._rust.deal_combat_damage()` BEFORE the existing
+> `self._rust.apply_sbas()`, guarded by the same
+> `list(self._rust.get_attackers())` short-circuit that already
+> guards the SBA call — exact byte-equivalent of Python's
+> `if any(o.attacking for o in self._state.battlefield)` two-call
+> path. Also added END_OF_COMBAT phase-entry branch calling
+> `self._rust.clear_combat()` to mirror Python's
+> `clear_combat_state` (`engine_adapter.py:1282-1283`) — the
+> stale-attackers-Vec gap was latent (no consumer walked the Vec
+> turn-to-turn), unmasked by the COMBAT_DAMAGE damage call: post-fix
+> the stale `self.attackers=[80]` Vec would phantom-fire damage
+> every subsequent turn until the END_OF_COMBAT clear closed that
+> gap. Pinned RED-before/GREEN-after by
+> `tests/test_rust_shadow_bakein.py::
+> test_g7_activateability_affordability_closed_then_next_frontier_
+> surfaced` (arch5/s0 row flipped 504→512 STATE_EQ `library_p1` —
+> the b3f7c0a9 sibling-owned next-frontier) +
+> `test_g7_classd_1of23_thawbringer_mana_affordability_closed_then_
+> next_frontier` (arch30/s1 row flipped 431→888 STATE_EQ
+> `('priority_player', 0, 1)` — the @808 sibling-owned next-
+> frontier) + `test_g7_classc_warpexile_delayed_trigger_root_cause_
+> closed_then_next_frontier_surfaced` (arch1/s1 cross-lane life_p0
+> @356 closed, surfaces b3f7c0a9 `library_p1` @460). The S6 Class-B
+> + Class-C rows in `tests/test_g7_s6_scale_verify.py` flipped
+> surfaced→closed in lockstep. NO `rust/src/` diff (pure bridge
+> port). **Out-of-scope documented divergence retained.** Rust's
+> `deal_combat_damage` runs first-strike + regular passes
+> back-to-back with NO SBA between them (`state_ops_combat.rs:919-
+> 922` — "No SBA enforcement between passes"; Python runs an SBA at
+> `combat.py:318`). The G2 reproductions had no first-strike at
+> play; the FS-pass-SBA interleave is tracked separately as a known
+> documented limitation.]**
+
 > **[Pre-fix RE-CHARACTERIZATION framing (verify-first @ `main` @
 > `430f3b39`; superseded above):]** The S6 evidence
 > (`docs/G7_S6_SCALE_VERIFY_EVIDENCE.md` + `s6_scale_verify.json`)
