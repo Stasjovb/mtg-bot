@@ -1,14 +1,20 @@
 # G7 mid-game STATE_EQ — verify-first finding + the auto-tap-from-lands engine fix
 
-> **Status: CLOSED (the identified frontier) + honest-stop (the next
-> distinct divergence pinned).** Lane: `feature/g7-midgame-stateeq`
+> **Status: CLOSED (the auto-tap frontier §2-4) + S1/S4
+> spell-stack-source-zone CLOSED by S5a/S5b/S5c + the §5-predicted
+> combat-blocker `LEGAL_SET_EQ` CLOSED by `fec5f14` (§7) + honest-stop
+> (two new distinct per-repro frontiers pinned in §7).** Lane (this
+> §7 addendum): `feature/fix-g7-combat-blocker-legalset` off `main` @
+> `24776ae0`; the original §2-6 lane was `feature/g7-midgame-stateeq`
 > off `main` @ `cf994e47`. This doc is the verify-first diagnosis +
 > fix record for the post-S1/S4 mid-game STATE_EQ frontier the
 > orchestrator's bake-in probe surfaced (arch2/s1 @ step 273;
-> arch5/s0 @ step 322). Cross-refs: `docs/RUST_STACK_RESOLUTION_
-> DESIGN.md` (the G7 owner doc), `docs/SEARCH_LIMITATIONS.md` G7
-> notes, `tests/test_rust_shadow_bakein.py::
-> test_g7_midgame_cast_autotap_closed_then_s1_spellstack_zone_surfaced`.
+> arch5/s0 @ step 322) and its §5-predicted combat-blocker successor.
+> Cross-refs: `docs/RUST_STACK_RESOLUTION_DESIGN.md` (the G7 owner
+> doc), `docs/SEARCH_LIMITATIONS.md` G7 notes,
+> `tests/test_rust_shadow_bakein.py::
+> test_g7_combat_blocker_legalset_closed_then_next_frontier_surfaced`
+> (the current flipped closure pin).
 
 ## 1. The frontier (orchestrator probe)
 
@@ -192,3 +198,90 @@ the S5-region successor; the G7 owner doc
 > (all fixed for free by the one hand-membership correction;
 > v-chain-agnostic), and the baseline-rebase protocol S5a must ship
 > with. That doc is the single owner for the next implementation lane.
+
+## 7. The §5-predicted combat-blocker LEGAL_SET_EQ — CLOSED (todo `fec5f14`)
+
+> **Status: CLOSED + honest-stop (two new distinct per-repro
+> frontiers pinned).** Lane: `feature/fix-g7-combat-blocker-legalset`
+> off `main` @ `24776ae0`. This closes the EXACT next divergence §5
+> predicted ("then hits LEGAL_SET_EQ ... a combat-blocker emission ...
+> clearly S3/S5/C1-region").
+
+After S5a closed the `hand_p0` axis the bake-in ran arch2/s1
+273→**312**, arch5/s0 322→**344** then tripped `LEGAL_SET_EQ`:
+`rust\py=[('blocker', N, None)] py\rust=[]` (arch2/s1 N=9, arch5/s0
+N=12 — Rust over-emits).
+
+**Verify-first root cause (class (c), Rust legal-emission gap;
+file:line both sides).** Drove both exact repros through the
+role-swapped bake-in and inspected the divergent declare-blockers
+decision. At the trip step: `step=DECLARE_BLOCKERS`, priority on the
+off-active defender, empty stack, **`battlefield attacking ids=[]`**
+(ZERO attackers), defender `eligible_blockers=[9]` / `[12]`,
+`_combat_phase=None`. Python's `MtgGameStateAdapter.
+_enter_declare_blockers` (`src/mtg_bot/search/engine_adapter.py:
+1322-1329`) computes `attackers = [o for o in battlefield if
+o.attacking]` and, EMPTY, takes `if not attackers:
+self._enter_priority_for_current_step(); return` — it NEVER sets
+`_combat_phase = _COMBAT_BLOCKERS`, so the rust_shadow combat-window
+reference (`src/mtg_bot/search/rust_shadow.py:281-286` = the Python
+adapter's `legal_decisions()`) emits NO `BlockerDecision`. Rust's
+blocker-decision emitter (`rust/src/state_ops_legal.rs:1336-1339`)
+gated ONLY on phase/priority/empty-stack + an eligible (untapped)
+defender creature — it had **no no-attackers gate**, so it still
+emitted `('blocker', head, None)`. This is the brief's
+"dead-or-removed-attacker / no-legal-block gate Python enforces and
+Rust's emitter omits".
+
+**The fix (new-code-is-right toward the Python SoT).** Added the
+byte-mirror no-attackers gate `&& !self.attackers.is_empty()` to the
+Rust blocker-emission gate. Rust's canonical "is attacking" predicate
+is `state.attackers` membership — documented by the `FocusFireEffect`
+arm at `state_ops_legal.rs:789-790` (*"A creature is attacking iff
+its id is in `state.attackers`"*); the byte-equal analog of Python's
+`o.attacking`. **`rust/src/state_ops_legal.rs` ONLY** (+ the bake-in
+pin flip + the SL note + the SOT_FLIP §4 row + this §7). 4-file core
+gate **1536 UNMOVED**; `tests_rust` zero-newly-failing vs `24776ae0`
+(30 ≡ 30, byte-identical set); `check_audit_coverage_staleness.py`
+exit 0; isolation self-check PASSED (shared canonical `.pyd`
+untouched). A `.pyd` rebuild on `main` is owed (orchestrator's).
+
+**The pin flip (surfaced→closure-flip discipline).**
+`test_g7_s5a_spellstack_zone_closed_then_blocker_legalset_surfaced` →
+`test_g7_combat_blocker_legalset_closed_then_next_frontier_surfaced`:
+asserts (1) the combat-blocker `LEGAL_SET_EQ` no longer fires at
+312/344 (each run proceeds PAST the old boundary) and (2) the new
+per-repro frontier surfaces LOUDLY at its freshly-characterized
+boundary. Negative controls intact.
+
+**The next distinct divergences (honest-stop — per-repro, surfaced,
+NOT introduced; the fix only NARROWS Rust over-emission).**
+
+- **arch2/s1 → step 318:** a RAW `ValueError` (NOT a
+  `ShadowDivergenceError` tripwire — rust_shadow calls
+  `self._rust.apply` raw BEFORE the NO_RAISE wrapper, so a Rust-side
+  raise is not converted). Rust's `legal_decisions` offers
+  `ActivateAbility(source_id=121, ability_index=0)` but Rust's own
+  `apply_action` rejects it: *"source 121 cost is unaffordable from
+  controller's mana pool (generic=2)"*. A **Rust-internal
+  legal-emit-vs-apply self-inconsistency** on activated-ability
+  mana-affordability — a C1-class legal-emission gap (the Rust
+  emitter offers a `{2}`-cost ability with no affordability gate;
+  Rust apply correctly rejects). This is the B1-axis analog for
+  `ActivateAbility` (B1 Slice 1 gated the 5 `CastSpell` sites via
+  `can_pay_cost`; the `ActivateAbility` emit site lacks the
+  equivalent gate).
+
+- **arch5/s0 → step 367:** a `STATE_EQ` tripwire on
+  `('priority_player', 1, 0)` (Python=1, Rust=0) on a
+  `PassPriority()` at a DECLARE_ATTACKERS step — a distinct
+  priority-player divergence (G5-family priority-port region, a
+  deeper production-deck manifestation than the synthetic-deck G5
+  the closure-flip earlier addressed).
+
+Both are DISTINCT, pre-existing axes, pinned LOUD by the flipped
+closure pin and filed as the next G7 follow-up (todo
+`fec5f14`-successor / SOT_FLIP §4). NOT force-fixed in this lane
+(`feedback_no_fallback_hybrids` honest-stop) — landing the sound
+combat-blocker fix and pinning the unmasked frontiers precisely is
+the correct disciplined outcome (the G4/G5/G6/S5a precedent).

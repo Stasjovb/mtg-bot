@@ -6715,6 +6715,68 @@ gate signal (correctly loud). The proper closure is parity-positive
 > `dba2ff5b`. The attribute removal does NOT shift the Rust-Effect-
 > variant inventory (it is a zone-id `const`, not an `Effect`), so
 > `check_audit_coverage_staleness.py` counts are unchanged.
+>
+> **[G7 combat-blocker LEGAL_SET follow-up CLOSED —
+> `feature/fix-g7-combat-blocker-legalset`, todo `fec5f14`; engine
+> fix, new-code-is-right toward the Python SoT; `.pyd` rebuild owed
+> on `main` (orchestrator's).]** The SEPARATE pre-existing C1-class
+> combat-blocker `LEGAL_SET_EQ` the S5a closure unmasked (above:
+> arch2/s1 step 312 N=9, arch5/s0 step 344 N=12; `py\rust` empty =
+> Rust over-emits) is **CLOSED**. **Verify-first root cause
+> (file:line both sides):** in a DECLARE_BLOCKERS step with priority
+> on the off-active defender, empty stack, an untapped defender
+> creature, and **ZERO attacking creatures**, Rust's blocker-decision
+> emitter (`rust/src/state_ops_legal.rs:1336-1339` gate) emitted
+> `('blocker', head, None)` because it gated ONLY on
+> phase/priority/empty-stack + an eligible (untapped) creature —
+> whereas Python's `MtgGameStateAdapter._enter_declare_blockers`
+> (`src/mtg_bot/search/engine_adapter.py:1322-1329`) computes
+> `attackers = [o for o in battlefield if o.attacking]` and, if
+> EMPTY, takes the `if not attackers:
+> self._enter_priority_for_current_step(); return` branch — it NEVER
+> sets `_combat_phase = _COMBAT_BLOCKERS`, so the rust_shadow
+> combat-window reference (`src/mtg_bot/search/rust_shadow.py:281-286`
+> = the Python adapter's `legal_decisions()`) emits NO
+> `BlockerDecision`. **Fix:** add the byte-mirror no-attackers gate
+> `&& !self.attackers.is_empty()` to the Rust blocker-emission gate
+> (Rust's canonical "is attacking" predicate is `state.attackers`
+> membership — the `FocusFireEffect` arm documents this at
+> `state_ops_legal.rs:789-790`; the byte-equal analog of Python's
+> `o.attacking`). `rust/src/state_ops_legal.rs` ONLY (+ the
+> bake-in pin flip + this note + the SOT_FLIP §4 row + the G7 finding
+> §5 status). **4-file core gate 1536 UNMOVED** (legal-emission
+> correctness fix; the bake-in pin is in
+> `tests/test_rust_shadow_bakein.py`, NOT a 4-file gate file);
+> `tests_rust` zero-newly-failing vs `24776ae0` (30 ≡ 30,
+> byte-identical set — the `test_legal.py` declare-blockers reds are
+> the pre-existing `feedcf93` baseline-rot, unaffected);
+> `check_audit_coverage_staleness.py` exit 0 (a gate-condition add,
+> not an `Effect` — structural arm does NOT fire, S5c/CFI-1
+> precedent). The cycle-25 honest-stop bake-in pin was flipped
+> surfaced→closure-flip: `test_g7_s5a_spellstack_zone_closed_then_
+> blocker_legalset_surfaced` →
+> `test_g7_combat_blocker_legalset_closed_then_next_frontier_
+> surfaced`. **SEPARATE NEW per-repro frontiers SURFACED (honest-stop
+> — distinct, pre-existing, surfaced — NOT introduced — by closing
+> the combat-blocker axis; the fix only NARROWS Rust over-emission so
+> it cannot have introduced them):**
+> *(a)* **arch2/s1 step 318** — a RAW `ValueError` (NOT a
+> `ShadowDivergenceError` tripwire — the rust_shadow harness calls
+> `self._rust.apply` raw before the NO_RAISE wrapper, so a Rust-side
+> raise propagates): Rust's `legal_decisions` offers
+> `ActivateAbility(source_id=121, ability_index=0)` but Rust's own
+> `apply_action` rejects it *"source 121 cost is unaffordable from
+> controller's mana pool (generic=2)"* — a **Rust-internal
+> legal-emit-vs-apply self-inconsistency** on activated-ability
+> mana-affordability (C1-class legal-emission gap; the emitter offers
+> a `{2}`-cost ability with no affordability gate, apply correctly
+> rejects). *(b)* **arch5/s0 step 367** — a `STATE_EQ` tripwire on
+> `('priority_player', 1, 0)` (Python=1, Rust=0) on a `PassPriority()`
+> at a DECLARE_ATTACKERS step (a deeper production-deck
+> priority-player divergence, G5-family region). Both pinned LOUD by
+> the flipped closure pin; filed as the next G7 follow-up (todo
+> below / SOT_FLIP §4). NOT force-fixed in this lane
+> (`feedback_no_fallback_hybrids` honest-stop).
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both
