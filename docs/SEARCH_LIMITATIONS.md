@@ -6394,6 +6394,58 @@ gate signal (correctly loud). The proper closure is parity-positive
 > resolve-branch port mirroring `actions.py:2720-2758`).
 > **Impact estimate:** zero strength/perf impact today (unreachable);
 > correctness-only at S4.
+>
+> **G7 Slice S3 LANDED — CLEAN-VERIFY NO-OP (this lane, no
+> `rust/src/` change).** Verify-first against live source @
+> `9e884681` CONTRADICTS the design doc's S3 "high-probability
+> Rust fix" hypothesis (the cast-time priority reset). The brief's
+> quoted anticipating docstring (*"a future stack-using cast slice
+> will need to re-think when the reset fires"*) exists ONLY pre-S1
+> (`6b3e5565^`); **S1 already deleted it and resolved the open
+> question** — the post-S1 docstring (`state_ops_cast.rs:621-630`)
+> definitively states the cast-push reset matches Python's
+> post-non-pass-action path. The cast-push
+> `priority_player = active_player` (`state_ops_cast.rs:633`, +
+> the identical resets in `cast_creature_warp:810` /
+> `cast_spell_noncreature:1030`) is **REDUNDANT, not divergent**:
+> the production Rust-driver loop
+> (`rust_engine_adapter.py:_run_priority_action`) overwrites
+> `priority_player` via `_reset_priority_to_active()` (`:511`
+> post-non-pass-action / `:444` post-resolution) — a documented
+> byte-exact port of Python `simulate._next_alive(active_player_idx)`
+> — at exactly Python's `simulate.py:282` / `:266-267` reset
+> points, BEFORE any per-apply STATE_EQ/LEGAL_SET_EQ compare. The
+> response-window machinery composes byte-equal: the I46
+> instant-speed CastSpell pass (`state_ops_legal.rs:1454-1507`,
+> gated per-card on `is_instant||flash`, run BEFORE the
+> sorcery-timing `stack.is_empty()` gate) emits the opponent's
+> response WHILE a permanent spell is on the stack, but ONLY when
+> the opponent HOLDS priority (the byte-faithful Python
+> `legal.py:180-181` priority gate at `state_ops_legal.rs:1199`);
+> LIFO resolution + post-resolution priority reset are byte-equal
+> to `simulate.py:priority_loop:254-267`. The C1 keystone (Slices
+> 1/2/3 `f1f09bbb`/`e6e3db58`/`bb29df8d`) is ALL in `main`
+> ancestry, so S3's response-window LEGAL_SET_EQ does not trip on a
+> known-open C1 axis (B1 DONE). S3 added NO `rust/src/` change; it
+> landed 3 verify-confirm pins
+> (`tests_rust/test_priority.py::test_s3_*` — the first engine-level
+> exercise of a real nested response window) + this status note +
+> `G7_S3_VERIFY_FINDING.md`. 4-file core gate **1532 UNMOVED**.
+> **Pre-existing-on-main flag (orchestrator, NOT S3-introduced —
+> S2-precedent pattern):** 23 `tests_rust/test_legal.py`
+> `DeclareAttackers`/`DeclareBlockers` emission-shape pins fail
+> identically on the unmodified `main @ 9e884681` shared `.pyd`
+> (zero S3 delta; the emitter now emits `attacker_decision`
+> factored-search variants vs the stale `declare_attackers` shape
+> these pins assert). NOT in the 4-file gate, NOT in S3's
+> priority/response-window scope — flagged for the orchestrator.
+> **S4 still owes** `cast_creature_warp` stack-push + rider
+> deferral (`state_ops_cast.rs:691-869`, still atomic at
+> `:785-790`) and the non-creature-permanent `&& creature` /
+> aura-attach divergence (the S2 boundary pin still guards it); the
+> full C4/`rust_shadow` bake-in is NOT expected clean post-S3 but
+> the post-cast priority/resolution SEQUENCE is byte-equal for the
+> creature case.
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both

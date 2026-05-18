@@ -832,3 +832,256 @@ def test_apply_action_pass_priority_noop_preserves_fingerprint(synthetic_state):
     synthetic_state.apply_action({"kind": "pass_priority"})
     fp_after = synthetic_state.fingerprint()
     assert fp_before == fp_after
+
+
+# ---------------------------------------------------------------------------
+# G7 Slice S3 — priority / response windows (the new surface).
+#
+# **Verify-first finding (G7_S3_VERIFY_FINDING.md): CLEAN-VERIFY
+# NO-OP.** The design-doc S3 hypothesized a cast-time priority-reset
+# fix; S1 (`5803aea7`) ALREADY landed the correct stack-semantics
+# reset. The brief's quoted docstring ("a future stack-using cast
+# slice will need to re-think when the reset fires") existed only
+# PRE-S1 (`6b3e5565^`) — S1 deleted it and resolved the open
+# question. The cast-push `priority_player = active_player`
+# (`state_ops_cast.rs:633`) is REDUNDANT (the adapter loop's
+# `_reset_priority_to_active()` at `rust_engine_adapter.py:511`
+# overwrites it with the byte-equal Python `_next_alive(active)`
+# target right after `apply_action` returns, before any compare
+# point), NOT divergent. NO `rust/src/` change.
+#
+# These pins are the design-named S3 DELIVERABLE: the first
+# engine-level exercise of a REAL nested response window —
+# a permanent (creature) spell sitting on the Rust stack across a
+# priority round while the opponent responds with an instant. This
+# surface NEVER existed cross-engine before S1 (no spell ever sat on
+# the Rust stack long enough for an opponent response). They lock:
+#   (a) the creature cast pushes a StackItem, does NOT atomic-resolve;
+#   (b) the opponent's instant-speed response window emits the
+#       CastSpell via `legal_decisions` WHILE the permanent spell is
+#       on the stack (I46 two-pass — the instant-speed pass is gated
+#       per-card on `is_instant || has_flash`, run BEFORE the
+#       sorcery-timing `stack.is_empty()` gate, so a spell on the
+#       stack does NOT suppress the response);
+#   (c) the response goes on TOP (LIFO) and resolves FIRST, then the
+#       permanent spell resolves and lands — byte-mirroring Python's
+#       `simulate.py:priority_loop:254-267` resolve-LIFO;
+#   (d) the post-resolution priority reset lands on the active player
+#       via the `_next_alive`-equivalent — byte-equal to Python's
+#       `simulate.py:266-267` (`priority_idx = _next_alive(state,
+#       state.active_player_idx)` after each resolution).
+# ---------------------------------------------------------------------------
+
+# Phase constant — mirrors ``rust/src/state_ops_steps.rs`` (PHASE_MAIN1
+# is the precombat main phase; the synthetic seed defaults to it for
+# the sorcery-timing-eligible window, matching ``test_cast.py``).
+_PHASE_MAIN1 = 3
+# Zone constant — mirrors ``rust/src/state_ops_zones.rs``.
+_ZONE_HAND = 0
+_ZONE_BATTLEFIELD = 2
+_ZONE_GRAVEYARD = 3
+# Synthetic seed: p0 hand[0] is a Llanowar Elves ({G} creature).
+_P0_ELF_ID = 10
+
+
+def _response_instant_dict():
+    """A no-effects Instant — the opponent's response spell. It needs
+    no effect (we assert the priority/resolution SEQUENCE + LIFO
+    ordering, not an effect observable); the bare Instant routes
+    through `cast_spell_noncreature` and post-resolves hand ->
+    graveyard. Mirrors ``test_counterspell._vanilla_dict`` /
+    ``test_cast.py``'s instant fixtures."""
+    return {
+        "name": "S3 Response Instant",
+        "card_types": ["Instant"],
+        "mana_cost": {"generic": 1},
+        "effects": [],
+    }
+
+
+def test_s3_permanent_spell_sits_on_stack_opponent_gets_response_window(
+    synthetic_state,
+):
+    """S3 deliverable (a)+(b): a creature spell cast by p0 SITS on the
+    stack (no atomic resolve — the S1 contract), and p1's response
+    window emits an instant-speed CastSpell via `legal_decisions(1)`
+    WHILE the creature spell is on the stack. This is the I46
+    two-pass instant-speed emission composing with a non-empty stack
+    — the surface that did not exist pre-S1.
+
+    **Byte-equal priority-window model (the verify-first-confirmed
+    sequence).** A response window opens for p1 only when priority is
+    PASSED to p1 — exactly Python's `simulate.py:priority_loop`: after
+    p0's cast (a non-pass action) the loop resets priority to the
+    active player (p0, `:282`); p0 then passes (single in-round pass),
+    and `:271-273` moves priority to `_next_alive((0+1)%2)` = p1.
+    `legal_decisions` correctly bails to bare PassPriority for an
+    OFF-priority caller (`state_ops_legal.rs:1199-1201`, byte-faithful
+    to Python `legal.py:180-181`); the response emission is gated on
+    p1 actually HOLDING priority. So the test models the loop's
+    priority hand-off (give_priority_to(1) is the
+    `_next_alive`-equivalent the adapter loop / Python loop performs)
+    rather than querying p1 off-priority."""
+    synthetic_state.set_phase(_PHASE_MAIN1)
+    # p1's response instant in hand.
+    resp_id = synthetic_state.register_and_inject_object(
+        _response_instant_dict(), 1, _ZONE_HAND
+    )
+    # p0 casts the creature -> StackItem, NOT resolved. The cast-push
+    # reset (and the adapter loop's post-non-pass-action reset) put
+    # priority on the active player p0 — byte-equal to Python
+    # `simulate.py:282`.
+    synthetic_state.add_mana(0, "G", 1)
+    assert synthetic_state.cast_creature(_P0_ELF_ID, 0) is True
+    assert synthetic_state.stack_size() == 1
+    assert synthetic_state.is_stack_empty() is False
+    assert synthetic_state.find_object_zone(_P0_ELF_ID) == _ZONE_HAND, (
+        "S1 contract: the creature spell sits on the stack (still in "
+        "hand, NOT atomic-resolved to the battlefield)"
+    )
+    assert synthetic_state.get_priority_player() == 0, (
+        "post-cast priority is the active player (p0) — Python "
+        "simulate.py:282 post-non-pass-action reset"
+    )
+    # Off-priority caller (p1) correctly bails to bare PassPriority —
+    # the byte-faithful Python `legal.py:180-181` priority gate. This
+    # is NOT the response window yet.
+    p1_offpri = synthetic_state.legal_decisions(1)
+    assert [a["kind"] for a in p1_offpri] == ["pass_priority"], (
+        "off-priority p1 must see ONLY PassPriority (byte-equal to "
+        "Python legal.py:180-181); the response window has not opened"
+    )
+
+    # The priority loop passes priority to p1 (p0 passes -> Python
+    # `simulate.py:271-273` `_next_alive((0+1)%2)`). NOW the response
+    # window is open with the permanent spell still on the stack.
+    synthetic_state.give_priority_to(1)
+    synthetic_state.add_mana(1, "C", 1)
+    p1_legal = synthetic_state.legal_decisions(1)
+    cast_actions = [a for a in p1_legal if a["kind"] == "cast_spell"]
+    assert any(a["card_id"] == resp_id for a in cast_actions), (
+        "S3 response window broken: with p1 HOLDING priority, the "
+        "opponent's instant-speed CastSpell must be emitted while a "
+        "permanent spell is on the stack — the I46 instant-speed pass "
+        "must NOT be suppressed by the non-empty stack (it is gated "
+        "per-card on is_instant||flash, NOT the sorcery-timing "
+        "stack.is_empty() short-circuit at state_ops_legal.rs:1450)"
+    )
+    # PassPriority is always offered (the opponent may decline to
+    # respond — CR 117.3a).
+    assert any(a["kind"] == "pass_priority" for a in p1_legal)
+
+
+def test_s3_response_resolves_lifo_then_permanent_spell_lands(
+    synthetic_state,
+):
+    """S3 deliverable (c): the opponent's response goes on TOP of the
+    permanent spell and resolves FIRST (LIFO — CR 405.5 /
+    `simulate.py:priority_loop:254-267` resolves the TOP item per
+    completed pass round); then the permanent spell resolves and the
+    creature lands on the battlefield. The nested-window resolution
+    order is byte-equal to Python's stack discipline."""
+    synthetic_state.set_phase(_PHASE_MAIN1)
+    resp_id = synthetic_state.register_and_inject_object(
+        _response_instant_dict(), 1, _ZONE_HAND
+    )
+    bf_p0_before = synthetic_state.battlefield_sizes[0]
+    gy_p1_before = synthetic_state.graveyard_sizes[1]
+
+    # p0 casts creature (bottom of stack).
+    synthetic_state.add_mana(0, "G", 1)
+    assert synthetic_state.cast_creature(_P0_ELF_ID, 0) is True
+    # p1 responds with the instant (top of stack — LIFO).
+    synthetic_state.add_mana(1, "C", 1)
+    assert (
+        synthetic_state.cast_spell_noncreature(resp_id, 1) is True
+    ), "the opponent's instant must cast onto the non-empty stack"
+    assert synthetic_state.stack_size() == 2, (
+        "nested window: response on TOP of the permanent spell "
+        "(stack depth 2)"
+    )
+    # Creature still pending (NOT prematurely resolved by the response
+    # cast).
+    assert synthetic_state.find_object_zone(_P0_ELF_ID) == _ZONE_HAND
+    assert synthetic_state.battlefield_sizes[0] == bf_p0_before
+
+    # Resolve TOP (the response instant) first — LIFO.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.stack_size() == 1, (
+        "LIFO: the response (top) resolved first, the permanent spell "
+        "remains on the stack"
+    )
+    assert synthetic_state.find_object_zone(resp_id) == _ZONE_GRAVEYARD
+    assert synthetic_state.graveyard_sizes[1] == gy_p1_before + 1
+    # Permanent spell still pending until ITS resolution.
+    assert synthetic_state.find_object_zone(_P0_ELF_ID) == _ZONE_HAND
+    assert synthetic_state.battlefield_sizes[0] == bf_p0_before
+
+    # Resolve the permanent spell — the creature lands.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.is_stack_empty() is True
+    assert (
+        synthetic_state.find_object_zone(_P0_ELF_ID) == _ZONE_BATTLEFIELD
+    )
+    assert synthetic_state.battlefield_sizes[0] == bf_p0_before + 1
+    assert synthetic_state.is_summoning_sick(_P0_ELF_ID) is True, (
+        "the permanent spell resolved through move_source_post_resolve "
+        "(summoning-sick stamped at RESOLUTION, byte-equal to Python's "
+        "put_into_battlefield) — NOT at cast time"
+    )
+
+
+def test_s3_post_resolution_priority_resets_to_active_player(
+    synthetic_state,
+):
+    """S3 deliverable (d): after the response window resolves, the
+    priority reset lands on the ACTIVE player — byte-equal to Python's
+    `simulate.py:priority_loop:266-267`
+    (`priority_idx = _next_alive(state, state.active_player_idx)`
+    after each resolution). The Rust adapter loop owns this reset
+    (`rust_engine_adapter.py:_reset_priority_to_active` at `:444`
+    post-resolution / `:511` post-non-pass-action, both targeting
+    `_next_alive_idx(active_player_idx)`); the cast-push reset in
+    `cast_creature` is redundant, not divergent.
+
+    This pins the *direction* of the reset at the engine boundary:
+    the active player (p0) holds priority after the cast (the
+    cast-push reset) AND after the resolution — proving the
+    engine-side state the adapter loop reads is already byte-aligned
+    with Python's post-action invariant (priority == active after a
+    non-pass action / a resolution)."""
+    synthetic_state.set_phase(_PHASE_MAIN1)
+    assert synthetic_state.active_player == 0
+    # Hand priority to the NON-active player first, so an accidental
+    # missing reset would be detectable.
+    synthetic_state.give_priority_to(1)
+    assert synthetic_state.get_priority_player() == 1
+
+    synthetic_state.add_mana(0, "G", 1)
+    assert synthetic_state.cast_creature(_P0_ELF_ID, 0) is True
+    # CR 117.1c / `simulate.py:274-282`: a non-pass action (the cast)
+    # resets priority to the active player. The engine-side cast-push
+    # reset fires here; the adapter loop's `_reset_priority_to_active`
+    # (the byte-equal-to-Python authority) would set the same target.
+    assert synthetic_state.get_priority_player() == 0, (
+        "post-cast priority must be the active player (p0) — "
+        "byte-equal to Python's post-non-pass-action reset "
+        "simulate.py:282 `_next_alive(state.active_player_idx)`"
+    )
+    assert synthetic_state.active_player == 0, (
+        "the cast must not perturb active_player (I8: priority and "
+        "active are independent fields)"
+    )
+
+    # Resolve the permanent spell; CR 117.1c again — priority returns
+    # to the active player after the resolution
+    # (`simulate.py:266-267`). The synthetic state has no second
+    # priority holder change here, so the post-resolution invariant is
+    # "priority == active player" — assert it directly.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.is_stack_empty() is True
+    assert synthetic_state.get_priority_player() == 0, (
+        "post-resolution priority must reset to the active player — "
+        "byte-equal to Python simulate.py:266-267 "
+        "`_next_alive(state.active_player_idx)`"
+    )
