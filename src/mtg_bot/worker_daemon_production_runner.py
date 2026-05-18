@@ -206,12 +206,21 @@ def _encode_npz_bytes(
     # wants a file-like or path. BytesIO works because savez_compressed
     # internally uses the zipfile module which only needs seek/write.
     buf = io.BytesIO()
-    if write_structured_tokens and len(chunk) > 6 and chunk[6]:
+    if write_structured_tokens:
+        # Empty struct_rows (timed-out / crashed games whose chunk
+        # came from ``_empty_arrays()``) used to fall through to the
+        # flat-only ``else`` branch via the
+        # ``... and chunk[6]`` truthiness check, leaving the npz
+        # without the structured-token columns. train_nn.py then
+        # rejected the ENTIRE batch on the first such file — even
+        # though the empty game contributes no samples — because
+        # the schema must be uniform across every npz when
+        # ``--architecture structured``. Always emit the structured
+        # columns when the flag is on; ``_pad_and_stack_structured_rows([])``
+        # returns shape-(0,0) arrays that round-trip cleanly.
         from mtg_bot.training.data_gen import _pad_and_stack_structured_rows
-        struct = _pad_and_stack_structured_rows(chunk[6])
-        # Use np.savez_compressed directly with the keys save_dataset
-        # would produce; we can't call save_dataset because it only
-        # accepts a Path. Mirror save_dataset's array layout.
+        struct_rows = chunk[6] if len(chunk) > 6 else []
+        struct = _pad_and_stack_structured_rows(struct_rows)
         arrays = {
             "features": features,
             "outcomes": outcomes,

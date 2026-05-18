@@ -463,6 +463,38 @@ def test_encode_npz_bytes_roundtrips(tmp_path):
     assert data["features"].shape == (n, 51)
 
 
+def test_encode_npz_bytes_emits_empty_structured_arrays_for_empty_chunk():
+    # Regression: timed-out / crashed games go through
+    # ``_empty_arrays()`` which produces an empty ``struct_rows=[]``.
+    # The old guard ``if write_structured_tokens and chunk[6]`` fell
+    # through to the flat-only branch and produced an npz WITHOUT
+    # structured columns even though the consumer was set up for
+    # structured; train_nn.py rejected the entire batch when even
+    # ONE such empty npz was present. Empty struct rows must still
+    # emit the 4 structured arrays (as shape-(0,0)) for schema
+    # uniformity.
+    empty_chunk = (
+        np.zeros((0, 51), dtype=np.float32),
+        np.zeros((0,), dtype=np.float32),
+        np.zeros((0, 1), dtype=np.float32),
+        np.zeros((0, 1), dtype=bool),
+        None,            # winner
+        "timed_out",     # outcome_kind
+        [],              # struct_rows — the empty list that
+                         # used to disable the structured branch.
+    )
+    blob = prr._encode_npz_bytes(empty_chunk, write_structured_tokens=True)
+    data = np.load(io.BytesIO(blob))
+    # All 4 structured columns must be present (even though shape-(0,0)).
+    assert "structured_token_type" in data.files
+    assert "structured_token_emb_ids" in data.files
+    assert "structured_token_scalars" in data.files
+    assert "structured_attention_mask" in data.files
+    # Shape contract: empty rows + uniform schema.
+    assert data["structured_token_type"].shape == (0, 0)
+    assert data["features"].shape == (0, 51)
+
+
 def test_resolve_deck_pool_path_honors_explicit_and_default():
     """Explicit > default."""
     p = prr._resolve_deck_pool_path("custom/pool.gz")
