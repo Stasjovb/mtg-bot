@@ -208,16 +208,27 @@ impl GameState {
 
     /// Resolve an object id to the zone constant naming the zone it
     /// currently lives in. Returns `None` if no object with that id
-    /// is in any of the five tracked zones (hand / library /
-    /// battlefield / graveyard / exile) on either player. The stack
-    /// is still not searched (a stack item is keyed by source id,
-    /// not by full GameObject membership) — once it is, the search
-    /// extends here.
+    /// is in any tracked zone (hand / library / battlefield /
+    /// graveyard / exile per-player, or the centralized stack-object
+    /// store) on either player.
     ///
     /// **Round-14 update:** exile is now searched. Round-1 ignored
     /// exile because nothing read FROM exile yet; round-11 added
     /// `Effect::ExileTarget` (write into exile) and this slice is
     /// the matching "exile is now a first-class read source" half.
+    ///
+    /// **G7 S5a update (Option β):** the centralized
+    /// `state.stack_objects` store IS now searched and reports
+    /// `ZONE_STACK`. A spell on the stack lives there (the cast moved
+    /// it hand → store with `obj.zone = ZONE_STACK`) — this is the
+    /// direct mirror of Python's observable `card.zone == Zone.STACK`
+    /// (`actions.py:1751`), NOT a hand-derived projection (it is a
+    /// zone-identity lookup, parallel to Python's `card.zone`). The
+    /// hand-derived projections (`hand_snapshot` / the fingerprint
+    /// hand slot / the determinizer pool / the 3 legal-emit
+    /// `players[idx].hand.iter()` loops) deliberately do NOT search
+    /// the store, so the on-stack spell vanishes from them exactly as
+    /// Python's `p.hand.remove(card)` removes it.
     ///
     /// The lookup is membership-based, NOT a read of the object's
     /// `zone` field. That field carries placeholder data on
@@ -243,6 +254,13 @@ impl GameState {
             if player.exile.iter().any(|o| o.id == obj_id) {
                 return Some(ZONE_EXILE);
             }
+        }
+        // G7 S5a (Option β): the spell-stack-source-zone store. A
+        // cast spell's owned GameObject lives here while on the stack
+        // (zone=ZONE_STACK) — the byte-mirror of Python's observable
+        // `card.zone == Zone.STACK`.
+        if self.stack_objects.iter().any(|o| o.id == obj_id) {
+            return Some(ZONE_STACK);
         }
         None
     }

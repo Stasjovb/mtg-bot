@@ -1206,6 +1206,46 @@ pub struct GameState {
     pub blockers: Vec<(u32, u32)>,
     /// The stack — top is the LAST element of the Vec for O(1) pop.
     pub stack: Vec<StackItem>,
+    /// **G7 Slice S5a — the spell-stack-source-zone store (Option β).**
+    /// While a spell (or other resolve-via-`move_source_post_resolve`
+    /// entity) is on the stack, its owned `GameObject` lives HERE with
+    /// `obj.zone = ZONE_STACK` — NOT in the owner's `hand` Vec.
+    ///
+    /// **Why a centralized store, not a per-player zone.** Python's
+    /// `StackItem` owns the card by reference (`actions.py:1759-1767`
+    /// `StackItem(source=card, …)`) — the card is `p.hand.remove`'d at
+    /// cast (`actions.py:1403`) and `card.zone = Zone.STACK`
+    /// (`actions.py:1751`); it lives in NO zone list, reachable only
+    /// via `state.stack[i].source` and read directly at resolve
+    /// (`card = item.source`, `actions.py:2708`). Rust keeps `StackItem`
+    /// id-only (no `state.rs` StackItem-shape / fingerprint-slot churn —
+    /// the design's Option β minimum-blast-radius choice); this Vec is
+    /// the place Rust holds the owned object so the id-keyed source
+    /// finders still reach it. It is centralized (one per `GameState`,
+    /// not per-`Player`) because Python's stack is centralized on
+    /// `GameState` and a stack item's source has no per-player zone
+    /// while it is on the stack.
+    ///
+    /// **Excluded from every hand-derived projection by construction.**
+    /// `hand_snapshot` / the fingerprint's per-player hand slot / the
+    /// determinizer pool / `set_object_printing_id` / the 3
+    /// `legal.rs` `players[idx].hand.iter()` cast-emit loops all read
+    /// `players[idx].hand` (or the 5 per-player zones) and NEVER this
+    /// store — so the on-stack spell vanishes from all of them exactly
+    /// as Python's `p.hand.remove(card)` removes it from every
+    /// hand-derived Python projection. NOT serialized as its own
+    /// fingerprint/snapshot zone (Python has no separate stack-object
+    /// zone signature either — the card's stack presence is represented
+    /// solely via the `StackItem`/`stack_snapshot` `source_obj_id`
+    /// slot, which is byte-unchanged). The 3 source-resolution walks
+    /// (`find_source_printing_id` / `take_source` /
+    /// `move_source_post_resolve`) and the `dispatch_event`
+    /// CAST/DIES/LEAVES observer walk are extended to find a source
+    /// here as an additional zone; `take_source` removes from here on
+    /// resolve and `move_source_post_resolve` pushes the owned object
+    /// to its post-resolve destination (bf / graveyard) byte-equal to
+    /// Python's `put_into_battlefield`.
+    pub stack_objects: Vec<GameObject>,
     /// Count of consecutive `pass_priority` invocations since the last
     /// non-pass mutation. Round-27 G3 closure: needed by the
     /// `complete_step_via_priority_round` composer to detect "both
@@ -1707,6 +1747,12 @@ impl Clone for GameState {
             attackers: self.attackers.clone(),
             blockers: self.blockers.clone(),
             stack: self.stack.clone(),
+            // G7 S5a: the stack-object store rides every clone (the
+            // determinizer clones the provider then determinizes the
+            // clone; a mid-stack clone must keep the stack-resident
+            // source so resolve still finds it). CoW-cheap — a Vec of
+            // GameObject; almost always 0 or 1 entries.
+            stack_objects: self.stack_objects.clone(),
             consecutive_passes: self.consecutive_passes,
             permanent_left_battlefield_this_turn: self.permanent_left_battlefield_this_turn,
             spell_warped_this_turn: self.spell_warped_this_turn,
@@ -2226,6 +2272,10 @@ pub fn make_synthetic_state(
         attackers: Vec::new(),
         blockers: Vec::new(),
         stack: Vec::new(),
+        // G7 S5a: empty spell-stack-source-zone store at construction;
+        // filled by a cast pushing the spell hand → here, drained by
+        // `move_source_post_resolve` at resolution.
+        stack_objects: Vec::new(),
         consecutive_passes: 0,
         permanent_left_battlefield_this_turn: false,
         spell_warped_this_turn: false,

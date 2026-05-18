@@ -173,7 +173,7 @@ use crate::state::{
 use crate::state_ops_decisions::auto_resolve_pending;
 use crate::state_ops_zones::{
     mark_left_battlefield_if_nonland, ZONE_BATTLEFIELD, ZONE_EXILE,
-    ZONE_GRAVEYARD, ZONE_HAND, ZONE_LIBRARY,
+    ZONE_GRAVEYARD, ZONE_HAND, ZONE_LIBRARY, ZONE_STACK,
 };
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
@@ -217,6 +217,19 @@ fn find_source_printing_id(state: &GameState, obj_id: u32) -> Option<u32> {
             }
         }
     }
+    // G7 S5a (Option β): the cast spell's owned GameObject lives in
+    // `state.stack_objects` (zone=ZONE_STACK) while it is on the
+    // stack — NOT in any per-player Vec. Search it as the 5th source
+    // zone so `move_source_post_resolve` can discover the resolving
+    // spell's printing/effects exactly as before S5a (when the spell
+    // was hand-resident). Python's analog reads the source directly
+    // off `item.source` (`actions.py:2708`) — same object, no zone
+    // walk; the id walk here is Rust's id-keyed equivalent.
+    for obj in state.stack_objects.iter() {
+        if obj.id == obj_id {
+            return Some(obj.printing_id);
+        }
+    }
     None
 }
 
@@ -228,6 +241,27 @@ fn find_source_printing_id(state: &GameState, obj_id: u32) -> Option<u32> {
 /// if no object with that id exists in any tracked zone (the
 /// "lost track of source" case).
 fn take_source(state: &mut GameState, obj_id: u32) -> Option<(GameObject, u8, u8)> {
+    // G7 S5a (Option β): check the spell-stack-source-zone store
+    // FIRST. The cast moved the spell hand → `stack_objects` with
+    // `obj.zone = ZONE_STACK` and `obj.controller = caster` (the
+    // direct mirror of Python's `p.hand.remove(card)` +
+    // `card.zone = Zone.STACK` + `card.controller_id = player_id`,
+    // `actions.py:1403`/`:1751`/`:1752`). The returned pidx is the
+    // object's OWN `controller` — for a hand/gy/exile-origin cast
+    // that is the caster, byte-identical to the player-index the
+    // pre-S5a hand walk returned (you cast from your own hand). This
+    // is the moment Python's `card = item.source` reads the owned
+    // object off the StackItem (`actions.py:2708`); Rust takes the
+    // owned object out of the store here so
+    // `move_source_post_resolve` can push it to its post-resolve
+    // destination, byte-equal to Python's `put_into_battlefield`.
+    if let Some(pos) =
+        state.stack_objects.iter().position(|o| o.id == obj_id)
+    {
+        let obj = state.stack_objects.remove(pos);
+        let controller = obj.controller;
+        return Some((obj, controller, ZONE_STACK));
+    }
     for (pidx, player) in state.players.iter_mut().enumerate() {
         for (zone_const, zone) in [
             (ZONE_HAND, &mut player.hand),
@@ -443,13 +477,19 @@ pub(crate) fn dispatch_event(
     // `IsSelf`-shape "when this creature dies" trigger can still
     // see itself as a candidate observer.
     //
-    // For CAST events, the spell-being-cast is still in the hand
-    // zone at dispatch time (Rust's no-stack `cast_creature`
-    // dispatches CAST after mana payment but BEFORE the move-to-bf).
-    // The subject is the object in the hand; SourceIsSelf-shape
-    // "when you cast this" triggers need the casting card as an
-    // extra observer so the predicate's source==subject test can
-    // match. Mirrors the DIES extra-observer pattern.
+    // For CAST events, the spell-being-cast is on the STACK at
+    // dispatch time (G7 S5a: the cast moves the spell hand →
+    // `state.stack_objects` with zone=ZONE_STACK, then dispatches
+    // CAST, then pushes the StackItem — mirroring Python's
+    // `card.zone = Zone.STACK` BEFORE the `StackItem` append,
+    // `actions.py:1751`/`:1759`). The subject is the object in the
+    // stack store; SourceIsSelf-shape "when you cast this" triggers
+    // need the casting card as an extra observer so the predicate's
+    // source==subject test can match. Mirrors the DIES extra-observer
+    // pattern. (Pre-S5a the spell was hand-resident at CAST dispatch;
+    // the 6th-zone `stack_objects` walk below replaces the hand
+    // lookup for that case while keeping the 5-per-player-zone walk
+    // for DIES/LEAVES, whose subjects are NOT stack-resident.)
     let firings: Vec<(u32, u8, u32, Effect, bool)> = {
         let bf = bf_iter_etb_sorted(state);
         // Build the observer list: every bf permanent, plus
@@ -479,6 +519,7 @@ pub(crate) fn dispatch_event(
             // `bf` (shouldn't happen for these events' callers),
             // don't double-register it as an observer.
             if !observer_entries.iter().any(|(id, _, _)| *id == subject_id) {
+                let mut found = false;
                 'outer: for player in &state.players {
                     for zone in [
                         &player.hand,
@@ -494,8 +535,31 @@ pub(crate) fn dispatch_event(
                                     obj.controller,
                                     obj.printing_id,
                                 ));
+                                found = true;
                                 break 'outer;
                             }
+                        }
+                    }
+                }
+                // G7 S5a: 6th zone — the spell-stack-source-zone
+                // store. For a CAST event the subject is here (the
+                // cast moved it hand → `stack_objects`); the 5
+                // per-player zones above no longer hold it. DIES /
+                // LEAVES subjects are never stack-resident so this is
+                // a correct no-op for them. Keeps SourceIsSelf "when
+                // you cast this" CAST triggers + respond-to-cast
+                // firing byte-equal to pre-S5a / Python (without it
+                // they would SILENTLY stop matching —
+                // `feedback_silent_noop_pipelines`).
+                if !found {
+                    for obj in state.stack_objects.iter() {
+                        if obj.id == subject_id {
+                            observer_entries.push((
+                                obj.id,
+                                obj.controller,
+                                obj.printing_id,
+                            ));
+                            break;
                         }
                     }
                 }
@@ -3765,17 +3829,37 @@ fn apply_effect(
             // "lands" — stack item removed — but the graveyard step
             // is a no-op, same tolerance the round-7 primitive shows.
             let mut taken: Option<GameObject> = None;
-            'outer: for player in state.players.iter_mut() {
-                for zone in [
-                    &mut player.hand,
-                    &mut player.library,
-                    &mut player.battlefield,
-                    &mut player.graveyard,
-                ] {
-                    if let Some(pos) = zone.iter().position(|o| o.id == target_obj_id) {
-                        let v = Arc::make_mut(zone);
-                        taken = Some(v.remove(pos));
-                        break 'outer;
+            // G7 S5a (Option β): a spell on the stack has its owned
+            // GameObject in `state.stack_objects` (NOT a per-player
+            // zone). Check the store FIRST — the countered spell IS
+            // the target here, so for the common counter-a-spell case
+            // the source lives in the store. (Pre-S5a it was hand-
+            // resident and the 4-zone sweep found it; the store check
+            // is the byte-equivalent for the re-homed model. Without
+            // this the countered spell's GameObject would orphan in
+            // the store and never reach the graveyard — an off-target
+            // leak the reconciliation must close,
+            // `feedback_silent_noop_pipelines`.)
+            if let Some(pos) = state
+                .stack_objects
+                .iter()
+                .position(|o| o.id == target_obj_id)
+            {
+                taken = Some(state.stack_objects.remove(pos));
+            }
+            if taken.is_none() {
+                'outer: for player in state.players.iter_mut() {
+                    for zone in [
+                        &mut player.hand,
+                        &mut player.library,
+                        &mut player.battlefield,
+                        &mut player.graveyard,
+                    ] {
+                        if let Some(pos) = zone.iter().position(|o| o.id == target_obj_id) {
+                            let v = Arc::make_mut(zone);
+                            taken = Some(v.remove(pos));
+                            break 'outer;
+                        }
                     }
                 }
             }
