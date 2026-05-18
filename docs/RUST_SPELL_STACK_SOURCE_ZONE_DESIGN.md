@@ -95,6 +95,54 @@
 > S5a ledger, the orchestrator's `.pyd`-rebuild-on-main + the
 > separate unmasked combat-blocker LEGAL_SET follow-up.
 
+> **STATUS UPDATE — S5c LANDED (dead-code attr cleanup + SL note
+> flip; NO engine / `.pyd` / behavior change) on branch
+> `feature/g7-s5c-deadcode-sl-flip`.** The §3 / §5.1 S5c slice is
+> complete and is a **small, clean, parity-neutral slice** (not
+> padded — the design correctly predicted S5c is the thin
+> cleanup tail). What S5c did, exactly:
+> 1. **Dead-code attribute cleanup.** Removed the now-obsolete
+>    S1/S4-era `#[allow(dead_code)]` on
+>    `rust/src/state_ops_zones.rs` `ZONE_STACK` (the §3 / Part-6
+>    "Drop `#[allow(dead_code)]` on `ZONE_STACK` if Option β
+>    lands" item — Option β DID land in S5a). **Proven genuinely
+>    obsolete (not a silent removal):** `cargo build --lib` is
+>    warning-clean (0/0) and clippy total warnings are
+>    byte-identical before→after (79→79, all the pre-existing
+>    `doc list item without indentation` style lint), with **zero
+>    `dead_code` diagnostic anywhere** and `ZONE_STACK` in no
+>    clippy diagnostic — confirming the constant is genuinely used
+>    post-S5a (`find_object_zone` → `ZONE_STACK` at
+>    `state_ops_zones.rs:263`, `take_source` reports it
+>    `state_ops_resolve.rs:263`, `use`-imported as a source-
+>    resolution zone `state_ops_resolve.rs:176`). S5a left nothing
+>    unwired — no honest-stop finding. The sibling
+>    `#[allow(dead_code)]` on `ZONE_EXILE` was deliberately LEFT
+>    (out of S5c's design-doc scope — `ZONE_EXILE` went live at
+>    round-14, long pre-S5a; its stale allow is a separate
+>    non-blocking cleanup, NOT an S5a-created obsolescence, so
+>    force-folding it would over-scope S5c).
+> 2. **SL "honest-stopped" → CLOSED flip.** Flipped the
+>    `docs/SEARCH_LIMITATIONS.md` G7 mid-game note header from
+>    "S1 spell-stack-source-zone honest-stopped" → "spell-stack-
+>    source-zone `hand_p0` axis S5a/S5b CLOSED", and appended a
+>    `[G7 S5c LANDED ...]` block; the SEPARATE unmasked C1-class
+>    combat-blocker `LEGAL_SET_EQ` follow-up + S4b + warp-cast
+>    legal-EMISSION axis are kept explicitly STILL-OPEN (S5/S5c do
+>    NOT close those — no overclaim).
+> Gate: **4-file core 1534 UNMOVED**; `tests_rust` zero-newly-
+> failing vs `dba2ff5b` (S5c removes one attribute line — no
+> behavior change); `check_audit_coverage_staleness.py` counts
+> unchanged (a zone-id `const`, not an `Effect` — no variant-
+> inventory shift). `rust/src/` WAS touched (one attribute line in
+> `state_ops_zones.rs`) so the orchestrator owes a `.pyd` rebuild
+> at merge (functionally a no-op — the only Rust delta is removing
+> a compile-time lint allow; identical generated code). NOT
+> merged / NOT pushed (orchestrator owns the merge + `.pyd`
+> rebuild + cron resync). Recommended NEXT per the G7 owner doc:
+> S5 triggers-verify → S6 → S7 (S5a is the satisfied hard
+> prerequisite for S7 CE5-removal).
+
 > **Status: DESIGN / SCOPING (verify-first). Docs-only.** This is the
 > canonical owner doc for the **S5 spell-stack-source-zone
 > re-homing** — the single residual `hand_p0` divergence the
