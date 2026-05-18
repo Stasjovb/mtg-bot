@@ -304,15 +304,15 @@ def main(argv=None) -> None:
         ),
     )
     parser.add_argument(
-        "--early-stop-patience", type=int, default=None,
+        "--early-stop-patience", type=int, default=3,
         help=(
             "Stop training after the val loss has failed to improve "
-            "for this many consecutive epochs. Default None = disabled "
-            "(run all --epochs). Typical iter runs hit best val loss "
-            "around epoch 25-30 of a 50-epoch budget; the remaining "
-            "~20 epochs are mostly overfitting. Set to 5 to ride "
-            "through plateau noise but still cut the wasted tail. "
-            "Must be a positive int if set."
+            "for this many consecutive epochs. Default 3 — the D3 "
+            "epochs-ablation (docs/SCALING_DIAGNOSTICS.md) showed v5 "
+            "was undertrained at 5 epochs / patience=None; re-training "
+            "with epochs=20 + patience=3 cleared the eval gate against "
+            "v5 (Wilson-LB 0.546). To run every epoch unconditionally, "
+            "pass a patience >= --epochs. Must be a positive int."
         ),
     )
     parser.add_argument(
@@ -1041,6 +1041,7 @@ def _main_structured(args, parser) -> None:
             # The flat-feature train path already passes this through
             # (lines 549, 646 above); structured was the outlier.
             compile_model=args.compile_model,
+            early_stop_patience=args.early_stop_patience,
         )
         elapsed = time.perf_counter() - started
 

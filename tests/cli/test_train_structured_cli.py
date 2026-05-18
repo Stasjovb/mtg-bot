@@ -271,6 +271,46 @@ def test_train_structured_cli_validates_early_stop_patience(
         ])
 
 
+def test_train_structured_cli_default_early_stop_patience_is_3(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    # Regression: when --early-stop-patience is omitted, the CLI must
+    # forward patience=3 into the trainer (D3 ablation finding — v5 was
+    # undertrained at patience=None / 5 epochs; docs/SCALING_DIAGNOSTICS.md).
+    captured = {}
+    real_train = cli_train.train_structured_model
+
+    def spy(*args, **kwargs):
+        captured["early_stop_patience"] = kwargs.get(
+            "early_stop_patience", "<not-passed>",
+        )
+        return real_train(*args, **kwargs)
+
+    monkeypatch.setattr(cli_train, "train_structured_model", spy)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_PATH", raising=False)
+    monkeypatch.delenv("MTG_BOT_RUN_DB_URL", raising=False)
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_structured_npz(
+        data_dir / "shard_001.npz", n_rows=16, seq_len=4, seed=1,
+    )
+
+    cli_train.main([
+        "--data-dir", str(data_dir),
+        "--registry-root", str(tmp_path / "weights"),
+        "--epochs", "1",
+        "--batch-size", "4",
+        "--val-split", "0.25",
+        "--device", "cpu",
+        "--architecture", "structured",
+    ])
+    assert captured["early_stop_patience"] == 3, (
+        f"expected default --early-stop-patience=3 "
+        f"(D3 ablation finding), got {captured['early_stop_patience']!r}"
+    )
+
+
 def test_train_structured_cli_validates_window_recent(
     tmp_path: Path, monkeypatch,
 ) -> None:

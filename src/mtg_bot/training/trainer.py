@@ -705,6 +705,7 @@ def train_structured_model(
     epoch_callback: Optional[Callable[[dict[str, Any]], None]] = None,
     autocast_dtype: Any = "auto",
     compile_model: Optional[bool] = None,
+    early_stop_patience: Optional[int] = None,
 ) -> TrainingHistory:
     """Train a :class:`StructuredModel` over a
     :class:`StructuredDataset`.
@@ -769,6 +770,11 @@ def train_structured_model(
     if not (0.0 <= val_split < 1.0):
         raise ValueError(
             f"val_split must be in [0, 1); got {val_split}"
+        )
+    if early_stop_patience is not None and early_stop_patience < 1:
+        raise ValueError(
+            f"early_stop_patience must be >= 1 (or None to disable); "
+            f"got {early_stop_patience}"
         )
     if config is None:
         config = StructuredModelConfig()
@@ -1051,6 +1057,30 @@ def train_structured_model(
                     })
                 except Exception:  # noqa: BLE001
                     pass
+
+            # Patience-based early stopping. Mirrors the
+            # ``train_value_network`` semantics: only meaningful when we
+            # have val data; with no val rows ``best_val_epoch`` stays
+            # -1 and val_loss is NaN, so nothing to compare. Without
+            # this, the structured CLI's --early-stop-patience flag is
+            # captured into metadata but never honored — the lever
+            # SCALING_DIAGNOSTICS.md D3 recommends.
+            if (
+                early_stop_patience is not None
+                and n_val > 0
+                and history.best_val_epoch >= 0
+                and (epoch - history.best_val_epoch) >= early_stop_patience
+            ):
+                effective_total_epochs = epoch + 1
+                print(
+                    f"[structured-trainer] early-stop fired at epoch "
+                    f"{epoch + 1} (best was epoch "
+                    f"{history.best_val_epoch + 1}, "
+                    f"patience={early_stop_patience})",
+                    file=sys.stderr,
+                )
+                _emit("running", current_epoch=epoch + 1)
+                break
     except BaseException:
         try:
             _emit("failed", current_epoch=len(history.train_losses))
