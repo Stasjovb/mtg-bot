@@ -835,6 +835,7 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">Games</div><div class="stat-value" data-field="games">—</div></div>
         <div class="stat"><div class="stat-label">Samples</div><div class="stat-value" data-field="samples">—</div></div>
         <div class="stat"><div class="stat-label">Workers</div><div class="stat-value" data-field="workers">—</div></div>
+        <div class="stat"><div class="stat-label">Depth (nodes)</div><div class="stat-value" data-field="nodes">—</div></div>
         <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" data-field="elapsed">—</div></div>
         <div class="stat"><div class="stat-label">ETA</div><div class="stat-value" data-field="eta">—</div></div>
         <div class="stat"><div class="stat-label">Games / hr</div><div class="stat-value" data-field="gph">—</div></div>
@@ -870,6 +871,7 @@ function ensureCard(run) {
         <div class="stat"><div class="stat-label">New / opp / draws</div><div class="stat-value" data-field="record">—</div></div>
         <div class="stat"><div class="stat-label">Opponent</div><div class="stat-value" data-field="opp">—</div></div>
         <div class="stat"><div class="stat-label">Workers</div><div class="stat-value" data-field="workers">—</div></div>
+        <div class="stat"><div class="stat-label">Depth (nodes)</div><div class="stat-value" data-field="nodes">—</div></div>
         <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" data-field="elapsed">—</div></div>
         <div class="stat"><div class="stat-label">ETA</div><div class="stat-value" data-field="eta">—</div></div>
         <div class="stat"><div class="stat-label">Games / hr</div><div class="stat-value" data-field="gph">—</div></div>
@@ -1039,6 +1041,7 @@ function fillRun(el, run) {
     el.querySelector('[data-field="games"]').textContent = done + ' / ' + total;
     el.querySelector('[data-field="samples"]').textContent = fmtNum(run.n_samples);
     el.querySelector('[data-field="workers"]').textContent = String(run.n_workers || '—');
+    el.querySelector('[data-field="nodes"]').textContent = String(run.nodes || '—');
     el.querySelector('[data-field="elapsed"]').textContent = fmtSeconds(run.elapsed_seconds);
     el.querySelector('[data-field="eta"]').textContent =
       status === 'running' ? fmtSeconds(run.estimated_remaining_seconds) : '—';
@@ -1070,6 +1073,7 @@ function fillRun(el, run) {
     el.querySelector('[data-field="opp"]').textContent =
       esc(run.opponent_label || 'unknown');
     el.querySelector('[data-field="workers"]').textContent = String(run.n_workers || '—');
+    el.querySelector('[data-field="nodes"]').textContent = String(run.nodes || '—');
     el.querySelector('[data-field="elapsed"]').textContent = fmtSeconds(run.elapsed_seconds);
     el.querySelector('[data-field="eta"]').textContent =
       status === 'running' ? fmtSeconds(run.estimated_remaining_seconds) : '—';

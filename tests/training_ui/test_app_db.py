@@ -1296,6 +1296,140 @@ def test_status_stopped_round_trips_via_extra_json(
     assert body["kind"] == "cycle"
 
 
+def test_api_runs_attaches_machines_when_aggregate_row_exists(
+    client, progress_dir: Path,
+):
+    # Regression: stages with an aggregate row (the typical iterate
+    # self_play / eval case) still want per-machine sub-cards. The
+    # rollup-only attachment was an artifact of the
+    # missing-aggregate fallback path; per-shard rows should drive
+    # the machines array regardless of whether the aggregate fired.
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_009_self_play_v5", kind="self_play",
+            status="running",
+            started_at="2026-05-18T17:35:00+00:00",
+        )
+        # Aggregate row present.
+        _seed_progress(
+            conn, "iter_009_self_play_v5", shard_label=None,
+            n_games_done=4, n_games_total=10,
+            elapsed_seconds=600.0,
+        )
+        # Per-shard rows.
+        _seed_progress(
+            conn, "iter_009_self_play_v5",
+            shard_label="DESKTOP-J05412I",
+            n_games_done=3, n_games_total=10,
+            elapsed_seconds=600.0,
+            extra={"n_workers": 16},
+        )
+        _seed_progress(
+            conn, "iter_009_self_play_v5",
+            shard_label="Greggs-MacBook-Pro.local",
+            n_games_done=1, n_games_total=10,
+            elapsed_seconds=420.0,
+            extra={"n_workers": 6},
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    [r] = [r for r in res.get_json()["runs"]
+           if r["run_id"] == "iter_009_self_play_v5"]
+    # Aggregate counters preserved (this is the existing-aggregate
+    # path, not the rollup fallback).
+    assert r["n_games_done"] == 4
+    # Machines attached from per-shard rows.
+    assert "machines" in r
+    labels = sorted(m["label"] for m in r["machines"])
+    assert labels == ["DESKTOP-J05412I", "Greggs-MacBook-Pro.local"]
+    by_label = {m["label"]: m for m in r["machines"]}
+    assert by_label["DESKTOP-J05412I"]["n_workers"] == 16
+    assert by_label["Greggs-MacBook-Pro.local"]["n_workers"] == 6
+
+
+def test_api_runs_cycle_inherits_machines_from_active_stage(
+    client, progress_dir: Path,
+):
+    # When listing cycles, the per-machine sub-cards should reflect
+    # the active stage's per-shard rows. Without this the cycle card
+    # shows aggregated counters but no machines breakdown, which is
+    # the UI defect this fixes.
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_009_cycle", kind="iterate",
+            status="running",
+            started_at="2026-05-18T17:30:00+00:00",
+        )
+        # Cycle's own aggregate row (kind=iterate progress).
+        _seed_progress(
+            conn, "iter_009_cycle", shard_label=None,
+            n_games_done=4,
+        )
+        # Child stage.
+        _seed_run(
+            conn, "iter_009_self_play_v5", kind="self_play",
+            status="running",
+            started_at="2026-05-18T17:31:00+00:00",
+            parent_run_id="iter_009_cycle",
+        )
+        _seed_progress(
+            conn, "iter_009_self_play_v5", shard_label=None,
+            n_games_done=4, n_games_total=10,
+            elapsed_seconds=600.0,
+        )
+        _seed_progress(
+            conn, "iter_009_self_play_v5",
+            shard_label="DESKTOP-J05412I",
+            n_games_done=3, n_games_total=10,
+            elapsed_seconds=600.0,
+            extra={"n_workers": 16},
+        )
+        _seed_progress(
+            conn, "iter_009_self_play_v5",
+            shard_label="Greggs-MacBook-Pro.local",
+            n_games_done=1, n_games_total=10,
+            elapsed_seconds=420.0,
+            extra={"n_workers": 6},
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    [r] = [r for r in res.get_json()["runs"]
+           if r["run_id"] == "iter_009_cycle"]
+    # Cycle's UI kind is folded to the active stage's kind.
+    assert r["kind"] == "data_gen"
+    assert r["_db_kind"] == "iterate"
+    # Cycle inherits machines from the active stage's per-shard rows.
+    assert "machines" in r
+    labels = sorted(m["label"] for m in r["machines"])
+    assert labels == ["DESKTOP-J05412I", "Greggs-MacBook-Pro.local"]
+
+
+def test_api_runs_exposes_nodes_from_config_json(
+    client, progress_dir: Path,
+):
+    # The MCTS node-budget surfaces as ``run.nodes`` for the UI's
+    # "Depth (nodes)" stat. v5 was iter_005's 200-node baseline; iter
+    # cycles at the bumped --nodes 400 want this visible at a glance.
+    conn = _open_db(progress_dir)
+    try:
+        _seed_run(
+            conn, "iter_009_self_play_v5", kind="self_play",
+            status="running",
+            started_at="2026-05-18T17:35:00+00:00",
+            config_json=json.dumps({"nodes": 400, "samples": 4}),
+        )
+    finally:
+        conn.close()
+    res = client.get("/api/runs")
+    [r] = [r for r in res.get_json()["runs"]
+           if r["run_id"] == "iter_009_self_play_v5"]
+    assert r["nodes"] == 400
+
+
 def test_per_shard_progress_rows_synthesize_machines_array(
     client, progress_dir: Path,
 ):
