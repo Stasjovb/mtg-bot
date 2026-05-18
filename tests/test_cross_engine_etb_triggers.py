@@ -19925,15 +19925,26 @@ def test_r63_warp_cast_pays_warp_cost_sets_flag_and_pending():
         "kicked": False, "cast_for_free": False,
         "use_impending": False, "cast_room_half": None,
     })
+    # G7 S4: cast_creature_warp now pushes a StackItem (was atomic).
+    # The genuinely cast-time riders (warp_cost paid,
+    # spell_warped_this_turn) are observable immediately; the bf entry
+    # is at resolution (byte-mirroring Python's _cast_spell /
+    # put_into_battlefield split). Drive the resolve so WarpBeast
+    # lands — byte-equivalent to the old fused post-state, just split
+    # cast-then-resolve (the S1 closure-flip pattern).
     pool = dict(rs.get_mana_pool(0))
     assert sum(pool.values()) == 0, (
         f"warp cost {{1}}{{R}} must fully drain the 2-mana pool; "
         f"got {pool} (would be non-empty if it paid the {{3}}{{R}} "
         f"mana_cost instead)")
     assert rs.spell_warped_this_turn is True
+    assert not rs.is_stack_empty(), (
+        "G7 S4: the warp creature spell must be ON THE STACK "
+        "post-cast (stack-then-resolve, not atomic)")
+    rs.resolve_top_of_stack()
     bf = [o for o in rs.battlefield_snapshot()
           if o["printing_name"] == "WarpBeast"]
-    assert len(bf) == 1, "WarpBeast must be on the battlefield post-cast"
+    assert len(bf) == 1, "WarpBeast must be on the battlefield post-resolve"
 
 
 def test_r63_warp_end_step_sweep_exiles_with_warped_marker():
@@ -19951,6 +19962,12 @@ def test_r63_warp_end_step_sweep_exiles_with_warped_marker():
         "kicked": False, "cast_for_free": False,
         "use_impending": False, "cast_room_half": None,
     })
+    # G7 S4: warp cast is stack-then-resolve (was atomic). Drive the
+    # resolve so WarpBeast lands on the bf with the warp_exile_pending
+    # flag riding through onto the post-resolution bf object — exactly
+    # where the end-step sweep keys off it (the design's key risk,
+    # resolved structurally). S1 closure-flip pattern.
+    rs.resolve_top_of_stack()
     assert any(o["printing_name"] == "WarpBeast"
                for o in rs.battlefield_snapshot())
     rs.set_phase(9)        # MAIN2
@@ -19982,6 +19999,10 @@ def test_r63_warp_exile_recast_pays_normal_cost_clears_warped():
         "kicked": False, "cast_for_free": False,
         "use_impending": False, "cast_room_half": None,
     })
+    # G7 S4: warp cast is stack-then-resolve (was atomic); drive the
+    # resolve so WarpBeast lands (warp_exile_pending rides onto the bf
+    # object) BEFORE the end-step sweep exiles it. S1 closure-flip.
+    rs.resolve_top_of_stack()
     rs.set_phase(9)
     rs.advance_phase()  # → END_STEP exiles it
     assert any(o["printing_name"] == "WarpBeast"
@@ -21640,6 +21661,11 @@ def test_r72_warp_phase2_hand_cast_pays_warp_cost_and_life():
         "kicked": False, "cast_for_free": False,
         "use_impending": False, "cast_room_half": None,
     })
+    # G7 S4: warp cast is stack-then-resolve (was atomic). The
+    # genuinely cast-time riders — warp_cost paid, the {2} life rider,
+    # spell_warped_this_turn — are observable immediately (Python sets
+    # all three in _cast_spell BEFORE the StackItem push); the bf
+    # entry is at resolution. S1 closure-flip pattern.
     pool = dict(rs.get_mana_pool(0))
     assert sum(pool.values()) == 0, (
         f"the {{B}} warp cost must fully drain the 1-B pool; got "
@@ -21647,9 +21673,12 @@ def test_r72_warp_phase2_hand_cast_pays_warp_cost_and_life():
     assert rs.get_life(0) == 8, (
         f"warp life rider: 10 - 2 = 8; got {rs.get_life(0)}")
     assert rs.spell_warped_this_turn is True
+    assert not rs.is_stack_empty(), (
+        "G7 S4: TLC's warp spell must be ON THE STACK post-cast")
+    rs.resolve_top_of_stack()
     bf = [o for o in rs.battlefield_snapshot()
           if o["printing_name"] == "TLC"]
-    assert len(bf) == 1, "TLC must be on the battlefield post-cast"
+    assert len(bf) == 1, "TLC must be on the battlefield post-resolve"
     # end-step sweep proves warp_exile_pending was stamped.
     rs.set_phase(9)
     rs.advance_phase()  # → END_STEP
@@ -21678,16 +21707,26 @@ def test_r72_warp_phase2_graveyard_cast_full_then_exile_then_recast():
         "kicked": False, "cast_for_free": False,
         "use_impending": False, "cast_room_half": None,
     })
+    # G7 S4: graveyard-warp cast is stack-then-resolve (was atomic).
+    # The card LEAVES the graveyard at cast time (normalized
+    # graveyard -> hand, the S1 exile-recast pattern, byte-mirroring
+    # Python's p.graveyard.remove(card) + card.zone = STACK); the bf
+    # entry is at resolution. The cast-time riders (life, warp pool,
+    # spell_warped_this_turn) are observable immediately. S1
+    # closure-flip pattern.
     assert [o for o in rs.graveyard_snapshot(0)
             if o["printing_name"] == "TLC"] == [], (
         "TLC must have LEFT the graveyard (graveyard-warp-cast)")
-    bf = [o for o in rs.battlefield_snapshot()
-          if o["printing_name"] == "TLC"]
-    assert len(bf) == 1, "TLC must be on the battlefield"
     assert rs.get_life(0) == 8, (
         f"graveyard-warp life rider: 10 - 2 = 8; got {rs.get_life(0)}")
     assert rs.spell_warped_this_turn is True
     assert dict(rs.get_mana_pool(0)).get("B", 0) == 0
+    assert not rs.is_stack_empty(), (
+        "G7 S4: graveyard-warp TLC must be ON THE STACK post-cast")
+    rs.resolve_top_of_stack()
+    bf = [o for o in rs.battlefield_snapshot()
+          if o["printing_name"] == "TLC"]
+    assert len(bf) == 1, "TLC must be on the battlefield post-resolve"
     # End step → exile (Phase-1 sweep reused, graveyard origin).
     rs.set_phase(9)
     rs.advance_phase()  # → END_STEP
@@ -22054,6 +22093,117 @@ def test_r72_warp_phase2_bridge_graveyard_cast_lifecycle_byte_equal():
         f"graveyard-warp-cast SynthTLC must be warp-exiled byte-equal "
         f"(exile destination, not graveyard); py_ex={py_ex} "
         f"rs_ex={rs_ex}")
+
+
+def test_g7s4_warp_creature_cast_is_stack_then_resolve_not_atomic():
+    """**G7 Slice S4 focused pin** — `cast_creature_warp` now pushes a
+    `StackItem` (was atomic). Mirrors S1's
+    `test_g7s1_cast_creature_pushes_stackitem_no_autoresolve` for the
+    WARP creature path. Asserts the new shape directly (not just via
+    the CE5-bridged `step_both` lifecycle tests above, which drain the
+    stack before comparing):
+
+    1. Post-cast: the warp spell is ON THE STACK (NOT on the
+       battlefield), the cast-time riders are observable (warp_cost
+       paid, `spell_warped_this_turn`), but `summoning_sick` /
+       `warp_exile_pending` are NOT yet on any bf object (no bf
+       object exists — byte-mirroring Python's `_cast_spell`, which
+       only removes from source + appends the StackItem; bf entry +
+       sickness are resolve-time `put_into_battlefield`).
+    2. Post-resolve: the creature is on the bf with
+       `summoning_sick=True` (resolve-time, via the already-present
+       `move_source_post_resolve`), and the `warp_exile_pending` rider
+       — stamped on the stack-resident SOURCE object at cast time —
+       has RIDDEN THROUGH resolution onto the post-resolution bf
+       object (proven by the end-step sweep exiling it; the design's
+       key risk, resolved structurally with no new field)."""
+    rs = _r62_fresh_rust_state()
+    wid = _r63_inject_warp_creature(rs)
+    rs.set_phase(3)
+    rs.add_mana(0, "R", 1)
+    rs.add_mana(0, "C", 1)  # {1}{R} warp cost
+    assert rs.is_stack_empty() is True
+    rs.apply_action({
+        "kind": "cast_spell", "card_id": wid, "use_warp": True,
+        "kicked": False, "cast_for_free": False,
+        "use_impending": False, "cast_room_half": None,
+    })
+    # (1) cast-time: on the stack, riders observable, NOTHING on bf.
+    assert rs.is_stack_empty() is False, (
+        "S4: the warp creature spell must be ON THE STACK post-cast")
+    assert [o for o in rs.battlefield_snapshot()
+            if o["printing_name"] == "WarpBeast"] == [], (
+        "S4: NO bf entry at cast time (resolve-time, like Python "
+        "put_into_battlefield)")
+    assert sum(dict(rs.get_mana_pool(0)).values()) == 0, (
+        "S4: warp_cost {1}{R} paid at cast time (genuinely cast-time "
+        "rider, mirrors Python _cast_spell)")
+    assert rs.spell_warped_this_turn is True, (
+        "S4: spell_warped_this_turn set at cast time (Python :1427)")
+    # (2) resolve-time: bf entry + summoning sickness.
+    rs.resolve_top_of_stack()
+    bf = [o for o in rs.battlefield_snapshot()
+          if o["printing_name"] == "WarpBeast"]
+    assert len(bf) == 1, "S4: WarpBeast lands on bf at RESOLUTION"
+    assert bf[0].get("summoning_sick") is True, (
+        "S4: summoning_sick stamped at RESOLVE (move_source_post_"
+        "resolve), not cast — byte-mirrors Python put_into_battlefield")
+    # (2 cont.) warp_exile_pending rode the source object through
+    # resolve onto the bf object — the end-step sweep keys off it.
+    rs.set_phase(9)
+    rs.advance_phase()  # → END_STEP: warp-exile sweep
+    assert [o for o in rs.battlefield_snapshot()
+            if o["printing_name"] == "WarpBeast"] == [], (
+        "S4: the cast-time warp_exile_pending rode the source object "
+        "through resolution onto the bf object — sweep exiled it "
+        "(the design's key risk, resolved structurally)")
+    assert len([o for o in rs.exile_snapshot(0)
+                if o["printing_name"] == "WarpBeast"]) == 1
+
+
+def test_g7s4_impending_and_room_riders_remain_out_of_reach_in_rust():
+    """**G7 S4 verify-first honest pin** — S4 defers the *warp*
+    rider/provenance (the one live rider: `warp_exile_pending`) from
+    cast-time to resolve-time. The OTHER riders the design names —
+    impending time-counter init, room-half — are NOT reachable through
+    the Rust cast surface at all today (separately-deferred plumbing,
+    NOT something S4 introduces a defer for):
+
+    - the legal emitter hard-codes `use_impending=False` /
+      `cast_room_half=None` (`state_ops_legal.rs:511-513`);
+    - the `Action::CastSpell` dispatch explicitly ignores both
+      (`state_ops_actions.rs:292-293`).
+
+    So `use_impending=True` / `cast_room_half="..."` are accepted as
+    data and have NO effect — the cast routes by `use_warp` only and
+    the impending/room rider is a structural no-op. This pin LOCKS
+    that honest boundary: a future slice that wires impending/room
+    flips this and is forced to add the resolve-time rider
+    consumption (new-code-is-right). This is NOT a tripwire weakening
+    — it asserts the CURRENT honest reach of the Rust cast surface."""
+    rs = _r62_fresh_rust_state()
+    wid = _r63_inject_warp_creature(rs)
+    rs.set_phase(3)
+    rs.add_mana(0, "R", 1)
+    rs.add_mana(0, "C", 1)
+    # use_impending=True is data-only: the warp cast still routes by
+    # use_warp (the synthetic WarpBeast HAS a warp_cost), and the
+    # impending flag has zero effect on the stack-then-resolve shape.
+    rs.apply_action({
+        "kind": "cast_spell", "card_id": wid, "use_warp": True,
+        "kicked": False, "cast_for_free": False,
+        "use_impending": True, "cast_room_half": "left",
+    })
+    assert rs.is_stack_empty() is False, (
+        "use_impending/cast_room_half are data-only — the warp cast "
+        "still stack-pushes by use_warp, unaffected")
+    rs.resolve_top_of_stack()
+    bf = [o for o in rs.battlefield_snapshot()
+          if o["printing_name"] == "WarpBeast"]
+    assert len(bf) == 1, (
+        "the creature lands as a NORMAL warp creature — impending "
+        "time-counter init / room-half routing are NOT modeled in "
+        "Rust (out-of-reach plumbing, not an S4 rider-defer)")
 
 
 def test_bridge_put_plus_one_counter_on_opponents_creature_bidirectional_round_trip():
