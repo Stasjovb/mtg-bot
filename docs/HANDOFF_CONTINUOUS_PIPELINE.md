@@ -138,16 +138,20 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 20, @ `5803aea7` — READ FIRST.**
-> **G7 build-out STARTED — Slice S1 LANDED (`5803aea7`):
-> `cast_creature` now pushes a StackItem (no atomic resolve),
-> shared .pyd rebuilt on main, 4-file gate 1532 UNMOVED verified
-> on the shared venv, cron exit-0, state_ops-only (no residue
-> cadence). NEXT = dispatch S2 (resolver permanent-spell
-> byte-eq). G3 thesis-fork RESOLVED (Rust implements the stack;
-> ops mode fully autonomous); design `docs/RUST_STACK_
-> RESOLUTION_DESIGN.md` is the canonical G7 owner. Flip NO-GO
-> until G7 S1..S7 + B1 close + a CE5-FREE C4 runs clean.**
+> **⚠ SoT-FLIP PATH — cycle 21, @ `fb7f0a14` — READ FIRST.**
+> **G7 S1+S2 DONE. S1 (`5803aea7`): `cast_creature`→StackItem
+> (no atomic resolve). S2 (`fb7f0a14`): HONEST clean-verify
+> no-op — Rust's resolve path already byte-equal w/ Python
+> `put_into_battlefield` for the creature case (zero rust/src/
+> touched; agent did NOT manufacture a diff; non-creature-perm
+> + aura-attach DEFERRED to S4 with a forcing tripwire). NEXT =
+> dispatch B1 (C1 Slices 2/3) BEFORE S3 — the design EXPLICITLY
+> sequences C1 S2/3 just before S3 so S3's response-window
+> LEGAL_SET_EQ does not trip on the known-open C1 axis. G3 fork
+> RESOLVED (Rust implements the stack; fully autonomous);
+> `docs/RUST_STACK_RESOLUTION_DESIGN.md` is the canonical G7
+> owner. Flip NO-GO until G7 S1..S7 + B1 close + a CE5-FREE C4
+> runs clean.**
 > The cycle-11 phase-transition decision is RESOLVED: the user chose
 > **pivot to the SoT-flip path** (deliberate sequenced flip-execution,
 > NOT continuous cheap-refill). The continuous cheap-parallel-refill
@@ -291,12 +295,25 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   ROWS (incl. G4/G5/G6/G7) ARE current at HEAD.
 > - **S1 LANDED (`5803aea7`)** — `cast_creature`→StackItem (no
 >   atomic resolve), state_ops-only, 4-file 1532 UNMOVED on the
->   rebuilt shared .pyd (CE5 still bridges), `from_exile_warped`
->   normalized exile→hand at cast-time (`_warp` deferred to S4).
->   **NEXT: dispatch S2** (resolver permanent-spell byte-eq —
->   `resolve_top_of_stack`/`move_source_post_resolve` vs Python
->   `put_into_battlefield`: ETB-timestamp monotonicity, ENTERS
->   push-ordering, aura attach; mostly verify + targeted-fix).
+>   rebuilt shared .pyd, `from_exile_warped` normalized
+>   exile→hand at cast-time (`_warp` deferred to S4).
+> - **S2 LANDED (`fb7f0a14`) — HONEST clean-verify no-op.**
+>   Byte-diff confirmed Rust's resolve path already byte-equal
+>   w/ Python `put_into_battlefield` (`src/mtg_bot/actions.py`)
+>   on all 3 S2 axes for the creature case; zero `rust/src/`
+>   touched, no `.pyd` rebuild needed, residue cadence does NOT
+>   fire. 4 verify pins + a non-creature-perm/aura-attach
+>   forcing tripwire DEFERRED to S4 (SL-documented). 1532
+>   UNMOVED (×2); 749 broader resolve/aura/enters green.
+>   Carry-forward: 2 pre-existing `tests_rust/test_triggers.py`
+>   land-search/landfall failures (NOT in the 4-file gate, NOT
+>   S1/S2-caused — tests_rust baseline-rot, tracked for a sweep).
+>   **NEXT: dispatch B1 (C1 Slices 2/3) BEFORE S3** — per design
+>   §4.2/§4.5 C1 S2/3 must land just before S3 so S3's
+>   response-window LEGAL_SET_EQ doesn't trip on the known-open
+>   C1 axis (the C4 22/300 LEGAL_SET_EQ co-blocker). Then S3
+>   (priority/response windows, highest-risk) → S4 → S5 → S6 →
+>   S7 CE5 removal LAST.
 >   Flip remains **NO-GO** until G7 S1..S7 + B1 close +
 >   the CE5-FREE C4 runs divergence-clean. The atomic SoT-flip
 >   (B3-S5) remains an ORCHESTRATOR+USER go/no-go — explicitly NOT

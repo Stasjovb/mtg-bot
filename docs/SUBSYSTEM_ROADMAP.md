@@ -1213,6 +1213,63 @@ second:
    >     SoT-flip (B3-S5). Flip NO-GO until all hold.
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 21 —
+   >   G7 Slice S2 HONEST clean-verify no-op; @ `fb7f0a14`,
+   >   counts UNCHANGED, parity 307/475 / PROBED 106
+   >   UNCHANGED).**
+   >   - **S2 merged `fb7f0a14`: CLEAN-VERIFY NO-OP — zero
+   >     `rust/src/` touched.** Byte-diff confirmed Rust's
+   >     resolve path (`resolve_top_of_stack` spell branch /
+   >     `move_source_post_resolve` / `reserve_etb_timestamp`)
+   >     ALREADY byte-equal with Python `put_into_battlefield`
+   >     (`src/mtg_bot/actions.py:2969` — the brief's
+   >     `engine/`-path was stale, corrected) on all 3 S2 axes
+   >     for the only permanent type S1 can stack (CREATURE):
+   >     ETB-timestamp monotonicity (parity compares bf *order*
+   >     via stable etb_timestamp sort; the counter itself is
+   >     NOT in the fingerprint), ENTERS push-ordering (both
+   >     dispatch Event::ENTERS only after pop + on-bf), aura/
+   >     attach (UNREACHABLE post-S2 — bare enchant/artifact/
+   >     PW/aura falls through both cast primitives → S4).
+   >   - **HONEST-PROGRESS: agent did NOT manufacture a diff.**
+   >     Landed 4 `test_s2_*` verify-confirm pins + a
+   >     non-creature-permanent boundary TRIPWIRE a future S4
+   >     lane is forced to flip (the `&& creature`
+   >     summoning-sick guard + missing resolve-time aura-attach
+   >     are explicitly DEFERRED to S4, SL-documented; tripwire
+   >     not weakened). 4-file core **1532 UNMOVED** (×2);
+   >     broader resolve/stack/snapshot/triggers/cast/aura/
+   >     enters suites 749 passed; isolation self-check PASSED.
+   >   - **Zero `rust/src/` touched → residue cadence does NOT
+   >     fire (stricter than the CFI-1 state_ops-only
+   >     precedent); NO `.pyd` rebuild needed (functional
+   >     no-op); NO count drift; POOL_PARITY/PROBED UNCHANGED;
+   >     stamps stay bb29df8d.** Did NOT touch CE5 / the
+   >     pop-only G3 composer.
+   >   - **Carry-forward (honest, NOT papered):** 2 pre-existing
+   >     `tests_rust/test_triggers.py` failures
+   >     (`test_rs2_search_library_for_basic_land_tapped_fires_etb`,
+   >     `test_landfall_observer_fires_on_land_arrival`) fail
+   >     identically on main's shared venv with zero code change
+   >     — NOT in the 4-file campaign gate, land-search/landfall,
+   >     unrelated to the S1/S2 resolve axes; tests_rust/
+   >     baseline-rot (like the S1 lane's 32). Tracked for an
+   >     eventual tests_rust baseline-rot sweep; NOT
+   >     slice-plan-blocking, NOT a regression.
+   >   - **Flip endgame: S1+S2 DONE → NEXT = B1 (C1 Slices 2/3)
+   >     BEFORE S3** (design §4.2/§4.5 EXPLICITLY sequences C1
+   >     S2/3 just before S3 so S3's response-window
+   >     LEGAL_SET_EQ does not trip on the known-open C1 axis —
+   >     C4 confirmed B1 = the 22/300 LEGAL_SET_EQ co-blocker)
+   >     → S3 priority/response windows (HIGHEST-RISK:
+   >     brand-new nested-response-window cross-engine surface)
+   >     → S4 cast_creature_warp + riders + the deferred
+   >     non-creature-perm/aura-attach → S5 → S6 → **S7 CE5
+   >     removal LAST** → CE5-FREE re-proof + fresh CE5-FREE C4
+   >     clean → ORCHESTRATOR+USER go/no-go on the atomic
+   >     SoT-flip (B3-S5). Flip NO-GO until all hold.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

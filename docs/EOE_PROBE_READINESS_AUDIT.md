@@ -304,58 +304,73 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 5803aea7 (continuous-pipeline cycle 20 —
-     G7 build-out STARTED: **Slice S1 LANDED** (`5803aea7`);
-     shared .pyd rebuilt on main + 4-file gate **1532
-     verified UNMOVED on the shared venv**, cron exit-0). Flip
-     remains **NO-GO** until G7 S1..S7 + B1 (C1 Slices 2/3)
-     close and a fresh CE5-FREE C4 runs clean; the path is
-     well-scoped per `docs/RUST_STACK_RESOLUTION_DESIGN.md` (the
-     canonical G7 owner; the full diagnosis + slice plan +
-     CE5-removal proof live there and in the cycle-19 PRIOR
-     below). **S1 (`5803aea7`): `cast_creature` now pushes a
-     `StackItem` and does NOT atomic-resolve** — mirrors the
-     already-working `cast_spell_noncreature` pattern; the
-     hand->battlefield move + summoning-sickness + ETB are
-     deferred to the already-present `resolve_top_of_stack`/
-     `move_source_post_resolve` (resolve-time), byte-matching
-     Python's `_cast_spell` (cast-time = source-zone removal +
-     STACK + StackItem) / `put_into_battlefield` (resolve-time
-     summoning_sick) split. ONE honest boundary nuance: the
-     `from_exile_warped` recast is normalized exile->hand at
-     cast time (byte-mirrors Python's cast-time exile-clear;
-     `cast_creature_warp` itself deferred to S4). **S1 parity
-     proof:** 4-file core gate **1532 UNMOVED** — CE5 still
-     bridges `step_both` (Python stack->CE5-resolve == Rust
-     now-stack->CE5-resolve); S1 only makes Rust match the
-     stack-then-resolve shape CE5 already expects (28 tests_rust
-     no-stack pins + 2 warp-recast pins closure-flipped to the
-     stack shape, verified NOT genuine byte-divergence; +1 S1
-     pin). Touched `rust/src/state_ops_cast.rs` ONLY —
-     state_ops-only, residue cadence did NOT fire (CFI-1
-     precedent, git-log+cron verified); NO count drift;
-     POOL_PARITY/PROBED UNCHANGED 307/475 / 106; 8
-     genuinely_missing residue stamps stay bb29df8d. Shared .pyd
-     rebuilt on main via the interpreter-explicit canonical
-     pattern (`maturin build -i .venv-py313` -> force-install
-     the cp313 wheel; `maturin develop`'s implicit interp
-     resolution had grabbed a 3.11 — recorded for future
-     resyncs); isolation self-check had PASSED in-lane (.venv-wt
-     contained). **Slice plan (per the design doc):** S1 DONE ->
-     **S2 next** (resolver permanent-spell byte-eq:
-     `resolve_top_of_stack`/`move_source_post_resolve` vs Python
-     `put_into_battlefield` — ETB-timestamp monotonicity, ENTERS
-     push-ordering, aura attach; mostly verify + targeted-fix,
-     machinery already exercised by S1) -> (B1=C1 S2/3 parallel,
-     co-evolve w/ S3) -> S3 priority/response windows -> S4
-     cast_creature_warp + riders -> S5 triggers-on-stack -> S6
-     bake-in scale verify -> **S7 CE5 removal LAST** (then the
-     ENTIRE prior evidence base re-proven CE5-FREE + fresh
-     CE5-FREE C4 clean = the final flip gate; green-WITH-CE5 /
-     CE5-equivalent / stack-axis carve-out are NON-acceptance).
-     Magnitude unchanged (~6-11 cycles; biggest risk = the
-     brand-new nested-response-window surface at S3, B1
-     co-blocker). NEXT = dispatch S2. PRIOR cycle 19 (@ 2a0867bf
+     Measured at main fb7f0a14 (continuous-pipeline cycle 21 —
+     G7 **S1+S2 DONE**; S2 was a HONEST clean-verify no-op).
+     Flip remains **NO-GO** until G7 S1..S7 + B1 (C1 Slices
+     2/3) close and a fresh CE5-FREE C4 runs clean; well-scoped
+     per `docs/RUST_STACK_RESOLUTION_DESIGN.md` (canonical G7
+     owner). **S1 (`5803aea7`, cycle 20):** `cast_creature`
+     pushes a `StackItem` (no atomic resolve), bf-entry/
+     summoning-sickness/ETB deferred to the already-present
+     resolver; 4-file 1532 UNMOVED on the rebuilt shared .pyd
+     (CE5 still bridges); state_ops_cast.rs only. **S2
+     (`fb7f0a14`, this cycle): CLEAN-VERIFY NO-OP — zero
+     `rust/src/` touched.** Byte-diff confirmed Rust's resolve
+     path (`resolve_top_of_stack` spell branch /
+     `move_source_post_resolve` / `reserve_etb_timestamp`) is
+     ALREADY byte-equal with Python `put_into_battlefield`
+     (`src/mtg_bot/actions.py:2969` — brief's `engine/`-path was
+     stale, corrected) on all three S2 axes for the only
+     permanent type S1 can stack (a CREATURE spell): (1)
+     ETB-timestamp monotonicity — parity compares bf *order*
+     (battlefield_snapshot stable-sorts by etb_timestamp;
+     next_etb_timestamp NOT in the fingerprint), Rust's
+     separate-but-monotonic counter is byte-equal for relative
+     order; (2) ENTERS push-ordering — both dispatch
+     Event::ENTERS only after pop + on-bf; (3) aura/attach —
+     UNREACHABLE post-S2 (bare enchantment/artifact/PW/aura
+     falls through both cast primitives — S4 territory). Agent
+     did NOT manufacture a diff (HONEST-PROGRESS): landed 4
+     `test_s2_*` verify-confirm pins + a non-creature-permanent
+     boundary TRIPWIRE that a future S4 lane is forced to flip
+     (the `&& creature` summoning-sick guard + missing
+     resolve-time aura-attach are explicitly DEFERRED to S4,
+     SL-documented, tripwire not weakened). 4-file core **1532
+     UNMOVED** (run twice); broader resolve/stack/snapshot/
+     triggers/cast/aura/enters suites 749 passed; isolation
+     self-check PASSED. **Zero rust/src/ touched -> residue
+     cadence does NOT fire (stricter than the CFI-1
+     state_ops-only precedent); NO .pyd rebuild needed
+     (functional no-op); NO count drift; POOL_PARITY/PROBED
+     UNCHANGED 307/475 / 106; stamps stay bb29df8d.** CARRY-
+     FORWARD (honest, flagged by the S2 lane, NOT papered):
+     two `tests_rust/test_triggers.py` failures
+     (`test_rs2_search_library_for_basic_land_tapped_fires_etb`,
+     `test_landfall_observer_fires_on_land_arrival`) are
+     PRE-EXISTING on main (fail identically on the shared venv
+     with zero code change, NOT in the 4-file campaign gate,
+     land-search/landfall — unrelated to the S1/S2 resolve
+     axes; tests_rust/ baseline-rot, like the S1 lane's 32).
+     Not a regression; tracked for an eventual tests_rust
+     baseline-rot sweep, NOT slice-plan-blocking. **Slice plan
+     (per design doc §4.2/§4.5):** S1+S2 DONE -> **NEXT = B1
+     (C1 Slices 2/3) BEFORE S3** — the design EXPLICITLY
+     sequences C1 S2/3 to land just before S3 so S3's
+     response-window LEGAL_SET_EQ does not trip on the
+     known-open C1 axis (C4 confirmed B1 = the 22/300
+     LEGAL_SET_EQ co-blocker) -> S3 priority/response windows
+     (HIGHEST-RISK: brand-new nested-response-window
+     cross-engine surface) -> S4 cast_creature_warp + riders +
+     the deferred non-creature-permanent/aura-attach -> S5
+     triggers-on-stack -> S6 bake-in scale verify -> **S7 CE5
+     removal LAST** (then the ENTIRE prior evidence base
+     re-proven CE5-FREE + fresh CE5-FREE C4 clean = the final
+     flip gate; green-WITH-CE5 / CE5-equivalent / stack-axis
+     carve-out are NON-acceptance). Magnitude unchanged (~6-11
+     cycles). NEXT = dispatch B1 (C1 Slices 2/3). PRIOR cycle
+     20 (@ 5803aea7 — G7 S1 LANDED: cast_creature->StackItem,
+     shared .pyd rebuilt, 1532 UNMOVED on shared venv,
+     state_ops-only, cron exit-0). PRIOR cycle 19 (@ 2a0867bf
      — G3 thesis-fork RESOLVED (Rust implements the stack; ops
      mode fully autonomous) + G7 design merged
      `docs/RUST_STACK_RESOLUTION_DESIGN.md`: atomic resolution
