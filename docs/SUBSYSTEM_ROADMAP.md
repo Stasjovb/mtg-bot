@@ -1049,6 +1049,72 @@ second:
    >     ledger rows are kept current at HEAD).
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 18 —
+   >   C4 SCALED RE-SWEEP RAN AND DIVERGED 0/300; flip
+   >   NO-GO-until-closed; cycle-17 "chain converged / bake-in
+   >   clean / no G7" claim CORRECTED (synthetic-deck-only);
+   >   thesis-level G3-justification fork ESCALATED TO THE USER;
+   >   @ `4876bf08`, counts UNCHANGED, parity 307/475 / PROBED
+   >   106 UNCHANGED).**
+   >   - **C4 evidence (honest):** built `--driver rust_shadow`
+   >     on `scripts/bench_trajectory_parity.py` +
+   >     `rust_shadow.drive_shadow_game_to_terminal` (pure-Python
+   >     tooling, merged `4876bf08`; 4-file 1532 UNMOVED, no
+   >     Rust/`.pyd`/count touch, cron exit-0, residue cadence
+   >     did NOT fire); ran the round-76-class grid (60×5 = 300
+   >     real 17lands production-deck games) THROUGH the
+   >     role-swapped `ShadowCheckedRustAdapter` bake-in at
+   >     flip-candidate `e87a6ebe`. RESULT: **0 PASS / 300**, 260
+   >     FAIL_DIVERGENCE (238 STATE_EQ + 22 LEGAL_SET_EQ), 40
+   >     FAIL_TIMEOUT (degenerate land-only walks — NOT clean), 0
+   >     FAIL_EXCEPTION. Evidence: `docs/C4_RESWEEP_EVIDENCE.md`
+   >     + committed `c4_resweep.json`. The bake-in working
+   >     exactly as the honest bad-flip tripwire — caught BEFORE
+   >     the irreversible flip.
+   >   - **Cycle-17 milestone CORRECTED:** "chain fully
+   >     convergent / no G7 / bake-in clean to terminal" held
+   >     ONLY on the 3-card synthetic smoke deck (casts no
+   >     spells); G4/G5/G6 closures stand but the chain was NOT
+   >     exhausted at scale.
+   >   - **G7 OPEN (NEW, dominant 238/300):** the bake-in's
+   >     STATE_EQ does NOT reconcile the **G3 "Rust resolves
+   >     `CastSpell` atomically"** axis (Rust → battlefield +
+   >     stack emptied; Python → spell on the stack pending the
+   >     locked-in full stack-and-priority resolution).
+   >     `step_both` reconciles via its CE5 cast-vs-resolve
+   >     mirror (`cross_engine.py:10313`); the role-swapped
+   >     bake-in has none. Mid-game live-play; trips on the FIRST
+   >     spell cast of essentially every real deck. Pinned +
+   >     filed (`SEARCH_LIMITATIONS.md` G7 OPEN + `SOT_FLIP_
+   >     CUTOVER_PLAN.md` §4 G7 OPEN + [C4-RE-SWEEP CORRECTION]
+   >     on the G6 row).
+   >   - **B1 (already-OPEN C1 keystone, 22/300 LEGAL_SET_EQ):**
+   >     independently confirms C1 Slices 2/3 still open at
+   >     scale. Expected residual, co-blocker, NOT new.
+   >   - **⚠⚠ THESIS-LEVEL FORK escalated to the USER (NOT
+   >     autonomously resolved):** the proposed G7 fix (port the
+   >     CE5 cast-vs-resolve stack-drain into the bake-in) is the
+   >     SAME reconciliation the ENTIRE campaign parity evidence
+   >     base (`step_both`) already relies on — internally
+   >     consistent — BUT its soundness rests on the G3 "Rust
+   >     resolves atomically — accepted C6-fenced caveat" whose
+   >     justification appears DEFERRED and never written ("SL
+   >     entry owed at B3-impl"). C4 magnitude (79% of games /
+   >     every spell cast) makes it a thesis-level question: is
+   >     atomic resolution a justified accepted simplification,
+   >     OR must Rust implement real stack-and-priority
+   >     resolution / does the flip thesis need revisiting? Per
+   >     honest-progress / `feedback_no_fallback_hybrids` the
+   >     orchestrator did NOT autonomously dispatch a G7
+   >     harness-reconciliation lane.
+   >   - **Flip endgame is now: USER resolves the
+   >     G3-justification fork → (on the resolved basis) G7
+   >     closes + B1 (C1 Slices 2/3) lands → fresh C4 re-sweep
+   >     runs divergence-clean → ORCHESTRATOR+USER go/no-go on
+   >     the atomic SoT-flip (B3-S5), explicitly NOT autonomous.**
+   >     Flip is NO-GO until all four hold.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

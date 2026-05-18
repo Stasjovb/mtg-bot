@@ -304,64 +304,77 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 30a5cebe (continuous-pipeline cycle 17 —
-     SoT-FLIP pre-flip blocker G6 CLOSED via pure-Python
-     SBA-timing port; THE G4->G5->G6 CONVERGENT CHAIN IS FULLY
-     CLOSED — no G7; the rust_shadow bake-in now reaches the
-     natural terminal state DIVERGENCE-CLEAN). G6 (merge
-     `4d7c8ab3`, docs backfill `30a5cebe`): the Rust-driver
-     game-over-detection-timing gap is CLOSED —
-     RustGameStateAdapter._run_step_enter_sbas() calls Rust's
-     existing apply_sbas() pymethod at Python's EXACT selective
-     _enter_step SBA cadence (UPKEEP / BEGINNING_OF_COMBAT /
-     POSTCOMBAT_MAIN / END always + COMBAT_DAMAGE iff
-     get_attackers() — the agent's HONEST-PROGRESS refinement of
-     the brief's imprecise "every step"; matched exactly, NOT
-     over-called), invoked after the step-progression
-     advance_phase() on BOTH the _advance_to_next_decision
-     auto-advance loop AND the _run_priority_action empty-stack
-     pass-round step-end. PURE PYTHON (rust_engine_adapter.py
-     only — calls the EXISTING apply_sbas() pymethod, verified
-     write-once/idempotent on the loss/winner axis
-     state_ops_sba.rs:328-362) — no Rust/.pyd/Cargo touch,
-     decision_source=python (the SoT) byte-unchanged, 4-file
-     1532 baseline UNMOVED (RustGameStateAdapter dormant on that
-     path -> parity-neutral by construction); residue cadence
-     did NOT fire (cron exit-0); NO count drift;
-     POOL_PARITY/PROBED UNCHANGED 307/475 / 106 (no regen); 8
-     genuinely_missing residue stamps stay bb29df8d (no re-stamp
-     owed). Pin FLIPPED
-     test_post_player_loss_is_over_timing_divergence_is_surfaced
-     -> ::_is_closed (bake-in divergence-clean to the natural
-     terminal); rust_shadow 13 + rust-adapter 33 = 46 passed;
-     negative controls intact. Ledger: SOT_FLIP_CUTOVER_PLAN G6
-     -> CLOSED-by-4d7c8ab3 + §4 bullet + G4/G5 trailing refs;
-     SEARCH_LIMITATIONS G4/G5/G6 note chain flipped (G6 CLOSED).
-     **MILESTONE: the convergent chain is exhausted.** All three
-     (G4 mana-timing, G5 priority-port, G6 SBA-timing) lived in
-     the SAME narrow degenerate post-deck-out 3-card-synthetic
-     game-end region; each closure was CR-correctness-improving;
-     NONE in normal admitted gameplay; closing G6 unmasked NO
-     further divergence — the bake-in is CLEAN to terminal. The
-     flip prerequisites are now ALL COMPLETE: C1 keystone
-     (Slices 1/2/3 `f1f09bbb`/`e6e3db58`/`bb29df8d`) + G1
-     factored combat + B3 wiring SPEC + B3-IMPL S1..S4 + the
-     rust_shadow bake-in harness (now clean). **The SINGLE
-     remaining gate before the user-facing atomic-flip go/no-go
-     is the C4 post-R76 scaled re-sweep run THROUGH the
-     now-clean fully-strengthened bake-in (equivalence evidence)
-     — NOW UNBLOCKED** (the chain that blocked it is closed).
-     STALENESS POINTER: docs/SOT_FLIP_CUTOVER_PLAN.md §0a's
-     verify-first preamble is anchored at the OLDER 4704ca3e
-     (pre-B3-impl, pre-C1-Slices-2/3-completion) — its "Slices
-     2/3 IN FLIGHT" / "B3 NOT-STARTED" prose is SUPERSEDED; THIS
-     sentinel + the HANDOFF ⚠ block are the canonical current
-     critical-path pointer. NEXT = C4 scaled re-sweep
-     (orchestrator-run — evidence generation, reversible) ->
-     ORCHESTRATOR+USER go/no-go on the atomic SoT-flip B3-S5
-     (explicitly NOT autonomous — the single least-reversible
-     campaign action) -> bake-in period ->
-     bridge-vestigialization cleanup. PRIOR cycle 16 (@
+     Measured at main 4876bf08 (continuous-pipeline cycle 18 —
+     C4 SCALED RE-SWEEP RAN AND **DIVERGED: 0/300 PASS** at the
+     flip-candidate commit; flip is **NO-GO-until-closed**; the
+     cycle-17 "chain converged / bake-in clean to terminal / no
+     G7" claim is CORRECTED — it was TRUE ONLY ON THE SYNTHETIC
+     3-CARD SMOKE DECK, which casts no spells). The C4 post-R76
+     scaled re-sweep (tooling merged `4876bf08`; new
+     `--driver rust_shadow` mode on
+     scripts/bench_trajectory_parity.py +
+     rust_shadow.drive_shadow_game_to_terminal — pure-Python
+     tooling, no Rust/.pyd/count touch, 4-file 1532 UNMOVED,
+     cron exit-0, residue cadence did NOT fire) ran the
+     round-76-class grid (60 archetypes × 5 seeds = 300 real
+     17lands production-deck games) THROUGH the role-swapped
+     ShadowCheckedRustAdapter bake-in at flip-candidate
+     `e87a6ebe`. RESULT: **0 PASS / 300**, 260 FAIL_DIVERGENCE
+     (238 STATE_EQ + 22 LEGAL_SET_EQ), 40 FAIL_TIMEOUT
+     (degenerate land-only random walks at the step cap — NOT
+     clean PASSes), 0 FAIL_EXCEPTION. Evidence:
+     docs/C4_RESWEEP_EVIDENCE.md + the committed c4_resweep.json
+     (raw 300-game artifact). This is exactly what C4 exists to
+     catch BEFORE the irreversible flip — the bake-in working as
+     the honest bad-flip tripwire (feedback_no_fallback_hybrids).
+     TWO axes: (1) **G7 OPEN (NEW, dominant 238/300)** — the
+     bake-in's STATE_EQ does NOT reconcile the G3 "Rust resolves
+     CastSpell atomically" axis (Rust apply(CastSpell) -> spell
+     to battlefield + stack emptied + mana spent; Python ->
+     spell on the stack pending the locked-in full
+     stack-and-priority resolution). step_both reconciles this
+     via its CE5 cast-vs-resolve mirror
+     (cross_engine.py:10313, drains BOTH stacks after a
+     cast_spell); the role-swapped bake-in has no equivalent.
+     Mid-game live-play (both players alive, full libraries) —
+     NOT the post-deck-out tail G4/G5/G6 lived in; trips on the
+     FIRST spell cast of essentially every real deck. The smoke
+     deck never casts a spell, so the cycle-17 "no G7 /
+     convergent" claim was synthetic-deck-only; the chain was
+     NOT exhausted at scale. Pinned (SEARCH_LIMITATIONS G7 OPEN
+     section + SOT_FLIP_CUTOVER_PLAN §4 ledger row G7 OPEN + a
+     [C4-RE-SWEEP CORRECTION] on the G6 row), todo filed.
+     (2) **B1 (already-OPEN C1 keystone, 22/300 LEGAL_SET_EQ)**
+     — independently confirms the C1 legal_decisions ==
+     legal_actions mana/target/additional-cost asymmetry
+     (PARTIALLY CLOSED, Slices 2/3 outstanding) is still open at
+     scale; expected residual, NOT a new finding. ⚠ THESIS-LEVEL
+     FORK ESCALATED TO THE USER (NOT autonomously resolved): the
+     proposed G7 fix (port the CE5 cast-vs-resolve stack-drain
+     into the bake-in) is mechanically the SAME reconciliation
+     the ENTIRE campaign parity evidence base (step_both /
+     307-byte-equal / PROBED 106 / round-74/76) already relies
+     on — internally consistent — BUT its soundness rests on the
+     G3 "Rust resolves atomically — accepted C6-fenced caveat"
+     whose justification appears DEFERRED and never written
+     ("SL entry owed at B3-impl"); the C4 magnitude (79% of
+     games / every spell cast) makes that a thesis-level
+     question, not a narrow caveat: is atomic resolution a
+     justified accepted simplification, or must Rust implement
+     real stack-and-priority resolution (a substantial Rust
+     effort) / does the flip thesis need revisiting. Per
+     honest-progress / feedback_no_fallback_hybrids the
+     orchestrator did NOT autonomously dispatch a G7
+     harness-reconciliation lane (that commits Reading A on an
+     unestablished justification). NEXT = USER decision on the
+     G3-justification fork BEFORE any G7 lane; flip remains
+     NO-GO until G7 + B1 close and a fresh C4 runs clean. PRIOR
+     cycle 17 (@ 30a5cebe — SoT-FLIP G6 CLOSED via pure-Python
+     SBA-timing port; the "G4->G5->G6 chain fully convergent /
+     bake-in clean to terminal / no G7" claim was TRUE
+     SYNTHETIC-DECK-ONLY, CORRECTED cycle 18 by the C4 scaled
+     re-sweep; 1532 UNMOVED, counts unchanged, residue cadence
+     did not fire). PRIOR cycle 16 (@
      ef154a4e — SoT-FLIP G5 CLOSED via pure-Python alive-skip
      port (_next_alive_idx mirrors simulate._next_alive via
      Rust losers()); G6 unmasked + closed next cycle; 1532

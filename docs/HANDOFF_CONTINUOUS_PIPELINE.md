@@ -138,7 +138,12 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 17, @ `30a5cebe` — READ FIRST.**
+> **⚠ SoT-FLIP PATH — cycle 18, @ `4876bf08` — READ FIRST.**
+> **C4 SCALED RE-SWEEP RAN AND DIVERGED (0/300 PASS) — flip is
+> NO-GO-until-closed. A THESIS-LEVEL FORK (G3 atomic-resolution
+> justification) is ESCALATED TO THE USER — see the G7 bullet +
+> "NEXT". Do NOT autonomously dispatch a G7 harness-reconciliation
+> lane.**
 > The cycle-11 phase-transition decision is RESOLVED: the user chose
 > **pivot to the SoT-flip path** (deliberate sequenced flip-execution,
 > NOT continuous cheap-refill). The continuous cheap-parallel-refill
@@ -214,41 +219,78 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   `_is_surfaced` → `_is_closed`; 4-file 1532 UNMOVED;
 >   rust_shadow 13 + rust-adapter 33 = 46; negative controls
 >   intact; pure-Python (no Rust/`.pyd`).
-> - **★ MILESTONE — the G4→G5→G6 convergent chain is FULLY
->   CLOSED; closing G6 unmasked NO G7; the `rust_shadow` bake-in
->   now reaches the natural terminal state DIVERGENCE-CLEAN.**
->   All three lived in the SAME narrow degenerate post-deck-out
->   3-card-synthetic game-end region (mana/priority/SBA
->   bookkeeping); each closure was CR-correctness-improving; NONE
->   in normal admitted gameplay. The bake-in did its designed
->   honest-stop job and is now exhausted of divergences in this
->   corner. **The flip prerequisites are now ALL COMPLETE:** C1
->   keystone (Slices 1/2/3 `f1f09bbb`/`e6e3db58`/`bb29df8d`) + G1
->   factored combat + B3 wiring SPEC + **B3-IMPL S1..S4** + the
->   `rust_shadow` bake-in harness (now clean).
+> - **★ CYCLE-17 MILESTONE CLAIM CORRECTED.** The cycle-17 "G4→G5→G6
+>   convergent chain FULLY CLOSED / closing G6 unmasked NO G7 /
+>   bake-in reaches terminal DIVERGENCE-CLEAN" was **TRUE ONLY ON
+>   THE TINY 3-CARD SYNTHETIC SMOKE DECK** (which casts no spells —
+>   Forest/Bears land-drops + passes). G4/G5/G6's own closures
+>   stand, but the chain was **NOT exhausted at scale**.
+> - **C4 SCALED RE-SWEEP — DIVERGED (the honest evidence).** The
+>   orchestrator built `--driver rust_shadow` on
+>   `scripts/bench_trajectory_parity.py` +
+>   `rust_shadow.drive_shadow_game_to_terminal` (pure-Python
+>   tooling, merged `4876bf08`; 4-file 1532 UNMOVED, no
+>   Rust/`.pyd`/count touch, cron exit-0) and ran the
+>   round-76-class grid (60 archetypes × 5 seeds = **300 real
+>   17lands production-deck games**) THROUGH the role-swapped
+>   bake-in at flip-candidate `e87a6ebe`: **0 PASS / 300**, 260
+>   FAIL_DIVERGENCE (238 STATE_EQ + 22 LEGAL_SET_EQ), 40
+>   FAIL_TIMEOUT (degenerate land-only walks at the step cap —
+>   NOT clean), 0 FAIL_EXCEPTION. Evidence: `docs/C4_RESWEEP_
+>   EVIDENCE.md` + the committed `c4_resweep.json`. The bake-in
+>   working exactly as the honest bad-flip tripwire — it caught
+>   this BEFORE the irreversible flip, which is what C4 exists for.
+> - **G7 — OPEN (NEW, dominant 238/300; flip NO-GO-until-closed).**
+>   The bake-in's STATE_EQ does NOT reconcile the **G3 "Rust
+>   resolves `CastSpell` atomically"** axis (Rust `apply(CastSpell)`
+>   → spell to battlefield + stack emptied + mana spent; Python →
+>   spell on the stack pending the locked-in full
+>   stack-and-priority resolution). `step_both` reconciles this via
+>   its CE5 cast-vs-resolve mirror (`cross_engine.py:10313`, drains
+>   BOTH stacks after a `cast_spell`); the role-swapped bake-in has
+>   no equivalent. Mid-game live-play (both players alive) — trips
+>   on the FIRST spell cast of essentially every real deck.
+>   Pinned (`SEARCH_LIMITATIONS.md` G7 OPEN + `SOT_FLIP_CUTOVER_
+>   PLAN.md` §4 ledger row **G7 OPEN** + a [C4-RE-SWEEP CORRECTION]
+>   on the G6 row), todo filed.
+> - **B1 (already-OPEN C1 keystone, 22/300 LEGAL_SET_EQ).**
+>   Independently confirms the C1 `legal_decisions==legal_actions`
+>   mana/target/additional-cost asymmetry (PARTIALLY CLOSED,
+>   Slices 2/3 outstanding) is still open at scale. Expected
+>   residual, NOT a new finding — co-blocker of the flip GO.
+> - **⚠⚠ THESIS-LEVEL FORK — ESCALATED TO THE USER, NOT
+>   autonomously resolved.** The proposed G7 fix (port the CE5
+>   cast-vs-resolve stack-drain into the bake-in) is mechanically
+>   the SAME reconciliation the ENTIRE campaign parity evidence
+>   base (`step_both` / 307-byte-equal / PROBED 106 / round-74/76)
+>   already relies on — internally consistent — **but its
+>   soundness rests on the G3 "Rust resolves atomically — accepted
+>   C6-fenced caveat" whose justification appears DEFERRED and
+>   never written ("SL entry owed at B3-impl").** The C4 magnitude
+>   (79% of games / every spell cast) makes this a thesis-level
+>   question, not a narrow caveat: is atomic resolution a justified
+>   accepted simplification, OR must Rust implement real
+>   stack-and-priority resolution (a substantial Rust effort) / does
+>   the flip thesis need revisiting? Per honest-progress /
+>   `feedback_no_fallback_hybrids` the orchestrator did **NOT**
+>   autonomously dispatch a G7 harness-reconciliation lane (that
+>   would commit "Reading A" on an unestablished justification and
+>   risk false-green equivalence evidence).
 > - **⚠ STALENESS POINTER:** `docs/SOT_FLIP_CUTOVER_PLAN.md` §0a's
->   verify-first preamble is anchored at the OLDER `4704ca3e`
->   (pre-B3-impl, pre-C1-Slices-2/3-completion). Its "Slices 2/3
->   IN FLIGHT" / "B3 NOT-STARTED" prose is **SUPERSEDED** — THIS
->   ⚠ block + the `EOE_PROBE_READINESS_AUDIT.md` sentinel are the
->   canonical current critical-path pointer; the
->   `SOT_FLIP_CUTOVER_PLAN.md` §4 ledger ROWS (incl. G4/G5/G6)
->   are kept current at HEAD, only its §0a preamble prose is
->   stale.
-> - **NEXT (the single remaining gate before the user go/no-go):
->   the orchestrator runs the C4 post-R76 scaled re-sweep THROUGH
->   the now-clean fully-strengthened `rust_shadow` bake-in** —
->   orchestrator-run (evidence generation, reversible),
->   **NOW UNBLOCKED** (the chain that blocked it is closed) →
->   produces the equivalence evidence →
->   **the atomic SoT-flip (B3-S5) is an ORCHESTRATOR+USER go/no-go
->   on that evidence — explicitly NOT autonomous** (the single
->   least-reversible action in the campaign) → bake-in period →
->   Step 5/6 bridge-vestigialization cleanup
->   (`docs/BRIDGE_VESTIGIALIZATION_PLAN.md`). No known hidden gaps
->   remain beyond the C4 evidence sweep (G2 interim-maskable
->   non-blocker; G3 accepted C6-fenced caveat, SL entry owed at
->   B3-impl).
+>   verify-first preamble is anchored at the OLDER `4704ca3e`; its
+>   "Slices 2/3 IN FLIGHT" / "B3 NOT-STARTED" prose is
+>   **SUPERSEDED** — THIS ⚠ block + the `EOE_PROBE_READINESS_
+>   AUDIT.md` sentinel are the canonical current pointer; the §4
+>   ledger ROWS (incl. G4/G5/G6/G7) ARE current at HEAD.
+> - **NEXT: the USER decides the G3-justification fork BEFORE any
+>   G7 lane.** Flip remains **NO-GO** until (a) the G3 fork is
+>   resolved, (b) G7 closes on the resolved basis, (c) B1 (C1
+>   Slices 2/3) lands, and (d) a fresh C4 re-sweep through
+>   `--driver rust_shadow` runs divergence-clean. The atomic
+>   SoT-flip (B3-S5) remains an ORCHESTRATOR+USER go/no-go —
+>   explicitly NOT autonomous (the single least-reversible action).
+>   (G2 interim-maskable non-blocker; the G3 caveat is now the
+>   load-bearing open question, NOT a deferred footnote.)
 >
 > **Cadence: ONE genuine flip lane at a time. A re-orienting routine /
 > next session MUST NOT pad the pipeline back to ≤5 with manufactured
