@@ -6715,6 +6715,61 @@ gate signal (correctly loud). The proper closure is parity-positive
 > `dba2ff5b`. The attribute removal does NOT shift the Rust-Effect-
 > variant inventory (it is a zone-id `const`, not an `Effect`), so
 > `check_audit_coverage_staleness.py` counts are unchanged.
+>
+> **[G7 S5 TRIGGERS-VERIFY LANDED — `feature/g7-s5-triggers-verify`,
+> pure-Python VERIFY, NO `rust/src/`/`src/`/`.pyd`/behavior change.]**
+> The comprehensive verification that the FULL faithfully-bridgeable
+> trigger surface composes **byte-equal Python↔Rust through the S5a
+> re-homed `stack_objects` source** is **a CLEAN VERIFY — the claim
+> HOLDS, no hole, no fix slice implied.** `tests/test_g7_s5_triggers_
+> verify.py` (6 pins) drives a trigger-bearing creature through
+> cast→on-stack→resolve on BOTH engines at the per-apply compare
+> point the role-swapped `rust_shadow` bake-in uses (NO CE5 drain),
+> reusing the S5b `_drive_to_spell_on_stack` driver: (2) a
+> `source_is_self` ETB trigger on the cast creature fires at
+> `move_source_post_resolve`→`dispatch_event(Enters)` reading the
+> re-homed source, FULL field view byte-equal mid-stack AND
+> post-resolve (the core G7 owner-doc Slice S5 deliverable); (3)
+> multi-ETB resolve-time push ORDER byte-equal (asserted at the
+> post-spell-resolve stack-signature window); (4) the trigger is an
+> equally-respondable ALONE-on-stack object on BOTH engines (same
+> `stack_size` + byte-equal stack signature — the §S5 respond-to-
+> trigger / S3-risk nested window) then resolves byte-equal; (5)
+> negative control: a simulated re-homed-source hole fails LOUD
+> (3-field divergence) then heals — genuinely discriminating. **One
+> honestly-documented limitation (NOT an S5a engine hole):** the
+> §1.4 CAST observer-walk surface is NOT faithfully exercisable
+> through the cross-engine `triggered_abilities` predicate bridge —
+> `Event.IS_CAST` is a 2-subject event (`("spell","controller")`) so
+> the bridge's slot-None `subject_*`/`controlled_by_you` mapping
+> (correct for single-subject ENTERS/DIES) makes
+> `_resolve_subject(subjects, None)` return `None`, Python no-ops
+> while Rust resolves the on-stack spell as subject and fires (a
+> harness-fixture-bridge gap; real card data uses
+> `Subject("spell",…)`, `cards/parser/triggers.py:728-760`). The
+> §1.4 Rust CAST observer walk + `cards.rs` helper stack-store
+> extension are proven instead by **S5a's own `tests_rust` closure-
+> flips** (the silent-CAST-trigger regression S5a fixed) AND by Pins
+> 2/3/4 — the ENTERS path reads the SAME re-homed `stack_objects`
+> store the CAST observer walk reads (`state_ops_resolve.rs:480-517`,
+> shared store), so the CAST axis has no SEPARATE re-homed-source
+> code path left unverified. Pin 6 asserts the limitation is real +
+> exactly as described (documented, not papered —
+> `feedback_silent_noop_pipelines`). Gate: **4-file core gate 1536
+> UNMOVED** (one pure-Python test file, zero `src/`/`rust/src/`/
+> `parity_smoke.py`/`cross_engine.py`); `tests_rust` 30 failed / 2312
+> passed = byte-identical to the `24776ae0` baseline (zero
+> newly-failing; the 30 pre-existing reds, todo `feedcf93`,
+> untouched); `check_audit_coverage_staleness.py` exit 0 (zero
+> Effect / zero `rust/src/` touch — no structural-arm fire);
+> isolation self-check PASSED (shared canonical `.venv-py313` `.pyd`
+> mtime+size byte-identical before/after — worktree-isolated build
+> only). Zero engine → NO `.pyd` rebuild / NO residue cadence / NO
+> cron resync owed (the S5b zero-engine pattern). The SEPARATE
+> unmasked combat-blocker `LEGAL_SET_EQ` follow-up + S4b + warp-cast
+> legal-EMISSION axis remain explicitly STILL-OPEN (S5 triggers-
+> verify does NOT close those — no overclaim). NEXT per the G7 owner
+> doc: S6 (bake-in scale verify) → S7 CE5 removal LAST.
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both
