@@ -103,15 +103,54 @@ LB ≥ 0.525. **Falsifier (anticipated):** CI brackets ~0.5 / UB <
 0.525 despite a lower val-value loss ⇒ *loss ↓ ≠ strength ↑* ⇒
 epochs alone is NOT the lever; redirect to data quantity + depth.
 
-> **RESULT: PENDING** — fill on completion (win-rate, Wilson CI,
-> verdict, and the secondary readout: where the ablation's val-value
-> loss plateaus vs v5's 0.0039).
+**RESULT (2026-05-18): CONFIRMED — pre-registered prediction held;
+the anticipated falsifier did NOT trigger.** Ablation `v1` (20
+epochs, same byte-identical 65-file dataset, scratch registry) vs
+production `v5` (5 epochs), head-to-head at nodes=200, seats
+alternated:
+
+| metric | value |
+|--|--|
+| new (20ep) wins / old (5ep) wins / draws | **23 / 9 / 0** |
+| new win-rate (decisive n=32) | **71.9 %** |
+| Wilson 95 % CI | **[0.546, 0.844]** |
+| gate (LB ≥ 0.525) | **PASS** (LB 0.546) → early-stopped |
+| crashed | 0 |
+
+**Verdict: more epochs IS gate-promotable strength.** Training v5's
+*exact* architecture on its *exact* data for 20 epochs instead of 5
+yields a net that clears the project's promotion gate against v5 —
+the only variable changed was epochs (+ enabling early-stop).
+**v5 was genuinely undertrained**; its `early_stop_patience=None`
+5-epoch hard cap (flagged in D1) was leaving gate-promotable strength
+unfit. This is the *cheapest possible* lever — no new self-play, no
+deeper search, no architecture change.
+
+**Statistical honesty:** n=32 is small (early-stop fired *because*
+the effect is large); the CI is wide ([0.55, 0.84]) so the *point*
+71.9 % is noisy. The robust claim is the gate criterion — "clears
+the 0.525 promotion floor with Wilson-LB 0.546" — not "exactly
+72 %".
+
+**The loss curve mis-predicted this (recorded honestly).** The
+pre-run expectation, read off the secondary loss readout, was the
+*falsifier*: 20-epoch `val_value_loss` was noisy ~0.003–0.007 (best
+0.00052 @e15, bouncing; total best-val 0.2090 → 0.2056, ~1.6 %, then
+slight overfit past e14) and **`val_policy_loss` was dead-flat at
+~0.205 for all 20 epochs** (D1's flat-policy finding holds at 20ep).
+That looked like "marginal, mostly noise." The **gate said the
+opposite.** Mechanism: a better-fit *value* head alone substantially
+strengthens MCTS — value estimates drive PUCT selection and leaf
+evaluation even with an unchanged policy prior. Loss magnitude badly
+under-predicted the strength gain. This is the loss-≠-strength
+principle cutting *against* the loss-based read — exactly why the
+gate, not the curve, is the arbiter.
 
 ---
 
 ## Synthesis — what this means for the next iterate cycle
 
-As of 2026-05-17 the evidence is unambiguous on two of four levers:
+As of 2026-05-18 **three of four levers are resolved, two validated**:
 
 - **Trunk width — NOT indicated.** D1: no overfit, value head still
   learning on the current trunk. Scaling width has the *least*
@@ -124,15 +163,31 @@ As of 2026-05-17 the evidence is unambiguous on two of four levers:
   `BENCHMARKING_FINDINGS` §4/§2A) directly offsets the added
   per-game cost. Economics of deeper self-play: `BENCHMARKING_
   FINDINGS` §1/§2 (per-game ≈ linear in `--nodes`).
-- **More epochs / data — cheap *complementary* value-head lever
-  (D3 pending).** Verdict from the running ablation; gate-adjudicated,
-  not assumed (loss ↓ ≠ strength ↑ is the registered caveat).
+- **More epochs — VALIDATED, and the CHEAPEST lever (D3, 2026-05-18).**
+  20ep vs 5ep on identical data/arch ⇒ 71.9 % (Wilson-LB 0.546 ≥
+  gate). v5 was undertrained by its 5-epoch hard cap. Zero extra
+  cost — no new self-play, no deeper search, just adequate epochs +
+  early-stop patience in the training config. Complementary to depth
+  (epochs = fit the targets you have; depth = make better targets).
 - **Belief (roadmap Step 2/4) — the next *representational*
   frontier, but NOT the current binding constraint.** Revisit only
   if/when depth + training-budget are exhausted.
 
-**Recommended next production change:** raise self-play search depth
-(the validated lever), with `--epochs` + a sane `--early-stop-
-patience` folded in if D3 confirms the value-head win — both
-adjudicated by the eval gate across iterations, never by loss curves
-alone.
+**Recommended next production change (priority order, both
+gate-validated):**
+
+1. **Immediately, ~zero cost: fix the training config.** v5's
+   5-epoch hard cap (`early_stop_patience=None`) under-fit a
+   gate-promotable amount of strength (D3). The next training — and
+   a re-train of the current best on its existing data — should use
+   adequate `--epochs` (≥20) **+** a real `--early-stop-patience`
+   (e.g. 3–5). No new self-play, no extra per-game compute. Highest
+   ROI available.
+2. **Then, costlier: raise self-play `--nodes`** (D2 — better policy
+   targets; per-game ≈ linear in nodes, offset by the enabled
+   `--nn-device cuda` ≈2×). Size it via the Stage-A knee + Stage-B
+   iso-compute sweep.
+
+Both adjudicated by the eval gate across iterations, never by loss
+curves alone — D3 is the standing reminder that loss magnitude can
+badly mis-predict strength in *either* direction.
