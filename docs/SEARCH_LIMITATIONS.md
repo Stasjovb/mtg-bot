@@ -5817,7 +5817,79 @@ CastSpell target-satisfiability axis is now CLOSED too** (Slice 2,
 above): `state_ops_legal.rs:legal_decisions` gates every live
 CastSpell emission site on `spell_targets_satisfiable`, so it no
 longer emits a `cast_spell` dict for a spell whose targeted effect
-has 0 legal targets (CR 601.2c). **The CastSpell additional-cost
+has 0 legal targets (CR 601.2c).
+
+> **[G7 S6-Class-D — Slice-2 SEQUENCE-RECURSION HOLE CLOSED
+> (`feature/g7-classd-castset`; engine, `state_ops_legal.rs`-only;
+> new-code-is-right toward the Python SoT; `.pyd` rebuild owed on
+> `main` — orchestrator's).]** Verify-first against the 23/300
+> S6-evidence Class-D `cast_spell` LEGAL_SET_EQ asymmetry INVERTED
+> the "co-evolving B1-keystone, its own B1 lane" framing: 22/23 were
+> a single genuine in-scope Slice-2 bug, NOT a downstream artifact of
+> Class B/C/E and NOT a priority re-diagnosis. `spell_targets_-
+> satisfiable` iterated `printing.effects` matching ONLY top-level
+> `Effect` variants. The bridge's `sequence` arm
+> (`cross_engine.py:1494`) sends a Sequence-bodied spell as ONE
+> `{"kind":"sequence",...}` dict → `cards.rs parse_effect` builds a
+> SINGLE nested `Effect::Sequence{effects:[..]}` element (NOT a
+> flattened Vec). Radiant Strike's
+> `Sequence(DestroyTargetArtifactOrTappedCreature, GainLife{3})` —
+> whose targeted leaf has ZERO legal targets when no artifact / no
+> tapped creature is on the (byte-identical) battlefield, CR 601.2c —
+> therefore hit the `_ => {}` catch-all on the Sequence wrapper and
+> fell through to the conservative `true`, so Rust NEVER pruned the
+> un-targetable cast while Python's `legal_actions` correctly omitted
+> it (Python's `spell_effect` IS the Sequence, whose
+> `requires_target()`/`legal_targets()` delegate to the targeted
+> child). The function's own docstring CLAIMED *"matching the
+> targeted variant ANYWHERE in the Vec — see the find below"* but no
+> such find/recursion existed (the doc described an unimplemented
+> contract). **FIX:** `spell_targets_satisfiable` now depth-first
+> flattens `Effect::Sequence` children before the targeted-leaf
+> match (bounded — `parse_effect` builds a finite tree). **Parity-
+> NEUTRAL by construction:** it ONLY adds pruning of zero-legal-
+> target Sequence-wrapped casts (which Python also prunes); the
+> per-leaf scan logic is byte-unchanged ⇒ it cannot over-prune a
+> Python-legal cast (subset-preserving §4 property preserved). All 10
+> C1 Slice-1/2/3 pins + 33 bake-in / cross-engine-legal-set pins stay
+> GREEN. **HONEST-STOP residual:** the 23rd Class-D repro (arch30/s1
+> step 111, Thawbringer `{2}{G}` creature, `spell_effect=None`) is a
+> DISTINCT mana sub-axis (Python prunes for INSUFFICIENT MANA via
+> `can_pay_cost` — 2 untapped lands for a 3-mana cost — Rust
+> over-emits; `state_ops_mana::can_pay_cost`/auto-tap-headroom, NOT
+> the target gate). NOT closed here; filed as a separate follow-up
+> todo (`f5145c1d`), the closing of the homogeneous 22 does not
+> depend on it. Closing the 22 unmasks the already-tracked Class-C
+> warp-EXILE axis (todo `8d353e80`) deeper in arch7/s0 (step
+> 453→700) — Class D was UPSTREAM, masking it in the random walk; NOT
+> a new G-axis, NOT a regression. Pin: `tests/test_rust_shadow_-
+> bakein.py::test_g7_classd_castset_seqwrap_targets_closed_then_-
+> next_frontier` (red-before/green-after; arch7/s0 PAST step 453,
+> next = Class-C warp-EXILE STATE_EQ @700, surfaces LOUDLY). The S6
+> inventory row for Class D (`tests/test_g7_s6_scale_verify.py`) was
+> flipped to the closure contract (boundary 453→700, kind
+> LEGAL_SET_EQ→STATE_EQ; the 2 pre-existing arch2/s1 318→320 S6 reds
+> are `b3f7c0a9`-owned, byte-identical to baseline `dc22ebc4`, NOT
+> this lane). 4-file core gate **1536 UNMOVED** (`decision_source=
+> "python"` dormant w.r.t. Rust cast internals — `state_ops_legal.rs`
+> legal-emission only; the bake-in pins are not 4-file gate files);
+> `tests_rust` 30 failed / 2312 passed BYTE-IDENTICAL to `dc22ebc4`
+> (zero newly-failing — the `feedcf93` factored-combat/observer
+> baseline-rot, untouched); `check_audit_coverage_staleness.py` exit
+> 0 (a gate-condition fn change, not an `Effect`/bridge-arm/`cards.rs`
+> change — structural arm does NOT fire, S5c/CFI-1 precedent);
+> isolation self-check PASSED (shared canonical `.venv-py313` `.pyd`
+> SHA256/size/mtime byte-identical before/after — worktree-isolated
+> `maturin build`+force-install, NO shared/main `.pyd` rebuild).
+> `rust/src/` WAS touched → orchestrator owes a `.pyd` rebuild +
+> resync at merge; serializes w.r.t. the concurrent Lane A on
+> `state_ops_legal.rs` — this lane owns the `spell_targets_-
+> satisfiable` CAST-emit region (single hunk `@@ -748 fn
+> spell_targets_satisfiable`), Lane A owns the COMBAT-emit
+> `:1199`/`:1336` region (DISJOINT regions — flag the shared-file
+> overlap so the orchestrator serializes the merges).
+
+**The CastSpell additional-cost
 axis is now CLOSED too** (Slice 3, above):
 `state_ops_legal.rs:legal_decisions` gates every live CastSpell
 emission site on `additional_costs_payable` (reading the 3 new

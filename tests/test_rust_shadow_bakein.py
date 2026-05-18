@@ -819,6 +819,180 @@ def test_g7_activateability_affordability_closed_then_next_frontier_surfaced():
         )
 
 
+def test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier():
+    """**G7 S6-Class-D closure-flip** (the B1-keystone/C1
+    ``legal_decisions==legal_actions`` cast-set asymmetry — 23/300 in
+    ``docs/G7_S6_SCALE_VERIFY_EVIDENCE.md`` / ``s6_scale_verify.json``;
+    todo ``g7-classd-castset``).
+
+    **Verify-first INVERTED the S6-evidence framing.** The S6 evidence
+    labelled Class D *"the secondary 22/300 C4 LEGAL_SET_EQ shape; the
+    already-OPEN B1 keystone co-blocker (C1
+    ``legal_decisions==legal_actions`` mana/target/additional-cost
+    asymmetry); NOT a new G-axis — co-evolves, its own B1 lane"*. The
+    verify-first characterization is more precise:
+
+    1. **It is NOT a downstream artifact of Class B/C/E and NOT a
+       priority/timing re-diagnosis.** Across ALL 23 repros the
+       divergence fires at a normal priority window
+       (``has_priority(ap)==True``, ``stack==0``, ``combat=None``,
+       ``priority_player_idx==active_player_idx``) — priority/timing
+       AGREES on both engines. The discriminator is purely the
+       per-card cast gate.
+
+    2. **22/23 are a single, genuine, in-scope C1-Slice-2
+       (target-satisfiability) bug — the SEQUENCE-RECURSION hole.**
+       Every one of the 22 is **Radiant Strike** (id 76 / id 75…)
+       ``Sequence(DestroyTargetArtifactOrTappedCreature, GainLife{3})``
+       in the queried player's hand: ``can_cast(mana)==True``,
+       ``additional_costs_payable==True``, but Python's
+       ``_targets_are_satisfiable==False`` (CR 601.2c — zero legal
+       targets: no artifact, no tapped creature on the byte-identical
+       battlefield). Python's ``legal_actions`` correctly OMITS the
+       cast; Rust's ``legal_decisions`` still EMITTED it because
+       ``state_ops_legal.rs::spell_targets_satisfiable`` iterated
+       ``printing.effects`` matching ONLY top-level ``Effect``
+       variants. The bridge's ``sequence`` arm
+       (``cross_engine.py:1494``) sends the whole spell body as ONE
+       ``{"kind":"sequence",...}`` dict → ``cards.rs parse_effect``
+       materializes a SINGLE nested ``Effect::Sequence{effects:[..]}``
+       element. The targeted leaf
+       ``DestroyTargetArtifactOrTappedCreature`` is a CHILD of that
+       Sequence, so the flat loop hit the ``_ => {}`` catch-all on the
+       Sequence wrapper and fell through to the conservative ``true``
+       — NEVER pruning a zero-target Sequence-wrapped spell. (The
+       function's OWN docstring claimed *"matching the targeted
+       variant ANYWHERE in the Vec — see the find below"* but no such
+       find/recursion existed — the doc described an unimplemented
+       contract.) **FIXED** (new-code-is-right toward Python's SoT —
+       Python's ``spell_effect`` IS the Sequence whose
+       ``requires_target()``/``legal_targets()`` delegate to the
+       targeted child): ``spell_targets_satisfiable`` now depth-first
+       flattens ``Effect::Sequence`` children before the targeted-leaf
+       match. Parity-NEUTRAL by construction (it only ADDS pruning of
+       zero-legal-target Sequence-wrapped casts, which Python also
+       prunes; the per-leaf scan logic is byte-unchanged — it cannot
+       over-prune). All 10 C1 Slice-1/2/3 pins stay GREEN.
+
+    3. **1/23 (arch30/s1 step 111) is a DISTINCT, SEPARATE mana
+       sub-axis — NOT closed here (honest-stop, filed).** Thawbringer
+       (id 80, ``{2}{G}`` creature, ``spell_effect=None``):
+       ``_targets_are_satisfiable==True`` but
+       ``_can_cast(mana)==False`` — Python prunes for INSUFFICIENT
+       MANA (p1 has 2 untapped lands incl. Stomping Ground for a
+       3-mana cost); Rust's ``legal_decisions`` over-emits it. A
+       distinct C1-Slice-1 / ``can_pay_cost`` mana-headroom residual
+       in a DIFFERENT code path (``state_ops_mana::can_pay_cost`` /
+       auto-tap-headroom, NOT the target-satisfiability gate). Filed
+       as a separate follow-up todo; the closing of the homogeneous 22
+       does not depend on it.
+
+    **NEXT DISTINCT FRONTIER SURFACED (honest-stop — SEPARATE,
+    pre-existing, surfaced — NOT introduced — by closing the Sequence
+    hole; Class D was UPSTREAM, masking it in the random walk).**
+    With the false ``cast_spell 76`` no longer in the legal set the
+    arch7/s0 random driver picks differently and the bake-in runs
+    PAST step 453 to step 700, where it trips a ``STATE_EQ`` on
+    ``('exile_p1', ...)`` (Knight Luminary on Rust's exile_p1, not
+    Python's) — the already-tracked **Class C warp-EXILE
+    delayed-trigger-vs-deterministic-sweep** axis (todo
+    ``8d353e80``), NOT a new G-axis and NOT a regression.
+
+    Per the established G4/G5/G6/S5a/combat-blocker
+    surfaced→closure-flip discipline this pin asserts BOTH: (1) the
+    Class-D ``cast_spell``/``Sequence``-target axis is CLOSED (the run
+    proceeds PAST its old step-453 boundary AND the surfaced msg is
+    NOT the old ``('cast_spell', 76, ...)`` LEGAL_SET_EQ
+    over-emission), and (2) the next distinct frontier surfaces
+    LOUDLY at its freshly-characterized boundary (do NOT silently let
+    it pass; if it stops firing the next axis was closed elsewhere —
+    re-characterize, do NOT just bump)."""
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity import trajectory
+    from mtg_bot.search.engine_adapter_factory import (
+        build_shadow_checked_adapter,
+    )
+
+    # arch7/s0: Class-D Radiant-Strike Sequence-target axis CLOSED at
+    # its old step-453 boundary → next = the already-tracked Class-C
+    # warp-EXILE STATE_EQ @700 (Knight Luminary on Rust exile_p1).
+    arch, seed, old_boundary, exp_step, kind, needle = (
+        7, 0, 453, 700, "STATE_EQ", "('exile_p1'"
+    )
+    names = trajectory.load_production_deck(archetype=arch)
+    spec = trajectory.production_deck_to_deckspec(
+        names, shared_rng_seed=seed
+    )
+    adapter = build_shadow_checked_adapter(spec)
+    rng = random.Random(seed)
+    steps = 0
+    raised: ShadowDivergenceError | None = None
+    raw_exc: BaseException | None = None
+    while not adapter.is_terminal() and steps < 4000:
+        try:
+            legal = adapter.legal_decisions()
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        if not legal:
+            break
+        choice = rng.choice(legal)
+        try:
+            adapter.apply(choice)
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        except Exception as e:  # noqa: BLE001 — captured, asserted
+            raw_exc = e
+            break
+        steps += 1
+
+    # (1) CLASS-D CAST-SET / SEQUENCE-TARGET AXIS CLOSED: the run
+    # proceeds PAST the old step-453 boundary. A trip at/before 453
+    # means the Sequence-recursion fix regressed (do NOT bump the
+    # boundary — fix the engine).
+    assert steps > old_boundary, (
+        f"arch{arch}/s{seed}: the Class-D cast-set / Sequence-target "
+        f"axis must be CLOSED — the run must proceed PAST its old "
+        f"boundary step {old_boundary} (it stopped at {steps}). A stop "
+        f"at/before {old_boundary} means the spell_targets_satisfiable "
+        f"Sequence-recursion fix regressed — fix the engine, do NOT "
+        f"bump the boundary. err={raised!r} raw={raw_exc!r}"
+    )
+    surfaced_msg = str(raised) if raised is not None else str(raw_exc)
+    assert "cast_spell" not in surfaced_msg, (
+        f"arch{arch}/s{seed}: the surfaced divergence still mentions a "
+        f"cast_spell over-emission — the Class-D LEGAL_SET_EQ "
+        f"cast-set asymmetry was NOT actually closed: "
+        f"{surfaced_msg[:300]!r}."
+    )
+    # (2) THE NEXT DISTINCT FRONTIER SURFACES LOUDLY at its
+    # freshly-characterized boundary. It is the already-tracked
+    # Class-C warp-EXILE STATE_EQ (todo 8d353e80), NOT a new G-axis.
+    assert steps == exp_step, (
+        f"arch{arch}/s{seed}: expected the freshly-characterized "
+        f"next-frontier boundary step {exp_step}, got {steps}. A "
+        f"different step means the surfaced frontier moved — "
+        f"re-characterize this pin, do NOT just bump. "
+        f"err={raised!r} raw={raw_exc!r}"
+    )
+    assert raised is not None and raw_exc is None, (
+        f"arch{arch}/s{seed}: the next distinct divergence must "
+        f"SURFACE as a {kind} ShadowDivergenceError. raised={raised!r} "
+        f"raw={raw_exc!r}. If it no longer fires it was closed "
+        f"elsewhere — re-characterize this pin (do NOT silently pass)."
+    )
+    assert raised.tripwire == kind, (
+        f"arch{arch}/s{seed}: expected tripwire {kind}, got "
+        f"{raised.tripwire}: {str(raised)[:300]!r}."
+    )
+    assert needle in str(raised), (
+        f"arch{arch}/s{seed}: the surfaced {kind} must be PRECISELY "
+        f"the characterized Class-C warp-EXILE {needle!r}. Got: "
+        f"{str(raised)[:300]!r}."
+    )
+
+
 def test_g4_i20_cast_set_axis_is_closed_by_lockstep():
     """G4 CLOSURE PIN. G4 (the C1/G1-analog for the I20 axis: the
     documented Python mana-hold-until-cleanup simplification,
