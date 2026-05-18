@@ -5,8 +5,10 @@
 > combat-blocker `LEGAL_SET_EQ` CLOSED by `fec5f14` (§7) + frontier
 > (a) (`ActivateAbility` apply auto-tap, the §2-4 analog) CLOSED by
 > `04d67d99` (§8) + honest-stop (a new distinct library-shuffle-order
-> frontier pinned in §8; frontier (b) arch5/s0 step 367
-> `priority_player` STILL-OPEN, unchanged).** Lane (this §8
+> frontier pinned in §8; frontier (b) = S6 Class B arch5/s0 step 367
+> `priority_player` VERIFY-FIRST RE-DIAGNOSED in §9 — a Rust-ENGINE
+> slice, NOT an adapter-port slice; HONEST-STOP, STILL-OPEN).** Lane
+> (this §8
 > addendum): `feature/fix-g7-frontier-a-activateability-affordability`
 > off `main` @ `a9126b06`; the §7 addendum was
 > `feature/fix-g7-combat-blocker-legalset` off `main` @ `24776ae0`;
@@ -392,3 +394,107 @@ NOT force-fixed in this lane (`feedback_no_fallback_hybrids`
 honest-stop) — landing the sound (a) fix and pinning the unmasked
 library-shuffle-order frontier precisely is the correct disciplined
 outcome (the G4/G5/G6/S5a/combat-blocker precedent).
+
+## 9. Frontier (b) = S6 Class B (arch5/s0 step 367 `priority_player`) — VERIFY-FIRST RE-DIAGNOSED: a Rust-ENGINE slice, NOT an adapter-port slice (HONEST-STOP)
+
+> **Status: HONEST-STOP — root cause is in `rust/src`, NOT the
+> Rust-driver adapter port; this is a distinct Rust-engine slice
+> (orchestrator-sequenced), explicitly NOT forced into the
+> adapter-port lane.** Lane: `feature/g7-classb-priority-port` off
+> `main` @ `3a963e0f`; pure-Python investigation, ZERO `rust/src` /
+> `.pyd` / tracked-file change (the speculative adapter mirror was
+> prototyped, verified NOT to close the trip, and reverted —
+> `feedback_no_fallback_hybrids`; only throwaway `scripts/scout_classb_*`
+> diagnostics committed). Frontier (b) = S6 Class B, the dominant
+> 138/300 of the S6 scale-verify.
+
+**The brief's framing (G5-family Rust-driver-ADAPTER priority-port —
+the `86411a99` `_next_alive_idx` family mis-mirroring the Python SoT
+on the production-deck path) is INVERTED by verify-first.** It is NOT
+an adapter-port gap.
+
+**RED-before (byte-exact at `3a963e0f`).** arch5/s0 step 367, a
+`PassPriority()` at the BEGINNING_OF_COMBAT pass-round end (empty
+stack, **`losers=[]`** — NOT a `_next_alive`/player-loss case at all,
+unlike the synthetic-deck G5). Post-apply STATE_EQ
+`('priority_player', 1, 0)` (Python=1, Rust=0): the empty-stack
+step-end advances to DECLARE_ATTACKERS with an eligible attacker (obj
+12 Icecave Crasher).
+
+**Root cause (file:line both sides).** The **true SoT is
+`simulate.py`** (`MtgGameStateAdapter` is itself a search-
+reimplementation of it; the rust_shadow STATE_EQ compares against
+`MtgGameStateAdapter`, which faithfully mirrors the SoT here):
+
+- `simulate.run_step(DECLARE_ATTACKERS)` (`simulate.py:316-322`):
+  `apply_action(DeclareAttackers)` does NOT touch
+  `priority_player_idx`; only the subsequent `priority_loop`
+  (`simulate.py:222-247`) sets `priority_idx = _next_alive(active)`
+  (line 235/247) — and that fires at the FIRST DECLARE_ATTACKERS
+  priority pass, AFTER the attacker decision. So at the
+  `declare_attackers` decision moment + into `priority_loop` entry,
+  `priority_player_idx` is the **CARRIED** value (=1, the prior
+  BEGINNING_OF_COMBAT pass-round holder). Instrumented raw
+  `simulate.py` on this exact deck/seed CONFIRMS
+  `priority_player_idx=1` at `declare_attackers` + `priority_loop
+  ENTER`.
+- `MtgGameStateAdapter` mirrors the SoT: the combat-exposed
+  `_enter_declare_attackers` / `_enter_declare_blockers`
+  (`engine_adapter.py:1312-1316` / `:1358-1361`) set `_combat_phase`
+  and RETURN WITHOUT `_enter_priority_for_current_step`;
+  `priority_player_idx` stays carried through the whole factored-
+  combat window (reset deferred to `_finalize_*_phase` `:1112` /
+  `:1144`); `active_player()` (`:753-767`) overrides the
+  decision-maker to active (attackers) / defender (blockers) while
+  `priority_player_idx` stays carried.
+- The Rust **engine** is the SoT-divergent side: (i)
+  `state_ops_actions.rs:1444-1446` unconditionally
+  `state.priority_player = state.active_player` after EVERY non-pass
+  action (the round-27 G3+G4 post-arm CR-117.1c reset), and (ii)
+  `state_ops_legal.rs:1199` `if self.priority_player != player_id {
+  return [pass] }` gates ALL factored-combat emission on the queried
+  player == Rust's `priority_player`. So Rust STRUCTURALLY requires
+  `priority_player == active` during DECLARE_ATTACKERS — it never
+  carries priority through the factored-combat window like the
+  `simulate.py` SoT does.
+
+**Why the Rust-driver adapter CANNOT reconcile this in-scope.** Per
+`feedback_parity_new_code_is_right` the SoT (`simulate.py`) is the
+correct side and `MtgGameStateAdapter`'s carried priority is
+SoT-faithful; the Rust ENGINE is wrong. The adapter cannot keep
+Rust's `priority_player` carried because the `state_ops_legal.rs:1199`
+gate would then suppress the factored-combat emission (chicken-and-egg:
+detecting the factored-combat window needs the emission, the emission
+needs `priority == active`), and `state_ops_actions.rs:1446`
+re-forces `priority=active` after every apply regardless of what the
+adapter sets — both in `rust/src`. The only adapter-side "fixes" are
+(a) touching `rust/src` (out of this lane) or (b) a masking
+`_DOCUMENTED_ACCEPTED_FIELDS` carve-out the S6 evidence pins empty and
+the brief forbids. A pure-Python `_combat_decision_maker` deferred-
+priority adapter mirror was prototyped and **verified NOT to close the
+step-367 trip** (the line-1199 gate blocks the factored-combat
+detection), then reverted — confirming the root cause is the Rust
+engine, not the port.
+
+**Conclusion + fix scope (a Rust-engine lane, orchestrator-
+sequenced).** Class B is RE-CLASSIFIED: NOT a G5-family
+adapter-port slice — a **Rust-engine `CastSpell`/priority-model
+slice**. The Rust engine's "`priority_player == active` during/after
+non-pass actions" model (`state_ops_actions.rs:1444-1446` + the
+`state_ops_legal.rs:1199` combat-emit priority gate) diverges from the
+`simulate.py` SoT which keeps `priority_player_idx` carried through
+the factored-combat decision window. Fix scope = a Rust-engine slice:
+make the Rust DECLARE_ATTACKERS/DECLARE_BLOCKERS factored-combat
+decision NOT force `priority_player=active` (mirror `simulate.py`'s
+"priority stays carried until the DECLARE_ATTACKERS priority loop's
+first pass"), or relax the line-1199 combat-emit gate to key on
+active/defender (not `priority_player`) while keeping `priority_player`
+carried. Sequenced by the orchestrator as a Rust slice — NOT this
+adapter-port lane (the brief's explicit STOP condition). The bake-in
+pin's arch5/s0 row is UNCHANGED (it still correctly asserts Class B
+surfaces at step 367 — RED-before byte-identical at `3a963e0f`); the
+arch2/s1 row (shuffle-order `b3f7c0a9`) is UNCHANGED. 4-file core gate
+**1536 UNMOVED**; `tests_rust` zero-newly-failing vs `3a963e0f`; cron
+exit 0; isolation self-check PASSED (shared canonical `.pyd`
+byte-identical before/after — zero `rust/src` ⇒ NO `.pyd` rebuild
+owed). NOT merged / NOT pushed.

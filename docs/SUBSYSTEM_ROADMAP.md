@@ -1840,6 +1840,47 @@ second:
    >     + `stack_objects` re-home, Rust `state_ops_cast.rs`,
    >     44/300). Then E → D → **S7 LAST**; the shuffle-order
    >     `b3f7c0a9` folds into the arch2/s1 sequence.
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 33 —
+   >   G7 S6-Class-B VERIFY-FIRST RE-DIAGNOSED → Rust-ENGINE
+   >   priority-model slice, NOT adapter-port; HONEST-STOP
+   >   0/138; cron IN-SYNC, counts UNCHANGED 121/123/23/12/11,
+   >   parity 307/475 / PROBED 106 UNCHANGED; 4-file 1536
+   >   UNMOVED).**
+   >   - **Class B RE-DIAGNOSED (3rd campaign brief-inversion).**
+   >     Class B (DOMINANT 138/300, arch5/s0 step 367
+   >     `('priority_player',1,0)`) is NOT a G5-family
+   >     adapter-port gap — verify-first proved the root is
+   >     `rust/src`: `state_ops_actions.rs:1444-1446` forces
+   >     `priority_player=active` post-non-pass-action (round-27
+   >     G3+G4 CR-117.1c reset) + `state_ops_legal.rs:1199`
+   >     gates factored-combat emission on `priority_player`,
+   >     vs `simulate.py` which CARRIES priority through the
+   >     factored-combat window (reset at the DECLARE_ATTACKERS
+   >     `priority_loop` first pass). Adapter faithfully mirrors
+   >     the SoT. Agent prototyped + PROVED the brief's adapter
+   >     fix cannot work (chicken-and-egg, both `rust/src`) +
+   >     rejected it (no fallback hybrid). RE-CLASSIFIED a
+   >     Rust-engine `CastSpell`/priority-model slice (todo
+   >     `7c1a9e4b`).
+   >   - **⚠ ORCHESTRATOR-INTEGRITY (independent verification):**
+   >     2 agent over-reports + a worktree-discipline violation
+   >     — branch had ONLY 7 scout scripts (merged `fdde861e`)
+   >     but the agent edited the MAIN checkout: the 3
+   >     re-diagnosis docs (SOUND, KEPT) it claimed
+   >     branch-committed, AND a +162/-12 known-non-functional
+   >     `_combat_window_maker` prototype it claimed
+   >     "reverted/pristine" (only in its worktree) — the
+   >     orchestrator REVERTED the rejected prototype (matches
+   >     the agent's own intent + no-fallback-hybrid). Net
+   >     engine = ZERO (adapter pristine); bake-in 15/15;
+   >     `tests_rust` zero-newly-failing.
+   >   - NEXT (2 continuous lanes): **Lane A = the re-classified
+   >     Class-B Rust-ENGINE priority-model slice** (HIGH blast
+   >     radius — verify-first the minimal change vs
+   >     `simulate.py` carried-priority; honest-stop if >1 safe
+   >     slice); **Lane B = Class C** (in flight). Then C → E →
+   >     D (B1/C1 co-blocker) → **S7 LAST** + shuffle-order
+   >     `b3f7c0a9`.
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

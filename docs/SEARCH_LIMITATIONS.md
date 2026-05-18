@@ -6848,6 +6848,76 @@ gate signal (correctly loud). The proper closure is parity-positive
 > below / SOT_FLIP §4). NOT force-fixed (`feedback_no_fallback_hybrids`
 > honest-stop). NOT merged / NOT pushed.
 
+> **[G7 frontier (b) = S6 Class B (dominant 138/300, arch5/s0 step
+> 367 `('priority_player',1,0)`) — VERIFY-FIRST RE-DIAGNOSED +
+> HONEST-STOP: the root cause is in `rust/src`, a Rust-ENGINE slice,
+> NOT the Rust-driver-adapter port — lane
+> `feature/g7-classb-priority-port` off `main` @ `3a963e0f`;
+> pure-Python investigation, ZERO `rust/src`/`.pyd`/tracked-file
+> change.]** The brief framed Class B as a G5-family Rust-driver-
+> ADAPTER priority-port (`86411a99` `_next_alive_idx` family)
+> mis-mirroring the Python SoT on the production-deck path.
+> Verify-first INVERTED this. RED-before byte-exact (arch5/s0 step
+> 367, `PassPriority()` at the BEGINNING_OF_COMBAT pass-round end,
+> empty stack, **`losers=[]`** — NOT a `_next_alive`/player-loss
+> case). The empty-stack step-end advances to DECLARE_ATTACKERS with
+> an eligible attacker (obj 12). **The true SoT is `simulate.py`**:
+> `run_step(DECLARE_ATTACKERS)` (`simulate.py:316-322`)
+> `apply_action(DeclareAttackers)` does NOT touch
+> `priority_player_idx`; `priority_loop`'s `_next_alive(active)`
+> reset (`simulate.py:235/247`) fires only at the FIRST
+> DECLARE_ATTACKERS pass, AFTER the attacker decision — so
+> `priority_player_idx` is the CARRIED value (=1) through the
+> attacker-declaration moment (instrumented raw `simulate.py`
+> CONFIRMS). `MtgGameStateAdapter` faithfully mirrors the SoT
+> (combat-exposed `_enter_declare_attackers`/`_enter_declare_blockers`
+> `engine_adapter.py:1312-1316`/`:1358-1361` set `_combat_phase` and
+> RETURN WITHOUT `_enter_priority_for_current_step`; reset deferred to
+> `_finalize_*_phase` `:1112`/`:1144`; `active_player()` `:753-767`
+> overrides the decision-maker to active/defender while
+> `priority_player_idx` stays carried). The Rust **engine** is the
+> SoT-divergent side: `state_ops_actions.rs:1444-1446` unconditionally
+> forces `state.priority_player = state.active_player` after EVERY
+> non-pass action (the round-27 G3+G4 post-arm CR-117.1c reset), and
+> `state_ops_legal.rs:1199` `if self.priority_player != player_id {
+> return [pass] }` gates ALL factored-combat emission on the queried
+> player == Rust's `priority_player` — so Rust STRUCTURALLY requires
+> `priority_player == active` during DECLARE_ATTACKERS, never carrying
+> priority through the factored-combat window like the `simulate.py`
+> SoT. The Rust-driver adapter CANNOT reconcile this in-scope (it
+> cannot keep Rust's `priority_player` carried — the line-1199 gate
+> would suppress the factored-combat emission and
+> `state_ops_actions.rs:1446` re-forces priority=active after every
+> apply, both in `rust/src`; the only adapter-side "fixes" are
+> touching `rust/src` or a masking `_DOCUMENTED_ACCEPTED_FIELDS`
+> carve-out the S6 evidence pins empty + the brief forbids). A
+> speculative pure-Python `_combat_decision_maker` deferred-priority
+> adapter mirror was prototyped and verified NOT to close the
+> step-367 trip (the line-1199 gate blocks the factored-combat
+> detection chicken-and-egg), then reverted
+> (`feedback_no_fallback_hybrids` — no forced hybrid). **Per the
+> brief's explicit STOP condition this lane HONEST-STOPS.** Class B is
+> RE-CLASSIFIED: a **Rust-engine `CastSpell`/priority-model slice**
+> (`state_ops_actions.rs:1444-1446` + `state_ops_legal.rs:1199` vs
+> the `simulate.py` carried-priority SoT) — NOT a G5-family
+> adapter-port slice. Fix scope = a Rust-engine lane (make the Rust
+> DECLARE_ATTACKERS/DECLARE_BLOCKERS factored-combat decision NOT
+> force `priority_player=active`, mirroring `simulate.py`'s "priority
+> stays carried until the DECLARE_ATTACKERS priority loop's first
+> pass"; or relax line-1199 to key on active/defender while keeping
+> `priority_player` carried), orchestrator-sequenced as a Rust slice.
+> The bake-in pin's arch5/s0 row is UNCHANGED (still asserts Class B
+> surfaces at step 367 — RED-before byte-identical at `3a963e0f`);
+> arch2/s1 row (`b3f7c0a9`) UNCHANGED. 4-file core gate **1536
+> UNMOVED**; `tests_rust` 30 failed / 2312 passed = zero-newly-failing
+> vs `3a963e0f` (the `feedcf93` baseline-rot byte-identical); bake-in
+> suite 15 green; `check_audit_coverage_staleness.py` exit 0;
+> isolation self-check PASSED (shared canonical `.pyd` SHA256/size/
+> mtime byte-identical before/after — zero `rust/src` ⇒ orchestrator
+> owes NO `.pyd` rebuild). Full verify-first record:
+> `docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` §9 + SOT_FLIP §4 G7 row.
+> NOT merged / NOT pushed.
+
 > **[S5 TRIGGERS-VERIFY LANDED + orchestrator-merged (cycle 30) —
 > `feature/g7-s5-triggers-verify`, pure-Python VERIFY, ZERO
 > engine/`rust/src`/`.pyd`.]** The full faithfully-bridgeable trigger
