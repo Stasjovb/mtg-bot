@@ -6800,6 +6800,51 @@ gate signal (correctly loud). The proper closure is parity-positive
 > (`rust_shadow` bake-in scale verify, NO new masking) → **S7 CE5
 > removal LAST** → CE5-free re-proof + fresh CE5-free C4.
 
+> **[S6 SCALE-VERIFY LANDED — `feature/g7-s6-bakein-scale-verify` off
+> `main` @ `a9126b06`, pure-Python VERIFY, ZERO
+> engine/`rust/src`/`src`/`cross_engine.py`/`.pyd`.]** The penultimate
+> G7 slice (S7 CE5-removal is LAST). Full evidence:
+> **`docs/G7_S6_SCALE_VERIFY_EVIDENCE.md`** + committed
+> `s6_scale_verify.json`. The 300-game C4-class scale sweep
+> (`--archetypes 0-59 --seeds 0,1,2,3,4 --driver rust_shadow`, real
+> 17lands decks, `drive_shadow_game_to_terminal` — the exact C4 idiom,
+> NO CE5, NO CE5-equivalent in the bake-in) on `a9126b06`:
+> **(1) the S5a/S5b/S5-triggers `hand_p0` atomic-cast axis + the
+> cycle-30 combat-blocker `LEGAL_SET_EQ` STAY CLOSED at scale — 0/300
+> reappear** (the original-C4 dominant 238/300 atomic-cast shape +
+> `('blocker', N, None)` over-emission appear in ZERO of the 300
+> production games; classified every non-timeout failure, zero
+> CLOSED-axis hits); **(2) NO NEW MASKING** —
+> `_DOCUMENTED_ACCEPTED_FIELDS == frozenset()` (empty, pinned), the 3
+> negative controls fire LOUDLY on injected divergence, no silent
+> passes (0/300 PASS, every non-timeout game trips loudly, ZERO
+> unclassified shapes); **(3) the complete remaining frontier is an
+> ENUMERATED FINITE set of 5 distinct pre-existing already-tracked
+> axes** — B G5-family priority-port STATE_EQ (138/300, dominant), C
+> warp-EMISSION/S4b (44/300), E C1-family mana-source color on
+> ActivateAbility (31/300), D B1-keystone/C1 cast-set asymmetry
+> (23/300, the EXACT secondary C4 22/300), A B1-axis ActivateAbility
+> affordability raw ValueError (21/300, the cycle-30-pinned
+> arch2/s1-step-318); + 43/300 FAIL_TIMEOUT degenerate land-only walks
+> (the C4 40/300 class, NOT a parity verdict); **(4) S7-READINESS:
+> GO, gated ONLY on closing the finite set — NO structural/masking
+> blocker** (S5a the S7 linchpin holds at scale; the gap is exactly
+> the 5-class finite frontier, each a tractable fix-lane). Fix-lane
+> sequence → S7: `B → C → E → A → (D = B1/C1 Slices 2/3, its own
+> co-blocker lane) → S7 (CE5 removal + CE5-free re-proof + fresh
+> CE5-free C4 = the final flip gate)`. Pinned:
+> `tests/test_g7_s6_scale_verify.py` (8 pins — the 2 known frontiers
+> reproduce byte-exactly, the 5-class complete inventory each trips
+> LOUDLY at its characterized boundary, the NO-NEW-MASKING
+> empty-frozenset + negative-control guard). 4-file core gate **1536
+> UNMOVED**; `tests_rust` zero-newly-failing vs `a9126b06` (30 ≡ 30);
+> `check_audit_coverage_staleness.py` exit 0; isolation self-check
+> PASSED (shared canonical `.pyd` byte-identical before/after — NO
+> `.pyd` rebuild). NOT merged / NOT pushed; zero Rust ⇒ NO `.pyd`
+> rebuild / NO residue cadence / NO cron resync owed (the
+> S5b/S5-triggers zero-engine pattern). The GO decision itself remains
+> the USER's.
+
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both
 engines then immediately calls `_assert_state_eq()`), against

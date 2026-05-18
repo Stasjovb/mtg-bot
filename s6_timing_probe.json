@@ -1,0 +1,154 @@
+{
+  "config": {
+    "decks": "17lands",
+    "driver": "rust_shadow",
+    "shadow_max_steps": 4000,
+    "archetypes": "0-2",
+    "seeds": "0,1",
+    "max_turns": 120,
+    "combat_strategy": "attack_all",
+    "mulligans": 0,
+    "activate_lander_sac": false,
+    "require_creatures": null
+  },
+  "summary": {
+    "total_games": 6,
+    "passes": 0,
+    "fail_divergence": 5,
+    "fail_timeout": 0,
+    "archetype_filtered": 0,
+    "fail_exception": 1,
+    "total_elapsed_seconds": 15.304204600397497,
+    "divergence_shape_histogram": {
+      "STATE_EQ::fields:priority_player": 3,
+      "STATE_EQ::fields:B,C,G,R,U,W,mana_pool_p1": 1,
+      "STATE_EQ::fields:Forest,Island,Starbreach Whale,battlefield,exile_p1,stack": 1
+    },
+    "per_archetype": {
+      "0": {
+        "FAIL_DIVERGENCE": 2
+      },
+      "1": {
+        "FAIL_DIVERGENCE": 2
+      },
+      "2": {
+        "FAIL_DIVERGENCE": 1,
+        "FAIL_EXCEPTION": 1
+      }
+    }
+  },
+  "games": [
+    {
+      "archetype": 0,
+      "seed": 0,
+      "status": "FAIL_DIVERGENCE",
+      "turns_played": 0,
+      "actions_played": 649,
+      "elapsed_seconds": 3.1123983000870794,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": "STATE_EQ",
+      "divergence_fields": [
+        "fields:priority_player"
+      ],
+      "exception_type": null,
+      "exception_message": "[STATE_EQ] compare_fields divergences (undocumented \u2014 the genuine bad-flip signal): [('priority_player', 0, 1)]",
+      "last_action_kind": null,
+      "winner_player_idx": null,
+      "win_reason": null
+    },
+    {
+      "archetype": 0,
+      "seed": 1,
+      "status": "FAIL_DIVERGENCE",
+      "turns_played": 0,
+      "actions_played": 366,
+      "elapsed_seconds": 2.586076800012961,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": "STATE_EQ",
+      "divergence_fields": [
+        "fields:priority_player"
+      ],
+      "exception_type": null,
+      "exception_message": "[STATE_EQ] compare_fields divergences (undocumented \u2014 the genuine bad-flip signal): [('priority_player', 1, 0)]",
+      "last_action_kind": null,
+      "winner_player_idx": null,
+      "win_reason": null
+    },
+    {
+      "archetype": 1,
+      "seed": 0,
+      "status": "FAIL_DIVERGENCE",
+      "turns_played": 0,
+      "actions_played": 598,
+      "elapsed_seconds": 2.7725753001868725,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": "STATE_EQ",
+      "divergence_fields": [
+        "fields:B,C,G,R,U,W,mana_pool_p1"
+      ],
+      "exception_type": null,
+      "exception_message": "[STATE_EQ] compare_fields divergences (undocumented \u2014 the genuine bad-flip signal): [('mana_pool_p1', (('B', 0), ('C', 0), ('G', 0), ('R', 0), ('U', 2), ('W', 0)), (('B', 0), ('C', 0), ('G', 2), ('R', 0), ('U', 0), ('W', 0)))]",
+      "last_action_kind": null,
+      "winner_player_idx": null,
+      "win_reason": null
+    },
+    {
+      "archetype": 1,
+      "seed": 1,
+      "status": "FAIL_DIVERGENCE",
+      "turns_played": 0,
+      "actions_played": 169,
+      "elapsed_seconds": 2.4999905999284238,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": "STATE_EQ",
+      "divergence_fields": [
+        "fields:Forest,Island,Starbreach Whale,battlefield,exile_p1,stack"
+      ],
+      "exception_type": null,
+      "exception_message": "[STATE_EQ] compare_fields divergences (undocumented \u2014 the genuine bad-flip signal): [('exile_p1', (), (('Starbreach Whale', 0, 1, 0, 0, None, 1, 81),)), ('battlefield', (('Island', 1, 0, 0, 0, None, 1, 77), ('Forest', 0, 0, 0, 0, None, 0, 26), ('Forest', 1, 0, 0, 0, None, 1, 110), ('Starbreach Whale', 0, 1, 0, 0, None, 1, 81)), (('Island', 1, 0, 0, 0, None, 1, 77), ('Forest', 0, 0, 0, 0, None, 0, 26), ('Forest', 1, 0, 0, 0, None, 1, 110))), ('stack', ((None, 0, 0, 0, 0, None, 1, 81),), ())]",
+      "last_action_kind": null,
+      "winner_player_idx": null,
+      "win_reason": null
+    },
+    {
+      "archetype": 2,
+      "seed": 0,
+      "status": "FAIL_DIVERGENCE",
+      "turns_played": 0,
+      "actions_played": 430,
+      "elapsed_seconds": 2.156936600105837,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": "STATE_EQ",
+      "divergence_fields": [
+        "fields:priority_player"
+      ],
+      "exception_type": null,
+      "exception_message": "[STATE_EQ] compare_fields divergences (undocumented \u2014 the genuine bad-flip signal): [('priority_player', 1, 0)]",
+      "last_action_kind": null,
+      "winner_player_idx": null,
+      "win_reason": null
+    },
+    {
+      "archetype": 2,
+      "seed": 1,
+      "status": "FAIL_EXCEPTION",
+      "turns_played": 0,
+      "actions_played": 318,
+      "elapsed_seconds": 2.1762270000763237,
+      "divergence_turn": null,
+      "divergence_action_index": null,
+      "divergence_kind": null,
+      "divergence_fields": [],
+      "exception_type": "ValueError",
+      "exception_message": "ActivateAbility: source 121 cost is unaffordable from controller's mana pool (mana_cost generic=2, W=0, U=0, B=0, R=0, G=0)",
+      "last_action_kind": null,
+      "winner_player_idx": null,
+      "win_reason": null
+    }
+  ]
+}

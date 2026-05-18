@@ -503,6 +503,70 @@ cast internals, so it is UNMOVED by construction; any byte-shift in a
 
 ### Slice S6 — the `rust_shadow` bake-in driver decision-loop (NO new masking; CE5 removal lives in Part 3)
 
+> **STATUS: S6 LANDED — SCALE-VERIFY COMPLETE. NO NEW MASKING; the
+> closed axes STAY CLOSED at scale; the remaining frontier is an
+> ENUMERATED FINITE set; S7 is GO gated only on closing it (NO
+> structural/masking blocker).** Lane:
+> `feature/g7-s6-bakein-scale-verify` off `main` @ `a9126b06`. Full
+> evidence + the complete frontier inventory + the priority-ordered
+> fix-lane sequence → S7 are in **`docs/G7_S6_SCALE_VERIFY_EVIDENCE.md`**
+> + the committed `s6_scale_verify.json`. The S6 scale sweep
+> (`--archetypes 0-59 --seeds 0,1,2,3,4 --driver rust_shadow`, 300
+> real-17lands-deck games on the C4 round-76-class grid,
+> `drive_shadow_game_to_terminal` — the exact C4 idiom, NO CE5, NO
+> CE5-equivalent in the bake-in):
+> 1. **The S5a/S5b/S5-triggers `hand_p0` atomic-cast axis AND the
+>    cycle-30 combat-blocker `LEGAL_SET_EQ` STAY CLOSED at scale —
+>    0/300 reappear.** The dominant 238/300 ORIGINAL-C4 atomic-cast
+>    `[('battlefield',…),('stack',…)]`+`hand_pX` shape (`0/300 @
+>    e87a6ebe`) and the `('blocker', N, None)` over-emission do NOT
+>    reappear anywhere in the 300-game population (verified by
+>    classifying every non-timeout failure — zero CLOSED-axis hits).
+>    S5a genuinely closed the linchpin at scale, not just on the
+>    synthetic smoke deck.
+> 2. **NO NEW MASKING — verified 3 ways:** `_DOCUMENTED_ACCEPTED_FIELDS
+>    == frozenset()` (empty — pinned); the 3 negative controls fire
+>    LOUDLY on injected divergence (STATE_EQ/LEGAL_SET_EQ/NO_RAISE);
+>    NO silent passes (the 0/300 PASS is itself the proof — every
+>    non-timeout game trips loudly; zero unclassified shapes — no axis
+>    masked rather than fixed).
+> 3. **COMPLETE FRONTIER INVENTORY = 5 enumerated finite classes**
+>    (priority-ordered): **B** G5-family priority-port STATE_EQ
+>    (138/300, dominant — the deeper production-deck manifestation the
+>    cycle-30 pin characterized at arch5/s0 step 367); **C**
+>    warp-EMISSION/S4b (44/300 — warp creatures resolve atomically in
+>    Rust vs on-stack in Python; the known STILL-OPEN warp-cast
+>    legal-EMISSION axis, incl. `library_pX` warp-recast sub-variants);
+>    **E** C1-family mana-source color on `ActivateAbility` (31/300);
+>    **D** B1-keystone/C1 `legal_decisions==legal_actions` cast-set
+>    asymmetry (23/300 — the EXACT secondary C4 22/300 LEGAL_SET_EQ,
+>    its own B1 lane); **A** B1-axis `ActivateAbility` affordability
+>    raw `ValueError` (21/300 — the arch2/s1-step-318 frontier the
+>    cycle-30 pin already pinned). Plus 43/300 FAIL_TIMEOUT = the
+>    degenerate land-only random walks (NOT a parity verdict; the C4
+>    40/300 class). ZERO unclassified — the gap is finite.
+> 4. **S7-READINESS: GO, gated ONLY on closing the finite set — NO
+>    structural/masking blocker.** S5a (the S7 linchpin) is satisfied
+>    AND holds at scale; the gap is exactly the enumerated 5-class
+>    finite frontier (each a tractable fix-lane), NOT a structural
+>    rework. Remaining fix-lane sequence → S7: `B → C → E → A → (D =
+>    B1/C1 Slices 2/3, its own co-blocker lane) → S7 (CE5 removal +
+>    CE5-free re-proof + fresh CE5-free C4 = the final flip gate)`.
+>    The GO decision itself is the USER's.
+> S6 added **zero `rust/src/` / `src/` / `cross_engine.py` change**;
+> it added one new pure-Python pin module
+> (`tests/test_g7_s6_scale_verify.py`, 8 pins) + 2 throwaway
+> `scripts/scout_s6_*` diagnostics + the evidence doc + the committed
+> JSON. 4-file core gate **1536 UNMOVED**; `tests_rust`
+> zero-newly-failing vs `a9126b06` (30 ≡ 30 byte-identical);
+> `check_audit_coverage_staleness.py` exit 0; isolation self-check
+> PASSED (shared canonical `.pyd` SHA256/size/mtime byte-identical
+> before/after — pure-Python verify, NO `.pyd` rebuild). NOT merged /
+> NOT pushed; this lane ships zero Rust so NO `.pyd` rebuild / NO
+> residue cadence / NO cron resync is owed (the S5b/S5-triggers
+> zero-engine pattern). NEXT: the priority-ordered fix-lane sequence
+> above, then **S7 LAST**.
+
 - **Scope.** With S1–S5 landed, the role-swapped
   `ShadowCheckedRustAdapter` already drives Rust through the real
   stack/priority loop **for free**: `apply()` calls
