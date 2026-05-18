@@ -36,6 +36,65 @@
 > remaining text below is the original verify-first design (kept as
 > the as-built record; "Status: DESIGN/SCOPING" superseded by this).
 
+> **STATUS UPDATE — S5b LANDED (pure-Python VERIFY, no engine /
+> `rust/src/` / `.pyd` change) on branch
+> `feature/g7-s5b-codec-determinizer-verify`.** The §6 "the
+> codec-slot / determinizer / legal-emit / fingerprint divergences
+> are **all fixed for free by the single hand-membership
+> correction** … **v1/v2-action-encoding-agnostic** … no v-chain
+> break, no retraining" claim is **PROVEN — all S5b byte-equality
+> pins genuinely GREEN; S5a's "fixed for free" claim HOLDS, no
+> hole.** Added `tests/test_g7_s5b_codec_determinizer_verify.py`
+> (9 pins). The pins drive a Grizzly Bears cast onto the stack on
+> BOTH engines and compare at the same per-apply moment the
+> role-swapped `rust_shadow` bake-in uses (apply-to-both then
+> compare, **NO CE5-style post-cast drain** — the cast→on-stack→
+> resolve window S5a re-homed):
+> 1. **codec hand-slot byte-equality (§1.6), v1 AND v2** — the Rust
+>    `hand_snapshot`-sourced codec hand slots byte-match Python's
+>    `p.hand` exclusion of the on-stack spell; the on-stack spell is
+>    in NEITHER engine's codec hand projection; every surviving
+>    in-hand card encodes to the IDENTICAL policy slot from both
+>    data sources under `positional_v1` AND `canonical_v2`.
+> 2. **determinizer pool + end-to-end byte-equality (§1.7)** —
+>    `determinize` (Python source) and `rust_determinize` (Rust
+>    source) over the mid-stack state produce byte-identical hidden
+>    pools AND byte-identical determinized per-owner hand+library
+>    sequences under the same RNG seed; the on-stack spell is in
+>    NEITHER pool. Exercised with ≥2 hidden library cards so the
+>    `rng.shuffle` is a real permutation (NOT a degenerate ≤1-card
+>    no-op); CoW source-pristine verified.
+> 3. **fingerprint hand-slot byte-equality (§1.10)** — the
+>    per-player `hand_p0`/`hand_p1` fingerprint slot is byte-equal
+>    Python↔Rust mid-stack; the **stack slot is byte-equal AND
+>    byte-unchanged** Python↔Rust (Python has no separate
+>    stack-object zone signature — the spell rides the stack slot
+>    via `source.id`, matching Rust's `source_obj_id`, per the S5a
+>    `state.rs` design comment); Rust native `fingerprint()` ==
+>    Rust-via-snapshot recipe (intra-engine determinism unaffected).
+> 4. **NOT a v-chain break** — the same surviving in-hand card maps
+>    correctly under BOTH v1 and v2 from BOTH data sources; the
+>    correction is hand-membership, NOT intra-hand ordering — no
+>    retraining implied.
+> Negative control verified (a simulated S5a hole — on-stack spell
+> injected into a hand pool — makes the determinizer pin fail loud,
+> so the pins genuinely discriminate; not trivially-passing).
+> **4-file core gate 1534 UNMOVED** (verified — S5b adds one
+> pure-Python test file, touches zero `src/`/`rust/src/`/
+> `parity_smoke.py`; `decision_source="python"` dormant w.r.t. Rust
+> cast internals exactly as designed). Broader codec/determinizer/
+> fingerprint/snapshot suites green (242 passed + 1 pre-existing
+> xpass). `scripts/check_audit_coverage_staleness.py` exits 1 from a
+> **pre-existing** S5a `rust/src/cards.rs`-touch residue-stamp drift
+> (orchestrator-owned STALENESS-SENTINEL — verified present at base
+> `302a5fc5` independent of the S5b file; S5b changes zero Rust so
+> the structural arm is unaffected by S5b — the `.pyd`-rebuild +
+> cron-resync this implies is the orchestrator-owed follow-up the
+> SOT_FLIP §4 G7 row already notes). Recommended NEXT: **S5c**
+> (dead-code/`ZONE_STACK` attr cleanup + SL note flip) and, per the
+> S5a ledger, the orchestrator's `.pyd`-rebuild-on-main + the
+> separate unmasked combat-blocker LEGAL_SET follow-up.
+
 > **Status: DESIGN / SCOPING (verify-first). Docs-only.** This is the
 > canonical owner doc for the **S5 spell-stack-source-zone
 > re-homing** — the single residual `hand_p0` divergence the

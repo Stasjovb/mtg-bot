@@ -6640,6 +6640,44 @@ gate signal (correctly loud). The proper closure is parity-positive
 > `SOT_FLIP_CUTOVER_PLAN.md` §4. NOT force-fixed in this lane
 > (`feedback_no_fallback_hybrids` honest-stop). A `.pyd` rebuild on
 > `main` is owed (orchestrator's — the campaign's riskiest merge).
+>
+> **[G7 S5b LANDED — `feature/g7-s5b-codec-determinizer-verify`,
+> pure-Python VERIFY, NO engine / `rust/src/` / `.pyd` change.]**
+> S5a's "fixed for free / not a v-chain break" claim is **PROVEN —
+> all S5b byte-equality pins genuinely GREEN; the claim HOLDS, no
+> hole.** `tests/test_g7_s5b_codec_determinizer_verify.py` (9 pins)
+> drives a Grizzly Bears cast onto BOTH engines' stacks and compares
+> at the same per-apply moment the role-swapped `rust_shadow`
+> bake-in uses (apply-to-both then compare, **NO CE5 post-cast
+> drain** — the cast→on-stack→resolve window S5a re-homed):
+> (1) codec hand-slot byte-equality under BOTH `positional_v1` and
+> `canonical_v2` — on-stack spell in NEITHER codec hand projection,
+> surviving in-hand cards encode to IDENTICAL slots from the Rust
+> `hand_snapshot` source and the Python `p.hand` source; (2)
+> determinizer pool + end-to-end byte-equality — `determinize`
+> (Python) and `rust_determinize` (Rust) produce byte-identical
+> hidden pools AND determinized sequences (same RNG seed, ≥2 hidden
+> cards so the shuffle is real, CoW source-pristine); (3)
+> fingerprint per-player hand-slot byte-equal Python↔Rust, stack
+> slot byte-equal AND byte-unchanged (Python has no separate
+> stack-object zone signature), Rust native `fingerprint()` ==
+> snapshot recipe; (4) NOT a v-chain break — same card maps under
+> v1 AND v2 from both sources (hand-membership, not intra-hand
+> ordering — no retraining). Negative control verified (a simulated
+> S5a hole fails the pin loud — genuinely discriminating, not
+> trivially-passing). **4-file core gate 1534 UNMOVED** (S5b adds
+> one pure-Python test file, zero `src/`/`rust/src/`/
+> `parity_smoke.py` touch; `decision_source="python"` dormant).
+> Broader codec/determinizer/fingerprint/snapshot suites green
+> (242 + 1 pre-existing xpass). The `check_audit_coverage_
+> staleness.py` exit-1 is **pre-existing** S5a `cards.rs`-touch
+> residue-stamp drift (verified present at base `302a5fc5`
+> independent of the S5b file — orchestrator-owned STALENESS-
+> SENTINEL; S5b changes zero Rust so the structural arm is
+> unaffected by S5b). Remaining: **S5c** (dead-code/`ZONE_STACK`
+> attr cleanup + this note's "honest-stopped"→"S5a/S5b closed"
+> flip) + the orchestrator's `.pyd`-rebuild-on-main + the separate
+> unmasked combat-blocker LEGAL_SET follow-up.
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both
