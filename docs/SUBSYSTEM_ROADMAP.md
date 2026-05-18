@@ -1881,6 +1881,43 @@ second:
    >     slice); **Lane B = Class C** (in flight). Then C → E →
    >     D (B1/C1 co-blocker) → **S7 LAST** + shuffle-order
    >     `b3f7c0a9`.
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 34 —
+   >   G7 S6-Class-C RE-CHARACTERIZED, verify-first HONEST-STOP,
+   >   ZERO engine; cron IN-SYNC, counts UNCHANGED
+   >   121/123/23/12/11, parity 307/475 / PROBED 106 UNCHANGED;
+   >   4-file 1536 UNMOVED).**
+   >   - **4th campaign brief-inversion.** The brief's "warp
+   >     resolves atomically in Rust vs on-stack in Python"
+   >     premise is FACTUALLY FALSE: S4(`bb9e490b`)+S5a
+   >     (`eb0fd0ca`) already made `cast_creature_warp`
+   >     StackItem-push + re-home hand/gy→`stack_objects` +
+   >     non-auto-resolve (byte-IDENTICAL Python↔Rust
+   >     cast→stack→resolve, bake-in-traced). The brief's fix is
+   >     already landed (a manufactured diff = fabricated no-op,
+   >     declined).
+   >   - **REAL Class-C root = the warp-EXILE
+   >     delayed-trigger-vs-deterministic-sweep DELIBERATE
+   >     divergence** (`SEARCH_LIMITATIONS.md:1790-1909`; S4
+   >     finding §6 Phase-3 follow-on): Python pushes a CR-603.7
+   >     `WarpExileSelf` delayed trigger on the stack at END
+   >     step; Rust has no `delayed_triggers` Vec + does a
+   >     deterministic `warp_exile_sweep_on_end_step` mutation.
+   >     Heterogeneous: ~31 warp-exile + ~11 `library_pX`
+   >     (= `b3f7c0a9`). 0/44 by code (correct — genuine fix =
+   >     a Rust `delayed_triggers` + `WarpExileSelf` stack-push
+   >     port, >1 safe slice, todo `8d353e80`). +1 LOUD pin;
+   >     agent disciplined (no over-reports).
+   >   - NOTE: 2 pre-existing `test_g7_s6_scale_verify.py` reds
+   >     (arch2/s1 318→320 frontier-a-moved boundary) owned by
+   >     `b3f7c0a9` (stale-S6-pin refresh), NOT a regression,
+   >     NOT a 4-file gate file.
+   >   - NEXT (2 continuous lanes): **Lane A = the
+   >     re-classified Class-B Rust-ENGINE priority-model slice**
+   >     (DOMINANT 138/300, HIGH blast radius); **Lane B =
+   >     Class E** (C1-family mana-source COLOR on
+   >     `ActivateAbility` 31/300 — `auto_tap_pay_for_cost`
+   >     color/source order vs Python `ManaCost.colored`). Then
+   >     C (`8d353e80`) → D (B1/C1) → **S7 LAST** + `b3f7c0a9`.
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
