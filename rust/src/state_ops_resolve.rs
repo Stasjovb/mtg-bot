@@ -1320,7 +1320,19 @@ fn destroy_first_defender_creature_then_draw_if_undamaged(
     obj.zone = ZONE_GRAVEYARD;
     obj.tapped = false;
     obj.damage = 0;
-    obj.counters = 0;
+    // R77-CFI1: counters are NOT cleared on the dead object. Python's
+    // `turn.move_off_battlefield` (turn.py:231-240) clears combat
+    // marks (damage / tapped / attached_to) but deliberately leaves
+    // `+1/+1` counters intact; the SBA destroy path
+    // (`state_ops_sba.rs` ~:417) and the closed `DepressurizeEffect`
+    // arm both follow that observable ("counters retained on the dead
+    // object" — the established byte-equal contract). The prior stray
+    // `obj.counters = 0;` here diverged from BOTH Python (SoT) and
+    // Rust's own SBA destroy path; removed so a counter'd creature
+    // destroyed via this hand-rolled arm carries its counters into the
+    // graveyard byte-equal (R77-CFI1; same class as the closed
+    // CFI-1 — see the FINDINGS NOTE in
+    // tests/test_probe_cross_feature_interaction.py).
     obj.attached_to = None;
     obj.exiled_with_source = None;
     let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
@@ -2264,7 +2276,19 @@ fn apply_effect(
                 // omits the clear (CR 302.1 — sickness is battlefield-
                 // only state). See I35.
                 obj.damage = 0;
-                obj.counters = 0;
+                // R77-CFI1: counters are NOT cleared on the dead
+                // object. A sacrifice is a death that routes through
+                // Python's `turn.move_off_battlefield` (turn.py:538
+                // docstring: "sacrifice ... calls
+                // move_off_battlefield directly"), which clears combat
+                // marks but deliberately leaves `+1/+1` counters
+                // intact — the SAME byte-equal contract the SBA
+                // destroy path / the closed `DepressurizeEffect` arm
+                // follow. Prior stray `obj.counters = 0;` here
+                // diverged from the Python SoT for a counter'd
+                // sacrificed permanent; removed (R77-CFI1; audited
+                // sibling of the destroy arms, same class as the
+                // closed CFI-1).
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
@@ -2620,7 +2644,17 @@ fn apply_effect(
                 // omits the clear (CR 302.1 — sickness is battlefield-
                 // only state). See I35.
                 obj.damage = 0;
-                obj.counters = 0;
+                // R77-CFI1: counters are NOT cleared on the dead
+                // object. Python's `turn.move_off_battlefield`
+                // (turn.py:231-240) clears combat marks but
+                // deliberately leaves `+1/+1` counters intact; the SBA
+                // destroy path (`state_ops_sba.rs` ~:417) and the
+                // closed `DepressurizeEffect` arm both follow that
+                // observable ("counters retained on the dead object" —
+                // the established byte-equal contract). The prior stray
+                // `obj.counters = 0;` here diverged from BOTH Python
+                // (SoT) and Rust's own SBA destroy path; removed
+                // (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
@@ -5378,7 +5412,17 @@ fn apply_effect(
                 // omits the clear (CR 302.1 — sickness is battlefield-
                 // only state). See I35.
                 obj.damage = 0;
-                obj.counters = 0;
+                // R77-CFI1: counters are NOT cleared on the dead
+                // object. Python's `turn.move_off_battlefield`
+                // (turn.py:231-240) clears combat marks but
+                // deliberately leaves `+1/+1` counters intact; the SBA
+                // destroy path (`state_ops_sba.rs` ~:417) and the
+                // closed `DepressurizeEffect` arm both follow that
+                // observable ("counters retained on the dead object" —
+                // the established byte-equal contract). The prior stray
+                // `obj.counters = 0;` here diverged from BOTH Python
+                // (SoT) and Rust's own SBA destroy path; removed
+                // (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let leaving_printing_id = obj.printing_id;
@@ -5454,7 +5498,13 @@ fn apply_effect(
                 // omits the clear (CR 302.1 — sickness is battlefield-
                 // only state). See I35.
                 obj.damage = 0;
-                obj.counters = 0;
+                // R77-CFI1: counters are NOT cleared on the dead
+                // object — the established byte-equal contract
+                // (Python `turn.move_off_battlefield` turn.py:231-240
+                // / SBA destroy `state_ops_sba.rs` ~:417 / the closed
+                // `DepressurizeEffect` arm all retain `+1/+1` counters
+                // on the dead object). Prior stray `obj.counters = 0;`
+                // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
@@ -5521,7 +5571,13 @@ fn apply_effect(
                 // omits the clear (CR 302.1 — sickness is battlefield-
                 // only state). See I35.
                 obj.damage = 0;
-                obj.counters = 0;
+                // R77-CFI1: counters are NOT cleared on the dead
+                // object — the established byte-equal contract
+                // (Python `turn.move_off_battlefield` turn.py:231-240
+                // / SBA destroy `state_ops_sba.rs` ~:417 / the closed
+                // `DepressurizeEffect` arm all retain `+1/+1` counters
+                // on the dead object). Prior stray `obj.counters = 0;`
+                // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
@@ -5581,7 +5637,13 @@ fn apply_effect(
                 // omits the clear (CR 302.1 — sickness is battlefield-
                 // only state). See I35.
                 obj.damage = 0;
-                obj.counters = 0;
+                // R77-CFI1: counters are NOT cleared on the dead
+                // object — the established byte-equal contract
+                // (Python `turn.move_off_battlefield` turn.py:231-240
+                // / SBA destroy `state_ops_sba.rs` ~:417 / the closed
+                // `DepressurizeEffect` arm all retain `+1/+1` counters
+                // on the dead object). Prior stray `obj.counters = 0;`
+                // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
@@ -5664,7 +5726,13 @@ fn apply_effect(
                 // omits the clear (CR 302.1 — sickness is battlefield-
                 // only state). See I35.
                 obj.damage = 0;
-                obj.counters = 0;
+                // R77-CFI1: counters are NOT cleared on the dead
+                // object — the established byte-equal contract
+                // (Python `turn.move_off_battlefield` turn.py:231-240
+                // / SBA destroy `state_ops_sba.rs` ~:417 / the closed
+                // `DepressurizeEffect` arm all retain `+1/+1` counters
+                // on the dead object). Prior stray `obj.counters = 0;`
+                // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
@@ -5832,7 +5900,13 @@ fn apply_effect(
                 // CE13 closure: `summoning_sick` is NOT reset here
                 // (CR 302.1 — battlefield-only state). See I35.
                 obj.damage = 0;
-                obj.counters = 0;
+                // R77-CFI1: counters are NOT cleared on the dead
+                // object — the established byte-equal contract
+                // (Python `turn.move_off_battlefield` turn.py:231-240
+                // / SBA destroy `state_ops_sba.rs` ~:417 / the closed
+                // `DepressurizeEffect` arm all retain `+1/+1` counters
+                // on the dead object). Prior stray `obj.counters = 0;`
+                // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) =
@@ -6793,7 +6867,13 @@ fn apply_effect(
                 // omits the clear (CR 302.1 — sickness is battlefield-
                 // only state). See I35.
                 obj.damage = 0;
-                obj.counters = 0;
+                // R77-CFI1: counters are NOT cleared on the dead
+                // object — the established byte-equal contract
+                // (Python `turn.move_off_battlefield` turn.py:231-240
+                // / SBA destroy `state_ops_sba.rs` ~:417 / the closed
+                // `DepressurizeEffect` arm all retain `+1/+1` counters
+                // on the dead object). Prior stray `obj.counters = 0;`
+                // removed (R77-CFI1; same class as the closed CFI-1).
                 obj.attached_to = None;
                 obj.exiled_with_source = None;
                 let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
@@ -9698,7 +9778,15 @@ fn apply_effect(
             obj.tapped = false;
             obj.summoning_sick = true; // r28 CE1 universal default
             obj.damage = 0;
-            obj.counters = 0;
+            // R77-CFI1: counters are NOT cleared on the dead object.
+            // A sacrifice routes through Python's
+            // `turn.move_off_battlefield` (turn.py:538 docstring:
+            // "sacrifice ... calls move_off_battlefield directly"),
+            // which leaves `+1/+1` counters intact — the SAME
+            // byte-equal contract the SBA destroy path / the closed
+            // `DepressurizeEffect` arm follow. Prior stray
+            // `obj.counters = 0;` removed (R77-CFI1; audited sibling
+            // of the destroy arms, same class as the closed CFI-1).
             obj.attached_to = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
@@ -10050,7 +10138,13 @@ fn apply_effect(
             obj.tapped = false;
             obj.summoning_sick = true; // r28 CE1 universal-true default
             obj.damage = 0;
-            obj.counters = 0;
+            // R77-CFI1: counters are NOT cleared on the dead object —
+            // the established byte-equal contract (Python
+            // `turn.move_off_battlefield` turn.py:231-240 / SBA
+            // destroy `state_ops_sba.rs` ~:417 / the closed
+            // `DepressurizeEffect` arm all retain `+1/+1` counters on
+            // the dead object). Prior stray `obj.counters = 0;`
+            // removed (R77-CFI1; same class as the closed CFI-1).
             obj.attached_to = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
@@ -11633,7 +11727,15 @@ fn apply_effect(
             // omits the clear (CR 302.1 — sickness is battlefield-
             // only state). See I35.
             obj.damage = 0;
-            obj.counters = 0;
+            // R77-CFI1: counters are NOT cleared on the dead object.
+            // A sacrifice routes through Python's
+            // `turn.move_off_battlefield` (turn.py:538 docstring:
+            // "sacrifice ... calls move_off_battlefield directly"),
+            // which leaves `+1/+1` counters intact — the SAME
+            // byte-equal contract the SBA destroy path / the closed
+            // `DepressurizeEffect` arm follow. Prior stray
+            // `obj.counters = 0;` removed (R77-CFI1; audited sibling
+            // of the destroy arms, same class as the closed CFI-1).
             obj.attached_to = None;
             obj.exiled_with_source = None;
             let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);

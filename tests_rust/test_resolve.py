@@ -3207,11 +3207,28 @@ def test_resolve_destroy_target_moves_to_graveyard(synthetic_state):
 
 
 def test_resolve_destroy_target_resets_state(synthetic_state):
-    """Per-object state reset on zone change (CR 400.7): tapped /
-    damage / counters all reset on the way to graveyard. Pre-load the
-    target with non-default state, resolve a Murder, and verify after
-    moving to graveyard the find_object_zone reports graveyard and the
-    counters/damage on the underlying object reset."""
+    """Per-object state reset on zone change: combat marks (tapped /
+    damage) reset on the way to graveyard, but **+1/+1 counters are
+    RETAINED on the dead object** — the established Python-SoT
+    byte-equal contract (R77-CFI1).
+
+    Python's ``turn.move_off_battlefield`` (``turn.py:231-240``) clears
+    damage / tapped / attached_to but DELIBERATELY leaves
+    ``obj.counters`` intact; the generic ``turn.destroy`` routes
+    through it, and Rust's own SBA destroy path
+    (``state_ops_sba.rs`` ~:417) + the closed ``DepressurizeEffect``
+    arm follow the same observable. Pre-R77-CFI1 this test asserted
+    ``get_counters == 0`` after the Murder — that pinned a stray
+    ``obj.counters = 0;`` in the hand-rolled ``Effect::DestroyTarget``
+    arm that diverged from the Python SoT (the round-77 bench-resweep
+    ``cast_spell::graveyard_p1`` divergence). The stray line was
+    deleted; this assertion now pins counter-RETENTION (new-code-is-
+    right: the test was asserting the bug; aligned to Python SoT —
+    same as the R76-2 affected-test update). Aside: CR 700.4 says
+    counters cease on zone change, so the rules-pure end state is 0;
+    but the CAMPAIGN parity contract is Python-SoT = "retained" (see
+    the CFI-1 FINDINGS NOTE in
+    ``tests/test_probe_cross_feature_interaction.py``)."""
     target_obj_id = 67
     # Pre-load the target with non-default state so the reset is
     # observable via the zone-changed read path.
@@ -3227,12 +3244,11 @@ def test_resolve_destroy_target_resets_state(synthetic_state):
     synthetic_state.push_to_stack(spell_obj_id, 0)
     synthetic_state.resolve_top_of_stack()
 
-    # Target moved to graveyard with reset state. The pre-r11 readers
-    # walk all four tracked zones (including graveyard) and read the
-    # underlying GameObject fields — so a successful reset on the way
-    # out means the readers all return zero/false.
+    # Target moved to graveyard: damage reset (combat mark), but the
+    # +1/+1 counters are RETAINED on the dead object (Python-SoT
+    # byte-equal contract — R77-CFI1).
     assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
-    assert synthetic_state.get_counters(target_obj_id) == 0
+    assert synthetic_state.get_counters(target_obj_id) == 3
     assert synthetic_state.get_damage(target_obj_id) == 0
 
 
@@ -7068,10 +7084,17 @@ def test_resolve_destroy_all_creatures_only_lands_unaffected(engine):
 def test_resolve_destroy_all_creatures_resets_per_object_state(
     synthetic_state,
 ):
-    """Per-object state reset on zone change (CR 400.7): tapped /
-    damage / counters all reset on the way to graveyard. Pre-load a
-    creature with non-default state and verify after the Wrath the
-    underlying object reads back as reset."""
+    """Per-object state reset on zone change: combat marks (tapped /
+    damage) reset on the way to graveyard, but **+1/+1 counters are
+    RETAINED on the dead object** — the Python-SoT byte-equal contract
+    (R77-CFI1). Pre-R77-CFI1 this asserted ``get_counters == 0`` after
+    the Wrath, pinning the stray ``obj.counters = 0;`` in the
+    hand-rolled ``Effect::DestroyAllCreatures`` arm that diverged from
+    Python's ``turn.move_off_battlefield`` (which leaves counters
+    intact; the SBA destroy path / closed ``DepressurizeEffect`` arm
+    follow the same observable). Stray line deleted; assertion now
+    pins counter-RETENTION (new-code-is-right; the R76-2 affected-test
+    precedent)."""
     target_id = 5  # First Bears on p0's battlefield.
     synthetic_state.tap_object(target_id)
     synthetic_state.add_counters(target_id, 2)
@@ -7086,15 +7109,13 @@ def test_resolve_destroy_all_creatures_resets_per_object_state(
     synthetic_state.push_to_stack(spell_obj_id, 0)
     synthetic_state.resolve_top_of_stack()
 
-    # Target moved to graveyard with reset state — the counters/damage
-    # readers walk all four tracked zones (including graveyard) and read
-    # the underlying GameObject fields. (is_tapped is battlefield-only
+    # Target moved to graveyard: damage reset (combat mark), but the
+    # +1/+1 counters are RETAINED on the dead object (Python-SoT
+    # byte-equal contract — R77-CFI1). (is_tapped is battlefield-only
     # per its definition, so we can't observe `tapped=false` directly
-    # for an object that left the battlefield — the round-17
-    # DestroyTarget reset test follows the same convention of asserting
-    # only counters/damage post-move.)
+    # for an object that left the battlefield.)
     assert synthetic_state.find_object_zone(target_id) == ZONE_GRAVEYARD
-    assert synthetic_state.get_counters(target_id) == 0
+    assert synthetic_state.get_counters(target_id) == 2
     assert synthetic_state.get_damage(target_id) == 0
 
 
@@ -7595,12 +7616,18 @@ def test_resolve_destroy_target_nonland_permanent_targets_source_controller_when
 def test_resolve_destroy_target_nonland_permanent_resets_state(
     synthetic_state,
 ):
-    """Per-object state reset on zone change (CR 400.7): tapped /
-    damage / counters all reset on the way to graveyard. Pre-load
-    the target with non-default state, resolve Drag, and verify the
-    destroyed object's counters/damage reset to zero. Under the I39
-    cross-player walk, the first non-Land permanent is p0's bf[5] =
-    obj_id 5 (p0's first Bears)."""
+    """Per-object state reset on zone change: combat marks (tapped /
+    damage) reset on the way to graveyard, but **+1/+1 counters are
+    RETAINED on the dead object** — the Python-SoT byte-equal contract
+    (R77-CFI1). Pre-R77-CFI1 this asserted ``get_counters == 0`` after
+    Drag, pinning the stray ``obj.counters = 0;`` in the hand-rolled
+    ``Effect::DestroyTargetNonlandPermanent`` arm that diverged from
+    Python's ``turn.move_off_battlefield`` (counters retained; SBA
+    destroy / closed ``DepressurizeEffect`` arm follow the same
+    observable). Stray line deleted; assertion now pins counter-
+    RETENTION (new-code-is-right; the R76-2 affected-test precedent).
+    Under the I39 cross-player walk, the first non-Land permanent is
+    p0's bf[5] = obj_id 5 (p0's first Bears)."""
     target_obj_id = 5  # p0's bf[5], the first Bears across both players
     synthetic_state.tap_object(target_obj_id)
     synthetic_state.add_counters(target_obj_id, 3)
@@ -7614,9 +7641,11 @@ def test_resolve_destroy_target_nonland_permanent_resets_state(
     synthetic_state.push_to_stack(spell_obj_id, 0)
     synthetic_state.resolve_top_of_stack()
 
-    # Target moved to graveyard with reset state.
+    # Target moved to graveyard: damage reset (combat mark), but the
+    # +1/+1 counters are RETAINED on the dead object (Python-SoT
+    # byte-equal contract — R77-CFI1).
     assert synthetic_state.find_object_zone(target_obj_id) == ZONE_GRAVEYARD
-    assert synthetic_state.get_counters(target_obj_id) == 0
+    assert synthetic_state.get_counters(target_obj_id) == 3
     assert synthetic_state.get_damage(target_obj_id) == 0
 
 
