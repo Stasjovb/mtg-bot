@@ -1077,23 +1077,41 @@ def test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier():
     # arch7/s0: Class-D Radiant-Strike Sequence-target axis CLOSED at
     # its old step-453 boundary.
     #
-    # **RE-CHARACTERIZED at G7 @369 closure (this slice).** The prior
-    # pin expected the post-Class-D + post-Class-C next-frontier to be
-    # the G1 stateless-Rust ``attack=False`` re-emission
-    # ``LEGAL_SET_EQ`` axis @757 (todo ``a92e7d4f``). That axis has
-    # NOW been CLOSED by the present B3-S3 provider-accumulation
-    # port (``rust_engine_adapter.py``
-    # ``_finalize_attacker_phase``/``_finalize_blocker_phase`` +
-    # entry-only ``_refresh_combat_phase``). The arch7/s0 row runs
-    # PAST step 757 and surfaces at step 808 on a NEW distinct G-axis:
-    # ``STATE_EQ`` ``('priority_player', 0, 1)`` + a battlefield diff
-    # on Knight Luminary's tapped state (obj id 70: ``tapped=0`` py
-    # vs ``tapped=1`` rust). This is NOT a regression of @757 — it's
-    # the next downstream priority+state divergence in the
-    # post-combat-damage tail that the @369/@757 closures unmask.
+    # **RE-CHARACTERIZED at G7 @808 G3 closure (this slice).** The
+    # prior pin expected the post-@369/@757-closure next-frontier to
+    # be the @808 ``STATE_EQ`` ``('priority_player', 0, 1)`` + Knight
+    # Luminary tapped-state divergence (todo ``808a3f9c``). That axis
+    # has NOW been CLOSED by the present G3 deferred-batch
+    # combat-decision apply (``rust_engine_adapter.py``
+    # ``_run_priority_action`` no longer routes
+    # ``AttackerDecision`` / ``BlockerDecision`` through Rust's
+    # per-decision ``apply_action``; instead
+    # ``_finalize_attacker_phase`` / ``_finalize_blocker_phase``
+    # issue the batched ``Action::DeclareAttackers`` /
+    # ``Action::DeclareBlockers`` call once at queue-exhaustion —
+    # byte-mirroring Python's
+    # ``apply_action(state, ap.id, DeclareAttackers(
+    # frozenset(_chosen_attackers)))`` in
+    # ``engine_adapter.py:1103-1108``). The arch7/s0 row runs PAST
+    # step 808 and surfaces at step 817 on a NEW distinct G-axis:
+    # ``STATE_EQ`` ``('life_p0', 19, 20)`` — a 1-life delta (py
+    # p0=19 vs rust p0=20) consistent with a combat-damage outcome
+    # divergence (Rust did not deal 1 damage to p0 that Python did,
+    # OR vice versa). The sequence leading in is
+    # ``AttackerDecision(70,T) → (120,F) → (121,T)`` then a
+    # ``CastSpell(76)`` (Radiant Strike, the Class-D Sequence
+    # target leaf), then PassPriorities resolving combat damage at
+    # @817. This is the SAME combat-damage outcome / SBA axis the
+    # sibling-owned arch5/s0 @504 + arch30/s1 @431 rows surface
+    # (todos ``504a1c7d``/``431b7e2a``); arch7/s0 simply reaches the
+    # post-combat-damage tail later because of the surfacing-cycle
+    # @504 sibling closure cascade. NOT a regression of @808 — a
+    # downstream combat-damage / SBA divergence unmasked by the
+    # @808 closure. Sibling-owned (combat-damage outcome / SBA axis,
+    # not a separate G-axis); leave to the @504/@431 sibling agent.
     # The boundary + tripwire shape are deterministic across runs.
     arch, seed, old_boundary, exp_step, kind, needle = (
-        7, 0, 757, 808, "STATE_EQ", "('priority_player', 0, 1)"
+        7, 0, 808, 817, "STATE_EQ", "('life_p0', 19, 20)"
     )
     names = trajectory.load_production_deck(archetype=arch)
     spec = trajectory.production_deck_to_deckspec(
@@ -1124,23 +1142,28 @@ def test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier():
         steps += 1
 
     # (1) STACKED CLOSURES CONFIRMED: the run proceeds PAST the
-    # ``old_boundary`` step. With the G7 @369 closure landing in this
-    # slice, ``old_boundary`` is now the most-recently-closed axis
-    # (757 — G1 stateless-Rust ``attack=False`` re-emission). The
-    # underlying Class-D Sequence-target axis (was @453) AND the
-    # @757 attacker-decision axis are BOTH closed at this row; a stop
-    # at/before 757 means a regression of EITHER the
-    # spell_targets_satisfiable Sequence-recursion fix (Class-D) OR
-    # the present provider-accumulation port (@369 / @757) — fix the
-    # appropriate engine path, do NOT bump the boundary.
+    # ``old_boundary`` step. With the G7 @808 G3 closure landing in
+    # this slice, ``old_boundary`` is now the most-recently-closed
+    # axis (808 — priority + Knight Luminary tapped-state divergence
+    # caused by Rust's per-decision ``AttackerDecision`` eager apply
+    # vs Python's batched finalize). The underlying Class-D
+    # Sequence-target axis (was @453), the @757 attacker-decision
+    # axis, AND the @808 priority/tapped axis are ALL closed at this
+    # row; a stop at/before 808 means a regression of EITHER the
+    # spell_targets_satisfiable Sequence-recursion fix (Class-D), OR
+    # the @369/@757 provider-accumulation port, OR the present G3
+    # deferred-batch combat-decision apply — fix the appropriate
+    # engine path, do NOT bump the boundary.
     assert steps > old_boundary, (
         f"arch{arch}/s{seed}: the stacked Class-D + G1 attack=False "
-        f"closures must HOLD — the run must proceed PAST step "
-        f"{old_boundary} (it stopped at {steps}). A stop at/before "
-        f"{old_boundary} means EITHER the Class-D cast-set / "
-        f"Sequence-target fix OR the present provider-accumulation "
-        f"port regressed — fix the appropriate engine path, do NOT "
-        f"bump the boundary. err={raised!r} raw={raw_exc!r}"
+        f"+ G3 deferred-batch closures must HOLD — the run must "
+        f"proceed PAST step {old_boundary} (it stopped at {steps}). "
+        f"A stop at/before {old_boundary} means EITHER the Class-D "
+        f"cast-set / Sequence-target fix, OR the provider-"
+        f"accumulation port (@369/@757), OR the present "
+        f"deferred-batch combat-decision apply regressed — fix the "
+        f"appropriate engine path, do NOT bump the boundary. "
+        f"err={raised!r} raw={raw_exc!r}"
     )
     surfaced_msg = str(raised) if raised is not None else str(raw_exc)
     assert "cast_spell" not in surfaced_msg, (
@@ -1151,11 +1174,22 @@ def test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier():
     )
     # Regression guard: the surfaced divergence must NOT be the
     # G1 stateless-Rust ``attack=False`` re-emission ``LEGAL_SET_EQ``
-    # axis (the @757 axis the present slice just closed).
+    # axis (the @757 axis the @369-closure slice closed).
     assert "py\\rust=[\"('pass',)\"]" not in surfaced_msg, (
         f"arch{arch}/s{seed}: the surfaced divergence still has the "
         f"G1 attack=False re-emission signature — the @369/@757 "
         f"provider-accumulation port regressed: {surfaced_msg[:300]!r}."
+    )
+    # Regression guard: the surfaced divergence must NOT be the
+    # @808 ``('priority_player', 0, 1)`` STATE_EQ + Knight Luminary
+    # tapped axis (the axis the present slice just closed). A
+    # ``priority_player`` STATE_EQ with the tapped-state diff
+    # signature means the G3 deferred-batch port regressed.
+    assert "('priority_player', 0, 1)" not in surfaced_msg, (
+        f"arch{arch}/s{seed}: the surfaced divergence still has the "
+        f"@808 priority_player + Knight Luminary tapped signature — "
+        f"the G3 deferred-batch combat-decision port regressed: "
+        f"{surfaced_msg[:300]!r}."
     )
     # (2) THE NEXT DISTINCT FRONTIER SURFACES LOUDLY at its
     # freshly-characterized boundary. It is a NEW G-axis distinct
