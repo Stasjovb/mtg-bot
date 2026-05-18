@@ -830,41 +830,45 @@ def test_g7_activateability_affordability_closed_then_next_frontier_surfaced():
         # arch5/s0: frontier (b) = S6 Class B (the dominant 138/300
         # ``('priority_player', 1, 0)`` STATE_EQ @367) CLOSED by the
         # coordinated G7 S6 Class-B option-β engine+adapter slice
-        # (``state_ops_legal.rs`` option-β + the
-        # ``rust_engine_adapter.py`` deferred-priority-reset /
-        # combat-decision-maker ``active_player()`` /
-        # decision-maker ``legal_decisions()`` query /
-        # factored-combat ``PassPriority`` strip). The carried-priority-
-        # through-factored-combat axis now byte-mirrors the
-        # ``simulate.py`` SoT; step 367 no longer trips (nor the
-        # step-368 combat-window ``('pass',)`` follow-on the engine
-        # half alone would have surfaced). The run proceeds PAST to a
-        # NEW distinct frontier @369: ``LEGAL_SET_EQ`` —
-        # ``py\rust=["('pass',)"]`` while Rust still emits the
-        # factored ``attacker_decision`` pair for the lone declined
-        # attacker (obj 12). This is the **pre-existing G1
-        # stateless-Rust ``attack=False`` re-emission gap**: Rust's
-        # ``apply_action(AttackerDecision, attack=false)`` is a
-        # deliberate no-op (the G1 stateless-Rust /
-        # stateful-provider split, ``state_ops_legal.rs``
-        # ~1283-1294 / ``state_ops_actions.rs:1356-1385``), and the
-        # ``RustGameStateAdapter`` does NOT port Python's provider-side
-        # ``_apply_attacker_decision`` ``_pending_attackers.pop(0)`` +
-        # ``_finalize_attacker_phase`` accumulation
-        # (``engine_adapter.py:1080-1108`` — the B3-S3 "sibling slice"
-        # the G1 design explicitly defers), so a factored
-        # ``attack=False`` on the LAST eligible attacker leaves the
-        # creature eligible and Rust re-emits the same head forever
-        # while Python finalizes combat and moves to the priority
-        # window (``[PassPriority]``). DISTINCT from Class-B's
-        # priority axis, pre-existing (zero provider accumulation at
-        # ``dc22ebc4``), unmasked — NOT introduced — by closing 367
-        # (arch5/s0 never reached a factored-attacker ``attack=False``
-        # before; blocked at 344/367). Filed as the next G7 follow-up
-        # (the G1 provider-accumulation / B3-S3 port). Boundary +
-        # tripwire + the ``py\rust=["('pass',)"]`` signature are
-        # deterministic across runs.
-        (5, 0, 367, 369, "LEGAL_SET_EQ", "py\\rust=[\"('pass',)\"]"),
+        # (cycle-37 ``feature/g7-classb-priority-port-fix``); the
+        # follow-on @369 ``LEGAL_SET_EQ`` G1 stateless-Rust
+        # ``attack=False`` re-emission gap (todo ``a92e7d4f``) was
+        # CLOSED by the present slice (the B3-S3
+        # provider-accumulation port:
+        # ``rust_engine_adapter.py::_finalize_attacker_phase`` +
+        # ``_finalize_blocker_phase`` mirror
+        # ``MtgGameStateAdapter._finalize_attacker_phase`` /
+        # ``_finalize_blocker_phase`` (``engine_adapter.py:1101-1144``);
+        # ``_refresh_combat_phase`` only INITIALIZES the eligible-id
+        # queue on FIRST ENTRY (mirroring
+        # ``_enter_declare_attackers`` /
+        # ``_enter_declare_blockers``,
+        # ``engine_adapter.py:1288-1361``) and ``_run_priority_action``
+        # pops the queue head per ``AttackerDecision``/
+        # ``BlockerDecision`` apply, finalizing when empty —
+        # byte-mirroring ``_apply_attacker_decision``
+        # ``_pending_attackers.pop(0)`` semantics
+        # (``engine_adapter.py:1080-1099``)). Step 369 no longer
+        # trips. The run proceeds PAST to a NEW distinct frontier
+        # @504: a ``STATE_EQ`` tripwire on
+        # ``('graveyard_p0', ...)`` + ``('graveyard_p1', ...)`` +
+        # ``('battlefield', ...)`` — Rust kept Icecave Crasher (id 12)
+        # AND Seedship Agrarian (id 83) on the battlefield while
+        # Python moved BOTH to graveyards (Python's combat-damage
+        # resolution + SBA flipped both as lethal-damaged, Rust's
+        # did not). This is a **combat-damage outcome / SBA
+        # divergence** — a NEW G-axis distinct from the
+        # @369 ``LEGAL_SET_EQ`` attacker-decision re-emission axis,
+        # the prior @367 ``priority_player`` STATE_EQ axis, AND the
+        # already-tracked library-shuffle-order axis (``b3f7c0a9``;
+        # arch2/s1 row). Unmasked — NOT introduced — by closing @369
+        # (combat is now actually resolving on both engines, so the
+        # next downstream divergence in combat-damage / SBA
+        # outcomes surfaces; arch5/s0 simply never reached a
+        # post-DECLARE_ATTACKERS combat-damage step before, blocked
+        # at @369). Filed as the next G7 follow-up. The boundary +
+        # tripwire are deterministic across runs.
+        (5, 0, 369, 504, "STATE_EQ", "('graveyard_p0'"),
     ):
         names = trajectory.load_production_deck(archetype=arch)
         spec = trajectory.production_deck_to_deckspec(
@@ -875,7 +879,12 @@ def test_g7_activateability_affordability_closed_then_next_frontier_surfaced():
         steps = 0
         raised: ShadowDivergenceError | None = None
         raw_exc: BaseException | None = None
-        while not adapter.is_terminal() and steps < 400:
+        # Loop cap bumped from 400 -> 4000 to accommodate the
+        # arch5/s0 row's new next-frontier @504 (post-@369-closure
+        # surfaced combat-damage / SBA divergence); the cap stays
+        # safely below the other multi-seed pins' 4000 (they reach
+        # similar depths post-closure).
+        while not adapter.is_terminal() and steps < 4000:
             try:
                 legal = adapter.legal_decisions()
             except ShadowDivergenceError as e:
@@ -901,11 +910,14 @@ def test_g7_activateability_affordability_closed_then_next_frontier_surfaced():
         # (1) PRIOR PER-REPRO AXIS CLOSED: the run proceeds PAST its
         # old boundary. arch2/s1: PAST step 318 — the frontier-(a)
         # ActivateAbility apply pool-only raw-reject, closed by the
-        # auto_tap_pay_for_cost reroute. arch5/s0: PAST step 367 — the
-        # S6 Class-B ``('priority_player', 1, 0)`` STATE_EQ, closed by
-        # the coordinated option-β engine+adapter slice. A trip
-        # at/before the old boundary means the relevant axis regressed
-        # (do NOT bump the boundary — fix the engine).
+        # auto_tap_pay_for_cost reroute. arch5/s0: PAST step 369 — the
+        # post-Class-B G1 stateless-Rust ``attack=False`` re-emission
+        # axis, closed by the present B3-S3 provider-accumulation
+        # port (``_finalize_attacker_phase`` /
+        # ``_finalize_blocker_phase`` + entry-only
+        # ``_refresh_combat_phase``). A trip at/before the old boundary
+        # means the relevant axis regressed (do NOT bump the boundary
+        # — fix the engine).
         assert steps > old_boundary, (
             f"arch{arch}/s{seed}: the prior per-repro axis must be "
             f"CLOSED — the run must proceed PAST its old boundary step "
@@ -1065,25 +1077,23 @@ def test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier():
     # arch7/s0: Class-D Radiant-Strike Sequence-target axis CLOSED at
     # its old step-453 boundary.
     #
-    # RE-CHARACTERIZED at merge-time (cycle-37 serial-merge pipeline):
-    # the original pin expected the next-frontier to be the
-    # already-tracked Class-C warp-EXILE STATE_EQ @700
-    # ('exile_p1', ...) — Knight Luminary on Rust's exile_p1 vs the
-    # battlefield on Python. Class-C delayed-trigger port has now
-    # ALSO landed in main (cycle-37 merge #3), so the warp-EXILE axis
-    # is CLOSED on arch7/s0 too; the bake-in runs PAST step 700 and
-    # surfaces at step 757 on the SAME G1 stateless-Rust
-    # ``attack=False`` re-emission LEGAL_SET_EQ axis the Class-B
-    # canonical arch5/s0 surfaces at step 369:
-    # ``LEGAL_SET_EQ rust\py=["('attacker', 120, False)",
-    # "('attacker', 120, True)"] py\rust=["('pass',)"]``. The
-    # attacker is the same Knight Luminary that was on Rust exile_p1
-    # at the old @700 pin (obj id 120), but the new divergence shape
-    # is the unrelated G1 attacker-decision axis (B3-S3
-    # provider-accumulation port; sibling lane the cycle-37 Class-B
-    # row at @369 surfaces).
+    # **RE-CHARACTERIZED at G7 @369 closure (this slice).** The prior
+    # pin expected the post-Class-D + post-Class-C next-frontier to be
+    # the G1 stateless-Rust ``attack=False`` re-emission
+    # ``LEGAL_SET_EQ`` axis @757 (todo ``a92e7d4f``). That axis has
+    # NOW been CLOSED by the present B3-S3 provider-accumulation
+    # port (``rust_engine_adapter.py``
+    # ``_finalize_attacker_phase``/``_finalize_blocker_phase`` +
+    # entry-only ``_refresh_combat_phase``). The arch7/s0 row runs
+    # PAST step 757 and surfaces at step 808 on a NEW distinct G-axis:
+    # ``STATE_EQ`` ``('priority_player', 0, 1)`` + a battlefield diff
+    # on Knight Luminary's tapped state (obj id 70: ``tapped=0`` py
+    # vs ``tapped=1`` rust). This is NOT a regression of @757 — it's
+    # the next downstream priority+state divergence in the
+    # post-combat-damage tail that the @369/@757 closures unmask.
+    # The boundary + tripwire shape are deterministic across runs.
     arch, seed, old_boundary, exp_step, kind, needle = (
-        7, 0, 453, 757, "LEGAL_SET_EQ", "('attacker', 120, False)"
+        7, 0, 757, 808, "STATE_EQ", "('priority_player', 0, 1)"
     )
     names = trajectory.load_production_deck(archetype=arch)
     spec = trajectory.production_deck_to_deckspec(
@@ -1113,16 +1123,23 @@ def test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier():
             break
         steps += 1
 
-    # (1) CLASS-D CAST-SET / SEQUENCE-TARGET AXIS CLOSED: the run
-    # proceeds PAST the old step-453 boundary. A trip at/before 453
-    # means the Sequence-recursion fix regressed (do NOT bump the
-    # boundary — fix the engine).
+    # (1) STACKED CLOSURES CONFIRMED: the run proceeds PAST the
+    # ``old_boundary`` step. With the G7 @369 closure landing in this
+    # slice, ``old_boundary`` is now the most-recently-closed axis
+    # (757 — G1 stateless-Rust ``attack=False`` re-emission). The
+    # underlying Class-D Sequence-target axis (was @453) AND the
+    # @757 attacker-decision axis are BOTH closed at this row; a stop
+    # at/before 757 means a regression of EITHER the
+    # spell_targets_satisfiable Sequence-recursion fix (Class-D) OR
+    # the present provider-accumulation port (@369 / @757) — fix the
+    # appropriate engine path, do NOT bump the boundary.
     assert steps > old_boundary, (
-        f"arch{arch}/s{seed}: the Class-D cast-set / Sequence-target "
-        f"axis must be CLOSED — the run must proceed PAST its old "
-        f"boundary step {old_boundary} (it stopped at {steps}). A stop "
-        f"at/before {old_boundary} means the spell_targets_satisfiable "
-        f"Sequence-recursion fix regressed — fix the engine, do NOT "
+        f"arch{arch}/s{seed}: the stacked Class-D + G1 attack=False "
+        f"closures must HOLD — the run must proceed PAST step "
+        f"{old_boundary} (it stopped at {steps}). A stop at/before "
+        f"{old_boundary} means EITHER the Class-D cast-set / "
+        f"Sequence-target fix OR the present provider-accumulation "
+        f"port regressed — fix the appropriate engine path, do NOT "
         f"bump the boundary. err={raised!r} raw={raw_exc!r}"
     )
     surfaced_msg = str(raised) if raised is not None else str(raw_exc)
@@ -1132,9 +1149,17 @@ def test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier():
         f"cast-set asymmetry was NOT actually closed: "
         f"{surfaced_msg[:300]!r}."
     )
+    # Regression guard: the surfaced divergence must NOT be the
+    # G1 stateless-Rust ``attack=False`` re-emission ``LEGAL_SET_EQ``
+    # axis (the @757 axis the present slice just closed).
+    assert "py\\rust=[\"('pass',)\"]" not in surfaced_msg, (
+        f"arch{arch}/s{seed}: the surfaced divergence still has the "
+        f"G1 attack=False re-emission signature — the @369/@757 "
+        f"provider-accumulation port regressed: {surfaced_msg[:300]!r}."
+    )
     # (2) THE NEXT DISTINCT FRONTIER SURFACES LOUDLY at its
-    # freshly-characterized boundary. It is the already-tracked
-    # Class-C warp-EXILE STATE_EQ (todo 8d353e80), NOT a new G-axis.
+    # freshly-characterized boundary. It is a NEW G-axis distinct
+    # from the closed Class-D + @757 attacker-decision axes.
     assert steps == exp_step, (
         f"arch{arch}/s{seed}: expected the freshly-characterized "
         f"next-frontier boundary step {exp_step}, got {steps}. A "
@@ -1206,15 +1231,24 @@ def test_g7_classd_1of23_thawbringer_mana_affordability_closed_then_next_frontie
     live affordability seam in ``can_pay_cost`` switches to the
     set-based port.
 
-    **Closure proof + next-frontier.** Pre-fix arch30/s1 trips at
-    step 111 with ``LEGAL_SET_EQ rust\\py=[('cast_spell', 80, ...)]
-    py\\rust=[]``. Post-fix the run proceeds PAST 111 to step 321
-    where it surfaces the SAME G1 stateless-Rust ``attack=False``
-    re-emission ``LEGAL_SET_EQ`` axis the Class-B canonical
-    arch5/s0 row surfaces at step 369 + the Class-D arch7/s0 row
-    surfaces at step 757 — the same B3-S3 provider-accumulation
-    port follow-up, NOT a new G-axis and NOT a regression of either
-    Class-D fix.
+    **Closure proof + next-frontier.** Pre-Class-D-1of23-fix arch30/s1
+    trips at step 111 with ``LEGAL_SET_EQ
+    rust\\py=[('cast_spell', 80, ...)] py\\rust=[]``. Post-fix the
+    run proceeded PAST 111 to step 321 where the SAME G1
+    stateless-Rust ``attack=False`` re-emission ``LEGAL_SET_EQ`` axis
+    the Class-B canonical arch5/s0 row surfaces at step 369 + the
+    Class-D arch7/s0 row surfaces at step 757 — the same B3-S3
+    provider-accumulation port follow-up. **RE-CHARACTERIZED at G7
+    @369 closure (this slice).** The @321 G1 attacker-decision axis
+    has NOW been CLOSED by the present B3-S3 provider-accumulation
+    port. The arch30/s1 row runs PAST step 321 and surfaces at step
+    431 on a NEW distinct G-axis: ``STATE_EQ`` ``('life_p0', 16, 20)``
+    — a 4-life delta (py p0=16 vs rust p0=20) consistent with a
+    combat-damage outcome divergence (Rust did not deal combat
+    damage to p0 that Python did, OR vice versa). NOT a regression
+    of either the Class-D mana-affordability fix or the @321
+    attacker-decision axis — a downstream combat-damage / SBA
+    divergence unmasked by the @321 closure.
     """
     pytest.importorskip("mtg_bot_engine")
     from mtg_bot.parity import trajectory
@@ -1223,7 +1257,7 @@ def test_g7_classd_1of23_thawbringer_mana_affordability_closed_then_next_frontie
     )
 
     arch, seed, old_boundary, exp_step, kind, needle = (
-        30, 1, 111, 321, "LEGAL_SET_EQ", "('attacker', 80, False)"
+        30, 1, 321, 431, "STATE_EQ", "('life_p0', 16, 20)"
     )
     names = trajectory.load_production_deck(archetype=arch)
     spec = trajectory.production_deck_to_deckspec(
@@ -1253,17 +1287,20 @@ def test_g7_classd_1of23_thawbringer_mana_affordability_closed_then_next_frontie
             break
         steps += 1
 
-    # (1) CLASS-D 1/23 MANA-AFFORDABILITY AXIS CLOSED: the run
-    # proceeds PAST the old step-111 boundary. A trip at/before 111
-    # means the set-based can_pay_cost fix regressed (do NOT bump
-    # the boundary — fix the engine).
+    # (1) STACKED CLOSURES CONFIRMED: the run proceeds PAST the
+    # ``old_boundary`` step. The Class-D 1/23 mana-affordability axis
+    # (was @111) AND the @321 G1 attacker-decision re-emission axis
+    # are BOTH closed at this row; the assertion now guards step
+    # 321 (the most-recently-closed boundary, the present slice).
     assert steps > old_boundary, (
-        f"arch{arch}/s{seed}: the Class-D 1/23 mana-affordability "
-        f"axis must be CLOSED — the run must proceed PAST its old "
-        f"boundary step {old_boundary} (it stopped at {steps}). A stop "
-        f"at/before {old_boundary} means the set-based can_pay_cost "
-        f"port regressed — fix the engine, do NOT bump the boundary. "
-        f"err={raised!r} raw={raw_exc!r}"
+        f"arch{arch}/s{seed}: the stacked Class-D mana-affordability "
+        f"(was @111) + G1 attack=False (was @321) closures must HOLD "
+        f"— the run must proceed PAST step {old_boundary} (it stopped "
+        f"at {steps}). A stop at/before {old_boundary} means EITHER "
+        f"the set-based can_pay_cost port OR the present "
+        f"provider-accumulation port regressed — fix the appropriate "
+        f"engine path, do NOT bump the boundary. err={raised!r} "
+        f"raw={raw_exc!r}"
     )
     surfaced_msg = str(raised) if raised is not None else str(raw_exc)
     # Regression guard: the surfaced divergence must NOT be a
@@ -1273,9 +1310,18 @@ def test_g7_classd_1of23_thawbringer_mana_affordability_closed_then_next_frontie
         f"cast_spell over-emission — the Class-D mana-affordability "
         f"axis was NOT actually closed: {surfaced_msg[:300]!r}."
     )
+    # Regression guard: the surfaced divergence must NOT be the
+    # G1 stateless-Rust ``attack=False`` re-emission axis (the @321
+    # axis the present slice just closed).
+    assert "py\\rust=[\"('pass',)\"]" not in surfaced_msg, (
+        f"arch{arch}/s{seed}: the surfaced divergence still has the "
+        f"G1 attack=False re-emission signature — the @369/@321 "
+        f"provider-accumulation port regressed: {surfaced_msg[:300]!r}."
+    )
     # (2) THE NEXT DISTINCT FRONTIER SURFACES LOUDLY at its
-    # freshly-characterized boundary. It is the G1 attacker-decision
-    # re-emission axis (same as Class-B @369 + Class-D @757).
+    # freshly-characterized boundary. It is a NEW G-axis distinct
+    # from the closed Class-D + G1 attack=False axes — a combat-damage
+    # outcome / SBA divergence (``('life_p0', ...)`` 4-life delta).
     assert steps == exp_step, (
         f"arch{arch}/s{seed}: expected the freshly-characterized "
         f"next-frontier boundary step {exp_step}, got {steps}. A "

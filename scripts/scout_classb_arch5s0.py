@@ -48,7 +48,7 @@ def main(arch: int, seed: int, trace_from: int) -> None:
     rust = adapter.rust_adapter
     py = adapter.py_adapter
     steps = 0
-    while not adapter.is_terminal() and steps < 400:
+    while not adapter.is_terminal() and steps < 4000:
         try:
             legal = adapter.legal_decisions()
         except ShadowDivergenceError as e:

@@ -101,25 +101,30 @@ def _drive_to_trip(arch: int, seed: int, max_steps: int = 4000):
         # raise to NO_RAISE; a Rust-side raise propagates raw).
         (2, 1, 318, "raw",
          "ActivateAbility: source 121 cost is unaffordable"),
-        # Frontier (b) = S6 Class B — CLOSURE-FLIPPED. The dominant
-        # 138/300 ``STATE_EQ ('priority_player', 1, 0)`` @367 is
-        # CLOSED by the coordinated G7 S6 Class-B option-β
-        # engine+adapter slice (``state_ops_legal.rs`` option-β +
-        # ``rust_engine_adapter.py`` deferred-priority-reset /
-        # combat-decision-maker ``active_player()``+``legal_decisions()``
-        # / factored-combat ``PassPriority`` strip). The run proceeds
-        # PAST 367 to a NEW distinct frontier @369: ``LEGAL_SET_EQ``
-        # ``py\rust=["('pass',)"]`` — the pre-existing **G1
-        # stateless-Rust ``attack=False`` re-emission gap** (Rust's
-        # ``apply_action(AttackerDecision, attack=false)`` is a
-        # deliberate no-op and the ``RustGameStateAdapter`` does not
-        # port Python's provider-side ``_pending_attackers.pop(0)`` +
-        # ``_finalize_attacker_phase`` — the B3-S3 sibling slice the
-        # G1 design defers), unmasked — NOT introduced — by closing
-        # 367 (zero provider accumulation at ``dc22ebc4``; arch5/s0
-        # never reached a factored ``attack=False`` before, blocked at
-        # 344/367). Filed as the next G7 follow-up.
-        (5, 0, 369, "LEGAL_SET_EQ", "py\\rust=[\"('pass',)\"]"),
+        # Frontier (b) — CLOSURE-FLIPPED (this slice). The cycle-37
+        # S6 Class-B option-β engine+adapter slice closed the
+        # @367 ``priority_player`` axis; the immediate next-frontier
+        # @369 (``LEGAL_SET_EQ py\rust=["('pass',)"]`` — the G1
+        # stateless-Rust ``attack=False`` re-emission gap, todo
+        # ``a92e7d4f``) has NOW been closed by the present B3-S3
+        # provider-accumulation port
+        # (``rust_engine_adapter.py``
+        # ``_finalize_attacker_phase``/``_finalize_blocker_phase`` +
+        # entry-only ``_refresh_combat_phase`` — byte-mirror of
+        # Python ``_apply_attacker_decision`` /
+        # ``_apply_blocker_decision`` +
+        # ``_finalize_attacker_phase``/``_finalize_blocker_phase``,
+        # ``engine_adapter.py:1080-1144``). Step 369 no longer trips
+        # (nor does step 367). The run proceeds PAST to a NEW
+        # distinct frontier @504: ``STATE_EQ`` on
+        # ``('graveyard_p0', ...)`` + ``('graveyard_p1', ...)`` +
+        # ``('battlefield', ...)`` — a combat-damage outcome / SBA
+        # divergence (Python killed Icecave Crasher + Seedship
+        # Agrarian via lethal damage; Rust kept them on battlefield).
+        # NEW G-axis distinct from the closed Class-B priority axis
+        # AND the closed @369 attacker-decision axis. Filed as the
+        # next G7 follow-up.
+        (5, 0, 504, "STATE_EQ", "('graveyard_p0'"),
     ],
 )
 def test_s6_known_frontiers_reproduce_byte_exactly(
@@ -188,32 +193,20 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         (2, 1, 318, "raw",
          "ActivateAbility: source 121 cost is unaffordable",
          "B1-axis (ActivateAbility affordability)"),
-        # Class B — CLOSURE-FLIPPED. The dominant 138/300 G5-family
-        # ``STATE_EQ ('priority_player', 1, 0)`` @367 is CLOSED by the
-        # coordinated G7 S6 Class-B option-β engine+adapter slice
-        # (carry ``priority_player`` through the factored-combat
-        # window byte-faithful to the ``simulate.py`` SoT — relocate
-        # the factored-combat emission above the ``state_ops_legal.rs``
-        # line-1199 priority gate keyed on the structural
-        # decision-maker; defer the adapter's eager
-        # ``_reset_priority_to_active`` for factored-combat steps; make
-        # ``active_player()``/``legal_decisions()`` resolve the combat
-        # decision-maker; strip the structural ``PassPriority`` from
-        # the factored-combat set). The run proceeds PAST 367 to a NEW
-        # distinct frontier @369: ``LEGAL_SET_EQ``
-        # ``py\rust=["('pass',)"]`` — the pre-existing **G1
-        # stateless-Rust ``attack=False`` re-emission gap** (the
-        # ``RustGameStateAdapter`` does not port Python's provider-side
-        # ``_pending_attackers.pop(0)`` + ``_finalize_attacker_phase``
-        # accumulation — the B3-S3 sibling slice the G1 design
-        # defers), unmasked — NOT introduced — by closing 367 (zero
-        # provider accumulation at ``dc22ebc4``; arch5/s0 never reached
-        # a factored ``attack=False`` before, blocked at 344/367).
-        # Filed as the next G7 follow-up (G1 provider-accumulation /
-        # B3-S3 port).
-        (5, 0, 369, "LEGAL_SET_EQ", "py\\rust=[\"('pass',)\"]",
-         "G1 stateless-Rust attack=False re-emission (B3-S3 "
-         "provider-accumulation port; Class-B priority axis CLOSED)"),
+        # Class B — DOUBLE-CLOSURE-FLIPPED. The cycle-37 Class-B
+        # option-β engine+adapter slice closed the @367 priority axis;
+        # the present B3-S3 provider-accumulation port closes the
+        # @369 G1 stateless-Rust ``attack=False`` re-emission axis
+        # (todo ``a92e7d4f``). The arch5/s0 row proceeds PAST 369
+        # to a NEW distinct frontier @504: ``STATE_EQ`` on
+        # ``('graveyard_p0', ...)`` + ``('graveyard_p1', ...)`` +
+        # ``('battlefield', ...)`` — a combat-damage outcome / SBA
+        # divergence (Python killed Crasher + Seedship Agrarian; Rust
+        # kept them on battlefield). NEW G-axis filed as the next G7
+        # follow-up (combat-damage outcome / SBA divergence).
+        (5, 0, 504, "STATE_EQ", "('graveyard_p0'",
+         "combat-damage outcome / SBA divergence (G1 attack=False "
+         "re-emission CLOSED; new G-axis surfaced past @369)"),
         # Class C — CLOSED via the delayed-trigger port
         # (feature/g7-classc-warp-delayed-trigger). The warp-EXILE
         # delayed-trigger-vs-deterministic-sweep axis previously
@@ -274,10 +267,19 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         # provider-accumulation port; same lane as the Class-B
         # @369-surfaced row).  Filed follow-up: f5145c1d (the Class-D
         # 1/23 Thawbringer mana sub-axis remains separate).
-        (7, 0, 757, "LEGAL_SET_EQ", "('attacker', 120, False)",
-         "G1 stateless-Rust attack=False re-emission (same axis as "
-         "Class-B @369 row; unmasked deeper in arch7/s0 by stacking "
-         "Class-D + Class-C closures)"),
+        # Class D — TRIPLE-CLOSURE-FLIPPED. Class-D Sequence-target
+        # axis (was @453) + Class-C warp-EXILE @700 + the present
+        # @757 G1 attack=False axis are now ALL closed; arch7/s0
+        # proceeds PAST 757 to step 808 on a NEW distinct G-axis:
+        # ``STATE_EQ`` ``('priority_player', 0, 1)`` + a battlefield
+        # diff on Knight Luminary's tapped state (obj id 70:
+        # ``tapped=0`` py vs ``tapped=1`` rust). NEW G-axis (priority
+        # + tapped state divergence in the post-combat-damage tail);
+        # filed as the next G7 follow-up.
+        (7, 0, 808, "STATE_EQ", "('priority_player', 0, 1)",
+         "priority + tapped-state STATE_EQ (G1 attack=False @757 + "
+         "Class-D Sequence-target @453 + Class-C @700 ALL CLOSED; "
+         "new G-axis surfaced past @757)"),
         # Class E — CLOSED by the ordered-pool `ManaPool`
         # representation (rust/src/state.rs::ManaPool now carries
         # `coins: Vec<ManaCoin>` as Python-parity insertion-ordered SoT;
