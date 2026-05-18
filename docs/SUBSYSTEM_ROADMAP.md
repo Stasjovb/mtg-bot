@@ -1652,6 +1652,39 @@ second:
    >   - NEXT = S5b (pure-Python codec/determinizer verify —
    >     DISPATCHED) → S5c → S5 triggers-verify → S6 → **S7 CE5
    >     removal LAST** → CE5-free re-proof + fresh CE5-free C4.
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 28 —
+   >   G7 S5b LANDED + Round-77 CLEAN; both ZERO engine; cron
+   >   IN-SYNC, counts UNCHANGED 121/123/23/12/11, parity
+   >   307/475 / PROBED 106 UNCHANGED, 4-file 1534 UNMOVED).**
+   >   - **S5b (pure-Python VERIFY):** S5a's "codec-slot /
+   >     determinizer / legal-emit / fingerprint fixed FOR FREE
+   >     by the single hand-membership correction — v1/v2-
+   >     agnostic, NOT a v-chain break" claim PROVEN: all 9
+   >     byte-equality pins genuinely GREEN
+   >     (`tests/test_g7_s5b_codec_determinizer_verify.py`;
+   >     codec v1+v2 / determinizer pool+e2e / fingerprint
+   >     hand-slot + stack-slot-unchanged / not-a-v-chain-
+   >     break), negative-control-discriminating. No hole, no
+   >     fix slice implied. Zero `rust/src`/`src`/`.pyd`.
+   >   - **Round-77 post-R76-fix bench RE-SWEEP CLEAN:**
+   >     identical round-76 360-game grid 340→**358 PASS / 2
+   >     FAIL** (−18, 90% resolved); all 18
+   >     `cast_spell::battlefield` flipped FAIL→PASS via R76-1
+   >     `6dc57fc4` + R76-2 `fee2e5fc`; the 2 residual = the
+   >     already-tracked **CFI-1** hand-rolled-destroy
+   >     `obj.counters=0` zeroing, byte-identical to round-76,
+   >     NOT a new bug, NOT re-filed. Docs/evidence only.
+   >   - NEXT (2 continuous lanes): **Lane A = S5c**
+   >     (dead-code/`ZONE_STACK` attr cleanup + SL
+   >     "honest-stopped"→closed flip) → S6 → **S7 CE5 removal
+   >     LAST** → CE5-free re-proof + fresh CE5-free C4;
+   >     **Lane B = R77-CFI1** (drop stray `obj.counters=0` in
+   >     the still-live hand-rolled-destroy sibling arms
+   >     `state_ops_resolve.rs` ≈5297/≈5373, byte-mirror
+   >     Python `turn.move_off_battlefield` + the closed
+   >     `DepressurizeEffect` arm; merge serializes w.r.t. any
+   >     state_ops Rust lane). Distinct: S4b + warp-EMISSION +
+   >     the combat-blocker `LEGAL_SET`.
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
