@@ -482,6 +482,19 @@ def _subprocess_play_self_play(
     )
     factory = per_game_cfg.build
 
+    # The structured trainer demands structured-token columns; the
+    # flat-feature trainer ignores them. The caller's
+    # ``write_structured_tokens`` flag was hardcoded ``False`` at the
+    # ``_play_one`` call sites, which silently dropped the columns
+    # for every structured-net self_play stage and broke the
+    # downstream train_nn.py with a "missing structured-token
+    # arrays" error. Derive from cfg.architecture (the network's
+    # actual shape, read from its metadata.json on first claim) so
+    # the npzs always match what the trainer expects, regardless of
+    # what the caller passed.
+    effective_structured = (
+        write_structured_tokens or cfg.architecture == "structured"
+    )
     chunk, outcome_kind, winner, n_samples = _play_self_play_game(
         factory=factory,
         base_seed=seed,
@@ -491,10 +504,10 @@ def _subprocess_play_self_play(
         per_game_timeout_sec=per_game_timeout_sec,
         capture_every=capture_every,
         action_encoding_version=cfg.action_encoding_version,
-        write_structured_tokens=write_structured_tokens,
+        write_structured_tokens=effective_structured,
     )
     npz_bytes = _encode_npz_bytes(
-        chunk, write_structured_tokens=write_structured_tokens,
+        chunk, write_structured_tokens=effective_structured,
     )
     duration_s = time.perf_counter() - t0
     return {
@@ -879,6 +892,9 @@ def build_self_play_runner(
             },
         )
 
+        # Derive from cfg.architecture — see _subprocess_play_self_play
+        # for the rationale (the subprocess path's identical fix).
+        effective_structured = cfg.architecture == "structured"
         chunk, outcome_kind, winner, n_samples = _play_self_play_game(
             factory=factory,
             base_seed=seed,
@@ -888,10 +904,12 @@ def build_self_play_runner(
             per_game_timeout_sec=per_game_timeout_sec,
             capture_every=capture_every,
             action_encoding_version=cfg.action_encoding_version,
-            write_structured_tokens=False,
+            write_structured_tokens=effective_structured,
         )
 
-        npz_bytes = _encode_npz_bytes(chunk, write_structured_tokens=False)
+        npz_bytes = _encode_npz_bytes(
+            chunk, write_structured_tokens=effective_structured,
+        )
         duration_s = time.perf_counter() - t0
         _emit(
             "game_end",

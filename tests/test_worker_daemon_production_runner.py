@@ -204,6 +204,97 @@ def test_self_play_runner_caches_weights_by_version(tmp_path):
     assert "deck_pool_loaded" in names
 
 
+def _save_tiny_structured_metadata(tmp_path: Path, version: str) -> Path:
+    """Mirror of ``_save_tiny_weights`` but with a real
+    structured-net checkpoint + ``architecture='structured'`` in the
+    metadata. Uses :func:`_build_structured_model` so the worker
+    daemon's PoisonedWeightsCacheError coherency check accepts the
+    pair (the check sniffs the state_dict shape to confirm the
+    declared architecture).
+    """
+    from mtg_bot.search.nn_evaluator import _build_structured_model
+
+    version_dir = tmp_path / version
+    version_dir.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        _build_structured_model().state_dict(),
+        version_dir / "weights.pt",
+    )
+    metadata = {
+        "version": version,
+        "action_encoding_version": "canonical_v2",
+        "architecture": "structured",
+        "training": {
+            "with_policy": True,
+            "architecture": "structured",
+        },
+    }
+    (version_dir / "metadata.json").write_text(
+        json.dumps(metadata), encoding="utf-8",
+    )
+    return version_dir
+
+
+@pytest.mark.parametrize(
+    "saver,expected_structured",
+    [
+        (_save_tiny_weights, False),         # shared (flat MLP)
+        (_save_tiny_structured_metadata, True),  # structured
+    ],
+    ids=["shared-arch-disables-structured-tokens",
+         "structured-arch-enables-structured-tokens"],
+)
+def test_play_one_derives_write_structured_tokens_from_architecture(
+    tmp_path, saver, expected_structured,
+):
+    # Regression: ``_play_one`` and ``_subprocess_play_self_play``
+    # used to hardcode ``write_structured_tokens=False`` regardless
+    # of the network's architecture, so every structured-net
+    # self_play stage wrote npzs without the structured-token
+    # columns and train_nn.py rejected them downstream
+    # ("missing structured-token arrays"). The fix derives
+    # ``write_structured_tokens`` from ``cfg.architecture`` so the
+    # structured trainer's consumer contract is honored end-to-end.
+    src_dir = saver(tmp_path / "src", "vTEST")
+    captured: dict[str, Any] = {}
+
+    def fake_play(**kwargs):
+        captured.update(kwargs)
+        empty = (
+            np.zeros((0, 51), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0, 1), dtype=np.float32),
+            np.zeros((0, 1), dtype=bool),
+            None,
+            "completed",
+            [],
+        )
+        return empty, "completed", 0, 0
+
+    import mtg_bot.worker_daemon_production_runner as mod
+    real = mod._play_self_play_game
+    mod._play_self_play_game = fake_play
+    try:
+        runner = prr.build_self_play_runner(
+            coordinator_url="http://test:5099",
+            stage_id="stage_x",
+            n_workers=1,
+            weights_cache_root=tmp_path / "cache",
+            worker_id="test-worker",
+            log_event=None,
+            deck_pool_path=str(_save_tiny_deck_pool(tmp_path / "pool")),
+            http_get=_stub_http_get_for_version_dir(src_dir),
+        )
+        runner.setup(
+            "http://test:5099", tmp_path / "cache", "self_play", 1,
+        )
+        runner.play_one_game(_make_claim(), "test")
+    finally:
+        mod._play_self_play_game = real
+
+    assert captured["write_structured_tokens"] is expected_structured
+
+
 def test_self_play_runner_raises_on_missing_deck_pool(tmp_path):
     """No pool at the given path → clear error."""
     runner = prr.build_self_play_runner(
