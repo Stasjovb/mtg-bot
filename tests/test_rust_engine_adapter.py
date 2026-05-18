@@ -335,3 +335,68 @@ def test_rust_adapter_apply_on_terminal_raises():
     assert adapter.legal_decisions() == []
     with pytest.raises(ValueError):
         adapter.apply(PassPriority())
+
+
+def test_reset_priority_to_active_invalidates_legal_cache():
+    """**G7 S6 Class-D v2 cast_spell asymmetry residuals regression
+    pin.** ``_reset_priority_to_active`` mutates Rust's priority
+    holder via ``give_priority_to``. ``legal_decisions(pid)`` is
+    priority-gated (``state_ops_legal.rs:1587-1589``: an off-priority
+    pid returns just ``[PassPriority]``), so any cached value from
+    BEFORE the shift is silently stale after it. The pre-fix bug:
+    ``_run_priority_action``'s pass-round-complete branch
+    (``rust_engine_adapter.py:586-590``) calls
+    ``_combat_decision_maker()`` which populates the legal cache for
+    ``dm = active_player`` AGAINST a state where Rust priority is
+    still the passer (off-active). ``_combat_decision_maker`` then
+    returns None (the post-finalize/no-eligible case), triggering
+    ``_reset_priority_to_active`` — which used to leave the stale
+    cache in place. The next external ``legal_decisions()`` then
+    returned ``[PassPriority]`` only, dropping every instant-speed
+    CastSpell the priority window should admit (the 12-residual
+    LEGAL_SET_EQ ``py\\rust=[cast_spell, ...]`` shape).
+
+    This test injects exactly the bug-triggering state — cache
+    populated with the off-priority value for ``pid``, then
+    priority reset to ``pid`` via ``_reset_priority_to_active`` —
+    and asserts the cache is invalidated. Surfaces a regression as a
+    LOUD test fail rather than a 300-game scale-verify divergence.
+    """
+    from mtg_bot.search.engine_adapter_factory import (
+        make_rust_game_state_adapter,
+    )
+
+    adapter = make_rust_game_state_adapter(_rust_state())
+    # Pre-populate the cache with arbitrary value tagged for some pid.
+    # The active player's id is what _reset_priority_to_active sets
+    # priority TO; pick the other pid as the cache key to simulate
+    # the bug scenario (cache for dm == active, populated when pri
+    # was the passer).
+    active = int(adapter._rust.active_player_idx)
+    other = 1 - active
+    # Force priority to the non-active player so a populate of the
+    # active player's legal set reflects the off-priority state
+    # (just [PassPriority]).
+    adapter._rust.give_priority_to(other)
+    # Manually populate the cache for the active player at off-
+    # priority — this is the same shape _combat_decision_maker
+    # produces via _legal_dicts_cached(dm = active) when called
+    # right after a pass-round advance_phase but BEFORE
+    # _reset_priority_to_active.
+    populated = adapter._legal_dicts_cached(active)
+    # Cache must hold the off-priority result.
+    assert adapter._legal_cache_player == active
+    assert adapter._legal_cache_value is populated
+    # Now reset priority to active — mirrors the call site at
+    # rust_engine_adapter.py:590. After this, the cache for `active`
+    # is stale (priority shifted, what's legal for `active` may grow).
+    adapter._reset_priority_to_active()
+    # The fix: _reset_priority_to_active MUST invalidate when it
+    # actually shifted priority.
+    assert adapter._legal_cache_player is None, (
+        "_reset_priority_to_active must invalidate the legal cache "
+        "after a give_priority_to shift; otherwise the next "
+        "legal_decisions() returns stale data (G7 S6 Class-D v2 "
+        "cast_spell asymmetry residuals)."
+    )
+    assert adapter._legal_cache_value is None
