@@ -6520,6 +6520,67 @@ gate signal (correctly loud). The proper closure is parity-positive
 > nested windows for the warp/permanent case (largely already
 > present — verification slice); the warp legal-EMISSION axis above
 > is a distinct S5+/legal-axis owner, NOT S4's.
+>
+> **G7 mid-game STATE_EQ — auto-tap-from-lands CLOSED (this lane,
+> `feature/g7-midgame-stateeq`); S1 spell-stack-source-zone honest-
+> stopped.** The orchestrator's post-S1/S4 bake-in probe surfaced a
+> NEW mid-game STATE_EQ on non-warp production decks (arch2/s1 @ step
+> 273 `Galactic Wayfarer` `{2}{G}`; arch5/s0 @ step 322 `Icecave
+> Crasher`). **Verify-first diagnosis (class c, genuine engine bug,
+> reproduces under `cross_engine.step_both` too — NOT a `rust_shadow`
+> driver/lockstep bug):** the three stack-push cast primitives
+> (`cast_creature` / `cast_creature_warp` / `cast_spell_noncreature`,
+> `rust/src/state_ops_cast.rs`) paid the cost STRICTLY from the
+> floating `mana_pool` and returned `Ok(false)` (a SILENT no-op) when
+> the pool alone was short — while the Rust legal emitter is
+> PERMISSIVE (`auto_tap_headroom_pool`/`can_pay_cost` count pool +
+> auto-tappable lands, mirroring Python `can_pay_cost`). Python's
+> `_cast_spell` ACTUALLY pays via `auto_tap_for_cost`
+> (`actions.py:1662`) — pool first, then tap lands. Rust had no
+> apply-side auto-tap, so a production-deck cast needing land-tapping
+> was emitted-legal then silently dropped (direction CONFIRMED
+> INVERTED from the orchestrator's read: Python casts, Rust does
+> not). **CLOSED:** `state_ops_cast.rs` grows `auto_tap_pay_for_cost`
+> (byte-mirrors `auto_tap_for_cost`: lands-only, colored-first in
+> Python's `ManaCost.colored` order then generic, pool consumed
+> before tapping, `Event::BecomesTapped` per land, plan-then-commit
+> so an unpayable over-emit degrades to the same honest `false`
+> no-mutation bail); all three cast pay sites route through it.
+> Verified at the trip: the cast now succeeds byte-perfectly — the
+> auto-tapped land set is IDENTICAL to Python's and the divergence
+> collapses from 4 fields (hand+mana+battlefield+stack) to 1
+> (`hand_p0`). The `ActivateAbility` pool-only `pay_mana_cost_pub`
+> path is intentionally UNCHANGED (separate axis; the random driver
+> taps lands via separate `ActivateAbility` decisions there).
+> **Honest-stop — the NEXT distinct divergence is S5-region, NOT this
+> lane's scope:** with the cast succeeding, the residual `hand_p0`
+> divergence is the **S1/S4 spell-stack-source-zone** invariant —
+> Rust deliberately keeps the cast spell in the `hand` Vec
+> (`zone=ZONE_HAND`) while on the stack so `take_source`/
+> `find_source_printing_id` find it at resolve (the documented S1
+> design above: "card stays in hand"), whereas Python removes it from
+> `p.hand` + sets `card.zone=Zone.STACK` (`actions.py:1403`/`:1751`).
+> Masked in the 4-file gate by CE5 (`step_both` drains the stack
+> before the compare) and previously unreachable in `rust_shadow`
+> (the no-auto-tap bug failed the cast first). Re-homing the
+> spell-stack source zone touches `take_source`/
+> `find_source_printing_id`/`move_source_post_resolve` + the
+> `hand_snapshot` surface (consumed by the codec slot source
+> `rust_zone_view.py`, the determinizer, the 4-file gate's
+> `parity_smoke.py` field view, and the legal emitter's 3
+> `players[idx].hand.iter()` cast-emit sites) — a high-blast-radius
+> S1/S4 redesign explicitly OUT of scope (S5-region; brief: "Do NOT
+> do S5/S6/S7/S4b"). Pinned (loud, characterized — both repros,
+> asserts the auto-tap frontier CLOSED + the next divergence
+> SURFACED) by `tests/test_rust_shadow_bakein.py::
+> test_g7_midgame_cast_autotap_closed_then_s1_spellstack_zone_
+> surfaced`. Full diagnosis + the §5 diagnostic (with the source-zone
+> hypothetically resolved the games run 273→281 / 322→344 then hit
+> LEGAL_SET_EQ C1/S3-region axes): `docs/G7_MIDGAME_STATEEQ_VERIFY_
+> FINDING.md`. **S5 follow-up owner:** the spell-stack-source-zone
+> reconciliation is the next owed slice for the non-warp-creature-
+> deck frontier (`RUST_STACK_RESOLUTION_DESIGN.md` S5 section). A
+> `.pyd` rebuild on `main` is owed (orchestrator's).
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both
