@@ -249,14 +249,31 @@ def test_bear_caster_activate_succeeds_with_pre_populated_pool(synthetic_state):
 
 
 def test_bear_caster_activate_raises_when_pool_empty(synthetic_state):
-    """Affordability gate: with no mana in pool, the activate
-    apply raises ValueError flagging unaffordable cost. No state
-    mutation — the Bear stays untapped, no stack push."""
+    """Affordability gate: with no mana in pool **and no auto-tappable
+    lands**, the activate apply raises ValueError flagging unaffordable
+    cost. No state mutation — the Bear stays untapped, no stack push.
+
+    **G7 frontier (a) — apply-side auto-tap (the §2-4 analog).** The
+    ``ActivateAbility`` apply mana-pay now routes through
+    ``state_ops_cast::auto_tap_pay_for_cost`` (byte-mirroring Python's
+    ``_activate_ability`` → ``auto_tap_for_cost``), so an empty pool
+    alone no longer raises if the controller has untapped lands — apply
+    auto-taps them, exactly as Python does. The synthetic state
+    pre-seeds p0 with 5 untapped Forests ({1}{G} payable from them), so
+    isolating the genuine "unaffordable" contract requires tapping
+    those out FIRST — the SAME idiom the I50 legal-side analog test
+    (`test_bear_caster_does_not_emit_when_pool_empty`) uses. Only with
+    NO pool AND NO tappable lands does the unaffordable raise dominate.
+    """
     bear_id = synthetic_state.register_and_inject_object(
         _bear_caster_dict(), 0, ZONE_BATTLEFIELD,
     )
     synthetic_state.force_set_summoning_sick(bear_id, False)
-    # Pool starts empty by default; defensively empty it again.
+    # Tap out the default Forests so apply-side auto-tap can't cover
+    # the {1}{G} cost, then empty the pool — only then does the
+    # genuinely-unaffordable raise dominate (mirrors the I50 legal
+    # analog).
+    _tap_all_default_p0_mana_sources(synthetic_state)
     synthetic_state.empty_mana_pool(0)
 
     stack_before = synthetic_state.stack_size()
@@ -1225,14 +1242,25 @@ def test_sacrifice_self_pays_before_effect_resolves(synthetic_state):
 
 
 def test_sacrifice_self_raises_when_mana_insufficient(synthetic_state):
-    """If mana can't be paid, the sacrifice DOES NOT happen — source
-    stays on bf, pool unchanged, no stack push. Apply raises with the
-    affordability error.
+    """If mana can't be paid **and there are no auto-tappable lands**,
+    the sacrifice DOES NOT happen — source stays on bf, pool unchanged,
+    no stack push. Apply raises with the affordability error.
+
+    **G7 frontier (a) — apply-side auto-tap (the §2-4 analog).** The
+    ``ActivateAbility`` apply mana-pay now auto-taps lands
+    (byte-mirroring Python's ``_activate_ability`` →
+    ``auto_tap_for_cost``). The synthetic state pre-seeds p0 with 5
+    untapped Forests which auto-tap to cover this ``{2}`` generic cost,
+    so isolating the genuine "unaffordable" contract requires tapping
+    them out FIRST (the SAME idiom the I50 legal-side analog uses).
     """
     card_id = synthetic_state.register_and_inject_object(
         _illvoi_galeblade_dict(), 0, ZONE_BATTLEFIELD,
     )
     synthetic_state.force_set_summoning_sick(card_id, False)
+    # No pool AND no tappable lands — only then is {2} genuinely
+    # unaffordable (apply auto-taps lands post-frontier-(a) fix).
+    _tap_all_default_p0_mana_sources(synthetic_state)
     synthetic_state.empty_mana_pool(0)
     # No mana — cost is unaffordable.
 

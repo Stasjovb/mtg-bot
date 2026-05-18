@@ -944,20 +944,40 @@ impl GameState {
                         )));
                     }
                 }
-                // Phase 4: pay the mana cost (if any). pay_mana_cost
-                // on the controller's pool either succeeds (commits)
-                // or returns false with no mutation. Mirrors the
-                // affordability shape Python's `auto_tap_for_cost`
-                // checks before committing — but unlike Python,
-                // Rust's pool is the SOLE mana source for cost-pay
-                // (no auto-tap-from-lands fallback yet); the caller
-                // is responsible for pre-populating the pool from
-                // their lands. A future slice can grow an auto-tap
-                // composer that mirrors the Python pipeline.
-                let mana_paid: bool = {
-                    let pool = &mut state.players[controller_idx].mana_pool;
-                    crate::state_ops_cast::pay_mana_cost_pub(pool, &resolved.mana_cost)
-                };
+                // Phase 4: pay the mana cost (if any) by **auto-tapping
+                // from lands**, byte-mirroring Python's
+                // `_activate_ability` (`src/mtg_bot/actions.py:
+                // 1992-1995`), which pays the ability mana via the
+                // IDENTICAL `auto_tap_for_cost` call `_cast_spell` makes
+                // (`actions.py:1662`): consume the floating pool first,
+                // then tap untapped non-sick controller lands for the
+                // remainder.
+                //
+                // **G7 frontier (a) closure — the §2-4 analog for
+                // `ActivateAbility`.** Previously this site paid STRICTLY
+                // from the controller's floating pool
+                // (`pay_mana_cost_pub`), bailing with a raw `ValueError`
+                // when the pool alone fell short. But the legal emitter
+                // offers `ActivateAbility` on pool **+ auto-tappable
+                // lands** (`state_ops_legal.rs:2105` →
+                // `auto_tap_headroom_pool`, the `can_pay_cost` shape,
+                // byte-equal to Python's `legal.py:653` predicate). So a
+                // production-deck activation whose cost needs land-
+                // tapping (pool alone short) was emitted-legal then
+                // raw-rejected here — the bake-in's arch2/s1 step-318
+                // self-inconsistency (`ActivateAbility(121,0)`, `{2}`
+                // Lander, pool `{U:1}` + 2 untapped Forests). Routing
+                // through the SAME `auto_tap_pay_for_cost` helper the
+                // three §2-4 cast sites use makes apply honor what legal
+                // offered, exactly as Python's `_activate_ability` does.
+                // The plan-then-commit helper still degrades a genuinely
+                // unpayable over-emit to the SAME no-mutation
+                // `Ok(false)` → raw-`ValueError` bail (no fallback
+                // hybrid; honest failure preserved).
+                let mana_paid: bool =
+                    crate::state_ops_cast::auto_tap_pay_for_cost(
+                        state, controller_idx, &resolved.mana_cost,
+                    )?;
                 if !mana_paid {
                     return Err(PyValueError::new_err(format!(
                         "ActivateAbility: source {source_id} cost is \

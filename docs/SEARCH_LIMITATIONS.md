@@ -6779,6 +6779,75 @@ gate signal (correctly loud). The proper closure is parity-positive
 > (`feedback_no_fallback_hybrids` honest-stop). [Combat-blocker
 > merged @ `f521501d` (cycle 30).]
 
+> **[G7 frontier (a) — `ActivateAbility` legal-emit-vs-apply
+> mana-affordability self-inconsistency CLOSED —
+> `feature/fix-g7-frontier-a-activateability-affordability` (todo
+> `04d67d99`); engine fix, new-code-is-right toward the Python SoT;
+> `.pyd` rebuild owed on `main` (orchestrator's).]** Verify-first
+> INVERTED the brief's hypothesis ("legal-emit lacks the gate; apply
+> correctly refuses"): the `ActivateAbility` legal-emit gate at
+> `state_ops_legal.rs:2105` ALREADY uses
+> `pool_can_cover(&auto_tap_headroom_pool(...))` (the `can_pay_cost`
+> shape, byte-equal to Python's `legal.py:653` activated-ability
+> predicate — pool + auto-tappable lands), and Python's `legal_actions`
+> ALSO offers `ActivateAbility(121,0)` at the arch2/s1 step-318 repro
+> (Python pool `{U:1}` + 2 untapped Forests covers `{2}`), so
+> `LEGAL_SET_EQ` passes. The bug is the **§2-4 analog for
+> `ActivateAbility`**: Rust's `apply_action` `ActivateAbility` arm
+> (`state_ops_actions.rs` Phase 4) paid STRICTLY from the floating pool
+> (`pay_mana_cost_pub`, no auto-tap) and raw-`ValueError`-rejected,
+> whereas Python's `_activate_ability` (`actions.py:1992-1995`) pays
+> the ability mana via the IDENTICAL `auto_tap_for_cost` call
+> `_cast_spell` makes (`actions.py:1662`) — Python's apply auto-taps
+> lands and SUCCEEDS (verify-first-confirmed: Python pool `[U]`→`[]`,
+> activation lands). Narrowing the legal emitter (the brief's
+> hypothesized scope) would have created a WORSE `LEGAL_SET_EQ`
+> divergence vs Python (`activate_ability` IS in `rust_shadow`'s
+> `_SET_EQ_KINDS`). **Fix = route the Rust `ActivateAbility` apply
+> mana-pay through the SAME `state_ops_cast::auto_tap_pay_for_cost`
+> helper the three §2-4 cast pay sites use** (the lands-only,
+> plan-then-commit byte-mirror of Python's `auto_tap_for_cost`;
+> promoted `pub(crate)`). Apply now honors what legal offered, exactly
+> as Python's `_activate_ability` does; a genuinely-unpayable
+> over-emit still degrades to the SAME no-mutation `Ok(false)` →
+> raw-`ValueError` bail (no fallback hybrid — the strict pool-only
+> `pay_mana_cost_pub` is retained `#[allow(dead_code)]` with ZERO live
+> callers, provably not a runtime fallback). `rust/src/
+> state_ops_actions.rs` + `rust/src/state_ops_cast.rs` (the §2-4
+> helper visibility) + the bake-in pin flip + 2 `tests_rust` pins that
+> encoded the now-superseded pool-only contract (closure-flipped to
+> the corrected auto-tap-succeeds shape via the established I50
+> `_tap_all_default_p0_mana_sources` idiom — new-code-is-right) + this
+> note + SOT_FLIP §4 + the G7 finding §7 status. 4-file core gate
+> **1536 UNMOVED** (the bake-in pin is NOT a 4-file gate file);
+> `tests_rust` **zero-newly-failing vs `a9126b06`** (30 ≡ 30
+> byte-identical after the 2 superseded-contract pins were corrected);
+> `check_audit_coverage_staleness.py` exit 0 (a pay-site reroute +
+> fn-visibility change, NOT an `Effect` — structural arm does NOT fire,
+> CFI-1/S5c precedent; `state_ops_legal.rs` NOT touched); isolation
+> self-check PASSED (shared canonical `.pyd` LastWriteTime+size
+> untouched — worktree-isolated `maturin build`+force-install). Pin
+> flipped surfaced→closure-flip:
+> `test_g7_combat_blocker_legalset_closed_then_next_frontier_surfaced`
+> → `test_g7_activateability_affordability_closed_then_next_frontier_
+> surfaced`. **SEPARATE NEW frontier SURFACED (honest-stop — distinct,
+> pre-existing, surfaced — NOT introduced; closing (a) lets arch2/s1
+> run 318→320):** arch2/s1 step 320 — a `STATE_EQ` tripwire on
+> `('library_p1', ...)`: a **library-ORDERING divergence** — with
+> `ActivateAbility(121,0)` (the Lander "Search your library for a
+> basic land card ... then **shuffle**" ability) now applying
+> byte-equal on both engines, the post-search SHUFFLE produces a
+> different library ORDER in Rust vs Python (identical 50-card
+> multiset; the per-engine shuffle RNG is not lockstep). Step + tripwire
+> + field deterministic across runs; only the library content order
+> varies run-to-run (that variance IS the divergence). A NEW G7
+> frontier (search-then-shuffle library-order parity), distinct from
+> (a) (closed) and from frontier (b) (arch5/s0 step 367
+> `('priority_player',1,0)` — UNCHANGED, still STILL-OPEN). Pinned
+> LOUD by the flipped closure pin; filed as the next G7 follow-up (todo
+> below / SOT_FLIP §4). NOT force-fixed (`feedback_no_fallback_hybrids`
+> honest-stop). NOT merged / NOT pushed.
+
 > **[S5 TRIGGERS-VERIFY LANDED + orchestrator-merged (cycle 30) —
 > `feature/g7-s5-triggers-verify`, pure-Python VERIFY, ZERO
 > engine/`rust/src`/`.pyd`.]** The full faithfully-bridgeable trigger

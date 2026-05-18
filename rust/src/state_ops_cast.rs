@@ -212,11 +212,21 @@ fn pool_total(pool: &ManaPool) -> u32 {
 /// that ordering against a stray red pip in the pool. A future
 /// slice with hybrid / X / phyrexian costs replaces this best-
 /// effort spend with a proper plan-search.
-/// `pub(crate)` re-export wrapper for the local `pay_mana_cost` so
-/// the CE20 Slice 1 ActivateAbility dispatch in
-/// `state_ops_actions.rs` can pay mana from the same primitive that
-/// spell casts use. Returns the same true-on-success / false-no-
-/// mutation semantics.
+/// `pub(crate)` re-export wrapper for the local `pay_mana_cost`.
+///
+/// **G7 frontier (a): NO live callers.** This wrapper's sole caller
+/// was the `ActivateAbility` apply mana-pay site in
+/// `state_ops_actions.rs`, which the frontier-(a) fix rerouted through
+/// `auto_tap_pay_for_cost` (the §2-4 byte-mirror of Python's
+/// `auto_tap_for_cost`) so activated-ability apply auto-taps lands
+/// exactly as Python's `_activate_ability` does. The strict pool-only
+/// primitive is kept (NOT deleted — minimal scope; the helper docs and
+/// the `SEARCH_LIMITATIONS.md` G7 note reference it as the "old
+/// pool-only `pay_mana_cost`" honest-failure baseline the
+/// plan-then-commit helper degrades to) and explicitly NOT a runtime
+/// fallback: it has zero live callers, so nothing routes to it — there
+/// is no fallback hybrid (`feedback_no_fallback_hybrids`).
+#[allow(dead_code)]
 pub(crate) fn pay_mana_cost_pub(pool: &mut ManaPool, cost: &crate::cards::ManaCost) -> bool {
     pay_mana_cost(pool, cost)
 }
@@ -336,7 +346,28 @@ fn pay_mana_cost(pool: &mut ManaPool, cost: &crate::cards::ManaCost) -> bool {
 /// dispatched) iff payable; `false` with NO mutation otherwise (the
 /// caller bails exactly as the old pool-only `pay_mana_cost` did, so
 /// the unpayable path is unchanged).
-fn auto_tap_pay_for_cost(
+///
+/// **G7 frontier (a) — `ActivateAbility` apply auto-tap (the §2-4
+/// analog).** Originally module-private (the three cast pay sites were
+/// the only §2-4 callers). Promoted to `pub(crate)` so the
+/// `ActivateAbility` apply arm in `state_ops_actions.rs` pays the
+/// activated-ability mana cost through the SAME byte-mirror of Python's
+/// `auto_tap_for_cost`. Python's `_activate_ability`
+/// (`actions.py:1992-1995`) pays the ability mana via the IDENTICAL
+/// `auto_tap_for_cost` call `_cast_spell` makes (`actions.py:1662`), so
+/// the activated-ability apply path MUST auto-tap lands exactly as the
+/// cast path does. The legal emitter already gated `ActivateAbility` on
+/// pool + auto-tap headroom (`state_ops_legal.rs:2105`,
+/// `pool_can_cover(&auto_tap_headroom_pool(...))` = the `can_pay_cost`
+/// shape, byte-equal to Python's `legal.py:653` activated-ability
+/// predicate); routing apply through this helper makes apply honor what
+/// legal offered — closing the Rust-internal legal-emit-vs-apply
+/// self-inconsistency the bake-in surfaced at arch2/s1 step 318
+/// (`ActivateAbility(121,0)` `{2}` Lander, pool `{U:1}` + 2 untapped
+/// Forests: emitted-legal then pool-only-rejected). Lands-only (matches
+/// Python's `auto_tap_for_cost`); the mana-creature-breadth C1 axis is
+/// separate and unchanged.
+pub(crate) fn auto_tap_pay_for_cost(
     state: &mut GameState,
     idx: usize,
     cost: &crate::cards::ManaCost,

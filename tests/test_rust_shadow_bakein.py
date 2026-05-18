@@ -205,66 +205,77 @@ def test_g7s4_rust_shadow_warp_deck_clean_prefix_then_known_legal_emit_gap():
     )
 
 
-def test_g7_combat_blocker_legalset_closed_then_next_frontier_surfaced():
-    """**G7 combat-blocker LEGAL_SET closure-flip** (was
-    ``test_g7_s5a_spellstack_zone_closed_then_blocker_legalset_surfaced``;
-    todo ``fec5f14``).
+def test_g7_activateability_affordability_closed_then_next_frontier_surfaced():
+    """**G7 ActivateAbility-affordability closure-flip** (was
+    ``test_g7_combat_blocker_legalset_closed_then_next_frontier_surfaced``
+    → was ``test_g7_s5a_spellstack_zone_closed_then_blocker_legalset_surfaced``;
+    todo ``04d67d99`` / ``fec5f14``-successor).
 
-    **PRIOR FRONTIER — CLOSED by the combat-blocker legal-emission
-    fix (engine, new-code-is-right toward the Python SoT).** The S5a
-    honest-stop pinned a post-``hand_p0``-closure ``LEGAL_SET_EQ`` at
-    arch2/s1 step **312** / arch5/s0 step **344**: in a
-    DECLARE_BLOCKERS step with priority on the off-active (defender)
-    player, empty stack, and an untapped defender creature but **ZERO
-    attacking creatures**, Rust's blocker-decision emitter
-    (``rust/src/state_ops_legal.rs`` declare-blockers region) still
-    emitted ``('blocker', N, None)`` (arch2/s1 N=9, arch5/s0 N=12),
-    whereas Python's ``MtgGameStateAdapter._enter_declare_blockers``
-    (``engine_adapter.py:1322-1329``) takes the
-    ``if not attackers: self._enter_priority_for_current_step();
-    return`` branch — it NEVER sets ``_combat_phase``, so the
-    rust_shadow combat-window reference (``rust_shadow.py:281-286``,
-    the Python adapter's ``legal_decisions()``) emits NO
-    ``BlockerDecision`` (``py\\rust`` empty = Rust over-emits). **The
-    fix adds the byte-mirror no-attackers gate to the Rust emitter:
-    ``&& !self.attackers.is_empty()``** (Rust's canonical
-    "is attacking" predicate is ``state.attackers`` membership — see
-    the ``FocusFireEffect`` arm, ``state_ops_legal.rs:789-790``; the
-    byte-equal analog of Python's ``[o for o in battlefield if
-    o.attacking]``). The combat-blocker ``LEGAL_SET_EQ`` NO LONGER
-    fires at 312/344: both runs proceed PAST the old boundary.
+    **PRIOR FRONTIER (a) — CLOSED by the ``ActivateAbility`` apply
+    auto-tap fix (engine, new-code-is-right toward the Python SoT).**
+    The combat-blocker closure honest-stop pinned, for arch2/s1, a
+    post-combat-blocker RAW ``ValueError`` at step **318**: Rust's
+    ``legal_decisions`` offered ``ActivateAbility(source_id=121,
+    ability_index=0)`` (the ``{2}`` Lander sac-search ability — emitted
+    on pool **+ auto-tap headroom**, ``state_ops_legal.rs:2105`` →
+    ``auto_tap_headroom_pool``, the ``can_pay_cost`` shape byte-equal to
+    Python's ``legal.py:653`` activated-ability predicate) but Rust's
+    own ``apply_action`` paid the cost **STRICTLY from the floating
+    pool** (``state_ops_actions.rs`` Phase 4 → ``pay_mana_cost_pub``,
+    no auto-tap) and raw-rejected it (pool ``{U:1}`` could not cover
+    ``{2}`` though 2 untapped Forests could): *"ActivateAbility: source
+    121 cost is unaffordable from controller's mana pool"*. A
+    **Rust-internal legal-emit-vs-apply self-inconsistency** — the
+    **§2-4 analog for ``ActivateAbility``**: Python's
+    ``_activate_ability`` (``actions.py:1992-1995``) pays the ability
+    mana via the IDENTICAL ``auto_tap_for_cost`` call ``_cast_spell``
+    makes (``actions.py:1662``), i.e. Python's apply auto-taps lands.
+    **The fix routes the Rust ``ActivateAbility`` apply mana-pay through
+    the SAME ``state_ops_cast::auto_tap_pay_for_cost`` helper the three
+    §2-4 cast pay sites use** (the lands-only, plan-then-commit
+    byte-mirror of Python's ``auto_tap_for_cost``; promoted
+    ``pub(crate)``). Apply now honors what legal offered, exactly as
+    Python's ``_activate_ability`` does. The arch2/s1 RAW ``ValueError``
+    NO LONGER fires at 318: the run proceeds PAST it. **arch5/s0 is
+    UNAFFECTED** by this fix (its 367 frontier (b) is not an
+    ActivateAbility-affordability axis); its prior closed axis stays the
+    combat-blocker ``LEGAL_SET_EQ`` @344.
 
     **NEXT DISTINCT DIVERGENCE SURFACED (honest-stop — SEPARATE,
-    pre-existing, surfaced — NOT introduced — by closing the
-    combat-blocker axis; per-repro, NOT this lane's scope).** With the
-    combat-blocker ``LEGAL_SET_EQ`` closed the bake-in runs further
-    and trips a DIFFERENT divergence on each repro:
+    pre-existing, surfaced — NOT introduced — by closing frontier (a);
+    per-repro, NOT this lane's scope).** With (a) closed the arch2/s1
+    bake-in runs further and trips a DIFFERENT divergence; arch5/s0's
+    frontier (b) is held intact (distinct, STILL-OPEN follow-up):
 
-    * **arch2/s1 — step 318:** a RAW ``ValueError`` (NOT a
-      ``ShadowDivergenceError`` tripwire — the rust_shadow harness
-      calls ``self._rust.apply`` raw before the NO_RAISE wrapper, so a
-      Rust-side raise is not converted). Rust's ``legal_decisions``
-      offers ``ActivateAbility(source_id=121, ability_index=0)`` but
-      Rust's own ``apply_action`` rejects it: *"ActivateAbility:
-      source 121 cost is unaffordable from controller's mana pool
-      (mana_cost generic=2, W=0, U=0, B=0, R=0, G=0)"*. A
-      **Rust-internal legal-emit-vs-apply self-inconsistency** on
-      activated-ability mana-affordability (a C1-class legal-emission
-      gap — the Rust emitter offers a ``{2}``-cost ability without an
-      affordability gate; Rust apply correctly rejects).
+    * **arch2/s1 — step 320:** a ``ShadowDivergenceError`` tripwire
+      ``STATE_EQ`` on ``('library_p1', ...)`` — a **library-ORDERING
+      divergence**. With ``ActivateAbility(121,0)`` (the Lander
+      "Search your library for a basic land card ... then **shuffle**"
+      ability) now applying byte-equal on both engines, the post-search
+      **shuffle produces a DIFFERENT library order** in Rust vs Python
+      (identical 50-card multiset, divergent order; the per-engine
+      shuffle RNG is not lockstep). The step-320 boundary + the
+      ``STATE_EQ``/``library_p1`` shape are deterministic across runs;
+      only the library *content order* varies run-to-run (that variance
+      IS the divergence). A NEW G7 frontier (search-then-shuffle
+      library-order parity) — distinct from (a) (closed) and from (b).
 
     * **arch5/s0 — step 367:** a ``ShadowDivergenceError`` tripwire
       ``STATE_EQ`` on ``('priority_player', 1, 0)`` (Python=1,
       Rust=0) on a ``PassPriority()`` at a DECLARE_ATTACKERS step — a
       distinct priority-player STATE_EQ divergence (G5-family
       priority-port region, a deeper production-deck manifestation).
+      **UNCHANGED by the frontier-(a) fix** — frontier (b), a distinct
+      STILL-OPEN follow-up (NOT closed in this lane).
 
     Both are DISTINCT, pre-existing axes filed as the next G7
     follow-up in ``SOT_FLIP_CUTOVER_PLAN.md`` §4 +
     ``SEARCH_LIMITATIONS.md``. Per the established
     G4/G5/G6/S5a surfaced→closure-flip discipline this pin asserts
-    BOTH: (1) the prior combat-blocker ``LEGAL_SET_EQ`` axis is CLOSED
-    (each run goes PAST the old 312/344 boundary; no combat-blocker
+    BOTH: (1) the prior per-repro axis is CLOSED (each run goes PAST
+    its old boundary — arch2/s1 PAST the (a) step-318
+    ActivateAbility-affordability boundary; arch5/s0 PAST the
+    combat-blocker 344 — and the surfaced msg is NOT the old
     ``('blocker', N, None)`` over-emission), and (2) the new per-repro
     frontier surfaces LOUDLY at its freshly-characterized boundary
     (do NOT silently let it pass; if it stops firing the next axis was
@@ -276,15 +287,26 @@ def test_g7_combat_blocker_legalset_closed_then_next_frontier_surfaced():
     )
 
     # Per-repro freshly-characterized next-frontier contract:
-    #   old_boundary  — the closed combat-blocker LEGAL_SET_EQ step
-    #                    (a trip at/before this == the fix regressed)
+    #   old_boundary  — the per-repro CLOSED axis step (a trip
+    #                    at/before this == the fix regressed). For
+    #                    arch2/s1 this is the frontier-(a)
+    #                    ActivateAbility-affordability step 318 the
+    #                    auto_tap_pay_for_cost reroute just closed; for
+    #                    arch5/s0 it is the (unchanged) combat-blocker
+    #                    LEGAL_SET_EQ step 344.
     #   exp_step       — the new next-frontier step
     #   kind           — "raw" (uncaught Rust-side ValueError) or
     #                    a ShadowDivergenceError tripwire name
     #   needle         — a substring uniquely characterizing it
     for (arch, seed, old_boundary, exp_step, kind, needle) in (
-        (2, 1, 312, 318, "raw",
-         "ActivateAbility: source 121 cost is unaffordable"),
+        # arch2/s1: frontier (a) (ActivateAbility apply pool-only
+        # raw-reject @318) CLOSED → next = a STATE_EQ library-ORDER
+        # divergence @320 (post-Lander-search shuffle order parity;
+        # the step + tripwire + field are deterministic, only the
+        # library content order varies run-to-run = the divergence).
+        (2, 1, 318, 320, "STATE_EQ", "('library_p1'"),
+        # arch5/s0: UNCHANGED by the frontier-(a) fix — frontier (b),
+        # a distinct STILL-OPEN priority-player STATE_EQ follow-up.
         (5, 0, 344, 367, "STATE_EQ", "('priority_player', 1, 0)"),
     ):
         names = trajectory.load_production_deck(archetype=arch)
@@ -319,19 +341,21 @@ def test_g7_combat_blocker_legalset_closed_then_next_frontier_surfaced():
                 break
             steps += 1
 
-        # (1) PRIOR combat-blocker LEGAL_SET_EQ AXIS CLOSED: the run
-        # proceeds PAST the old S5a-era boundary (arch2/s1 312,
-        # arch5/s0 344). A trip at/before the old boundary means the
-        # no-attackers gate did NOT close the combat-blocker
-        # over-emission (regression — do NOT bump the boundary, fix
-        # the engine).
+        # (1) PRIOR PER-REPRO AXIS CLOSED: the run proceeds PAST its
+        # old boundary. arch2/s1: PAST step 318 — the frontier-(a)
+        # ActivateAbility apply pool-only raw-reject, closed by the
+        # auto_tap_pay_for_cost reroute. arch5/s0: PAST step 344 — the
+        # combat-blocker LEGAL_SET_EQ (unchanged by the (a) fix). A
+        # trip at/before the old boundary means the relevant axis
+        # regressed (do NOT bump the boundary — fix the engine).
         assert steps > old_boundary, (
-            f"arch{arch}/s{seed}: with the no-attackers gate closing "
-            f"the combat-blocker LEGAL_SET_EQ the run must proceed "
-            f"PAST the old boundary step {old_boundary} (it stopped at "
-            f"{steps}). A stop at/before {old_boundary} means the "
-            f"Rust blocker-emission no-attackers gate regressed — fix "
-            f"the engine, do NOT bump the boundary."
+            f"arch{arch}/s{seed}: the prior per-repro axis must be "
+            f"CLOSED — the run must proceed PAST its old boundary step "
+            f"{old_boundary} (it stopped at {steps}). A stop at/before "
+            f"{old_boundary} means the closed axis regressed "
+            f"(arch2/s1: the ActivateAbility apply auto-tap; arch5/s0: "
+            f"the combat-blocker no-attackers gate) — fix the engine, "
+            f"do NOT bump the boundary. err={raised!r} raw={raw_exc!r}"
         )
         assert steps == exp_step, (
             f"arch{arch}/s{seed}: expected the freshly-characterized "
@@ -340,7 +364,8 @@ def test_g7_combat_blocker_legalset_closed_then_next_frontier_surfaced():
             f"re-characterize this pin, do NOT just bump."
         )
         # (2) THE NEW DISTINCT PER-REPRO FRONTIER SURFACES LOUDLY. It
-        # is NOT the (now-closed) combat-blocker LEGAL_SET_EQ.
+        # is NEITHER the closed combat-blocker LEGAL_SET_EQ NOR (for
+        # arch2/s1) the closed ActivateAbility-affordability axis.
         if kind == "raw":
             assert raw_exc is not None and raised is None, (
                 f"arch{arch}/s{seed}: expected the characterized "

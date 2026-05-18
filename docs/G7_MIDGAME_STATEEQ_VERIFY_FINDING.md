@@ -2,18 +2,24 @@
 
 > **Status: CLOSED (the auto-tap frontier §2-4) + S1/S4
 > spell-stack-source-zone CLOSED by S5a/S5b/S5c + the §5-predicted
-> combat-blocker `LEGAL_SET_EQ` CLOSED by `fec5f14` (§7) + honest-stop
-> (two new distinct per-repro frontiers pinned in §7).** Lane (this
-> §7 addendum): `feature/fix-g7-combat-blocker-legalset` off `main` @
-> `24776ae0`; the original §2-6 lane was `feature/g7-midgame-stateeq`
-> off `main` @ `cf994e47`. This doc is the verify-first diagnosis +
-> fix record for the post-S1/S4 mid-game STATE_EQ frontier the
-> orchestrator's bake-in probe surfaced (arch2/s1 @ step 273;
-> arch5/s0 @ step 322) and its §5-predicted combat-blocker successor.
-> Cross-refs: `docs/RUST_STACK_RESOLUTION_DESIGN.md` (the G7 owner
-> doc), `docs/SEARCH_LIMITATIONS.md` G7 notes,
+> combat-blocker `LEGAL_SET_EQ` CLOSED by `fec5f14` (§7) + frontier
+> (a) (`ActivateAbility` apply auto-tap, the §2-4 analog) CLOSED by
+> `04d67d99` (§8) + honest-stop (a new distinct library-shuffle-order
+> frontier pinned in §8; frontier (b) arch5/s0 step 367
+> `priority_player` STILL-OPEN, unchanged).** Lane (this §8
+> addendum): `feature/fix-g7-frontier-a-activateability-affordability`
+> off `main` @ `a9126b06`; the §7 addendum was
+> `feature/fix-g7-combat-blocker-legalset` off `main` @ `24776ae0`;
+> the original §2-6 lane was `feature/g7-midgame-stateeq` off `main` @
+> `cf994e47`. This doc is the verify-first diagnosis + fix record for
+> the post-S1/S4 mid-game STATE_EQ frontier the orchestrator's bake-in
+> probe surfaced (arch2/s1 @ step 273; arch5/s0 @ step 322), its
+> §5-predicted combat-blocker successor (§7), and §7's frontier (a)
+> `ActivateAbility`-affordability successor (§8). Cross-refs:
+> `docs/RUST_STACK_RESOLUTION_DESIGN.md` (the G7 owner doc),
+> `docs/SEARCH_LIMITATIONS.md` G7 notes,
 > `tests/test_rust_shadow_bakein.py::
-> test_g7_combat_blocker_legalset_closed_then_next_frontier_surfaced`
+> test_g7_activateability_affordability_closed_then_next_frontier_surfaced`
 > (the current flipped closure pin).
 
 ## 1. The frontier (orchestrator probe)
@@ -265,12 +271,13 @@ NOT introduced; the fix only NARROWS Rust over-emission).**
   `apply_action` rejects it: *"source 121 cost is unaffordable from
   controller's mana pool (generic=2)"*. A **Rust-internal
   legal-emit-vs-apply self-inconsistency** on activated-ability
-  mana-affordability — a C1-class legal-emission gap (the Rust
-  emitter offers a `{2}`-cost ability with no affordability gate;
-  Rust apply correctly rejects). This is the B1-axis analog for
-  `ActivateAbility` (B1 Slice 1 gated the 5 `CastSpell` sites via
-  `can_pay_cost`; the `ActivateAbility` emit site lacks the
-  equivalent gate).
+  mana-affordability. **→ CLOSED in §8 (frontier (a)). Verify-first
+  INVERTED the "legal-emit lacks the gate; apply correctly rejects"
+  read: the legal-emit gate already matches Python (pool + auto-tap
+  headroom) and Python apply auto-taps and SUCCEEDS — the real bug is
+  the §2-4 analog (Rust `ActivateAbility` apply was pool-only, no
+  auto-tap). Fixed by routing apply through the §2-4
+  `auto_tap_pay_for_cost` helper.**
 
 - **arch5/s0 → step 367:** a `STATE_EQ` tripwire on
   `('priority_player', 1, 0)` (Python=1, Rust=0) on a
@@ -285,3 +292,103 @@ closure pin and filed as the next G7 follow-up (todo
 (`feedback_no_fallback_hybrids` honest-stop) — landing the sound
 combat-blocker fix and pinning the unmasked frontiers precisely is
 the correct disciplined outcome (the G4/G5/G6/S5a precedent).
+
+## 8. Frontier (a) — `ActivateAbility` apply auto-tap — CLOSED (todo `04d67d99`)
+
+> **Status: CLOSED + honest-stop (a new distinct library-shuffle-order
+> frontier pinned).** Lane: `feature/fix-g7-frontier-a-
+> activateability-affordability` off `main` @ `a9126b06`. This closes
+> §7's frontier (a) (the arch2/s1 step-318 RAW `ValueError`). Frontier
+> (b) (arch5/s0 step 367 `('priority_player',1,0)`) is UNCHANGED — a
+> distinct STILL-OPEN follow-up, NOT touched here.
+
+**Verify-first INVERTED the brief's hypothesis.** The brief framed (a)
+as "the `ActivateAbility` legal-emit site lacks the affordability gate
+and `apply_action` correctly refuses". Driving the exact arch2/s1
+seed-1 repro to step 318 and inspecting BOTH engines:
+
+- The offending decision is `ActivateAbility(source_id=121,
+  ability_index=0)` — a **Lander** token (`Artifact`, `is_land=False`),
+  ability 0 = `{2}`, sacrifice-self, search-a-basic-land (`tap_self=
+  False`).
+- Priority player is p1; pool p1 = `{U:1}`; p1's untapped non-sick
+  controller battlefield has 2 Forests (67, 103) + a summoning-sick
+  Forest (2). So pool + auto-tap headroom = `{U:1, G:2}` ⊇ `{2}`.
+- **Rust's legal-emit gate already matches Python.** `state_ops_legal.
+  rs:2105` uses `pool_can_cover(&auto_tap_headroom_pool(self, idx),
+  &ability.cost.mana)` = the `can_pay_cost` shape
+  (`state_ops_mana.rs:460`), byte-equal to Python's `legal.py:653`
+  activated-ability predicate (`can_pay_cost(state, player_id,
+  effective_mana, ...)` — pool + auto-tappable lands). Python's
+  `legal_actions(state, 1)` ALSO offers `ActivateAbility(121,0)` here
+  → `LEGAL_SET_EQ` passes (the pin reaches step 318 cleanly).
+- **The real bug is the §2-4 analog for `ActivateAbility`.** Rust's
+  `apply_action` `ActivateAbility` arm (`state_ops_actions.rs` Phase
+  4) paid STRICTLY from the floating pool via `pay_mana_cost_pub` (no
+  auto-tap) and raw-`ValueError`-rejected because `{U:1}` < `{2}`.
+  Python's `_activate_ability` (`actions.py:1992-1995`) instead pays
+  the ability mana via the **IDENTICAL** `auto_tap_for_cost` call
+  `_cast_spell` makes (`actions.py:1662`) — Python apply auto-taps
+  lands and SUCCEEDS (verify-first-confirmed: Python p1 pool
+  `[U]`→`[]`, the activation lands). This is precisely the §2-3
+  `CastSpell` "permissive in legal, strict in apply" inversion, just
+  for `ActivateAbility` — the §2-4 doc explicitly deferred the
+  `ActivateAbility` pool-only path as a "separate axis"; this lane is
+  that axis.
+- Narrowing the legal emitter (the brief's hypothesized scope) would
+  have produced a WORSE divergence: `activate_ability` IS in
+  `rust_shadow`'s `_SET_EQ_KINDS`, so a pool-only Rust legal set would
+  `LEGAL_SET_EQ`-diverge from Python's headroom-based legal set at the
+  same step 318. New-code-is-right toward the Python SoT
+  (`feedback_parity_new_code_is_right`) requires the apply-side fix.
+
+**The fix (engine — new-code-is-right toward Python).** The §2-4
+`auto_tap_pay_for_cost` helper in `state_ops_cast.rs` (the lands-only,
+plan-then-commit byte-mirror of Python's `auto_tap_for_cost`) is
+promoted `pub(crate)`; the `ActivateAbility` apply Phase-4 mana-pay is
+rerouted from `pay_mana_cost_pub` to `auto_tap_pay_for_cost(state,
+controller_idx, &resolved.mana_cost)`. Apply now auto-taps the
+controller's untapped lands for the ability cost exactly as Python's
+`_activate_ability` does (the Lander, being an Artifact not a Land, is
+excluded from the auto-tap land pool and sacrificed separately in
+Phase 5b — byte-equal to Python's order). A genuinely-unpayable
+over-emit still degrades to the SAME no-mutation `Ok(false)` →
+raw-`ValueError` bail the old pool-only path produced (no fallback
+hybrid; the strict `pay_mana_cost_pub` is retained
+`#[allow(dead_code)]` with ZERO live callers — provably not a runtime
+fallback). **Files:** `rust/src/state_ops_actions.rs` +
+`rust/src/state_ops_cast.rs` (helper visibility) + the bake-in pin
+flip + 2 `tests_rust` pins that encoded the now-superseded pool-only
+contract (closure-flipped to the corrected auto-tap-succeeds shape via
+the established I50 `_tap_all_default_p0_mana_sources` idiom) + the SL
+note + SOT_FLIP §4 + this §8. `state_ops_legal.rs` was NOT touched
+(verify-first proved the legal gate was already correct). Per CFI-1/S5c
+a `state_ops_*.rs` touch does NOT fire the cron structural arm
+(confirmed: `check_audit_coverage_staleness.py` exit 0). A `.pyd`
+rebuild on `main` is owed (orchestrator's).
+
+**Result — frontier (a) CLOSED, byte-equal land payment.** With the
+fix the arch2/s1 `ActivateAbility(121,0)` now applies successfully
+(auto-tapping a Forest exactly as Python does); the bake-in runs
+**318 → 320**.
+
+**The next distinct divergence (honest-stop — surfaced, NOT
+introduced).** With (a) closed the arch2/s1 bake-in trips a NEW
+distinct frontier at **step 320**: a `STATE_EQ` `ShadowDivergenceError`
+on `('library_p1', ...)` — a **library-ORDERING divergence**. With the
+Lander's "Search your library for a basic land card ... then
+**shuffle**" ability now applying byte-equal on both engines, the
+post-search **shuffle produces a different library ORDER** in Rust vs
+Python (identical 50-card multiset; the per-engine shuffle RNG is not
+lockstep). The step-320 boundary + the `STATE_EQ`/`library_p1` shape
+are deterministic across runs; only the library *content order* varies
+run-to-run (that variance IS the divergence). A NEW G7 frontier
+(search-then-shuffle library-order parity) — DISTINCT from (a) (closed)
+and from frontier (b) (arch5/s0 step 367 — UNCHANGED, still
+STILL-OPEN). Pinned LOUD by the flipped closure pin
+(`test_g7_activateability_affordability_closed_then_next_frontier_
+surfaced`) and filed as the next G7 follow-up (todo / SOT_FLIP §4).
+NOT force-fixed in this lane (`feedback_no_fallback_hybrids`
+honest-stop) — landing the sound (a) fix and pinning the unmasked
+library-shuffle-order frontier precisely is the correct disciplined
+outcome (the G4/G5/G6/S5a/combat-blocker precedent).
