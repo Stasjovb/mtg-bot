@@ -181,3 +181,14 @@ Python `card.zone = Zone.STACK` + `p.hand.remove(card)`
 LEGAL_SET_EQ axes the §5 diagnostic surfaced (C1/S3-region). This is
 the S5-region successor; the G7 owner doc
 (`RUST_STACK_RESOLUTION_DESIGN.md`) S5 section is the home for it.
+
+> **SCOPED (the S5-region successor design now exists).** The
+> spell-stack-source-zone re-homing is fully verify-first scoped in
+> **`docs/RUST_SPELL_STACK_SOURCE_ZONE_DESIGN.md`**: every surface
+> mapped with file:line, the decision (B — ONE irreducibly-atomic
+> Rust core lane S5a, Option β stack-object store, + thin verify
+> slices S5b/S5c), the CE5-must-hold-without-it analysis (S5a is the
+> hard S7 prerequisite), the determinizer/codec-slot/v1-v2 implications
+> (all fixed for free by the one hand-membership correction;
+> v-chain-agnostic), and the baseline-rebase protocol S5a must ship
+> with. That doc is the single owner for the next implementation lane.
