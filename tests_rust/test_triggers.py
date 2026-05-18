@@ -1995,6 +1995,7 @@ def test_cast_self_trigger_fires_on_cast(synthetic_state):
 
     ok = synthetic_state.cast_creature(crt_id, 0)
     assert ok is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     # The CAST trigger is on the stack (no ENTERS trigger fires
     # because the creature only has a CAST one).
     assert synthetic_state.stack_size() == 1, (
@@ -2030,6 +2031,7 @@ def test_cast_creature_observer_fires_on_another_creature_cast(synthetic_state):
 
     ok = synthetic_state.cast_creature(bait_id, 0)
     assert ok is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
 
     assert synthetic_state.stack_size() == 1, (
         "expected the `subject_is_creature` CAST observer to fire on "
@@ -2074,6 +2076,7 @@ def test_cast_observer_with_controlled_by_you_fires_on_own_cast(synthetic_state)
     )
     ok = synthetic_state.cast_creature(bait_id, 0)
     assert ok is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert synthetic_state.stack_size() == 1
     top = synthetic_state.peek_top_of_stack()
     assert top["source_obj_id"] == observer_id
@@ -2118,6 +2121,7 @@ def test_cast_fires_before_enters_when_both_on_same_source(synthetic_state):
 
     ok = synthetic_state.cast_creature(crt_id, 0)
     assert ok is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
 
     # Both triggers on stack — push order: CAST first, ENTERS second
     # (cast_creature dispatches CAST in phase 2, ENTERS in phase 3).

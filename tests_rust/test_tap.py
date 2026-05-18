@@ -224,6 +224,7 @@ def test_untap_all_for_player_leaves_summoning_sick_alone(engine):
     elves_id = 10
     assert state.printing_name_of(elves_id) == "Llanowar Elves"
     assert state.cast_creature(elves_id, 0) is True
+    state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert state.is_summoning_sick(elves_id) is True
     # Tap the elves (e.g. as if activating its mana ability).
     assert state.tap_object(elves_id) is True
@@ -373,6 +374,7 @@ def test_activate_ability_on_summoning_sick_creature_with_tap_cost_is_rejected(
     elves_id = 10
     assert state.printing_name_of(elves_id) == "Llanowar Elves"
     assert state.cast_creature(elves_id, 0) is True
+    state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert state.is_summoning_sick(elves_id) is True
     assert state.is_tapped(elves_id) is False
     pool_before = state.get_mana_pool(0)["G"]

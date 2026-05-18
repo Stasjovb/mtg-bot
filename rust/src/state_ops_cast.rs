@@ -88,6 +88,11 @@ use pyo3::prelude::*;
 use std::sync::Arc;
 
 const ZONE_BATTLEFIELD: u8 = 2;
+/// Local mirror of `crate::state_ops_zones::ZONE_HAND` (= 0),
+/// matching the existing `ZONE_BATTLEFIELD` local-const pattern in
+/// this module. Used by the G7-S1 exile-recast zone normalization in
+/// `cast_creature` (exile -> hand at cast time).
+const ZONE_HAND: u8 = 0;
 
 fn check_player_id(player_id: u8) -> PyResult<usize> {
     let idx = player_id as usize;
@@ -276,6 +281,17 @@ fn move_from_hand_to_battlefield(
 /// permanent is byte-identical to a hand-cast one (modulo the
 /// origin zone). Returns the pushed-object snapshot, or `None` if
 /// the id isn't a live exile object for `idx`.
+///
+/// **G7 Slice S1:** `cast_creature` no longer fuses cast+resolve, so
+/// the exile-recast no longer moves exile -> battlefield in the cast
+/// primitive (it normalizes exile -> hand at cast time and lets
+/// `move_source_post_resolve` land it on the battlefield at
+/// resolution, byte-mirroring Python). This helper is retained for
+/// G7 Slice S4 (`cast_creature_warp` + riders) which still has the
+/// exile-recast move pattern to re-home; `#[allow(dead_code)]` keeps
+/// the warning quiet in the S1-only interim without deleting the
+/// verified helper.
+#[allow(dead_code)]
 fn move_from_exile_to_battlefield(
     state: &mut GameState,
     idx: usize,
@@ -433,19 +449,46 @@ impl GameState {
         Ok(moved.is_some())
     }
 
-    /// Cast a creature spell from `player_id`'s hand. Pays the
-    /// printing's `mana_cost` out of the player's mana pool, moves
-    /// the card to the battlefield, and stamps the new permanent
-    /// with `summoning_sick = true`. Returns `true` on success,
-    /// `false` on any precondition failure: object not in hand, no
-    /// such printing, the printing's `card_types` does not contain
-    /// `"Creature"`, or insufficient mana.
+    /// **G7 Slice S1 (stack-and-priority creature cast).** Cast a
+    /// creature spell from `player_id`'s hand. Pays the printing's
+    /// `mana_cost` out of the player's mana pool, fires `Event::Cast`,
+    /// and **pushes a spell `StackItem`** — the card does NOT enter
+    /// the battlefield here. Returns `true` on success, `false` on
+    /// any precondition failure: object not in hand (nor a `warped`
+    /// exile-recast), no such printing, the printing's `card_types`
+    /// does not contain `"Creature"`, or insufficient mana.
     ///
-    /// **No-stack semantics.** The Python pipeline pushes a
-    /// `StackItem`, settles priority, then resolves; this primitive
-    /// short-circuits to the resolved state. ETB triggers, "when X
-    /// is cast" hooks, and any choice points the spell normally
-    /// presents are deferred until a Rust-side stack lands.
+    /// **Stack-and-priority semantics (G7 Slice S1 — was no-stack).**
+    /// This primitive now mirrors `cast_spell_noncreature` exactly:
+    /// it pays mana, dispatches the CAST event, pushes a
+    /// `StackItem::new_spell` (the spell GameObject stays in the hand
+    /// zone — Rust's pre-existing spell-stack model;
+    /// `find_source_printing_id` / `take_source` search the hand at
+    /// resolve), resets priority/passes, and **returns WITHOUT
+    /// resolving**. The harness drives `resolve_top_of_stack`
+    /// separately (CE5 cast-vs-resolve mirror today; the real
+    /// adapter priority loop in production). At resolution the
+    /// ALREADY-PRESENT `move_source_post_resolve`
+    /// (`state_ops_resolve.rs:285-332`) lands the creature on the
+    /// battlefield with `summoning_sick = true` (`:301-303`) + a
+    /// fresh ETB timestamp (`:311-318`), then `resolve_top_of_stack`
+    /// dispatches `Event::Enters` — byte-mirroring Python's
+    /// resolve-time `put_into_battlefield` (`actions.py:2778` ->
+    /// `:2993` sets `summoning_sick = True`). NO `summoning_sick`
+    /// stamp is applied here at cast time — Python doesn't either
+    /// (`_cast_spell` `actions.py:1403/1751-1767` only removes the
+    /// card from its source zone, sets `zone=STACK`, and appends the
+    /// `StackItem`; the bf entry + summoning sickness happen at
+    /// resolve).
+    ///
+    /// Creature spells carry NO cast-time target (a vanilla permanent
+    /// spell has no `_select_spell_targets` pick), so the bare
+    /// untargeted `StackItem::new_spell` constructor is used (vs
+    /// `cast_spell_noncreature`'s `new_spell_with_targets` for
+    /// single-/two-target instants/sorceries). `cast_creature_warp`
+    /// + the warp/impending/room riders are deferred to G7 Slice S4
+    /// (this S1 lane is creature-only, non-warp; the
+    /// `cast_creature_warp` primitive is untouched here).
     fn cast_creature(&mut self, obj_id: u32, player_id: u8) -> PyResult<bool> {
         let idx = check_player_id(player_id)?;
         // Phase 1: read-only lookup. Find the object in hand, fetch
@@ -457,11 +500,10 @@ impl GameState {
         // **Phase-1 warp exile-recast (round-63):** if the object is
         // NOT in hand but IS a `warped` object in this player's
         // exile, this is a warp exile-recast — pay the NORMAL
-        // `mana_cost` (legal.py:478-489 / actions.py:1476-1510), move
-        // exile->bf, clear `warped`. The hand path is tried first
-        // (the common case); the exile fallback only fires for a
-        // `warped` exile object. Both pay `mana_cost` (the recast is
-        // at full cost — `use_warp=false`).
+        // `mana_cost` (legal.py:478-489 / actions.py:1476-1510). The
+        // hand path is tried first (the common case); the exile
+        // fallback only fires for a `warped` exile object. Both pay
+        // `mana_cost` (the recast is at full cost — `use_warp=false`).
         let in_hand = self.players[idx]
             .hand
             .iter()
@@ -510,56 +552,84 @@ impl GameState {
             return Ok(false);
         }
         self.players[idx].mana_pool = pool_copy;
-        // Slice 6: dispatch Event::Cast NOW — after mana payment
-        // commits but before the move-to-bf fires its ENTERS
-        // dispatch. CR 601.2 — a spell is "cast" the moment its
-        // cost is paid (technically before, but post-cost-pay is
-        // the closest moment Rust's no-stack primitive can hook
-        // into). CAST fires BEFORE ENTERS, matching the Python flow
-        // where the spell stack item resolves on top of the cast
-        // event.
-        //
-        // The subject is the card-being-cast still in the hand zone
-        // (move-to-bf hasn't fired yet). Predicate matchers walk
-        // all four zones so the hand-zone lookup finds it.
+        // **G7 S1 exile-recast zone normalization.** Python's
+        // exile-recast (`actions.py:1501-1502`) does
+        // `p.exile.remove(card)` then `card.warped = False` AT CAST
+        // TIME, and `card.zone = Zone.STACK` (`:1751`) — the recast
+        // card leaves exile and sits on the STACK until resolution
+        // (byte-identical to the hand path; nothing on the
+        // battlefield yet). Rust's spell-stack model keeps the
+        // stack-resident source IN a tracked zone, and
+        // `find_source_printing_id` / `take_source`
+        // (`state_ops_resolve.rs:205-246`) search hand / library /
+        // battlefield / graveyard but **NOT exile**. So move the
+        // exile-recast object exile -> hand here (the zone the
+        // spell-stack model uses for its stack-resident source,
+        // exactly as `cast_spell_noncreature` leaves its source in
+        // hand) and clear the warp markers at cast time, mirroring
+        // Python's cast-time `card.warped = False`. At resolution
+        // `move_source_post_resolve` takes it hand -> battlefield
+        // (creature -> bf + summoning_sick), byte-equal to Python's
+        // `put_into_battlefield`. The recast is a fresh permanent
+        // (CR 400.7) — clearing `warp_exile_pending` too matches the
+        // prior no-stack primitive's clear.
+        if from_exile_warped {
+            if let Some(pos) = self.players[idx]
+                .exile
+                .iter()
+                .position(|o| o.id == obj_id)
+            {
+                let exile = Arc::make_mut(&mut self.players[idx].exile);
+                let mut obj = exile.remove(pos);
+                obj.zone = ZONE_HAND;
+                obj.warped = false;
+                obj.warp_exile_pending = false;
+                let hand = Arc::make_mut(&mut self.players[idx].hand);
+                hand.push(obj);
+            }
+        }
+        // Dispatch Event::Cast NOW — after mana payment commits but
+        // before the StackItem push, the SAME ordering as
+        // `cast_spell_noncreature` (Delta 6, `:842-850`) /
+        // `cast_creature_warp`. CR 601.2 — a spell is "cast" the
+        // moment its cost is paid. The subject is the card-being-cast
+        // still in the hand zone (the push leaves it there);
+        // predicate matchers walk all four zones so the hand-zone
+        // lookup finds it.
         crate::state_ops_resolve::dispatch_event(
             self,
             crate::cards::Event::Cast,
             obj_id,
         )?;
-        // Phase 3: move the card. Stamp summoning sickness AFTER the
-        // push (stamp on the in-place battlefield slot, since
-        // `move_from_hand_to_battlefield` returns the snapshot at
-        // push time). The warp exile-recast moves exile->bf via the
-        // sibling helper and clears the `warped` marker (the recast
-        // is a fresh permanent — CR 400.7 — mirroring Python
-        // actions.py:1502 `card.warped = False`).
-        if from_exile_warped {
-            let _ = move_from_exile_to_battlefield(self, idx, obj_id)?;
-        } else {
-            let _ = move_from_hand_to_battlefield(self, idx, obj_id)?;
-        }
-        let player = &mut self.players[idx];
-        let bf = Arc::make_mut(&mut player.battlefield);
-        if let Some(obj) = bf.iter_mut().find(|o| o.id == obj_id) {
-            obj.summoning_sick = true;
-            if from_exile_warped {
-                obj.warped = false;
-                obj.warp_exile_pending = false;
-            }
-        }
-        // Round-27 G4 closure: CR 117.1c — the active player gets
-        // priority after a spell is cast (or after an ability
-        // resolves). The Rust `cast_creature` primitive fuses the
-        // Python "push to stack -> resolve" sequence into a single
-        // mutation (no-stack semantics — see the docstring above), so
-        // the "after cast" priority reset happens here at the
-        // primitive layer. A future stack-using cast slice will need
-        // to re-think when the reset fires (after the cast push? or
-        // after the resolution pop?), but the no-stack shape today
-        // makes "after the primitive succeeds" the only well-defined
-        // moment. Also reset `consecutive_passes` — a successful
-        // cast is a non-pass mutation that breaks any pass streak.
+        // **G7 S1: push the spell StackItem, do NOT move to
+        // battlefield, do NOT auto-resolve.** Mirrors
+        // `cast_spell_noncreature`'s Delta-4 push (`:943-957`). A
+        // vanilla creature spell carries NO cast-time target (Python
+        // `_select_spell_targets` returns `()` for a bare permanent
+        // spell), so the bare untargeted `new_spell` constructor is
+        // used. `resolve_top_of_stack` later applies any
+        // `printing.effects` (none for a vanilla creature) and
+        // `move_source_post_resolve` sends the creature hand ->
+        // battlefield (CR 608.2m via the ALREADY-PRESENT
+        // `post_resolve_destination` permanent -> ZONE_BATTLEFIELD
+        // route, stamping `summoning_sick` + the ETB timestamp), then
+        // `dispatch_event(Event::Enters)` fires the ETB triggers —
+        // all at resolution time, byte-mirroring Python's
+        // `put_into_battlefield`.
+        self.stack
+            .push(crate::state::StackItem::new_spell(obj_id, player_id));
+        // CR 117.1c — the active player gets priority after a spell
+        // is cast. Verbatim from `cast_spell_noncreature` Delta 7
+        // (`:958-962`) / `cast_creature_warp`. The cast push (not the
+        // resolution pop) is the reset moment, matching Python: the
+        // priority loop resets priority via the post-non-pass-action
+        // path (`simulate.py:274-282`) when the cast is applied, then
+        // resets again after the eventual resolution
+        // (`simulate.py:266-267`). The post-cast reset here is the
+        // first of those two; the post-resolution reset is the loop's
+        // job (S3 verifies the priority-round composition end-to-end).
+        // Also reset `consecutive_passes` — a successful cast is a
+        // non-pass mutation that breaks any pass streak.
         self.priority_player = self.active_player;
         self.consecutive_passes = 0;
         Ok(true)

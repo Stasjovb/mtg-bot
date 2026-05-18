@@ -128,6 +128,7 @@ def test_declare_attacker_summoning_sick_returns_false(synthetic_state):
     synthetic_state.add_mana(0, "G", 1)
     elf_id = P0_FIRST_HAND_ID
     assert synthetic_state.cast_creature(elf_id, 0) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     # Sanity check: the just-cast creature is summoning sick.
     assert synthetic_state.is_summoning_sick(elf_id) is True
     # Now try to attack with it — should be refused.
@@ -461,6 +462,7 @@ def test_vigilance_summoning_sick_still_returns_false(synthetic_state):
     synthetic_state.add_mana(0, "G", 1)
     synthetic_state.add_mana(0, "C", 1)  # cover the {1} generic
     assert synthetic_state.cast_creature(obj_id, 0) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     # Just-cast: summoning sick.
     assert synthetic_state.is_summoning_sick(obj_id) is True
     # Vigilance does not grant haste.
@@ -1172,6 +1174,7 @@ def test_haste_creature_can_attack_when_summoning_sick(synthetic_state):
     synthetic_state.add_mana(0, "G", 1)
     synthetic_state.add_mana(0, "C", 1)  # cover the {1} generic
     assert synthetic_state.cast_creature(obj_id, 0) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     # Just-cast: summoning sick.
     assert synthetic_state.is_summoning_sick(obj_id) is True
     # Haste lets it attack despite summoning sickness.
@@ -1191,6 +1194,7 @@ def test_non_haste_creature_summoning_sick_still_rejects(synthetic_state):
     synthetic_state.add_mana(0, "G", 1)
     elf_id = P0_FIRST_HAND_ID  # Llanowar Elves, no haste
     assert synthetic_state.cast_creature(elf_id, 0) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert synthetic_state.is_summoning_sick(elf_id) is True
     # No haste: still rejected.
     assert synthetic_state.declare_attacker(elf_id) is False
@@ -1227,6 +1231,7 @@ def test_haste_creature_taps_when_attacking_unless_vigilance(synthetic_state):
     synthetic_state.add_mana(0, "G", 1)
     synthetic_state.add_mana(0, "C", 1)
     assert synthetic_state.cast_creature(obj_id, 0) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert synthetic_state.is_summoning_sick(obj_id) is True
     assert synthetic_state.is_tapped(obj_id) is False
     # Attack with the haste creature.
@@ -1251,6 +1256,7 @@ def test_haste_plus_vigilance_does_not_tap(synthetic_state):
     synthetic_state.add_mana(0, "G", 1)
     synthetic_state.add_mana(0, "C", 1)
     assert synthetic_state.cast_creature(obj_id, 0) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert synthetic_state.is_summoning_sick(obj_id) is True
     # Haste lets it attack despite summoning sickness.
     assert synthetic_state.declare_attacker(obj_id) is True, (
@@ -2457,6 +2463,7 @@ def test_vigilance_plus_haste_freshly_cast_attacks_untapped(synthetic_state):
     synthetic_state.add_mana(0, "G", 1)
     synthetic_state.add_mana(0, "C", 1)  # cover the {1} generic
     assert synthetic_state.cast_creature(obj_id, 0) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert synthetic_state.is_summoning_sick(obj_id) is True
     # Haste bypasses the summoning-sickness rejection.
     assert synthetic_state.declare_attacker(obj_id) is True, (

@@ -381,6 +381,7 @@ def test_end_turn_and_start_next_clears_summoning_sickness_for_new_active(
     elf_id = 67 + 10
     synthetic_state.add_mana(1, "G", 1)
     assert synthetic_state.cast_creature(elf_id, 1) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert synthetic_state.is_summoning_sick(elf_id) is True
     assert synthetic_state.active_player == 0
     synthetic_state.end_turn_and_start_next()

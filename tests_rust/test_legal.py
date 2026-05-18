@@ -1084,9 +1084,12 @@ def test_legal_decisions_declare_attackers_summoning_sick_without_haste_excluded
     # Fund the mana pool: 1G + 1 generic. We feed G + C.
     state.add_mana(0, "G", 1)
     state.add_mana(0, "C", 1)
-    # Cast it — stamps summoning_sick = true on the battlefield slot.
+    # G7 S1: cast pushes the StackItem; resolve lands it on the bf
+    # with summoning_sick = true (stamped at resolution by
+    # move_source_post_resolve).
     ok = state.cast_creature(bear_id, 0)
     assert ok is True
+    state.resolve_top_of_stack()
     # Confirm the bear is on the battlefield with summoning_sick =
     # true. We read via the snapshot (no player_id arg — emits both
     # players' bf).
@@ -1147,6 +1150,7 @@ def test_legal_decisions_declare_attackers_haste_creature_included(
     state.add_mana(0, "C", 1)
     ok = state.cast_creature(hasty_id, 0)
     assert ok is True
+    state.resolve_top_of_stack()  # G7 S1: land it on the bf
     bf = state.battlefield_snapshot()
     hasty_bf = next(o for o in bf if o["id"] == hasty_id)
     # Stamped sick — but haste on the printing overrides.
@@ -1753,6 +1757,7 @@ def test_legal_decisions_activate_ability_excludes_summoning_sick_creature(
     elves_id = 10
     assert state.printing_name_of(elves_id) == "Llanowar Elves"
     assert state.cast_creature(elves_id, 0) is True
+    state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert state.is_summoning_sick(elves_id) is True
 
     _empty_hand(state, 0)
@@ -2119,6 +2124,7 @@ def test_legal_decisions_declare_blockers_summoning_sick_creature_included(
     state.add_mana(1, "G", 1)
     state.add_mana(1, "C", 1)
     assert state.cast_creature(p1_bear_id, 1) is True
+    state.resolve_top_of_stack()  # G7 S1: land it on the bf
     bf = state.battlefield_snapshot()
     p1_bear_bf = next(o for o in bf if o["id"] == p1_bear_id)
     assert p1_bear_bf["summoning_sick"] is True

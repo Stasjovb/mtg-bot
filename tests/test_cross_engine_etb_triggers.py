@@ -20007,6 +20007,11 @@ def test_r63_warp_exile_recast_pays_normal_cost_clears_warped():
         "kicked": False, "cast_for_free": False,
         "use_impending": False, "cast_room_half": None,
     })
+    # G7 S1: cast_creature now pushes a StackItem (exile-recast is
+    # normalized exile -> hand at cast time); drive the resolve so the
+    # recast WarpBeast lands on the battlefield — byte-equivalent to
+    # the old fused no-stack post-state, just split cast-then-resolve.
+    rs.resolve_top_of_stack()
     pool = dict(rs.get_mana_pool(0))
     assert sum(pool.values()) == 0, (
         f"recast must pay the full {{3}}{{R}} (4 mana) — pool should "
@@ -21717,6 +21722,11 @@ def test_r72_warp_phase2_graveyard_cast_full_then_exile_then_recast():
         "kicked": False, "cast_for_free": False,
         "use_impending": False, "cast_room_half": None,
     })
+    # G7 S1: cast_creature pushes a StackItem (exile-recast normalized
+    # exile -> hand at cast time); drive the resolve so the recast TLC
+    # lands on the battlefield — byte-equivalent to the old fused
+    # no-stack post-state, split cast-then-resolve.
+    rs.resolve_top_of_stack()
     assert len([o for o in rs.battlefield_snapshot()
                 if o["printing_name"] == "TLC"]) == 1, (
         "exile-recast TLC must be back on the battlefield")

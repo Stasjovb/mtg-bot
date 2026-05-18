@@ -6317,6 +6317,31 @@ gate signal (correctly loud). The proper closure is parity-positive
 > see; the prior "Closing G6 unmasked NO G7 / chain fully convergent"
 > claim is **TRUE-ON-THE-SYNTHETIC-DECK-ONLY** and does NOT hold at
 > scale on the admitted real-deck surface.
+>
+> **G7 Slice S1 LANDED (this lane).** `cast_creature`
+> (`rust/src/state_ops_cast.rs`) no longer short-circuits the stack:
+> the non-warp creature cast now pays mana, fires `Event::Cast`, and
+> **pushes a bare `StackItem::new_spell`** (card stays in hand, NO
+> battlefield move, NO `summoning_sick` stamp at cast time, NO
+> auto-resolve) — mirroring `cast_spell_noncreature` exactly. The
+> already-present `resolve_top_of_stack` /
+> `move_source_post_resolve` land the creature on the battlefield at
+> resolution with summoning sickness + the ETB timestamp +
+> `Event::Enters` dispatch, byte-mirroring Python's resolve-time
+> `put_into_battlefield` (`actions.py:2778`/`:2993`). The
+> exile-recast (`from_exile_warped`) branch normalizes exile → hand
+> at cast time (Python `actions.py:1501-1502`) so the stack-resident
+> source stays findable (`find_source_printing_id`/`take_source` do
+> not search exile). **Still OPEN after S1:** `cast_creature_warp` +
+> the warp/impending/room riders remain no-stack (G7 Slice S4); S1 is
+> foundational only and is NOT expected to make the C4 re-sweep clean
+> (that needs S2/S3+). S1 keeps the 4-file core gate at the **1532**
+> baseline UNMOVED (the CE5 cast-vs-resolve mirror still bridges
+> `step_both`; S1 only makes Rust match the stack-then-resolve shape
+> CE5 already expects). Per the settled USER decision the "Fix scope
+> estimate" paragraph below (port CE5 into the bake-in) stays
+> SUPERSEDED — S1 is the first slice of the real
+> stack-and-priority implementation, not the CE5-port false-green.
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both
