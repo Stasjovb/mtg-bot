@@ -1720,6 +1720,49 @@ second:
    >     `LEGAL_SET` follow-up** (todo `fec5f14` — the next
    >     bake-in tripwire after the now-closed `hand_p0`).
    >     Distinct: S4b + warp-EMISSION.
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 30 —
+   >   G7 combat-blocker LEGAL_SET CLOSED + S5-triggers-verify
+   >   CLEAN; cron IN-SYNC, counts UNCHANGED 121/123/23/12/11,
+   >   parity 307/475 / PROBED 106 UNCHANGED; 4-file 1536
+   >   UNMOVED).**
+   >   - **Combat-blocker `LEGAL_SET` (todo `fec5f14`) CLOSED**
+   >     (`f521501d`, `state_ops_legal.rs`-only): Rust's
+   >     blocker-decision emitter lacked Python's no-attackers
+   >     gate (Python `_enter_declare_blockers` returns early
+   >     when zero attackers → emits NO `BlockerDecision`);
+   >     fixed with the byte-mirror conjunct
+   >     `&& !self.attackers.is_empty()` (new-code-is-right).
+   >     Surfaced pin flipped surfaced→closure (still loud +
+   >     exact tripwire; negative controls intact).
+   >   - **HONEST-STOP — 2 distinct pre-existing deeper
+   >     frontiers unmasked (surfaced NOT introduced), pinned
+   >     LOUD + successor todo filed:** (a) arch2/s1 318
+   >     `ActivateAbility` legal-emit-vs-apply mana-
+   >     affordability self-inconsistency (the **B1-axis analog
+   >     for `ActivateAbility`**); (b) arch5/s0 367
+   >     `priority_player` STATE_EQ (deeper production-deck
+   >     **G5-family**).
+   >   - **S5-triggers-verify CLEAN** (`1efee0d4`, pure-Python
+   >     VERIFY, ZERO engine): the full faithfully-bridgeable
+   >     trigger surface composes byte-equal Python↔Rust through
+   >     the S5a re-homed `stack_objects` source — claim HOLDS,
+   >     no hole, no fix slice (6 pins + negative control;
+   >     one honestly-documented harness-bridge limitation for
+   >     the 2-subject `Event.IS_CAST`, NOT an S5a engine hole —
+   >     same re-homed store as ETB, proven by S5a closure-flips
+   >     + pins 2/3/4).
+   >   - Shared `.pyd` rebuilt (combat-blocker real codegen;
+   >     S5-triggers zero-engine); `state_ops_legal.rs`-only →
+   >     no structural-arm fire; `tests_rust` zero-newly-failing.
+   >   - NEXT (2 continuous lanes): **Lane A = S6** (the
+   >     `rust_shadow` bake-in scale verify, NO new masking —
+   >     the penultimate G7 slice) → **S7 CE5 removal LAST** →
+   >     CE5-free re-proof + fresh CE5-free C4 = the final flip
+   >     gate; **Lane B = frontier (a)** the `ActivateAbility`
+   >     legal-emit-vs-apply mana-affordability gap (B1-axis
+   >     analog, earliest unmasked tripwire @ step 318).
+   >     Distinct STILL-OPEN: frontier (b) G5-family
+   >     `priority_player`, S4b, warp-EMISSION.
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
