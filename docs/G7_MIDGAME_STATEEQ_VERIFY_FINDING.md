@@ -775,3 +775,164 @@ the next G7 follow-up.
 `feature/g7-classb-priority-port-fix` off `main @ dc22ebc4`;
 orchestrator owns merge + canonical `.pyd` resync + lane
 serialization.
+
+## 9.3 G7 @369 G1 stateless-Rust attack=False re-emission / B3-S3 provider-accumulation port LANDED (todo `a92e7d4f`)
+
+> **Status: LANDED on `feature/g7-g1-stateless-attacker-decision-port`
+> off `main` @ `89a4f32b`.** The B3-S3 sibling slice the G1
+> stateless-Rust design explicitly deferred has been ported: the
+> `RustGameStateAdapter` now byte-mirrors Python
+> `MtgGameStateAdapter._apply_attacker_decision` /
+> `_finalize_attacker_phase` (and the blocker counterparts).
+> Multi-seed pins flipped: arch5/s0 @369 → CLOSED (next-frontier
+> @504 combat-damage/SBA divergence surfaced); arch7/s0 @757 →
+> CLOSED (next-frontier @808 priority + tapped-state STATE_EQ
+> surfaced); arch30/s1 @321 → CLOSED (next-frontier @431 life-total
+> STATE_EQ surfaced). Shared canonical `.pyd` SHA256/size/mtime
+> byte-identical before/after — orchestrator owns the merge.
+
+**Verify-first reproduction (pre-fix).** The brief's premise — that
+Rust `apply_action(AttackerDecision, attack=false)` is a deliberate
+no-op (`state_ops_actions.rs:1357-1384`) and the
+`RustGameStateAdapter` does not port Python's provider-side
+`_pending_attackers.pop(0)` + `_finalize_attacker_phase` accumulation
+(`engine_adapter.py:1080-1108`) — was confirmed via
+`scripts/scout_classb_arch5s0.py 5 0 365`:
+- Step 368 (pre-apply): Both engines in DECLARE_ATTACKERS combat
+  window. `AttackerDecision(attacker_id=12, attack=False)` is applied.
+- Rust apply: NO-OP (the `false` branch).
+- Step 369 (post-apply): Python's adapter has popped `_pending_attackers[0]
+  = 12`, queue empty → `_finalize_attacker_phase` runs → priority
+  window opens → `legal_decisions()` returns `[PassPriority()]`. Rust
+  still has obj 12 untapped + eligible → emits factored
+  `[('attacker',12,True), ('attacker',12,False)]` pair again. The
+  `rust_shadow` LEGAL_SET_EQ check trips: `rust\py=
+  ["('attacker',12,False)", "('attacker',12,True)"] py\rust=
+  ["('pass',)"]`.
+
+Same signature multi-seed:
+- arch7/s0 @757: `('attacker', 120, False)` re-emission (Knight Luminary).
+- arch30/s1 @321: `('attacker', 80, False)` re-emission (Thawbringer).
+
+**Fix (`rust_engine_adapter.py`, the bridge — zero Rust diff).**
+Faithful mirror of the Python SoT:
+
+1. **`_compute_eligible_attackers(player_id)` /
+   `_compute_eligible_blockers(player_id)`** — Python-side
+   re-computation of Rust's eligibility predicate
+   (`state_ops_legal.rs:1308-1343`) using `battlefield_snapshot()` +
+   the `printing_resolver`. Byte-equal to Rust's filter (controller +
+   not tapped + Creature + not summoning-sick OR has haste + not
+   defender). UEOT-granted-defender is documented as out-of-scope on
+   the loader-admitted EoE surface (zero such cards; would require a
+   Rust pymethod if/when one lands).
+
+2. **`_refresh_combat_phase` — initialize-on-entry only.** Pre-port
+   the queue was re-derived to `[atk_heads[0]]` (just the
+   `min(eligible)` Rust emits) on every `legal_decisions()` call —
+   correct only because `attack=True` taps the creature so Rust's
+   `min(eligible)` advanced naturally; `attack=False` broke this
+   (creature stays eligible, head doesn't advance, queue
+   re-derived to same id forever). Post-port: on the transition
+   `_combat_phase: None → ATTACKERS/BLOCKERS` the queue is sized
+   to the FULL sorted eligible-id list (mirroring Python
+   `_enter_declare_attackers`'s
+   `self._pending_attackers = sorted(o.id for o in eligible)`,
+   `engine_adapter.py:1315`). Within the same window subsequent
+   calls leave the in-flight queue alone — only `apply` pop /
+   `finalize` mutates it.
+
+3. **`_run_priority_action` — pop on apply, finalize on empty.**
+   The `AttackerDecision` / `BlockerDecision` arm now pops
+   `_pending_attackers[0]` / `_pending_blockers[0]` after the Rust
+   `apply_action` dispatch (mirroring Python's
+   `_apply_attacker_decision`'s `_pending_attackers.pop(0)` at
+   `engine_adapter.py:1097`). On an empty queue, calls the
+   freshly-ported `_finalize_attacker_phase` /
+   `_finalize_blocker_phase` (mirror of
+   `engine_adapter.py:1101-1144` minus the
+   `apply_action(DeclareAttackers/Blockers)` — Rust already
+   accumulated via per-decision `declare_attacker` /
+   `declare_blocker` primitives). Out-of-order
+   `AttackerDecision`/`BlockerDecision` raises (loud-fail per
+   `feedback_silent_noop_pipelines`).
+
+4. **`_finalized_combat_window: (turn, phase)`** — a marker
+   capturing the moment `_finalize_*_phase` ran. Within the SAME
+   (turn, phase) `_refresh_combat_phase` and
+   `_combat_decision_maker` treat the window as "done", suppressing
+   factored re-emission while Rust is structurally still in
+   DECLARE_ATTACKERS / DECLARE_BLOCKERS (a declined attacker stays
+   eligible → Rust still emits a factored pair, but Python's
+   adapter has moved on; the marker keeps both adapters in
+   lockstep). When the (turn, phase) tag advances — natural step
+   progression or turn rollover — the marker becomes stale and the
+   adapter is free to enter the next factored window.
+
+5. **`legal_decisions` — synthesize from queue head, filter
+   post-finalize.** Inside an in-flight factored-combat window, the
+   emitted legal set is exactly the factored option pair for
+   `_pending_attackers[0]` / `_pending_blockers[0]` (NOT Rust's
+   `min(eligible)` head). Post-finalize, factored dicts are
+   filtered OUT — only the priority-window set passes through.
+   This is the byte-equal Python adapter shape: factored options
+   only during the window, priority-window set elsewhere
+   (`engine_adapter.py:808-828`).
+
+**Test pins flipped.**
+- `tests/test_rust_shadow_bakein.py`:
+  - `test_g7_activateability_affordability_closed_then_next_frontier_surfaced`'s
+    arch5/s0 row: `(367, 369, "LEGAL_SET_EQ", "py\\rust=[\"('pass',)\"]")`
+    → `(369, 504, "STATE_EQ", "('graveyard_p0'")`. Loop cap
+    400 → 4000.
+  - `test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier`
+    (arch7/s0): `(453, 757, "LEGAL_SET_EQ", "('attacker', 120, False)")`
+    → `(757, 808, "STATE_EQ", "('priority_player', 0, 1)")`.
+  - `test_g7_classd_1of23_thawbringer_mana_affordability_closed_then_next_frontier`
+    (arch30/s1): `(111, 321, "LEGAL_SET_EQ", "('attacker', 80, False)")`
+    → `(321, 431, "STATE_EQ", "('life_p0', 16, 20)")`.
+- `tests/test_g7_s6_scale_verify.py`: Class-B row (arch5/s0) +
+  Class-D row (arch7/s0) flipped identically.
+
+**Next frontiers surfaced (filed as follow-up todos).** Three
+DISTINCT new G-axes unmasked by the @369 closure:
+- arch5/s0 @504: combat-damage outcome / SBA divergence (Python killed
+  Crasher (id 12) + Seedship Agrarian (id 83) via lethal damage;
+  Rust kept them on battlefield).
+- arch7/s0 @808: priority + tapped-state STATE_EQ (Knight Luminary
+  tapped=0 py vs tapped=1 rust; priority_player 0 vs 1).
+- arch30/s1 @431: life-total STATE_EQ (`life_p0` 16 py vs 20 rust;
+  4-life delta consistent with combat-damage outcome).
+
+All three are NEW G-axes distinct from @369/@757/@321 and from prior
+closures; PRE-EXISTING (zero combat-damage parity on the bake-in
+surface before this slice opened the gate); unmasked — NOT introduced
+— by the present closure. Each filed as its own follow-up todo.
+
+**Gate (4-file core / `tests_rust` / audit / bake-in / isolation):**
+
+- 4-file core gate: **1536 PASSED** UNMOVED.
+- `tests_rust`: **30 failed / 2312 passed BYTE-IDENTICAL** to
+  pristine `89a4f32b` (the feedcf93 baseline reds untouched —
+  `Compare-Object` returns empty against main's failure set).
+  Zero newly-failing.
+- `tests/test_g7_s6_scale_verify.py`: 6 pass / 2 PRE-EXISTING fails
+  (arch2/s1 @318 raw → @320 STATE_EQ — the b3f7c0a9
+  library-shuffle-order baseline-rot byte-identical to main; NOT
+  this lane).
+- `tests/test_rust_shadow_bakein.py`: **20/20 green** with all
+  three multi-seed @369/@757/@321 pins flipped to
+  closure+next-frontier-surfaced.
+- `python scripts/check_audit_coverage_staleness.py` exit **0**
+  (no Rust touch → structural arm did not fire).
+- Isolation self-check: shared canonical `.pyd` at
+  `mtg-bot\.venv-py313\Lib\site-packages\mtg_bot_engine\mtg_bot_engine.cp313-win_amd64.pyd`
+  SHA256 `A47C1232C33E61BBD87B28717C916CBD3759E332ED6F913157E0B8DE461D2AB2`
+  size 1523712 mtime `05/18/2026 11:03:29 AM` **byte-identical
+  before/after** the worktree-isolated `.venv-py313` builds.
+  This slice ships **ZERO Rust diff** → no `.pyd` rebuild owed,
+  no canonical resync owed at merge.
+
+**NOT merged / NOT pushed.** Branch
+`feature/g7-g1-stateless-attacker-decision-port` off `main @
+89a4f32b`; orchestrator owns merge.
