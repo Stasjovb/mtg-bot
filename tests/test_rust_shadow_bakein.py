@@ -205,58 +205,87 @@ def test_g7s4_rust_shadow_warp_deck_clean_prefix_then_known_legal_emit_gap():
     )
 
 
-def test_g7_s5a_spellstack_zone_closed_then_blocker_legalset_surfaced():
-    """**G7 S5a closure-flip** (was
-    ``test_g7_midgame_cast_autotap_closed_then_s1_spellstack_zone_surfaced``).
+def test_g7_combat_blocker_legalset_closed_then_next_frontier_surfaced():
+    """**G7 combat-blocker LEGAL_SET closure-flip** (was
+    ``test_g7_s5a_spellstack_zone_closed_then_blocker_legalset_surfaced``;
+    todo ``fec5f14``).
 
-    **PRIOR FRONTIER — CLOSED by G7 S5a (engine fix,
-    new-code-is-right).** The cycle-25 honest-stop pinned a post-cast
-    ``hand_p0``-ONLY STATE_EQ at arch2/s1 step 273 / arch5/s0 step 322:
-    Rust's S1 spell-stack model kept the cast spell's GameObject
-    physically in the ``hand`` Vec (``zone=ZONE_HAND``) while it was on
-    the stack, whereas Python ``_cast_spell`` removes the card from
-    ``p.hand`` and sets ``card.zone=Zone.STACK``
-    (``actions.py:1403``/``:1751``). **S5a re-homes the spell hand →
-    ``GameState.stack_objects`` (the now-live ``ZONE_STACK`` store,
-    Option β)** and extends the three source-resolution walks
-    (``find_source_printing_id`` / ``take_source`` / the
-    ``dispatch_event`` CAST observer walk) + the ``cards.rs`` predicate
-    subject/controller lookups to reach the stack-resident object — so
-    ``hand_snapshot`` (and thus the codec slot source, the
-    determinizer pool, the 3 legal-emit loops, the fingerprint hand
-    slot, and the 4-file/CE ``hand_pX`` field view) byte-match Python's
-    ``p.hand`` exclusion. The ``hand_p0`` STATE_EQ NO LONGER fires:
-    the run proceeds PAST the old step-273/322 boundary.
+    **PRIOR FRONTIER — CLOSED by the combat-blocker legal-emission
+    fix (engine, new-code-is-right toward the Python SoT).** The S5a
+    honest-stop pinned a post-``hand_p0``-closure ``LEGAL_SET_EQ`` at
+    arch2/s1 step **312** / arch5/s0 step **344**: in a
+    DECLARE_BLOCKERS step with priority on the off-active (defender)
+    player, empty stack, and an untapped defender creature but **ZERO
+    attacking creatures**, Rust's blocker-decision emitter
+    (``rust/src/state_ops_legal.rs`` declare-blockers region) still
+    emitted ``('blocker', N, None)`` (arch2/s1 N=9, arch5/s0 N=12),
+    whereas Python's ``MtgGameStateAdapter._enter_declare_blockers``
+    (``engine_adapter.py:1322-1329``) takes the
+    ``if not attackers: self._enter_priority_for_current_step();
+    return`` branch — it NEVER sets ``_combat_phase``, so the
+    rust_shadow combat-window reference (``rust_shadow.py:281-286``,
+    the Python adapter's ``legal_decisions()``) emits NO
+    ``BlockerDecision`` (``py\\rust`` empty = Rust over-emits). **The
+    fix adds the byte-mirror no-attackers gate to the Rust emitter:
+    ``&& !self.attackers.is_empty()``** (Rust's canonical
+    "is attacking" predicate is ``state.attackers`` membership — see
+    the ``FocusFireEffect`` arm, ``state_ops_legal.rs:789-790``; the
+    byte-equal analog of Python's ``[o for o in battlefield if
+    o.attacking]``). The combat-blocker ``LEGAL_SET_EQ`` NO LONGER
+    fires at 312/344: both runs proceed PAST the old boundary.
 
-    **NEXT DISTINCT DIVERGENCE SURFACED (honest-stop — a SEPARATE
-    pre-existing C1-class combat-blocker LEGAL_SET asymmetry, NOT
-    S5a's scope).** With ``hand_p0`` closed, the bake-in now runs to
-    arch2/s1 step **312** / arch5/s0 step **344** then trips a
-    **LEGAL_SET_EQ**: Rust emits an extra ``('blocker', N, None)``
-    (arch2/s1 N=9, arch5/s0 N=12) the Python set lacks (``py\\rust``
-    empty). This is exactly the next divergence the cycle-25 finding
-    (``docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md`` §5) PREDICTED
-    ("then hits LEGAL_SET_EQ ... a combat-blocker emission ... clearly
-    S3/S5/C1-region, definitively out of this lane"). It is a
-    DISTINCT, pre-existing axis (a declare-blockers legal-emission
-    asymmetry), surfaced — not introduced — by closing ``hand_p0``;
-    filed in the cutover ledger + ``SEARCH_LIMITATIONS.md`` as a G7
-    follow-up. Per the established G4/G5/G6 surfaced→closure-flip
-    discipline this pin asserts BOTH: (1) the prior ``hand_p0`` axis
-    is CLOSED (the run goes past the old boundary; no ``hand_p0``
-    STATE_EQ), and (2) the new combat-blocker LEGAL_SET_EQ surfaces
-    LOUDLY at its freshly-characterized boundary (do NOT silently let
-    it pass; if it stops firing the next axis was closed elsewhere —
-    update this pin)."""
+    **NEXT DISTINCT DIVERGENCE SURFACED (honest-stop — SEPARATE,
+    pre-existing, surfaced — NOT introduced — by closing the
+    combat-blocker axis; per-repro, NOT this lane's scope).** With the
+    combat-blocker ``LEGAL_SET_EQ`` closed the bake-in runs further
+    and trips a DIFFERENT divergence on each repro:
+
+    * **arch2/s1 — step 318:** a RAW ``ValueError`` (NOT a
+      ``ShadowDivergenceError`` tripwire — the rust_shadow harness
+      calls ``self._rust.apply`` raw before the NO_RAISE wrapper, so a
+      Rust-side raise is not converted). Rust's ``legal_decisions``
+      offers ``ActivateAbility(source_id=121, ability_index=0)`` but
+      Rust's own ``apply_action`` rejects it: *"ActivateAbility:
+      source 121 cost is unaffordable from controller's mana pool
+      (mana_cost generic=2, W=0, U=0, B=0, R=0, G=0)"*. A
+      **Rust-internal legal-emit-vs-apply self-inconsistency** on
+      activated-ability mana-affordability (a C1-class legal-emission
+      gap — the Rust emitter offers a ``{2}``-cost ability without an
+      affordability gate; Rust apply correctly rejects).
+
+    * **arch5/s0 — step 367:** a ``ShadowDivergenceError`` tripwire
+      ``STATE_EQ`` on ``('priority_player', 1, 0)`` (Python=1,
+      Rust=0) on a ``PassPriority()`` at a DECLARE_ATTACKERS step — a
+      distinct priority-player STATE_EQ divergence (G5-family
+      priority-port region, a deeper production-deck manifestation).
+
+    Both are DISTINCT, pre-existing axes filed as the next G7
+    follow-up in ``SOT_FLIP_CUTOVER_PLAN.md`` §4 +
+    ``SEARCH_LIMITATIONS.md``. Per the established
+    G4/G5/G6/S5a surfaced→closure-flip discipline this pin asserts
+    BOTH: (1) the prior combat-blocker ``LEGAL_SET_EQ`` axis is CLOSED
+    (each run goes PAST the old 312/344 boundary; no combat-blocker
+    ``('blocker', N, None)`` over-emission), and (2) the new per-repro
+    frontier surfaces LOUDLY at its freshly-characterized boundary
+    (do NOT silently let it pass; if it stops firing the next axis was
+    closed elsewhere — re-characterize this pin, do NOT just bump)."""
     pytest.importorskip("mtg_bot_engine")
     from mtg_bot.parity import trajectory
     from mtg_bot.search.engine_adapter_factory import (
         build_shadow_checked_adapter,
     )
 
-    for arch, seed, exp_step, exp_blocker_id in (
-        (2, 1, 312, 9),
-        (5, 0, 344, 12),
+    # Per-repro freshly-characterized next-frontier contract:
+    #   old_boundary  — the closed combat-blocker LEGAL_SET_EQ step
+    #                    (a trip at/before this == the fix regressed)
+    #   exp_step       — the new next-frontier step
+    #   kind           — "raw" (uncaught Rust-side ValueError) or
+    #                    a ShadowDivergenceError tripwire name
+    #   needle         — a substring uniquely characterizing it
+    for (arch, seed, old_boundary, exp_step, kind, needle) in (
+        (2, 1, 312, 318, "raw",
+         "ActivateAbility: source 121 cost is unaffordable"),
+        (5, 0, 344, 367, "STATE_EQ", "('priority_player', 1, 0)"),
     ):
         names = trajectory.load_production_deck(archetype=arch)
         spec = trajectory.production_deck_to_deckspec(
@@ -266,6 +295,7 @@ def test_g7_s5a_spellstack_zone_closed_then_blocker_legalset_surfaced():
         rng = random.Random(seed)
         steps = 0
         raised: ShadowDivergenceError | None = None
+        raw_exc: BaseException | None = None
         while not adapter.is_terminal() and steps < 400:
             try:
                 legal = adapter.legal_decisions()
@@ -280,50 +310,77 @@ def test_g7_s5a_spellstack_zone_closed_then_blocker_legalset_surfaced():
             except ShadowDivergenceError as e:
                 raised = e
                 break
+            except Exception as e:  # noqa: BLE001 — captured, asserted
+                # The rust_shadow harness only converts a *Python*-side
+                # apply raise to NO_RAISE; a Rust-side apply_action
+                # raise propagates raw. The arch2/s1 next frontier is
+                # exactly this (Rust legal/apply self-inconsistency).
+                raw_exc = e
+                break
             steps += 1
 
-        # (1) PRIOR hand_p0 AXIS CLOSED: the run proceeds well PAST the
-        # old cycle-25 cast-step boundary (arch2/s1 273, arch5/s0 322).
-        # A trip at/before the old boundary would mean S5a did NOT
-        # close the spell-stack-source-zone axis (regression — do NOT
-        # update the boundary, fix the engine).
+        # (1) PRIOR combat-blocker LEGAL_SET_EQ AXIS CLOSED: the run
+        # proceeds PAST the old S5a-era boundary (arch2/s1 312,
+        # arch5/s0 344). A trip at/before the old boundary means the
+        # no-attackers gate did NOT close the combat-blocker
+        # over-emission (regression — do NOT bump the boundary, fix
+        # the engine).
+        assert steps > old_boundary, (
+            f"arch{arch}/s{seed}: with the no-attackers gate closing "
+            f"the combat-blocker LEGAL_SET_EQ the run must proceed "
+            f"PAST the old boundary step {old_boundary} (it stopped at "
+            f"{steps}). A stop at/before {old_boundary} means the "
+            f"Rust blocker-emission no-attackers gate regressed — fix "
+            f"the engine, do NOT bump the boundary."
+        )
         assert steps == exp_step, (
-            f"arch{arch}/s{seed}: with S5a closing hand_p0 the run must "
-            f"reach the freshly-characterized next-divergence boundary "
-            f"step {exp_step} (it tripped at {steps}). A trip at/before "
-            f"the old cycle-25 boundary means the hand_p0 re-homing "
-            f"regressed; a different later step means the surfaced "
-            f"frontier moved — re-characterize, do NOT just bump."
+            f"arch{arch}/s{seed}: expected the freshly-characterized "
+            f"next-frontier boundary step {exp_step}, got {steps}. A "
+            f"different step means the surfaced frontier moved — "
+            f"re-characterize this pin, do NOT just bump."
         )
-        # (2) THE NEW DISTINCT DIVERGENCE SURFACES LOUDLY: a
-        # combat-blocker LEGAL_SET_EQ (Rust emits an extra
-        # ('blocker', N, None) Python lacks). NOT a STATE_EQ on
-        # hand_p0 — that axis is closed.
-        assert raised is not None, (
-            f"arch{arch}/s{seed}: the next distinct divergence (the "
-            f"C1-class combat-blocker LEGAL_SET asymmetry the cycle-25 "
-            f"finding predicted) must still SURFACE post-S5a. If it no "
-            f"longer fires it was closed elsewhere — update this pin to "
-            f"the closed contract (do NOT silently pass)."
-        )
-        assert raised.tripwire == "LEGAL_SET_EQ", (
-            f"arch{arch}/s{seed}: expected the predicted next-axis "
-            f"LEGAL_SET_EQ (a Rust-extra declare-blockers emission), "
-            f"got {raised.tripwire}: {str(raised)[:300]!r} — a "
-            f"DIFFERENT tripwire is a further honest-stop-unmasked "
-            f"divergence; pin it + flag the slice owner, do NOT paper."
-        )
-        msg = str(raised)
-        assert f"('blocker', {exp_blocker_id}, None)" in msg, (
-            f"arch{arch}/s{seed}: the surfaced LEGAL_SET_EQ must be "
-            f"PRECISELY the characterized Rust-extra "
-            f"('blocker', {exp_blocker_id}, None). Got: {msg[:300]!r}."
-        )
-        assert "rust\\py" in msg and "py\\rust=[]" in msg, (
-            f"arch{arch}/s{seed}: the asymmetry direction must be "
-            f"Rust-emits-extra (rust\\py non-empty, py\\rust empty) — "
-            f"a Rust-side over-emission of the blocker decision. Got: "
-            f"{msg[:300]!r}."
+        # (2) THE NEW DISTINCT PER-REPRO FRONTIER SURFACES LOUDLY. It
+        # is NOT the (now-closed) combat-blocker LEGAL_SET_EQ.
+        if kind == "raw":
+            assert raw_exc is not None and raised is None, (
+                f"arch{arch}/s{seed}: expected the characterized "
+                f"Rust-side raw {needle!r} legal/apply "
+                f"self-inconsistency (NOT a ShadowDivergenceError). "
+                f"raw={raw_exc!r} tripwire={raised!r}. If it no longer "
+                f"fires the axis was closed elsewhere — re-characterize."
+            )
+            assert needle in str(raw_exc), (
+                f"arch{arch}/s{seed}: the surfaced raw exception must "
+                f"be PRECISELY the characterized {needle!r}. Got: "
+                f"{str(raw_exc)[:300]!r}."
+            )
+        else:
+            assert raised is not None and raw_exc is None, (
+                f"arch{arch}/s{seed}: the next distinct divergence "
+                f"must SURFACE as a {kind} ShadowDivergenceError. "
+                f"raised={raised!r} raw={raw_exc!r}. If it no longer "
+                f"fires it was closed elsewhere — re-characterize this "
+                f"pin (do NOT silently pass)."
+            )
+            assert raised.tripwire == kind, (
+                f"arch{arch}/s{seed}: expected tripwire {kind}, got "
+                f"{raised.tripwire}: {str(raised)[:300]!r} — a "
+                f"DIFFERENT tripwire is a further honest-stop-unmasked "
+                f"divergence; re-characterize + flag the slice owner, "
+                f"do NOT paper."
+            )
+            assert needle in str(raised), (
+                f"arch{arch}/s{seed}: the surfaced {kind} must be "
+                f"PRECISELY the characterized {needle!r}. Got: "
+                f"{str(raised)[:300]!r}."
+            )
+        # The closed axis must NOT be what surfaced: neither path may
+        # be the old combat-blocker ('blocker', N, None) over-emission.
+        surfaced_msg = str(raised) if raised is not None else str(raw_exc)
+        assert "blocker" not in surfaced_msg, (
+            f"arch{arch}/s{seed}: the surfaced divergence still "
+            f"mentions a blocker — the combat-blocker LEGAL_SET_EQ was "
+            f"NOT actually closed: {surfaced_msg[:300]!r}."
         )
 
 

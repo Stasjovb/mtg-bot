@@ -1318,12 +1318,43 @@ impl GameState {
         //
         // Gate: `phase == PHASE_DECLARE_BLOCKERS` AND
         // `priority_player != active_player` (defender declares, NOT
-        // the attacker — CR 509.1) AND `stack.is_empty()`. Priority
-        // is already confirmed above. The
+        // the attacker — CR 509.1) AND `stack.is_empty()` AND
+        // `!self.attackers.is_empty()` (there is at least one
+        // attacking creature — see the no-attackers gate below).
+        // Priority is already confirmed above. The
         // `priority_player != active_player` check is the inversion
         // of the DeclareAttackers gate — only the defender (off-turn
         // player) declares blockers, so we want to emit for the
         // OFF-active priority holder.
+        //
+        // **No-attackers gate (G7 combat-blocker LEGAL_SET fix,
+        // new-code-is-right toward the Python SoT).** Python's
+        // `MtgGameStateAdapter._enter_declare_blockers`
+        // (`engine_adapter.py:1322-1329`) computes
+        // `attackers = [o for o in battlefield if o.attacking]` and,
+        // if it is EMPTY, takes the `if not attackers:
+        // self._enter_priority_for_current_step(); return` branch —
+        // it NEVER sets `_combat_phase = _COMBAT_BLOCKERS`, so the
+        // adapter's `legal_decisions()` (the rust_shadow combat-window
+        // reference, `rust_shadow.py:281-286`) emits NO
+        // `BlockerDecision` at all (it falls through to the raw
+        // priority-window `legal_actions`). Pre-fix the Rust emitter
+        // gated only on phase/priority/empty-stack + an eligible
+        // (untapped) defender creature, so with zero attackers it
+        // STILL emitted `('blocker', head, None)` — over-emitting a
+        // blocker decision Python prunes (the
+        // `rust\\py=[('blocker', N, None)] py\\rust=[]` G7
+        // divergence, `docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` §5;
+        // arch2/s1 step 312 N=9, arch5/s0 step 344 N=12). The Rust
+        // canonical "is attacking" predicate is `state.attackers`
+        // membership (see the `FocusFireEffect` arm above,
+        // `state_ops_legal.rs:789-790`: *"A creature is attacking iff
+        // its id is in `state.attackers`"*); Python's `o.attacking`
+        // is the byte-equal analog. `self.attackers` is the
+        // active-player-committed attacker set
+        // (`state_ops_combat.rs:declare_attacker` pushes onto it).
+        // So `!self.attackers.is_empty()` byte-mirrors Python's
+        // `if not attackers` no-blocking-phase guard.
         //
         // Eligibility per `src/mtg_bot/combat.py:eligible_blockers`
         // (lines 26-32): on the defender's battlefield, is a
@@ -1336,6 +1367,7 @@ impl GameState {
         if self.phase == PHASE_DECLARE_BLOCKERS
             && self.priority_player != self.active_player
             && self.stack.is_empty()
+            && !self.attackers.is_empty()
         {
             // Collect eligible blockers in battlefield iteration
             // order (stable across calls). Per CR 302.1, summoning-
