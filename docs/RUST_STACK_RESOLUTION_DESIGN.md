@@ -437,6 +437,53 @@ cast internals, so it is UNMOVED by construction; any byte-shift in a
 
 ### Slice S4 — `cast_creature_warp` + permanent-spell riders (warp / impending / room / cast-from-X provenance)
 
+> **STATUS — S4 LANDED (`bb9e490b`) + S5a re-home LANDED (`eb0fd0ca`),
+> BOTH ancestors of the S6 sweep `a9126b06`. The S6-evidence "Class C
+> = warp creatures resolve atomically in Rust vs on-stack in Python"
+> framing is VERIFY-FIRST CONTRADICTED at `main` @ `3a963e0f`.** The
+> G7 Class-C lane (`feature/g7-classc-warp-onstack`) drove the
+> canonical S6 Class-C repros (arch1/s1 Starbreach Whale obj 81;
+> arch4/s0 Germinating Wurm obj 12) through the role-swapped
+> `rust_shadow` bake-in at HEAD and found: `cast_creature_warp`
+> ALREADY pushes a `StackItem::new_spell` + re-homes the spell
+> hand/gy → `stack_objects` (S5a Option-β) and does NOT auto-resolve;
+> the warp creature tracks **byte-IDENTICAL** Python↔Rust through
+> cast → stack → resolve-to-battlefield for ~17 steps. **The warp
+> cast path is NOT atomic; there is no atomic→stack diff to apply
+> (the brief's prescribed fix is already landed — manufacturing one
+> would be a fabricated no-op, `feedback_no_fallback_hybrids`).**
+> **The REAL Class-C root cause is the warp-EXILE
+> delayed-trigger-vs-deterministic-sweep DELIBERATE divergence**
+> documented at `docs/SEARCH_LIMITATIONS.md` ("warp end-step exile is
+> a PHASE_END_STEP-entry sweep, NOT a CR-603.7 delayed trigger") — at
+> the END step Python pushes the `WarpExileSelf` delayed trigger onto
+> the stack (a response window) while Rust's deterministic
+> phase-entry sweep (`state_ops_steps.rs::warp_exile_sweep_on_end_
+> step`) has already moved the creature bf→exile_pX. It is the
+> S4-finding's explicitly-flagged **Phase-3 follow-on**
+> (`G7_S4_VERIFY_FINDING.md` §6 "the delayed-trigger port remains the
+> only Phase-3 follow-on … correctness-completeness work"), a
+> pre-existing documented divergence **surfaced at scale** by the
+> bake-in's uniform-random driver holding priority at the end step
+> (which the bench's `attack_all` strategy never did) — NOT a
+> regression, NOT the atomic-cast hole. **Class C is heterogeneous**
+> (honest-stop): re-characterizing the SAME `s6_scale_verify.json`,
+> the warp/exile/library STATE_EQ bucket is **~31 warp-EXILE
+> delayed-trigger** (this root cause) + **~11 `library_pX`
+> shuffle-order** (the SEPARATE filed todo `b3f7c0a9`, NOT warp, NOT
+> this lane). Pinned LOUD by `tests/test_rust_shadow_bakein.py::
+> test_g7_classc_warpexile_delayed_trigger_root_cause_pinned`; the
+> S6 Class-C inventory row label corrected (verdict UNMOVED, only the
+> false root-cause label). **The genuine fix = port a Rust
+> `delayed_triggers` model + the `WarpExileSelf` stack-push response
+> window (filed todo); it is materially out of one safe slice and is
+> NOT this lane's deliverable.** 4-file core gate **1536 UNMOVED**;
+> `tests_rust` zero-newly-failing; zero `rust/src/` change. The S4
+> design text below is the AS-DESIGNED record (the stack-push was
+> implemented exactly as specified and proven; S4b's
+> non-creature-permanent boundary remains the distinct flagged slice
+> — separate from this warp-exile axis).
+
 - **Scope.** Apply the S1 stack-push shape to `cast_creature_warp`
   (`state_ops_cast.rs:621-743`) and carry the rider/provenance state
   Python stamps on the **card** at cast time (`cast_via_warp`,

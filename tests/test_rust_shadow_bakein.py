@@ -205,6 +205,197 @@ def test_g7s4_rust_shadow_warp_deck_clean_prefix_then_known_legal_emit_gap():
     )
 
 
+def test_g7_classc_warpexile_delayed_trigger_root_cause_pinned():
+    """**G7 S6-Class-C verify-first root-cause pin (HONEST-STOP).**
+
+    The S6 scale-verify evidence
+    (``docs/G7_S6_SCALE_VERIFY_EVIDENCE.md`` + ``s6_scale_verify.json``)
+    labelled Class C (44/300) *"warp-EMISSION/S4b — warp creatures
+    resolve atomically in Rust vs on-stack in Python; the S1/S5a
+    treatment never applied to the warp cast path"*. **Verify-first
+    against live ``main`` @ ``3a963e0f`` CONTRADICTS that premise** and
+    this pin locks the REAL, empirically-verified root cause so a
+    future fix lane cannot regress to the false framing or manufacture
+    a no-op atomic→stack diff:
+
+    1. **The warp CAST path is NOT atomic — S4 (``bb9e490b``) + S5a
+       (``eb0fd0ca``) already landed and are ancestors of the S6
+       sweep ``a9126b06``.** ``cast_creature_warp``
+       (``rust/src/state_ops_cast.rs``) ALREADY pushes a
+       ``StackItem::new_spell`` + re-homes the spell hand/gy →
+       ``stack_objects`` (S5a Option-β) and does NOT auto-resolve.
+       Traced on the canonical Class-C repro **arch1/s1** (Starbreach
+       Whale ``Warp {1}{U}``, obj 81): the warp ``CastSpell(card_id=81,
+       use_warp=True)`` at step 151 pushes the creature on the stack
+       on BOTH engines, and obj 81 tracks **byte-IDENTICAL** through
+       cast → stack → resolve-to-battlefield for ~17 steps
+       (151→168). There is no atomic-resolve to fix.
+
+    2. **The REAL Class-C root cause is the warp-EXILE
+       delayed-trigger-vs-deterministic-sweep deliberate divergence,
+       documented at ``docs/SEARCH_LIMITATIONS.md`` "warp end-step
+       exile is a PHASE_END_STEP-entry sweep, NOT a CR-603.7 delayed
+       trigger".** At the END step (step 169 for arch1/s1; step 192
+       for arch4/s0 Germinating Wurm obj 12): Python schedules the
+       warp permanent's exile as a CR-603.7 ``WarpExileSelf`` delayed
+       triggered ability that ``turn.run_delayed_end_step_triggers``
+       **pushes onto the stack** (response window); Rust has no
+       ``delayed_triggers`` Vec and instead does a **deterministic
+       mutation on entry to PHASE_END_STEP**
+       (``state_ops_steps.rs::warp_exile_sweep_on_end_step``) —
+       sweeping the creature battlefield → exile_pX immediately, no
+       stack-pushed trigger. So at the divergence step Python =
+       {creature on bf + ``WarpExileSelf`` trigger on the stack},
+       Rust = {creature in exile_pX, off bf, stack empty}. This is
+       EXACTLY the ``SEARCH_LIMITATIONS.md`` "Failure mode": a
+       scenario where the warp-exile delayed trigger sits on the
+       Python stack with a response window vs Rust's atomic
+       phase-entry sweep. The doc said "No such card/scenario exists
+       in the EoE pool's bridge-admitted set today" — true for the
+       bench's ``attack_all`` strategy, but the role-swapped
+       ``rust_shadow`` bake-in's uniform-random driver DOES hold
+       priority at the end step and the per-apply STATE_EQ DOES
+       compare that delayed-trigger window. **It is a pre-existing
+       documented deliberate divergence surfaced at scale, NOT a
+       regression and NOT the brief's atomic-cast hole.**
+
+    3. **Class C is heterogeneous (honest-stop, per the brief).**
+       Re-characterizing the SAME committed ``s6_scale_verify.json``
+       (``scripts/scout_classc_classify.py``): of the warp/exile/
+       library STATE_EQ bucket, **~31** are the warp-EXILE
+       delayed-trigger root cause above and **~11** are the SEPARATE
+       ``library_pX`` shuffle-order divergence (per-engine shuffle
+       RNG not lockstep) — the latter is **already owned by the
+       distinct filed todo ``b3f7c0a9``** (the arch2/s1-step-320
+       shuffle-order frontier from cycle 32), NOT a warp issue and
+       NOT this lane.
+
+    The honest deliverable is therefore: NO engine diff (the brief's
+    fix is already applied; manufacturing one would be a fabricated
+    no-op — ``feedback_no_fallback_hybrids`` / no manufactured diff),
+    a filed todo for the genuine fix (the Rust warp-exile
+    delayed-trigger / ``delayed_triggers`` port — materially out of
+    one safe slice; the S4-finding's Phase-3 follow-on), and this
+    LOUD pin. If a future lane ports the delayed-trigger model and
+    closes the warp-exile axis, the ``raised is not None`` /
+    signature assertions flip and this pin must be updated to the
+    closed contract (new-code-is-right) — it must NEVER silently
+    pass."""
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity import trajectory
+    from mtg_bot.parity.cross_engine import (
+        build_python_field_view, compare_fields, parity_smoke,
+    )
+    from mtg_bot.search.rust_shadow import (
+        build_shadow_checked_adapter as _bsca,
+    )
+
+    # The canonical Class-C repro the S6 evidence cites: arch1/s1,
+    # Starbreach Whale (Warp {1}{U}), obj 81, divergence step 169.
+    deck = trajectory.load_production_deck(archetype=1)
+    spec = trajectory.production_deck_to_deckspec(deck, shared_rng_seed=1)
+    adapter = _bsca(spec)
+    py_a, rust_a = adapter.py_adapter, adapter.rust_adapter
+    ps = parity_smoke()
+
+    rng = random.Random(1)
+    steps = 0
+    raised: ShadowDivergenceError | None = None
+    cast_seen_on_stack_both = False
+    while not adapter.is_terminal() and steps < 4000:
+        try:
+            legal = adapter.legal_decisions()
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        if not legal:
+            break
+        choice = rng.choice(legal)
+        try:
+            adapter.apply(choice)
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        # Window proof (point 1): right after the warp cast the
+        # creature is on the stack on BOTH engines (NOT atomic on
+        # Rust). Recorded once; the run continues to the real
+        # warp-EXILE divergence.
+        if not cast_seen_on_stack_both:
+            pv = build_python_field_view(py_a.engine_state)
+            rv = ps._build_field_view(rust_a.rust_state)
+            in_stack = lambda v: any(  # noqa: E731
+                isinstance(t, (list, tuple)) and t and t[-1] == 81
+                for t in (v or ())
+            )
+            if in_stack(pv.get("stack")) and in_stack(rv.get("stack")):
+                cast_seen_on_stack_both = True
+        steps += 1
+
+    # (1) The warp creature WAS on the stack on BOTH engines at some
+    # point — proves the S4/S5a stack-push genuinely applies to the
+    # warp cast path (the brief's "atomic" premise is contradicted).
+    assert cast_seen_on_stack_both, (
+        "VERIFY-FIRST CONTRADICTION CHECK: the warp creature (obj 81) "
+        "must appear on the stack on BOTH engines after the warp "
+        "CastSpell — proving cast_creature_warp is NOT atomic "
+        "(S4+S5a already landed). If this never held, the warp cast "
+        "path regressed to atomic — that IS the brief's hole; "
+        "re-open S4b. (Here it DID hold: not atomic.)"
+    )
+
+    # (2) The run trips at the warp-EXILE divergence (the real
+    # Class-C root cause), LOUD — not masked, not silently passing.
+    assert raised is not None, (
+        "the warp-EXILE delayed-trigger-vs-deterministic-sweep "
+        "divergence must still SURFACE on arch1/s1. If it no longer "
+        "fires, the warp-exile axis was closed elsewhere (the "
+        "delayed-trigger port landed) — UPDATE this pin to the closed "
+        "contract; do NOT let it silently pass (that would be exactly "
+        "the masking S6 exists to rule out)."
+    )
+    assert raised.tripwire == "STATE_EQ", (
+        f"expected the warp-exile STATE_EQ shape, got "
+        f"{raised.tripwire}: {str(raised)[:300]!r}"
+    )
+    msg = str(raised)
+    # The exact verified signature: Starbreach Whale, the three
+    # divergent fields (exile / battlefield / stack), and explicitly
+    # NOT a closed-axis (hand_p0) or non-warp shape.
+    assert "Starbreach Whale" in msg, (
+        f"the surfaced divergence must be the warp creature "
+        f"(obj 81 Starbreach Whale). Got: {msg[:400]!r}"
+    )
+    pv = build_python_field_view(py_a.engine_state)
+    rv = ps._build_field_view(rust_a.rust_state)
+    divs = {d.field: (d.py_value, d.rust_value)
+            for d in compare_fields(pv, rv)}
+    # Rust swept the Whale to exile_p1 (deterministic sweep); Python
+    # did NOT (the delayed trigger has not resolved — Whale still on
+    # bf, WarpExileSelf trigger on the stack).
+    assert "exile_p1" in divs and divs["exile_p1"][0] == () and any(
+        t and t[-1] == 81 for t in divs["exile_p1"][1]
+    ), f"expected Rust-only exile_p1 Whale, got {divs.get('exile_p1')!r}"
+    assert "battlefield" in divs and any(
+        t and t[-1] == 81 for t in divs["battlefield"][0]
+    ) and not any(
+        t and t[-1] == 81 for t in divs["battlefield"][1]
+    ), "expected Whale on Python bf but NOT Rust bf (sweep removed it)"
+    # Python has a stack object with source-id 81 (the WarpExileSelf
+    # delayed trigger pushed onto the stack); Rust's stack is empty
+    # (deterministic sweep, no trigger). This is the CR-603.7
+    # delayed-trigger-vs-deterministic-sweep deliberate divergence.
+    assert "stack" in divs and any(
+        t and t[-1] == 81 for t in divs["stack"][0]
+    ) and divs["stack"][1] == (), (
+        f"expected Python WarpExileSelf(src=81) on the stack and an "
+        f"empty Rust stack, got {divs.get('stack')!r}"
+    )
+    assert "hand_p0" not in msg, (
+        "REGRESSION GUARD: the CLOSED non-warp atomic-cast hand_p0 "
+        f"axis must NOT appear in the Class-C shape. Got: {msg[:300]!r}"
+    )
+
+
 def test_g7_activateability_affordability_closed_then_next_frontier_surfaced():
     """**G7 ActivateAbility-affordability closure-flip** (was
     ``test_g7_combat_blocker_legalset_closed_then_next_frontier_surfaced``

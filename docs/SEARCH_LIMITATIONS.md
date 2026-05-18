@@ -1908,6 +1908,33 @@ allow the response window (the delayed trigger sits on the stack)
 and Rust not (the sweep is an atomic phase-entry mutation). No such
 card/scenario exists in the EoE pool's bridge-admitted set today.
 
+> **[G7 S6-Class-C — this Failure mode is now ACTIVELY SURFACED at
+> scale by the role-swapped `rust_shadow` bake-in (verify-first,
+> `main` @ `3a963e0f`).]** The "no such scenario exists" caveat is
+> true for the bench's `attack_all` strategy (which never holds
+> priority at the end step), but the role-swapped `rust_shadow`
+> bake-in's **uniform-random** driver DOES hold priority at the end
+> step and the per-apply STATE_EQ DOES compare the
+> delayed-trigger-on-stack window. This is the **dominant ~31/300
+> piece of S6 "Class C"** (canonical repros: arch1/s1 Starbreach
+> Whale obj 81 @ step 169; arch4/s0 Germinating Wurm obj 12 @ step
+> 192): at the END step Python has {warp creature on bf +
+> `WarpExileSelf` delayed trigger on the stack}, Rust has {creature
+> swept to exile_pX, off bf, stack empty}. **This is NOT a
+> regression and NOT the S6-evidence's "warp creatures resolve
+> atomically" framing** — S4 (`bb9e490b`) + S5a (`eb0fd0ca`) already
+> made the warp CAST path stack-then-resolve (verified byte-equal
+> for ~17 steps before the END-step warp-exile); it is THIS
+> documented deliberate divergence surfaced at scale. Pinned LOUD by
+> `tests/test_rust_shadow_bakein.py::
+> test_g7_classc_warpexile_delayed_trigger_root_cause_pinned`; the
+> S6 Class-C inventory-row label corrected (verdict UNMOVED). The
+> remaining ~11/300 of S6 "Class C" are the SEPARATE `library_pX`
+> shuffle-order axis (todo `b3f7c0a9`), not this warp-exile axis.
+> Cross-ref: `docs/RUST_STACK_RESOLUTION_DESIGN.md` S4 status block,
+> `docs/G7_S4_VERIFY_FINDING.md` §6, `docs/SOT_FLIP_CUTOVER_PLAN.md`
+> §4 G7 row.
+
 **Fix scope**: port Python's `state.delayed_triggers` Vec +
 `run_delayed_end_step_triggers` + a stack-pushed `WarpExileSelf`
 analog to Rust (a larger follow-on; the cost-mechanic family's
