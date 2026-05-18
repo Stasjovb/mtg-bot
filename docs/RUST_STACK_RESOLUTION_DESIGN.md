@@ -289,6 +289,48 @@ cast internals, so it is UNMOVED by construction; any byte-shift in a
 
 ### Slice S2 — `resolve_top_of_stack` byte-equal with Python for the permanent-spell path
 
+> **STATUS: S2 LANDED — CLEAN-VERIFY NO-OP (no resolver code change).**
+> Verify-first read against live source @ `d59970c9` concluded the
+> resolver is **already byte-equal** with Python `put_into_battlefield`
+> (`src/mtg_bot/actions.py:2969`; NOTE the brief's
+> `src/mtg_bot/engine/actions.py` path is stale — the SoT lives at
+> `src/mtg_bot/actions.py`) on all THREE S2 axes for the **only
+> permanent-spell type S1 can stack**: a CREATURE spell via
+> `cast_creature` (`state_ops_cast.rs:492`, hard `Creature` gate
+> `:541-542`). **Axis 1 (ETB-timestamp monotonicity):** byte-equal —
+> the parity contract reads bf ORDER (`battlefield_snapshot`
+> stable-sort by `etb_timestamp`, `state_ops_snapshot.rs:211`), never
+> absolute counter values, so Rust's separate-but-monotonic
+> `next_etb_timestamp` (CE4-era design, predates S2) is byte-equal to
+> Python's shared `next_timestamp` for relative bf ordering; the
+> `&& creature` summoning-sick guard at
+> `state_ops_resolve.rs:301-303` agrees with Python's unconditional
+> `actions.py:2993` set for the creature case. **Axis 2 (ENTERS
+> push-ordering):** byte-equal — both engines dispatch ENTERS only
+> after the resolving spell's StackItem is popped AND the object is on
+> bf. **Axis 3 (aura/attach):** UNREACHABLE via the S1 primitives —
+> bare Enchantment/Artifact/Planeswalker/Aura fall through BOTH
+> `cast_spell_noncreature` (Instant|Sorcery only) and `cast_creature`
+> (Creature only), so the latent `&& creature` non-creature-permanent
+> divergence and the missing resolve-time aura attach
+> (`actions.py:2720-2758`) are S4+ territory (as this slice's scope
+> note already anticipated: "auras may be S4/out-of-scope first cut").
+> S2 added **no `rust/src/` change**; it landed 4 verify-confirm pins
+> in `tests_rust/test_resolve.py` (`test_s2_*`) locking the byte-equal
+> conclusion + the non-creature-permanent boundary tripwire (a future
+> S4 that opens non-creature-permanent casting trips the boundary pin
+> and is forced to fix the guard + aura attach — new-code-is-right).
+> 4-file core gate **1532 UNMOVED**. **S3/S4 note surfaced:** the
+> `&& creature` summoning-sick guard and the absent resolve-time
+> aura-attach are S4's, NOT S3's — and S3 must NOT assume the
+> non-creature-permanent resolve path exists yet (it does not until
+> S4). The 2 pre-existing `tests_rust/test_triggers.py` land-search /
+> landfall failures (`test_rs2_search_library_for_basic_land_tapped_
+> fires_etb`, `test_landfall_observer_fires_on_land_arrival`) are
+> **pre-existing on `main` @ `d59970c9`** (fail identically on the
+> shared venv with zero code change), NOT in the 4-file gate, and
+> outside S2 scope — flagged for the orchestrator.
+
 - **Scope.** Verify/extend `move_source_post_resolve` +
   `resolve_top_of_stack`'s spell branch so a stacked permanent spell
   lands on bf **byte-identical to Python `put_into_battlefield`**:

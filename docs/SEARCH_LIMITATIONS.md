@@ -6342,6 +6342,58 @@ gate signal (correctly loud). The proper closure is parity-positive
 > estimate" paragraph below (port CE5 into the bake-in) stays
 > SUPERSEDED — S1 is the first slice of the real
 > stack-and-priority implementation, not the CE5-port false-green.
+>
+> **G7 Slice S2 LANDED — CLEAN-VERIFY NO-OP (this lane, no resolver
+> code change).** Verify-first against live source @ `d59970c9`: the
+> resolver (`resolve_top_of_stack` spell branch +
+> `move_source_post_resolve`, `rust/src/state_ops_resolve.rs`) is
+> **already byte-equal** with Python `put_into_battlefield`
+> (`src/mtg_bot/actions.py:2969` — the brief's
+> `src/mtg_bot/engine/actions.py` path is STALE) on the three S2 axes
+> for the only permanent-spell type S1 can stack (a CREATURE spell via
+> `cast_creature`'s hard `Creature` gate `state_ops_cast.rs:541-542`):
+> **(1) ETB-timestamp monotonicity** — the parity contract compares bf
+> ORDER (`battlefield_snapshot` stable-sorts by `etb_timestamp`,
+> `state_ops_snapshot.rs:211`), never absolute counter values, so
+> Rust's separate-but-monotonic `next_etb_timestamp` (CE4-era design)
+> is byte-equal to Python's shared `next_timestamp` for relative bf
+> ordering; **(2) ENTERS push-ordering** — both engines dispatch
+> ENTERS only after the resolving StackItem is popped + the object is
+> on bf; **(3) aura/attach** — UNREACHABLE (see the DEFERRED note
+> below). S2 added NO `rust/src/` change; it landed 4 verify-confirm
+> pins (`tests_rust/test_resolve.py::test_s2_*`) + this status note. 4-
+> file core gate **1532 UNMOVED**.
+>
+> **DEFERRED to S4 (latent / unreachable in post-S2 build — documented
+> divergence).** Python `put_into_battlefield:2993` sets
+> `summoning_sick = True` **unconditionally for EVERY permanent**
+> (creature, artifact, enchantment, planeswalker, battle); Rust
+> `move_source_post_resolve` (`state_ops_resolve.rs:301-303`) only
+> stamps it under an `&& creature` guard. Python also attaches auras +
+> applies `apply_aura_static_grants_on_attach` at resolve
+> (`actions.py:2720-2758`); Rust's resolve path has no aura-attach.
+> **Why it is OK now:** a bare Enchantment/Artifact/Planeswalker/Aura
+> (no Creature, no Instant/Sorcery type) falls through BOTH Rust cast
+> primitives (`cast_spell_noncreature` requires Instant|Sorcery
+> `state_ops_cast.rs:891-901`; `cast_creature` requires Creature
+> `:541-542`), so it **cannot be cast/stacked at all** in the post-S2
+> build — the `&& creature` summoning-sick divergence and the missing
+> aura attach are unreachable. **Failure mode if not-OK:** when G7
+> Slice S4 opens non-creature-permanent / aura casting, a resolved
+> bare artifact/enchantment would have `summoning_sick=false` (Rust)
+> vs `True` (Python) on the bf-zone signature, and a resolved aura
+> would not attach — a STATE_EQ divergence. **Tripwire:**
+> `tests_rust/test_resolve.py::test_s2_non_creature_permanent_cannot_
+> be_stacked_boundary` asserts the current honest boundary (both
+> primitives reject a bare Enchantment); the S4 lane that opens this
+> path flips that assertion and is FORCED to fix the `&& creature`
+> guard (drop the guard — Python is unconditional) + add resolve-time
+> aura attach (new-code-is-right; never weaken the tripwire).
+> **Fix-scope estimate:** S4 — small (drop the `&& creature` guard to
+> match Python's unconditional set; aura attach is a larger
+> resolve-branch port mirroring `actions.py:2720-2758`).
+> **Impact estimate:** zero strength/perf impact today (unreachable);
+> correctness-only at S4.
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both
