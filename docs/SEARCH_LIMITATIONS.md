@@ -6446,6 +6446,80 @@ gate signal (correctly loud). The proper closure is parity-positive
 > full C4/`rust_shadow` bake-in is NOT expected clean post-S3 but
 > the post-cast priority/resolution SEQUENCE is byte-equal for the
 > creature case.
+>
+> **G7 Slice S4 LANDED (this lane).** `cast_creature_warp`
+> (`rust/src/state_ops_cast.rs`) no longer fuses cast+resolve: the
+> warp creature cast now pays `warp_cost`, debits the warp life
+> rider, sets `state.spell_warped_this_turn = true` (the genuinely
+> cast-time riders — Python `_cast_spell` sets all three BEFORE the
+> StackItem push: `actions.py:1427`/`:1432`/`:1457`/`:1460`), stamps
+> `warp_exile_pending = true` on the **stack-resident SOURCE object**
+> (NOT on a bf object — there is none yet), fires `Event::Cast`, and
+> **pushes a bare `StackItem::new_spell`** — NO bf move, NO
+> cast-time `summoning_sick`, NO auto-resolve. The graveyard-warp
+> source is normalized graveyard → hand at cast time (the exact S1
+> exile-recast pattern, byte-mirroring Python's
+> `p.graveyard.remove(card)` + `card.zone = STACK`,
+> `actions.py:1450`/`:1751`). The already-present
+> `resolve_top_of_stack` / `move_source_post_resolve` land the
+> creature on the battlefield at resolution with summoning sickness +
+> the ETB timestamp + `Event::Enters`, byte-mirroring Python's
+> `put_into_battlefield` (`actions.py:2993`). **The design's "key
+> risk" — the `warp_exile_sweep_on_end_step`
+> (`state_ops_steps.rs:365`) keying off the bf object — is resolved
+> structurally with NO new field and NO `state.rs`/serialization
+> touch:** `take_source` moves the WHOLE owned `GameObject`
+> (`state_ops_resolve.rs:230-245`) so the cast-time
+> `warp_exile_pending` rides through resolution onto the
+> post-resolution bf object, exactly where the sweep reads it (the
+> direct mirror of S1's exile-recast object-field-on-the-source
+> pattern). `move_from_graveyard_to_battlefield` /
+> `move_from_exile_to_battlefield` are now S4-dead
+> (`#[allow(dead_code)]`, retained — same treatment S1 gave the
+> exile helper). 28 closure-flipped warp pins (5 cross-engine warp
+> lifecycle + 2 corrected stale round-25 baseline-rot
+> `test_actions.py` pins that were FAILING on `main` since round-63
+> when `use_warp` went live — net **−2** failures, **zero net-new**)
+> + 3 S4 probes (`test_g7s4_*`: the stack-then-resolve shape, the
+> impending/room out-of-reach honest pin, the rust_shadow warp-deck
+> clean-prefix pin). 4-file core gate **1532 UNMOVED** (CE5 still
+> bridges `step_both`; S4 makes Rust's warp-cast match the
+> stack-then-resolve shape CE5 already expects, exactly like S1).
+> **impending / room riders are NOT an S4 defer:** Rust does not
+> implement `use_impending` / `cast_room_half` at all (the legal
+> emitter hard-codes them off — `state_ops_legal.rs:511-513`; the
+> dispatch ignores them — `state_ops_actions.rs:292-293`), so there
+> is nothing for S4 to move to resolve for them — they are
+> separately-deferred plumbing (pinned by
+> `test_g7s4_impending_and_room_riders_remain_out_of_reach_in_rust`).
+> **The non-creature-permanent boundary is flagged S4b, NOT folded
+> in** (verify-first: opening it is a separate cast-primitive-routing
+> problem + a resolve-time aura-attach subsystem, structurally
+> orthogonal to warp-rider deferral and well beyond S4's design-doc
+> scope — see `docs/G7_S4_VERIFY_FINDING.md` §4); the S2
+> `test_s2_non_creature_permanent_cannot_be_stacked_boundary`
+> tripwire is UNCHANGED (loud honest signal). **Honest-stop unmasked
+> (S5+/separate-axis, pinned not papered):** driving the role-swapped
+> bake-in over a synthetic *warp* deck (`_r63_warp_synth_deckspec`)
+> with the uniform-random driver surfaces a `LEGAL_SET_EQ` warp-cast
+> **emission** divergence at step ~220 (Rust offers a warp
+> `cast_spell` the Python shadow's legal set does not) — verified
+> **byte-identical on `main` pre-S4** (same seed, same step, same
+> error). S4 owns the warp-cast resolve SHAPE (proven byte-equal by
+> the direct `apply` + `step_both` cross-engine probes), NOT the
+> warp-cast legal-EMISSION parity, which is a separate
+> S5+/legal-emission axis. Pinned (loud, characterized) by
+> `test_g7s4_rust_shadow_warp_deck_clean_prefix_then_known_legal_emit_gap`
+> — it asserts BOTH the S4-non-regression (clean prefix to ~step
+> 220, main-identical) AND that the known pre-existing divergence is
+> surfaced at its boundary. **S5 follow-up the design implies:**
+> with permanent (incl. warp) spells now resolving via
+> `resolve_top_of_stack` → `move_source_post_resolve` →
+> `dispatch_event(Enters)`, S5 verifies ETB-trigger-on-stack push
+> ordering vs Python `put_into_battlefield` + respond-to-trigger
+> nested windows for the warp/permanent case (largely already
+> present — verification slice); the warp legal-EMISSION axis above
+> is a distinct S5+/legal-axis owner, NOT S4's.
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both

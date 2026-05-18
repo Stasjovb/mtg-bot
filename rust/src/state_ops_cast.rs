@@ -347,6 +347,17 @@ fn move_from_exile_to_battlefield(
 /// inert for THIS card but keeps the path forward-correct and
 /// identical to the hand arm). Returns the pushed-object snapshot, or
 /// `None` if the id isn't a live graveyard object for `idx`.
+///
+/// **G7 Slice S4:** `cast_creature_warp` no longer fuses
+/// cast+resolve, so the graveyard-warp source no longer moves
+/// graveyard -> battlefield in the cast primitive (it normalizes
+/// graveyard -> hand at cast time — the S1 exile-recast pattern — and
+/// lets `move_source_post_resolve` land it on the battlefield at
+/// resolution, byte-mirroring Python). This helper is now S4-dead;
+/// `#[allow(dead_code)]` keeps the warning quiet without deleting the
+/// verified helper (exact treatment S1 gave
+/// `move_from_exile_to_battlefield`).
+#[allow(dead_code)]
 fn move_from_graveyard_to_battlefield(
     state: &mut GameState,
     idx: usize,
@@ -635,53 +646,78 @@ impl GameState {
         Ok(true)
     }
 
-    /// **Phase-1 warp substrate (round-63) + Phase 2 (Timeline
-    /// Culler).** Warp-cast a creature from `player_id`'s hand OR (if
-    /// absent there and the printing is `warp_castable_from_graveyard`)
-    /// the GRAVEYARD: identical to `cast_creature` with these deltas
-    /// (verified against the live `cast_creature` + Python
-    /// `actions.py:1393-1464` bodies):
+    /// **G7 Slice S4 (stack-and-priority warp-creature cast).**
+    /// Warp-cast a creature from `player_id`'s hand OR (if absent
+    /// there and the printing is `warp_castable_from_graveyard`) the
+    /// GRAVEYARD. Mirrors `cast_creature`'s S1 stack-push shape with
+    /// the warp deltas. Verified against the live `cast_creature` +
+    /// Python `actions.py:1393-1560` / `put_into_battlefield`.
     ///
-    /// 0. **(Phase 2) Source-zone cascade:** hand first, then
-    ///    graveyard gated on `warp_castable_from_graveyard` — mirrors
-    ///    Python's single `_cast_spell` `if hand: ... elif gy-warp:`
-    ///    cascade so the `Action::CastSpell` dispatch site stays
-    ///    byte-identical (no new arm). Phase-1/1.5 cards are never in
-    ///    the graveyard when warp-cast and carry
-    ///    `warp_castable_from_graveyard=false`, so the fall-through
-    ///    never triggers for them (unchanged behavior).
-    /// 1. **Cost source:** pays `printing.warp_cost` (unwrapped —
-    ///    the legal emitter only offered `use_warp=true` when this
-    ///    is `Some`) instead of `printing.mana_cost`. Mirrors
-    ///    Python's `effective_warp_cost(...)` element `[0]`
-    ///    (`actions.py:1399-1400`) / the graveyard branch's
-    ///    `card.printing.warp_cost` (`actions.py:1448`).
-    /// 1b. **(Phase 2) Life rider:** after the mana spend commits,
-    ///    debit `printing.warp_additional_life_cost` from the
-    ///    caster's life UNCONDITIONALLY (CR 117.9b — part of the warp
-    ///    alternative cost, no decision point). The legal emitter has
-    ///    already gated `life > rider`, so this never drops below 1.
-    ///    `rider == 0` (every Phase-1/1.5 card) is a no-op. Mirrors
-    ///    Python `actions.py:1430-1436` (hand) / `:1458-1464`
-    ///    (graveyard).
+    /// **Stack-and-priority semantics (G7 Slice S4 — was atomic).**
+    /// Pays `warp_cost`, debits the warp life rider, sets
+    /// `state.spell_warped_this_turn = true` (the genuinely cast-time
+    /// riders — Python sets all three in `_cast_spell` BEFORE the
+    /// StackItem push), stamps `warp_exile_pending = true` on the
+    /// stack-resident SOURCE object (NOT on a bf object — there is no
+    /// bf object yet), fires `Event::Cast`, pushes a bare
+    /// `StackItem::new_spell` (the spell GameObject stays in its
+    /// origin zone — Rust's spell-stack model), resets
+    /// priority/passes, and **returns WITHOUT resolving**. At
+    /// resolution the ALREADY-PRESENT `move_source_post_resolve`
+    /// (`state_ops_resolve.rs:285-332`) lands the creature on the
+    /// battlefield with `summoning_sick = true` (`:301-303`) + a
+    /// fresh ETB timestamp, then `resolve_top_of_stack` dispatches
+    /// `Event::Enters` — byte-mirroring Python's resolve-time
+    /// `put_into_battlefield` (`actions.py:2993` sets
+    /// `summoning_sick`). `take_source` moves the WHOLE owned object
+    /// (fields intact), so the cast-time `warp_exile_pending` rides
+    /// onto the post-resolution bf object — exactly where the
+    /// end-step sweep (`state_ops_steps.rs::
+    /// warp_exile_sweep_on_end_step`) keys off it. NO `summoning_sick`
+    /// / `warp_exile_pending`-on-a-bf-object stamp here at cast time
+    /// (the design's key risk — resolved structurally by riding the
+    /// flag on the source object, the direct mirror of S1's
+    /// exile-recast zone normalization).
+    ///
+    /// **Deltas vs `cast_creature` (S1 shape):**
+    ///
+    /// 0. **Source-zone cascade:** hand first, then graveyard gated
+    ///    on `warp_castable_from_graveyard` — mirrors Python's single
+    ///    `_cast_spell` `if hand: ... elif gy-warp:` cascade so the
+    ///    `Action::CastSpell` dispatch site stays byte-identical.
+    /// 1. **Cost source:** pays `printing.warp_cost` (unwrapped — the
+    ///    legal emitter only offered `use_warp=true` when this is
+    ///    `Some`) instead of `printing.mana_cost`. Mirrors Python's
+    ///    `effective_warp_cost(...)[0]` (`actions.py:1399-1400`) / the
+    ///    graveyard branch's `card.printing.warp_cost` (`:1448`).
+    /// 1b. **Life rider:** after the mana spend commits, debit
+    ///    `printing.warp_additional_life_cost` UNCONDITIONALLY (CR
+    ///    117.9b — part of the warp alternative cost, no decision
+    ///    point). Genuinely cast-time in Python (`:1432`/`:1460`).
     /// 2. **`spell_warped_this_turn`:** set `true` after the mana
-    ///    spend commits, mirroring Python `actions.py:1427` (hand) /
-    ///    `:1457` (graveyard) — BOTH branches set it. The field is a
-    ///    plain `bool` on `GameState` (`state.rs`; no Arc dance).
-    /// 3. **`warp_exile_pending`:** stamp `true` on the just-cast
-    ///    permanent (alongside the `summoning_sick = true` stamp) so
-    ///    the `PHASE_END_STEP`-entry sweep
-    ///    (`state_ops_steps.rs::warp_exile_sweep_on_end_step`)
-    ///    exiles it at the next end step. Set IDENTICALLY for the
-    ///    hand AND graveyard arm — Python schedules the SAME
-    ///    `WarpExileSelf` for both (`actions.py:1550-1559` runs for
-    ///    any `use_warp`). Rust's no-stack model: a deterministic
-    ///    phase-entry sweep, NOT Python's stack-pushed delayed
-    ///    trigger — documented in `SEARCH_LIMITATIONS.md`.
-    /// 4. **Type gate / priority tail:** unchanged from
-    ///    `cast_creature` (the `Creature`-type gate passes on
-    ///    `Artifact Creature` / a bare `Creature`; the priority/
-    ///    passes reset is verbatim).
+    ///    spend commits, mirroring Python `:1427` (hand) / `:1457`
+    ///    (graveyard). A `GameState` bool; genuinely cast-time.
+    /// 3. **`warp_exile_pending`:** stamp `true` on the STACK-RESIDENT
+    ///    SOURCE object (hand arm) or normalize the graveyard-warp
+    ///    source graveyard→hand and stamp it there (graveyard arm),
+    ///    so it rides through `move_source_post_resolve` onto the
+    ///    post-resolution bf object. Set IDENTICALLY for both arms —
+    ///    Python schedules the SAME `WarpExileSelf` for both
+    ///    (`actions.py:1550-1559`). Rust's model: a deterministic
+    ///    phase-entry sweep keyed off the bf object's flag, NOT
+    ///    Python's stack-pushed delayed trigger (documented in
+    ///    `SEARCH_LIMITATIONS.md`).
+    /// 4. **Graveyard-source normalization:** like S1's exile-recast
+    ///    (`cast_creature` exile→hand at cast time), the
+    ///    graveyard-warp source is normalized graveyard→hand at cast
+    ///    time so it byte-matches Python's `p.graveyard.remove(card)`
+    ///    + `card.zone = STACK` (`:1450`/`:1751`) and the spell-stack
+    ///    source model stays uniform with the hand arm. The
+    ///    `move_from_graveyard_to_battlefield` /
+    ///    `move_from_exile_to_battlefield` helpers are S4-dead for
+    ///    this path (retained `#[allow(dead_code)]`, same treatment
+    ///    S1 gave the exile helper).
+    /// 5. **Priority tail:** verbatim from `cast_creature` (S1).
     ///
     /// Returns `true` on success, `false` on the same precondition
     /// failures as `cast_creature` plus "not in hand AND (not in
@@ -769,44 +805,102 @@ impl GameState {
         if life_cost > 0 {
             self.players[idx].life -= life_cost as i32;
         }
-        // CAST event before ENTERS, same ordering as `cast_creature`.
+        // **G7 S4 Delta 4: graveyard-source zone normalization.**
+        // Python's graveyard-warp branch (`actions.py:1450`) does
+        // `p.graveyard.remove(card)` then `card.zone = Zone.STACK`
+        // (`:1751`) AT CAST TIME — the source leaves the graveyard
+        // and sits on the STACK until resolution (byte-identical to
+        // the hand arm; nothing on the battlefield yet). Rust's
+        // spell-stack model keeps the stack-resident source IN a
+        // tracked zone; to byte-match Python's "card left the
+        // graveyard at cast time" AND keep the spell-stack source
+        // model uniform with the hand arm, normalize the
+        // graveyard-warp source graveyard -> hand here (the same zone
+        // the hand arm leaves its source in; the EXACT shape of S1's
+        // exile-recast exile -> hand normalization in `cast_creature`
+        // `:576-590`). `find_source_printing_id` / `take_source`
+        // (`state_ops_resolve.rs:205-245`) then find it in the hand
+        // at resolve and `move_source_post_resolve` lands it on the
+        // battlefield (creature -> bf + summoning_sick), byte-equal
+        // to Python's `put_into_battlefield`. The
+        // `move_from_graveyard_to_battlefield` helper is now S4-dead
+        // for this path (retained `#[allow(dead_code)]`, same
+        // treatment S1 gave `move_from_exile_to_battlefield`).
+        if from_graveyard {
+            if let Some(pos) = self.players[idx]
+                .graveyard
+                .iter()
+                .position(|o| o.id == obj_id)
+            {
+                let gy =
+                    Arc::make_mut(&mut self.players[idx].graveyard);
+                let mut obj = gy.remove(pos);
+                obj.zone = ZONE_HAND;
+                let hand =
+                    Arc::make_mut(&mut self.players[idx].hand);
+                hand.push(obj);
+            }
+        }
+        // **G7 S4 Delta 3: stamp `warp_exile_pending` on the
+        // STACK-RESIDENT SOURCE object (NOT a bf object — there is no
+        // bf object yet).** `take_source` moves the WHOLE owned
+        // GameObject (fields intact, nothing reset —
+        // `state_ops_resolve.rs:230-245`) and
+        // `move_source_post_resolve` pushes it to the battlefield
+        // (`:285-332`), so this cast-time flag rides through
+        // resolution onto the post-resolution bf object — exactly
+        // where the end-step sweep
+        // (`state_ops_steps.rs::warp_exile_sweep_on_end_step`) keys
+        // off it. Set IDENTICALLY for the hand AND (now
+        // hand-normalized) graveyard arm — Python schedules the SAME
+        // `WarpExileSelf` for both (`actions.py:1550-1559` runs for
+        // any `use_warp`). This is the design's "key risk" resolved
+        // structurally: no new field, no StackItem rider slot, no
+        // `state.rs` serialization touch — the direct mirror of S1's
+        // exile-recast object-field-on-the-stack-resident-source
+        // pattern. (After the graveyard normalization above, the
+        // source for BOTH arms is in this player's HAND.)
+        if let Some(pos) = self.players[idx]
+            .hand
+            .iter()
+            .position(|o| o.id == obj_id)
+        {
+            let hand = Arc::make_mut(&mut self.players[idx].hand);
+            hand[pos].warp_exile_pending = true;
+        }
+        // Dispatch Event::Cast NOW — after mana payment + the
+        // cast-time riders commit but before the StackItem push, the
+        // SAME ordering as `cast_creature` (S1, `:599-603`) /
+        // `cast_spell_noncreature`. CR 601.2 — a spell is "cast" the
+        // moment its cost is paid. The subject is the card-being-cast
+        // still in the hand zone (the push leaves it there; the
+        // graveyard arm was normalized into the hand above); predicate
+        // matchers walk all four zones so the hand-zone lookup finds
+        // it.
         crate::state_ops_resolve::dispatch_event(
             self,
             crate::cards::Event::Cast,
             obj_id,
         )?;
-        // Delta 1b: move from the resolved source zone. Hand →
-        // `move_from_hand_to_battlefield` (Phase 1, unchanged);
-        // graveyard → `move_from_graveyard_to_battlefield` (Phase 2,
-        // mirrors Python actions.py:1450 `p.graveyard.remove(card)` +
-        // put_into_battlefield). Both fire the SAME CAST→ENTERS drain
-        // path so any ETB fires byte-equal (inert for Timeline
-        // Culler — triggered_abilities=() — but forward-correct).
-        if from_graveyard {
-            let _ =
-                move_from_graveyard_to_battlefield(self, idx, obj_id)?;
-        } else {
-            let _ = move_from_hand_to_battlefield(self, idx, obj_id)?;
-        }
-        let player = &mut self.players[idx];
-        let bf = Arc::make_mut(&mut player.battlefield);
-        if let Some(obj) = bf.iter_mut().find(|o| o.id == obj_id) {
-            obj.summoning_sick = true;
-            // Delta 3: stamp the end-step warp-exile schedule. This
-            // is set IDENTICALLY for the hand AND graveyard arm —
-            // Python schedules the SAME `WarpExileSelf` delayed
-            // trigger for both branches (actions.py:1550-1559 runs
-            // for any `use_warp`), so a graveyard-warp-cast Timeline
-            // Culler is exiled by the SAME deterministic
-            // PHASE_END_STEP sweep and then re-castable from exile at
-            // NORMAL {B}{B} (the Phase-1 sweep + exile-recast handle
-            // the rest unchanged — the exile object is in exile, not
-            // the graveyard, so it never re-enters the graveyard-warp
-            // loop).
-            obj.warp_exile_pending = true;
-        }
-        // Delta 4: priority/passes reset, verbatim from
-        // `cast_creature`.
+        // **G7 S4: push the spell StackItem, do NOT move to
+        // battlefield, do NOT auto-resolve.** Verbatim from
+        // `cast_creature` (S1, `:619-620`). A vanilla creature spell
+        // (warp cards: Timeline Culler etc. have
+        // `triggered_abilities=()`) carries NO cast-time target, so
+        // the bare untargeted `new_spell` constructor is used.
+        // `resolve_top_of_stack` later runs `move_source_post_resolve`
+        // (creature hand -> battlefield, stamping `summoning_sick` +
+        // the ETB timestamp; the `warp_exile_pending` flag rides
+        // along on the owned object) then `dispatch_event(Enters)` —
+        // all at resolution, byte-mirroring Python's
+        // `put_into_battlefield`.
+        self.stack
+            .push(crate::state::StackItem::new_spell(obj_id, player_id));
+        // Delta 5: priority/passes reset, verbatim from `cast_creature`
+        // (S1, `:633-634`). The cast push (not the resolution pop) is
+        // the reset moment, matching Python's post-non-pass-action
+        // priority reset (`simulate.py:274-282`); the post-resolution
+        // reset is the priority loop's job.
         self.priority_player = self.active_player;
         self.consecutive_passes = 0;
         Ok(true)

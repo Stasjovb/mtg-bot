@@ -1232,12 +1232,22 @@ def test_apply_action_cast_spell_with_all_flags_false_explicit(synthetic_state):
 
 
 def test_apply_action_cast_spell_use_warp_true_dispatches_unchanged(synthetic_state):
-    """First-slice contract: ``use_warp=True`` is parsed as data but
-    has NO observable effect on the dispatch. The cast still routes
-    to ``cast_creature(card_id, priority_player)`` and pays the
-    base mana cost (no exile-zone alt-cost, no end-of-turn exile).
-    Pins the flag-ignored convention so a future warp-plumbing slice
-    has a clear baseline to diff against."""
+    """**Post-round-63 + G7 S4 corrected contract** (was a stale
+    round-25 "flags-ignored" pin — `use_warp` went LIVE at round-63,
+    routing to `cast_creature_warp`; the old "Elf lands on bf, flag
+    ignored" assertion has been WRONG since then and was failing on
+    every commit incl. main @ `cd3a5f4e`. G7 S4 touches the
+    `cast_creature_warp` semantics so the closure-flip discipline
+    closes the stale pin to the honest contract — new-code-is-right).
+
+    The synthetic Llanowar Elves printing has ``warp_cost = None``
+    (`state.rs:2088`). ``use_warp=True`` routes to
+    ``cast_creature_warp`` which bails ``Ok(false)`` on the missing
+    ``warp_cost`` (defensive — the legal emitter never offers
+    ``use_warp=True`` without a ``warp_cost``). So the cast does NOT
+    happen: the Elf stays in hand, the mana is NOT spent, the stack
+    is empty. Pins that honest no-op (no atomic-vs-stack distinction
+    even arises — the primitive bailed before any push)."""
     elf_id = P0_FIRST_HAND_ID
     synthetic_state.add_mana(0, "G", 1)
 
@@ -1245,9 +1255,11 @@ def test_apply_action_cast_spell_use_warp_true_dispatches_unchanged(synthetic_st
         {"kind": "cast_spell", "card_id": elf_id, "use_warp": True}
     )
 
-    # Same battlefield landing as the unflagged case — flag was ignored.
-    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
-    assert synthetic_state.get_mana_pool(0)["G"] == 0
+    # cast_creature_warp bailed (no warp_cost on the synthetic Elf) —
+    # no cast, no mana spend, no stack push.
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
+    assert synthetic_state.get_mana_pool(0)["G"] == 1
+    assert synthetic_state.is_stack_empty() is True
 
 
 def test_apply_action_cast_spell_kicked_true_dispatches_unchanged(synthetic_state):
@@ -1997,12 +2009,19 @@ def test_apply_action_every_legal_decision_round_trips_without_raising(
 def test_apply_action_cast_spell_with_warp_and_kicked_true_still_dispatches(
     synthetic_state,
 ):
-    """``use_warp=True`` + ``kicked=True`` together: still routes to
-    the base ``cast_creature`` primitive (round-25 flags-ignored
-    contract). The Elf lands on the battlefield and only the base
-    {G} mana cost is paid — neither alt-cost machinery fires. Locks
-    in the combinatorial flag-ignored property across multiple
-    True flags."""
+    """**Post-round-63 + G7 S4 corrected contract** (was a stale
+    round-25 "flags-ignored" pin — same baseline-rot class as
+    ``test_apply_action_cast_spell_use_warp_true_dispatches_unchanged``:
+    failing on every commit incl. main @ `cd3a5f4e` since `use_warp`
+    went live at round-63. G7 S4 touches `cast_creature_warp`, so the
+    closure-flip discipline closes it to the honest contract).
+
+    ``use_warp=True`` routes to ``cast_creature_warp``; the synthetic
+    Elf has ``warp_cost = None`` so the primitive bails ``Ok(false)``
+    BEFORE any mana spend / stack push (the missing-warp_cost defensive
+    bail fires before ``kicked`` would ever matter). So the cast does
+    NOT happen — Elf in hand, mana untouched, stack empty. Locks the
+    combinatorial honest-no-op across the warp+kicker flag pair."""
     elf_id = P0_FIRST_HAND_ID
     synthetic_state.add_mana(0, "G", 1)
 
@@ -2015,11 +2034,11 @@ def test_apply_action_cast_spell_with_warp_and_kicked_true_still_dispatches(
         }
     )
 
-    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
-    # Only the base G was spent — neither warp's alt-cost nor kicker's
-    # extra pip was debited (would have failed for insufficient mana
-    # if the kicker pip had been wired).
-    assert synthetic_state.get_mana_pool(0)["G"] == 0
+    # cast_creature_warp bailed (no warp_cost) before the kicker /
+    # mana / stack-push logic — honest no-op.
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
+    assert synthetic_state.get_mana_pool(0)["G"] == 1
+    assert synthetic_state.is_stack_empty() is True
 
 
 def test_apply_action_cast_spell_cast_room_half_left_routes_to_cast_creature(

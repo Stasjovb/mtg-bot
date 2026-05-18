@@ -101,6 +101,110 @@ def test_shadow_runs_divergence_clean_over_the_valid_prefix():
     # divergence-clean over the valid window.
 
 
+def test_g7s4_rust_shadow_warp_deck_clean_prefix_then_known_legal_emit_gap():
+    """**G7 S4 rust_shadow pin** — drives the role-swapped
+    ``ShadowCheckedRustAdapter`` over a synthetic *warp* deck
+    (``_r63_warp_synth_deckspec``: {3}{R} / warp {1}{R} 3/3 +
+    Forests) with the uniform-random driver
+    (``drive_shadow_game_to_terminal`` contract).
+
+    **VERIFIED (this commit, both engines built from source):**
+
+    1. **S4 does NOT regress the bake-in.** The run is
+       divergence-clean over the bounded prefix BEFORE the
+       pre-existing step-220 trip point — byte-IDENTICAL to ``main``
+       @ ``cd3a5f4e`` (same seed=2026, same first-divergence step
+       220, same error). S4 changes the warp-cast *resolve shape*
+       (atomic → stack-then-resolve); it does NOT move the bake-in's
+       first-divergence boundary. (S1's plain-creature rust_shadow
+       proof used the same "clean over the window" contract.)
+
+    2. **The step-220 divergence is a PRE-EXISTING, main-identical
+       ``LEGAL_SET_EQ`` warp-cast-EMISSION gap — NOT S4's scope, NOT
+       a regression, NOT papered.** At step ~220 the role-swapped
+       contract surfaces ``rust\\py=[('cast_spell', 0, True, ...)]
+       py\\rust=[]``: Rust's ``legal_decisions`` offers a warp
+       ``cast_spell`` the Python shadow's legal set does not (a
+       legal-EMISSION asymmetry on the warp-cast OFFER — the
+       I20/G4-class mana-timing / warp legal-emission axis). The
+       random driver never even APPLIES a warp cast because the
+       legal-set diverges first. This was verified byte-identical on
+       ``main`` (pre-S4) — S4 owns the warp-cast resolve SHAPE
+       (proven byte-equal by the direct ``apply`` + ``step_both``
+       cross-engine probes in ``test_cross_engine_etb_triggers.py``),
+       NOT the warp-cast legal-EMISSION parity, which is a separate
+       axis owned by a later slice (S5+/legal-emission; see
+       ``docs/G7_S4_VERIFY_FINDING.md`` §5 + ``docs/
+       SEARCH_LIMITATIONS.md`` G7-S4 note).
+
+    This pin is the honest-stop: it asserts the prefix is clean
+    (no S4 regression) AND that the known pre-existing divergence is
+    SURFACED at its characterized boundary (loud, not masked). If a
+    future slice closes the warp legal-emission axis, the
+    ``raised is not None`` assertion flips and this pin must be
+    updated to the closed contract (new-code-is-right)."""
+    from tests.test_cross_engine_etb_triggers import (
+        _r63_warp_synth_deckspec,
+    )
+
+    adapter = _shadow(_r63_warp_synth_deckspec)
+    rng = random.Random(2026)
+    steps = 0
+    raised: ShadowDivergenceError | None = None
+    clean_prefix = 0
+    while not adapter.is_terminal() and steps < 400:
+        try:
+            legal = adapter.legal_decisions()
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        if not legal:
+            break
+        choice = rng.choice(legal)
+        try:
+            adapter.apply(choice)
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        steps += 1
+        clean_prefix = steps
+
+    # (1) No S4 regression: a substantial divergence-clean prefix
+    # (the pre-existing trip is at ~step 220; require the prefix to
+    # reach well past where an atomic-vs-stack warp-cast STATE_EQ
+    # regression would have fired — i.e. S4's stack-then-resolve
+    # composes clean for every decision the driver applied here).
+    assert clean_prefix >= 200, (
+        f"S4 must NOT regress the bake-in: the divergence-clean "
+        f"prefix over the synthetic warp deck must reach the "
+        f"pre-existing ~step-220 boundary (byte-identical to main). "
+        f"Got only {clean_prefix} clean steps — an atomic-vs-stack "
+        f"warp-cast STATE_EQ regression would fire MUCH earlier. "
+        f"err={raised!r}"
+    )
+    # (2) The known pre-existing legal-emission gap is SURFACED
+    # (honest-stop, not masked). It is a LEGAL_SET_EQ on a warp
+    # cast_spell OFFER (Rust offers, Python shadow does not) — the
+    # legal-EMISSION axis, NOT S4's resolve-shape scope; verified
+    # main-identical (pre-S4).
+    assert raised is not None, (
+        "the known pre-existing warp legal-emission divergence must "
+        "still SURFACE (it was verified main-identical). If it no "
+        "longer fires, the legal-emission axis was closed elsewhere "
+        "— update this pin to the closed contract (do NOT silently "
+        "let it pass)."
+    )
+    msg = str(raised)
+    assert "LEGAL_SET_EQ" in msg and "cast_spell" in msg, (
+        f"the surfaced divergence must be the characterized "
+        f"warp-cast LEGAL_SET_EQ emission gap (legal-emission axis, "
+        f"S5+/separate slice — NOT S4's resolve-shape scope, NOT a "
+        f"regression). Got a DIFFERENT divergence: {msg!r} — this "
+        f"would be an honest-stop-unmasked NEW divergence; pin it + "
+        f"flag the slice owner per the S4 brief, do NOT paper it."
+    )
+
+
 def test_g4_i20_cast_set_axis_is_closed_by_lockstep():
     """G4 CLOSURE PIN. G4 (the C1/G1-analog for the I20 axis: the
     documented Python mana-hold-until-cleanup simplification,
