@@ -349,6 +349,39 @@ class RustGameStateAdapter:
         target = self._next_alive_idx(int(self._rust.active_player_idx))
         if int(self._rust.get_priority_player()) != target:
             self._rust.give_priority_to(target)
+            # **G7 S6 Class-D v2 cast_spell asymmetry residuals
+            # closure (legal-cache stale-after-priority-shift fix).**
+            # ``give_priority_to`` mutates the Rust priority holder,
+            # which directly changes what ``legal_decisions(pid)``
+            # emits for ANY ``pid`` (the priority gate at
+            # ``state_ops_legal.rs:1587-1589``: a non-priority-holder
+            # query returns just ``[PassPriority]``). Any cached
+            # ``_legal_dicts_cached`` entry populated BEFORE this
+            # shift was computed against the OLD priority holder and
+            # is now stale.
+            #
+            # **Root cause of the 12 v2 residuals.** Inside
+            # ``_run_priority_action``'s pass-round-completes branch
+            # (line :588), ``_combat_decision_maker()`` runs BEFORE
+            # this call (to detect whether the just-entered combat
+            # step is a factored-decision window) and populates the
+            # cache for ``dm = active_player`` against a state where
+            # Rust priority is still the PASSER (off-active). If that
+            # cached value is ``[PassPriority]`` (the off-priority
+            # query result), the subsequent priority reset here would
+            # make ``priority_player == active_player == dm`` — at
+            # which point a fresh ``legal_decisions(dm)`` would emit
+            # the instant-speed CastSpells the priority window opens.
+            # Without invalidation, the next external
+            # ``legal_decisions()`` call hits the stale cache and the
+            # CastSpell is silently dropped, surfacing as a
+            # LEGAL_SET_EQ ``py\\rust=[cast_spell, ...]`` divergence.
+            # Single-axis closure: the 12 v2 residuals share this
+            # exact root cause (all instants the priority window
+            # should admit at DECLARE_ATTACKERS for the active
+            # player). See ``docs/SEARCH_LIMITATIONS.md`` G7 S6
+            # Class-D v2 cast_spell asymmetry entry.
+            self._invalidate_legal_cache()
 
     def _run_step_enter_sbas(self) -> None:
         """Rust-side port of Python's ``state_based_actions`` calls
