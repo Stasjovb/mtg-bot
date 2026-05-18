@@ -6359,6 +6359,23 @@ flip whose pre-flip equivalence gate has **never validated a single
 spell cast** on a real deck (the smoke deck casts none). The honest
 C4 disposition is **flip NO-GO-until-G7-closed**.
 
+**Design owner.** `docs/RUST_STACK_RESOLUTION_DESIGN.md` is the
+canonical verify-first sliced design for the real fix. Per the settled
+USER decision, the "Fix scope estimate" paragraph below (port the CE5
+mirror into the bake-in) is **SUPERSEDED**: Rust MUST implement real
+stack-and-priority `CastSpell` resolution and CE5 must be REMOVED with
+parity proven WITHOUT it (porting CE5 in is the rejected false-green
+path). Verify-first diagnosis: atomic resolution is a NARROW removable
+short-circuit on `cast_creature`/`cast_creature_warp` only —
+`cast_spell_noncreature` already pushes a `StackItem` without
+resolving, and the Rust stack, the full effect-dispatching
+`resolve_top_of_stack`, the permanent-aware `move_source_post_resolve`,
+and the real effect-dispatching adapter priority loop
+(`rust_engine_adapter.py:_run_priority_action`) all already exist. It
+is a tractable rewire, not an architectural rebuild. See that doc for
+slices S1–S7, the CE5-removal + CE5-free re-proof plan, and the honest
+magnitude / B1 (C1 S2/3) coupling.
+
 **Fix scope estimate.** Port the `step_both` CE5 cast-vs-resolve
 mirror into the role-swapped bake-in: after
 `ShadowCheckedRustAdapter.apply()` applies a stack-using decision to
