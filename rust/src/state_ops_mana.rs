@@ -547,9 +547,164 @@ pub(crate) fn can_pay_cost(
     // here exactly as Python's `_coin_satisfies_context` is a no-op
     // when no coin carries a restriction (the dominant real case).
     let _ = spell_kind;
-    let headroom =
-        crate::state_ops_legal::auto_tap_headroom_pool(state, player_idx);
-    crate::state_ops_legal::pool_can_cover(&headroom, cost)
+    //
+    // **G7 S6 Class-D 1/23 Thawbringer fix (cycle-37 Phase 2).**
+    //
+    // The prior implementation —
+    // `pool_can_cover(&auto_tap_headroom_pool(state, idx), cost)` —
+    // over-credits dual-producing lands. `auto_tap_headroom_pool`
+    // sums each land's `mana_produced` symbols into per-color counts,
+    // so a Stomping Ground (`mana_produced = ["R", "G"]`) credits
+    // both `pool.red += 1` AND `pool.green += 1` — counted as TWO
+    // mana of capacity when in reality the land taps for ONE
+    // (CR 605.1 — choose ONE produced color on activation).
+    //
+    // Python's `actions.can_pay_cost` (`actions.py:336-403` — the
+    // SoT) tracks lands as a SET: each land is consumed once, either
+    // for a colored requirement (any color it can produce) OR for
+    // generic. arch30/s1 step 111 Thawbringer `{2}{G}` with p1
+    // controlling untapped Stomping Ground + untapped Forest:
+    // Python pays {G} using one of them (used_lands.add) → only 1
+    // remaining land → generic 2 unpayable → False (Python prunes
+    // the cast). Rust's old gate counted 1R + 2G headroom = 3 total
+    // → pool_can_cover returns true → Rust over-emitted the cast.
+    //
+    // Fix: byte-port Python's set-based algorithm. Pool coins are
+    // consumed by index; lands by id. Each land's produced-color
+    // set is its `mana_produced` field (Forest = {G}; Stomping
+    // Ground = {R,G}). A land matches a colored requirement iff
+    // that color is in its set. Each land may be used at most once.
+    // Mirrors apply-time `auto_tap_pay_for_cost` Phase 1 PLAN —
+    // legal-emit and apply now agree on what's payable.
+    //
+    // **Scope of the change vs the prior comment block.** The prior
+    // header described `can_pay_cost` as a wrapper over
+    // `pool_can_cover(auto_tap_headroom_pool(...))`. After this fix
+    // those two primitives still exist (and `pool_can_cover` is
+    // still used by other call sites — `state_ops_legal.rs::
+    // additional_costs_payable` and similar — that operate on a
+    // POOL only, NO land-tap headroom). Only the live affordability
+    // wrapper here switches to the set-based port. The mana-creature
+    // breadth axis (Python uses lands ONLY; Rust's prior `auto_tap_
+    // headroom_pool` also credits non-sick mana creatures) is a
+    // DISTINCT, separately-tracked C1 axis (see the comment in
+    // state_ops_cast.rs::auto_tap_pay_for_cost) — out of scope here.
+    // We restrict to lands too (the apply path is lands-only, so
+    // the legal path matching it is the parity-neutral move; mana
+    // creatures auto-tap is the apply-side widening, not relevant
+    // for this gate).
+    can_pay_cost_set_based(state, player_idx, cost)
+}
+
+/// Set-based port of Python `actions.can_pay_cost` for the live
+/// CastSpell surface (generic + 5-colored ManaCost; no hybrid/X/
+/// Phyrexian on the Rust ManaCost struct). Each pool coin is
+/// consumed by INDEX, each land by ID — exactly Python's
+/// `used_coins` / `used_lands` sets. Lands are filtered to the
+/// controller's untapped, non-summoning-sick lands (the
+/// `_untapped_lands` shape — lands only, NOT mana creatures, to
+/// byte-match `auto_tap_pay_for_cost`'s lands-only apply path).
+///
+/// Returns true iff the cost is payable. Pure read-only (no mutation
+/// of state).
+fn can_pay_cost_set_based(
+    state: &crate::state::GameState,
+    player_idx: usize,
+    cost: &crate::cards::ManaCost,
+) -> bool {
+    // Snapshot untapped controller lands in battlefield order,
+    // with their produced-color set. Mirrors Python's
+    // `lands = _untapped_lands(state, player_id)` (`actions.py:196`).
+    // Lands-only — matches the apply-side `auto_tap_pay_for_cost`
+    // discipline (Python's `auto_tap_for_cost` is also lands-only).
+    let mut lands: Vec<(u32, Vec<String>)> = Vec::new();
+    for obj in state.players[player_idx].battlefield.iter() {
+        if obj.tapped {
+            continue;
+        }
+        let Some(printing) = state.registry.lookup(obj.printing_id) else {
+            continue;
+        };
+        if !printing.card_types.iter().any(|t| t == "Land") {
+            continue;
+        }
+        let symbols: Vec<String> = match &printing.mana_produced {
+            Some(v) => v.clone(),
+            None => Vec::new(),
+        };
+        if symbols.is_empty() {
+            continue;
+        }
+        lands.push((obj.id, symbols));
+    }
+    // Snapshot the controller's pool coins (already the Class-E
+    // insertion-ordered Vec<ManaCoin>).
+    let pool: Vec<crate::state::ManaCoin> =
+        state.players[player_idx].mana_pool.coins.clone();
+    let mut used_coins: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
+    let mut used_lands: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
+    // Pay colored requirements first — pool coins of the matching
+    // color first, then any matching untapped land. Iteration order
+    // is Python's `ManaCost.colored` order (B, G, R, U, W) per
+    // `cards.parse_mana_cost`.
+    let colored: [(u8, &str, u8); 5] = [
+        (cost.black, "B", b'B'),
+        (cost.green, "G", b'G'),
+        (cost.red, "R", b'R'),
+        (cost.blue, "U", b'U'),
+        (cost.white, "W", b'W'),
+    ];
+    for (need_count, sym_str, sym_byte) in colored {
+        let mut need = need_count as u32;
+        if need == 0 {
+            continue;
+        }
+        // Pool coins of the matching color first (insertion order;
+        // mirrors `for idx, coin in enumerate(usable_pool)`).
+        for (i, coin) in pool.iter().enumerate() {
+            if need == 0 {
+                break;
+            }
+            if used_coins.contains(&i) {
+                continue;
+            }
+            if coin.color == sym_byte {
+                used_coins.insert(i);
+                need -= 1;
+            }
+        }
+        if need == 0 {
+            continue;
+        }
+        // Match-color lands (Python: `[l for l in lands if color in
+        // effective_land_produces(l) and l.id not in used_lands]`).
+        let matching: Vec<u32> = lands
+            .iter()
+            .filter(|(lid, syms)| {
+                !used_lands.contains(lid)
+                    && syms.iter().any(|s| s == sym_str)
+            })
+            .map(|(lid, _)| *lid)
+            .collect();
+        if (matching.len() as u32) < need {
+            return false;
+        }
+        for lid in matching.into_iter().take(need as usize) {
+            used_lands.insert(lid);
+        }
+    }
+    // Generic (and hybrid pip count, which is 0 on the live Rust
+    // ManaCost surface — the field exists in Python but Rust's
+    // `cards::ManaCost` has no `hybrid` field, so we add 0 here).
+    let remaining_pool = pool.len() - used_coins.len();
+    let remaining_lands = lands
+        .iter()
+        .filter(|(lid, _)| !used_lands.contains(lid))
+        .count();
+    let needed = cost.generic as usize;
+    remaining_pool + remaining_lands >= needed
 }
 
 /// The Rust analog of Python's `spell_kind: str | frozenset[str]`

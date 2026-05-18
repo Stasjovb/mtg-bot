@@ -1160,6 +1160,147 @@ def test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier():
     )
 
 
+def test_g7_classd_1of23_thawbringer_mana_affordability_closed_then_next_frontier():
+    """**G7 S6-Class-D 1/23 Thawbringer mana-affordability closure
+    pin** (cycle-37 Phase 2 — todo ``f5145c1d``).
+
+    The G7 S6 Class-D cast-set asymmetry (23/300) was heterogeneous.
+    22/23 were the homogeneous ``spell_targets_satisfiable``
+    ``Effect::Sequence``-recursion bug — CLOSED by merge #1
+    (``feature/g7-classd-castset`` → ``deee7ff4``). The remaining 1/23
+    is the Thawbringer ``{2}{G}`` cast at arch30/s1 step 111:
+    Rust ``legal_decisions`` over-emitted the cast despite p1 having
+    only 2 untapped lands (Stomping Ground + Forest) for a 3-mana
+    cost — Python correctly pruned via ``can_pay_cost``.
+
+    **Root cause** (verify-first, ``rust/src/state_ops_mana.rs::
+    can_pay_cost``). The legal-side affordability gate composed
+    ``pool_can_cover(&auto_tap_headroom_pool(state, idx), cost)``.
+    ``auto_tap_headroom_pool`` sums each untapped land's
+    ``mana_produced`` symbols into per-color counts — so a Stomping
+    Ground (``mana_produced = ["R", "G"]`` — Ravnica shock-land
+    disjunction) credited ``pool.red += 1`` AND ``pool.green += 1``,
+    counted as TWO mana of capacity when in reality the land taps for
+    ONE (CR 605.1 — choose one produced color on activation).
+    For Thawbringer ``{2}{G}`` (generic=2, green=1): the headroom
+    pool was (R:1, G:2) → ``pool_can_cover`` returned true (G>=1
+    consumes 1 of the 2 green credits; remaining 1+1=2 >= generic 2)
+    → Rust over-emitted. Python's ``actions.can_pay_cost``
+    (``actions.py:336-403``) tracks lands as a SET (``used_lands``):
+    each land may be used at most once for any combination of
+    colored/generic — Stomping Ground used for {G} (it can produce
+    G) → 1 remaining land → generic 2 unpayable → False.
+
+    **Fix** (new-code-is-right toward the Python SoT; cycle-37 Phase
+    2 commit on this branch). ``state_ops_mana.rs::can_pay_cost`` no
+    longer wraps ``pool_can_cover(auto_tap_headroom_pool(...))`` for
+    the live-CastSpell affordability check — it byte-ports
+    ``actions.can_pay_cost`` to a set-based implementation
+    (``can_pay_cost_set_based``): pool coins consumed by INDEX,
+    lands by ID, each at most once. Matches the apply-time
+    ``auto_tap_pay_for_cost`` Phase 1 PLAN exactly — legal-emit and
+    apply now agree on what's payable. The legal-side
+    ``auto_tap_headroom_pool`` + ``pool_can_cover`` primitives stay
+    in place for callers that operate on a pool only with no
+    land-tap headroom (e.g. ``additional_costs_payable``); only the
+    live affordability seam in ``can_pay_cost`` switches to the
+    set-based port.
+
+    **Closure proof + next-frontier.** Pre-fix arch30/s1 trips at
+    step 111 with ``LEGAL_SET_EQ rust\\py=[('cast_spell', 80, ...)]
+    py\\rust=[]``. Post-fix the run proceeds PAST 111 to step 321
+    where it surfaces the SAME G1 stateless-Rust ``attack=False``
+    re-emission ``LEGAL_SET_EQ`` axis the Class-B canonical
+    arch5/s0 row surfaces at step 369 + the Class-D arch7/s0 row
+    surfaces at step 757 — the same B3-S3 provider-accumulation
+    port follow-up, NOT a new G-axis and NOT a regression of either
+    Class-D fix.
+    """
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity import trajectory
+    from mtg_bot.search.engine_adapter_factory import (
+        build_shadow_checked_adapter,
+    )
+
+    arch, seed, old_boundary, exp_step, kind, needle = (
+        30, 1, 111, 321, "LEGAL_SET_EQ", "('attacker', 80, False)"
+    )
+    names = trajectory.load_production_deck(archetype=arch)
+    spec = trajectory.production_deck_to_deckspec(
+        names, shared_rng_seed=seed
+    )
+    adapter = build_shadow_checked_adapter(spec)
+    rng = random.Random(seed)
+    steps = 0
+    raised: ShadowDivergenceError | None = None
+    raw_exc: BaseException | None = None
+    while not adapter.is_terminal() and steps < 4000:
+        try:
+            legal = adapter.legal_decisions()
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        if not legal:
+            break
+        choice = rng.choice(legal)
+        try:
+            adapter.apply(choice)
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        except Exception as e:  # noqa: BLE001 — captured, asserted
+            raw_exc = e
+            break
+        steps += 1
+
+    # (1) CLASS-D 1/23 MANA-AFFORDABILITY AXIS CLOSED: the run
+    # proceeds PAST the old step-111 boundary. A trip at/before 111
+    # means the set-based can_pay_cost fix regressed (do NOT bump
+    # the boundary — fix the engine).
+    assert steps > old_boundary, (
+        f"arch{arch}/s{seed}: the Class-D 1/23 mana-affordability "
+        f"axis must be CLOSED — the run must proceed PAST its old "
+        f"boundary step {old_boundary} (it stopped at {steps}). A stop "
+        f"at/before {old_boundary} means the set-based can_pay_cost "
+        f"port regressed — fix the engine, do NOT bump the boundary. "
+        f"err={raised!r} raw={raw_exc!r}"
+    )
+    surfaced_msg = str(raised) if raised is not None else str(raw_exc)
+    # Regression guard: the surfaced divergence must NOT be a
+    # cast_spell over-emission (the closed Class-D cast-set axis).
+    assert "cast_spell" not in surfaced_msg, (
+        f"arch{arch}/s{seed}: the surfaced divergence still mentions a "
+        f"cast_spell over-emission — the Class-D mana-affordability "
+        f"axis was NOT actually closed: {surfaced_msg[:300]!r}."
+    )
+    # (2) THE NEXT DISTINCT FRONTIER SURFACES LOUDLY at its
+    # freshly-characterized boundary. It is the G1 attacker-decision
+    # re-emission axis (same as Class-B @369 + Class-D @757).
+    assert steps == exp_step, (
+        f"arch{arch}/s{seed}: expected the freshly-characterized "
+        f"next-frontier boundary step {exp_step}, got {steps}. A "
+        f"different step means the surfaced frontier moved — "
+        f"re-characterize this pin, do NOT just bump. "
+        f"err={raised!r} raw={raw_exc!r}"
+    )
+    assert raised is not None and raw_exc is None, (
+        f"arch{arch}/s{seed}: the next distinct divergence must "
+        f"SURFACE as a {kind} ShadowDivergenceError. raised={raised!r} "
+        f"raw={raw_exc!r}. If it no longer fires it was closed "
+        f"elsewhere — re-characterize this pin (do NOT silently pass)."
+    )
+    assert raised.tripwire == kind, (
+        f"arch{arch}/s{seed}: expected tripwire {kind}, got "
+        f"{raised.tripwire}: {str(raised)[:300]!r}."
+    )
+    assert needle in str(raised), (
+        f"arch{arch}/s{seed}: the surfaced {kind} must be PRECISELY "
+        f"the characterized G1 attacker-decision re-emission "
+        f"{needle!r} (same axis as Class-B @369 / Class-D @757). "
+        f"Got: {str(raised)[:300]!r}."
+    )
+
+
 def test_g4_i20_cast_set_axis_is_closed_by_lockstep():
     """G4 CLOSURE PIN. G4 (the C1/G1-analog for the I20 axis: the
     documented Python mana-hold-until-cleanup simplification,
