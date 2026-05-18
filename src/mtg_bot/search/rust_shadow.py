@@ -519,7 +519,48 @@ def build_shadow_checked_adapter(spec: Any):
     (``build_matched_states`` — the surviving Rust materializer per
     ``BRIDGE_VESTIGIALIZATION_PLAN.md`` §2.1). This is the bake-in
     factory the §4.2 C4-scale sweep + the one real ``mtg_bot
-    iterate`` iteration drive through."""
+    iterate`` iteration drive through.
+
+    **b3f7c0a9 — gameplay-shuffle RNG-lockstep** (G7 follow-up). When
+    ``spec.shared_rng_seed`` is set, the matched-state builder already
+    seeds the initial library shuffle to the same permutation on both
+    engines (CE8 Slice 1). After setup, the in-game shuffle paths
+    (Python ``state.rng.shuffle`` via ``shuffle_library`` /
+    ``random.Random.choice``; Rust ``Effect::SearchLibraryForBasicLand-
+    Tapped`` / ``Effect::FamishedWorldsire*`` / mulligan / library
+    ops via the external-rng substrate) need to draw from the SAME MT
+    stream at the SAME position so a search-then-shuffle resolves to
+    an identical post-shuffle library order cross-engine. The Lander's
+    ``{2}, Sac: ~`` (``ActivateAbility(121, 0)`` on the bake-in's
+    arch2/s1 step 320 row) is the canonical trigger surface: with the
+    G7 frontier-(a) ActivateAbility-affordability axis CLOSED, the
+    activation now applies byte-equal on both engines and the
+    post-search shuffle is the next divergence — same multiset,
+    different order — purely because the per-engine RNG was not
+    lockstep through the gameplay-shuffle phase. The CE8-Slice-2
+    substrate (``state.rng = r`` on Python; ``set_external_rng(r)`` on
+    Rust) is in place (see ``SEARCH_LIMITATIONS.md`` entries #15/#16);
+    this is the bake-in-side wiring that actually installs matched
+    rngs. Both engines get a FRESH ``random.Random(shared_rng_seed)``
+    instance — fresh-seeded means MT-position 0 on both sides, so the
+    first gameplay-shuffle ``_randbelow`` draws line up byte-for-byte.
+    The instances are SEPARATE (one Python-owned per engine) to avoid
+    accidentally sharing MT state across the engine boundary; both
+    follow the IDENTICAL Fisher-Yates algorithm (Python's
+    ``random.shuffle`` and Rust's external-rng Fisher-Yates ARE the
+    same algorithm — entry #16 closed that) so they stay byte-lockstep
+    as long as the shuffle invocations fire in the same order, which
+    is guaranteed by the lockstep ``apply`` of identical decisions in
+    ``ShadowCheckedRustAdapter``. When ``shared_rng_seed`` is ``None``
+    (the synthetic-deck smoke path), gameplay rngs are NOT installed
+    and both engines fall through to their legacy paths (Python's
+    default ``random.Random()``; Rust's xorshift64 fallback) —
+    back-compat preserved for the no-shared-rng smoke. See
+    ``tests/test_parity_smoke.py::test_r54_cross_engine_search_
+    library_basic_land_byte_equal_shared_rng`` for the byte-equal
+    contract this rng-pairing satisfies."""
+    import random
+
     from mtg_bot.parity.cross_engine import build_matched_states
     from mtg_bot.search.engine_adapter import MtgGameStateAdapter
     from mtg_bot.search.engine_adapter_factory import (
@@ -528,6 +569,32 @@ def build_shadow_checked_adapter(spec: Any):
     from mtg_bot.search.heuristics_config import HeuristicsConfig
 
     py_state, rust_state = build_matched_states(spec)
+
+    # b3f7c0a9 gameplay-shuffle RNG-lockstep. The matched-state builder
+    # already consumed the initial p0/p1 library-shuffle draws from a
+    # transient ``random.Random(seed)`` on each engine (independent
+    # instances, byte-identical MT positions). For ALL subsequent
+    # in-game shuffles, install fresh-seeded rngs on both engines so
+    # the first gameplay ``_randbelow`` lines up. Fail-loud on a
+    # missing pymethod (substrate regression) — never silently fall
+    # through to xorshift, per ``feedback_silent_noop_pipelines``.
+    if getattr(spec, "shared_rng_seed", None) is not None:
+        seed = spec.shared_rng_seed
+        py_state.rng = random.Random(seed)
+        if not hasattr(rust_state, "set_external_rng"):
+            raise RuntimeError(
+                "b3f7c0a9: Rust GameState is missing "
+                "`set_external_rng` — the CE8-Slice-2 external-rng "
+                "substrate is the load-bearing surface for cross-"
+                "engine gameplay-shuffle parity. Refusing to silently "
+                "fall through to xorshift64 (would re-open the b3f7c0a9 "
+                "library-shuffle-order frontier at arch2/s1 step 320). "
+                "Rebuild the `.pyd` from a checkout that includes the "
+                "G19/CE8 closure (entry #16 in "
+                "`docs/SEARCH_LIMITATIONS.md`)."
+            )
+        rust_state.set_external_rng(random.Random(seed))
+
     # The Python checker runs HEURISTICS-DISABLED (correctness-
     # sensitive, like eval): the adapter's phase-prune / force-
     # landdrop / skip-empty-combat short-circuits are deliberate

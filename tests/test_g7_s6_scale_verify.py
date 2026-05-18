@@ -95,12 +95,26 @@ def _drive_to_trip(arch: int, seed: int, max_steps: int = 4000):
 @pytest.mark.parametrize(
     "arch,seed,exp_step,kind,needle",
     [
-        # Frontier (a) — the B1-axis analog: Rust legal-emit-vs-apply
-        # self-inconsistency on ActivateAbility mana-affordability. RAW
-        # ValueError (rust_shadow only converts a *Python*-side apply
-        # raise to NO_RAISE; a Rust-side raise propagates raw).
-        (2, 1, 318, "raw",
-         "ActivateAbility: source 121 cost is unaffordable"),
+        # Frontier (a) — CLOSURE-FLIPPED twice. The B1-axis analog
+        # (Rust legal-emit-vs-apply self-inconsistency on
+        # ActivateAbility mana-affordability) was @318 RAW
+        # ValueError, CLOSED by feature/fix-g7-frontier-a-
+        # activateability-affordability (a9126b06 → main). With (a)
+        # closed the bake-in surfaced the b3f7c0a9 library-shuffle-
+        # order STATE_EQ @320 (post-Lander-search per-engine shuffle
+        # RNG not lockstep). b3f7c0a9 is now ALSO closed (matched
+        # ``random.Random(shared_rng_seed)`` installation in
+        # ``build_shadow_checked_adapter`` — both engines' in-game
+        # Fisher-Yates byte-equal). The run proceeds PAST 320 to
+        # @337: ``LEGAL_SET_EQ py\rust=["('pass',)"]`` — the SAME
+        # pre-existing G1 stateless-Rust ``attack=False`` re-emission
+        # axis the arch5/s0 row pins at @369 (and arch7/s0 at @757),
+        # surfacing here on arch2/s1's attacker_id=9. Filed as the
+        # next G7 follow-up (G1 provider-accumulation / B3-S3 port —
+        # already a tracked sibling-owned lane). The load-bearing
+        # identity is the ``py\rust=["('pass',)"]`` shape, not the
+        # specific attacker_id.
+        (2, 1, 337, "LEGAL_SET_EQ", "py\\rust=[\"('pass',)\"]"),
         # Frontier (b) = S6 Class B — CLOSURE-FLIPPED. The dominant
         # 138/300 ``STATE_EQ ('priority_player', 1, 0)`` @367 is
         # CLOSED by the coordinated G7 S6 Class-B option-β
@@ -183,11 +197,25 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
 @pytest.mark.parametrize(
     "arch,seed,exp_step,kind,needle,axis_class",
     [
-        # Class A — B1-axis analog (ActivateAbility legal-emit-vs-apply
-        # mana-affordability self-inconsistency). RAW ValueError.
-        (2, 1, 318, "raw",
-         "ActivateAbility: source 121 cost is unaffordable",
-         "B1-axis (ActivateAbility affordability)"),
+        # Class A — CLOSURE-FLIPPED twice (B1-axis (a) closed; then
+        # b3f7c0a9 library-shuffle-order closed). The original
+        # @318-RAW ``ActivateAbility: source 121 cost is unaffordable``
+        # is CLOSED by feature/fix-g7-frontier-a-activateability-
+        # affordability (a9126b06 → main); the @320 b3f7c0a9
+        # ``STATE_EQ ('library_p1', ...)`` library-shuffle-order
+        # frontier that surfaced behind (a) is CLOSED by the
+        # matched-rng installation in ``build_shadow_checked_adapter``.
+        # The run proceeds PAST both to @337: ``LEGAL_SET_EQ
+        # py\rust=["('pass',)"]`` — the SAME pre-existing G1
+        # stateless-Rust ``attack=False`` re-emission axis as Class B
+        # (arch5/s0 @369) and Class D (arch7/s0 @757), surfacing here
+        # on arch2/s1's attacker_id=9. NOT a new G-axis — it is the
+        # already-tracked G1 provider-accumulation / B3-S3 port
+        # sibling-owned lane.
+        (2, 1, 337, "LEGAL_SET_EQ", "py\\rust=[\"('pass',)\"]",
+         "G1 stateless-Rust attack=False re-emission (cross-arch "
+         "twin of Class B @369 / Class D @757; surfaced behind the "
+         "stacked frontier-(a) + b3f7c0a9 closures on arch2/s1)"),
         # Class B — CLOSURE-FLIPPED. The dominant 138/300 G5-family
         # ``STATE_EQ ('priority_player', 1, 0)`` @367 is CLOSED by the
         # coordinated G7 S6 Class-B option-β engine+adapter slice
@@ -293,10 +321,20 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         # test_g7_classe_closed_then_library_shuffle_order_next_frontier_surfaced
         # (next-frontier pin) for the dedicated red-before/green-after
         # contract.
-        (1, 0, 600, "STATE_EQ", "library_p1",
-         "Class-E CLOSED → next frontier is the b3f7c0a9 "
-         "library-shuffle-order axis (SEPARATE, NOT a mana-pool "
-         "regression)"),
+        # Class E — CLOSED by ordered-pool ``ManaPool``; the
+        # b3f7c0a9 library-shuffle-order axis that surfaced behind
+        # Class-E @600 is ALSO CLOSED (matched-rng installation in
+        # ``build_shadow_checked_adapter``). The run proceeds PAST
+        # @600 to @610 where it surfaces a STATE_EQ on ``life_p0``
+        # (16, 20) — a 4-life delta on p0. Same life-total STATE_EQ
+        # axis as the Class-C arch1/s1 @356 row (``('life_p0', 17,
+        # 20)``), just a different seed/step. Pre-existing axis,
+        # unmasked — NOT introduced — by stacking the b3f7c0a9
+        # closure on top of Class-E.
+        (1, 0, 610, "STATE_EQ", "('life_p0', 16, 20)",
+         "life-total STATE_EQ (next-frontier behind the stacked "
+         "Class-E + b3f7c0a9 closures; cross-seed twin of the "
+         "Class-C arch1/s1 row)"),
     ],
 )
 def test_s6_complete_frontier_inventory(

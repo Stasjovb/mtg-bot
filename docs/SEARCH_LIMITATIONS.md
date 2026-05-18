@@ -7245,6 +7245,67 @@ gate signal (correctly loud). The proper closure is parity-positive
 > `docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` §9.2. NOT merged / NOT
 > pushed.
 
+> **[G7 b3f7c0a9 library-SHUFFLE-ORDER parity CLOSED — `feature/g7-
+> b3f7c0a9-library-shuffle-order-parity` off `main` @ `89a4f32b`,
+> pure-Python `src/mtg_bot/search/rust_shadow.py`-only, ZERO
+> engine/`rust/src`/`.pyd`.]** The b3f7c0a9 frontier surfaced by the
+> frontier-(a) `ActivateAbility` apply auto-tap closure (the
+> arch2/s1 step-320 `STATE_EQ ('library_p1', ...)` post-Lander-
+> search library-ORDERING divergence — identical 50-card multiset,
+> divergent order, per-engine shuffle RNG not lockstep) is **CLOSED**
+> at the bake-in harness layer. **The substrate was already in place**
+> (entry #15/#16 closed CE8 Slice 2: the Python
+> `SearchLibraryForBasicLandTapped.resolve` shuffles via
+> `shuffle_library` → `state.rng.shuffle`; Rust's
+> `Effect::SearchLibraryForBasicLandTapped` resolve arm consumes
+> Fisher-Yates draws via `external_rng::next_below` when an external
+> rng is installed via `GameState.set_external_rng(rng)`. The two
+> are byte-identical given `random.Random` instances at the same MT
+> position) — the gap was that `build_shadow_checked_adapter` did
+> not install matched gameplay rngs on the two engines. **Fix:**
+> when `spec.shared_rng_seed is not None`, install a fresh
+> `random.Random(shared_rng_seed)` on `py_state.rng` AND call
+> `rust_state.set_external_rng(random.Random(shared_rng_seed))` —
+> SEPARATE Python-owned instances, both at MT position 0, both
+> consuming the IDENTICAL `_randbelow` draws through the IDENTICAL
+> Fisher-Yates algorithm in lockstep through every gameplay
+> shuffle. Synthetic-deck callers without `shared_rng_seed` are
+> unaffected (back-compat preserved — Python's default
+> `random.Random()` + Rust's xorshift64 fallback both untouched).
+> `feedback_silent_noop_pipelines` discipline: the install raises
+> loudly if Rust's `set_external_rng` pymethod is missing (a
+> substrate regression would otherwise silently re-open the
+> b3f7c0a9 frontier). **arch2/s1 step 320 STATE_EQ on `library_p1`
+> RED→GREEN; the run proceeds PAST 320 to a new distinct frontier
+> @337: `LEGAL_SET_EQ py\rust=["('pass',)"]` — the SAME pre-existing
+> G1 stateless-Rust `attack=False` re-emission axis the arch5/s0 row
+> already pins at @369 (and arch7/s0 at @757), surfacing here on
+> arch2/s1's `attacker_id=9`. DISTINCT, pre-existing, sibling-owned
+> (the G1 provider-accumulation / B3-S3 port lane), unmasked — NOT
+> introduced — by stacking the b3f7c0a9 closure on top of the
+> frontier-(a) closure** (`feedback_no_fallback_hybrids` honest-stop;
+> NOT force-fixed in this lane). arch1/s0 also surfaces a different
+> frontier behind the stacked Class-E + b3f7c0a9 closures: step 610
+> `STATE_EQ ('life_p0', 16, 20)` — the same life-total STATE_EQ axis
+> the Class-C arch1/s1 @356 row already pins. Pins re-characterized
+> surfaced→closure following the G4/G5/G6/S5a/combat-blocker/(a)
+> closure-flip discipline: `tests/test_rust_shadow_bakein.py::
+> test_g7_activateability_affordability_closed_then_next_frontier_
+> surfaced` arch2/s1 row 320→337 (LEGAL_SET_EQ G1 axis); `tests/
+> test_rust_shadow_bakein.py::test_g7_classe_closed_then_library_
+> shuffle_order_next_frontier_surfaced` 600→610 + frontier identity
+> flipped from library-shuffle-order → life-total STATE_EQ; `tests/
+> test_g7_s6_scale_verify.py` Class-A arch2/s1 row 318→337 + Class-E
+> arch1/s0 row 600→610. arch5/s0 step 369, arch7/s0 step 757,
+> arch1/s1 step 356 pins UNCHANGED (sibling-owned lanes). 4-file
+> core gate **1536 UNMOVED**; `tests_rust` **30 failed/2312 passed
+> BYTE-IDENTICAL** to `89a4f32b` baseline (the pre-existing
+> `feedcf93` reds); `check_audit_coverage_staleness.py` exit 0;
+> isolation self-check PASSED (shared canonical `.pyd`
+> SHA256/size/mtime byte-identical before/after — pure-Python lane,
+> NO `.pyd` rebuild owed). NOT merged / NOT pushed; zero Rust ⇒ NO
+> `.pyd` rebuild / NO residue cadence / NO cron resync owed.
+
 > **[S5 TRIGGERS-VERIFY LANDED + orchestrator-merged (cycle 30) —
 > `feature/g7-s5-triggers-verify`, pure-Python VERIFY, ZERO
 > engine/`rust/src`/`.pyd`.]** The full faithfully-bridgeable trigger
