@@ -138,7 +138,7 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 16, @ `ef154a4e` — READ FIRST.**
+> **⚠ SoT-FLIP PATH — cycle 17, @ `30a5cebe` — READ FIRST.**
 > The cycle-11 phase-transition decision is RESOLVED: the user chose
 > **pivot to the SoT-flip path** (deliberate sequenced flip-execution,
 > NOT continuous cheap-refill). The continuous cheap-parallel-refill
@@ -197,43 +197,58 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   applied at `_reset_priority_to_active` + the sibling
 >   no-loss-model sites. Pin **flipped** `_is_surfaced` →
 >   `_is_closed`; 4-file 1532 UNMOVED; negative controls intact.
-> - **G6 — OPEN, the single genuine flip lane now.** Closing G5
->   honestly unmasked a distinct game-over-detection-**timing**
->   gap (NOT G5's `_next_alive` axis, NOT G4's mana axis, NOT
->   introduced by the G5 port): `RustGameStateAdapter` does not
->   call `apply_sbas()` on the step-end/auto-advance path, so
->   `is_over`/`winner_id` lag Python by a step post-deck-out vs
->   Python's `state_based_actions`-at-`_enter_step` (STATE_EQ
->   `is_over` rust=False/python=True + `winner_id`
->   rust=None/python=0 at step ~151, turn 8 PRECOMBAT_MAIN;
->   verified Rust's own `apply_sbas()` DOES flip them when
->   invoked — purely the missing adapter call). NOT a clean
->   one-liner (an SBA-timing port across the step-advance/
->   auto-advance paths — verify-first vs the 1532 baseline);
->   honestly NOT forced into the G5 lane
->   (`feedback_no_fallback_hybrids` / HONEST-PROGRESS). The
->   bake-in now STOPS on it → MUST land before the C4 re-sweep.
->   Pinned `::test_post_player_loss_is_over_timing_divergence_is_surfaced`;
->   own `SOT_FLIP_CUTOVER_PLAN.md` G6 ledger row; todo filed.
->   **Orchestrator dispatched the G6-closure single deliberate
->   flip lane this cycle.**
-> - **Unmask chain G4→G5→G6 is CONVERGENT** — all three are in
->   the SAME narrow region (the degenerate post-deck-out tail of
->   a 3-card synthetic deck: game-end mana/priority/SBA
->   bookkeeping), each closure CR-correctness-improving + scoped,
->   NO divergence in normal admitted gameplay. This is the
->   bake-in doing its designed job (honest-stop, not papered),
->   not scope creep.
-> - **NEXT: G6 closes →** the orchestrator runs the **C4 post-R76
->   scaled re-sweep THROUGH the rust_shadow bake-in** (equivalence
->   evidence) →
+> - **G6 — CLOSED (`4d7c8ab3`, docs backfill `30a5cebe`,
+>   pure-Python SBA-timing port).** Closing G5 honestly unmasked
+>   a distinct game-over-detection-**timing** gap (NOT G5's
+>   `_next_alive` axis, NOT G4's mana axis, NOT introduced by the
+>   G5 port): `RustGameStateAdapter` didn't call `apply_sbas()`
+>   on the step-end/auto-advance path, so `is_over`/`winner_id`
+>   lagged Python a step post-deck-out. Closed by
+>   `_run_step_enter_sbas()` calling Rust's existing
+>   `apply_sbas()` at Python's **exact selective** `_enter_step`
+>   SBA cadence (UPKEEP/BEGINNING_OF_COMBAT/POSTCOMBAT_MAIN/END
+>   always + COMBAT_DAMAGE iff `get_attackers()` — the agent's
+>   honest refinement of the brief's imprecise "every step";
+>   matched exactly, NOT over-called) on both the auto-advance
+>   loop and the empty-stack pass-round step-end. Pin **flipped**
+>   `_is_surfaced` → `_is_closed`; 4-file 1532 UNMOVED;
+>   rust_shadow 13 + rust-adapter 33 = 46; negative controls
+>   intact; pure-Python (no Rust/`.pyd`).
+> - **★ MILESTONE — the G4→G5→G6 convergent chain is FULLY
+>   CLOSED; closing G6 unmasked NO G7; the `rust_shadow` bake-in
+>   now reaches the natural terminal state DIVERGENCE-CLEAN.**
+>   All three lived in the SAME narrow degenerate post-deck-out
+>   3-card-synthetic game-end region (mana/priority/SBA
+>   bookkeeping); each closure was CR-correctness-improving; NONE
+>   in normal admitted gameplay. The bake-in did its designed
+>   honest-stop job and is now exhausted of divergences in this
+>   corner. **The flip prerequisites are now ALL COMPLETE:** C1
+>   keystone (Slices 1/2/3 `f1f09bbb`/`e6e3db58`/`bb29df8d`) + G1
+>   factored combat + B3 wiring SPEC + **B3-IMPL S1..S4** + the
+>   `rust_shadow` bake-in harness (now clean).
+> - **⚠ STALENESS POINTER:** `docs/SOT_FLIP_CUTOVER_PLAN.md` §0a's
+>   verify-first preamble is anchored at the OLDER `4704ca3e`
+>   (pre-B3-impl, pre-C1-Slices-2/3-completion). Its "Slices 2/3
+>   IN FLIGHT" / "B3 NOT-STARTED" prose is **SUPERSEDED** — THIS
+>   ⚠ block + the `EOE_PROBE_READINESS_AUDIT.md` sentinel are the
+>   canonical current critical-path pointer; the
+>   `SOT_FLIP_CUTOVER_PLAN.md` §4 ledger ROWS (incl. G4/G5/G6)
+>   are kept current at HEAD, only its §0a preamble prose is
+>   stale.
+> - **NEXT (the single remaining gate before the user go/no-go):
+>   the orchestrator runs the C4 post-R76 scaled re-sweep THROUGH
+>   the now-clean fully-strengthened `rust_shadow` bake-in** —
+>   orchestrator-run (evidence generation, reversible),
+>   **NOW UNBLOCKED** (the chain that blocked it is closed) →
+>   produces the equivalence evidence →
 >   **the atomic SoT-flip (B3-S5) is an ORCHESTRATOR+USER go/no-go
 >   on that evidence — explicitly NOT autonomous** (the single
 >   least-reversible action in the campaign) → bake-in period →
 >   Step 5/6 bridge-vestigialization cleanup
 >   (`docs/BRIDGE_VESTIGIALIZATION_PLAN.md`). No known hidden gaps
->   remain beyond G6 (G2 interim-maskable non-blocker; G3 accepted
->   C6-fenced caveat, SL entry owed at B3-impl).
+>   remain beyond the C4 evidence sweep (G2 interim-maskable
+>   non-blocker; G3 accepted C6-fenced caveat, SL entry owed at
+>   B3-impl).
 >
 > **Cadence: ONE genuine flip lane at a time. A re-orienting routine /
 > next session MUST NOT pad the pipeline back to ≤5 with manufactured

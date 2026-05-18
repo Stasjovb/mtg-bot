@@ -994,6 +994,61 @@ second:
    >     hidden gaps beyond G6 (scoped + reconcilable).
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 17 —
+   >   SoT-FLIP G6 CLOSED via pure-Python SBA-timing port; ★ THE
+   >   G4→G5→G6 CONVERGENT CHAIN IS FULLY CLOSED — no G7, the
+   >   rust_shadow bake-in now reaches the natural terminal state
+   >   DIVERGENCE-CLEAN; @ `30a5cebe`, counts UNCHANGED, parity
+   >   307/475 / PROBED 106 UNCHANGED).**
+   >   - **G6 CLOSED** (merge `4d7c8ab3`, docs backfill
+   >     `30a5cebe`): `RustGameStateAdapter._run_step_enter_sbas()`
+   >     calls Rust's existing `apply_sbas()` pymethod at
+   >     Python's **exact selective** `_enter_step` SBA cadence
+   >     (UPKEEP / BEGINNING_OF_COMBAT / POSTCOMBAT_MAIN / END
+   >     always + COMBAT_DAMAGE iff `get_attackers()` — the
+   >     agent's HONEST-PROGRESS refinement of the brief's
+   >     imprecise "every step"; matched exactly, NOT
+   >     over-called), invoked after the step-progression
+   >     `advance_phase()` on BOTH the `_advance_to_next_decision`
+   >     auto-advance loop AND the `_run_priority_action`
+   >     empty-stack pass-round step-end. **PURE PYTHON**
+   >     (`rust_engine_adapter.py` only — the existing
+   >     `apply_sbas()`, verified write-once/idempotent on the
+   >     loss/winner axis) — no Rust/`.pyd`/Cargo touch,
+   >     `decision_source=python` byte-unchanged, 4-file 1532
+   >     baseline UNMOVED, residue cadence did NOT fire (cron
+   >     exit-0), NO count drift, POOL_PARITY/PROBED UNCHANGED.
+   >     Pin FLIPPED `_is_surfaced` → `_is_closed`; rust_shadow
+   >     13 + rust-adapter 33 = 46 passed; negative controls
+   >     intact. Ledger: SOT_FLIP G6 → CLOSED-by-`4d7c8ab3`; SL
+   >     G4/G5/G6 chain flipped.
+   >   - **★ MILESTONE: the convergent chain is exhausted.** All
+   >     three (G4 mana-timing, G5 priority-port, G6 SBA-timing)
+   >     lived in the SAME narrow degenerate post-deck-out
+   >     3-card-synthetic game-end region; each closure was
+   >     CR-correctness-improving; NONE in normal admitted
+   >     gameplay; closing G6 unmasked NO further divergence —
+   >     the bake-in is CLEAN to terminal. The flip prerequisites
+   >     are now ALL COMPLETE: C1 keystone (Slices 1/2/3) + G1
+   >     factored combat + B3 wiring SPEC + B3-IMPL S1..S4 + the
+   >     rust_shadow bake-in harness (now clean).
+   >   - **Flip endgame is now: the SINGLE remaining gate before
+   >     the user go/no-go is the C4 post-R76 scaled re-sweep run
+   >     THROUGH the now-clean fully-strengthened rust_shadow
+   >     bake-in (orchestrator-run — evidence generation,
+   >     reversible; NOW UNBLOCKED) → ORCHESTRATOR+USER go/no-go
+   >     on the atomic SoT-flip (B3-S5) — explicitly NOT
+   >     autonomous (the single least-reversible action) →
+   >     bake-in period → bridge-vestigialization cleanup.** No
+   >     known hidden gaps beyond the C4 evidence sweep.
+   >   - STALENESS POINTER: `SOT_FLIP_CUTOVER_PLAN.md` §0a
+   >     preamble is anchored at the older `4704ca3e`
+   >     (pre-B3-impl) — its "Slices 2/3 IN FLIGHT / B3
+   >     NOT-STARTED" prose is SUPERSEDED; the HANDOFF ⚠ block +
+   >     EOE sentinel are the canonical current pointer (the §4
+   >     ledger rows are kept current at HEAD).
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
