@@ -1327,6 +1327,76 @@ second:
    >     SoT-flip (B3-S5). Flip NO-GO until all hold.
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 23 —
+   >   G7-S3 HONEST clean-verify no-op; the HIGHEST-RISK slice's
+   >   risk did NOT materialize; @ `022d2ebc`, counts UNCHANGED,
+   >   parity 307/475 / PROBED 106 UNCHANGED).**
+   >   - **S3 verify-finding (`022d2ebc`, zero `rust/src/`):**
+   >     the design's S3 fix-hypothesis (the `cast_creature`
+   >     cast-push priority-reset) was HONESTLY CONTRADICTED vs
+   >     live source — that reset was ALREADY reconciled by S1:
+   >     the anticipating docstring existed only pre-S1; the
+   >     production Rust-driver loop
+   >     `rust_engine_adapter.py:_run_priority_action` overwrites
+   >     `priority_player` via `_reset_priority_to_active()` (the
+   >     G5-lane byte-exact port of Python `simulate._next_alive`)
+   >     at exactly Python's reset points
+   >     (`simulate.py:266-267/:282`) BEFORE any per-apply
+   >     STATE_EQ/LEGAL_SET_EQ compare — the cast-push reset is
+   >     REDUNDANT, not divergent.
+   >   - **The nested-response-window cross-engine surface
+   >     COMPOSES BYTE-EQUAL** (the MEDIUM-HIGH "Rust
+   >     priority-round machinery can't support nested response
+   >     windows" risk the design flagged did NOT materialize):
+   >     the I46 instant-speed CastSpell pass
+   >     (`state_ops_legal.rs:1454-1507`, run before the
+   >     sorcery-timing `stack.is_empty()` gate, gated on the
+   >     opponent holding priority — byte-faithful Python
+   >     `legal.py:180-181`) emits the response with a permanent
+   >     spell on the stack; LIFO resolution + byte-equal
+   >     priority reset verified.
+   >   - **S3 did NOT honest-stop-unmask any new divergence** —
+   >     the post-cast priority/resolution SEQUENCE is byte-equal
+   >     for the creature case, so the `rust_shadow` bake-in now
+   >     gets MATERIALLY PAST the G7 cast-resolve trip. Agent did
+   >     NOT manufacture a diff: added 3 nested-response-window
+   >     pins `tests_rust/test_priority.py::test_s3_*` (one
+   >     initially red → correctly diagnosed as a TEST bug, fixed
+   >     not papered) + SL/design notes. 4-file **1532 UNMOVED**;
+   >     676 priority/cast/resolve/counterspell/stack/adapter +
+   >     13 rust_shadow_bakein green; isolation self-check PASS.
+   >   - Zero `rust/src/` → NO `.pyd` rebuild, residue cadence
+   >     does NOT fire (CFI-1+, stricter); NO count drift;
+   >     POOL_PARITY/PROBED UNCHANGED; stamps stay bb29df8d; CE5
+   >     + the pop-only G3 composer NOT touched.
+   >   - **CARRY-FORWARD (honest, accumulating, NOT
+   >     slice-blocking):** `tests_rust/` baseline-rot now ~32
+   >     (S1) + 2 (S2) + 23 (S3: DeclareAttackers/DeclareBlockers
+   >     emission-shape pins asserting the stale
+   >     `declare_attackers` shape vs the G1 factored
+   >     `attacker_decision` variants) — ALL fail identically on
+   >     unmodified `main`, NONE in the 4-file campaign gate,
+   >     NONE S1/S2/S3-introduced (`tests_rust/` is the Rust unit
+   >     suite drifting from the evolving emitter; the
+   >     cross-engine parity gate is the real gate + green).
+   >     Filed for an eventual non-blocking `tests_rust`
+   >     baseline-rot refresh sweep; does NOT gate the flip slice
+   >     plan.
+   >   - **NET: flip NO-GO list = "G7 S4..S7 + CE5-FREE C4".
+   >     NEXT = G7-S4** (`cast_creature_warp` still atomic at
+   >     `state_ops_cast.rs:785-790` + permanent-spell riders/
+   >     provenance + the deferred non-creature-permanent
+   >     `&& creature`/aura-attach the S2 boundary tripwire
+   >     `test_s2_non_creature_permanent_cannot_be_stacked_
+   >     boundary` holds, which S4 must flip+fix) → S5
+   >     triggers-on-stack → S6 bake-in scale verify → **S7 CE5
+   >     removal LAST** → CE5-FREE re-proof + fresh CE5-FREE C4
+   >     clean (also the definitive fully-unmasked B1
+   >     LEGAL_SET_EQ confirmation) → ORCHESTRATOR+USER go/no-go
+   >     on the atomic SoT-flip (B3-S5). Flip NO-GO until all
+   >     hold.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

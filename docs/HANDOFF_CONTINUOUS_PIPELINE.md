@@ -138,24 +138,26 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 22, @ `e329d3eb` — READ FIRST.**
-> **G7 S1+S2 DONE. B1 = ANOTHER HONEST CLEAN-VERIFY FINDING: C1
-> Slices 1/2/3 were ALREADY LANDED (`f1f09bbb`/`e6e3db58`/
-> `bb29df8d`, all in main ancestry — the §0a "Slices 2/3 IN
-> FLIGHT" was the known-stale @4704ca3e prose). The C4 22/300
-> LEGAL_SET_EQ was NOT a separate C1 gap — it was a DOWNSTREAM
-> ARTIFACT of G7 atomic resolution, now closed by S1's
-> stack-push (re-driving the exact C4 repros → zero LEGAL_SET_EQ
-> trip); agent landed a negative-control-verified end-to-end
-> regression sentinel, zero rust/src, did NOT manufacture a
-> diff (`e329d3eb`). HONEST masking caveat: the sentinel proves
-> the B1 axis closed as a REGRESSION GUARD; the definitive
-> fully-unmasked confirmation lands at the post-S7 CE5-FREE C4
-> (G7 STATE_EQ still trips first). NET: the flip NO-GO list
-> SIMPLIFIES to "G7 S3..S7 + CE5-FREE C4" (B1 no longer a
-> separate co-blocker). NEXT = dispatch G7-S3 (priority/response
-> windows — the HIGHEST-RISK slice). G3 fork RESOLVED (Rust
-> implements the stack; fully autonomous);
+> **⚠ SoT-FLIP PATH — cycle 23, @ `022d2ebc` — READ FIRST.**
+> **G7 S1+S2+S3 DONE, B1 DONE. S3 (`022d2ebc`) = HONEST
+> clean-verify no-op AND THE HIGHEST-RISK SLICE'S RISK DID NOT
+> MATERIALIZE:** the design's S3 fix-hypothesis (cast-push
+> priority-reset) was honestly contradicted vs live source — S1
+> had already reconciled it (the adapter loop's
+> `_reset_priority_to_active`, a G5-lane port, fires at Python's
+> exact reset points). The brand-new nested-response-window
+> cross-engine surface **composes byte-equal** (I46 instant-speed
+> emission + LIFO resolution + byte-equal reset verified by 3 new
+> `tests_rust/test_priority.py::test_s3_*` pins); S3 unmasked
+> **NO new divergence**; the `rust_shadow` bake-in now gets
+> MATERIALLY PAST the G7 cast-resolve trip for the creature case.
+> Zero rust/src, 1532 UNMOVED, no `.pyd` rebuild, CE5 untouched.
+> NET: flip NO-GO list is **"G7 S4..S7 + CE5-FREE C4"**. NEXT =
+> dispatch G7-S4 (`cast_creature_warp` — still atomic at
+> `state_ops_cast.rs:785-790` — + permanent-spell
+> riders/provenance + the deferred non-creature-permanent
+> `&& creature`/aura-attach the S2 boundary tripwire guards).
+> G3 fork RESOLVED (Rust implements the stack; fully autonomous);
 > `docs/RUST_STACK_RESOLUTION_DESIGN.md` is the canonical G7
 > owner.**
 > The cycle-11 phase-transition decision is RESOLVED: the user chose
@@ -330,18 +332,39 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   fully-unmasked confirmation is the post-S7 CE5-FREE C4 (G7
 >   STATE_EQ trips first until then). 1532 UNMOVED; no `.pyd`
 >   rebuild; no residue cadence; CE5 untouched.
-> - **NET: the flip NO-GO list SIMPLIFIES** from "G7 S1..S7 + B1
->   + CE5-free C4" to **"G7 S3..S7 + CE5-free C4"** (S1+S2 done;
->   B1 already-landed + the C4 artifact closed by S1 + pinned).
->   **NEXT: dispatch G7-S3** (priority/response windows — the
->   HIGHEST-RISK slice: the brand-new nested-response-window
->   cross-engine surface; no B1 prerequisite remains, the C1
->   legal-set surface is stable so S3's LEGAL_SET_EQ won't trip
->   on a C1 axis, exactly as design §4.2/§4.5 intended) → S4
->   `cast_creature_warp` + riders + the deferred
->   non-creature-perm/aura-attach → S5 → S6 → S7 CE5 removal
->   LAST.
->   Flip remains **NO-GO** until G7 S3..S7 close +
+> - **S3 LANDED (`022d2ebc`) — HONEST clean-verify no-op; the
+>   HIGHEST-RISK slice's risk did NOT materialize.** The design's
+>   S3 fix-hypothesis (cast-push priority-reset) was honestly
+>   contradicted vs live source — S1 had already reconciled it
+>   (the adapter loop's `_reset_priority_to_active`, the G5-lane
+>   byte-exact port of Python `simulate._next_alive`, fires at
+>   Python's exact reset points before any per-apply compare; the
+>   cast-push reset is redundant, not divergent). The brand-new
+>   nested-response-window cross-engine surface **composes
+>   byte-equal** (I46 instant-speed emission gated on the
+>   opponent holding priority + LIFO resolution + byte-equal
+>   reset; 3 new `tests_rust/test_priority.py::test_s3_*` pins,
+>   first engine-level exercise of a real response window). S3
+>   unmasked **NO new divergence** — the post-cast
+>   priority/resolution SEQUENCE is byte-equal for the creature
+>   case, so the `rust_shadow` bake-in now gets MATERIALLY PAST
+>   the G7 cast-resolve trip. Zero `rust/src/`, 1532 UNMOVED, no
+>   `.pyd` rebuild, no residue cadence, CE5 + the pop-only G3
+>   composer untouched.
+> - **NET: the flip NO-GO list is now "G7 S4..S7 + CE5-FREE C4"**
+>   (S1+S2+S3 done; B1 done). **NEXT: dispatch G7-S4** —
+>   `cast_creature_warp` (still atomic at
+>   `state_ops_cast.rs:785-790`) + permanent-spell
+>   riders/provenance (warp/impending/room/cast-from-X) + the
+>   deferred non-creature-permanent `&& creature` summoning-sick
+>   guard + resolve-time aura-attach (both still held by the S2
+>   boundary tripwire `test_s2_non_creature_permanent_cannot_be_
+>   stacked_boundary`, which S4 must flip+fix) → S5
+>   triggers-on-stack → S6 bake-in scale verify → **S7 CE5
+>   removal LAST** → CE5-FREE re-proof + fresh CE5-FREE C4 clean
+>   (also the definitive fully-unmasked B1 LEGAL_SET_EQ
+>   confirmation) = the final flip gate.
+>   Flip remains **NO-GO** until G7 S4..S7 close +
 >   the CE5-FREE C4 runs divergence-clean. The atomic SoT-flip
 >   (B3-S5) remains an ORCHESTRATOR+USER go/no-go — explicitly NOT
 >   autonomous (the single least-reversible action). (G2
