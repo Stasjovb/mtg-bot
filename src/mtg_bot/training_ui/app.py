@@ -164,6 +164,12 @@ def _row_to_ui_dict(
                     "replays_dir",
                     "capture_every_self_play",
                     "capture_every_eval",
+                    # MCTS search budget per decision. Surfaces as the
+                    # "Depth" stat on data_gen + eval cards so it's
+                    # visible at a glance whether a run is at the
+                    # iter_005 baseline (200) or a depth-bumped config
+                    # (400/800 — D2 in docs/SCALING_DIAGNOSTICS.md).
+                    "nodes",
                 ):
                     if cfg.get(key) is not None:
                         ui[key] = cfg[key]
@@ -386,9 +392,8 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
         # n_games_done is the canonical "did the aggregate row get
         # written" indicator (a real aggregate row, even 0/0, has
         # the column populated; a missing aggregate leaves it NULL).
-        # For those, roll up the per-shard rows AND fetch the
-        # per-shard records themselves so the front-end can render
-        # the per-machine sub-card grid.
+        # For those, roll up the per-shard rows for the counter
+        # display.
         def _effective_done(row: sqlite3.Row) -> Optional[int]:
             sid = effective_progress_run_id[row["run_id"]]
             if sid != row["run_id"]:
@@ -401,7 +406,6 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
             if _effective_done(row) is None
         ]
         per_shard_rollup: dict[str, dict[str, Any]] = {}
-        per_shard_records: dict[str, list[dict[str, Any]]] = {}
         if missing_agg:
             placeholders = ",".join("?" * len(missing_agg))
             rollup_rows = conn.execute(
@@ -426,11 +430,23 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
             per_shard_rollup = {
                 r["run_id"]: dict(r) for r in rollup_rows
             }
-            # Fetch the raw per-shard records too so the rendering
-            # path can synthesize `machines` array + sum the extras
-            # (n_samples, n_workers, p0_wins, p1_wins, ...) from
-            # extra_json that the structured counter columns don't
-            # cover.
+
+        # Always fetch per-shard rows for every displayed run's
+        # effective progress source — both standalone stage runs and
+        # cycle rows (the cycle's active stage). The front-end's
+        # per-machine sub-card grid renders whenever ``machines`` is
+        # populated; tying that to the missing-aggregate fallback was
+        # an artifact of the rollup path. Stages WITH an aggregate row
+        # still have per-shard rows and want the same sub-card grid;
+        # cycles do too (their active stage's per-shard rows show
+        # which worker is producing which slice of the cycle's
+        # progress).
+        per_shard_records: dict[str, list[dict[str, Any]]] = {}
+        all_progress_ids = list(set(
+            effective_progress_run_id.values()
+        ))
+        if all_progress_ids:
+            placeholders = ",".join("?" * len(all_progress_ids))
             shard_rows = conn.execute(
                 f"""
                 SELECT run_id, shard_label, n_games_done,
@@ -441,7 +457,7 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
                 WHERE shard_label IS NOT NULL
                   AND run_id IN ({placeholders})
                 """,
-                missing_agg,
+                all_progress_ids,
             ).fetchall()
             for r in shard_rows:
                 per_shard_records.setdefault(
@@ -593,6 +609,17 @@ def _list_runs(progress_dir: Path) -> list[dict[str, Any]]:
             if stage_ui_kind is not None:
                 ui_dict["kind"] = stage_ui_kind
                 ui_dict["_active_stage_run_id"] = stage_run_id
+            # Per-machine sub-card grid. The rollup branch above
+            # already attached this on its path; the aggregate-row
+            # branch also needs it (stages with an aggregate row still
+            # have per-shard rows; cycles inherit them from their
+            # active stage). Don't overwrite a machines value the
+            # rollup branch already set.
+            shard_recs = per_shard_records.get(effective_id)
+            if shard_recs and "machines" not in ui_dict:
+                ui_dict["machines"] = _per_shard_to_machines(
+                    shard_recs,
+                )
             out.append(ui_dict)
     return out
 
