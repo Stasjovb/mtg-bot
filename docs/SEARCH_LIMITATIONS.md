@@ -6875,6 +6875,74 @@ gate signal (correctly loud). The proper closure is parity-positive
 > below / SOT_FLIP §4). NOT force-fixed (`feedback_no_fallback_hybrids`
 > honest-stop). NOT merged / NOT pushed.
 
+> **[G7 S6-Class-E (31/300) — VERIFY-FIRST RE-CHARACTERIZED +
+> HONEST-STOP: the root cause is the `auto_tap_for_cost` GENERIC-cost
+> POOL-drain ORDER, NOT a mana-SOURCE/land-tap color choice; the
+> faithful fix needs an ordered-pool `ManaPool` representation —
+> materially out of one safe slice + outside the
+> `state_ops_cast.rs`/`state_ops_mana.rs`-only lane scope. Lane
+> `feature/g7-classe-mana-color` off `main` @ `430f3b39`;
+> pure-test/docs investigation, ZERO `rust/src`/`src/`/`.pyd`/
+> `cross_engine.py` change.]** The S6 evidence
+> (`docs/G7_S6_SCALE_VERIFY_EVIDENCE.md` + `s6_scale_verify.json`)
+> labelled Class E *"C1-family mana-SOURCE color on `ActivateAbility`
+> — Rust taps a different-colored source than Python (the auto-tap
+> land/source pick order diverges)"*. **Verify-first against live
+> `main` @ `430f3b39` REFINES that framing.** (1) It is **NOT** a
+> colored-pip or land-tap-color issue: the `ManaCost.colored`
+> iteration order (Python `sorted` = `B,G,R,U,W`,
+> `cards/base.py:parse_mana_cost:391`) and the colored-land tap order
+> ALREADY byte-match Python — frontier-a settled those
+> (`auto_tap_pay_for_cost`, `state_ops_cast.rs:431-470`). In every
+> Class-E repro the diverging cost is **PURE GENERIC** and (on the
+> canonical arch1/s0 @ step 598 — `ActivateAbility(120,0)`, Lander
+> `ManaCost(generic=2, colored=())`) every land is already tapped so
+> NO land is tapped at all. (2) The **real root cause is the
+> GENERIC-cost drain ORDER from the floating mana POOL**: Python's
+> `auto_tap_for_cost` (`actions.py:964-976` — the SoT both
+> `_cast_spell` `actions.py:1662` and `_activate_ability`
+> `actions.py:1992-1995` pay through) drains the generic cost from
+> `p.mana_pool` in **list/insertion order** (`for idx, coin in
+> enumerate(p.mana_pool)`, FIFO, NO color preference), while Rust's
+> `auto_tap_pay_for_cost` (`state_ops_cast.rs:472-483`) drains generic
+> in a **fixed `C→W→U→B→R→G` color priority** (copied from
+> `state_ops_mana.rs::pay_mana_cost:271-295` — the WRONG SoT for the
+> cast/activate pay path). On arch1/s0 the p1 pool list at step 598 is
+> `[G, G, U, U]` with cost `{2}`: Python consumes the first two list
+> entries (`G, G`) → residual `U:2`; Rust drains `U` before `G` →
+> residual `G:2`. SAME cost, SAME total drained (2), DIFFERENT
+> colored residual — exactly the `mana_pool_pX` STATE_EQ shape. (3)
+> **Class E is HOMOGENEOUS — 31/31 the same root cause**
+> (`scripts/scout_classe_characterize.py` over the committed
+> `s6_scale_verify.json`; mix of `ActivateAbility` + `CastSpell`
+> last-actions, all paying through the IDENTICAL `auto_tap_for_cost`).
+> (4) **The faithful fix is out of this lane's scope.** Byte-mirroring
+> Python's pool-LIST-order generic drain requires Rust to know the
+> pool coin **insertion order**. Rust's `ManaPool` (`state.rs:509`)
+> is a per-color **count** struct that discards order at `add_mana`
+> time (`state_ops_mana.rs:117-127`). The pre-pool dumps are genuinely
+> interleaved (`[W,W,G,W,U,W,G]`, `[R,G,G,G,G,G,G,R,G,G,G]`) and
+> provably **NOT reconstructable from per-color counts** — a
+> count-only heuristic would be a `feedback_no_fallback_hybrids`
+> fallback that gets the interleaved cases wrong. The only faithful
+> fix is an **ordered-pool representation** in `state.rs::ManaPool` +
+> every add/drain/clone/fingerprint/snapshot/decisions site updated
+> (**186 per-color pool-field references across 9 `rust/src` files**,
+> INCLUDING `cards.rs` which fires the cron structural arm and is
+> off-limits) — a multi-file engine-representation refactor, more than
+> one safe slice. This lane ships ZERO engine diff (manufacturing a
+> partial count-only diff would be a fabricated no-op). Pinned LOUD by
+> `tests/test_rust_shadow_bakein.py::
+> test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned`
+> (asserts the trip @ step 598 + the pure-generic-cost +
+> multi-color-pool + same-total-different-color root-cause signature —
+> flips to the closed contract when the ordered-pool repr lands, must
+> NEVER silently pass); the S6 Class-E inventory-row label refined
+> (verdict/step/needle UNMOVED — the pin's verdict was firing
+> correctly, only its root-cause label was imprecise). Filed as the
+> genuine-fix follow-up todo. Cross-ref:
+> `docs/SOT_FLIP_CUTOVER_PLAN.md` §4 G7 row.
+
 > **[G7 frontier (b) = S6 Class B (dominant 138/300, arch5/s0 step
 > 367 `('priority_player',1,0)`) — VERIFY-FIRST RE-DIAGNOSED +
 > HONEST-STOP: the root cause is in `rust/src`, a Rust-ENGINE slice,

@@ -209,13 +209,31 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         (7, 0, 453, "LEGAL_SET_EQ",
          "('cast_spell', 76, False, False, False, False, None)",
          "B1-keystone/C1 (legal_decisions==legal_actions cast set)"),
-        # Class E — mana-color divergence on ability activation: the
-        # tapped source produces a different color in the two engines
-        # (Python U:2 vs Rust G:2). A mana-production/land-tap
-        # color-choice axis (C1-family — the Rust legal/apply
-        # mana-source selection vs Python's). STATE_EQ on mana_pool.
+        # Class E — RE-CHARACTERIZED (verify-first @ main 430f3b39;
+        # see test_rust_shadow_bakein.py::
+        # test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned).
+        # The S6-evidence label "C1-family mana-SOURCE color selection
+        # (auto-tap land/source pick order)" is REFINED: the
+        # colored-pip order + colored-land tap order ALREADY byte-match
+        # Python (frontier-a settled those). The REAL root cause is the
+        # GENERIC-cost drain ORDER from the floating mana POOL: Python's
+        # auto_tap_for_cost (actions.py:964-976 — the SoT both
+        # _cast_spell and _activate_ability pay through) drains generic
+        # in p.mana_pool LIST/insertion order; Rust's
+        # auto_tap_pay_for_cost (state_ops_cast.rs:472-483) drains
+        # generic in a fixed C→W→U→B→R→G color priority. arch1/s0 @ 598
+        # the {2}-generic Lander activation: pool list [G,G,U,U] →
+        # Python keeps U:2, Rust keeps G:2 (same total, different
+        # color). HOMOGENEOUS — 31/31 the same root cause
+        # (scout_classe_characterize.py). The faithful fix is an
+        # ordered-pool ManaPool representation (out of the
+        # state_ops_cast/mana-only lane scope; filed follow-up todo).
+        # (boundary step + needle UNCHANGED — the pin's verdict was
+        # firing correctly, only its root-cause label was imprecise.)
         (1, 0, 598, "STATE_EQ", "mana_pool_p1",
-         "C1-family (mana-source color selection)"),
+         "auto_tap_for_cost generic-pool-drain ORDER "
+         "(Python list-order vs Rust fixed C→W→U→B→R→G; "
+         "ordered-pool repr fix out of lane scope)"),
     ],
 )
 def test_s6_complete_frontier_inventory(
