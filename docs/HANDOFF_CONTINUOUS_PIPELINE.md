@@ -138,20 +138,26 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 21, @ `fb7f0a14` — READ FIRST.**
-> **G7 S1+S2 DONE. S1 (`5803aea7`): `cast_creature`→StackItem
-> (no atomic resolve). S2 (`fb7f0a14`): HONEST clean-verify
-> no-op — Rust's resolve path already byte-equal w/ Python
-> `put_into_battlefield` for the creature case (zero rust/src/
-> touched; agent did NOT manufacture a diff; non-creature-perm
-> + aura-attach DEFERRED to S4 with a forcing tripwire). NEXT =
-> dispatch B1 (C1 Slices 2/3) BEFORE S3 — the design EXPLICITLY
-> sequences C1 S2/3 just before S3 so S3's response-window
-> LEGAL_SET_EQ does not trip on the known-open C1 axis. G3 fork
-> RESOLVED (Rust implements the stack; fully autonomous);
+> **⚠ SoT-FLIP PATH — cycle 22, @ `e329d3eb` — READ FIRST.**
+> **G7 S1+S2 DONE. B1 = ANOTHER HONEST CLEAN-VERIFY FINDING: C1
+> Slices 1/2/3 were ALREADY LANDED (`f1f09bbb`/`e6e3db58`/
+> `bb29df8d`, all in main ancestry — the §0a "Slices 2/3 IN
+> FLIGHT" was the known-stale @4704ca3e prose). The C4 22/300
+> LEGAL_SET_EQ was NOT a separate C1 gap — it was a DOWNSTREAM
+> ARTIFACT of G7 atomic resolution, now closed by S1's
+> stack-push (re-driving the exact C4 repros → zero LEGAL_SET_EQ
+> trip); agent landed a negative-control-verified end-to-end
+> regression sentinel, zero rust/src, did NOT manufacture a
+> diff (`e329d3eb`). HONEST masking caveat: the sentinel proves
+> the B1 axis closed as a REGRESSION GUARD; the definitive
+> fully-unmasked confirmation lands at the post-S7 CE5-FREE C4
+> (G7 STATE_EQ still trips first). NET: the flip NO-GO list
+> SIMPLIFIES to "G7 S3..S7 + CE5-FREE C4" (B1 no longer a
+> separate co-blocker). NEXT = dispatch G7-S3 (priority/response
+> windows — the HIGHEST-RISK slice). G3 fork RESOLVED (Rust
+> implements the stack; fully autonomous);
 > `docs/RUST_STACK_RESOLUTION_DESIGN.md` is the canonical G7
-> owner. Flip NO-GO until G7 S1..S7 + B1 close + a CE5-FREE C4
-> runs clean.**
+> owner.**
 > The cycle-11 phase-transition decision is RESOLVED: the user chose
 > **pivot to the SoT-flip path** (deliberate sequenced flip-execution,
 > NOT continuous cheap-refill). The continuous cheap-parallel-refill
@@ -308,13 +314,34 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   Carry-forward: 2 pre-existing `tests_rust/test_triggers.py`
 >   land-search/landfall failures (NOT in the 4-file gate, NOT
 >   S1/S2-caused — tests_rust baseline-rot, tracked for a sweep).
->   **NEXT: dispatch B1 (C1 Slices 2/3) BEFORE S3** — per design
->   §4.2/§4.5 C1 S2/3 must land just before S3 so S3's
->   response-window LEGAL_SET_EQ doesn't trip on the known-open
->   C1 axis (the C4 22/300 LEGAL_SET_EQ co-blocker). Then S3
->   (priority/response windows, highest-risk) → S4 → S5 → S6 →
->   S7 CE5 removal LAST.
->   Flip remains **NO-GO** until G7 S1..S7 + B1 close +
+> - **B1 LANDED (`e329d3eb`) — HONEST clean-verify finding: C1
+>   Slices 1/2/3 were ALREADY in main ancestry**
+>   (`f1f09bbb`/`e6e3db58`/`bb29df8d`; `state_ops_legal.rs`
+>   `spell_targets_satisfiable` + `additional_costs_payable` are
+>   faithful Python-SoT mirrors, not stubs). The C4 22/300
+>   LEGAL_SET_EQ was a G7-atomic-resolve **downstream artifact**,
+>   closed by S1's stack-push (exact C4 repros + 100-game pop
+>   re-driven → zero LEGAL_SET_EQ trip). Zero `rust/src/` (no
+>   diff manufactured); added a negative-control-verified
+>   end-to-end regression sentinel that FAIL-LOUDs on a
+>   LEGAL_SET_EQ `cast_spell` over-emission and tolerates the
+>   out-of-scope G7 STATE_EQ. **Honest masking caveat:** proves
+>   the B1 axis closed as a regression guard; the definitive
+>   fully-unmasked confirmation is the post-S7 CE5-FREE C4 (G7
+>   STATE_EQ trips first until then). 1532 UNMOVED; no `.pyd`
+>   rebuild; no residue cadence; CE5 untouched.
+> - **NET: the flip NO-GO list SIMPLIFIES** from "G7 S1..S7 + B1
+>   + CE5-free C4" to **"G7 S3..S7 + CE5-free C4"** (S1+S2 done;
+>   B1 already-landed + the C4 artifact closed by S1 + pinned).
+>   **NEXT: dispatch G7-S3** (priority/response windows — the
+>   HIGHEST-RISK slice: the brand-new nested-response-window
+>   cross-engine surface; no B1 prerequisite remains, the C1
+>   legal-set surface is stable so S3's LEGAL_SET_EQ won't trip
+>   on a C1 axis, exactly as design §4.2/§4.5 intended) → S4
+>   `cast_creature_warp` + riders + the deferred
+>   non-creature-perm/aura-attach → S5 → S6 → S7 CE5 removal
+>   LAST.
+>   Flip remains **NO-GO** until G7 S3..S7 close +
 >   the CE5-FREE C4 runs divergence-clean. The atomic SoT-flip
 >   (B3-S5) remains an ORCHESTRATOR+USER go/no-go — explicitly NOT
 >   autonomous (the single least-reversible action). (G2

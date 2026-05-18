@@ -1270,6 +1270,63 @@ second:
    >     SoT-flip (B3-S5). Flip NO-GO until all hold.
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 22 —
+   >   B1 = ANOTHER HONEST clean-verify finding: C1 Slices 1/2/3
+   >   were ALREADY LANDED; flip blocker list SIMPLIFIES; @
+   >   `e329d3eb`, counts UNCHANGED, parity 307/475 / PROBED 106
+   >   UNCHANGED).**
+   >   - **B1 verify-finding (`e329d3eb`):** `git merge-base
+   >     --is-ancestor` confirmed all 3 C1 sub-slices in main
+   >     ancestry — Slice 1 mana `f1f09bbb`, Slice 2
+   >     target-satisf `e6e3db58`, Slice 3 additional-cost
+   >     `bb29df8d`; `state_ops_legal.rs`
+   >     `spell_targets_satisfiable` + `additional_costs_payable`
+   >     are faithful per-Effect Python-SoT mirrors gating all 6
+   >     live CastSpell sites (NOT stubs). The
+   >     `SOT_FLIP_CUTOVER_PLAN.md` §0a "Slices 2/3 IN FLIGHT"
+   >     was the known-STALE @`4704ca3e` prose.
+   >   - **The C4 22/300 LEGAL_SET_EQ was NOT a separate open C1
+   >     prune gap — it was a DOWNSTREAM ARTIFACT of G7 atomic
+   >     resolution** (atomic-resolve → different Rust state →
+   >     different legal cast set), now closed by S1's
+   >     stack-push: re-driving the EXACT C4-recorded (arch,seed)
+   >     LEGAL_SET_EQ repros + the 100-game population through
+   >     the role-swapped bake-in now yields ZERO LEGAL_SET_EQ
+   >     `cast_spell` trip.
+   >   - **HONEST-PROGRESS: agent did NOT manufacture a diff**
+   >     (zero `rust/src/`, same discipline as S2). Landed a
+   >     permanent end-to-end regression sentinel
+   >     `test_c4_resweep_cast_spell_legal_set_eq_axis_is_closed_end_to_end`
+   >     (drives the verbatim C4 repros through `rust_shadow`,
+   >     FAIL-LOUD on any LEGAL_SET_EQ `cast_spell` over-emission,
+   >     TOLERATES the out-of-B1-scope G7 STATE_EQ;
+   >     negative-control-verified discriminator).
+   >   - **HONEST MASKING CAVEAT (recorded, NOT overclaimed):**
+   >     the bake-in stops at the FIRST divergence and G7
+   >     STATE_EQ trips on spell casts, so the sentinel proves
+   >     the B1 axis closed AS A REGRESSION GUARD; the DEFINITIVE
+   >     fully-unmasked end-to-end confirmation of the C1
+   >     legal-set axis only lands at the post-S7 CE5-FREE C4
+   >     (when G7 STATE_EQ no longer trips first).
+   >   - Zero `rust/src/` → residue cadence does NOT fire
+   >     (stricter than CFI-1 state_ops-only); NO `.pyd` rebuild
+   >     needed; NO count drift; POOL_PARITY/PROBED UNCHANGED;
+   >     stamps stay bb29df8d; 4-file core **1532 UNMOVED**; CE5
+   >     NOT touched.
+   >   - **NET: the flip NO-GO list reduces from "G7 S1..S7 + B1
+   >     + CE5-free C4" to "G7 S3..S7 + CE5-free C4"** (S1+S2
+   >     done; B1 already-landed + the C4 artifact closed by S1
+   >     + pinned). **Flip endgame: NEXT = G7-S3**
+   >     (priority/response windows — HIGHEST-RISK: the
+   >     brand-new nested-response-window cross-engine surface;
+   >     no B1 prerequisite remains, the C1 legal-set surface is
+   >     stable) → S4 cast_creature_warp + riders + deferred
+   >     non-creature-perm/aura-attach → S5 → S6 → **S7 CE5
+   >     removal LAST** → CE5-FREE re-proof + fresh CE5-FREE C4
+   >     clean → ORCHESTRATOR+USER go/no-go on the atomic
+   >     SoT-flip (B3-S5). Flip NO-GO until all hold.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
