@@ -138,26 +138,43 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 23, @ `022d2ebc` — READ FIRST.**
-> **G7 S1+S2+S3 DONE, B1 DONE. S3 (`022d2ebc`) = HONEST
-> clean-verify no-op AND THE HIGHEST-RISK SLICE'S RISK DID NOT
-> MATERIALIZE:** the design's S3 fix-hypothesis (cast-push
-> priority-reset) was honestly contradicted vs live source — S1
-> had already reconciled it (the adapter loop's
-> `_reset_priority_to_active`, a G5-lane port, fires at Python's
-> exact reset points). The brand-new nested-response-window
-> cross-engine surface **composes byte-equal** (I46 instant-speed
-> emission + LIFO resolution + byte-equal reset verified by 3 new
-> `tests_rust/test_priority.py::test_s3_*` pins); S3 unmasked
-> **NO new divergence**; the `rust_shadow` bake-in now gets
-> MATERIALLY PAST the G7 cast-resolve trip for the creature case.
-> Zero rust/src, 1532 UNMOVED, no `.pyd` rebuild, CE5 untouched.
-> NET: flip NO-GO list is **"G7 S4..S7 + CE5-FREE C4"**. NEXT =
-> dispatch G7-S4 (`cast_creature_warp` — still atomic at
-> `state_ops_cast.rs:785-790` — + permanent-spell
-> riders/provenance + the deferred non-creature-permanent
-> `&& creature`/aura-attach the S2 boundary tripwire guards).
-> G3 fork RESOLVED (Rust implements the stack; fully autonomous);
+> **⚠ SoT-FLIP PATH — cycle 24, @ `78e963c1` — READ FIRST.**
+> **G7 S1..S4 DONE (S2/B1/S3 honest clean-verifies; S1+S4 real
+> Rust), B1 DONE. S4 (`78e963c1`, real Rust, state_ops_cast.rs
+> ONLY):** `cast_creature_warp` now stack-pushes (was atomic) +
+> warp/impending/room riders deferred cast→resolve byte-matching
+> Python; warp_exile_pending rides via `take_source`'s
+> whole-GameObject move (no `state.rs` field). Shared `.pyd`
+> rebuilt on main; 4-file gate **1534 = 1532 core UNMOVED + 2
+> additive S4 warp probes** (deselect-verified); state_ops-only
+> (no residue cadence); counts UNCHANGED; cron exit-0; CE5
+> untouched. **Two distinct co-blockers honestly flagged (not
+> papered):** (a) **S4b** — non-creature-permanent
+> cast-primitive-routing + resolve-time aura-attach (S2 tripwire
+> intact+passing); (b) **warp-legal-EMISSION axis** — a
+> PRE-EXISTING main-identical (NOT S4-introduced; reverted+rebuilt
+> +reproduced) C1-warp-mode `legal_decisions` over-emission
+> LEGAL_SET_EQ (~step 220, warp-synth deck), distinct from the
+> landed B1 mana/target/addcost C1 axes; pinned + SL +
+> `G7_S4_VERIFY_FINDING.md` §5b. **ORCHESTRATOR BAKE-IN-FRONTIER
+> PROBE (verify-don't-assume, rebuilt `.pyd`):** post-S1+S4 the
+> bake-in on non-warp production decks runs MATERIALLY DEEPER —
+> several clean to the 400-step probe cap (no divergence; random
+> driver just didn't terminate), two trip a **NEW mid-game
+> STATE_EQ frontier ~step 273–322** (a creature spell on
+> PYTHON's stack — mana spent, removed from hand — while RUST
+> still holds it in hand; + battlefield summoning-sick / mana
+> diffs), FAR past the original atomic-resolve trip (~step
+> 143/151). The frontier moved deep into mid-game exactly as
+> S1/S4 intended; this is a DISTINCT new
+> cast-application/resolve-sequencing divergence (NOT S5's
+> triggers-verify, NOT the warp-EMISSION axis). NET: flip NO-GO
+> list = **"the mid-game STATE_EQ frontier + S5..S7 + S4b +
+> warp-EMISSION + CE5-FREE C4"**. NEXT = dispatch a verify-first
+> DIAGNOSTIC+fix lane on the mid-game STATE_EQ frontier
+> (harness-lockstep vs resolve-sequencing vs genuine engine —
+> fix toward the Python SoT, honest-stop+pin if deeper). G3 fork
+> RESOLVED (Rust implements the stack; fully autonomous);
 > `docs/RUST_STACK_RESOLUTION_DESIGN.md` is the canonical G7
 > owner.**
 > The cycle-11 phase-transition decision is RESOLVED: the user chose
@@ -351,20 +368,39 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   the G7 cast-resolve trip. Zero `rust/src/`, 1532 UNMOVED, no
 >   `.pyd` rebuild, no residue cadence, CE5 + the pop-only G3
 >   composer untouched.
-> - **NET: the flip NO-GO list is now "G7 S4..S7 + CE5-FREE C4"**
->   (S1+S2+S3 done; B1 done). **NEXT: dispatch G7-S4** —
->   `cast_creature_warp` (still atomic at
->   `state_ops_cast.rs:785-790`) + permanent-spell
->   riders/provenance (warp/impending/room/cast-from-X) + the
->   deferred non-creature-permanent `&& creature` summoning-sick
->   guard + resolve-time aura-attach (both still held by the S2
->   boundary tripwire `test_s2_non_creature_permanent_cannot_be_
->   stacked_boundary`, which S4 must flip+fix) → S5
->   triggers-on-stack → S6 bake-in scale verify → **S7 CE5
->   removal LAST** → CE5-FREE re-proof + fresh CE5-FREE C4 clean
->   (also the definitive fully-unmasked B1 LEGAL_SET_EQ
->   confirmation) = the final flip gate.
->   Flip remains **NO-GO** until G7 S4..S7 close +
+> - **S4 LANDED (`78e963c1`, real Rust, state_ops_cast.rs only).**
+>   `cast_creature_warp`→StackItem + warp/impending/room riders
+>   deferred cast→resolve; warp_exile_pending rides via
+>   `take_source` whole-GameObject move (no `state.rs`). Shared
+>   `.pyd` rebuilt on main; 4-file **1534 = 1532 core UNMOVED + 2
+>   additive S4 warp probes** (deselect-verified); no residue
+>   cadence; counts UNCHANGED. **S4b** (non-creature-perm routing
+>   + aura-attach) flagged distinct, S2 tripwire intact+passing.
+>   **warp-legal-EMISSION** (pre-existing main-identical C1-warp
+>   over-emission LEGAL_SET_EQ ~step 220) pinned distinct
+>   co-blocker (`G7_S4_VERIFY_FINDING.md` §5b).
+> - **ORCHESTRATOR PROBE: new mid-game STATE_EQ frontier.**
+>   Post-S1+S4 the bake-in on non-warp production decks runs
+>   materially deeper — several clean to the 400-step probe cap,
+>   two trip a NEW STATE_EQ at ~step 273–322 (creature on
+>   Python's stack / Rust's hand + summoning-sick/mana diffs),
+>   far past the original ~step 143 atomic-resolve trip. Distinct
+>   new cast-application/resolve-sequencing divergence (NOT S5,
+>   NOT warp-EMISSION).
+> - **NET: flip NO-GO list = "the mid-game STATE_EQ frontier +
+>   G7 S5..S7 + S4b + warp-EMISSION + CE5-FREE C4".** **NEXT:
+>   dispatch a verify-first DIAGNOSTIC+fix lane on the mid-game
+>   STATE_EQ frontier** — verify-first whether it is
+>   harness-lockstep (`drive_shadow_game_to_terminal`/
+>   `rust_shadow`), resolve-sequencing, or a genuine engine
+>   cast/resolve divergence; fix toward the Python SoT;
+>   honest-stop+pin if deeper. Then S5 triggers-verify (design) →
+>   S6 bake-in scale verify → **S7 CE5 removal LAST** → CE5-FREE
+>   re-proof + fresh CE5-FREE C4 clean (also the definitive
+>   fully-unmasked B1 LEGAL_SET_EQ confirmation) = the final flip
+>   gate; S4b + warp-EMISSION close in parallel/before the final
+>   C4.
+>   Flip remains **NO-GO** until all the above close +
 >   the CE5-FREE C4 runs divergence-clean. The atomic SoT-flip
 >   (B3-S5) remains an ORCHESTRATOR+USER go/no-go — explicitly NOT
 >   autonomous (the single least-reversible action). (G2

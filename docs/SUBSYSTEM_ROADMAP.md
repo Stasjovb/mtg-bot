@@ -1397,6 +1397,76 @@ second:
    >     hold.
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 24 —
+   >   G7-S4 LANDED real Rust; orchestrator probe surfaced the
+   >   next mid-game divergence; @ `78e963c1`, counts UNCHANGED,
+   >   parity 307/475 / PROBED 106 UNCHANGED).**
+   >   - **S4 (`78e963c1`, real Rust, `state_ops_cast.rs`
+   >     ONLY):** `cast_creature_warp` now pushes a StackItem
+   >     (was atomic); warp/impending/room/cast-from-X riders
+   >     deferred cast-time→resolve-time byte-matching Python
+   >     `_cast_spell`(stamp)/`put_into_battlefield`(consume).
+   >     The design's key risk (the `warp_exile_sweep` keying
+   >     off the bf object) resolved STRUCTURALLY —
+   >     `take_source` moves the whole owned GameObject so
+   >     `warp_exile_pending` rides through
+   >     `move_source_post_resolve` onto the post-resolution bf
+   >     object (S1 exile-recast mirror); NO `state.rs` field.
+   >   - Shared `.pyd` REBUILT on main (S4 is real Rust, like
+   >     S1); 4-file gate **1534 = 1532 core baseline UNMOVED +
+   >     2 additive S4 warp cross-engine probes** (agent
+   >     deselect-verified core = exactly 1532; full run 0
+   >     fail); residue cadence did NOT fire (state_ops-only,
+   >     CFI-1, git-log verified); NO count drift;
+   >     POOL_PARITY/PROBED UNCHANGED; stamps stay bb29df8d;
+   >     cron exit-0; CE5 + the pop-only G3 composer untouched.
+   >   - **HONEST scoping (agent, not papered):** (a) the
+   >     non-creature-permanent boundary (bare enchantment/
+   >     artifact/PW falls through both cast primitives + needs
+   >     a resolve-time aura-attach subsystem) flagged a
+   >     DISTINCT slice **S4b**, NOT force-folded; the S2
+   >     boundary tripwire is UNCHANGED + passing. (b) a
+   >     PRE-EXISTING main-identical (NOT S4-introduced — agent
+   >     reverted `state_ops_cast.rs`, rebuilt, reproduced the
+   >     exact trip) **warp-cast legal-EMISSION** LEGAL_SET_EQ
+   >     divergence (~step 220, warp-synth deck: Rust offers a
+   >     warp `cast_spell` the Python shadow's legal set does
+   >     not — a C1-warp-mode `legal_decisions` over-emission
+   >     axis DISTINCT from the landed B1 mana/target/addcost C1
+   >     axes); pinned loud + SL + `G7_S4_VERIFY_FINDING.md`
+   >     §5b; distinct co-blocker.
+   >   - **ORCHESTRATOR BAKE-IN-FRONTIER PROBE
+   >     (verify-don't-assume, on the rebuilt `.pyd`):**
+   >     post-S1+S4 the `rust_shadow` bake-in on non-warp
+   >     production decks runs MATERIALLY DEEPER — arch0/1/11
+   >     clean to the 400-step probe cap (no divergence; random
+   >     driver just didn't terminate), arch2/s1 + arch5/s0 trip
+   >     a **NEW STATE_EQ frontier ~step 273–322** (a creature
+   >     spell on PYTHON's stack — mana spent, removed from hand
+   >     — while RUST still holds it in hand; + battlefield
+   >     summoning-sick / mana_pool diffs), FAR past the
+   >     original atomic-resolve trip (~step 143/151). The
+   >     frontier moved deep into mid-game exactly as S1/S4
+   >     intended; the next genuine divergence is this distinct
+   >     mid-game cast-application / resolve-sequencing STATE_EQ
+   >     (NOT S5's triggers-verify, NOT the warp-EMISSION axis).
+   >   - **NET: flip NO-GO list = "the mid-game STATE_EQ
+   >     frontier + G7 S5..S7 + S4b + warp-EMISSION + CE5-FREE
+   >     C4". NEXT = a verify-first DIAGNOSTIC+fix lane on the
+   >     mid-game STATE_EQ frontier** (harness-lockstep in
+   >     `drive_shadow_game_to_terminal`/`rust_shadow` vs
+   >     resolve-sequencing vs a genuine engine cast/resolve
+   >     divergence; fix toward the Python SoT; honest-stop+pin
+   >     if deeper) → S5 triggers-verify (design) → S6 bake-in
+   >     scale verify → **S7 CE5 removal LAST** → CE5-FREE
+   >     re-proof + fresh CE5-FREE C4 clean (also the definitive
+   >     fully-unmasked B1 LEGAL_SET_EQ confirmation) →
+   >     ORCHESTRATOR+USER go/no-go on the atomic SoT-flip
+   >     (B3-S5). Flip NO-GO until all hold.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned); `tests_rust/`
+   >     baseline-rot (~32+2+23, outside the 4-file gate, todo
+   >     filed, non-blocking).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
