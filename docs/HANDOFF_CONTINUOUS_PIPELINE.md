@@ -138,42 +138,54 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 24, @ `78e963c1` — READ FIRST.**
-> **G7 S1..S4 DONE (S2/B1/S3 honest clean-verifies; S1+S4 real
-> Rust), B1 DONE. S4 (`78e963c1`, real Rust, state_ops_cast.rs
-> ONLY):** `cast_creature_warp` now stack-pushes (was atomic) +
-> warp/impending/room riders deferred cast→resolve byte-matching
-> Python; warp_exile_pending rides via `take_source`'s
-> whole-GameObject move (no `state.rs` field). Shared `.pyd`
-> rebuilt on main; 4-file gate **1534 = 1532 core UNMOVED + 2
-> additive S4 warp probes** (deselect-verified); state_ops-only
-> (no residue cadence); counts UNCHANGED; cron exit-0; CE5
-> untouched. **Two distinct co-blockers honestly flagged (not
-> papered):** (a) **S4b** — non-creature-permanent
-> cast-primitive-routing + resolve-time aura-attach (S2 tripwire
-> intact+passing); (b) **warp-legal-EMISSION axis** — a
-> PRE-EXISTING main-identical (NOT S4-introduced; reverted+rebuilt
-> +reproduced) C1-warp-mode `legal_decisions` over-emission
-> LEGAL_SET_EQ (~step 220, warp-synth deck), distinct from the
-> landed B1 mana/target/addcost C1 axes; pinned + SL +
-> `G7_S4_VERIFY_FINDING.md` §5b. **ORCHESTRATOR BAKE-IN-FRONTIER
-> PROBE (verify-don't-assume, rebuilt `.pyd`):** post-S1+S4 the
-> bake-in on non-warp production decks runs MATERIALLY DEEPER —
-> several clean to the 400-step probe cap (no divergence; random
-> driver just didn't terminate), two trip a **NEW mid-game
-> STATE_EQ frontier ~step 273–322** (a creature spell on
-> PYTHON's stack — mana spent, removed from hand — while RUST
-> still holds it in hand; + battlefield summoning-sick / mana
-> diffs), FAR past the original atomic-resolve trip (~step
-> 143/151). The frontier moved deep into mid-game exactly as
-> S1/S4 intended; this is a DISTINCT new
-> cast-application/resolve-sequencing divergence (NOT S5's
-> triggers-verify, NOT the warp-EMISSION axis). NET: flip NO-GO
-> list = **"the mid-game STATE_EQ frontier + S5..S7 + S4b +
-> warp-EMISSION + CE5-FREE C4"**. NEXT = dispatch a verify-first
-> DIAGNOSTIC+fix lane on the mid-game STATE_EQ frontier
-> (harness-lockstep vs resolve-sequencing vs genuine engine —
-> fix toward the Python SoT, honest-stop+pin if deeper). G3 fork
+> **⚠ SoT-FLIP PATH — cycle 25, @ `4c8bd33c` — READ FIRST.**
+> **G7 S1..S4 DONE + the mid-game-STATE_EQ DIAGNOSTIC lane
+> found+fixed a GENUINE Rust ENGINE BUG (`4c8bd33c`, real Rust,
+> state_ops_cast.rs ONLY).** Diagnosis = class (c) engine bug,
+> NOT a harness artifact: the 3 stack-push cast primitives paid
+> STRICTLY from the floating mana pool while the legal emitter
+> permissively counts pool + auto-tappable lands (mirroring
+> Python `can_pay_cost`); Python `_cast_spell` pays via
+> `auto_tap_for_cost`. So an ordinary production cast (`{2}{G}`
+> with 1 floating + 2 untapped Forests) was emitted-legal then
+> **silently dropped** on apply. **It reproduces under
+> `cross_engine.step_both` too — the 4-file gate stayed green
+> ONLY because its scenarios pre-populate the Rust pool, so the
+> role-swapped scaled bake-in caught a real engine bug the 4-file
+> gate STRUCTURALLY COULD NOT** (concrete validation of the
+> CE5-free-at-scale requirement). Fixed by `auto_tap_pay_for_cost`
+> (byte-mirror of Python `auto_tap_for_cost`, plan-then-commit so
+> an unpayable over-emit still bails honest). Orchestrator
+> independently verified: the cast now succeeds byte-perfectly,
+> divergence collapses **4 fields → 1** (`hand_p0` only;
+> mana/battlefield/stack MATCH); deterministic 7/7. Shared `.pyd`
+> rebuilt on main; 4-file **1534 = 1532 core UNMOVED + 2 S4
+> probes** (deselect-verified); state_ops-only (no residue
+> cadence); counts UNCHANGED; cron exit-0; CE5 + the pop-only G3
+> composer untouched. **HONEST (no overclaim): the bake-in step
+> did NOT advance — it trips at the SAME step 273/322, NARROWED
+> to the single residual `hand_p0`** = the documented S1/S4
+> spell-stack-source-zone invariant (Rust keeps the cast spell
+> in the hand Vec for `take_source` at resolve; Python removes
+> it + `zone=STACK`). Agent honest-stopped (NOT papered):
+> re-homing it is HIGH-BLAST-RADIUS (`take_source`/
+> `move_source_post_resolve` + hand-snapshot codec slot source +
+> determinizer + the 4-file field view + 3 legal-emit sites);
+> with it resolved the games run 273→281/322→344 then hit a
+> C1/S3-region LEGAL_SET_EQ (a further frontier behind it).
+> Pinned + `G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` + SL note.
+> Distinct co-blockers still open: **S4b** (non-creature-perm
+> routing + aura-attach), **warp-legal-EMISSION** (pre-existing
+> C1-warp over-emission). NET flip NO-GO list = **"the S1/S4
+> spell-stack-source-zone re-homing + S5..S7 + S4b +
+> warp-EMISSION + CE5-FREE C4"** (the auto-tap engine bug is
+> CLOSED). NEXT = a verify-first SCOPING/design-refinement lane
+> for the high-blast-radius S1/S4 spell-stack-source-zone
+> re-homing (produce a precise sub-design + honest-stop if too
+> large for one safe slice — do NOT force a sprawling risky
+> change). CARRY-FORWARD: `tests_rust/` baseline-rot ~30
+> byte-identical on clean main (pre-existing, NOT introduced,
+> outside the 4-file gate; todo filed, non-blocking). G3 fork
 > RESOLVED (Rust implements the stack; fully autonomous);
 > `docs/RUST_STACK_RESOLUTION_DESIGN.md` is the canonical G7
 > owner.**
@@ -379,23 +391,44 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   **warp-legal-EMISSION** (pre-existing main-identical C1-warp
 >   over-emission LEGAL_SET_EQ ~step 220) pinned distinct
 >   co-blocker (`G7_S4_VERIFY_FINDING.md` §5b).
-> - **ORCHESTRATOR PROBE: new mid-game STATE_EQ frontier.**
->   Post-S1+S4 the bake-in on non-warp production decks runs
->   materially deeper — several clean to the 400-step probe cap,
->   two trip a NEW STATE_EQ at ~step 273–322 (creature on
->   Python's stack / Rust's hand + summoning-sick/mana diffs),
->   far past the original ~step 143 atomic-resolve trip. Distinct
->   new cast-application/resolve-sequencing divergence (NOT S5,
->   NOT warp-EMISSION).
-> - **NET: flip NO-GO list = "the mid-game STATE_EQ frontier +
->   G7 S5..S7 + S4b + warp-EMISSION + CE5-FREE C4".** **NEXT:
->   dispatch a verify-first DIAGNOSTIC+fix lane on the mid-game
->   STATE_EQ frontier** — verify-first whether it is
->   harness-lockstep (`drive_shadow_game_to_terminal`/
->   `rust_shadow`), resolve-sequencing, or a genuine engine
->   cast/resolve divergence; fix toward the Python SoT;
->   honest-stop+pin if deeper. Then S5 triggers-verify (design) →
->   S6 bake-in scale verify → **S7 CE5 removal LAST** → CE5-FREE
+> - **MID-GAME STATE_EQ DIAGNOSTIC — CLOSED a genuine engine bug
+>   (`4c8bd33c`, real Rust, state_ops_cast.rs only).** Diagnosis
+>   = class (c): the 3 stack-push cast primitives paid STRICTLY
+>   from the floating pool while the legal emitter permissively
+>   counts pool + auto-tappable lands; an ordinary `{2}{G}` cast
+>   (1 floating + 2 untapped Forests) was emitted-legal then
+>   **silently dropped**. Reproduces under `step_both` too — the
+>   4-file gate stayed green only because its scenarios
+>   pre-populate the pool; **the role-swapped scaled bake-in
+>   caught a real engine bug the 4-file gate STRUCTURALLY COULD
+>   NOT** (validates the CE5-free-at-scale requirement). Fixed by
+>   `auto_tap_pay_for_cost` (byte-mirror of Python
+>   `auto_tap_for_cost`, plan-then-commit). Orchestrator-verified:
+>   divergence collapses **4 fields → 1** (`hand_p0`;
+>   mana/bf/stack MATCH), deterministic 7/7. `.pyd` rebuilt;
+>   1534 = 1532-core-UNMOVED + 2 S4 probes; no residue cadence;
+>   cron exit-0.
+> - **HONEST (no overclaim): the bake-in step did NOT advance —
+>   trips at the SAME step 273/322, narrowed to the single
+>   residual `hand_p0`** = the documented S1/S4
+>   spell-stack-source-zone invariant (Rust keeps the cast spell
+>   in the hand Vec for `take_source`; Python removes it +
+>   `zone=STACK`). Agent honest-stopped: re-homing it is
+>   HIGH-BLAST-RADIUS (`take_source`/`move_source_post_resolve` +
+>   hand-snapshot codec slot source + determinizer + 4-file field
+>   view + 3 legal-emit sites); with it resolved → 273→281/
+>   322→344 then a C1/S3 LEGAL_SET_EQ (a further frontier).
+>   Pinned + `G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` + SL note.
+> - **NET: flip NO-GO list = "the S1/S4 spell-stack-source-zone
+>   re-homing + G7 S5..S7 + S4b + warp-EMISSION + CE5-FREE C4"**
+>   (the auto-tap engine bug is CLOSED; the frontier is now
+>   precisely one documented invariant deep). **NEXT: a
+>   verify-first SCOPING/design-refinement lane for the
+>   high-blast-radius S1/S4 spell-stack-source-zone re-homing** —
+>   produce a precise sub-design + honest-stop if too large for
+>   one safe slice; do NOT force a sprawling risky change in one
+>   pass. Then implement → S5 triggers-verify (design) → S6
+>   bake-in scale verify → **S7 CE5 removal LAST** → CE5-FREE
 >   re-proof + fresh CE5-FREE C4 clean (also the definitive
 >   fully-unmasked B1 LEGAL_SET_EQ confirmation) = the final flip
 >   gate; S4b + warp-EMISSION close in parallel/before the final

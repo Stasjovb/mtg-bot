@@ -1467,6 +1467,93 @@ second:
    >     (resync/refresh-cadence owned); `tests_rust/`
    >     baseline-rot (~32+2+23, outside the 4-file gate, todo
    >     filed, non-blocking).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 25 —
+   >   mid-game STATE_EQ DIAGNOSTIC found+fixed a GENUINE Rust
+   >   ENGINE BUG; methodology validation; @ `4c8bd33c`, counts
+   >   UNCHANGED, parity 307/475 / PROBED 106 UNCHANGED).**
+   >   - **Diagnosis = class (c) genuine engine bug** (NOT a
+   >     harness/lockstep artifact — reproduces under
+   >     `cross_engine.step_both` too). The 3 stack-push cast
+   >     primitives paid STRICTLY from the floating pool
+   >     (`Ok(false)` if pool-short) while the Rust legal emitter
+   >     is PERMISSIVE (pool + auto-tappable lands, mirroring
+   >     Python `can_pay_cost`); Python `_cast_spell` pays via
+   >     `auto_tap_for_cost`. Rust had NO apply-side auto-tap →
+   >     an ordinary production cast (`{2}{G}` with G:1 floating
+   >     + 2 untapped Forests) was emitted-legal then **silently
+   >     dropped** (`feedback_silent_noop_pipelines`). **The
+   >     4-file gate stayed green ONLY because its scenarios
+   >     pre-populate the Rust pool — the role-swapped scaled
+   >     bake-in caught a real engine bug the 4-file gate
+   >     STRUCTURALLY COULD NOT** (concrete validation of the
+   >     CE5-free-at-scale requirement / why S7's re-proof
+   >     matters).
+   >   - **Fix (`4c8bd33c`, real Rust, state_ops_cast.rs ONLY):**
+   >     `auto_tap_pay_for_cost` byte-mirroring Python
+   >     `auto_tap_for_cost` (lands-only, colored-first
+   >     B/G/R/U/W then generic, pool consumed before tapping,
+   >     `Event::BecomesTapped` per tapped land,
+   >     plan-then-commit so an unpayable over-emit still bails
+   >     honest `Ok(false)` no-mutation); all 3 cast pay sites
+   >     route through it (ActivateAbility pool-only path
+   >     intentionally unchanged — separate C1 axis).
+   >   - **Orchestrator independently verified
+   >     (verify-don't-assume):** the cast now succeeds
+   >     byte-perfectly — divergence collapses **4 fields → 1**
+   >     (`hand_p0` ONLY; mana_pool/battlefield/stack MATCH at
+   >     arch2/s1 step 273, arch5/s0 step 322); determinism
+   >     cross-checked 7/7 (an earlier transient "no trip" was a
+   >     bug in the orchestrator's throwaway probe —
+   >     `drive_shadow_game_to_terminal` RETURNS a
+   >     FAIL_DIVERGENCE outcome, does NOT raise — NOT engine
+   >     nondeterminism). Shared `.pyd` REBUILT on main (owed —
+   >     real Rust); 4-file **1534 = 1532 core UNMOVED + 2 S4
+   >     probes** (deselect-verified); residue cadence did NOT
+   >     fire (state_ops_cast.rs only, CFI-1, git-log verified);
+   >     NO count drift; POOL_PARITY/PROBED UNCHANGED; stamps
+   >     stay bb29df8d; cron exit-0; CE5 + the pop-only G3
+   >     composer UNTOUCHED.
+   >   - **HONEST framing (no overclaim): the bake-in step did
+   >     NOT advance this cycle — it trips at the SAME step
+   >     273/322, NARROWED to the single residual `hand_p0`.**
+   >     That residual is the documented **S1/S4
+   >     spell-stack-source-zone invariant** (Rust deliberately
+   >     keeps the cast spell in the hand Vec, `zone=ZONE_HAND`,
+   >     for `take_source` at resolve; Python removes it +
+   >     `zone=STACK`, `actions.py:1403/1751`) — CE5-masked in
+   >     the 4-file gate, previously unreachable in `rust_shadow`
+   >     (the no-auto-tap bug failed the cast first). Agent
+   >     honest-stopped (NOT papered): re-homing it is
+   >     HIGH-BLAST-RADIUS (`take_source` /
+   >     `find_source_printing_id` / `move_source_post_resolve` +
+   >     hand-snapshot codec slot source + determinizer + the
+   >     4-file field view + 3 legal-emit sites); §5 diagnostic:
+   >     with it hypothetically resolved the games run
+   >     273→281 / 322→344 then hit a C1/S3-region LEGAL_SET_EQ
+   >     (a FURTHER frontier behind it). Pinned
+   >     `test_g7_midgame_cast_autotap_closed_then_s1_spellstack_
+   >     zone_surfaced` + `G7_MIDGAME_STATEEQ_VERIFY_FINDING.md`
+   >     + SL note.
+   >   - **NET: flip NO-GO list = "the S1/S4
+   >     spell-stack-source-zone re-homing + G7 S5..S7 + S4b +
+   >     warp-EMISSION + CE5-FREE C4"** (the auto-tap engine bug
+   >     is CLOSED; the frontier is now precisely one documented
+   >     invariant deep). **NEXT = a verify-first SCOPING/
+   >     design-refinement lane for the high-blast-radius S1/S4
+   >     spell-stack-source-zone re-homing** (produce a precise
+   >     sub-design + honest-stop if too large for one safe
+   >     slice; do NOT force a sprawling risky change in one
+   >     pass) → implement → S5 triggers-verify (design) → S6
+   >     bake-in scale verify → **S7 CE5 removal LAST** →
+   >     CE5-FREE re-proof + fresh CE5-FREE C4 clean (also the
+   >     definitive fully-unmasked B1 LEGAL_SET_EQ confirmation)
+   >     → ORCHESTRATOR+USER go/no-go on the atomic SoT-flip
+   >     (B3-S5). Flip NO-GO until all hold.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned); `tests_rust/`
+   >     baseline-rot ~30 byte-identical on clean main
+   >     (pre-existing, NOT introduced, outside the 4-file gate;
+   >     todo filed, non-blocking).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
