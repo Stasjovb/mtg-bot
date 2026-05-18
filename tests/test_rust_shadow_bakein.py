@@ -130,12 +130,12 @@ def test_g4_i20_cast_set_axis_is_closed_by_lockstep():
     ``test_post_player_loss_priority_port_is_closed``). Closing G5 in
     turn unmasked a further distinct pre-existing
     game-over-detection-TIMING divergence (``is_over``/``winner_id``,
-    NOT priority/active), tracked as blocker **G6** and honestly
-    pinned by
-    ``test_post_player_loss_is_over_timing_divergence_is_surfaced``.
-    None of G5/G6 is the I20/G4 mana axis; G4 closure does not depend
-    on either and is complete without them
-    (docs/SEARCH_LIMITATIONS.md / SOT_FLIP_CUTOVER_PLAN ledger)."""
+    NOT priority/active), tracked as blocker **G6** — also now
+    **CLOSED** (the ``_run_step_enter_sbas`` SBA-cadence port — see
+    ``test_post_player_loss_is_over_timing_is_closed``). None of
+    G5/G6 is the I20/G4 mana axis; G4 closure does not depend on
+    either and is complete without them (docs/SEARCH_LIMITATIONS.md /
+    SOT_FLIP_CUTOVER_PLAN ledger)."""
     adapter = _shadow()
     rng = random.Random(2026)
     steps = 0
@@ -204,30 +204,33 @@ def test_post_player_loss_priority_port_is_closed():
     priority window (past the old step-~149 G5 ``priority_player``
     trip point) on this seed.
 
-    NOTE — closing G5 honestly UNMASKS a SEPARATE, distinct,
+    NOTE — closing G5 honestly UNMASKED a SEPARATE, distinct,
     pre-existing divergence (exactly as G4's closure unmasked G5): a
     game-over-detection-TIMING gap (``is_over`` / ``winner_id``, NOT
     priority/active). Python flips ``is_over``/``winner_id`` via
     ``state_based_actions`` at the next ``_enter_step`` after a player
-    decks out; the Rust-driver port does not call ``apply_sbas()`` on
-    the step-end / auto-advance path, so Rust's ``is_over()`` lags by
-    one step. That is a DISTINCT Rust-driver SBA-timing port gap (NOT
+    decks out; the Rust-driver port did not call ``apply_sbas()`` on
+    the step-end / auto-advance path, so Rust's ``is_over()`` lagged
+    by one step. That DISTINCT Rust-driver SBA-timing port gap (NOT
     the G5 ``_next_alive`` priority axis, NOT the closed G4 mana
-    axis), honestly pinned by
-    ``test_post_player_loss_is_over_timing_divergence_is_surfaced``
-    below and filed as its own blocker (G6) for the orchestrator
-    (SOT_FLIP_CUTOVER_PLAN ledger / SEARCH_LIMITATIONS). This pin
-    therefore asserts G5 closure over the window UP TO that distinct
-    G6 trip point — keeping both the G5 closure AND the G6
-    honest-stop true (feedback_no_fallback_hybrids /
+    axis) was tracked as blocker **G6** and is now itself **CLOSED**
+    (the ``_run_step_enter_sbas`` SBA-cadence port — see
+    ``test_post_player_loss_is_over_timing_is_closed``, which now
+    drives the SAME tail divergence-clean all the way to terminal).
+    This pin keeps its bounded 150-step window (it predates and is
+    independent of G6's closure — it isolates the G5 priority axis
+    specifically); the full-tail-to-terminal clean run is asserted by
+    the G6 closure pin (feedback_no_fallback_hybrids /
     feedback_silent_noop_pipelines)."""
     adapter = _shadow()
     rng = random.Random(2026)
     steps = 0
     raised: ShadowDivergenceError | None = None
     # 150 steps clears the old step-~149 G5 priority_player trip point
-    # with margin but stops BEFORE the distinct ~step-151 is_over-
-    # timing divergence (G6, pinned independently below). The point of
+    # with margin. (Pre-G6-closure this bound also stopped BEFORE the
+    # distinct ~step-151 is_over-timing divergence; G6 is now closed
+    # and the G6 pin below drives the same tail clean to terminal.
+    # This bound stays as the isolated G5-axis window.) The point of
     # THIS pin: the G5 priority-port divergence no longer occurs.
     while not adapter.is_terminal() and steps < 150:
         try:
@@ -261,39 +264,69 @@ def test_post_player_loss_priority_port_is_closed():
     )
 
 
-def test_post_player_loss_is_over_timing_divergence_is_surfaced():
-    """HONEST-STOP EVIDENCE PIN for a SEPARATE, distinct,
-    pre-existing divergence the G5 closure now UNMASKS (it was MASKED
-    by G5 tripping first at step ~149 on ``priority_player`` before
-    the game-over-timing window) — tracked as blocker **G6**.
+def test_post_player_loss_is_over_timing_is_closed():
+    """G6 CLOSURE PIN (flipped from the former
+    ``test_post_player_loss_is_over_timing_divergence_is_surfaced``,
+    the same closure-flip pattern the G4 and G5 lanes used).
 
-    Root cause (verified): in the degenerate 3-card
-    ``tiny_synthetic_deckspec`` a player decks out by ~turn 8. After
-    the pass-round at the post-deck-out PRECOMBAT_MAIN step ends,
-    Python advances the step and its next ``_enter_step`` runs
-    ``state_based_actions`` which flips ``is_over=True`` /
-    ``winner_id=<survivor>``. The Rust-driver port
+    G6 was: in the degenerate 3-card ``tiny_synthetic_deckspec`` a
+    player decks out by ~turn 8. After the pass-round at the
+    post-deck-out PRECOMBAT_MAIN step ends, Python's source-of-truth
+    advances the step and its next ``_enter_step`` runs
+    ``state_based_actions`` (engine_adapter.py:1224/1238/1244/1264/
+    1268) which flips ``is_over=True`` / ``winner_id=<survivor>``.
+    The Rust-driver port
     (``RustGameStateAdapter._advance_to_next_decision`` / the step-end
-    ``advance_phase`` branch) does NOT call ``apply_sbas()`` on the
-    step-end / auto-advance path (only after resolution / non-pass
-    actions), so Rust's ``is_over()`` / ``winner_id`` lag Python's by
-    a step — a STATE_EQ ``is_over`` / ``winner_id`` divergence at
-    step ~151. (Verified independently: Rust's own ``apply_sbas()``
-    DOES flip ``is_over``/``winner_id`` when invoked — the gap is
-    purely that the adapter does not call it on this path.)
+    ``advance_phase`` branch in ``_run_priority_action``) did NOT call
+    ``apply_sbas()`` on the step-end / auto-advance path (only after
+    resolution / non-pass actions), so Rust's ``is_over()`` /
+    ``winner_id`` lagged Python's by a step — a STATE_EQ ``is_over`` /
+    ``winner_id`` divergence at step ~151.
 
-    This is **NOT the G5 ``_next_alive`` priority/active axis** (G5
-    is closed — see ``test_post_player_loss_priority_port_is_closed``)
-    and **NOT the closed G4 I20 mana axis**. It is a distinct
-    Rust-driver SBA-timing port gap, filed for the orchestrator as
-    its own blocker (G6) in ``docs/SOT_FLIP_CUTOVER_PLAN.md`` /
-    ``docs/SEARCH_LIMITATIONS.md``. This pin keeps it HONEST (the
-    tripwire fires loudly on it — it is real, not papered over:
-    feedback_no_fallback_hybrids / feedback_silent_noop_pipelines)."""
+    G6 is now **CLOSED** by porting Python's
+    ``state_based_actions``-at-``_enter_step`` cadence into the
+    Rust-driver adapter: ``RustGameStateAdapter._run_step_enter_sbas``
+    calls the EXISTING Rust ``apply_sbas()`` pymethod at exactly the
+    phases Python's ``_enter_step`` runs SBA at — UPKEEP /
+    BEGINNING_OF_COMBAT / POSTCOMBAT_MAIN / END unconditionally and
+    COMBAT_DAMAGE under Python's ``any(o.attacking ...)`` guard — and
+    is invoked right after the step-progression ``advance_phase()``
+    on BOTH the auto-advance loop (``_advance_to_next_decision``) and
+    the empty-stack pass-round step-end (``_run_priority_action``).
+    No more / no fewer ``apply_sbas()`` calls than Python's
+    ``state_based_actions`` cadence (over-calling at a phase Python
+    skips is forbidden). Pure Python in ``rust_engine_adapter.py`` —
+    the Rust ``apply_sbas()`` pymethod already exists and is
+    idempotent / write-once on the player-loss / ``winner_id`` axis
+    (``state_ops_sba.rs:328-362``), so no Rust / ``.pyd`` rebuild.
+
+    This pin PROVES the G6 is_over/winner_id SBA-timing divergence is
+    GONE: the bake-in now runs divergence-CLEAN through the ENTIRE
+    post-deck-out tail to terminal (past the old step-~151 G6 trip
+    point) on this seed.
+
+    NOTE — closing G6 does NOT unmask a further divergence: the run
+    completes clean to the natural terminal state (the degenerate
+    3-card both-decked-out tail). The G4->G5->G6 chain (all in the
+    same narrow post-deck-out game-end region — mana / priority /
+    SBA bookkeeping) is now fully CONVERGENT and closed; no G7
+    successor was surfaced (the bake-in reaches terminal without any
+    STATE_EQ raise). G6 is NOT the closed G5 ``_next_alive``
+    priority/active axis and NOT the closed G4 I20 mana axis; it was
+    the distinct Rust-driver SBA-timing port gap, now closed
+    (docs/SEARCH_LIMITATIONS.md / SOT_FLIP_CUTOVER_PLAN ledger). The
+    negative-control tests below still prove the STATE_EQ tripwire
+    fires loudly on a genuine injected divergence — the closure did
+    NOT weaken it (feedback_no_fallback_hybrids /
+    feedback_silent_noop_pipelines)."""
     adapter = _shadow()
     rng = random.Random(2026)
     steps = 0
     raised: ShadowDivergenceError | None = None
+    # Drive the SAME degenerate both-decked-out tail all the way to
+    # terminal (the old G6 trip point was step ~151; the run now
+    # completes clean a step or two later when the second player also
+    # decks out). 4000 is the same generous cap the surfaced-pin used.
     while not adapter.is_terminal() and steps < 4000:
         try:
             legal = adapter.legal_decisions()
@@ -307,33 +340,26 @@ def test_post_player_loss_is_over_timing_divergence_is_surfaced():
             raised = e
             break
         steps += 1
-    assert raised is not None, (
-        "expected the bake-in to surface the separate post-deck-out "
-        "is_over/winner_id SBA-timing divergence loudly, but the run "
-        "completed clean — the tripwire would be a silent no-op "
-        "(feedback_silent_noop_pipelines)"
+    assert raised is None, (
+        f"G6 (the post-deck-out Rust-driver is_over/winner_id "
+        f"SBA-timing port gap) must be CLOSED by the "
+        f"_run_step_enter_sbas cadence port — the bake-in must run "
+        f"divergence-clean through the entire post-deck-out tail to "
+        f"terminal (it tripped at step ~151 pre-closure on "
+        f"is_over/winner_id). Got a divergence at step {steps}: "
+        f"[{raised.tripwire}] {raised}"
+        if raised is not None else ""
     )
-    # It surfaces as a STATE_EQ is_over / winner_id divergence (NOT
-    # the now-closed G5 priority_player, NOT the closed G4 I20
-    # cast_spell).
-    assert raised.tripwire == "STATE_EQ", (
-        f"the separate post-loss is_over-timing issue must surface as "
-        f"STATE_EQ, got {raised.tripwire}: {raised}"
+    # The clean run must actually have reached the terminal state
+    # (guard against a premature non-terminal break masking the
+    # result) AND have run past the old step-~151 G6 trip point.
+    assert adapter.is_terminal(), (
+        f"expected the bake-in to reach the natural terminal state "
+        f"after closing G6; stopped non-terminal at step {steps}"
     )
-    assert (
-        "is_over" in str(raised) or "winner_id" in str(raised)
-    ), (
-        f"the separate post-loss issue must name the is_over/"
-        f"winner_id game-over-timing divergence (NOT the closed G5 "
-        f"priority_player, NOT the closed G4 cast_spell): {raised}"
-    )
-    assert "priority_player" not in str(raised), (
-        f"this must NOT be the now-CLOSED G5 priority-port signature "
-        f"(closed by the _next_alive alive-skip port): {raised}"
-    )
-    assert "cast_spell" not in str(raised), (
-        f"this must NOT be the closed G4 I20 cast-set signature: "
-        f"{raised}"
+    assert steps >= 151, (
+        f"expected to run at least to the old step-~151 G6 trip "
+        f"point before terminal; only reached step {steps}"
     )
 
 

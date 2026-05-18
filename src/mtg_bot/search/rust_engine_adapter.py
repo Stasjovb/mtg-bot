@@ -73,8 +73,13 @@ from mtg_bot.search.rust_decision_adapter import (
 # here so the provider's priority loop can classify the current phase
 # without a Rust round-trip per check.
 _PHASE_UNTAP = 0
+_PHASE_UPKEEP = 1
+_PHASE_BEGINNING_OF_COMBAT = 4
 _PHASE_DECLARE_ATTACKERS = 5
 _PHASE_DECLARE_BLOCKERS = 6
+_PHASE_COMBAT_DAMAGE = 7
+_PHASE_POSTCOMBAT_MAIN = 9
+_PHASE_END = 10
 _PHASE_CLEANUP = 11
 # STEPS_WITH_PRIORITY mirror (turn.py:42 — every step except UNTAP and
 # CLEANUP). The two combat-declare phases ALSO have priority but are
@@ -85,6 +90,33 @@ _AUTO_ADVANCE_PHASES = frozenset({_PHASE_UNTAP, _PHASE_CLEANUP})
 _COMBAT_DECLARE_PHASES = frozenset(
     {_PHASE_DECLARE_ATTACKERS, _PHASE_DECLARE_BLOCKERS}
 )
+
+# G6 — the phases at whose ``_enter_step`` Python's source-of-truth
+# (``engine_adapter.py``) runs ``state_based_actions(self._state)``.
+# This is the EXACT cadence the Rust-driver port must mirror on its
+# step-end / auto-advance path (the missing call surfaced by the G5
+# closure as blocker G6 — see this module's ``_run_step_enter_sbas``
+# docstring). Read straight off the Python ``_enter_step`` dispatch:
+#
+#   UPKEEP                (engine_adapter.py:1224)            -> always
+#   BEGINNING_OF_COMBAT   (engine_adapter.py:1238)            -> always
+#   POSTCOMBAT_MAIN       (engine_adapter.py:1244)            -> always
+#   END                   (engine_adapter.py:1268[, :1271])   -> always
+#   COMBAT_DAMAGE         (engine_adapter.py:1264)            -> ONLY
+#       when there are attackers (Python guards the SBA with
+#       ``if any(o.attacking for o in self._state.battlefield)``)
+#
+# DRAW / PRECOMBAT_MAIN / END_OF_COMBAT / the two combat-DECLARE
+# phases are priority/decision steps but Python's ``_enter_step`` runs
+# NO SBA there; UNTAP / CLEANUP are the auto steps (also no SBA).
+# Calling ``apply_sbas()`` at a phase Python does NOT is forbidden
+# (over-calling can byte-shift state / mask a divergence) — so this
+# set is the exact, minimal mirror, with COMBAT_DAMAGE kept
+# conditional below.
+_ENTER_STEP_SBA_PHASES = frozenset({
+    _PHASE_UPKEEP, _PHASE_BEGINNING_OF_COMBAT,
+    _PHASE_POSTCOMBAT_MAIN, _PHASE_END,
+})
 
 # Combat-phase sentinels — same vocabulary MtgGameStateAdapter uses
 # so the S3 combat-accumulation port can share semantics.
@@ -293,6 +325,57 @@ class RustGameStateAdapter:
         if int(self._rust.get_priority_player()) != target:
             self._rust.give_priority_to(target)
 
+    def _run_step_enter_sbas(self) -> None:
+        """Rust-side port of Python's ``state_based_actions`` calls
+        inside ``MtgGameStateAdapter._enter_step`` — the G6 closure.
+
+        **Root cause (verified — see ``test_post_player_loss_is_over_
+        timing_is_closed`` and ``scripts/trace_g6*.py`` evidence).**
+        Python's source-of-truth ``_enter_step`` runs
+        ``state_based_actions(self._state)`` at UPKEEP
+        (``engine_adapter.py:1224``), BEGINNING_OF_COMBAT (``:1238``),
+        POSTCOMBAT_MAIN (``:1244``), END (``:1268`` + the post-delayed-
+        trigger ``:1271``), and — *conditionally* — COMBAT_DAMAGE
+        (``:1264``, guarded ``if any(o.attacking ...)``). Those SBA
+        passes are what flip ``is_over`` / ``winner_id`` (and lock in
+        any other SBA-derived field) the step after a player decks
+        out. The Rust-driver port already mirrors Python's OTHER two
+        ``state_based_actions`` sites — post-resolution
+        (``:961`` -> this module's ``apply_sbas()`` after
+        ``resolve_top_of_stack``) and post-non-pass-action
+        (``:980`` -> ``apply_sbas()`` after ``apply_action``) — but
+        had NO SBA on the step-end / auto-advance path, so Rust's
+        ``is_over()`` / ``winner_id`` lagged Python's by a step. This
+        method supplies exactly the missing call at exactly Python's
+        ``_enter_step`` cadence — no more, no fewer (over-calling at a
+        phase Python skips can byte-shift state or mask a different
+        divergence; ``feedback_no_fallback_hybrids``).
+
+        Single-pass ``apply_sbas()`` (NOT
+        ``apply_sbas_until_quiescent``) for byte-consistency with the
+        two already-ported sites; the Rust pymethod's player-loss /
+        write-once-``winner_id`` transition is idempotent and
+        documented stable (``state_ops_sba.rs:328-362``), so re-entry
+        after a prior pass is a no-op on the G6 axis. Called
+        immediately AFTER an ``advance_phase()`` that lands on a new
+        step on the step-progression path — the byte-equivalent moment
+        to Python's ``_enter_step`` running just after
+        ``_advance_to_next_step`` ticked ``state.step`` forward.
+        """
+        phase = self._phase()
+        if phase in _ENTER_STEP_SBA_PHASES:
+            self._rust.apply_sbas()
+        elif phase == _PHASE_COMBAT_DAMAGE:
+            # COMBAT_DAMAGE: Python guards the SBA with
+            # ``if any(o.attacking for o in self._state.battlefield)``
+            # (engine_adapter.py:1255-1264 — SBA runs only when combat
+            # damage was actually resolved). Mirror that exact guard
+            # via Rust's ``get_attackers()`` so the cadence stays 1:1
+            # (no SBA at COMBAT_DAMAGE entry when no creature attacked,
+            # matching Python).
+            if list(self._rust.get_attackers()):
+                self._rust.apply_sbas()
+
     def _advance_to_next_decision(self) -> None:
         """Drive Rust forward until the game ends or the next
         priority/decision moment is pending. Rust's ``advance_phase``
@@ -310,6 +393,15 @@ class RustGameStateAdapter:
             phase = self._phase()
             if phase in _AUTO_ADVANCE_PHASES:
                 self._rust.advance_phase()
+                # G6: Python's ``_advance_to_next_decision`` calls
+                # ``_enter_step`` on the step it just landed on, which
+                # runs ``state_based_actions`` for the SBA-bearing
+                # steps. Mirror that at the byte-equivalent moment —
+                # immediately after the phase tick — so a deck-out that
+                # the auto-step transition crosses (e.g. the
+                # CLEANUP->UNTAP->UPKEEP wrap landing on UPKEEP) flips
+                # ``is_over``/``winner_id`` in lockstep with Python.
+                self._run_step_enter_sbas()
                 self._invalidate_legal_cache()
                 self._pass_count = 0
                 continue
@@ -362,6 +454,21 @@ class RustGameStateAdapter:
                     # post-apply compare point (the S4 STATE_EQ check
                     # runs immediately after apply()).
                     self._rust.advance_phase()
+                    # G6: Python's empty-stack pass-round end is
+                    # ``_advance_to_next_step()`` (engine_adapter.py
+                    # :971) followed by ``_advance_to_next_decision``
+                    # ->``_enter_step(new step)`` which runs
+                    # ``state_based_actions`` for the SBA-bearing
+                    # steps. The Rust ``advance_phase`` here is the
+                    # ``_advance_to_next_step`` analog; mirror the
+                    # ``_enter_step`` SBA at the byte-equivalent
+                    # moment (right after the phase tick, BEFORE the
+                    # priority reset / the post-apply STATE_EQ check).
+                    # This is the exact site the G5 closure unmasked
+                    # as G6 — a post-deck-out PRECOMBAT_MAIN pass-round
+                    # advancing to BEGINNING_OF_COMBAT, whose SBA flips
+                    # ``is_over``/``winner_id`` on the Python SoT.
+                    self._run_step_enter_sbas()
                     if not self._rust.is_over():
                         self._reset_priority_to_active()
             else:
