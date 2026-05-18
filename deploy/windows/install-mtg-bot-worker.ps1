@@ -47,6 +47,15 @@ param(
     [string] $TaskName = "MTGBotWorker",
     [string] $DeckPoolPath = "",
     [string] $WeightsCacheRoot = "",
+    # GPU NN-eval opt-in. "" (default) omits the flag entirely, so the
+    # registered action is byte-identical to the pre-GPU installer and
+    # the daemon keeps its historical CPU default. "cuda" / "auto"
+    # enable GPU NN-eval on hosts with a working CUDA torch build;
+    # "cpu" is explicit-CPU. Mirrors `mtg_bot.worker_daemon
+    # --nn-device {auto,cpu,cuda}` (see deploy/README.md "GPU hosts"
+    # + docs/BENCHMARKING_FINDINGS.md §4/§2A for the validated ~2x).
+    [ValidateSet("", "auto", "cpu", "cuda")]
+    [string] $NnDevice = "",
     [switch] $RunAsSystem
 )
 
@@ -79,14 +88,22 @@ function Quote-Arg($s) {
     return "$s"
 }
 
-$Arguments = @(
+$ArgList = @(
     "-m", "mtg_bot.worker_daemon",
     "--host", $TailnetIP,
     "--port", "5198",
     "--n-workers", "$NWorkers",
     "--deck-pool-path", (Quote-Arg $DeckPoolPath),
     "--weights-cache-root", (Quote-Arg $WeightsCacheRoot)
-) -join " "
+)
+# Only append --nn-device when explicitly requested. Empty default
+# => the spawned command line is character-for-character what the
+# pre-GPU installer produced (the daemon's own default is CPU), so
+# re-running this installer on a CPU-only host with no -NnDevice is
+# a no-op change. ``$NnDevice`` is ValidateSet-constrained and
+# space-free, so no Quote-Arg is needed.
+if ($NnDevice) { $ArgList += @("--nn-device", $NnDevice) }
+$Arguments = $ArgList -join " "
 
 $Action = New-ScheduledTaskAction `
     -Execute $VenvPython `
@@ -158,5 +175,10 @@ if ($RunAsSystem) {
 }
 
 Write-Host "Registered Task Scheduler entry '$TaskName'."
+if ($NnDevice) {
+    Write-Host "NN-eval device: --nn-device $NnDevice (GPU NN-eval)."
+} else {
+    Write-Host "NN-eval device: default (CPU; no --nn-device flag)."
+}
 Write-Host "Run 'Start-ScheduledTask -TaskName $TaskName' to launch now,"
 Write-Host "or reboot to let the At-Startup trigger fire."

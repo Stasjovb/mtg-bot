@@ -388,6 +388,24 @@ default on CPU-only workers and in tests. Smoke-check the host's
 torch build first:
 `python -c "import torch; print(torch.cuda.is_available())"`.
 
+On Windows, do **not** hand-edit the task — re-run the sanctioned
+installer with `-NnDevice`, which re-registers via the
+Task-Scheduler API (no `schtasks` 261-char limit) and prompts once
+for the account password via the standard `Get-Credential` dialog
+(`Set-ScheduledTask` cannot modify a stored-password task without
+the password; `schtasks /Change /TR` overflows 261 chars on the
+repo's absolute paths):
+
+```powershell
+.\deploy\windows\install-mtg-bot-worker.ps1 `
+  -TailnetIP <ip> -NWorkers <n> -RepoRoot <repo> -VenvPython <py> `
+  -NnDevice cuda
+# then: Start-ScheduledTask -TaskName MTGBotWorker  (when IDLE)
+```
+
+`-NnDevice` defaults to empty → the registered action is
+byte-identical to the pre-GPU installer (no-op on CPU-only hosts).
+
 ## Self-update (`POST /v2/self_update`)
 
 Push new code to a worker without SSHing in or touching the box.
