@@ -86,29 +86,40 @@ fn pay_mana_cost_internal(
     }
     let idx = controller as usize;
     let pool = &mut state.players[idx].mana_pool;
-    pool.white -= cost.white;
-    pool.blue -= cost.blue;
-    pool.black -= cost.black;
-    pool.red -= cost.red;
-    pool.green -= cost.green;
+    // G7 S6-Class-E ordered-pool: route the per-color decrements
+    // through the `coins`-vec-aware helper so the insertion-ordered
+    // SoT and per-color count cache stay synced. The drain ORDER is
+    // preserved verbatim (legacy C→W→U→B→R→G generic-priority) for
+    // parity-neutral migration; this fn is the decision-callback
+    // count-only legacy pay primitive, NOT the Class-E
+    // `auto_tap_for_cost` SoT path. Class E is fixed at the call
+    // site that DOES route through Python's `auto_tap_for_cost` SoT
+    // — `auto_tap_pay_for_cost` in `state_ops_cast.rs`.
+    pool.drain_first_n_color(b'W', cost.white as u32);
+    pool.drain_first_n_color(b'U', cost.blue as u32);
+    pool.drain_first_n_color(b'B', cost.black as u32);
+    pool.drain_first_n_color(b'R', cost.red as u32);
+    pool.drain_first_n_color(b'G', cost.green as u32);
     let mut remaining_generic = cost.generic as u32;
-    for slot in [
-        &mut pool.colorless,
-        &mut pool.white,
-        &mut pool.blue,
-        &mut pool.black,
-        &mut pool.red,
-        &mut pool.green,
-    ] {
+    for color in [b'C', b'W', b'U', b'B', b'R', b'G'] {
         if remaining_generic == 0 {
             break;
         }
-        let avail = *slot as u32;
+        let avail = match color {
+            b'W' => pool.white as u32,
+            b'U' => pool.blue as u32,
+            b'B' => pool.black as u32,
+            b'R' => pool.red as u32,
+            b'G' => pool.green as u32,
+            b'C' => pool.colorless as u32,
+            _ => 0,
+        };
         let take = avail.min(remaining_generic);
-        *slot -= take as u8;
+        pool.drain_first_n_color(color, take);
         remaining_generic -= take;
     }
     debug_assert_eq!(remaining_generic, 0);
+    pool.assert_count_sync();
     true
 }
 

@@ -623,7 +623,20 @@ pub(crate) fn auto_tap_headroom_pool(
     state: &crate::state::GameState,
     player_idx: usize,
 ) -> crate::state::ManaPool {
-    let mut pool = state.players[player_idx].mana_pool;
+    // G7 S6-Class-E ordered-pool: `ManaPool` is no longer `Copy`
+    // (it carries `Vec<ManaCoin>` — Python parity, list[ManaCoin]).
+    // Clone to build the hypothetical pool the controller COULD
+    // achieve by tapping their headroom sources. The headroom adds
+    // below mutate ONLY the per-color count cache on the local
+    // clone — this fn is a read-only AFFORDABILITY composer; the
+    // local pool is never written back to state. The legal-side
+    // affordability check (`pool_can_cover`) reads only the per-color
+    // counts, so leaving the local clone's `coins` vec untouched
+    // here is intentional (it's never read by the consumer of this
+    // return value). Real `add_mana` mutations that DO write back
+    // (e.g. the resolver `AddMana` arms) push to `coins` to keep the
+    // sync invariant.
+    let mut pool = state.players[player_idx].mana_pool.clone();
     for obj in state.players[player_idx].battlefield.iter() {
         let Some(printing) = state.registry.lookup(obj.printing_id) else {
             continue;

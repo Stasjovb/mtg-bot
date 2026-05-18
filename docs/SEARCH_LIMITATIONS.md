@@ -6875,15 +6875,36 @@ gate signal (correctly loud). The proper closure is parity-positive
 > below / SOT_FLIP §4). NOT force-fixed (`feedback_no_fallback_hybrids`
 > honest-stop). NOT merged / NOT pushed.
 
-> **[G7 S6-Class-E (31/300) — VERIFY-FIRST RE-CHARACTERIZED +
-> HONEST-STOP: the root cause is the `auto_tap_for_cost` GENERIC-cost
-> POOL-drain ORDER, NOT a mana-SOURCE/land-tap color choice; the
-> faithful fix needs an ordered-pool `ManaPool` representation —
-> materially out of one safe slice + outside the
-> `state_ops_cast.rs`/`state_ops_mana.rs`-only lane scope. Lane
-> `feature/g7-classe-mana-color` off `main` @ `430f3b39`;
-> pure-test/docs investigation, ZERO `rust/src`/`src/`/`.pyd`/
-> `cross_engine.py` change.]** The S6 evidence
+> **[G7 S6-Class-E (31/300) — CLOSED by the ordered-pool
+> `ManaPool` representation (`feature/g7-classe-mana-ordered-pool`
+> off `main` @ `dc22ebc4`).** The Rust `ManaPool` now carries a
+> `coins: Vec<ManaCoin>` insertion-ordered SoT alongside the
+> per-color count fields (the counts stay as an O(1)-read denormal-
+> ized cache for `pool_can_cover` / fingerprint / snapshot — those
+> readers are unchanged); every add/drain site routes through
+> `pool.push_coins` / `pool.drain_first_n_color` so the two sides
+> stay synced. `auto_tap_pay_for_cost` byte-mirrors Python's
+> `auto_tap_for_cost`: tracks `used_coin_indices` in the
+> controller's `coins` vec, walks the vec in insertion order for
+> both the colored-match and generic-FIFO phases, commits by
+> removing the indices high-to-low (the exact Python
+> `sorted(used_coin_ids, reverse=True)` then `del p.mana_pool[idx]`
+> idiom, `actions.py:978-980`). Pinned RED-before/GREEN-after by
+> `tests/test_rust_shadow_bakein.py::
+> test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned`
+> (CLOSURE — the arch1/s0 bake-in no longer trips at step 598;
+> `mana_pool_p1` color-residual divergence is structurally
+> impossible) +
+> `test_g7_classe_closed_then_library_shuffle_order_next_frontier_surfaced`
+> (the unmasked next frontier — the already-tracked b3f7c0a9
+> library-shuffle-order axis, NOT a new mana-pool axis). The S6
+> Class-E inventory row in `tests/test_g7_s6_scale_verify.py`
+> flipped surfaced→closed (arch1/s0 598→600, STATE_EQ
+> `mana_pool_p1`→`library_p1`). Historical RE-CHARACTERIZATION
+> framing kept below for the design-decision record.]**
+
+> **[Pre-fix RE-CHARACTERIZATION framing (verify-first @ `main` @
+> `430f3b39`; superseded above):]** The S6 evidence
 > (`docs/G7_S6_SCALE_VERIFY_EVIDENCE.md` + `s6_scale_verify.json`)
 > labelled Class E *"C1-family mana-SOURCE color on `ActivateAbility`
 > — Rust taps a different-colored source than Python (the auto-tap
