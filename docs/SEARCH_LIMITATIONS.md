@@ -6195,7 +6195,7 @@ regression.
 > because the Rust-driver port did not `apply_sbas()` on the
 > step-end / auto-advance path vs Python's
 > `state_based_actions`-at-`_enter_step`; step ~151), tracked as
-> blocker **G6 — now CLOSED-by-`<MERGE_HASH>`** (path: pure-Python
+> blocker **G6 — now CLOSED-by-`4d7c8ab3`** (path: pure-Python
 > SBA-cadence port — `RustGameStateAdapter._run_step_enter_sbas`
 > calls the pre-existing idempotent Rust `apply_sbas()` at exactly
 > Python's `_enter_step` SBA phases, invoked after the
