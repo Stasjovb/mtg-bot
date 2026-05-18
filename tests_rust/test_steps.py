@@ -225,6 +225,7 @@ def test_summoning_sick_cleared_at_untap_step_for_active_player(synthetic_state)
     elf_id = P1_FIRST_HAND_ID
     synthetic_state.add_mana(1, "G", 1)
     assert synthetic_state.cast_creature(elf_id, 1) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert synthetic_state.is_summoning_sick(elf_id) is True
     synthetic_state.set_phase(PHASE_CLEANUP)
     assert synthetic_state.active_player == 0
@@ -246,6 +247,7 @@ def test_summoning_sick_not_cleared_for_other_player(synthetic_state):
     elf_id = P0_FIRST_HAND_ID
     synthetic_state.add_mana(0, "G", 1)
     assert synthetic_state.cast_creature(elf_id, 0) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert synthetic_state.is_summoning_sick(elf_id) is True
     synthetic_state.set_phase(PHASE_CLEANUP)
     assert synthetic_state.active_player == 0
@@ -269,6 +271,7 @@ def test_summoning_sick_cleared_only_at_untap_step_not_other_phases(
     elf_id = P0_FIRST_HAND_ID
     synthetic_state.add_mana(0, "G", 1)
     assert synthetic_state.cast_creature(elf_id, 0) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert synthetic_state.is_summoning_sick(elf_id) is True
     synthetic_state.set_phase(PHASE_MAIN1)
     new_phase = synthetic_state.advance_phase()
@@ -286,6 +289,7 @@ def test_clone_then_advance_to_untap_does_not_affect_original(synthetic_state):
     elf_id = P1_FIRST_HAND_ID
     synthetic_state.add_mana(1, "G", 1)
     assert synthetic_state.cast_creature(elf_id, 1) is True
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert synthetic_state.is_summoning_sick(elf_id) is True
     cloned = synthetic_state.clone_once()
     cloned.set_phase(PHASE_CLEANUP)

@@ -1165,6 +1165,7 @@ def test_apply_action_cast_spell_minimal_dispatches_to_cast_creature(synthetic_s
     bf_before = synthetic_state.battlefield_sizes[0]
 
     synthetic_state.apply_action({"kind": "cast_spell", "card_id": elf_id})
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
 
     # Elf landed; one G pip spent.
     assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
@@ -1195,6 +1196,7 @@ def test_apply_action_cast_spell_uses_priority_player_as_actor(synthetic_state):
     p1_bf_before = synthetic_state.battlefield_sizes[1]
 
     synthetic_state.apply_action({"kind": "cast_spell", "card_id": elf_id})
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
 
     # Elf landed on player 1's battlefield, not player 0's.
     assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
@@ -1222,6 +1224,7 @@ def test_apply_action_cast_spell_with_all_flags_false_explicit(synthetic_state):
             "cast_room_half": None,
         }
     )
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
 
     # Same outcome as the minimal-shape test.
     assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
@@ -1260,6 +1263,7 @@ def test_apply_action_cast_spell_kicked_true_dispatches_unchanged(synthetic_stat
     synthetic_state.apply_action(
         {"kind": "cast_spell", "card_id": elf_id, "kicked": True}
     )
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
     assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
     assert synthetic_state.get_mana_pool(0)["G"] == 0
 
@@ -1298,6 +1302,7 @@ def test_apply_action_cast_spell_use_impending_true_dispatches_unchanged(synthet
     synthetic_state.apply_action(
         {"kind": "cast_spell", "card_id": elf_id, "use_impending": True}
     )
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
 
     # Lands as a normal creature (the elf would otherwise enter with
     # time counters under real impending semantics — but the flag is
@@ -1321,6 +1326,7 @@ def test_apply_action_cast_spell_cast_room_half_string_preserved(synthetic_state
             "cast_room_half": "left",
         }
     )
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
 
     assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
 
@@ -1339,6 +1345,7 @@ def test_apply_action_cast_spell_cast_room_half_none_parses(synthetic_state):
             "cast_room_half": None,
         }
     )
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
 
     assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
 
@@ -1363,6 +1370,7 @@ def test_apply_action_cast_spell_missing_flags_default_silently(synthetic_state)
 
     # No flag keys at all. Must not raise.
     synthetic_state.apply_action({"kind": "cast_spell", "card_id": elf_id})
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
 
     assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
 
@@ -2036,6 +2044,7 @@ def test_apply_action_cast_spell_cast_room_half_left_routes_to_cast_creature(
             "cast_room_half": "left",
         }
     )
+    synthetic_state.resolve_top_of_stack()  # G7 S1: land it on the bf
 
     assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
 
@@ -2161,6 +2170,7 @@ def test_apply_action_cast_spell_on_clone_leaves_original_unchanged(
 
     cloned = synthetic_state.clone_once()
     cloned.apply_action({"kind": "cast_spell", "card_id": elf_id})
+    cloned.resolve_top_of_stack()  # G7 S1: land it on the bf
 
     # Clone reflects the mutation.
     assert cloned.find_object_zone(elf_id) == ZONE_BATTLEFIELD

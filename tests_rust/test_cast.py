@@ -10,10 +10,19 @@ card from hand, pay its mana, deposit it on the battlefield.
 **Scope simplifications** (mirrored in the module docstring on
 ``rust/src/state_ops_cast.rs``):
 
-- **No stack yet.** Casting a creature spell moves it directly
-  hand -> battlefield after paying mana. Sorceries / instants /
-  triggered-via-stack interactions are deferred until a Rust-side
-  stack lands.
+- **G7 Slice S1 (stack-and-priority creature cast) — LANDED.**
+  Casting a creature spell now pays mana, fires ``Event::Cast``, and
+  **pushes a spell ``StackItem``** (the card stays in hand, Rust's
+  spell-stack model); it does NOT move to the battlefield in the
+  cast primitive and does NOT auto-resolve. ``resolve_top_of_stack``
+  later lands the creature on the battlefield (CR 608.2m via the
+  already-present ``move_source_post_resolve`` permanent route,
+  stamping ``summoning_sick`` + the ETB timestamp) and dispatches
+  ``Event::Enters`` — byte-mirroring Python's resolve-time
+  ``put_into_battlefield``. The no-stack pins below were
+  closure-flipped to the stack-push + drive-resolve shape (the
+  G4/G5/G6 closure-flip pattern). ``cast_creature_warp`` + the
+  warp/impending/room riders remain no-stack until G7 Slice S4.
 - **No one-land-per-turn enforcement.** ``play_land`` does not check
   ``lands_played_this_turn``. The Python side enforces this at
   ``legal_actions`` time, not inside the play primitive itself, so
@@ -193,24 +202,37 @@ def test_play_land_not_in_hand_returns_false(synthetic_state):
 
 
 def test_cast_creature_pays_mana_and_moves_to_battlefield(synthetic_state):
-    """Llanowar Elves in hand costs {G}. Give player 0 one green and
-    cast: the elf lands on the battlefield, hand shrinks by 1, the
-    green pip is consumed."""
+    """G7 S1 closure-flip. Llanowar Elves in hand costs {G}. Give
+    player 0 one green and cast: the cast pushes a spell StackItem
+    (card stays in hand, green pip consumed); driving
+    ``resolve_top_of_stack`` then lands the elf on the battlefield
+    and drains the hand — byte-equal to the old fused no-stack
+    post-state, just split into cast-then-resolve."""
     elf_id = P0_FIRST_HAND_ID
     assert synthetic_state.printing_name_of(elf_id) == "Llanowar Elves"
     synthetic_state.add_mana(0, "G", 1)
     assert synthetic_state.get_mana_pool(0)["G"] == 1
     hand_before = synthetic_state.hand_sizes[0]
     bf_before = synthetic_state.battlefield_sizes[0]
+    stack_before = synthetic_state.stack_size()
 
     ok = synthetic_state.cast_creature(elf_id, 0)
     assert ok is True
 
+    # Cast pushes the spell StackItem; card still in hand (Rust's
+    # spell-stack model), NOT yet on the battlefield. Mana spent.
+    assert synthetic_state.stack_size() == stack_before + 1
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+
+    # Resolve: the creature lands on the battlefield, hand drains.
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
     assert synthetic_state.hand_sizes[0] == hand_before - 1
     assert synthetic_state.battlefield_sizes[0] == bf_before + 1
-    # Mana spent.
-    assert synthetic_state.get_mana_pool(0)["G"] == 0
+    assert synthetic_state.is_stack_empty() is True
 
 
 def test_cast_creature_insufficient_mana_returns_false(synthetic_state):
@@ -259,13 +281,20 @@ def test_cast_creature_not_in_hand_returns_false(synthetic_state):
     assert synthetic_state.hand_sizes == hand_before
 
 
-def test_cast_creature_summoning_sick_after_cast(synthetic_state):
-    """A freshly-cast creature has summoning sickness — mirrors the
-    Python ``put_into_battlefield`` default. ``is_summoning_sick``
-    came in with the tap slice."""
+def test_cast_creature_summoning_sick_after_resolve(synthetic_state):
+    """G7 S1 closure-flip. A freshly-RESOLVED creature has summoning
+    sickness — mirrors the Python ``put_into_battlefield`` default
+    (``actions.py:2993``), stamped at RESOLUTION time by
+    ``move_source_post_resolve`` (``state_ops_resolve.rs:301-303``),
+    NOT at cast time (Python's ``_cast_spell`` doesn't stamp it
+    either). On the stack it is still in hand, so ``is_summoning_sick``
+    is ``None`` (the not-on-bf sentinel)."""
     elf_id = P0_FIRST_HAND_ID
     synthetic_state.add_mana(0, "G", 1)
     assert synthetic_state.cast_creature(elf_id, 0) is True
+    # Pre-resolve: spell on the stack, card in hand, no sickness stamp.
+    assert synthetic_state.is_summoning_sick(elf_id) is None
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.is_summoning_sick(elf_id) is True
 
 
@@ -288,6 +317,8 @@ def test_cast_creature_with_generic_cost_uses_any_color(synthetic_state):
     assert pool["G"] == 0  # green pip went to the colored requirement
     assert pool["C"] == 0  # colorless filled the generic
     assert pool["R"] == 1  # untouched
+    # G7 S1: bf landing is at resolution, not cast time.
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.find_object_zone(bears_id) == ZONE_BATTLEFIELD
     assert synthetic_state.battlefield_sizes[0] == bf_before + 1
 
@@ -324,6 +355,8 @@ def test_cast_creature_correctly_accepts_grizzly_bears(synthetic_state):
 
     assert synthetic_state.cast_creature(bears_id, 0) is True
 
+    # G7 S1: bf landing is at resolution, not cast time.
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.find_object_zone(bears_id) == ZONE_BATTLEFIELD
     assert synthetic_state.battlefield_sizes[0] == bf_before + 1
 
@@ -354,13 +387,18 @@ def test_clone_then_cast_does_not_affect_original(synthetic_state):
 
     cloned = synthetic_state.clone_once()
     assert cloned.cast_creature(elf_id, 0) is True
+    # G7 S1: drive the resolve on the clone so the elf lands on its
+    # battlefield (cast only pushes the StackItem).
+    cloned.resolve_top_of_stack()
 
     # Clone diverged.
     assert cloned.find_object_zone(elf_id) == ZONE_BATTLEFIELD
     assert cloned.get_mana_pool(0)["G"] == 0
-    # Source untouched: elf still in hand, green pip still in pool.
+    # Source untouched: elf still in hand, green pip still in pool,
+    # clone's stack push + resolve did not bleed back.
     assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
     assert synthetic_state.get_mana_pool(0)["G"] == 1
+    assert synthetic_state.is_stack_empty() is True
 
 
 def test_play_land_clone_then_play_does_not_affect_original(synthetic_state):
@@ -446,6 +484,9 @@ def test_cast_creature_flash_in_untap_phase(synthetic_state):
 
     assert synthetic_state.cast_creature(obj_id, 0) is True
 
+    # G7 S1: cast succeeds in any phase (no phase gate in the
+    # primitive); bf landing is at resolution.
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
     assert synthetic_state.battlefield_sizes[0] == bf_before + 1
 
@@ -463,6 +504,7 @@ def test_cast_creature_flash_in_combat_phase(synthetic_state):
     synthetic_state.add_mana(0, "C", 1)
 
     assert synthetic_state.cast_creature(obj_id, 0) is True
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
 
 
@@ -483,6 +525,7 @@ def test_cast_creature_vanilla_in_non_main_phase_still_succeeds(synthetic_state)
     # lands, this assertion flips to False and the test is renamed
     # ``..._still_rejected`` per the round-19 task description.
     assert synthetic_state.cast_creature(obj_id, 0) is True
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
 
 
@@ -500,6 +543,7 @@ def test_cast_creature_flash_on_opponents_turn(synthetic_state):
     synthetic_state.add_mana(1, "C", 1)
 
     assert synthetic_state.cast_creature(obj_id, 1) is True
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.find_object_zone(obj_id) == ZONE_BATTLEFIELD
 
 
@@ -766,6 +810,9 @@ def test_clone_isolation_after_cast_is_per_zone(synthetic_state):
 
     cloned = synthetic_state.clone_once()
     assert cloned.cast_creature(elf_id, 0) is True
+    # G7 S1: cast pushes the StackItem; drive resolve so the clone's
+    # elf actually lands on its battlefield.
+    cloned.resolve_top_of_stack()
 
     # Clone diverged: elf on bf, sick, hand shrunk, pool drained.
     assert cloned.find_object_zone(elf_id) == ZONE_BATTLEFIELD
@@ -785,14 +832,17 @@ def test_clone_isolation_after_cast_is_per_zone(synthetic_state):
 
 
 def test_fingerprint_changes_after_cast(synthetic_state):
-    """Cross-feature with fingerprint: casting a creature mutates the
-    hand zone signature, the battlefield zone signature, AND the
-    mana_pool signature — all three feed into the SHA1 digest (see
-    state_ops_fingerprint.rs docstring). The fingerprint must
-    therefore change after a successful cast.
+    """G7 S1 closure-flip. Cross-feature with fingerprint: the cast
+    mutates the mana_pool signature AND pushes a spell StackItem (the
+    stack signature feeds the SHA1 digest — see
+    state_ops_fingerprint.rs:331-335), so the fingerprint changes
+    post-cast even though the card is still in hand (not yet on bf).
+    Resolving then moves it hand -> battlefield, changing the
+    fingerprint AGAIN.
 
-    Pinning: same starting fingerprint twice (determinism), then a
-    different fingerprint post-cast (sensitivity)."""
+    Pinning: same starting fingerprint twice (determinism), a
+    different fingerprint post-cast (cast sensitivity), and a third
+    distinct fingerprint post-resolve (resolve sensitivity)."""
     elf_id = P0_FIRST_HAND_ID
     synthetic_state.add_mana(0, "G", 1)
 
@@ -802,23 +852,27 @@ def test_fingerprint_changes_after_cast(synthetic_state):
 
     assert synthetic_state.cast_creature(elf_id, 0) is True
 
-    fp_post = synthetic_state.fingerprint()
-    assert fp_post != fp_pre
+    fp_post_cast = synthetic_state.fingerprint()
+    assert fp_post_cast != fp_pre
+
+    synthetic_state.resolve_top_of_stack()
+    fp_post_resolve = synthetic_state.fingerprint()
+    assert fp_post_resolve != fp_post_cast
+    assert fp_post_resolve != fp_pre
 
 
 def test_two_casts_in_succession_drain_mana_independently(synthetic_state):
-    """Cross-feature: casting two creature spells in succession from
-    the same hand requires the mana pool to track both spends
-    cumulatively. Two Llanowar Elves @ {G} each = 2 green needed.
-    Both elves land, hand drops by 2, pool ends empty. Second cast
-    has no special interaction with the first (the Rust
-    ``cast_creature`` short-circuits the stack — the first cast is
-    already on the battlefield by the time the second runs).
+    """G7 S1 closure-flip. Cross-feature: casting two creature spells
+    in succession from the same hand requires the mana pool to track
+    both spends cumulatively. Two Llanowar Elves @ {G} each = 2 green
+    needed.
 
-    Captures the "second-cast sees the first's state" composition
-    in the no-stack Rust model: post-first-cast, hand is shorter and
-    the pool has one fewer pip, and the second cast reads from that
-    updated state."""
+    Captures the "second-cast sees the first's state" composition in
+    the stack-and-priority Rust model: cast elf_a (StackItem pushed,
+    1 G left), resolve it (elf_a -> bf), then cast elf_b against the
+    updated pool (the second {G} drains the pool to empty), resolve
+    it. Both elves land, hand drops by 2, pool ends empty — byte-equal
+    to the old fused post-state, split into cast-then-resolve."""
     elf_a = P0_FIRST_HAND_ID
     elf_b = P0_FIRST_HAND_ID + 1  # hand[1] is also a Llanowar Elves
     assert synthetic_state.printing_name_of(elf_b) == "Llanowar Elves"
@@ -827,18 +881,26 @@ def test_two_casts_in_succession_drain_mana_independently(synthetic_state):
     hand_before = synthetic_state.hand_sizes[0]
 
     assert synthetic_state.cast_creature(elf_a, 0) is True
-    # After the first cast, pool has 1 G left and hand shrunk by 1.
+    # After the first cast: 1 G spent (pool has 1 left), elf_a on the
+    # stack (still in hand zone, not bf yet).
     assert synthetic_state.get_mana_pool(0)["G"] == 1
+    assert synthetic_state.find_object_zone(elf_a) == ZONE_HAND
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+    synthetic_state.resolve_top_of_stack()
+    # elf_a resolved onto the battlefield, hand shrunk by 1.
     assert synthetic_state.hand_sizes[0] == hand_before - 1
     assert synthetic_state.battlefield_sizes[0] == bf_before + 1
     assert synthetic_state.find_object_zone(elf_a) == ZONE_BATTLEFIELD
 
     assert synthetic_state.cast_creature(elf_b, 0) is True
-    # Pool empty, hand shrunk by 2, both elves on battlefield.
+    # Second cast drains the remaining G against the updated pool.
     assert synthetic_state.get_mana_pool(0)["G"] == 0
+    synthetic_state.resolve_top_of_stack()
+    # Pool empty, hand shrunk by 2, both elves on battlefield.
     assert synthetic_state.hand_sizes[0] == hand_before - 2
     assert synthetic_state.battlefield_sizes[0] == bf_before + 2
     assert synthetic_state.find_object_zone(elf_b) == ZONE_BATTLEFIELD
+    assert synthetic_state.is_stack_empty() is True
 
 
 def test_cast_then_counter_via_effect_dispatch_lands_in_graveyard(synthetic_state):
@@ -959,12 +1021,16 @@ def test_castspell_instant_routes_to_cast_spell_noncreature(synthetic_state):
 
 
 def test_castspell_creature_still_routes_to_cast_creature(synthetic_state):
-    """Pin #2: a Creature printing through
+    """Pin #2 (G7 S1 closure-flip): a Creature printing through
     `Action::CastSpell{use_warp:false}` STILL routes to
     `cast_creature` (no regression — `cast_spell_noncreature`
     type-gates and returns Ok(false) for a creature so the dispatch
-    falls through). The synthetic seed's p0 hand is Llanowar Elves
-    ({G} creature)."""
+    falls through). Post-G7-S1, `cast_creature` no longer
+    short-circuits: the routed cast pushes a spell StackItem (stack
+    depth +1, card stays in hand), exactly like the instant route
+    (Pin #1). Driving `resolve_top_of_stack` then lands the creature
+    on the battlefield. The synthetic seed's p0 hand is Llanowar
+    Elves ({G} creature)."""
     elf_id = P0_FIRST_HAND_ID
     assert synthetic_state.printing_name_of(elf_id) == "Llanowar Elves"
     synthetic_state.add_mana(0, "G", 1)
@@ -974,11 +1040,64 @@ def test_castspell_creature_still_routes_to_cast_creature(synthetic_state):
     synthetic_state.apply_action(
         {"kind": "cast_spell", "card_id": elf_id})
 
-    # Creature landed on the battlefield via `cast_creature`'s
-    # no-stack path (NOT pushed as a spell StackItem).
+    # Routed to `cast_creature`, which now pushes a spell StackItem
+    # (stack +1) and leaves the card in hand — NOT the old no-stack
+    # immediate-battlefield short-circuit.
+    assert synthetic_state.stack_size() == stack_before + 1
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+
+    # Resolve: the creature lands on the battlefield.
+    synthetic_state.resolve_top_of_stack()
     assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
     assert synthetic_state.battlefield_sizes[0] == bf_before + 1
-    assert synthetic_state.stack_size() == stack_before
+    assert synthetic_state.is_stack_empty() is True
+
+
+def test_g7s1_cast_creature_pushes_stackitem_no_autoresolve(synthetic_state):
+    """G7 Slice S1 focused pin (mirrors Pin #1's stack-push shape for
+    the creature path). Direct `cast_creature` call: pays `mana_cost`,
+    pushes a spell `StackItem` (stack depth +1), the card stays in
+    HAND (NOT battlefield — the old no-stack short-circuit is gone),
+    NO `summoning_sick` stamp at cast time (the in-hand sentinel is
+    `None`), priority resets to the active player. The card is NOT
+    auto-resolved (stack non-empty after the cast). Then
+    `resolve_top_of_stack` (the already-present resolver, NOT the
+    pop-only G3 composer) lands the creature on the battlefield with
+    summoning sickness — byte-mirroring Python's resolve-time
+    `put_into_battlefield`."""
+    elf_id = P0_FIRST_HAND_ID
+    assert synthetic_state.printing_name_of(elf_id) == "Llanowar Elves"
+    synthetic_state.add_mana(0, "G", 1)
+    hand_before = synthetic_state.hand_sizes[0]
+    bf_before = synthetic_state.battlefield_sizes[0]
+    stack_before = synthetic_state.stack_size()
+
+    assert synthetic_state.cast_creature(elf_id, 0) is True
+
+    # Stack push, card in hand, mana spent, NOT resolved, NO sickness.
+    assert synthetic_state.stack_size() == stack_before + 1
+    assert synthetic_state.is_stack_empty() is False
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_HAND
+    assert synthetic_state.hand_sizes[0] == hand_before
+    assert synthetic_state.battlefield_sizes[0] == bf_before
+    assert synthetic_state.get_mana_pool(0)["G"] == 0
+    assert synthetic_state.is_summoning_sick(elf_id) is None
+    # Priority reset to active (cast tail, verbatim from
+    # `cast_spell_noncreature`).
+    assert (
+        synthetic_state.get_priority_player()
+        == synthetic_state.active_player
+    )
+
+    # Resolve via the real resolver: creature -> battlefield with
+    # summoning sickness + the spell StackItem drained.
+    synthetic_state.resolve_top_of_stack()
+    assert synthetic_state.find_object_zone(elf_id) == ZONE_BATTLEFIELD
+    assert synthetic_state.battlefield_sizes[0] == bf_before + 1
+    assert synthetic_state.hand_sizes[0] == hand_before - 1
+    assert synthetic_state.is_summoning_sick(elf_id) is True
+    assert synthetic_state.is_stack_empty() is True
 
 
 def test_castspell_spell_resolves_effect_then_to_graveyard(synthetic_state):
