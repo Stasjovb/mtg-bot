@@ -1115,6 +1115,60 @@ second:
    >     Flip is NO-GO until all four hold.
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 19 —
+   >   G3 thesis-fork RESOLVED + G7 design landed with a
+   >   DE-RISKING diagnosis; @ `2a0867bf`, counts UNCHANGED,
+   >   parity 307/475 / PROBED 106 UNCHANGED).**
+   >   - **G3 fork RESOLVED (user):** Rust MUST implement real
+   >     stack-and-priority `CastSpell` resolution (NOT
+   >     accept-atomic-and-reconcile-in-harness). Ops mode =
+   >     fully autonomous. The CE5 reconciliation must be REMOVED
+   >     and parity re-proven WITHOUT it.
+   >   - **G7 design merged `2a0867bf`** (`docs/RUST_STACK_
+   >     RESOLUTION_DESIGN.md` — canonical G7 owner, C1/B3
+   >     design-spec lineage; docs-only, no rust/src/.pyd/count
+   >     touch, cron exit-0, residue cadence did NOT fire —
+   >     cross-refs to SL/SOT_FLIP, not cross_engine.py).
+   >   - **★ Verify-first diagnosis (decision-relevant): atomic
+   >     CastSpell resolution is a NARROW REMOVABLE
+   >     SHORT-CIRCUIT, NOT a deep architectural absence.**
+   >     `cast_spell_noncreature` already pushes a StackItem +
+   >     does NOT auto-resolve (instants/sorceries work
+   >     end-to-end today). The ONE hole: `cast_creature`/
+   >     `cast_creature_warp` move the permanent hand→battlefield
+   >     INSIDE the cast primitive (`state_ops_cast.rs:540`),
+   >     skipping the stack — the entire G7 root cause. Rust
+   >     already has the real `stack: Vec<StackItem>`, full
+   >     effect-dispatching `resolve_top_of_stack`,
+   >     permanent-aware `move_source_post_resolve`, instant-speed
+   >     legal emission (I46), and the effect-dispatching
+   >     priority loop the bake-in already runs. Trap: the G3
+   >     composer `complete_step_via_priority_round` is POP-ONLY
+   >     (NOT the resolution path) — don't wire resolution
+   >     through it.
+   >   - **Slice plan:** S1 `cast_creature`→stack-push → S2
+   >     resolver permanent-spell byte-eq → (B1=C1 S2/3 parallel,
+   >     co-evolve w/ S3) → S3 priority/response windows → S4
+   >     `cast_creature_warp` + riders → S5 triggers-on-stack
+   >     (mostly verify) → S6 bake-in scale verify → **S7 CE5
+   >     removal LAST**. S1..S5 single serialized Rust `.pyd`
+   >     lanes; S7 a `cross_engine.py` Python lane.
+   >   - **CRITICAL PROOF:** CE5 removed only at S7; entire prior
+   >     evidence base (307/475 + PROBED 106 + the gate, all WITH
+   >     CE5) re-proven CE5-FREE + fresh CE5-FREE C4 clean = the
+   >     final flip gate. "green WITH CE5" / CE5-equivalent /
+   >     stack-axis carve-out are NON-acceptance.
+   >   - **Magnitude (honest, accepted): ~6–11 cycles**,
+   >     multi-cycle build-out, materially resets the flip
+   >     timeline. Biggest risk: nested response windows = a
+   >     brand-new cross-engine surface. B1 co-evolves with S3,
+   >     confirmed co-blocker.
+   >   - **Flip endgame: dispatch S1 → S2 → (B1 ∥) → S3..S7 →
+   >     CE5-FREE re-proof + fresh C4 clean → ORCHESTRATOR+USER
+   >     go/no-go on the atomic SoT-flip (B3-S5), explicitly NOT
+   >     autonomous.** Flip NO-GO until all hold.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

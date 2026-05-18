@@ -304,71 +304,68 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 4876bf08 (continuous-pipeline cycle 18 —
-     C4 SCALED RE-SWEEP RAN AND **DIVERGED: 0/300 PASS** at the
-     flip-candidate commit; flip is **NO-GO-until-closed**; the
-     cycle-17 "chain converged / bake-in clean to terminal / no
-     G7" claim is CORRECTED — it was TRUE ONLY ON THE SYNTHETIC
-     3-CARD SMOKE DECK, which casts no spells). The C4 post-R76
-     scaled re-sweep (tooling merged `4876bf08`; new
-     `--driver rust_shadow` mode on
-     scripts/bench_trajectory_parity.py +
-     rust_shadow.drive_shadow_game_to_terminal — pure-Python
-     tooling, no Rust/.pyd/count touch, 4-file 1532 UNMOVED,
-     cron exit-0, residue cadence did NOT fire) ran the
-     round-76-class grid (60 archetypes × 5 seeds = 300 real
-     17lands production-deck games) THROUGH the role-swapped
-     ShadowCheckedRustAdapter bake-in at flip-candidate
-     `e87a6ebe`. RESULT: **0 PASS / 300**, 260 FAIL_DIVERGENCE
-     (238 STATE_EQ + 22 LEGAL_SET_EQ), 40 FAIL_TIMEOUT
-     (degenerate land-only random walks at the step cap — NOT
-     clean PASSes), 0 FAIL_EXCEPTION. Evidence:
-     docs/C4_RESWEEP_EVIDENCE.md + the committed c4_resweep.json
-     (raw 300-game artifact). This is exactly what C4 exists to
-     catch BEFORE the irreversible flip — the bake-in working as
-     the honest bad-flip tripwire (feedback_no_fallback_hybrids).
-     TWO axes: (1) **G7 OPEN (NEW, dominant 238/300)** — the
-     bake-in's STATE_EQ does NOT reconcile the G3 "Rust resolves
-     CastSpell atomically" axis (Rust apply(CastSpell) -> spell
-     to battlefield + stack emptied + mana spent; Python ->
-     spell on the stack pending the locked-in full
-     stack-and-priority resolution). step_both reconciles this
-     via its CE5 cast-vs-resolve mirror
-     (cross_engine.py:10313, drains BOTH stacks after a
-     cast_spell); the role-swapped bake-in has no equivalent.
-     Mid-game live-play (both players alive, full libraries) —
-     NOT the post-deck-out tail G4/G5/G6 lived in; trips on the
-     FIRST spell cast of essentially every real deck. The smoke
-     deck never casts a spell, so the cycle-17 "no G7 /
-     convergent" claim was synthetic-deck-only; the chain was
-     NOT exhausted at scale. Pinned (SEARCH_LIMITATIONS G7 OPEN
-     section + SOT_FLIP_CUTOVER_PLAN §4 ledger row G7 OPEN + a
-     [C4-RE-SWEEP CORRECTION] on the G6 row), todo filed.
-     (2) **B1 (already-OPEN C1 keystone, 22/300 LEGAL_SET_EQ)**
-     — independently confirms the C1 legal_decisions ==
-     legal_actions mana/target/additional-cost asymmetry
-     (PARTIALLY CLOSED, Slices 2/3 outstanding) is still open at
-     scale; expected residual, NOT a new finding. ⚠ THESIS-LEVEL
-     FORK ESCALATED TO THE USER (NOT autonomously resolved): the
-     proposed G7 fix (port the CE5 cast-vs-resolve stack-drain
-     into the bake-in) is mechanically the SAME reconciliation
-     the ENTIRE campaign parity evidence base (step_both /
-     307-byte-equal / PROBED 106 / round-74/76) already relies
-     on — internally consistent — BUT its soundness rests on the
-     G3 "Rust resolves atomically — accepted C6-fenced caveat"
-     whose justification appears DEFERRED and never written
-     ("SL entry owed at B3-impl"); the C4 magnitude (79% of
-     games / every spell cast) makes that a thesis-level
-     question, not a narrow caveat: is atomic resolution a
-     justified accepted simplification, or must Rust implement
-     real stack-and-priority resolution (a substantial Rust
-     effort) / does the flip thesis need revisiting. Per
-     honest-progress / feedback_no_fallback_hybrids the
-     orchestrator did NOT autonomously dispatch a G7
-     harness-reconciliation lane (that commits Reading A on an
-     unestablished justification). NEXT = USER decision on the
-     G3-justification fork BEFORE any G7 lane; flip remains
-     NO-GO until G7 + B1 close and a fresh C4 runs clean. PRIOR
+     Measured at main 2a0867bf (continuous-pipeline cycle 19 —
+     the G3 thesis-fork is RESOLVED (user: **Rust MUST implement
+     real stack-and-priority CastSpell resolution**, ops mode =
+     fully autonomous) and the G7 design landed with a
+     materially DE-RISKING verify-first diagnosis). Flip remains
+     **NO-GO** until G7 (S1..S7) + B1 (C1 Slices 2/3) close and
+     a fresh CE5-FREE C4 runs clean — but the path is now
+     well-scoped, not open-ended. **G7 design merged 2a0867bf**
+     (`docs/RUST_STACK_RESOLUTION_DESIGN.md` — the canonical
+     owner doc for G7, in the C1/B3 design-spec lineage;
+     docs-only, no rust/src/.pyd/count touch, cron exit-0,
+     residue cadence did NOT fire — cross-refs went to SL/
+     SOT_FLIP, not cross_engine.py). **KEY DIAGNOSIS (the
+     single most decision-relevant output): atomic CastSpell
+     resolution is a NARROW, REMOVABLE SHORT-CIRCUIT — NOT a
+     deep architectural absence.** `cast_spell_noncreature`
+     ALREADY pushes a StackItem and does NOT auto-resolve
+     (state_ops_cast.rs:952-957 — stack-then-resolve works
+     end-to-end for instants/sorceries TODAY). The ONE hole:
+     `cast_creature`/`cast_creature_warp` move the permanent
+     hand->battlefield INSIDE the cast primitive
+     (state_ops_cast.rs:540), skipping the stack — that is the
+     entire G7 root cause. Rust ALREADY has: a real
+     `stack: Vec<StackItem>`, a full effect-dispatching
+     `resolve_top_of_stack` (state_ops_resolve.rs:12011-12247),
+     a permanent-aware `move_source_post_resolve`
+     (:285-332), instant-speed CastSpell legal emission incl.
+     flash (I46), and a real effect-dispatching priority loop in
+     `RustGameStateAdapter._run_priority_action` the bake-in
+     already runs. Documented trap: the G3 composer
+     `complete_step_via_priority_round` (state_ops_priority.rs:
+     260-296) is POP-ONLY (NOT the resolution path; the adapter
+     loop is) — wiring resolution through it would reintroduce a
+     no-effect bug. **Slice plan:** S1 cast_creature->stack-push
+     -> S2 resolver permanent-spell byte-eq -> (C1 S2/3 in
+     parallel; co-evolves w/ S3) -> S3 priority/response windows
+     -> S4 cast_creature_warp + riders -> S5 triggers-on-stack
+     (mostly verify) -> S6 bake-in scale verify -> **S7 CE5
+     removal LAST**. S1..S5 each a single serialized Rust .pyd
+     lane; S7 a cross_engine.py Python lane. **CRITICAL PROOF:**
+     CE5 (cross_engine.py:10367-10375) is removed at S7 only;
+     the ENTIRE prior evidence base (307/475 byte-equal + PROBED
+     106 + the parity-smoke/trajectory gate — ALL generated WITH
+     CE5) must then be re-proven **CE5-FREE**, and a fresh C4
+     `--driver rust_shadow` 300-game re-sweep must run
+     divergence-clean CE5-FREE = the final flip gate. "green
+     WITH CE5", any CE5-equivalent in rust_shadow.py, or any
+     _DOCUMENTED_ACCEPTED_FIELDS carve-out for the stack/
+     battlefield axis are explicitly NON-acceptance. **Magnitude
+     (honest, accepted): ~6-11 cycles, multi-cycle build-out —
+     materially resets the flip timeline.** Biggest risk: nested
+     response windows are brand-new cross-engine surface (no
+     spell ever sat on the Rust stack across a priority round
+     before). B1 (C1 Slices 2/3) co-evolves with S3 and is a
+     confirmed co-blocker (the two C4 divergence shapes). NEXT =
+     dispatch S1 (cast_creature->stack-push, first Rust lane).
+     PRIOR cycle 18 (@ 4876bf08 — C4 scaled re-sweep RAN +
+     DIVERGED 0/300 through the role-swapped bake-in at
+     flip-candidate e87a6ebe; cycle-17 "chain converged" claim
+     CORRECTED as synthetic-deck-only; G7 OPEN dominant +
+     B1 confirmed open at scale; thesis-fork escalated — now
+     resolved cycle 19; counts unchanged, cron exit-0). PRIOR
      cycle 17 (@ 30a5cebe — SoT-FLIP G6 CLOSED via pure-Python
      SBA-timing port; the "G4->G5->G6 chain fully convergent /
      bake-in clean to terminal / no G7" claim was TRUE
