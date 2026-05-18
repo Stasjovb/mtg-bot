@@ -175,14 +175,31 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         # Class B — G5-family priority-port STATE_EQ.
         (5, 0, 367, "STATE_EQ", "('priority_player', 1, 0)",
          "G5-family (priority-port)"),
-        # Class C — warp-EMISSION / S4b: a WARP creature
-        # (Starbreach Whale, Warp {1}{U}) resolves atomically in Rust
-        # (battlefield + warp-exile) while Python keeps it on the
-        # stack — the known STILL-OPEN warp-EMISSION/S4b axis. NOT the
-        # closed non-warp atomic-cast hand_p0 axis (no hand_pX in the
-        # shape; the non-warp creature cast resolves in lockstep).
+        # Class C — RE-CHARACTERIZED (verify-first @ main 3a963e0f;
+        # see test_rust_shadow_bakein.py::
+        # test_g7_classc_warpexile_delayed_trigger_root_cause_pinned).
+        # The S6-evidence label "warp-creature atomic resolve / S4b"
+        # is CONTRADICTED: S4 (bb9e490b) + S5a (eb0fd0ca) already
+        # landed (ancestors of this S6 sweep a9126b06), so
+        # cast_creature_warp is NOT atomic — the warp creature
+        # (Starbreach Whale, Warp {1}{U}, obj 81) goes cast→stack→bf
+        # byte-IDENTICAL to Python for ~17 steps. The REAL Class-C
+        # root cause is the warp-EXILE delayed-trigger-vs-
+        # deterministic-sweep DOCUMENTED deliberate divergence
+        # (SEARCH_LIMITATIONS.md "warp end-step exile is a
+        # PHASE_END_STEP-entry sweep, NOT a CR-603.7 delayed
+        # trigger"): at the END step (step 169) Python pushes the
+        # WarpExileSelf delayed trigger onto the stack (response
+        # window) while Rust's deterministic phase-entry sweep has
+        # already moved the creature bf→exile_p1. Pre-existing
+        # documented divergence surfaced at scale, NOT the brief's
+        # atomic-cast hole. (boundary step + needle UNCHANGED — the
+        # pin's verdict was firing correctly, only its root-cause
+        # label was wrong.) The library_pX sub-variants are a
+        # SEPARATE shuffle-order axis (todo b3f7c0a9), not Class C.
         (1, 1, 169, "STATE_EQ", "Starbreach Whale",
-         "warp-EMISSION/S4b (warp-creature atomic resolve)"),
+         "warp-EXILE delayed-trigger-vs-deterministic-sweep "
+         "(SEARCH_LIMITATIONS documented divergence; NOT atomic-cast)"),
         # Class D — B1/C1 keystone: Rust legal_decisions offers a
         # plain CastSpell (no warp/kick/free/impending flags) Python's
         # raw legal_actions does not — the C1
