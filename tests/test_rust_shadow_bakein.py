@@ -604,29 +604,40 @@ def test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned():
 
 
 def test_g7_classe_closed_then_library_shuffle_order_next_frontier_surfaced():
-    """**G7 S6-Class-E closure → next-frontier-surfaced** companion
-    to ``test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned``.
+    """**G7 S6-Class-E closure → b3f7c0a9 library-shuffle-order closure
+    → life-total STATE_EQ next-frontier** companion to
+    ``test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned``.
 
-    The Class-E ordered-pool fix moves the arch1/s0 bake-in PAST the
-    original step-598 ``mana_pool_p1`` trip. Pre-existing axes that
-    were UPSTREAM-MASKED by Class E now surface — most notably the
-    already-tracked ``library_pX`` shuffle-order frontier (todo
-    ``b3f7c0a9``: search-then-shuffle parity — the per-engine
-    shuffle RNG is not lockstep; identical multiset, divergent
-    order). This pin asserts WHICH frontier surfaces next on the
-    canonical arch1/s0 driver so:
+    **STACKED-CLOSURE FLIP** — this pin originally asserted Class-E
+    closure surfaced the b3f7c0a9 library-shuffle-order axis @600.
+    With todo ``b3f7c0a9`` itself now CLOSED (gameplay-shuffle RNG-
+    lockstep in ``build_shadow_checked_adapter`` — both engines get
+    a fresh ``random.Random(shared_rng_seed)`` post-setup so the
+    in-game Fisher-Yates is byte-equal), the arch1/s0 bake-in moves
+    PAST the old @600 ``library_p1`` STATE_EQ to a NEW distinct
+    frontier @610: ``STATE_EQ ('life_p0', 16, 20)`` — a 4-life delta
+    on p0. Same shape as the S6 inventory's Class-C row at arch1/s1
+    @356 ``('life_p0', 17, 20)`` (the life-total STATE_EQ axis), just
+    a different seed/step. Pre-existing axis, unmasked — NOT
+    introduced — by stacking the b3f7c0a9 closure on top of Class-E.
 
-    1. We have a load-bearing regression guard: if a future change
-       silently un-shuffles or re-introduces Class E, THIS pin trips
-       loudly instead of the bake-in running for 4000 steps then
-       silently passing.
+    This pin asserts the layered closure-flip:
 
-    2. The frontier's identity is documented (it is the
-       library-shuffle-order axis, NOT a new mana-pool axis).
+    1. **Class-E STAYS CLOSED**: a trip at/before step 598 means the
+       ordered-pool ``ManaPool`` regressed. A trip at step 600 with a
+       ``library_p1`` shape means the b3f7c0a9 closure regressed.
 
-    3. The honest-stop is structurally enforced: Class E is closed,
-       library-shuffle-order is OUTSIDE this lane's scope (filed as
-       its own todo).
+    2. **b3f7c0a9 STAYS CLOSED**: ``library_pX`` MUST NOT appear in
+       the surfaced shape. The matched ``random.Random(seed)``
+       installation in ``build_shadow_checked_adapter`` keeps both
+       engines' shuffle MT-positions lockstep through all gameplay
+       shuffles.
+
+    3. **The life-total STATE_EQ next-frontier surfaces LOUDLY**: NOT
+       a mana_pool axis, NOT a library_pX axis, but a ``life_p0``
+       STATE_EQ — the same SoT-divergent damage/effect-application
+       axis the Class-C arch1/s1 row already pins (the next pre-
+       existing axis behind the b3f7c0a9 closure on this seed).
     """
     pytest.importorskip("mtg_bot_engine")
     from mtg_bot.parity import trajectory
@@ -661,34 +672,44 @@ def test_g7_classe_closed_then_library_shuffle_order_next_frontier_surfaced():
     # runs to terminal without tripping, an axis was masked rather
     # than surfaced (exactly what S6 exists to rule out).
     assert raised is not None, (
-        "Class-E closed but the bake-in ran to terminal without "
-        "surfacing the next frontier. An axis is masked. Re-walk the "
-        "compare_fields output for the post-598 steps to find what's "
-        "being silently dropped."
+        "Class-E + b3f7c0a9 closed but the bake-in ran to terminal "
+        "without surfacing the next frontier. An axis is masked. "
+        "Re-walk the compare_fields output for the post-610 steps to "
+        "find what's being silently dropped."
     )
     # (2) The next-frontier trip surfaces at the empirically-verified
-    # boundary — step 600. The +2 over 598 is the post-ActivateAbility-
-    # generic-drain step plus the post-resolve step where the
-    # search-and-shuffle effect lands on the library; the boundary
-    # is deterministic.
-    assert steps == 600, (
-        f"arch1/s0 Class-E closure: expected the next-frontier "
-        f"boundary step 600 (library-shuffle-order axis), got "
-        f"{steps}. Either Class E re-opened (would trip at 598) or "
-        f"a DIFFERENT new frontier surfaced. err={str(raised)[:300]!r}"
+    # post-stacked-closure boundary — step 610. The shift from 600 to
+    # 610 is the 10 additional bake-in steps the post-Lander game
+    # path now runs cleanly past the library_p1 STATE_EQ (closed by
+    # the b3f7c0a9 matched-rng fix) before tripping the life-total
+    # STATE_EQ. The boundary is deterministic.
+    assert steps == 610, (
+        f"arch1/s0 Class-E + b3f7c0a9 closure: expected the next-"
+        f"frontier boundary step 610 (life-total STATE_EQ axis), got "
+        f"{steps}. A trip at/before 598 means Class E regressed; a "
+        f"trip at exactly 600 with a `library_pX` shape means the "
+        f"b3f7c0a9 matched-rng fix regressed; any other step means a "
+        f"DIFFERENT new frontier surfaced. err={str(raised)[:300]!r}"
     )
-    # (3) The next-frontier signature: a STATE_EQ on `library_p1` —
-    # the search-then-shuffle library-order axis (todo `b3f7c0a9`).
-    # NOT a mana_pool_pX divergence (Class E is closed).
+    # (3) The next-frontier signature: a STATE_EQ on `life_p0` (the
+    # same life-total axis the Class-C arch1/s1 row already pins at
+    # @356 with the ``('life_p0', 17, 20)`` shape). NOT a mana_pool
+    # axis (Class E is closed) and NOT a library_pX axis (b3f7c0a9 is
+    # closed).
     assert raised.tripwire == "STATE_EQ", (
-        f"expected the library-shuffle-order STATE_EQ shape, got "
+        f"expected the life-total STATE_EQ shape, got "
         f"{raised.tripwire}: {str(raised)[:300]!r}"
     )
     msg = str(raised)
-    assert "library_p1" in msg, (
-        f"the surfaced next frontier MUST be the library_p1 shuffle-"
-        f"order axis (the already-tracked todo b3f7c0a9). Got: "
+    assert "life_p0" in msg, (
+        f"the surfaced next frontier MUST be the life_p0 STATE_EQ "
+        f"axis (same axis as the S6 Class-C inventory row). Got: "
         f"{msg[:400]!r}"
+    )
+    assert "library_p" not in msg, (
+        f"REGRESSION GUARD: the CLOSED b3f7c0a9 library-shuffle-order "
+        f"axis must NOT appear in the next-frontier shape "
+        f"(matched-rng fix regressed). Got: {msg[:400]!r}"
     )
     assert "mana_pool" not in msg, (
         f"REGRESSION GUARD: the CLOSED Class-E mana_pool axis must "
@@ -733,23 +754,43 @@ def test_g7_activateability_affordability_closed_then_next_frontier_surfaced():
     combat-blocker ``LEGAL_SET_EQ`` @344.
 
     **NEXT DISTINCT DIVERGENCE SURFACED (honest-stop — SEPARATE,
-    pre-existing, surfaced — NOT introduced — by closing frontier (a);
-    per-repro, NOT this lane's scope).** With (a) closed the arch2/s1
-    bake-in runs further and trips a DIFFERENT divergence; arch5/s0's
-    frontier (b) is held intact (distinct, STILL-OPEN follow-up):
+    pre-existing, surfaced — NOT introduced — by closing frontier (a)
+    + stacking the b3f7c0a9 closure; per-repro, NOT this lane's scope).**
+    With (a) AND b3f7c0a9 both closed the arch2/s1 bake-in runs further
+    still and trips a DIFFERENT divergence; arch5/s0's frontier (b) is
+    held intact (distinct, STILL-OPEN follow-up):
 
-    * **arch2/s1 — step 320:** a ``ShadowDivergenceError`` tripwire
-      ``STATE_EQ`` on ``('library_p1', ...)`` — a **library-ORDERING
-      divergence**. With ``ActivateAbility(121,0)`` (the Lander
-      "Search your library for a basic land card ... then **shuffle**"
-      ability) now applying byte-equal on both engines, the post-search
-      **shuffle produces a DIFFERENT library order** in Rust vs Python
-      (identical 50-card multiset, divergent order; the per-engine
-      shuffle RNG is not lockstep). The step-320 boundary + the
-      ``STATE_EQ``/``library_p1`` shape are deterministic across runs;
-      only the library *content order* varies run-to-run (that variance
-      IS the divergence). A NEW G7 frontier (search-then-shuffle
-      library-order parity) — distinct from (a) (closed) and from (b).
+    * **arch2/s1 — step 337 (b3f7c0a9 closure-flip):** the prior
+      next-frontier @320 was the b3f7c0a9 ``STATE_EQ`` on
+      ``('library_p1', ...)`` library-ORDERING divergence (the Lander
+      ActivateAbility's post-search shuffle produced a different
+      library order in Rust vs Python because the per-engine shuffle
+      RNG was not lockstep). With b3f7c0a9 closed (matched
+      ``random.Random(shared_rng_seed)`` installed on both engines in
+      ``build_shadow_checked_adapter`` so the in-game Fisher-Yates is
+      byte-equal), the run proceeds PAST 320 to step 337 where it
+      surfaces a ``LEGAL_SET_EQ`` divergence:
+      ``rust\\py=["('attacker', 9, False)", "('attacker', 9, True)"]``
+      ``py\\rust=["('pass',)"]``. This is the SAME pre-existing G1
+      stateless-Rust ``attack=False`` re-emission gap the canonical
+      arch5/s0 row surfaces at step 369: Rust's
+      ``apply_action(AttackerDecision, attack=false)`` is a
+      deliberate no-op (the G1 stateless-Rust / stateful-provider
+      split, ``state_ops_legal.rs`` ~1283-1294 /
+      ``state_ops_actions.rs:1356-1385``), and the
+      ``RustGameStateAdapter`` does not port Python's provider-side
+      ``_pending_attackers.pop(0)`` + ``_finalize_attacker_phase``
+      accumulation (``engine_adapter.py:1080-1108`` — the B3-S3
+      "sibling slice" the G1 design explicitly defers). On arch2/s1
+      this surfaces for ``attacker_id=9`` (a different creature than
+      arch5/s0's ``attacker_id=12`` and arch7/s0's ``attacker_id=120``
+      — the axis is the per-attacker decision shape, not a per-id
+      property). DISTINCT, pre-existing axis (zero provider
+      accumulation at the cycle-37 main pipeline), unmasked — NOT
+      introduced — by stacking the b3f7c0a9 closure on top of the
+      frontier-(a) closure. Filed as the next G7 follow-up (G1
+      provider-accumulation / B3-S3 port — already a tracked
+      sibling-owned lane).
 
     * **arch5/s0 — step 367 → CLOSED; new frontier @369:** frontier
       (b) = S6 Class B (the dominant 138/300
@@ -822,11 +863,16 @@ def test_g7_activateability_affordability_closed_then_next_frontier_surfaced():
     #   needle         — a substring uniquely characterizing it
     for (arch, seed, old_boundary, exp_step, kind, needle) in (
         # arch2/s1: frontier (a) (ActivateAbility apply pool-only
-        # raw-reject @318) CLOSED → next = a STATE_EQ library-ORDER
-        # divergence @320 (post-Lander-search shuffle order parity;
-        # the step + tripwire + field are deterministic, only the
-        # library content order varies run-to-run = the divergence).
-        (2, 1, 318, 320, "STATE_EQ", "('library_p1'"),
+        # raw-reject @318) CLOSED + b3f7c0a9 library-shuffle-order
+        # @320 CLOSED → next = a LEGAL_SET_EQ @337, the G1 stateless-
+        # Rust attack=False re-emission axis (same axis as arch5/s0
+        # @369; the cross-lane sibling-owned G1 provider-accumulation
+        # / B3-S3 port). attacker_id=9 is the obj id of the attacker
+        # the random walk reaches first on this seed (a vanilla
+        # creature in this archetype); the load-bearing identity is
+        # the ``py\rust=["('pass',)"]`` shape, not the specific
+        # attacker_id. The step + tripwire + shape are deterministic.
+        (2, 1, 318, 337, "LEGAL_SET_EQ", "py\\rust=[\"('pass',)\"]"),
         # arch5/s0: frontier (b) = S6 Class B (the dominant 138/300
         # ``('priority_player', 1, 0)`` STATE_EQ @367) CLOSED by the
         # coordinated G7 S6 Class-B option-β engine+adapter slice
