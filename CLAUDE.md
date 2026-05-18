@@ -392,8 +392,16 @@ Summary:
 
 Net-scale caveat: the shipped structured trunk is **small** (`emb_dim
 128, n_layers 2, hidden_dim 256`); structured-input-landed ≠
-large-trunk. Trunk capacity / depth-vs-data is open — see
-`docs/BENCHMARKING_FINDINGS.md` §2A.
+large-trunk. **Which scaling lever is binding is being decided
+empirically in [`docs/SCALING_DIAGNOSTICS.md`](docs/SCALING_DIAGNOSTICS.md)**
+(pre-registered, eval-gate-adjudicated). As of 2026-05-17: trunk
+**width is NOT indicated** (no overfit; value head still learning on
+the current trunk), **search depth is a VALIDATED gate-promotable
+lever** (v5 is depth-limited: `v5@400/@800` beat `v5@200` 66 %/72 %,
+Wilson-LB ≥ 0.525, monotone), and the more-epochs value-head lever is
+under test. Read that doc before any width/depth/data scaling
+decision; perf/economics cross-ref `docs/BENCHMARKING_FINDINGS.md`
+§1/§2/§2A.
 
 Both belief outputs feed importance-sampled PIMC determinizations
 (ReBeL / DeepStack pattern).
