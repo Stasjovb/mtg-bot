@@ -242,6 +242,39 @@ def test_s6_complete_frontier_inventory(arch, seed, axis_class):
     )
 
 
+def test_s6_classc_warp_exile_counter_preserved_arch14_seed4_closed():
+    """S6 scale-verify v2 Class-C residual — Germinating Wurm warp-exile
+    with a +1/+1 counter (arch=14 / seed=4) is CLOSED.
+
+    Pre-fix: Rust's ``Effect::WarpExileSelf`` arm zeroed
+    ``obj.counters`` at the CR-400.7 reset, deliberately diverging
+    from Python's ``WarpExileSelf.resolve`` (which routes through
+    ``turn.move_off_battlefield`` — R77-CFI1: counters preserved
+    through zone-change). The S6 scale-verify v2 surfaced this as a
+    ``STATE_EQ::fields:Germinating Wurm,exile_p1`` divergence with
+    Python's exile_p1 tuple net counters = 1 and Rust's = 0.
+
+    Post-fix (this lane): the ``obj.counters = 0;`` line in
+    ``state_ops_resolve.rs::Effect::WarpExileSelf`` is removed, in
+    line with the documented R77-CFI1 fix-pattern that closed the
+    other arms with the same stray reset. arch14/seed4 now runs to
+    natural terminal (~2754 steps vs the prior trip at step 2371).
+    """
+    pytest.importorskip("mtg_bot_engine")
+    steps, raised, raw_exc = _drive_to_trip(14, 4)
+    assert raised is None, (
+        f"arch14/s4 (Class-C warp-exile counter-preserved): expected "
+        f"CLEAN run to terminal post Effect::WarpExileSelf counter-"
+        f"preservation fix. Tripwire fired at step {steps}: "
+        f"{str(raised)[:400]!r}."
+    )
+    assert raw_exc is None, (
+        f"arch14/s4 (Class-C warp-exile counter-preserved): expected "
+        f"CLEAN run to terminal. Raw exception at step {steps}: "
+        f"{raw_exc!r}."
+    )
+
+
 def test_s6_no_new_masking_negative_controls_intact():
     """NO-NEW-MASKING (the load-bearing S6 verdict). The bake-in's
     ``_DOCUMENTED_ACCEPTED_FIELDS`` is EMPTY (no field carve-out), and
