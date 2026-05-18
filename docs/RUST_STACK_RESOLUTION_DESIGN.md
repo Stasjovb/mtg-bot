@@ -469,6 +469,17 @@ cast internals, so it is UNMOVED by construction; any byte-shift in a
 
 ### Slice S5 — triggered-abilities-on-stack (in-scope confirmation)
 
+> **S5 SPELL-STACK SOURCE-ZONE RE-HOMING — dedicated owner doc.** The
+> post-auto-tap bake-in residual `hand_p0` divergence (Rust keeps the
+> cast spell hand-resident while on the stack; Python removes it +
+> `card.zone=Zone.STACK`) is scoped in
+> **`docs/RUST_SPELL_STACK_SOURCE_ZONE_DESIGN.md`**. Verdict there:
+> NOT cleanly sliceable — ONE irreducibly-atomic Rust core lane (S5a,
+> Option β stack-object store) + thin post-core verify/cleanup
+> (S5b/S5c); S5a is the hard prerequisite for S7 (CE5 removal). That
+> doc is the single owner for the implementation lane; read it before
+> S5a/S7.
+
 - **Scope.** Largely **already present** — `resolve_top_of_stack`'s
   TriggeredAbility branch (`state_ops_resolve.rs:12028-12090`) +
   `push_triggered_ability` + the ETB/DIES/LEAVES drains already model

@@ -6579,8 +6579,14 @@ gate signal (correctly loud). The proper closure is parity-positive
 > LEGAL_SET_EQ C1/S3-region axes): `docs/G7_MIDGAME_STATEEQ_VERIFY_
 > FINDING.md`. **S5 follow-up owner:** the spell-stack-source-zone
 > reconciliation is the next owed slice for the non-warp-creature-
-> deck frontier (`RUST_STACK_RESOLUTION_DESIGN.md` S5 section). A
-> `.pyd` rebuild on `main` is owed (orchestrator's).
+> deck frontier — fully verify-first scoped in
+> **`docs/RUST_SPELL_STACK_SOURCE_ZONE_DESIGN.md`** (decision: ONE
+> irreducibly-atomic Rust core lane S5a, Option β stack-object store,
+> + thin verify slices S5b/S5c; S5a is the hard prerequisite for S7
+> CE5-removal; ships with a baseline-rebase protocol). That doc is
+> the single owner for the implementation lane;
+> `RUST_STACK_RESOLUTION_DESIGN.md` S5 points to it. A `.pyd` rebuild
+> on `main` is owed (orchestrator's).
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both
