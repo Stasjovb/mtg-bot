@@ -12092,6 +12092,86 @@ fn apply_effect(
                 Arc::make_mut(&mut player.hand).push(obj);
             }
         }
+        // **G7 Class-C delayed-trigger port (round-78).** The
+        // `WarpExileSelf` delayed triggered ability resolves: re-look
+        // up the warp creature on the battlefield by `source_obj_id`
+        // and move it to its owner's exile with the CR-400.7 reset.
+        // If the creature is no longer on the battlefield (countered
+        // / died / bounced / exiled between cast and end-step
+        // resolve), this is a silent no-op per CR 603.6c — Python's
+        // `WarpExileSelf.resolve` (`effects/generic/exile.py:150-172`)
+        // does the same `if obj is None: return`.
+        //
+        // **Scan both players' battlefields** by id. The warp
+        // creature's controller is the source's owner in the
+        // first-slice; scanning both seats keeps the resolve robust
+        // against future control-change effects between cast and
+        // end-step.
+        //
+        // **Reset shape** mirrors `Effect::ExileTarget`'s reset shape
+        // above + Python's `WarpExileSelf.resolve` body: damage = 0,
+        // tapped = false, attached_to = None, exiled_with_source =
+        // None, counters = 0 (Python's `move_off_battlefield` resets
+        // damage/tapped/attached_to but does NOT zero counters; we
+        // zero them here to match the existing `Effect::ExileTarget`
+        // arm above — Phase-1 warp cards never carry counters in the
+        // bench so this is byte-equal to the Python behavior for the
+        // admitted set, and forward-correct for any future warp
+        // creature that does). `summoning_sick` is NOT cleared
+        // (CE13). `warp_exile_pending` is cleared (the cast-time
+        // marker has discharged its obligation). `warped = true` if
+        // non-token — same gate as the deterministic-sweep arm and
+        // Python's `if not obj.printing.is_token: obj.warped = True`.
+        Effect::WarpExileSelf => {
+            let mut found_at: Option<(usize, usize)> = None;
+            for (pidx, player) in state.players.iter().enumerate() {
+                if let Some(idx) = player
+                    .battlefield
+                    .iter()
+                    .position(|o| o.id == source_obj_id)
+                {
+                    found_at = Some((pidx, idx));
+                    break;
+                }
+            }
+            let Some((pidx, idx)) = found_at else {
+                // CR 603.6c — the trigger fired but has no permanent
+                // to act on; silent no-op.
+                return Ok(());
+            };
+            let player = &mut state.players[pidx];
+            let bf: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
+            let mut obj = bf.remove(idx);
+            // CR 400.7 reset — mirrors `Effect::ExileTarget` arm above
+            // and Python's `turn.move_off_battlefield` body.
+            obj.zone = ZONE_EXILE;
+            obj.tapped = false;
+            obj.damage = 0;
+            obj.counters = 0;
+            obj.attached_to = None;
+            obj.exiled_with_source = None;
+            obj.warp_exile_pending = false;
+            // Python's `WarpExileSelf.resolve` sets `obj.warped = True`
+            // only for non-tokens; Phase-1 warp cards are never tokens
+            // but the gate keeps this forward-correct.
+            let is_token = state
+                .registry
+                .lookup(obj.printing_id)
+                .map(|p| p.supertypes.iter().any(|s| s == "Token"))
+                .unwrap_or(false);
+            if !is_token {
+                obj.warped = true;
+            }
+            let (printing_id, leaving_obj_id) = (obj.printing_id, obj.id);
+            Arc::make_mut(&mut state.players[pidx].exile).push(obj);
+            // Round-29 Void LTB tracking: exile is a battlefield-exit.
+            mark_left_battlefield_if_nonland(state, printing_id);
+            // LEAVES + token-cease dispatch, same pattern as
+            // `Effect::ExileTarget` arm: queue, drain at the tail of
+            // `resolve_top_of_stack`.
+            state.pending_leaves_dispatches.push(leaving_obj_id);
+            crate::state_ops_zones::queue_token_cease(state, leaving_obj_id);
+        }
     }
     Ok(())
 }

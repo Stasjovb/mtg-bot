@@ -1246,6 +1246,42 @@ pub struct GameState {
     /// to its post-resolve destination (bf / graveyard) byte-equal to
     /// Python's `put_into_battlefield`.
     pub stack_objects: Vec<GameObject>,
+    /// **G7 Class-C delayed-trigger port (round-78).** Pending delayed
+    /// triggered abilities (CR 603.7), each scheduled at the time
+    /// some earlier resolve/cast committed to firing a trigger at a
+    /// future end step. Mirrors Python's `GameState.delayed_triggers:
+    /// list[dict]` (`src/mtg_bot/game.py:2629`). Each entry carries
+    /// `fire_at_turn`, `controller_id`, `source_id`, and the
+    /// `Effect` to push.
+    ///
+    /// **Scanned at START of every END step** by
+    /// `state_ops_steps.rs::run_delayed_end_step_triggers` — every
+    /// entry whose `fire_at_turn == state.turn_number` and
+    /// `controller_id == state.active_player` is converted into a
+    /// real triggered ability on the stack via
+    /// `push_triggered_ability(source_id, controller_id,
+    /// ability_index=0, effect, once_per_turn=false)` and removed
+    /// from the Vec. Non-matching entries (e.g. an opponent's-turn
+    /// warp scheduled for the next end step) ride.
+    ///
+    /// **First Rust producer:** `cast_creature_warp` schedules
+    /// `WarpExileSelf` here at warp-cast time (replacing the pre-port
+    /// stamp-`warp_exile_pending`-and-sweep-at-end-step path). The
+    /// Vec is generalized to the full `(fire_at_turn, controller_id,
+    /// source_id, effect)` shape Python uses so additional Python
+    /// delayed-trigger producers (`SacrificeSourceDelayed`,
+    /// `RemoveChargeCountersFromSourceDelayed`,
+    /// `ReturnExiledPermanentToOwnerTapped`) can be ported in their
+    /// own slices without re-shaping this field.
+    ///
+    /// **Serialization / fingerprint.** Empty by default (almost
+    /// always for non-warp game states); ride the canonical Clone
+    /// path. NOT in the per-object fingerprint tuple. The fingerprint
+    /// emits the Vec's contents only when non-empty (back-compat:
+    /// pre-port baselines pinned with an empty Vec stay byte-equal),
+    /// mirroring `pending_decisions`'s "serialize only when
+    /// non-empty" shape.
+    pub delayed_triggers: Vec<crate::cards::DelayedTrigger>,
     /// Count of consecutive `pass_priority` invocations since the last
     /// non-pass mutation. Round-27 G3 closure: needed by the
     /// `complete_step_via_priority_round` composer to detect "both
@@ -1753,6 +1789,12 @@ impl Clone for GameState {
             // source so resolve still finds it). CoW-cheap — a Vec of
             // GameObject; almost always 0 or 1 entries.
             stack_objects: self.stack_objects.clone(),
+            // G7 Class-C delayed-trigger port: a determinized clone
+            // must keep pending delayed triggers so the end-step push
+            // still fires on the clone. CoW-cheap — Vec<DelayedTrigger>
+            // typically empty or 1-2 entries (one per warp creature
+            // pending exile). Same lifecycle as `pending_decisions`.
+            delayed_triggers: self.delayed_triggers.clone(),
             consecutive_passes: self.consecutive_passes,
             permanent_left_battlefield_this_turn: self.permanent_left_battlefield_this_turn,
             spell_warped_this_turn: self.spell_warped_this_turn,
@@ -2276,6 +2318,11 @@ pub fn make_synthetic_state(
         // filled by a cast pushing the spell hand → here, drained by
         // `move_source_post_resolve` at resolution.
         stack_objects: Vec::new(),
+        // G7 Class-C delayed-trigger port: empty at construction;
+        // populated by warp-cast (`cast_creature_warp`) scheduling
+        // WarpExileSelf for the next end step, drained at PHASE_END_STEP
+        // entry by `run_delayed_end_step_triggers`.
+        delayed_triggers: Vec::new(),
         consecutive_passes: 0,
         permanent_left_battlefield_this_turn: false,
         spell_warped_this_turn: false,

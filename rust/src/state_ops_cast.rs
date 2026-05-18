@@ -1186,6 +1186,30 @@ impl GameState {
         {
             obj.warp_exile_pending = true;
         }
+        // **G7 Class-C delayed-trigger port (round-78).** Schedule the
+        // `WarpExileSelf` delayed triggered ability for the warp
+        // creature's controller's next END step. Mirrors Python's
+        // `actions.py:1550-1559` cast-time schedule. Replaces the
+        // round-63 deterministic-sweep path: the `warp_exile_pending`
+        // flag above is now the cast-time MARKER (mirroring Python's
+        // `cast_via_warp`) that the resolver (`Effect::WarpExileSelf`)
+        // clears on resolve; the actual end-step bf→exile move
+        // happens through the stack now (response window, CR 603.7).
+        //
+        // `offset = 0` iff `player_id == active_player`: a warp cast
+        // on the caster's own turn (sorcery-speed) fires the trigger
+        // at this turn's end step. `offset = 1` for an instant-speed
+        // warp on the opponent's turn (no Phase-1 cards admit this,
+        // but the offset shape is generalized for forward-
+        // correctness). Same shape as Python's `offset = 0 if
+        // state.active_player().id == player_id else 1`.
+        let offset: u32 = if player_id == self.active_player { 0 } else { 1 };
+        self.delayed_triggers.push(crate::cards::DelayedTrigger {
+            fire_at_turn: self.turn_number.saturating_add(offset),
+            controller_id: player_id,
+            source_id: obj_id,
+            effect: crate::cards::Effect::WarpExileSelf,
+        });
         // Dispatch Event::Cast NOW — after the spell is stack-
         // resident (S5a) + the cast-time riders commit, before the
         // StackItem push. The subject is in `stack_objects`; the

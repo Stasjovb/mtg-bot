@@ -400,6 +400,9 @@ pub fn make_state(
         // (Option β). Same lifecycle as `stack`: filled by a cast,
         // drained by `move_source_post_resolve` at resolution.
         stack_objects: Vec::new(),
+        // G7 Class-C delayed-trigger port: empty at game start; warp
+        // casts schedule WarpExileSelf entries; end-step entry drains.
+        delayed_triggers: Vec::new(),
         consecutive_passes: 0,
         permanent_left_battlefield_this_turn: false,
         spell_warped_this_turn: false,

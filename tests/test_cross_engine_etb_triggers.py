@@ -19971,16 +19971,23 @@ def test_r63_warp_end_step_sweep_exiles_with_warped_marker():
     assert any(o["printing_name"] == "WarpBeast"
                for o in rs.battlefield_snapshot())
     rs.set_phase(9)        # MAIN2
-    rs.advance_phase()     # → END_STEP (phase 10): warp-exile sweep
+    rs.advance_phase()     # → END_STEP (phase 10): WarpExileSelf onto stack
     assert rs.current_phase() == 10
+    # **G7 Class-C delayed-trigger port (round-78).** END_STEP entry
+    # pushes WarpExileSelf onto the stack (CR 603.7 response window);
+    # resolve drains it to exile. Pre-port this was an atomic
+    # phase-entry sweep; the new path matches Python's
+    # `turn.run_delayed_end_step_triggers` semantics.
+    rs.resolve_top_of_stack()  # WarpExileSelf resolves → bf → exile.
     bf = [o for o in rs.battlefield_snapshot()
           if o["printing_name"] == "WarpBeast"]
     ex = [o for o in rs.exile_snapshot(0)
           if o["printing_name"] == "WarpBeast"]
     assert bf == [], "WarpBeast must have left the battlefield"
     assert len(ex) == 1, (
-        f"WarpBeast must be in p0 exile after the END-step sweep; "
-        f"got exile={[o['printing_name'] for o in rs.exile_snapshot(0)]}")
+        f"WarpBeast must be in p0 exile after the delayed-trigger "
+        f"resolves; got exile="
+        f"{[o['printing_name'] for o in rs.exile_snapshot(0)]}")
 
 
 def test_r63_warp_exile_recast_pays_normal_cost_clears_warped():
@@ -20004,7 +20011,8 @@ def test_r63_warp_exile_recast_pays_normal_cost_clears_warped():
     # object) BEFORE the end-step sweep exiles it. S1 closure-flip.
     rs.resolve_top_of_stack()
     rs.set_phase(9)
-    rs.advance_phase()  # → END_STEP exiles it
+    rs.advance_phase()  # → END_STEP pushes WarpExileSelf onto the stack
+    rs.resolve_top_of_stack()  # delayed trigger resolves → bf → exile
     assert any(o["printing_name"] == "WarpBeast"
                for o in rs.exile_snapshot(0))
     rs.set_phase(3)  # a later MAIN1
@@ -20249,9 +20257,16 @@ def test_r63_warp_bridge_end_step_exile_and_recast_byte_equal():
         py, rs,
         {"kind": "cast_spell", "card_id": int(sw.id),
          "use_warp": True}).divergences
-    # Advance to END step on both — the warp-exile sweep fires; adv()
-    # asserts byte-equal at every phase boundary INCLUDING END.
-    adv(7)  # MAIN1 → END
+    # **G7 Class-C delayed-trigger port (round-78).** Advance to END
+    # step on both — END_STEP entry pushes WarpExileSelf onto the
+    # stack (CR-603.7 delayed trigger); resolution drains it to exile.
+    # adv() asserts byte-equal at every phase boundary, including END.
+    adv(7)  # MAIN1 → END (WarpExileSelf onto the stack on both)
+    from mtg_bot.parity.cross_engine import (
+        resolve_top_of_stack_python, resolve_top_of_stack_rust,
+    )
+    resolve_top_of_stack_python(py, floor=0)
+    resolve_top_of_stack_rust(rs, floor=0)
     py_ex = sorted(o.printing.name for o in py.players[ai].exile)
     rs_ex = sorted(o["printing_name"] for o in rs.exile_snapshot(ai))
     assert py_ex == rs_ex == ["SynthWarp"], (
@@ -21679,9 +21694,12 @@ def test_r72_warp_phase2_hand_cast_pays_warp_cost_and_life():
     bf = [o for o in rs.battlefield_snapshot()
           if o["printing_name"] == "TLC"]
     assert len(bf) == 1, "TLC must be on the battlefield post-resolve"
-    # end-step sweep proves warp_exile_pending was stamped.
+    # **G7 Class-C delayed-trigger port (round-78).** END step push +
+    # resolve drains the WarpExileSelf trigger that
+    # `cast_creature_warp` scheduled into `state.delayed_triggers`.
     rs.set_phase(9)
-    rs.advance_phase()  # → END_STEP
+    rs.advance_phase()  # → END_STEP: WarpExileSelf onto the stack
+    rs.resolve_top_of_stack()  # delayed trigger resolves → bf → exile
     assert [o for o in rs.battlefield_snapshot()
             if o["printing_name"] == "TLC"] == []
     assert len([o for o in rs.exile_snapshot(0)
@@ -21727,14 +21745,20 @@ def test_r72_warp_phase2_graveyard_cast_full_then_exile_then_recast():
     bf = [o for o in rs.battlefield_snapshot()
           if o["printing_name"] == "TLC"]
     assert len(bf) == 1, "TLC must be on the battlefield post-resolve"
-    # End step → exile (Phase-1 sweep reused, graveyard origin).
+    # **G7 Class-C delayed-trigger port (round-78).** End step pushes
+    # WarpExileSelf onto the stack; resolve drains it. Graveyard-cast
+    # warp creatures schedule the SAME delayed trigger as hand-cast
+    # (Python: `actions.py:1550` is shared; Rust:
+    # `cast_creature_warp` `delayed_triggers.push` runs in both arms).
     rs.set_phase(9)
-    rs.advance_phase()  # → END_STEP
+    rs.advance_phase()  # → END_STEP: WarpExileSelf onto the stack
+    rs.resolve_top_of_stack()  # delayed trigger resolves → bf → exile
     ex = [o for o in rs.exile_snapshot(0)
           if o["printing_name"] == "TLC"]
     assert len(ex) == 1, (
-        f"graveyard-warp-cast TLC must be exiled by the SAME end-step "
-        f"sweep; exile={[o['printing_name'] for o in rs.exile_snapshot(0)]}")
+        f"graveyard-warp-cast TLC must be exiled by the SAME delayed "
+        f"trigger; exile="
+        f"{[o['printing_name'] for o in rs.exile_snapshot(0)]}")
     assert [o for o in rs.battlefield_snapshot()
             if o["printing_name"] == "TLC"] == []
     # Recast from exile on a later turn: BASE use_warp=False at the
@@ -22148,15 +22172,32 @@ def test_g7s4_warp_creature_cast_is_stack_then_resolve_not_atomic():
     assert bf[0].get("summoning_sick") is True, (
         "S4: summoning_sick stamped at RESOLVE (move_source_post_"
         "resolve), not cast — byte-mirrors Python put_into_battlefield")
-    # (2 cont.) warp_exile_pending rode the source object through
-    # resolve onto the bf object — the end-step sweep keys off it.
+    # (2 cont.) **G7 Class-C delayed-trigger port (round-78).** The
+    # warp-EXILE obligation now flows through the stack: at
+    # PHASE_END_STEP entry, the new
+    # `state_ops_steps.rs::run_delayed_end_step_triggers` pushes
+    # `Effect::WarpExileSelf` onto the stack (mirroring Python's
+    # CR-603.7 delayed trigger). The bf→exile move happens at the
+    # NEXT `resolve_top_of_stack` — NOT atomically on
+    # `advance_phase` entry (pre-port behavior, since replaced).
     rs.set_phase(9)
-    rs.advance_phase()  # → END_STEP: warp-exile sweep
+    rs.advance_phase()  # → END_STEP: WarpExileSelf onto the stack.
+    # The warp creature is STILL on the bf — the trigger has not yet
+    # resolved (this is the byte-equal-Python on-stack window).
+    assert len([o for o in rs.battlefield_snapshot()
+                if o["printing_name"] == "WarpBeast"]) == 1, (
+        "S4 + Class-C port: end-step pushes WarpExileSelf onto the "
+        "stack; the warp creature stays on the bf until the trigger "
+        "RESOLVES (CR 603.7 response window).")
+    assert rs.is_stack_empty() is False, (
+        "Class-C port: end-step pushed the WarpExileSelf delayed "
+        "trigger onto the stack.")
+    rs.resolve_top_of_stack()  # WarpExileSelf resolves → bf → exile.
     assert [o for o in rs.battlefield_snapshot()
             if o["printing_name"] == "WarpBeast"] == [], (
-        "S4: the cast-time warp_exile_pending rode the source object "
-        "through resolution onto the bf object — sweep exiled it "
-        "(the design's key risk, resolved structurally)")
+        "S4 + Class-C port: WarpExileSelf resolution exiles the warp "
+        "creature (the cast-time warp_exile_pending marker rode the "
+        "object through resolve to bf and the trigger drains it now).")
     assert len([o for o in rs.exile_snapshot(0)
                 if o["printing_name"] == "WarpBeast"]) == 1
 

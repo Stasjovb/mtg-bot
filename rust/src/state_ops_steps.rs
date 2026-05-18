@@ -80,9 +80,7 @@
 //! before walking through the draw step.
 
 use crate::state::{GameObject, GameState, ManaPool};
-use crate::state_ops_zones::{
-    mark_left_battlefield_if_nonland, ZONE_EXILE, ZONE_GRAVEYARD, ZONE_HAND,
-};
+use crate::state_ops_zones::{ZONE_GRAVEYARD, ZONE_HAND};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -337,96 +335,115 @@ fn empty_all_mana_pools_inline(state: &mut GameState) {
     }
 }
 
-/// **Phase-1 warp substrate (round-63).** At the beginning of the
-/// END step, exile every battlefield permanent the active player
-/// controls that was warp-cast (`warp_exile_pending`). Mirrors
-/// Python's `WarpExileSelf` delayed trigger fired by
-/// `run_delayed_end_step_triggers` (turn.py:773) — Rust's no-stack
-/// cast model makes this a deterministic phase-entry sweep instead
-/// of a stack-pushed delayed triggered ability (documented
-/// simplification, `docs/SEARCH_LIMITATIONS.md`). The exiled
-/// permanent gets `warped=true` so the legal emitter offers the
-/// exile-recast at normal cost on a later turn; `warp_exile_pending`
-/// is cleared. CR 400.7 — the exiled card is a brand-new object:
-/// reset the same per-object state the `Effect::ExileTarget` arm
-/// resets (tapped / damage / counters / attached_to /
-/// exiled_with_source). `summoning_sick` is intentionally NOT reset
-/// (CE13 — Python's `move_off_battlefield` omits the clear; sickness
-/// is battlefield-only state). Round-29 Void LTB tracking: a
-/// non-land permanent leaving the battlefield flips
-/// `permanent_left_battlefield_this_turn` (mirrors Python
-/// `move_off_battlefield` turn.py:163-164). No LEAVES/DIES dispatch
-/// is wired here: exile is not a graveyard transit (no DIES per CR),
-/// and no bridge-admitted card carries a LEAVES trigger (the warp
-/// cards have `triggered_abilities=()`; `_SAFE_TRIGGERS` has no
-/// `leaves_battlefield` event) — the documented Phase-1
-/// simplification covers this (`SEARCH_LIMITATIONS.md`). CoW: skip
-/// the `Arc::make_mut` clone when no permanent is warp-pending.
-fn warp_exile_sweep_on_end_step(state: &mut GameState) {
-    let active = state.active_player as usize;
-    if state.players[active]
-        .battlefield
-        .iter()
-        .all(|o| !o.warp_exile_pending)
-    {
-        return;
+/// **G7 Class-C delayed-trigger port (round-78).** At the beginning
+/// of the END step, scan `state.delayed_triggers` for entries
+/// matching the active player's end step (`fire_at_turn ==
+/// state.turn_number && controller_id == state.active_player`) and
+/// push each as a real `StackItem::TriggeredAbility` via
+/// `push_triggered_ability`. Matching entries are REMOVED from the
+/// Vec; non-matching entries (e.g. an opponent-turn warp scheduled
+/// for the next end step) ride.
+///
+/// **Mirrors Python's `turn.run_delayed_end_step_triggers`**
+/// (`src/mtg_bot/turn.py:773-849`): same `(fire_at_turn,
+/// controller_id)` match, same FIFO scheduling order, same
+/// `push_triggered_ability` route onto the stack so players get
+/// priority + the standard `resolve_top_of_stack` path drains the
+/// trigger. **This replaces the pre-port deterministic
+/// `warp_exile_sweep_on_end_step` (round-63)** — Rust now matches
+/// Python's CR 603.7 semantics (the warp creature's exile is a
+/// respondable stack object, NOT an atomic phase-entry mutation).
+/// The G7 Class-C bake-in axis closes here.
+///
+/// **Token-source / missing-source semantics.** Python's
+/// `run_delayed_end_step_triggers` skips entries whose `source_id`
+/// no longer resolves to any GameObject (a token that ceased to
+/// exist before fire time; `turn.py:840-848`) — silent consume.
+/// Rust mirrors that: if no `state.players[*].{hand,library,bf,gy,
+/// exile}` object carries the id, the entry is dropped without
+/// pushing. A bf-resident source flows through the normal
+/// `push_triggered_ability` path.
+///
+/// **CoW.** Skip the work entirely when the Vec has no matching
+/// entry (common case for non-warp turns).
+fn run_delayed_end_step_triggers(state: &mut GameState) -> PyResult<()> {
+    if state.delayed_triggers.is_empty() {
+        return Ok(());
     }
-    // Partition: collect the warp-pending permanents off the
-    // battlefield, push them to exile with the CR-400.7 reset.
-    let player = &mut state.players[active];
-    let bf: &mut Vec<GameObject> = Arc::make_mut(&mut player.battlefield);
-    let mut exiled: Vec<GameObject> = Vec::new();
-    let mut i = 0;
-    while i < bf.len() {
-        if bf[i].warp_exile_pending {
-            let mut obj = bf.remove(i);
-            // CR 400.7 / parity with Python's `move_off_battlefield`
-            // (turn.py:231-240): reset damage / tapped / attached_to.
-            // Python does NOT zero +1/+1 `counters` here and does NOT
-            // clear `summoning_sick` (CE13) — match the source of
-            // truth exactly so the per-object fingerprint 8-tuple is
-            // byte-equal across engines for the warp-exile path
-            // (`counters` IS in the tuple; the Phase-1 cards never
-            // carry +1/+1 counters in the bench, but matching
-            // Python's actual behavior keeps the path forward-
-            // correct, not just coincidentally bit-equal).
-            obj.zone = ZONE_EXILE;
-            obj.tapped = false;
-            obj.damage = 0;
-            obj.attached_to = None;
-            obj.exiled_with_source = None;
-            obj.warp_exile_pending = false;
-            // Python's WarpExileSelf sets obj.warped = True only for
-            // non-tokens (effects/generic/exile.py:170-171). Phase-1
-            // warp cards are never tokens; gate on the printing for
-            // forward-correctness.
-            let is_token = state
-                .registry
-                .lookup(obj.printing_id)
-                .map(|p| {
-                    p.supertypes.iter().any(|s| s == "Token")
-                })
-                .unwrap_or(false);
-            if !is_token {
-                obj.warped = true;
-            }
-            exiled.push(obj);
+    let turn = state.turn_number;
+    let active = state.active_player;
+    let any_matches = state
+        .delayed_triggers
+        .iter()
+        .any(|e| e.fire_at_turn == turn && e.controller_id == active);
+    if !any_matches {
+        return Ok(());
+    }
+    let mut to_push: Vec<crate::cards::DelayedTrigger> =
+        Vec::with_capacity(state.delayed_triggers.len());
+    let mut remaining: Vec<crate::cards::DelayedTrigger> =
+        Vec::with_capacity(state.delayed_triggers.len());
+    for entry in state.delayed_triggers.drain(..) {
+        if entry.fire_at_turn == turn && entry.controller_id == active {
+            to_push.push(entry);
         } else {
-            i += 1;
+            remaining.push(entry);
         }
     }
-    let exile: &mut Vec<GameObject> = Arc::make_mut(&mut player.exile);
-    let mut leaving_printing_ids: Vec<u32> = Vec::with_capacity(exiled.len());
-    for obj in exiled {
-        leaving_printing_ids.push(obj.printing_id);
-        exile.push(obj);
+    state.delayed_triggers = remaining;
+    for entry in to_push {
+        // Source-existence check, parallel to Python's `source =
+        // _find_object_by_id(state, source_id); if source is None:
+        // continue` (`turn.py:840-848`). CR 603.6c — the trigger
+        // still "fires" but has no permanent to act on; drop the
+        // entry without pushing. Scan all 5 zones on both players +
+        // `stack_objects` for full source-id coverage.
+        let mut found = false;
+        'outer: for player in state.players.iter() {
+            for zone in [
+                &player.hand,
+                &player.library,
+                &player.battlefield,
+                &player.graveyard,
+                &player.exile,
+            ] {
+                if zone.iter().any(|o| o.id == entry.source_id) {
+                    found = true;
+                    break 'outer;
+                }
+            }
+        }
+        if !found
+            && !state
+                .stack_objects
+                .iter()
+                .any(|o| o.id == entry.source_id)
+        {
+            // Source ceased to exist before fire time — silent
+            // consume (entry was already drained out of
+            // `delayed_triggers` above).
+            continue;
+        }
+        crate::state_ops_resolve::push_triggered_ability(
+            state,
+            entry.source_id,
+            entry.controller_id,
+            // Synthetic ability index for delayed triggers. Rust
+            // does not have a separate triggered-ability registry
+            // for delayed triggers (they don't live on a printing),
+            // so the `ability_index` slot is a sentinel 0. The
+            // once-per-turn ledger is keyed on
+            // `(source_id, ability_index)` — `once_per_turn=false`
+            // keeps this trigger outside the ledger entirely,
+            // matching Python's delayed-trigger behavior (a
+            // delayed trigger fires unconditionally; it is not
+            // subject to once-per-turn gating).
+            0,
+            entry.effect.clone(),
+            false,
+        )?;
     }
-    // Round-29 Void LTB tracking: each non-land bf-exit flips the
-    // flag. Done AFTER the player-mutable borrow drops (the helper
-    // re-borrows `state.registry`).
-    for pid in leaving_printing_ids {
-        mark_left_battlefield_if_nonland(state, pid);
-    }
+    Ok(())
 }
 
 #[pymethods]
@@ -492,7 +509,7 @@ impl GameState {
     /// Step (1c)'s cleanup_step runs on the OLD active player (the
     /// one whose turn is ending) because the active-player swap
     /// doesn't happen until the CLEANUP -> UNTAP wrap in step (2b).
-    fn advance_phase(&mut self) -> u8 {
+    fn advance_phase(&mut self) -> PyResult<u8> {
         // CR 106.4 — exit-of-old-phase side effect. Empty both
         // players' mana pools BEFORE the phase counter ticks. Fires
         // on every advance_phase call; mirrors the source-of-truth
@@ -557,26 +574,22 @@ impl GameState {
             draw_card_inline(self, self.active_player);
         }
         if self.phase == PHASE_END_STEP {
-            // **Phase-1 warp substrate (round-63).** At the beginning
-            // of the END step, exile every battlefield permanent the
-            // active player controls that was warp-cast
-            // (`warp_exile_pending`). Mirrors Python's
-            // `WarpExileSelf` delayed trigger fired by
-            // `run_delayed_end_step_triggers` (turn.py:773) with
-            // `offset = 0` for sorcery-speed warps cast on the
-            // caster's own turn — both Phase-1 cards are sorcery-
-            // speed Artifact Creatures, so the warp cast and the
-            // exile happen on the same turn's end step. Active player
-            // here is the player whose turn it is (the turn wrap is
-            // on the CLEANUP -> UNTAP advance, not END_STEP entry).
-            // Rust's no-stack cast model makes this a deterministic
-            // phase-entry sweep instead of a stack-pushed delayed
-            // triggered ability — documented simplification, see
-            // `docs/SEARCH_LIMITATIONS.md`. This END_STEP-entry hook
-            // is new (only UNTAP / DRAW / CLEANUP had entry hooks
-            // pre-Phase-1); it mirrors the PHASE_CLEANUP-entry hook
-            // shape directly below.
-            warp_exile_sweep_on_end_step(self);
+            // **G7 Class-C delayed-trigger port (round-78).** At the
+            // beginning of the END step, drain matching delayed
+            // triggers from `state.delayed_triggers` onto the stack
+            // via `push_triggered_ability` — including any
+            // `WarpExileSelf` scheduled at warp-cast time. Replaces
+            // the round-63 deterministic
+            // `warp_exile_sweep_on_end_step` (which moved the warp
+            // creature bf→exile atomically at PHASE_END_STEP entry,
+            // skipping the CR-603.7 stack-pushed response window).
+            // Now Rust matches Python's
+            // `turn.run_delayed_end_step_triggers` semantics: the
+            // warp-exile obligation is a respondable stack object,
+            // resolves through `resolve_top_of_stack` →
+            // `Effect::WarpExileSelf` which does the bf→exile move
+            // with CR-400.7 reset + `warped=true` stamp on non-tokens.
+            run_delayed_end_step_triggers(self)?;
         }
         if self.phase == PHASE_CLEANUP {
             // CR 514.1 + CR 514.2 — on entry to the cleanup step,
@@ -589,7 +602,7 @@ impl GameState {
             // friction note in the module docstring.
             cleanup_step_for_active_player_inline(self);
         }
-        self.phase
+        Ok(self.phase)
     }
 
     /// True when the current phase is one of the two main phases

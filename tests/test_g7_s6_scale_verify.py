@@ -214,31 +214,26 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
         (5, 0, 369, "LEGAL_SET_EQ", "py\\rust=[\"('pass',)\"]",
          "G1 stateless-Rust attack=False re-emission (B3-S3 "
          "provider-accumulation port; Class-B priority axis CLOSED)"),
-        # Class C — RE-CHARACTERIZED (verify-first @ main 3a963e0f;
-        # see test_rust_shadow_bakein.py::
-        # test_g7_classc_warpexile_delayed_trigger_root_cause_pinned).
-        # The S6-evidence label "warp-creature atomic resolve / S4b"
-        # is CONTRADICTED: S4 (bb9e490b) + S5a (eb0fd0ca) already
-        # landed (ancestors of this S6 sweep a9126b06), so
-        # cast_creature_warp is NOT atomic — the warp creature
-        # (Starbreach Whale, Warp {1}{U}, obj 81) goes cast→stack→bf
-        # byte-IDENTICAL to Python for ~17 steps. The REAL Class-C
-        # root cause is the warp-EXILE delayed-trigger-vs-
-        # deterministic-sweep DOCUMENTED deliberate divergence
-        # (SEARCH_LIMITATIONS.md "warp end-step exile is a
-        # PHASE_END_STEP-entry sweep, NOT a CR-603.7 delayed
-        # trigger"): at the END step (step 169) Python pushes the
-        # WarpExileSelf delayed trigger onto the stack (response
-        # window) while Rust's deterministic phase-entry sweep has
-        # already moved the creature bf→exile_p1. Pre-existing
-        # documented divergence surfaced at scale, NOT the brief's
-        # atomic-cast hole. (boundary step + needle UNCHANGED — the
-        # pin's verdict was firing correctly, only its root-cause
-        # label was wrong.) The library_pX sub-variants are a
-        # SEPARATE shuffle-order axis (todo b3f7c0a9), not Class C.
-        (1, 1, 169, "STATE_EQ", "Starbreach Whale",
-         "warp-EXILE delayed-trigger-vs-deterministic-sweep "
-         "(SEARCH_LIMITATIONS documented divergence; NOT atomic-cast)"),
+        # Class C — CLOSED via the delayed-trigger port
+        # (feature/g7-classc-warp-delayed-trigger). The warp-EXILE
+        # delayed-trigger-vs-deterministic-sweep axis previously
+        # surfaced at arch1/s1 step 169 ("Starbreach Whale", three-
+        # field {bf, exile_p1, stack} STATE_EQ). With the new Rust
+        # state.delayed_triggers + Effect::WarpExileSelf +
+        # run_delayed_end_step_triggers landed, arch1/s1 runs MANY
+        # steps past 169 (the warp creature stays on the bf with the
+        # WarpExileSelf trigger on the stack — byte-equal Python at
+        # the end step) and then trips on the SAME next-frontier the
+        # Class-B canonical arch5/s0 trips on: a priority_player
+        # STATE_EQ at a DECLARE_ATTACKERS window (the G5-family
+        # priority-port lane in state_ops_actions.rs:1444-1446 /
+        # state_ops_legal.rs:1199 — the dominant 138/300 lane;
+        # sibling-owned feature/g7-classb-engine). The library_pX
+        # sub-variants remain a SEPARATE shuffle-order axis (todo
+        # b3f7c0a9), not Class C.
+        (1, 1, 351, "STATE_EQ", "('priority_player', 0, 1)",
+         "G5-family priority-port (next-frontier after warp-EXILE "
+         "closure via delayed-trigger port; same axis as Class B)"),
         # Class D — CLOSED (verify-first @ feature/g7-classd-castset;
         # see test_rust_shadow_bakein.py::
         # test_g7_classd_castset_seqwrap_targets_closed_then_next_frontier).
