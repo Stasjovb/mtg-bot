@@ -6176,7 +6176,7 @@ regression.
 > divergence). This is a flip **CR-correctness IMPROVEMENT** — the
 > Python hold-mana-until-cleanup simplification is the retired
 > known-wrong side, not a regression. **SEPARATE unmasked
-> follow-up (NOT G4) — G5 now CLOSED, G6 now OPEN:** the
+> follow-up (NOT G4) — G5 now CLOSED, G6 now CLOSED:** the
 > strengthened tripwire surfaced a distinct pre-existing
 > Rust-driver priority-port gap
 > (`RustGameStateAdapter._reset_priority_to_active` ignored a
@@ -6191,15 +6191,25 @@ regression.
 > `::test_post_player_loss_priority_port_divergence_is_surfaced`
 > → `::test_post_player_loss_priority_port_is_closed`. Closing G5
 > honestly UNMASKED a further distinct pre-existing
-> game-over-detection-TIMING gap (`is_over`/`winner_id` lag because
-> the Rust-driver port does not `apply_sbas()` on the step-end /
-> auto-advance path vs Python's `state_based_actions`-at-
-> `_enter_step`; step ~151), tracked as blocker **G6 — OPEN**,
-> honestly pinned `::test_post_player_loss_is_over_timing_
-> divergence_is_surfaced` (the dedicated SL section for G5/G6 is
-> below this G4 block; `SOT_FLIP_CUTOVER_PLAN.md` ledger rows G5
-> CLOSED / G6 OPEN). Orchestrator to sequence G6 before the C4
-> re-sweep / B3-S5 flip go/no-go. The prose below is the original
+> game-over-detection-TIMING gap (`is_over`/`winner_id` lagged
+> because the Rust-driver port did not `apply_sbas()` on the
+> step-end / auto-advance path vs Python's
+> `state_based_actions`-at-`_enter_step`; step ~151), tracked as
+> blocker **G6 — now CLOSED-by-`<MERGE_HASH>`** (path: pure-Python
+> SBA-cadence port — `RustGameStateAdapter._run_step_enter_sbas`
+> calls the pre-existing idempotent Rust `apply_sbas()` at exactly
+> Python's `_enter_step` SBA phases, invoked after the
+> step-progression `advance_phase()` on both the auto-advance loop
+> and the empty-stack pass-round step-end; no Rust pymethod, no
+> `.pyd`; `decision_source="python"` byte-unchanged; 4-file 1532
+> UNMOVED). Pin **flipped**
+> `::test_post_player_loss_is_over_timing_divergence_is_surfaced`
+> → `::test_post_player_loss_is_over_timing_is_closed` (the
+> dedicated SL section for G5/G6 is below this G4 block;
+> `SOT_FLIP_CUTOVER_PLAN.md` ledger rows G5 CLOSED / G6 CLOSED).
+> Closing G6 unmasked **NO** G7 successor — the bake-in now reaches
+> the natural terminal state clean, so the **G4→G5→G6 chain is
+> fully CONVERGENT and CLOSED**. The prose below is the original
 > G4 surfacing/diagnosis evidence, retained for the record.
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
