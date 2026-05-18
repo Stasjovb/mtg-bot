@@ -1196,9 +1196,48 @@ impl GameState {
 
         // Python lines 180-181: priority gate. Off-priority callers
         // bail with just the PassPriority action.
-        if self.priority_player != player_id {
-            return Ok(actions);
-        }
+        //
+        // **G7 S6 Class-B option-β (coordinated engine+adapter slice;
+        // new-code-is-right toward the `simulate.py` SoT).** The
+        // former early `return` here gated ALL emission — including
+        // the factored-combat DECLARE_ATTACKERS / DECLARE_BLOCKERS
+        // blocks — on `priority_player == player_id`. That only held
+        // because the Rust-driver adapter eagerly forced
+        // `priority_player = active` after every step end
+        // (`rust_engine_adapter.py:473`), so during the
+        // factored-combat decision window Rust's `priority_player`
+        // happened to equal the structural decision-maker. The
+        // `simulate.py` SoT does NOT reset priority at the
+        // BEGINNING_OF_COMBAT pass-round end — it CARRIES
+        // `priority_player_idx` through the factored-combat window
+        // (only the DECLARE_ATTACKERS `priority_loop`'s first pass
+        // resets it, AFTER the attacker decision —
+        // `simulate.py:222-247`); `MtgGameStateAdapter` faithfully
+        // mirrors that (its `_enter_declare_attackers` /
+        // `_enter_declare_blockers` RETURN WITHOUT
+        // `_enter_priority_for_current_step`,
+        // `engine_adapter.py:1312-1316/:1358-1361`, leaving
+        // `priority_player_idx` carried; `active_player()` overrides
+        // the decision-maker to active/defender,
+        // `engine_adapter.py:762-766`). The coordinated
+        // `rust_engine_adapter.py` change defers that eager reset for
+        // factored-combat steps so Rust's `priority_player` stays
+        // carried like the SoT — at which point the old
+        // `priority_player == player_id` gate would WRONGLY suppress
+        // the factored-combat emission (chicken-and-egg: detecting
+        // the window needs the emission, the old gate needs
+        // priority == active). So: relax this to a flag, let the
+        // factored-combat blocks below emit keyed on the STRUCTURAL
+        // decision-maker (attackers: `active_player == player_id`;
+        // blockers: `player_id == 1 - active_player`, Rust's
+        // canonical defender), and re-apply the byte-identical
+        // priority-window early return immediately BEFORE the genuine
+        // priority-window emission (the instant-speed CastSpell /
+        // PlayLand / sorcery / ActivateAbility block) — fencing ONLY
+        // that, exactly as Python's `legal.py:180-181` fences its
+        // priority-window emission. See
+        // `docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` §9/§9.1.
+        let is_priority_holder = self.priority_player == player_id;
 
         // DeclareAttackers emission (Rust-only — Python's
         // `legal_actions` does NOT emit this variant; see the module
@@ -1317,15 +1356,34 @@ impl GameState {
         // factored-search alternative Python uses).
         //
         // Gate: `phase == PHASE_DECLARE_BLOCKERS` AND
-        // `priority_player != active_player` (defender declares, NOT
-        // the attacker — CR 509.1) AND `stack.is_empty()` AND
-        // `!self.attackers.is_empty()` (there is at least one
-        // attacking creature — see the no-attackers gate below).
-        // Priority is already confirmed above. The
-        // `priority_player != active_player` check is the inversion
-        // of the DeclareAttackers gate — only the defender (off-turn
-        // player) declares blockers, so we want to emit for the
-        // OFF-active priority holder.
+        // `player_id == 1 - active_player` (the STRUCTURAL defender
+        // declares, NOT the attacker — CR 509.1) AND
+        // `stack.is_empty()` AND `!self.attackers.is_empty()` (there
+        // is at least one attacking creature — see the no-attackers
+        // gate below).
+        //
+        // **G7 S6 Class-B option-β.** The gate was formerly
+        // `self.priority_player != self.active_player`. That only
+        // distinguished the defender because the Rust-driver adapter
+        // forced `priority_player == active` during the
+        // factored-combat window; with the coordinated adapter change
+        // carrying `priority_player` like the `simulate.py` SoT, that
+        // proxy no longer holds. Key on the STRUCTURAL defender
+        // instead: `player_id == 1 - self.active_player` — Rust's own
+        // canonical defender id (the SAME `1 - self.active_player`
+        // the combat-damage plan uses, `state_ops_combat.rs:941`, and
+        // `choose_first_creature_for_defender`,
+        // `state_ops_choices.rs:104`), byte-equal to Python
+        // `MtgGameStateAdapter`'s `_combat_defender_id =
+        // _next_alive(state, (active+1) % n)`
+        // (`engine_adapter.py:1331-1336`) in the loader-admitted
+        // no-loss 2-player model and to Python's
+        // `active_player()` returning `_combat_defender_id` during
+        // `_COMBAT_BLOCKERS` (`engine_adapter.py:764-766`). This
+        // emits the factored blocker decision for the structural
+        // defender independent of who holds `priority_player` —
+        // exactly what the DECLARE_ATTACKERS block already does for
+        // the active player (`self.active_player == player_id`).
         //
         // **No-attackers gate (G7 combat-blocker LEGAL_SET fix,
         // new-code-is-right toward the Python SoT).** Python's
@@ -1365,7 +1423,7 @@ impl GameState {
         // the `declare_blocker` primitive's per-pair gate at apply
         // time.
         if self.phase == PHASE_DECLARE_BLOCKERS
-            && self.priority_player != self.active_player
+            && player_id == 1 - self.active_player
             && self.stack.is_empty()
             && !self.attackers.is_empty()
         {
@@ -1456,6 +1514,30 @@ impl GameState {
                 }
                 actions.push(blocker_decision_dict(py, head, None)?);
             }
+        }
+
+        // **G7 S6 Class-B option-β — relocated priority-window
+        // gate.** This is the byte-identical relocation of the
+        // former line-1199 `if self.priority_player != player_id {
+        // return Ok(actions); }` early return. Everything BELOW this
+        // point is the genuine priority-window emission (instant-
+        // speed CastSpell, PlayLand, sorcery-speed CastSpell,
+        // ActivateAbility) — exactly what Python's `legal.py:180-181`
+        // `if not _has_priority(...): return actions` fences (that
+        // Python gate fences ALL of `legal_actions`, including the
+        // instant-speed CastSpell block at `legal.py:217-301`). The
+        // factored-combat DECLARE_ATTACKERS / DECLARE_BLOCKERS
+        // blocks ABOVE now run independent of `priority_player`
+        // (keyed on the structural decision-maker), mirroring the
+        // `simulate.py` SoT which carries `priority_player_idx`
+        // through the factored-combat window. Semantics for the
+        // priority-window emission are UNCHANGED: an off-priority
+        // caller still bails here with just `[PassPriority]`, exactly
+        // as before — only the factored-combat emission moved above
+        // the gate. See `docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md`
+        // §9/§9.1.
+        if !is_priority_holder {
+            return Ok(actions);
         }
 
         // Python's `_is_sorcery_timing` (lines 25-32):

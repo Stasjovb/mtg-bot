@@ -7094,6 +7094,36 @@ gate signal (correctly loud). The proper closure is parity-positive
 > `docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` §9.1 + SOT_FLIP §4 G7
 > row. NOT merged / NOT pushed.
 
+> **[G7 S6 Class B cycle-37 — the coordinated engine+adapter slice
+> LANDED — Class-B priority axis CLOSED for arch5/s0; next frontier
+> @369 surfaced.]** Lane: `feature/g7-classb-priority-port-fix` off
+> `main` @ `dc22ebc4`. The §9.1 hand-off artifact (the +95/-13
+> `state_ops_legal.rs` option-β diff and the +155/-14
+> `rust_engine_adapter.py:473`/`:543-550`/`legal_decisions`
+> coordinated half) was applied verbatim, built into a worktree-local
+> `.venv-py313`, and the bake-in pin flipped from surfaced-at-367
+> `STATE_EQ ('priority_player',1,0)` to surfaced-at-369 `LEGAL_SET_EQ
+> py\rust=["('pass',)"]`. The new @369 frontier is the
+> **pre-existing G1 stateless-Rust `attack=False` re-emission /
+> B3-S3 provider-accumulation port** (Rust
+> `apply_action(AttackerDecision, attack=false)` is a deliberate no-op
+> and the `RustGameStateAdapter` does not port Python's provider-side
+> `_pending_attackers.pop(0)` + `_finalize_attacker_phase`
+> accumulation), DISTINCT, pre-existing, unmasked — NOT introduced —
+> by closing 367 (zero provider accumulation at `dc22ebc4`).
+> Gate: 4-file core **1536 UNMOVED**; `tests_rust` **30 failed/2312
+> passed BYTE-IDENTICAL** to pristine `dc22ebc4` (stash-pristine-build
+> diff returns empty); bake-in 17/17 green with the flipped arch5/s0
+> step-369 pin; `test_g7_s6_scale_verify` 6 pass / 2 PRE-EXISTING
+> fails (arch2/s1 B1-axis 318→320, NOT a Class B row — same 2 fails
+> on pristine wheel);
+> `check_audit_coverage_staleness.py` exit 0; isolation self-check
+> PASSED (shared canonical `.pyd` SHA256
+> `BEB897AC88E4876AAEA61E8909DEC26C6EDB98E39B332F1395E54A4C77A34EB8`
+> size/mtime byte-identical before/after). Full record:
+> `docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` §9.2. NOT merged / NOT
+> pushed.
+
 > **[S5 TRIGGERS-VERIFY LANDED + orchestrator-merged (cycle 30) —
 > `feature/g7-s5-triggers-verify`, pure-Python VERIFY, ZERO
 > engine/`rust/src`/`.pyd`.]** The full faithfully-bridgeable trigger

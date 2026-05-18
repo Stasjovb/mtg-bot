@@ -662,3 +662,116 @@ self-check PASSED (shared canonical `.pyd` SHA256/size/mtime
 byte-identical before/after — worktree-isolated builds only, zero
 committed `rust/src` ⇒ orchestrator owes NO `.pyd` rebuild). NOT
 merged / NOT pushed.
+
+## 9.2 Class B cycle-37 — the coordinated engine+adapter slice LANDED (Class-B priority axis CLOSED; next frontier @369 surfaced)
+
+> **Status: LANDED on `feature/g7-classb-priority-port-fix` off
+> `main` @ `dc22ebc4`.** The coordinated Rust-engine + Rust-driver-
+> adapter slice the §9.1 hand-off artifact pre-staged was applied
+> verbatim, built into a worktree-local `.venv-py313`, gates were
+> run cleanly, and the bake-in arch5/s0 pin was flipped from
+> surfaced-at-367 to surfaced-at-369. Shared canonical `.pyd`
+> SHA256/size/mtime byte-identical before/after — orchestrator owns
+> the merge + canonical resync.
+
+**Engine half (option-β, `rust/src/state_ops_legal.rs` only,
++95/-13).** Applied as documented in §9.1 step (1)/(2)/(3): relocate
+the line-1199 priority gate to a flag `is_priority_holder`, run the
+factored-combat DECLARE_ATTACKERS/DECLARE_BLOCKERS emission ABOVE the
+gate keyed on the structural decision-maker (attackers:
+`active_player == player_id`; blockers: `player_id == 1 -
+active_player`, Rust's canonical defender), and re-apply the
+byte-identical priority-window early return
+`if !is_priority_holder { return Ok(actions); }` immediately BEFORE
+the sorcery-timing / instant-speed CastSpell / PlayLand /
+ActivateAbility block (fences ONLY the genuine priority-window
+emission, byte-identical to the old predicate).
+
+**Adapter half (coordinated, `src/mtg_bot/search/rust_engine_adapter.py`,
++155/-14).** Three structural changes:
+
+1. `_run_priority_action` PassPriority empty-stack pass-round-end
+   branch (line ~473): defer `_reset_priority_to_active()` when the
+   just-advanced step is a factored-combat window with a pending
+   factored decision for the structural decision-maker — exactly the
+   Python `_enter_declare_*` / `simulate.py` SoT contract (priority
+   stays carried; the priority-loop's first pass after the attacker
+   decision resets it).
+2. `active_player()`: return the combat decision-maker
+   (`_combat_decision_maker()`) during factored-combat windows;
+   priority holder otherwise. Byte-mirrors Python's
+   `MtgGameStateAdapter.active_player()` `_COMBAT_*` overrides.
+3. `legal_decisions()`: query Rust with `active_player()` (the
+   decision-maker), not `_priority_pid()` directly. Strip the
+   structural `PassPriority` from the factored-combat set
+   (Python's adapter `legal_decisions()` returns ONLY the factored
+   pairs during the combat window — `engine_adapter.py:808-828`).
+   New helper `_combat_decision_maker()` resolves the
+   factored-combat decision-maker structurally (phase ∈ {DA, DB}
+   AND Rust emits a factored decision for the structural
+   decision-maker; else `None` = not a factored-combat window).
+
+**Test pins flipped.** `tests/test_g7_s6_scale_verify.py`'s
+arch5/s0 Class-B row flipped from `(367, STATE_EQ,
+('priority_player',1,0))` to the next-frontier-surfaced
+`(369, LEGAL_SET_EQ, py\rust=["('pass',)"])` row;
+`tests/test_rust_shadow_bakein.py`'s arch5/s0 bake-in row flipped
+the same way (boundary `344 → 367`, `STATE_EQ` →
+`LEGAL_SET_EQ`). The new frontier @369 is the
+**pre-existing G1 stateless-Rust `attack=False` re-emission gap**
+(Rust `apply_action(AttackerDecision, attack=false)` is a deliberate
+no-op and the `RustGameStateAdapter` does not port Python's
+provider-side `_pending_attackers.pop(0)` + `_finalize_attacker_phase`
+accumulation — the B3-S3 sibling slice the G1 design defers),
+unmasked — NOT introduced — by closing 367.
+
+**Verify-first proof (this commit, byte-identical to §9.1
+combinedproof but with the adapter half ACTUALLY landed, not
+monkeypatched).** Pre-fix `scout_classb_arch5s0.py 5 0 365`:
+trips at step 367 STATE_EQ `('priority_player',1,0)`. Post-fix
+(same scout): proceeds through step 367 (`PassPriority` post-apply
+Py `pri=1` Rust `pri=1` — matches Python SoT), through step 368
+(`AttackerDecision attacker_id=12 attack=False`), surfaces at step
+369 `LEGAL_SET trip @ step 369` `LEGAL_SET_EQ rust\py=["('attacker',
+12, False)", "('attacker', 12, True)"] py\rust=["('pass',)"]
+(active_player=0)` — the exact signature the bake-in pin now expects.
+
+**Gate (4-file core / `tests_rust` / audit / bake-in / isolation):**
+
+- 4-file core gate: **1536 PASSED** (`test_parity_smoke +
+  test_cross_engine_etb_triggers + test_trajectory_parity +
+  test_trajectory`) — UNMOVED, exactly baseline.
+- `tests_rust`: **30 failed / 2312 passed BYTE-IDENTICAL** to
+  pristine `dc22ebc4` (captured by stashing my diff, rebuilding,
+  diffing the failure-set sorted list — `diff` returns empty).
+  Zero newly-failing, zero newly-passing — the feedcf93-baseline
+  factored-combat/observer reds are untouched.
+- `tests/test_g7_s6_scale_verify.py`: **6 passed / 2 failed** — the
+  2 fails are PRE-EXISTING at pristine `dc22ebc4` (arch2/s1
+  B1-axis boundary `318 → 320`, NOT a Class B row; verified by
+  pristine rebuild). Same 2 fails on the pristine wheel.
+- `tests/test_rust_shadow_bakein.py`: **17/17 green** (the
+  17-pin Class-D-closure-included set the brief tracks; the new
+  arch5/s0 step-369 pin asserts the next-frontier-surfaced
+  state, replacing the old step-367 surfaced state).
+- `python scripts/check_audit_coverage_staleness.py` exit **0**.
+- Isolation self-check: shared canonical `.pyd` at
+  `C:\Users\Gregg Keithley\Documents\Claude\Projects\mtg-bot\.venv-py313\Lib\site-packages\mtg_bot_engine\mtg_bot_engine.cp313-win_amd64.pyd`
+  SHA256 `BEB897AC88E4876AAEA61E8909DEC26C6EDB98E39B332F1395E54A4C77A34EB8`
+  size 1501696 mtime `05/18/2026 05:40:12` **byte-identical
+  before/after** my worktree-local maturin develop --release.
+  Orchestrator owns the canonical `.pyd` resync after merge.
+
+**Honest count.** Class B priority axis CLOSED for arch5/s0
+(the dominant 138/300 manifestation). The next frontier @369
+(the G1 stateless-Rust attack=False re-emission / B3-S3
+provider-accumulation port) is DISTINCT, PRE-EXISTING (zero
+provider accumulation at `dc22ebc4`), and unmasked — NOT
+introduced — by closing 367 (arch5/s0 simply never reached a
+factored `attack=False` before, blocked at 344/367). Filed as
+the next G7 follow-up.
+
+**NOT merged / NOT pushed.** Branch
+`feature/g7-classb-priority-port-fix` off `main @ dc22ebc4`;
+orchestrator owns merge + canonical `.pyd` resync + lane
+serialization.
