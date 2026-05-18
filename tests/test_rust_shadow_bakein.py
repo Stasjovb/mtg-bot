@@ -463,112 +463,76 @@ def test_g7_classc_warpexile_delayed_trigger_root_cause_closed_then_next_frontie
 
 
 def test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned():
-    """**G7 S6-Class-E verify-first root-cause pin (HONEST-STOP).**
+    """**G7 S6-Class-E CLOSURE pin** (was the verify-first
+    honest-stop root-cause pin; flipped surfaced→closure when the
+    ordered-pool `ManaPool` representation landed).
 
     The S6 scale-verify evidence
     (``docs/G7_S6_SCALE_VERIFY_EVIDENCE.md`` + ``s6_scale_verify.json``)
     labelled Class E (31/300) *"C1-family mana-source COLOR on
-    ``ActivateAbility`` — Rust taps a different-colored mana SOURCE
-    than Python (the auto-tap land/source pick order diverges)"*.
-    **Verify-first against live ``main`` @ ``430f3b39`` REFINES that
-    framing** and this pin locks the REAL, empirically-verified root
-    cause so a future fix lane cannot regress to the (imprecise)
-    land-tap-color framing:
+    ``ActivateAbility``"*. Verify-first REFINED that framing: the real
+    root cause was the **GENERIC-cost drain ORDER from the floating
+    mana POOL**. Python's ``auto_tap_for_cost`` (``actions.py:919-986``,
+    the SoT for ``_cast_spell:1662`` and ``_activate_ability:1992-1995``)
+    drains by tracking COIN INDICES in ``p.mana_pool`` (a
+    ``list[ManaCoin]``) and iterating ``enumerate(p.mana_pool)`` in
+    **insertion / FIFO order** for BOTH colored and generic phases.
+    Rust's pre-fix ``auto_tap_pay_for_cost`` drained the GENERIC phase
+    in a fixed ``C→W→U→B→R→G`` color priority — wrong SoT for the
+    cast/activate pay path. On arch1/s0 the p1 pool list at step 598
+    is ``[G, G, U, U]`` with cost ``{2}``: Python consumes the first
+    two list entries (``G, G``) → residual ``U:2``; Rust's fixed
+    order drained ``U`` before ``G`` → residual ``G:2``. SAME cost,
+    SAME total drained, DIFFERENT colored residual.
 
-    1. **It is NOT a land-tap / colored-pip ordering issue.** The
-       colored-pip iteration order (Python ``ManaCost.colored`` =
-       ``sorted`` = ``B,G,R,U,W``; ``cards.base.parse_mana_cost:391``)
-       and the colored-land tap order ALREADY byte-match Python — that
-       was settled by frontier-a (``auto_tap_pay_for_cost``,
-       ``state_ops_cast.rs:431-470``). In every Class-E repro the
-       diverging ability/spell cost is **PURE GENERIC** (e.g. the
-       canonical arch1/s0 repro: ``ActivateAbility(source_id=120,
-       ability_index=0)`` — Lander, ``ManaCost(generic=2, colored=())``
-       — and the pre-apply pool is ALL floating mana, every land
-       already tapped, so NO land is tapped at all).
+    **THE FIX (this commit):** ``ManaPool`` (``rust/src/state.rs``)
+    now carries an insertion-ordered ``coins: Vec<ManaCoin>`` SoT
+    alongside the per-color count fields (the counts stay as a
+    denormalized cache for O(1) reads — fingerprint, snapshot,
+    ``pool_can_cover``, ``get_mana_pool`` are unchanged). Every
+    ``add_mana``-shape mutation site (``add_mana``,
+    ``tap_for_mana``, ``Effect::AddManaToPool``,
+    ``Effect::AddNManaOfChosenColor``) routes through
+    ``pool.push_coins(byte, n)`` to keep both sides synced. Every
+    drain site (``pay_mana_cost``, ``pay_mana_cost_pub``,
+    ``pay_mana_cost_internal``, ``remove_mana``) routes through
+    ``pool.drain_first_n_color(byte, n)`` so the ``coins`` vec
+    follows the count cache. ``auto_tap_pay_for_cost`` now
+    byte-mirrors Python's ``auto_tap_for_cost``: it tracks
+    ``used_coin_indices`` in the controller's ``coins`` vec, walks
+    the vec in insertion order for both colored matching and
+    generic FIFO, and commits by removing the indices high-to-low
+    (exactly Python's ``sorted(used_coin_ids, reverse=True)``).
 
-    2. **The REAL root cause is the GENERIC-cost drain ORDER from the
-       floating mana POOL.** Python's ``auto_tap_for_cost``
-       (``actions.py:964-976`` — the SoT both ``_cast_spell``
-       ``actions.py:1662`` and ``_activate_ability``
-       ``actions.py:1992-1995`` pay through) drains the generic cost
-       from ``p.mana_pool`` in **list / insertion order**
-       (``for idx, coin in enumerate(p.mana_pool)`` — FIFO over the
-       coin list, NO color preference). Rust's ``auto_tap_pay_for_cost``
-       (``state_ops_cast.rs:472-483``) drains generic in a **fixed
-       ``C→W→U→B→R→G`` color priority** (copied from
-       ``state_ops_mana.rs::pay_mana_cost:271-295``, the WRONG SoT for
-       the cast/activate pay path). On the canonical arch1/s0 repro the
-       p1 pool at step 598 is the list ``[G, G, U, U]`` with cost
-       ``{2}``: Python consumes the first two list entries (``G, G``) →
-       leftover ``U:2``; Rust's fixed order drains ``U`` before ``G`` →
-       leftover ``G:2``. SAME cost, SAME total drained (2), DIFFERENT
-       colored residual — exactly the ``mana_pool_pX`` STATE_EQ shape.
+    **CLOSURE CONTRACT (this pin):** the canonical arch1/s0 repro
+    no longer trips at step 598 on a ``mana_pool_p1`` STATE_EQ. The
+    bake-in proceeds PAST 598, surfacing a DIFFERENT divergence at
+    a later step that is **not** the Class-E mana-pool color
+    residual — that's the regression guard. The next-frontier pin
+    (sibling test below) asserts WHICH new frontier surfaces.
 
-    3. **Class E is HOMOGENEOUS — 31/31 the same root cause**
-       (``scripts/scout_classe_characterize.py`` over the committed
-       ``s6_scale_verify.json``): every Class-E STATE_EQ is this
-       ``auto_tap_for_cost`` generic-pool-drain-order divergence (mix
-       of ``ActivateAbility`` and ``CastSpell`` last-actions — both pay
-       through the IDENTICAL ``auto_tap_for_cost``; ONE root cause, not
-       a heterogeneous set).
-
-    4. **The faithful fix is OUT OF THIS LANE'S SCOPE (honest-stop,
-       per the brief — ``>1 safe slice`` and outside the authorized
-       ``state_ops_cast.rs``/``state_ops_mana.rs`` files).** Byte-
-       mirroring Python's pool-LIST-order generic drain requires Rust
-       to know the pool coin **insertion order**. Rust's ``ManaPool``
-       (``state.rs:509``) is a per-color **count** struct
-       (``white/blue/black/red/green/colorless: u8``) — it discards
-       insertion order at ``add_mana`` time
-       (``state_ops_mana.rs:117-127``: ``*slot = slot.saturating_add``).
-       The pre-pool dumps are genuinely interleaved
-       (``[W,W,G,W,U,W,G]``, ``[R,G,G,G,G,G,G,R,G,G,G]``) and
-       provably **NOT reconstructable from per-color counts** — a
-       count-only heuristic (e.g. "drain G last") would be a
-       ``feedback_no_fallback_hybrids`` fallback that gets the
-       interleaved cases wrong. The only faithful fix is an
-       **ordered-pool representation** in ``state.rs::ManaPool`` +
-       every add/drain/clone/fingerprint/snapshot/decisions site
-       updated (**186 per-color pool-field references across 9
-       ``rust/src`` files**, INCLUDING ``cards.rs`` which fires the
-       cron structural arm and is off-limits this lane). That is a
-       multi-file engine-representation refactor — materially more
-       than one safe slice. Filed as the genuine-fix follow-up todo;
-       this lane ships ZERO engine diff (manufacturing a partial
-       count-only diff would be a fabricated no-op /
-       ``feedback_no_fallback_hybrids``).
-
-    If a future lane lands the ordered-pool representation and closes
-    Class E, the ``raised is not None`` / signature assertions flip
-    and this pin must be updated to the closed contract
-    (new-code-is-right) — it must NEVER silently pass (that would be
-    exactly the masking S6 exists to rule out)."""
+    If a future change regresses Class E, the ``mana_pool_pX``
+    color-residual divergence will resurface and trip THIS pin's
+    "must not be a mana_pool_pX STATE_EQ" guard. Do NOT relax that
+    guard — it's the only protection against silently undoing the
+    ordered-pool fix.
+    """
     pytest.importorskip("mtg_bot_engine")
-    from mtg_bot.game import effective_activated_abilities
     from mtg_bot.parity import trajectory
-    from mtg_bot.parity.cross_engine import (
-        build_python_field_view, compare_fields, parity_smoke,
-    )
     from mtg_bot.search.rust_shadow import (
         build_shadow_checked_adapter as _bsca,
     )
 
-    # The canonical Class-E repro the S6 evidence cites: arch1/s0,
-    # ActivateAbility(source_id=120) (Lander, {2} generic),
-    # divergence step 598, Python U:2 vs Rust G:2.
+    # Same arch1/s0 driver as the original honest-stop pin —
+    # production deck #1, shared RNG seed 0, uniform-random
+    # rust_shadow bake-in.
     deck = trajectory.load_production_deck(archetype=1)
     spec = trajectory.production_deck_to_deckspec(deck, shared_rng_seed=0)
     adapter = _bsca(spec)
-    py_a, rust_a = adapter.py_adapter, adapter.rust_adapter
-    ps = parity_smoke()
 
     rng = random.Random(0)
     steps = 0
     raised: ShadowDivergenceError | None = None
-    last_choice = None
-    pre_pool_list: list[str] | None = None
-    cost_was_pure_generic = False
     while not adapter.is_terminal() and steps < 4000:
         try:
             legal = adapter.legal_decisions()
@@ -578,24 +542,6 @@ def test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned():
         if not legal:
             break
         choice = rng.choice(legal)
-        # Snapshot the pre-apply Python pool LIST + the cost shape of
-        # the about-to-apply mana-spending decision (the root-cause
-        # evidence: a PURE-GENERIC cost + a multi-color pool list).
-        if type(choice).__name__ == "ActivateAbility":
-            st = py_a.engine_state
-            src = next((o for o in st.battlefield
-                        if o.id == choice.source_id), None)
-            if src is not None:
-                abs_ = effective_activated_abilities(st, src)
-                if 0 <= choice.ability_index < len(abs_):
-                    mc = abs_[choice.ability_index].cost.mana
-                    cost_was_pure_generic = (
-                        mc is not None and mc.generic > 0
-                        and not mc.colored and not mc.hybrid
-                    )
-            p1 = next(pp for pp in st.players if pp.id == 1)
-            pre_pool_list = [c.color for c in p1.mana_pool]
-        last_choice = choice
         try:
             adapter.apply(choice)
         except ShadowDivergenceError as e:
@@ -603,81 +549,150 @@ def test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned():
             break
         steps += 1
 
-    # (1) The bake-in trips LOUDLY at the characterized boundary —
-    # not masked, not silently passing.
+    # **CLOSURE assertion (1).** The Class-E boundary step 598 NO
+    # LONGER trips on the mana_pool_p1 color-residual STATE_EQ.
+    # Either the run continues past 598 (most likely, surfacing the
+    # next-frontier divergence at a later step — see the sibling
+    # next-frontier pin), or it runs to terminal. Either is OK; what
+    # is NOT OK is tripping at exactly step 598 with the Class-E
+    # signature.
+    if raised is not None:
+        msg = str(raised)
+        # The Class-E shape was a STATE_EQ on `mana_pool_p1` at step
+        # 598. If the run trips at step 598 OR with a `mana_pool_p1`
+        # color-residual signature, the ordered-pool fix regressed.
+        regressed_at_598 = steps == 598
+        regressed_signature = (
+            raised.tripwire == "STATE_EQ" and "mana_pool_p1" in msg
+        )
+        assert not (regressed_at_598 and regressed_signature), (
+            f"REGRESSION: the Class-E mana-pool generic-drain-order "
+            f"divergence has re-surfaced at the original boundary step "
+            f"598 with the original signature. The ordered-pool "
+            f"`ManaPool` representation was REVERTED or a new drain "
+            f"site is bypassing the `coins` vec. err={msg[:400]!r}"
+        )
+        # Also guard the narrower signature alone — if `mana_pool_p1`
+        # COLOR-residual surfaces at ANY step, that's also a Class-E
+        # regression (we no longer expect the engine to ever produce
+        # a same-total-different-color residual on a generic-drain).
+        if raised.tripwire == "STATE_EQ" and "mana_pool_p1" in msg:
+            from mtg_bot.parity.cross_engine import (
+                build_python_field_view, compare_fields, parity_smoke,
+            )
+            py_a, rust_a = adapter.py_adapter, adapter.rust_adapter
+            pv = build_python_field_view(py_a.engine_state)
+            rv = parity_smoke()._build_field_view(rust_a.rust_state)
+            divs = {d.field: (d.py_value, d.rust_value)
+                    for d in compare_fields(pv, rv)}
+            if "mana_pool_p1" in divs:
+                py_pool, rust_pool = divs["mana_pool_p1"]
+                py_total = sum(n for _, n in py_pool)
+                rust_total = sum(n for _, n in rust_pool)
+                # A same-total-different-color residual IS the Class-E
+                # signature. An unequal-total mana_pool_p1 divergence
+                # is a different axis (affordability / count drift) —
+                # not a Class-E regression.
+                assert not (
+                    py_total == rust_total and py_pool != rust_pool
+                ), (
+                    f"REGRESSION: `mana_pool_p1` STATE_EQ at step "
+                    f"{steps} has the Class-E SAME-total-DIFFERENT-"
+                    f"color signature (py={py_pool!r} rust={rust_pool!r}). "
+                    f"The ordered-pool fix was undone."
+                )
+
+
+def test_g7_classe_closed_then_library_shuffle_order_next_frontier_surfaced():
+    """**G7 S6-Class-E closure → next-frontier-surfaced** companion
+    to ``test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned``.
+
+    The Class-E ordered-pool fix moves the arch1/s0 bake-in PAST the
+    original step-598 ``mana_pool_p1`` trip. Pre-existing axes that
+    were UPSTREAM-MASKED by Class E now surface — most notably the
+    already-tracked ``library_pX`` shuffle-order frontier (todo
+    ``b3f7c0a9``: search-then-shuffle parity — the per-engine
+    shuffle RNG is not lockstep; identical multiset, divergent
+    order). This pin asserts WHICH frontier surfaces next on the
+    canonical arch1/s0 driver so:
+
+    1. We have a load-bearing regression guard: if a future change
+       silently un-shuffles or re-introduces Class E, THIS pin trips
+       loudly instead of the bake-in running for 4000 steps then
+       silently passing.
+
+    2. The frontier's identity is documented (it is the
+       library-shuffle-order axis, NOT a new mana-pool axis).
+
+    3. The honest-stop is structurally enforced: Class E is closed,
+       library-shuffle-order is OUTSIDE this lane's scope (filed as
+       its own todo).
+    """
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity import trajectory
+    from mtg_bot.search.rust_shadow import (
+        build_shadow_checked_adapter as _bsca,
+    )
+
+    deck = trajectory.load_production_deck(archetype=1)
+    spec = trajectory.production_deck_to_deckspec(deck, shared_rng_seed=0)
+    adapter = _bsca(spec)
+
+    rng = random.Random(0)
+    steps = 0
+    raised: ShadowDivergenceError | None = None
+    while not adapter.is_terminal() and steps < 4000:
+        try:
+            legal = adapter.legal_decisions()
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        if not legal:
+            break
+        choice = rng.choice(legal)
+        try:
+            adapter.apply(choice)
+        except ShadowDivergenceError as e:
+            raised = e
+            break
+        steps += 1
+
+    # (1) The bake-in MUST surface a next-frontier divergence — if it
+    # runs to terminal without tripping, an axis was masked rather
+    # than surfaced (exactly what S6 exists to rule out).
     assert raised is not None, (
-        "the Class-E generic-pool-drain-order divergence must still "
-        "SURFACE on arch1/s0. If it no longer fires, the axis was "
-        "closed elsewhere (the ordered-pool representation landed) — "
-        "UPDATE this pin to the closed contract; do NOT let it "
-        "silently pass (that would be exactly the masking S6 exists "
-        "to rule out)."
+        "Class-E closed but the bake-in ran to terminal without "
+        "surfacing the next frontier. An axis is masked. Re-walk the "
+        "compare_fields output for the post-598 steps to find what's "
+        "being silently dropped."
     )
-    assert steps == 598, (
-        f"arch1/s0: expected the characterized Class-E boundary step "
-        f"598, got {steps}. A different step means the frontier MOVED "
-        f"(an axis closed/opened elsewhere) — re-characterize, do NOT "
-        f"silently bump. err={str(raised)[:200]!r}"
+    # (2) The next-frontier trip surfaces at the empirically-verified
+    # boundary — step 600. The +2 over 598 is the post-ActivateAbility-
+    # generic-drain step plus the post-resolve step where the
+    # search-and-shuffle effect lands on the library; the boundary
+    # is deterministic.
+    assert steps == 600, (
+        f"arch1/s0 Class-E closure: expected the next-frontier "
+        f"boundary step 600 (library-shuffle-order axis), got "
+        f"{steps}. Either Class E re-opened (would trip at 598) or "
+        f"a DIFFERENT new frontier surfaced. err={str(raised)[:300]!r}"
     )
+    # (3) The next-frontier signature: a STATE_EQ on `library_p1` —
+    # the search-then-shuffle library-order axis (todo `b3f7c0a9`).
+    # NOT a mana_pool_pX divergence (Class E is closed).
     assert raised.tripwire == "STATE_EQ", (
-        f"expected the Class-E mana-pool STATE_EQ shape, got "
+        f"expected the library-shuffle-order STATE_EQ shape, got "
         f"{raised.tripwire}: {str(raised)[:300]!r}"
     )
     msg = str(raised)
-    # (2) The exact verified signature: a mana_pool_p1 divergence
-    # where the two engines disagree only on the COLOR of the
-    # residual (same total), NOT on hand/battlefield/stack.
-    assert "mana_pool_p1" in msg, (
-        f"the surfaced divergence must be the p1 mana-pool color "
-        f"residual. Got: {msg[:400]!r}"
+    assert "library_p1" in msg, (
+        f"the surfaced next frontier MUST be the library_p1 shuffle-"
+        f"order axis (the already-tracked todo b3f7c0a9). Got: "
+        f"{msg[:400]!r}"
     )
-    assert "hand_p0" not in msg and "blocker" not in msg, (
-        "REGRESSION GUARD: the CLOSED non-warp atomic-cast hand_p0 / "
-        f"combat-blocker axes must NOT appear in the Class-E shape. "
-        f"Got: {msg[:300]!r}"
-    )
-    # (3) Root-cause proof: the decision that tripped is a PURE-GENERIC
-    # cost (so it is NOT a colored-pip / land-tap-color issue — frontier
-    # -a settled those), and the pre-apply Python pool was a multi-color
-    # LIST whose insertion order is what Python's generic drain honors.
-    assert type(last_choice).__name__ == "ActivateAbility", (
-        f"the canonical arch1/s0 Class-E trip is on an ActivateAbility "
-        f"(Lander {{2}}). Got {last_choice!r} — re-characterize."
-    )
-    assert cost_was_pure_generic, (
-        "ROOT-CAUSE PROOF: the diverging decision's cost must be PURE "
-        "GENERIC (no colored / hybrid pips) — Class E is the "
-        "generic-from-POOL drain-order divergence, NOT a colored-pip "
-        "or land-tap-color issue (frontier-a already byte-matched "
-        "those). If this fails the repro is no longer the "
-        "characterized root cause."
-    )
-    assert pre_pool_list is not None and len(set(pre_pool_list)) >= 2, (
-        f"ROOT-CAUSE PROOF: the pre-apply p1 pool must be a "
-        f"MULTI-COLOR list (Python drains it in insertion/list order; "
-        f"Rust drains a fixed C→W→U→B→R→G order — the divergence only "
-        f"manifests when >1 color is present). Got {pre_pool_list!r}."
-    )
-    # (4) The residual disagreement is COLOR-only at equal total — the
-    # signature of a same-cost different-color drain (NOT an
-    # affordability/count issue, which is the closed Class A).
-    pv = build_python_field_view(py_a.engine_state)
-    rv = ps._build_field_view(rust_a.rust_state)
-    divs = {d.field: (d.py_value, d.rust_value)
-            for d in compare_fields(pv, rv)}
-    assert "mana_pool_p1" in divs, (
-        f"expected a mana_pool_p1 compare_fields divergence, got "
-        f"fields={sorted(divs)!r}"
-    )
-    py_pool, rust_pool = divs["mana_pool_p1"]
-    py_total = sum(n for _, n in py_pool)
-    rust_total = sum(n for _, n in rust_pool)
-    assert py_total == rust_total and py_pool != rust_pool, (
-        f"ROOT-CAUSE PROOF: Class E is SAME total ({py_total} vs "
-        f"{rust_total}) but DIFFERENT colored residual "
-        f"(py={py_pool!r} rust={rust_pool!r}). An unequal total would "
-        f"be an affordability/count issue (the closed Class A), not "
-        f"the generic-drain-ORDER root cause."
+    assert "mana_pool" not in msg, (
+        f"REGRESSION GUARD: the CLOSED Class-E mana_pool axis must "
+        f"NOT appear in the next-frontier shape. Got: {msg[:400]!r}"
     )
 
 

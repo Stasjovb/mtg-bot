@@ -3310,19 +3310,24 @@ fn apply_effect(
             let controller_idx = state.active_player as usize;
             let pool = &mut state.players[controller_idx].mana_pool;
             let amount_u8 = (*amount).min(u8::MAX as i32) as u8;
-            match color.as_str() {
-                "W" => pool.white = pool.white.saturating_add(amount_u8),
-                "U" => pool.blue = pool.blue.saturating_add(amount_u8),
-                "B" => pool.black = pool.black.saturating_add(amount_u8),
-                "R" => pool.red = pool.red.saturating_add(amount_u8),
-                "G" => pool.green = pool.green.saturating_add(amount_u8),
-                "C" => pool.colorless = pool.colorless.saturating_add(amount_u8),
+            // G7 S6-Class-E ordered-pool: route through `push_coins`
+            // so the insertion-ordered `coins` vec and the per-color
+            // count cache stay synced.
+            let color_byte = match color.as_str() {
+                "W" => b'W',
+                "U" => b'U',
+                "B" => b'B',
+                "R" => b'R',
+                "G" => b'G',
+                "C" => b'C',
                 other => {
                     return Err(PyValueError::new_err(format!(
                         "AddManaToPool: unknown color {other:?}; valid: W, U, B, R, G, C"
                     )))
                 }
-            }
+            };
+            pool.push_coins(color_byte, amount_u8);
+            pool.assert_count_sync();
         }
         // Round-23: SearchLibraryForBasicLandTapped. CR 701.19 search +
         // 701.22 shuffle. The active player (= controller of resolving
@@ -8905,19 +8910,24 @@ fn apply_effect(
             };
             let amount_u8 = (*amount).min(u8::MAX as i32) as u8;
             let pool = &mut state.players[controller_idx].mana_pool;
-            match chosen.as_str() {
-                "W" => pool.white = pool.white.saturating_add(amount_u8),
-                "U" => pool.blue = pool.blue.saturating_add(amount_u8),
-                "B" => pool.black = pool.black.saturating_add(amount_u8),
-                "R" => pool.red = pool.red.saturating_add(amount_u8),
-                "G" => pool.green = pool.green.saturating_add(amount_u8),
-                "C" => pool.colorless = pool.colorless.saturating_add(amount_u8),
+            // G7 S6-Class-E ordered-pool: route through `push_coins`
+            // so the insertion-ordered `coins` vec and the per-color
+            // count cache stay synced.
+            let color_byte = match chosen.as_str() {
+                "W" => b'W',
+                "U" => b'U',
+                "B" => b'B',
+                "R" => b'R',
+                "G" => b'G',
+                "C" => b'C',
                 other => {
                     return Err(PyValueError::new_err(format!(
                         "AddNManaOfChosenColor: unknown color {other:?}; valid: W, U, B, R, G, C"
                     )));
                 }
-            }
+            };
+            pool.push_coins(color_byte, amount_u8);
+            pool.assert_count_sync();
         }
         // Round-28 generalized library tutor. Scans the source-
         // controller's library top-to-bottom for the FIRST card

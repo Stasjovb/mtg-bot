@@ -238,8 +238,11 @@ fn pay_mana_cost(pool: &mut ManaPool, cost: &crate::cards::ManaCost) -> bool {
         return false;
     }
     // Snapshot so we can roll back on a partial-pay failure (a
-    // colored pip the pool can't cover).
-    let snapshot = *pool;
+    // colored pip the pool can't cover). G7 S6-Class-E ordered-pool:
+    // `ManaPool` carries `Vec<ManaCoin>` and isn't `Copy`; clone
+    // explicitly so the rollback path can restore both the per-color
+    // counts AND the insertion-ordered `coins` vec.
+    let snapshot = pool.clone();
     if pool.white < cost.white
         || pool.blue < cost.blue
         || pool.black < cost.black
@@ -248,26 +251,32 @@ fn pay_mana_cost(pool: &mut ManaPool, cost: &crate::cards::ManaCost) -> bool {
     {
         return false;
     }
-    pool.white -= cost.white;
-    pool.blue -= cost.blue;
-    pool.black -= cost.black;
-    pool.red -= cost.red;
-    pool.green -= cost.green;
+    // G7 S6-Class-E ordered-pool: drain colored from `coins` in FIFO
+    // (per-color) to keep the insertion-ordered vec in sync with the
+    // per-color count cache. Same effective per-color delta as the
+    // legacy `pool.X -= cost.X` shape, but `coins` no longer drifts.
+    pool.drain_first_n_color(b'W', cost.white as u32);
+    pool.drain_first_n_color(b'U', cost.blue as u32);
+    pool.drain_first_n_color(b'B', cost.black as u32);
+    pool.drain_first_n_color(b'R', cost.red as u32);
+    pool.drain_first_n_color(b'G', cost.green as u32);
     let mut generic_remaining = cost.generic as u32;
-    for slot in [
-        &mut pool.colorless,
-        &mut pool.white,
-        &mut pool.blue,
-        &mut pool.black,
-        &mut pool.red,
-        &mut pool.green,
-    ] {
+    for color in [b'C', b'W', b'U', b'B', b'R', b'G'] {
         if generic_remaining == 0 {
             break;
         }
-        let take = (*slot as u32).min(generic_remaining) as u8;
-        *slot -= take;
-        generic_remaining -= take as u32;
+        let avail = match color {
+            b'W' => pool.white as u32,
+            b'U' => pool.blue as u32,
+            b'B' => pool.black as u32,
+            b'R' => pool.red as u32,
+            b'G' => pool.green as u32,
+            b'C' => pool.colorless as u32,
+            _ => 0,
+        };
+        let take = avail.min(generic_remaining);
+        pool.drain_first_n_color(color, take);
+        generic_remaining -= take;
     }
     if generic_remaining > 0 {
         // Shouldn't happen — pool_total covered the case above —
@@ -275,6 +284,7 @@ fn pay_mana_cost(pool: &mut ManaPool, cost: &crate::cards::ManaCost) -> bool {
         *pool = snapshot;
         return false;
     }
+    pool.assert_count_sync();
     true
 }
 
@@ -408,22 +418,36 @@ pub(crate) fn auto_tap_pay_for_cost(
         lands.push((obj.id, symbols));
     }
 
-    // ---- Phase 1: PLAN (no mutation). Decide which pool mana is
-    // consumed and which land ids are tapped. Bail with no mutation if
-    // the plan cannot be completed — byte-equivalent to
+    // ---- Phase 1: PLAN (no mutation). Decide which pool COIN INDICES
+    // are consumed and which land ids are tapped. Bail with no mutation
+    // if the plan cannot be completed — byte-equivalent to
     // `auto_tap_for_cost` being reachable only after `can_pay_cost`
     // (Python) / the permissive legal emit (Rust) said yes, but
     // strictly self-checked so an over-permissive emit degrades to the
     // same honest `false`-bail the old `pay_mana_cost` produced (NOT a
     // partial spend). ----
-    let pool = state.players[idx].mana_pool;
-    // Working copy of the pool's per-color counts.
-    let mut pw = pool.white;
-    let mut pu = pool.blue;
-    let mut pb = pool.black;
-    let mut pr = pool.red;
-    let mut pg = pool.green;
-    let mut pc = pool.colorless;
+    //
+    // **G7 S6-Class-E ordered-pool fix (Python SoT parity).** Python's
+    // `auto_tap_for_cost` (`actions.py:919-986`) drains the pool by
+    // tracking COIN INDICES (`used_coin_ids`) and iterating
+    // `enumerate(p.mana_pool)` for both the colored and generic
+    // phases. The colored phase scans coins IN INSERTION ORDER picking
+    // matching-color coins; the generic phase scans IN INSERTION ORDER
+    // picking any un-used coin. The interleaving means a pool like
+    // `[G, G, U, U]` paying cost `{2}` (pure generic) consumes the
+    // first two list entries (G, G) → residual `U:2`. The legacy
+    // Rust drain order (C→W→U→B→R→G fixed priority) would have
+    // drained `U` before `G` → residual `G:2`. THAT is the Class-E
+    // signature.
+    //
+    // The plan here mirrors Python exactly: it walks the controller's
+    // `coins` vec to pick INDICES into that vec, never per-color
+    // counts. The commit phase removes those indices (high-to-low to
+    // keep lower indices stable, exactly Python's
+    // `sorted(used_coin_ids, reverse=True)`).
+    let pool_coins: Vec<crate::state::ManaCoin> =
+        state.players[idx].mana_pool.coins.clone();
+    let mut used_coin_indices: Vec<usize> = Vec::new();
     let mut used_land: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
     let mut tapped_plan: Vec<u32> = Vec::new();
@@ -433,18 +457,33 @@ pub(crate) fn auto_tap_pay_for_cost(
         if need == 0 {
             continue;
         }
-        // Pool coins of the matching color first.
-        let slot = match sym {
-            "W" => &mut pw,
-            "U" => &mut pu,
-            "B" => &mut pb,
-            "R" => &mut pr,
-            "G" => &mut pg,
+        // Pool coins of the matching color first — iterate the
+        // insertion-ordered `coins` vec, skipping already-used
+        // indices, picking matching-color coins. Byte-mirror of
+        // Python `for idx, coin in enumerate(p.mana_pool):` +
+        // `if _coin_matches_color(coin, color)` (`actions.py:940-949`).
+        // Rust's `ManaCoin` is single-color (W/U/B/R/G/C — no "any"
+        // wildcard in the live registry), so the match is byte-equal.
+        let want = match sym {
+            "W" => b'W',
+            "U" => b'U',
+            "B" => b'B',
+            "R" => b'R',
+            "G" => b'G',
             _ => unreachable!("colored symbol vocabulary is W/U/B/R/G"),
         };
-        let from_pool = (*slot as u32).min(need);
-        *slot -= from_pool as u8;
-        need -= from_pool;
+        for (i, coin) in pool_coins.iter().enumerate() {
+            if need == 0 {
+                break;
+            }
+            if used_coin_indices.contains(&i) {
+                continue;
+            }
+            if coin.color == want {
+                used_coin_indices.push(i);
+                need -= 1;
+            }
+        }
         if need == 0 {
             continue;
         }
@@ -469,17 +508,23 @@ pub(crate) fn auto_tap_pay_for_cost(
         }
     }
 
-    // Generic: remaining pool (deterministic C→W→U→B→R→G drain,
-    // matching `pay_mana_cost`'s post-colored generic order), then
-    // remaining untapped lands `[:generic_need]`.
+    // Generic: walk `coins` IN INSERTION ORDER picking any un-used
+    // coin until `generic_need` is satisfied — byte-mirror of Python
+    // `for idx, coin in enumerate(p.mana_pool): ... used_coin_ids.
+    // append(idx); generic_need -= 1` (`actions.py:965-973`). The
+    // remainder is paid by tapping lands `[:generic_need]`. THIS is
+    // the Class-E fix: the order now follows pool LIST ORDER, not a
+    // fixed C→W→U→B→R→G color priority.
     let mut generic_need = cost.generic as u32;
-    for slot in [&mut pc, &mut pw, &mut pu, &mut pb, &mut pr, &mut pg] {
+    for (i, _coin) in pool_coins.iter().enumerate() {
         if generic_need == 0 {
             break;
         }
-        let take = (*slot as u32).min(generic_need);
-        *slot -= take as u8;
-        generic_need -= take;
+        if used_coin_indices.contains(&i) {
+            continue;
+        }
+        used_coin_indices.push(i);
+        generic_need -= 1;
     }
     if generic_need > 0 {
         for (lid, _syms) in lands.iter() {
@@ -499,16 +544,40 @@ pub(crate) fn auto_tap_pay_for_cost(
         return Ok(false);
     }
 
-    // ---- Phase 2: COMMIT. The plan is complete; debit the pool to
-    // the planned residual and tap the planned lands. ----
+    // ---- Phase 2: COMMIT. The plan is complete; remove the planned
+    // coin indices from the pool (high-index-first so lower indices
+    // stay stable — same as Python's `sorted(used_coin_ids,
+    // reverse=True)` then `del p.mana_pool[idx]`,
+    // `actions.py:978-980`) and tap the planned lands. The drain
+    // helper keeps the per-color count cache in sync as each coin is
+    // removed. ----
     {
         let mp = &mut state.players[idx].mana_pool;
-        mp.white = pw;
-        mp.blue = pu;
-        mp.black = pb;
-        mp.red = pr;
-        mp.green = pg;
-        mp.colorless = pc;
+        // Walk indices high-to-low so each `remove(idx)` doesn't shift
+        // later indices we still want to remove.
+        let mut sorted_indices = used_coin_indices.clone();
+        sorted_indices.sort_unstable_by(|a, b| b.cmp(a));
+        for i in sorted_indices {
+            // Defensive: indices come from a Vec we just snapshotted;
+            // they MUST still be valid because nothing else mutated
+            // the pool between snapshot and now (PyMethod, single-
+            // threaded).
+            debug_assert!(i < mp.coins.len(), "stale coin index after plan");
+            let removed = mp.coins.remove(i);
+            // Mirror in the per-color count cache so the existing
+            // count-reader call sites (`pool_can_cover`, fingerprint,
+            // snapshot, etc.) stay consistent.
+            match removed.color {
+                b'W' => mp.white = mp.white.saturating_sub(1),
+                b'U' => mp.blue = mp.blue.saturating_sub(1),
+                b'B' => mp.black = mp.black.saturating_sub(1),
+                b'R' => mp.red = mp.red.saturating_sub(1),
+                b'G' => mp.green = mp.green.saturating_sub(1),
+                b'C' => mp.colorless = mp.colorless.saturating_sub(1),
+                _ => {} // Defensive: vocabulary already validated.
+            }
+        }
+        mp.assert_count_sync();
     }
     for lid in tapped_plan {
         {

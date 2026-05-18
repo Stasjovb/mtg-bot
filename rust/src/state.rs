@@ -501,11 +501,95 @@ impl GameObject {
 // the Python side's `_CowList`.
 pub type Zone = Arc<Vec<GameObject>>;
 
+/// A single coin in a player's mana pool. Mirrors Python's
+/// `ManaCoin` (src/mtg_bot/game.py:2450): one color tag per coin.
+///
+/// **G7 S6-Class-E ordered-pool slice.** Python represents
+/// `Player.mana_pool` as a `list[ManaCoin]`. `auto_tap_for_cost`
+/// drains generic cost from that list in **insertion / FIFO order**
+/// (`actions.py:964-976`: `for idx, coin in enumerate(p.mana_pool)`),
+/// NOT by a fixed color priority. Mirroring that semantics
+/// byte-faithfully requires Rust to preserve coin insertion order —
+/// which a per-color count struct discards at `add_mana` time.
+/// `ManaCoin` is the unit of the ordered representation; the
+/// per-color count fields on `ManaPool` remain as a denormalized
+/// cache for O(1) reads and back-compat with the existing readers
+/// (`get_mana_pool`, `pool_can_cover`, `pool_total`, fingerprint,
+/// snapshot — all unchanged). Mutation sites keep the two in sync.
+///
+/// **Color vocab:** `'W'`, `'U'`, `'B'`, `'R'`, `'G'`, `'C'`. The
+/// closed vocabulary matches every other mana-color call site in
+/// the engine (`slot_mut` in `state_ops_mana.rs:72-87`, the
+/// `mana_produced` symbols, the cost-payment slot lookups). Stored
+/// as a single byte for cheap clone/copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManaCoin {
+    pub color: u8, // ASCII byte: b'W'/b'U'/b'B'/b'R'/b'G'/b'C'
+}
+
+impl ManaCoin {
+    /// Construct from a color &str. The closed vocabulary is
+    /// W/U/B/R/G/C — anything else returns `None`. Used by every
+    /// `add_mana`-shape mutation site to build the coin to push.
+    pub fn from_color_str(color: &str) -> Option<Self> {
+        let b = match color {
+            "W" => b'W',
+            "U" => b'U',
+            "B" => b'B',
+            "R" => b'R',
+            "G" => b'G',
+            "C" => b'C',
+            _ => return None,
+        };
+        Some(Self { color: b })
+    }
+
+    /// The color as a `&'static str` (cheap; no allocation).
+    pub fn color_str(&self) -> &'static str {
+        match self.color {
+            b'W' => "W",
+            b'U' => "U",
+            b'B' => "B",
+            b'R' => "R",
+            b'G' => "G",
+            b'C' => "C",
+            _ => "?", // Defensive; from_color_str gates the vocab.
+        }
+    }
+}
+
 /// Mana pool for one player. Five colors + colorless; capped at u8
 /// per color (255 of any color is more than any real game produces).
 /// Hybrid / X / snow mana are not yet modeled; future slices add
 /// them when a card needs them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// **G7 S6-Class-E ordered-pool representation.** `coins` is the
+/// insertion-ordered SoT (Python parity — `Player.mana_pool` is a
+/// `list[ManaCoin]`). The six per-color count fields are a
+/// denormalized cache populated and maintained alongside `coins` by
+/// every mutation site (`add_mana`, the `pay_mana_cost*` family,
+/// `auto_tap_pay_for_cost`, `empty_*_mana_pool*`, the resolver
+/// `AddMana` arms, the legal-side `auto_tap_headroom_pool`). The
+/// counts let O(1) read paths (`pool_can_cover`, `pool_total`,
+/// fingerprint/snapshot, `get_mana_pool`) stay unchanged; the
+/// `coins` vec only matters when a DRAIN consumer cares about
+/// insertion order (currently: `auto_tap_pay_for_cost` generic
+/// drain, which is the Class-E fix lane).
+///
+/// **Sync invariant**: at every quiescent point,
+/// `coins.iter().filter(|c| c.color == b'W').count() == self.white`
+/// (and same for U/B/R/G/C). Mutation sites enforce this by either
+/// (a) updating both, or (b) recomputing the counts from `coins` at
+/// the end of the mutation. `assert_count_sync` (debug-only)
+/// validates the invariant on every parity-critical pay/drain path
+/// so a future mutation that touches only one side fails loudly
+/// instead of producing a silent drift.
+///
+/// **Not `Copy`** — `Vec<ManaCoin>` makes the struct non-trivially
+/// destructible. The two pre-existing by-value sites
+/// (`auto_tap_pay_for_cost` snapshot, `auto_tap_headroom_pool`
+/// hypothetical pool) clone explicitly.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ManaPool {
     pub white: u8,
     pub blue: u8,
@@ -513,6 +597,169 @@ pub struct ManaPool {
     pub red: u8,
     pub green: u8,
     pub colorless: u8,
+    /// Insertion-ordered SoT — mirrors Python's `list[ManaCoin]`.
+    /// `add_mana` appends; drain consumers that care about FIFO
+    /// (Python `auto_tap_for_cost`'s generic drain) iterate this.
+    pub coins: Vec<ManaCoin>,
+}
+
+impl ManaPool {
+    /// Append `count` coins of `color` (ASCII byte). Bumps both the
+    /// `coins` vec (insertion-ordered) and the per-color denormalized
+    /// count. `color` must be one of `b'W'`, `b'U'`, `b'B'`, `b'R'`,
+    /// `b'G'`, `b'C'` — defensive no-op on an unknown byte (every
+    /// public caller already validates the color through
+    /// `ManaCoin::from_color_str` or the resolver's vocabulary).
+    ///
+    /// The per-color count uses `saturating_add` (matches the
+    /// existing `add_mana` shape — 255 of any one color is more than
+    /// any real game produces, and silent wrap would be a worse
+    /// failure mode than capping). The `coins` vec grows unbounded
+    /// because it carries identity ordering; a pool with 256 coins is
+    /// not a real-game scenario.
+    pub fn push_coins(&mut self, color: u8, count: u8) {
+        let slot = match color {
+            b'W' => &mut self.white,
+            b'U' => &mut self.blue,
+            b'B' => &mut self.black,
+            b'R' => &mut self.red,
+            b'G' => &mut self.green,
+            b'C' => &mut self.colorless,
+            _ => return, // Defensive no-op on unknown byte.
+        };
+        *slot = slot.saturating_add(count);
+        for _ in 0..count {
+            self.coins.push(ManaCoin { color });
+        }
+    }
+
+    /// Remove the first `count` coins (FIFO) matching `predicate`,
+    /// returning how many were actually removed. Used by drain paths
+    /// that need to consume specific coins (e.g. the colored-payment
+    /// phase of `auto_tap_pay_for_cost`, which drains coins of the
+    /// matching color from the pool side in insertion order). Updates
+    /// the per-color count cache in lockstep.
+    ///
+    /// `predicate(&coin) -> bool` decides whether to consume a coin.
+    /// Returns the actual count drained (≤ `count`, ≤ matching coins
+    /// present).
+    pub fn drain_first_n_where<F: Fn(&ManaCoin) -> bool>(
+        &mut self,
+        count: u32,
+        predicate: F,
+    ) -> u32 {
+        if count == 0 {
+            return 0;
+        }
+        let mut removed: u32 = 0;
+        let mut i = 0;
+        while i < self.coins.len() && removed < count {
+            if predicate(&self.coins[i]) {
+                let c = self.coins.remove(i);
+                // Decrement the matching denormalized slot.
+                let slot = match c.color {
+                    b'W' => &mut self.white,
+                    b'U' => &mut self.blue,
+                    b'B' => &mut self.black,
+                    b'R' => &mut self.red,
+                    b'G' => &mut self.green,
+                    b'C' => &mut self.colorless,
+                    _ => {
+                        removed += 1;
+                        continue;
+                    }
+                };
+                *slot = slot.saturating_sub(1);
+                removed += 1;
+            } else {
+                i += 1;
+            }
+        }
+        removed
+    }
+
+    /// Drain the first `count` coins (FIFO over `coins`, ANY color)
+    /// — the byte-mirror of Python's generic-cost drain idiom
+    /// `for idx, coin in enumerate(p.mana_pool): ... generic_need -= 1`
+    /// (`actions.py:965-973`). Returns the actual count drained.
+    /// Updates the per-color count cache in lockstep.
+    pub fn drain_first_n_fifo(&mut self, count: u32) -> u32 {
+        self.drain_first_n_where(count, |_| true)
+    }
+
+    /// Drain the first `count` coins of `color` (FIFO over `coins`).
+    /// Returns the actual count drained. Used by colored-payment
+    /// paths to keep `coins` in sync with the per-color count cache:
+    /// when an algorithm decrements `pool.green` by N, it should
+    /// also drain N green coins from the head of `coins`.
+    pub fn drain_first_n_color(&mut self, color: u8, count: u32) -> u32 {
+        self.drain_first_n_where(count, |coin| coin.color == color)
+    }
+
+    /// Repopulate `coins` from the per-color count cache, building a
+    /// canonical W/U/B/R/G/C-ordered coin list. Used as a recovery
+    /// path for the very small number of legacy paths that mutate
+    /// only the per-color counts (a transitional helper — every new
+    /// path should keep both sides in sync directly). The order isn't
+    /// "real" insertion order, of course; this is a last-resort
+    /// rebuilder for sites that intentionally don't track insertion
+    /// (e.g. inline cleanup-step resets that are about to zero the
+    /// pool anyway).
+    pub fn rebuild_coins_from_counts(&mut self) {
+        self.coins.clear();
+        for _ in 0..self.white {
+            self.coins.push(ManaCoin { color: b'W' });
+        }
+        for _ in 0..self.blue {
+            self.coins.push(ManaCoin { color: b'U' });
+        }
+        for _ in 0..self.black {
+            self.coins.push(ManaCoin { color: b'B' });
+        }
+        for _ in 0..self.red {
+            self.coins.push(ManaCoin { color: b'R' });
+        }
+        for _ in 0..self.green {
+            self.coins.push(ManaCoin { color: b'G' });
+        }
+        for _ in 0..self.colorless {
+            self.coins.push(ManaCoin { color: b'C' });
+        }
+    }
+
+    /// Debug-only invariant check: `coins`'s per-color histogram
+    /// matches the denormalized count fields. Runs only under
+    /// `debug_assertions`; release builds compile to nothing. Used as
+    /// a belt-and-suspenders guard on the pay/drain paths a future
+    /// mutation could touch without keeping both sides synced.
+    #[inline]
+    pub fn assert_count_sync(&self) {
+        if cfg!(debug_assertions) {
+            let mut w = 0u32;
+            let mut u = 0u32;
+            let mut b = 0u32;
+            let mut r = 0u32;
+            let mut g = 0u32;
+            let mut c = 0u32;
+            for coin in &self.coins {
+                match coin.color {
+                    b'W' => w += 1,
+                    b'U' => u += 1,
+                    b'B' => b += 1,
+                    b'R' => r += 1,
+                    b'G' => g += 1,
+                    b'C' => c += 1,
+                    _ => {}
+                }
+            }
+            debug_assert_eq!(w, self.white as u32, "ManaPool W drift");
+            debug_assert_eq!(u, self.blue as u32, "ManaPool U drift");
+            debug_assert_eq!(b, self.black as u32, "ManaPool B drift");
+            debug_assert_eq!(r, self.red as u32, "ManaPool R drift");
+            debug_assert_eq!(g, self.green as u32, "ManaPool G drift");
+            debug_assert_eq!(c, self.colorless as u32, "ManaPool C drift");
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

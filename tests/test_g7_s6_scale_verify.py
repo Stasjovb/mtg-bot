@@ -278,31 +278,25 @@ def test_s6_known_frontiers_reproduce_byte_exactly(
          "G1 stateless-Rust attack=False re-emission (same axis as "
          "Class-B @369 row; unmasked deeper in arch7/s0 by stacking "
          "Class-D + Class-C closures)"),
-        # Class E — RE-CHARACTERIZED (verify-first @ main 430f3b39;
-        # see test_rust_shadow_bakein.py::
-        # test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned).
-        # The S6-evidence label "C1-family mana-SOURCE color selection
-        # (auto-tap land/source pick order)" is REFINED: the
-        # colored-pip order + colored-land tap order ALREADY byte-match
-        # Python (frontier-a settled those). The REAL root cause is the
-        # GENERIC-cost drain ORDER from the floating mana POOL: Python's
-        # auto_tap_for_cost (actions.py:964-976 — the SoT both
-        # _cast_spell and _activate_ability pay through) drains generic
-        # in p.mana_pool LIST/insertion order; Rust's
-        # auto_tap_pay_for_cost (state_ops_cast.rs:472-483) drains
-        # generic in a fixed C→W→U→B→R→G color priority. arch1/s0 @ 598
-        # the {2}-generic Lander activation: pool list [G,G,U,U] →
-        # Python keeps U:2, Rust keeps G:2 (same total, different
-        # color). HOMOGENEOUS — 31/31 the same root cause
-        # (scout_classe_characterize.py). The faithful fix is an
-        # ordered-pool ManaPool representation (out of the
-        # state_ops_cast/mana-only lane scope; filed follow-up todo).
-        # (boundary step + needle UNCHANGED — the pin's verdict was
-        # firing correctly, only its root-cause label was imprecise.)
-        (1, 0, 598, "STATE_EQ", "mana_pool_p1",
-         "auto_tap_for_cost generic-pool-drain ORDER "
-         "(Python list-order vs Rust fixed C→W→U→B→R→G; "
-         "ordered-pool repr fix out of lane scope)"),
+        # Class E — CLOSED by the ordered-pool `ManaPool`
+        # representation (rust/src/state.rs::ManaPool now carries
+        # `coins: Vec<ManaCoin>` as Python-parity insertion-ordered SoT;
+        # auto_tap_pay_for_cost byte-mirrors auto_tap_for_cost by
+        # walking the `coins` vec in insertion order for both colored
+        # matching and generic FIFO drain). The arch1/s0 bake-in now
+        # proceeds PAST the old step-598 mana_pool_p1 color-residual
+        # trip to step 600, surfacing the SEPARATE library_pX
+        # shuffle-order axis (todo b3f7c0a9, NOT a mana-pool axis).
+        # See test_rust_shadow_bakein.py::
+        # test_g7_classe_mana_generic_pool_drain_order_root_cause_pinned
+        # (closure pin) +
+        # test_g7_classe_closed_then_library_shuffle_order_next_frontier_surfaced
+        # (next-frontier pin) for the dedicated red-before/green-after
+        # contract.
+        (1, 0, 600, "STATE_EQ", "library_p1",
+         "Class-E CLOSED → next frontier is the b3f7c0a9 "
+         "library-shuffle-order axis (SEPARATE, NOT a mana-pool "
+         "regression)"),
     ],
 )
 def test_s6_complete_frontier_inventory(

@@ -118,11 +118,28 @@ impl GameState {
         let idx = check_player_id(player_id)?;
         check_non_negative("add_mana", amount)?;
         let pool = &mut self.players[idx].mana_pool;
-        let slot = slot_mut(pool, color)?;
-        // Saturating to u8::MAX is intentional — 255 of any one
-        // color is more than any real game produces, and silently
-        // wrapping would be a worse failure mode than capping.
-        *slot = slot.saturating_add(amount as u8);
+        // Validate the color via `slot_mut` (it raises on unknown
+        // colors); use the byte form for the ordered-pool push so the
+        // `coins` vec and the per-color count stay in lockstep.
+        let _slot = slot_mut(pool, color)?;
+        let color_byte = match color {
+            "W" => b'W',
+            "U" => b'U',
+            "B" => b'B',
+            "R" => b'R',
+            "G" => b'G',
+            "C" => b'C',
+            // Unreachable: `slot_mut` above already validated the
+            // closed vocabulary. Belt-and-suspenders pattern.
+            _ => unreachable!("slot_mut validated color vocabulary"),
+        };
+        // G7 S6-Class-E ordered-pool: push N coins to the insertion-
+        // ordered `coins` vec AND bump the per-color count cache in
+        // lockstep. `push_coins` does both with saturating-add on the
+        // count (255-cap mirrors the pre-ordered-pool shape — 255 of
+        // any one color is more than any real game produces).
+        pool.push_coins(color_byte, amount as u8);
+        pool.assert_count_sync();
         Ok(())
     }
 
@@ -147,7 +164,27 @@ impl GameState {
                  can't remove {amount}"
             )));
         }
-        *slot = (current - amount) as u8;
+        // G7 S6-Class-E ordered-pool: drain from `coins` in insertion
+        // order (FIFO over coins matching `color`). The
+        // `drain_first_n_color` helper decrements the per-color count
+        // cache as it removes each coin, keeping the two sides
+        // synced. We don't need to touch the slot ref above — the
+        // helper owns the cache update.
+        let color_byte = match color {
+            "W" => b'W',
+            "U" => b'U',
+            "B" => b'B',
+            "R" => b'R',
+            "G" => b'G',
+            "C" => b'C',
+            _ => unreachable!("slot_mut validated color vocabulary"),
+        };
+        let drained = pool.drain_first_n_color(color_byte, amount as u32);
+        debug_assert_eq!(
+            drained, amount as u32,
+            "remove_mana: drain mismatch — coin/count sync drift"
+        );
+        pool.assert_count_sync();
         Ok(())
     }
 
@@ -270,32 +307,54 @@ impl GameState {
         }
         // Step 3: commit. Deduct colored, then drain generic from a
         // deterministic order: C → W → U → B → R → G.
+        //
+        // **G7 S6-Class-E ordered-pool parity-neutral migration**:
+        // this `pay_mana_cost` PyMethod is NOT the Python SoT for
+        // CastSpell / ActivateAbility — those route through
+        // `auto_tap_pay_for_cost` in `state_ops_cast.rs` (the lands-
+        // auto-tapping byte-mirror of `auto_tap_for_cost`). This
+        // method is the count-only legacy pay primitive; preserving
+        // its existing C→W→U→B→R→G drain order keeps Slice-1 byte-
+        // neutral (no test churn). What we ADD here is keeping the
+        // ordered `coins` vec in sync: for each per-color slot the
+        // method decrements, drain that many coins of that color from
+        // the head of `coins`. The two sides remain consistent so
+        // future readers (or future drain consumers) see the same
+        // pool.
         let pool = &mut self.players[idx].mana_pool;
-        pool.white -= req_white as u8;
-        pool.blue -= req_blue as u8;
-        pool.black -= req_black as u8;
-        pool.red -= req_red as u8;
-        pool.green -= req_green as u8;
+        pool.drain_first_n_color(b'W', req_white);
+        pool.drain_first_n_color(b'U', req_blue);
+        pool.drain_first_n_color(b'B', req_black);
+        pool.drain_first_n_color(b'R', req_red);
+        pool.drain_first_n_color(b'G', req_green);
         let mut remaining_generic = req_generic;
-        for slot in [
-            &mut pool.colorless,
-            &mut pool.white,
-            &mut pool.blue,
-            &mut pool.black,
-            &mut pool.red,
-            &mut pool.green,
-        ] {
+        // Walk the legacy C → W → U → B → R → G priority for the
+        // generic drain; for each color, drain from `coins` (FIFO of
+        // matching color) to keep `coins`/count cache synced. The
+        // legacy order is preserved verbatim (parity-neutral); the
+        // CLASS-E FIX in `auto_tap_pay_for_cost` is a SEPARATE drain
+        // path that uses `drain_first_n_fifo` (any-color FIFO).
+        for color in [b'C', b'W', b'U', b'B', b'R', b'G'] {
             if remaining_generic == 0 {
                 break;
             }
-            let avail = *slot as u32;
+            let avail = match color {
+                b'W' => pool.white as u32,
+                b'U' => pool.blue as u32,
+                b'B' => pool.black as u32,
+                b'R' => pool.red as u32,
+                b'G' => pool.green as u32,
+                b'C' => pool.colorless as u32,
+                _ => 0,
+            };
             let take = avail.min(remaining_generic);
-            *slot -= take as u8;
+            pool.drain_first_n_color(color, take);
             remaining_generic -= take;
         }
         // Sanity: step-2's `rem_total >= req_generic` check guarantees
         // we always drain to zero. Belt-and-suspenders only.
         debug_assert_eq!(remaining_generic, 0);
+        pool.assert_count_sync();
         Ok(true)
     }
 
@@ -364,8 +423,27 @@ impl GameState {
                 break;
             }
         }
-        let slot = slot_mut(&mut player.mana_pool, &produced_color)?;
-        *slot = slot.saturating_add(1);
+        // G7 S6-Class-E ordered-pool: route the produced-color credit
+        // through `push_coins` so the insertion-ordered `coins` vec
+        // and the per-color count cache are kept in sync. The `&str`
+        // produced_color is one of W/U/B/R/G/C (gated by the registry
+        // validator + the `slot_mut` lookup below as a belt-and-
+        // suspenders no-op-on-invalid).
+        // Validate the color through `slot_mut` first to preserve the
+        // existing error-on-bad-symbol contract (a registry-construct-
+        // ion bug raises here, not silently drops).
+        let _slot = slot_mut(&mut player.mana_pool, &produced_color)?;
+        let color_byte = match produced_color.as_str() {
+            "W" => b'W',
+            "U" => b'U',
+            "B" => b'B',
+            "R" => b'R',
+            "G" => b'G',
+            "C" => b'C',
+            _ => unreachable!("slot_mut validated color vocabulary"),
+        };
+        player.mana_pool.push_coins(color_byte, 1);
+        player.mana_pool.assert_count_sync();
         // Round-58 BECOMES_TAPPED event bridge — tap-for-mana site.
         // Python's `auto_tap_for_cost` (`src/mtg_bot/actions.py:
         // 981-985`) routes every land it taps through
