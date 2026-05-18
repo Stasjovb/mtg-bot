@@ -1685,6 +1685,41 @@ second:
    >     `DepressurizeEffect` arm; merge serializes w.r.t. any
    >     state_ops Rust lane). Distinct: S4b + warp-EMISSION +
    >     the combat-blocker `LEGAL_SET`.
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 29 —
+   >   G7 S5c LANDED + R77-CFI1 CLOSED; cron IN-SYNC, counts
+   >   UNCHANGED 121/123/23/12/11, parity 307/475 / PROBED 106
+   >   UNCHANGED; NEW 4-file baseline 1536 = 1532-core + 2 S4 +
+   >   2 R77-CFI1, all ADDITIVE).**
+   >   - **S5c (G7 critical-path cleanup):** removed the
+   >     obsolete S1/S4-era `#[allow(dead_code)]` on
+   >     `ZONE_STACK` (`state_ops_zones.rs`; cargo/clippy-proven
+   >     genuinely-used post-S5a, clippy byte-identical 79→79,
+   >     pure lint-attr removal → codegen-invariant). Flipped
+   >     the `SEARCH_LIMITATIONS.md` G7 mid-game note
+   >     "honest-stopped"→**"S5a/S5b CLOSED"**; the SEPARATE
+   >     `LEGAL_SET_EQ` + S4b + warp-EMISSION follow-ups kept
+   >     explicitly OPEN (no overclaim). Merged `9d8f19f5`.
+   >   - **R77-CFI1 CLOSED (Round-77's single residual):**
+   >     removed the stray `obj.counters=0` from 13 hand-rolled
+   >     death-to-graveyard arms in `state_ops_resolve.rs` (10
+   >     destroy + 3 sacrifice — the audit found the sacrifice
+   >     siblings the identical CFI-1 class), byte-mirror Python
+   >     `turn.move_off_battlefield` + the closed
+   >     `DepressurizeEffect` arm + Rust's own SBA destroy path;
+   >     repros arch815/s2 + arch54024/s7 RED→GREEN; 3
+   >     `tests_rust/test_resolve.py` bug-pinning asserts
+   >     `==0`→`==3` per the R76-2 new-code-is-right precedent
+   >     (Python untouched). Merged `da47183f`; shared `.pyd`
+   >     rebuilt (real codegen); `tests_rust` zero-newly-failing;
+   >     state_ops_resolve.rs-only → no structural-arm fire.
+   >   - NEXT (2 continuous lanes): **Lane A = S5-triggers-
+   >     verify** (triggers compose byte-equal through the
+   >     re-homed `stack_objects` source) → S6 → **S7 CE5
+   >     removal LAST** → CE5-free re-proof + fresh CE5-free C4 =
+   >     the final flip gate; **Lane B = the combat-blocker
+   >     `LEGAL_SET` follow-up** (todo `fec5f14` — the next
+   >     bake-in tripwire after the now-closed `hand_p0`).
+   >     Distinct: S4b + warp-EMISSION.
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also
