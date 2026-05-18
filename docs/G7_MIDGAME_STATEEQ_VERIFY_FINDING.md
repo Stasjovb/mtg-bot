@@ -498,3 +498,167 @@ arch2/s1 row (shuffle-order `b3f7c0a9`) is UNCHANGED. 4-file core gate
 exit 0; isolation self-check PASSED (shared canonical `.pyd`
 byte-identical before/after — zero `rust/src` ⇒ NO `.pyd` rebuild
 owed). NOT merged / NOT pushed.
+
+## 9.1 Class B cycle-35 — the Rust-ENGINE option-β change is PROVEN-CORRECT but the residual blocker is the OUT-OF-LANE Rust-driver ADAPTER (HONEST-STOP, ZERO committed engine)
+
+> **Status: HONEST-STOP — the engine sub-part is verify-first
+> PROVEN correct + non-regressing, but it closes 0/138 alone and the
+> residual blocker is `rust_engine_adapter.py` (the brief's explicit
+> out-of-lane prohibition + STOP condition). ZERO committed
+> `rust/src`/`.pyd`/tracked-file change — exactly the cycle-33
+> discipline.** Lane: `feature/g7-classb-engine` off `main` @
+> `430f3b39`; worktree-isolated `.venv-py313`; only throwaway
+> `scripts/scout_classb_{pathtrace,combinedproof,scalecompare}.py`
+> + this finding/SL/SOT_FLIP doc update committed.
+
+**RED-before (byte-exact at `430f3b39`).** Reproduced identically to
+§9: arch5/s0 step 367, `PassPriority()` at the BEGINNING_OF_COMBAT
+pass-round end (empty stack, `losers=[]`). Post-apply STATE_EQ
+`('priority_player', 1, 0)` — Python carries `priority_player_idx=1`,
+Rust forces `0`. Pre-apply both `pri=1 act=0`; post-apply Python
+`step=DECLARE_ATTACKERS pri=1`, Rust `phase=5 pri=0`.
+
+**Verify-first PINPOINTED the immediate force (instrumented
+`_reset_priority_to_active`/`_advance_to_next_decision`/
+`_run_priority_action` wrappers — `scout_classb_pathtrace.py`).** At
+step 367 the `_run_priority_action(PassPriority)` empty-stack
+pass-round-end branch (`rust_engine_adapter.py:456-473`) does
+`advance_phase()` (phase 4→5, BEGINNING_OF_COMBAT→DECLARE_ATTACKERS)
+then **`_reset_priority_to_active()` (`rust_engine_adapter.py:473`)**
+which fires `pri 1→0`. Rust's own `advance_phase` does NOT reset
+priority on this transition (only the CLEANUP→UNTAP wrap does,
+`state_ops_steps.rs:523`); `state_ops_actions.rs:1444-1446` is guarded
+`if !is_pass_priority` (does NOT fire on a PassPriority).
+**Conclusion: the IMMEDIATE `priority_player=0` force is
+`rust_engine_adapter.py:473` — NOT in `rust/src`.** The Python
+`MtgGameStateAdapter._run_priority_action` empty-stack branch
+(`engine_adapter.py:969-971`) does ONLY `_advance_to_next_step()` —
+NO priority reset — deferring it to `_enter_step` →
+`_enter_priority_for_current_step`, which the combat-exposed
+`_enter_declare_attackers` SKIPS (returns without it). The Rust-driver
+port added the eager `:473` reset; that eager reset is the divergent
+code, and it is in the FORBIDDEN `rust_engine_adapter.py`.
+
+**The chosen engine fix = option β, `state_ops_legal.rs` only**
+(byte-faithful to the Python adapter's structural decision-maker):
+move the DECLARE_ATTACKERS / DECLARE_BLOCKERS factored-combat emission
+ABOVE the line-1199 priority gate (turning the early `return` into a
+relocated `is_priority_holder` gate that fences only the genuine
+priority-window emission — PlayLand/CastSpell/ActivateAbility/sorcery
+block, byte-identical to the old predicate), and key the blocker gate
+on the **structural defender** `player_id == 1 - active_player`
+(Rust's own canonical defender, `state_ops_combat.rs:941` /
+`state_ops_choices.rs:104`; byte-equal to Python's
+`_combat_defender_id = _next_alive((active+1)%n)` in the
+loader-admitted no-loss 2-player model) instead of the
+`priority_player != active_player` proxy (which only held because the
+adapter forced `priority==active`). The attacker gate already keys on
+`active_player == player_id` (= Python `active_player()` returning
+`active_player_idx` during `_COMBAT_ATTACKERS`). Option α alone is
+INSUFFICIENT (verified): it would need the SAME line-1199 relaxation
+to break the chicken-and-egg, so β is the minimal, byte-faithful,
+smallest-blast-radius shape.
+
+**Verify-first PROOF the engine change is correct (the decisive
+`scout_classb_combinedproof.py` run, change ACTUALLY built into the
+worktree wheel).** With the option-β engine change BUILT IN **plus**
+a throwaway monkeypatch that defers the adapter's
+`_reset_priority_to_active` for factored-combat steps (the
+hypothetical coordinated `rust_engine_adapter.py` change Python's
+`_enter_declare_*` already embodies by returning without
+`_enter_priority_for_current_step`): **step 367 CLOSES** — the run
+proceeds PAST it (no `('priority_player',1,0)` trip) and surfaces a
+NEW distinct divergence at **step 368: `STATE_EQ active_player
+divergence: rust=1 python=0`** (Python combat decision-maker = active
+= 0 via `MtgGameStateAdapter.active_player()`'s `_COMBAT_ATTACKERS`
+override; Rust `RustGameStateAdapter.active_player()`
+(`rust_engine_adapter.py:543-550`) returns `_priority_pid()` = the
+now-carried priority = 1). So closing Class B requires BOTH (a) the
+`rust/src` line-1199 option-β relaxation (this lane — proven correct)
+AND (b) a coordinated `rust_engine_adapter.py` change: defer
+`_reset_priority_to_active` for factored-combat steps (`:473`) AND
+make `active_player()` return the combat decision-maker
+(active/defender) instead of `_priority_pid()` during factored combat
+(`:543-550`). Part (b) is the brief's explicit out-of-lane
+prohibition + STOP condition.
+
+**Why the engine change is SOUND but NOT landed (HONEST PROGRESS, no
+forced partial).** Built into the worktree wheel and exercised:
+`tests_rust` 30 failed / 2312 passed = **zero-newly-failing,
+zero-newly-passing vs `430f3b39`** (byte-identical `feedcf93`
+baseline-rot set); bake-in suite **16 green** (the arch5/s0 + arch2/s1
+pin rows UNCHANGED — Class B still surfaces at 367, correctly NOT
+flipped); a 60-game C4-class scale sweep
+(`scout_classb_scalecompare.py`, 12 arch × 5 seeds, pristine wheel vs
+changed wheel) is **behavior-neutral**: identical status distribution
+(`TIMEOUT 33 / FAIL_DIVERGENCE 27` ≡ `33 / 27`), **58/60 games
+byte-identical**, the only 2 deltas are SAME-step / SAME-tripwire /
+SAME-field (`library_pX` STATE_EQ @211/@286) shifts of WHICH card in
+the **already-filed `b3f7c0a9` library-SHUFFLE-ORDER frontier**
+surfaces (the run-to-run shuffle variance that pin explicitly
+documents — NOT a new divergence, NOT a boundary shift, NOT a closed-
+axis regression; the arch2/s1 row is NOT touched). The change is the
+**correct, necessary, non-regressing engine half** of a 2-part fix —
+but on its own it **closes 0/138, moves NO pin, flips NO closure**,
+and the residual blocker (`rust_engine_adapter.py:473` + `:543-550`)
+is explicitly out of this lane. Landing a no-closure `rust/src` change
+that owes a `.pyd` rebuild + cron resync + `state_ops_legal.rs` lane
+serialization for ZERO progress is exactly the forced-partial /
+incomplete-half the brief and HONEST PROGRESS reject. Therefore: the
+engine change is **reverted to pristine** (the worktree `rust/src` is
+byte-pristine; the proven-correct diff is preserved verbatim below as
+the orchestrator's hand-off artifact for the coordinated
+engine+adapter Class-B slice), exactly the cycle-33 ZERO-engine
+honest-stop discipline.
+
+**The proven-correct engine diff (orchestrator hand-off artifact —
+NOT committed as engine; apply alongside the coordinated
+`rust_engine_adapter.py` `:473`/`:543-550` change).** `git apply`
+against `rust/src/state_ops_legal.rs` @ `430f3b39`:
+
+1. Replace the line-1197-1201 `if self.priority_player != player_id {
+   return Ok(actions); }` early-return with `let is_priority_holder =
+   self.priority_player == player_id;` (factored-combat blocks below
+   run BEFORE the gate; emission keyed on the structural
+   decision-maker, NOT priority).
+2. The DECLARE_BLOCKERS gate `self.priority_player !=
+   self.active_player` → `player_id == 1 - self.active_player` (the
+   structural defender; byte-equal to Python's
+   `_next_alive((active+1)%n)` defender in the no-loss 2-player
+   model).
+3. Insert `if !is_priority_holder { return Ok(actions); }`
+   immediately BEFORE the sorcery-timing block (the relocated former
+   line-1199 early return — byte-identical priority-window-emission
+   semantics; only the factored-combat blocks now emit independent of
+   `priority_player`).
+
+(+79 / -12 in `state_ops_legal.rs`, comments included. Touches NOTHING
+else.)
+
+**Re-characterized Class B count: 0/138 closed by this lane**
+(HONEST — the engine half alone closes none; the dominant 138/300
+arch5/s0-step-367 `('priority_player',1,0)` STATE_EQ is UNMOVED). The
+bake-in pin's arch5/s0 row STAYS surfaced (NOT flipped — Class B is
+NOT closed); the arch2/s1 row is UNTOUCHED (the `b3f7c0a9` lane owns
+it). The next frontier behind Class B is **arch5/s0 step 368
+`STATE_EQ active_player divergence: rust=1 python=0`** (characterized
+above; it is gated behind the coordinated engine+adapter Class-B fix
+landing, so it is documented here — NOT pinnable as a surfaced
+boundary while step 367 still trips first).
+
+**Conclusion + RE-SCOPE.** Class B is a **coordinated Rust-engine +
+Rust-driver-adapter slice**, NOT an engine-only slice: the necessary
+`state_ops_legal.rs` option-β engine change (proven correct here) MUST
+land together with the `rust_engine_adapter.py:473` deferred-priority
++ `:543-550` combat-decision-maker `active_player()` change. The brief
+scoped this lane as engine-only and forbade `rust_engine_adapter.py`;
+per the brief's explicit STOP condition this lane HONEST-STOPS with
+ZERO committed engine. Gate: 4-file core **1536 UNMOVED** (zero
+Python/test/`parity_smoke.py`); `tests_rust` 30 failed / 2312 passed =
+zero-newly-failing vs `430f3b39` (byte-identical); bake-in suite 16
+green (arch5/s0 + arch2/s1 rows UNCHANGED); all prior G7 closure pins
+green; `check_audit_coverage_staleness.py` exit 0; isolation
+self-check PASSED (shared canonical `.pyd` SHA256/size/mtime
+byte-identical before/after — worktree-isolated builds only, zero
+committed `rust/src` ⇒ orchestrator owes NO `.pyd` rebuild). NOT
+merged / NOT pushed.

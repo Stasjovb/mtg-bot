@@ -7013,6 +7013,87 @@ gate signal (correctly loud). The proper closure is parity-positive
 > `docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` §9 + SOT_FLIP §4 G7 row.
 > NOT merged / NOT pushed.
 
+> **[G7 S6 Class B cycle-35 — the Rust-ENGINE option-β change is
+> VERIFY-FIRST PROVEN-CORRECT; Class B RE-SCOPED to a COORDINATED
+> engine+adapter slice; HONEST-STOP, ZERO committed engine.]** Lane
+> `feature/g7-classb-engine` off `main` @ `430f3b39`, worktree-
+> isolated `.venv-py313`. RED-before reproduced byte-exactly (arch5/s0
+> step 367 `('priority_player',1,0)`; Python carries
+> `priority_player_idx=1`, Rust forces 0). Verify-first PINPOINTED
+> (instrumented adapter-helper wrappers) the IMMEDIATE
+> `priority_player=0` force = **`rust_engine_adapter.py:473`
+> `_reset_priority_to_active()`** on the empty-stack
+> BEGINNING_OF_COMBAT pass-round-end into DECLARE_ATTACKERS — NOT in
+> `rust/src` (Rust `advance_phase` does NOT reset priority on that
+> transition; `state_ops_actions.rs:1444-1446` is
+> `if !is_pass_priority`-guarded; the Python adapter's empty-stack
+> branch `engine_adapter.py:969-971` does ONLY `_advance_to_next_step`
+> — NO reset — deferring it to `_enter_step` which the combat-exposed
+> `_enter_declare_attackers` SKIPS; the Rust-driver port's eager
+> `:473` reset is the divergent code, in the FORBIDDEN
+> `rust_engine_adapter.py`). The chosen engine fix = **option β,
+> `state_ops_legal.rs`-only**: move the factored-combat
+> DECLARE_ATTACKERS/DECLARE_BLOCKERS emission ABOVE the line-1199
+> priority gate, keyed on the structural decision-maker (attackers
+> `active_player==player_id`; blockers `player_id == 1 -
+> active_player`, Rust's canonical defender = byte-equal Python
+> `_next_alive((active+1)%n)` no-loss 2-player), the relocated
+> `is_priority_holder` early-return fencing ONLY the genuine
+> priority-window emission (byte-identical to the old line-1199
+> predicate). **DECISIVE PROOF (`scout_classb_combinedproof.py`,
+> change ACTUALLY built into the worktree wheel — an earlier
+> worktree-discipline slip that edited `rust/src` in the MAIN
+> checkout was caught, reverted to pristine, re-applied to the
+> worktree, the wheel rebuilt, then re-proved): option-β engine
+> change BUILT IN + a throwaway monkeypatch deferring the adapter's
+> `_reset_priority_to_active` for factored-combat steps ⇒ step 367
+> CLOSES (run proceeds PAST it) and a NEW distinct `STATE_EQ
+> active_player divergence: rust=1 python=0` surfaces at step 368**
+> (Python combat decision-maker=active=0 via
+> `MtgGameStateAdapter.active_player()`; Rust
+> `RustGameStateAdapter.active_player()` `:543-550` returns
+> `_priority_pid()`=carried priority=1). So closing Class B requires
+> BOTH (a) the `rust/src` line-1199 option-β relaxation (this lane —
+> proven correct) AND (b) a coordinated `rust_engine_adapter.py`
+> change (defer `_reset_priority_to_active` for factored-combat steps
+> `:473` + make `active_player()` return the combat decision-maker
+> not `_priority_pid()` `:543-550`); (b) is the brief's explicit
+> out-of-lane prohibition + STOP condition. The engine change is
+> SOUND (built+exercised: `tests_rust` 30 failed / 2312 passed =
+> zero-newly-failing AND zero-newly-passing vs `430f3b39`; bake-in
+> suite 16 green with arch5/s0+arch2/s1 pin rows UNCHANGED — Class B
+> still surfaces at 367, correctly NOT flipped; a 60-game C4-class
+> scale sweep pristine-wheel vs changed-wheel is behavior-neutral —
+> identical `TIMEOUT 33 / FAIL_DIVERGENCE 27`, 58/60 byte-identical,
+> the only 2 deltas are SAME-step/SAME-tripwire/SAME-field
+> `library_pX` shuffle-content shifts WITHIN the already-filed
+> `b3f7c0a9` shuffle-order frontier — NOT new/boundary-shifting/
+> regressing, the arch2/s1 row NOT touched) but on its own closes
+> **0/138**, moves NO pin, flips NO closure — so it is NOT landed (a
+> no-closure `rust/src` change owing a `.pyd` rebuild + cron resync +
+> `state_ops_legal.rs` lane serialization for ZERO progress is
+> exactly the forced-partial HONEST PROGRESS rejects, the cycle-33
+> ZERO-engine discipline). Engine reverted to byte-pristine; the
+> proven-correct +79/-12 `state_ops_legal.rs` diff is preserved
+> verbatim in `docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` §9.1 as the
+> orchestrator's hand-off artifact for the coordinated Class-B slice.
+> **Class B RE-SCOPED: a coordinated Rust-engine
+> (`state_ops_legal.rs` option-β) + Rust-driver-adapter
+> (`rust_engine_adapter.py:473` + `:543-550`) slice — NOT
+> engine-only.** Next frontier behind it = arch5/s0 step 368
+> `STATE_EQ active_player rust=1 python=0` (characterized; gated
+> behind the coordinated fix landing, NOT pinnable while 367 trips
+> first). 4-file core gate **1536 UNMOVED** (zero
+> Python/test/`parity_smoke.py`); `tests_rust` zero-newly-failing vs
+> `430f3b39` (byte-identical 30/2312); all prior G7 closure pins
+> green; `check_audit_coverage_staleness.py` exit 0; isolation
+> self-check PASSED (shared canonical `.pyd` SHA256/size/mtime
+> byte-identical before/after — worktree-isolated builds only, zero
+> committed `rust/src` ⇒ orchestrator owes NO `.pyd` rebuild). Full
+> verify-first record:
+> `docs/G7_MIDGAME_STATEEQ_VERIFY_FINDING.md` §9.1 + SOT_FLIP §4 G7
+> row. NOT merged / NOT pushed.
+
 > **[S5 TRIGGERS-VERIFY LANDED + orchestrator-merged (cycle 30) —
 > `feature/g7-s5-triggers-verify`, pure-Python VERIFY, ZERO
 > engine/`rust/src`/`.pyd`.]** The full faithfully-bridgeable trigger
