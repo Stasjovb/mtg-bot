@@ -952,6 +952,168 @@ def drive_one_game(
     return result
 
 
+def drive_one_game_rust_shadow(
+    archetype: int,
+    seed: int,
+    max_steps: int,
+    require_creatures: Optional[int] = None,
+    verbose: bool = False,
+) -> GameResult:
+    """C4 re-sweep driver: drive one (archetype, seed) REAL
+    production-deck game THROUGH the role-swapped ``rust_shadow``
+    bake-in (``ShadowCheckedRustAdapter``: Rust drives, Python
+    shadow-checks in lock-step with the 4-assertion tripwire) instead
+    of the ``step_both`` Python-drives/Rust-mirrors comparator.
+
+    This is the Step-0 / SOT_FLIP_CUTOVER_PLAN C4 evidence harness:
+    the SAME real-deck loader path (``load_production_deck`` +
+    ``production_deck_to_deckspec`` — the bench's
+    ``setup_matched_game_from_real_decks`` two-step expansion) and the
+    SAME ``require_creatures`` engine-agnostic precondition / outcome
+    classes as :func:`drive_one_game`, but the decision flow runs
+    through ``rust_shadow.drive_shadow_game_to_terminal`` (the EXACT
+    idiom ``tests/test_rust_shadow_bakein.py`` drives the bake-in
+    with — a deterministic seeded ``random.Random`` over
+    ``legal_decisions()`` applied via ``apply`` until terminal), just
+    longer + on a real DeckSpec.
+
+    A ``ShadowDivergenceError`` is recorded as FAIL_DIVERGENCE with the
+    tripwire name as ``divergence_kind`` and the tripwire detail in
+    ``exception_message`` (the honest bake-in fail signal — NO silent
+    fallback to ``step_both``, NO skipped game:
+    ``feedback_no_fallback_hybrids`` / ``feedback_silent_noop``). A
+    clean run to the natural terminal is PASS. Reuses the existing
+    ``GameResult`` / ``aggregate`` / ``render_summary`` / ``--json-out``
+    machinery so the report shape is byte-consistent with round-76.
+    """
+    from mtg_bot.parity import trajectory
+    from mtg_bot.search.rust_shadow import drive_shadow_game_to_terminal
+
+    result = GameResult(archetype=archetype, seed=seed, status="PASS")
+    t0 = time.perf_counter()
+
+    # ---- Setup: identical real-deck loader path to drive_one_game ----
+    try:
+        deck_names = trajectory.load_production_deck(archetype=archetype)
+    except (FileNotFoundError, IndexError) as e:
+        result.status = "FAIL_EXCEPTION"
+        result.exception_type = type(e).__name__
+        result.exception_message = str(e)
+        result.elapsed_seconds = time.perf_counter() - t0
+        return result
+
+    # ---- Round-66 N1 `--require-creatures N` precondition ------------
+    # Engine-agnostic (a property of the deterministic bridge-filtered
+    # deck), so it classifies identically to the step_both path and can
+    # never itself introduce a divergence. Default-off.
+    if require_creatures is not None:
+        n_admitted = _count_admitted_creature_copies(deck_names)
+        if n_admitted < require_creatures:
+            result.status = "ARCHETYPE_FILTERED"
+            result.exception_message = (
+                f"require-creatures precondition: {n_admitted} admitted "
+                f"creature copies < N={require_creatures} "
+                f"(structurally-uncloseable mirror; round-65 N3 — "
+                f"reclassified out of FAIL_TIMEOUT, no game run)"
+            )
+            result.elapsed_seconds = time.perf_counter() - t0
+            return result
+
+    # ---- Build the SAME real-deck DeckSpec the bench plays -----------
+    # This is exactly setup_matched_game_from_real_decks's first step
+    # (production_deck_to_deckspec); the bake-in factory
+    # (build_shadow_checked_adapter) owns the matched-state /
+    # mulligan-free construction from the spec. shared_rng_seed=seed
+    # gives the same per-seed library permutation the step_both path
+    # uses (DeckSpec.shared_rng_seed). An empty post-filter library
+    # raises ValueError -> ARCHETYPE_FILTERED, same as the step_both
+    # path's setup_matched_game_from_real_decks failure mode.
+    try:
+        spec = trajectory.production_deck_to_deckspec(
+            deck_names, shared_rng_seed=seed,
+        )
+    except ValueError as e:
+        msg = str(e)
+        if "empty library" in msg or "production deck filter" in msg:
+            result.status = "ARCHETYPE_FILTERED"
+            result.exception_message = msg
+            result.elapsed_seconds = time.perf_counter() - t0
+            return result
+        result.status = "FAIL_EXCEPTION"
+        result.exception_type = type(e).__name__
+        result.exception_message = msg
+        result.elapsed_seconds = time.perf_counter() - t0
+        return result
+    except Exception as e:  # noqa: BLE001 — bench is signal-generation
+        result.status = "FAIL_EXCEPTION"
+        result.exception_type = type(e).__name__
+        result.exception_message = str(e)
+        if verbose:
+            traceback.print_exc()
+        result.elapsed_seconds = time.perf_counter() - t0
+        return result
+
+    # ---- Drive THROUGH the rust_shadow bake-in to terminal ----------
+    outcome = drive_shadow_game_to_terminal(
+        spec, seed=seed, max_steps=max_steps,
+    )
+    result.status = outcome.status
+    result.actions_played = outcome.steps
+    # turns_played has no clean cross-engine analog under the
+    # Rust-driver bake-in (the adapter abstracts the phase loop);
+    # the step count is the load-bearing progress metric here.
+    result.turns_played = 0
+    if outcome.status == "PASS":
+        result.winner_player_idx = outcome.winner
+        result.win_reason = "terminal"
+    elif outcome.status == "FAIL_DIVERGENCE":
+        # The tripwire name is the divergence "kind"; the field-shape
+        # histogram key becomes "<tripwire>::<detail-head>" so the
+        # aggregate() shape histogram buckets by tripwire + the
+        # divergence head (consistent with the step_both kind::fields
+        # shape).
+        result.divergence_kind = outcome.divergence_kind
+        detail = outcome.divergence_detail or ""
+        # Use the leading bracketed/parenthesized shape token as the
+        # field-shape so distinct divergence shapes bucket separately
+        # while staying compact in render_summary.
+        result.divergence_fields = (_shadow_shape_token(detail),)
+        result.exception_message = detail[:500]
+    elif outcome.status == "FAIL_EXCEPTION":
+        result.exception_type = outcome.exception_type
+        result.exception_message = (outcome.exception_message or "")[:500]
+    # FAIL_TIMEOUT / ARCHETYPE_FILTERED carry no extra fields.
+
+    result.elapsed_seconds = time.perf_counter() - t0
+    return result
+
+
+def _shadow_shape_token(detail: str) -> str:
+    """Extract a compact, stable divergence-shape token from a
+    ShadowDivergenceError detail string for the shape histogram.
+
+    The detail looks like ``rust\\py=[...] py\\rust=[...]`` (LEGAL_SET)
+    or ``compare_fields divergences (...): [('field', ...)]`` (STATE)
+    or ``Python apply_action raised on ...`` (NO_RAISE). We want a
+    short key that groups the SAME divergence shape together without
+    the per-game ids. Best-effort; falls back to the detail head."""
+    import re
+
+    # STATE_EQ: pull the diverging field names.
+    fields = re.findall(r"\('([^']+)',", detail)
+    if fields:
+        return "fields:" + ",".join(sorted(set(fields)))
+    # LEGAL_SET_EQ: the canon kinds that differ (strip numeric ids).
+    kinds = re.findall(r"'\(?'?([a-z_]+)'", detail)
+    if kinds:
+        return "legalset:" + ",".join(sorted(set(kinds)))
+    # NO_RAISE / other: the exception class head.
+    m = re.search(r"raised on .*?: (\w+):", detail)
+    if m:
+        return "noraise:" + m.group(1)
+    return detail[:60]
+
+
 def _extract_field_names_from_assertion(msg: str) -> tuple:
     """drive_combat_phase formats its raise as a stringified list of
     ``(field, py_val, rust_val, known_gap)`` tuples. Pull the field
@@ -1061,6 +1223,38 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Deck source. Today only '17lands' is supported "
             "(data/17lands/eoe_decks.json.gz)."
+        ),
+    )
+    p.add_argument(
+        "--driver", default="step_both",
+        choices=("step_both", "rust_shadow"),
+        help=(
+            "Per-game driver. 'step_both' (DEFAULT, byte-unchanged): "
+            "the Python-drives / Rust-mirrors comparator the bench has "
+            "always used. 'rust_shadow': drive each REAL production-deck "
+            "game THROUGH the role-swapped ShadowCheckedRustAdapter "
+            "bake-in (Rust drives, Python shadow-checks in lock-step "
+            "with the 4-assertion tripwire; a ShadowDivergenceError is "
+            "FAIL_DIVERGENCE with the tripwire name as the divergence "
+            "kind; a clean run to the natural terminal is PASS). This "
+            "is the SOT_FLIP_CUTOVER_PLAN C4 / Step-0 evidence harness "
+            "— the round-76-class grid re-run through the flip-readiness "
+            "gate on the flip-candidate commit. Default-off: the "
+            "step_both path is byte-for-byte unchanged unless this is "
+            "explicitly set to rust_shadow (feedback_no_fallback_"
+            "hybrids: NO silent fallback to step_both on a divergence)."
+        ),
+    )
+    p.add_argument(
+        "--shadow-max-steps", type=int, default=4000,
+        help=(
+            "rust_shadow driver only: per-game decision-step upper "
+            "bound (FAIL_TIMEOUT if reached without a terminal). Pure "
+            "upper bound on the otherwise-deterministic decision loop "
+            "— parity-safe exactly like --max-turns (raising it can "
+            "ONLY convert TIMEOUT -> PASS/DIVERGENCE). Default 4000 is "
+            "the same generous cap the G6 closure pin uses; a real "
+            "60-card mirror's deck-out tail converges well within it."
         ),
     )
     p.add_argument(
@@ -1209,9 +1403,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     seeds = _parse_range(args.seeds)
 
     sys.stderr.write(
-        f"[bench] driving {len(archetypes)} archetype(s) x {len(seeds)} "
-        f"seed(s) = {len(archetypes) * len(seeds)} games; strategy="
+        f"[bench] driver={args.driver}; driving {len(archetypes)} "
+        f"archetype(s) x {len(seeds)} seed(s) = "
+        f"{len(archetypes) * len(seeds)} games; strategy="
         f"{args.combat_strategy}, max_turns={args.max_turns}, "
+        f"shadow_max_steps={args.shadow_max_steps}, "
         f"mulligans={args.mulligans}, "
         f"activate_lander_sac={args.activate_lander_sac}, "
         f"require_creatures={args.require_creatures}\n"
@@ -1223,16 +1419,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     for arch in archetypes:
         for seed in seeds:
             n_done += 1
-            r = drive_one_game(
-                archetype=arch,
-                seed=seed,
-                max_turns=args.max_turns,
-                combat_strategy=args.combat_strategy,
-                mulligans=args.mulligans,
-                verbose=args.verbose,
-                activate_lander_sac=args.activate_lander_sac,
-                require_creatures=args.require_creatures,
-            )
+            if args.driver == "rust_shadow":
+                r = drive_one_game_rust_shadow(
+                    archetype=arch,
+                    seed=seed,
+                    max_steps=args.shadow_max_steps,
+                    require_creatures=args.require_creatures,
+                    verbose=args.verbose,
+                )
+            else:
+                r = drive_one_game(
+                    archetype=arch,
+                    seed=seed,
+                    max_turns=args.max_turns,
+                    combat_strategy=args.combat_strategy,
+                    mulligans=args.mulligans,
+                    verbose=args.verbose,
+                    activate_lander_sac=args.activate_lander_sac,
+                    require_creatures=args.require_creatures,
+                )
             results.append(r)
             if args.verbose:
                 tag = r.status
@@ -1257,6 +1462,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         payload = {
             "config": {
                 "decks": args.decks,
+                "driver": args.driver,
+                "shadow_max_steps": args.shadow_max_steps,
                 "archetypes": args.archetypes,
                 "seeds": args.seeds,
                 "max_turns": args.max_turns,

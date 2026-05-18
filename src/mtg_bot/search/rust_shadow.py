@@ -59,7 +59,8 @@ green; that flip is explicitly NOT done here.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import random
+from typing import Any, NamedTuple, Optional
 
 from mtg_bot.actions import (
     ActivateAbility, CastSpell, DeclareAttackers, DeclareBlockers,
@@ -545,3 +546,135 @@ def build_shadow_checked_adapter(spec: Any):
     )
     rust_adapter = make_rust_game_state_adapter(rust_state, spec=spec)
     return ShadowCheckedRustAdapter(py_adapter, rust_adapter)
+
+
+# ---------------------------------------------------------------------------
+# Headless full-game driver — the Step-0 C4 scaled re-sweep harness contract
+# ---------------------------------------------------------------------------
+
+
+class ShadowGameOutcome(NamedTuple):
+    """The outcome of one headless ``rust_shadow`` bake-in game.
+
+    ``status`` is exactly one of the bench ``GameResult`` status
+    strings so the scaled C4 re-sweep can fold it into the SAME
+    ``aggregate`` / ``render_summary`` / ``--json-out`` machinery the
+    round-76 ``step_both`` sweep used (report-shape consistency):
+
+    * ``PASS``            — ran divergence-clean to the natural
+      terminal state through the role-swapped tripwire.
+    * ``FAIL_DIVERGENCE`` — a ``ShadowDivergenceError`` fired; the
+      tripwire name + detail are carried in ``divergence_kind`` /
+      ``divergence_detail`` (the honest bake-in fail signal —
+      ``feedback_no_fallback_hybrids``: NEVER a silent fall back to
+      ``step_both`` or a skipped game).
+    * ``FAIL_TIMEOUT``    — ``max_steps`` reached without a terminal
+      (a pure upper bound on the otherwise-deterministic decision
+      loop; parity-safe exactly like the bench ``--max-turns`` cap —
+      raising it can only convert TIMEOUT → PASS/DIVERGENCE).
+    * ``FAIL_EXCEPTION``  — any non-``ShadowDivergenceError`` raised
+      (e.g. an adapter / loader internal error).
+    """
+
+    status: str
+    steps: int
+    terminal: bool
+    winner: Optional[PlayerID] = None
+    divergence_kind: Optional[str] = None  # the tripwire name
+    divergence_detail: Optional[str] = None
+    exception_type: Optional[str] = None
+    exception_message: Optional[str] = None
+
+
+def drive_shadow_game_to_terminal(
+    spec: Any,
+    *,
+    seed: int,
+    max_steps: int = 4000,
+) -> ShadowGameOutcome:
+    """Drive ONE headless ``rust_shadow`` bake-in game to its natural
+    terminal through ``ShadowCheckedRustAdapter``.
+
+    This is the EXACT contract ``tests/test_rust_shadow_bakein.py``'s
+    clean-run / G4 / G5 / G6 closure pins drive the bake-in with — a
+    deterministic seeded ``random.Random`` choosing uniformly over
+    ``adapter.legal_decisions()`` and applying via ``adapter.apply``
+    until ``adapter.is_terminal()`` — just LONGER (a full game) and on
+    a REAL production-deck ``DeckSpec`` instead of the tiny synthetic
+    one. It is the same role-swapped gate the smoke runs, scaled.
+
+    ``seed`` keys the decision ``random.Random`` (per-seed determinism
+    — two runs of the same (spec, seed) take the identical decision
+    path; combined with the DeckSpec's own ``shared_rng_seed`` shuffle
+    this makes a game fully reproducible). ``max_steps`` is the pure
+    upper-bound timeout (the analog of the bench ``--max-turns`` cap;
+    a deck-out tail on a real 60-card mirror converges well within
+    the default — 4000 is the same generous cap the G6 closure pin
+    uses).
+
+    A ``ShadowDivergenceError`` is the honest FAIL_DIVERGENCE signal
+    (the tripwire name + detail are recorded; NO fallback to
+    ``step_both``, NO skip — ``feedback_no_fallback_hybrids`` /
+    ``feedback_silent_noop_pipelines``). A clean run to terminal is
+    PASS.
+    """
+    try:
+        adapter = build_shadow_checked_adapter(spec)
+    except ShadowDivergenceError as e:
+        # A divergence at construction (matched states not byte-equal
+        # at the start) is still the honest FAIL_DIVERGENCE signal.
+        return ShadowGameOutcome(
+            status="FAIL_DIVERGENCE", steps=0, terminal=False,
+            divergence_kind=e.tripwire, divergence_detail=str(e),
+        )
+    except Exception as e:  # noqa: BLE001 — bench is signal-generation
+        return ShadowGameOutcome(
+            status="FAIL_EXCEPTION", steps=0, terminal=False,
+            exception_type=type(e).__name__, exception_message=str(e),
+        )
+
+    rng = random.Random(seed)
+    steps = 0
+    try:
+        while steps < max_steps:
+            if adapter.is_terminal():
+                break
+            legal = adapter.legal_decisions()  # asserts LEGAL_SET_EQ
+            if not legal:
+                # A non-terminal state with NO legal decision is an
+                # honest engine/bridge bug — surface it, never silently
+                # treat it as a clean stop (feedback_silent_noop).
+                return ShadowGameOutcome(
+                    status="FAIL_EXCEPTION", steps=steps,
+                    terminal=False,
+                    exception_type="EmptyLegalSet",
+                    exception_message=(
+                        "non-terminal state produced an empty legal "
+                        "decision set under the rust_shadow driver"
+                    ),
+                )
+            choice = rng.choice(legal)
+            adapter.apply(choice)  # CHOSEN_EQ + STATE_EQ + NO_RAISE
+            steps += 1
+    except ShadowDivergenceError as e:
+        return ShadowGameOutcome(
+            status="FAIL_DIVERGENCE", steps=steps,
+            terminal=False,
+            divergence_kind=e.tripwire, divergence_detail=str(e),
+        )
+    except Exception as e:  # noqa: BLE001 — bench is signal-generation
+        return ShadowGameOutcome(
+            status="FAIL_EXCEPTION", steps=steps, terminal=False,
+            exception_type=type(e).__name__,
+            exception_message=str(e),
+        )
+
+    terminal = adapter.is_terminal()
+    if not terminal:
+        return ShadowGameOutcome(
+            status="FAIL_TIMEOUT", steps=steps, terminal=False,
+        )
+    return ShadowGameOutcome(
+        status="PASS", steps=steps, terminal=True,
+        winner=adapter.winner(),
+    )
