@@ -412,6 +412,28 @@ cast internals, so it is UNMOVED by construction; any byte-shift in a
   effects) — but nested windows (response to a response) have never
   been exercised cross-engine because no spell ever sat on the Rust
   stack long enough. New surface area.
+- **S3 LANDED — VERIFY-FIRST OUTCOME: CLEAN-VERIFY NO-OP (this
+  section's "high-probability Rust fix" hypothesis is CONTRADICTED
+  by live source @ `9e884681`).** The hypothesized cast-time
+  priority-reset fix was **already landed by S1** (`5803aea7`).
+  The quoted anticipating docstring (*"a future stack-using cast
+  slice will need to re-think when the reset fires"*) existed ONLY
+  pre-S1 (`6b3e5565^`) — S1 deleted it and resolved the question;
+  the post-S1 `state_ops_cast.rs:621-630` definitively states the
+  cast-push reset matches Python. The cast-push
+  `priority_player = active_player` (`:633`) is REDUNDANT (the
+  adapter loop's `_reset_priority_to_active()` overwrites it with
+  the byte-exact Python `_next_alive(active)` at `:511`/`:444`
+  before any compare point), NOT divergent. The response-window
+  machinery composes byte-equal (I46 instant-speed pass + the
+  Python-faithful `legal.py:180-181` priority gate + LIFO + the
+  post-resolution reset). NO `rust/src/` change; 3 verify-confirm
+  pins (`tests_rust/test_priority.py::test_s3_*`) + status note +
+  `G7_S3_VERIFY_FINDING.md`. 4-file core gate **1532 UNMOVED**.
+  This is a valid S3 outcome (S2/B1 clean-verify class — no diff
+  manufactured). S3 did NOT honest-stop-unmask a new divergence;
+  S4 (`cast_creature_warp` stack-push + rider deferral) is the
+  next owed slice, unaffected.
 
 ### Slice S4 — `cast_creature_warp` + permanent-spell riders (warp / impending / room / cast-from-X provenance)
 
