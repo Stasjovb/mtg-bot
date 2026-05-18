@@ -64669,8 +64669,20 @@ def test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
     assert py.spell_warped_this_turn is True
     assert rs.spell_warped_this_turn is True
 
-    # (3) The following end step — warp-exile, byte-equal at END.
-    adv(7)  # MAIN1 → END (the exile sweep fires on both)
+    # (3) **G7 Class-C delayed-trigger port (round-78).** The following
+    # end step: at PHASE_END_STEP entry both engines now push
+    # `WarpExileSelf` onto the stack (CR-603.7 delayed trigger;
+    # Python via `turn.run_delayed_end_step_triggers`, Rust via
+    # `state_ops_steps.rs::run_delayed_end_step_triggers`). Then the
+    # trigger resolves and exiles the warp creature with
+    # `warped=True`. Byte-equal at every step.
+    adv(7)  # MAIN1 → END: the WarpExileSelf trigger is on the stack.
+    # The trigger is now on both engines' stacks — drain to exile.
+    from mtg_bot.parity.cross_engine import (
+        resolve_top_of_stack_python, resolve_top_of_stack_rust,
+    )
+    resolve_top_of_stack_python(py, floor=0)
+    resolve_top_of_stack_rust(rs, floor=0)
     py_ex = sorted(o.printing.name for o in py.players[ai].exile)
     rs_ex = sorted(o["printing_name"] for o in rs.exile_snapshot(ai))
     assert py_ex == rs_ex == [card_name], (
@@ -64907,8 +64919,15 @@ def test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal(
             f"warp-cast on Rust; {life_before}→{rs.get_life(ai)}")
     life_after_cast = py.players[ai].life
 
-    # (3) The following end step — warp-exile, byte-equal at END.
-    adv(7)  # MAIN1 → END (the exile sweep fires on both)
+    # (3) **G7 Class-C delayed-trigger port (round-78).** End step:
+    # both engines push WarpExileSelf onto the stack at PHASE_END_STEP
+    # entry; resolve drains it to exile (byte-equal at every step).
+    adv(7)  # MAIN1 → END: WarpExileSelf is on the stack on both.
+    from mtg_bot.parity.cross_engine import (
+        resolve_top_of_stack_python, resolve_top_of_stack_rust,
+    )
+    resolve_top_of_stack_python(py, floor=0)
+    resolve_top_of_stack_rust(rs, floor=0)
     py_ex = sorted(o.printing.name for o in py.players[ai].exile)
     rs_ex = sorted(o["printing_name"] for o in rs.exile_snapshot(ai))
     assert py_ex == rs_ex == [card_name], (
@@ -68298,8 +68317,15 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
         f"cross-engine life mismatch post hand-warp: "
         f"py={py.players[ai].life} rs={rs.get_life(ai)}")
     assert py.spell_warped_this_turn and rs.spell_warped_this_turn
-    # The following END step exiles it byte-equal.
+    # **G7 Class-C delayed-trigger port (round-78).** The following
+    # END step pushes WarpExileSelf onto the stack on both engines;
+    # resolution drains it to exile.
     adv(7)
+    from mtg_bot.parity.cross_engine import (
+        resolve_top_of_stack_python, resolve_top_of_stack_rust,
+    )
+    resolve_top_of_stack_python(py, floor=0)
+    resolve_top_of_stack_rust(rs, floor=0)
     py_ex = sorted(o.printing.name for o in py.players[ai].exile)
     rs_ex = sorted(o["printing_name"] for o in rs.exile_snapshot(ai))
     assert py_ex == rs_ex == ["Timeline Culler"], (
@@ -68454,9 +68480,17 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
                for o in py.battlefield)
     assert any(e["id"] == rs_gy_tlc
                for e in rs.battlefield_snapshot())
-    # END step exiles the graveyard-warp-cast TLC byte-equal (SAME
-    # deterministic sweep, graveyard origin).
+    # **G7 Class-C delayed-trigger port (round-78).** END step pushes
+    # WarpExileSelf onto the stack (graveyard-cast warp creature gets
+    # the SAME delayed trigger as hand-cast — Python schedules both
+    # via actions.py:1550 / Rust via cast_creature_warp's delayed-
+    # trigger push). Resolve drains it byte-equal.
     adv(7)
+    from mtg_bot.parity.cross_engine import (
+        resolve_top_of_stack_python, resolve_top_of_stack_rust,
+    )
+    resolve_top_of_stack_python(py, floor=0)
+    resolve_top_of_stack_rust(rs, floor=0)
     py_ex2 = sorted(o.printing.name for o in py.players[ai].exile)
     rs_ex2 = sorted(o["printing_name"]
                     for o in rs.exile_snapshot(ai))

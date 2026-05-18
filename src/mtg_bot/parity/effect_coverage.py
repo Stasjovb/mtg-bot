@@ -336,6 +336,23 @@ RUST_AHEAD_OF_POOL: set[str] = {
     # precedent already allowlisted above; ahead-of-pool, not an
     # override, for the same reason.
     "TwoSubjectPumpAndDebuffByArtifactCount",
+    # **G7 Class-C delayed-trigger port (round-78).** Rust
+    # ``Effect::WarpExileSelf`` is the warp end-step delayed trigger
+    # the cast site (``cast_creature_warp``) schedules onto
+    # ``state.delayed_triggers``. Python has the exact same-named
+    # class at ``effects/generic/exile.py:133`` (``WarpExileSelf``),
+    # but the parsed-pool vocab never observes it directly because
+    # it is NOT a printing's `triggered_abilities` member — it is
+    # spawned by the cast site as a delayed trigger entry, NOT by a
+    # printing's static trigger definition. The
+    # ``OracleParserCardSource`` walks per-printing triggered
+    # abilities; the delayed-trigger spawn site is dynamic and
+    # therefore invisible to the pool walker. This is precisely the
+    # ``RUST_AHEAD_OF_POOL`` contract: a same-named Python class
+    # exists (verified — used by `actions.py:1554`'s
+    # `delayed_triggers.append`) but the static-printing walker
+    # doesn't see it. Override-mapping it elsewhere would be wrong.
+    "WarpExileSelf",
 }
 
 

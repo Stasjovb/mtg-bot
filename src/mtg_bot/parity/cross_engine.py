@@ -8665,6 +8665,19 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         return ReturnTargetPermanentYouControlToOwnersHand(
             optional=True, exclude_self=True,
         )
+    if kind == "warp_exile_self":
+        # **G7 Class-C delayed-trigger port (round-78).** Rust's
+        # ``Effect::WarpExileSelf`` mirror — the delayed triggered
+        # ability the warp creature's controller schedules at
+        # warp-cast time and the END-step sweep pushes onto the
+        # stack. Resolves by exiling the warp creature with the
+        # CR-400.7 reset + ``warped=True`` on non-tokens. No payload
+        # — the source-obj-id flows on the StackItem, the resolver
+        # re-looks up the bf object. Python's
+        # ``WarpExileSelf`` (``effects/generic/exile.py:133``) is
+        # the exact shape.
+        from mtg_bot.effects.generic.exile import WarpExileSelf
+        return WarpExileSelf()
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
@@ -10707,50 +10720,20 @@ def advance_phase_python(py_state) -> int:
         _py_draw_card(py_state, py_state.active_player_idx)
 
     if new_step == Step.END:
-        # 5b. **warp_cost substrate (Phase 1, round-63).** Mirror
-        #     Rust's ``state_ops_steps.rs::warp_exile_sweep_on_end_step``
-        #     (the new PHASE_END_STEP-entry hook). Production Python
-        #     schedules ``WarpExileSelf`` as a CR-603.7 delayed
-        #     trigger fired by ``turn.run_delayed_end_step_triggers``;
-        #     this harness primitive deliberately restricts itself to
-        #     the SAME composition Rust's ``advance_phase`` does (see
-        #     this function's docstring — it is NOT the production
-        #     engine entrypoint), so it inlines the deterministic
-        #     observable of ``WarpExileSelf`` exactly as it inlines
-        #     the CR-514 cleanup hooks below: every battlefield
-        #     permanent the ACTIVE player controls that was warp-cast
-        #     (``cast_via_warp``) moves to its owner's exile with the
-        #     CR-400.7 reset Python's ``turn.move_off_battlefield``
-        #     applies (damage / tapped / attached_to), gets
-        #     ``warped=True`` (non-token — mirrors
-        #     ``effects/generic/exile.py::WarpExileSelf``), and
-        #     ``cast_via_warp`` cleared. Active player here is the
-        #     player whose turn it is (the turn wrap is on the
-        #     CLEANUP->UNTAP advance, not END entry) — matches Rust's
-        #     ``active_player`` read and Python's ``offset=0`` for
-        #     sorcery-speed warps cast on the caster's own turn.
-        #     Byte-equal with Rust's sweep for the Phase-1 cards
-        #     (no LEAVES/DIES trigger fires — exile is not a graveyard
-        #     transit, and the bridge-admitted warp cards carry
-        #     ``triggered_abilities=()``; documented Phase-1
-        #     simplification, ``docs/SEARCH_LIMITATIONS.md``).
-        from mtg_bot.game import Zone
-
-        ai = py_state.active_player_idx
-        warp_pending = [
-            o for o in list(py_state.battlefield)
-            if o.controller_id == ai and getattr(o, "cast_via_warp", False)
-        ]
-        for obj in warp_pending:
-            py_state.battlefield.remove(obj)
-            obj.damage = 0
-            obj.tapped = False
-            obj.attached_to = None
-            obj.zone = Zone.EXILE
-            if not obj.printing.is_token:
-                obj.warped = True
-            obj.cast_via_warp = False
-            py_state.player_by_id(obj.owner_id).exile.append(obj)
+        # 5b. **G7 Class-C delayed-trigger port (round-78).** At the
+        #     beginning of the END step, push matching delayed
+        #     triggers from ``state.delayed_triggers`` onto the stack
+        #     via ``push_triggered_ability`` — exactly the production
+        #     Python entrypoint ``turn.run_delayed_end_step_triggers``
+        #     and exactly what Rust's
+        #     ``state_ops_steps.rs::run_delayed_end_step_triggers`` now
+        #     does (replacing the round-63 deterministic
+        #     ``warp_exile_sweep_on_end_step``). This harness primitive
+        #     is no longer doing a custom deterministic-sweep mirror —
+        #     it directly delegates to the production Python primitive
+        #     since both engines now share the same CR-603.7 semantics.
+        from mtg_bot.turn import run_delayed_end_step_triggers
+        run_delayed_end_step_triggers(py_state)
 
     if new_step == Step.CLEANUP:
         # 6. CR 514.1 hand-size discard + CR 514.2 damage clear +

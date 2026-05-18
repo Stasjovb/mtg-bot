@@ -3866,6 +3866,78 @@ pub enum Effect {
     /// emulate the apply-loop write outside a real combat flow.
     /// RUST_PARITY_GAPS.md I32 documents the lifecycle.
     DrawCardsEqualToResolvingCombatDamage,
+    /// **G7 Class-C delayed-trigger port (round-78).** The
+    /// `WarpExileSelf` delayed triggered ability: at the BEGINNING of
+    /// the END step of the turn in which a creature was warp-cast, the
+    /// warp creature's controller exiles it (CR 603.7 delayed trigger).
+    ///
+    /// **Mirrors Python's `WarpExileSelf`
+    /// (`src/mtg_bot/effects/generic/exile.py:133`).** Scheduled at
+    /// warp-cast time into `state.delayed_triggers`; pushed onto the
+    /// stack as a real `StackItem::TriggeredAbility` at PHASE_END_STEP
+    /// entry via `run_delayed_end_step_triggers`. The resolver arm
+    /// looks up the source obj by `source_obj_id` on the battlefield,
+    /// moves it bf → owner's exile with the CR-400.7 reset (damage /
+    /// tapped / attached_to / exiled_with_source), stamps
+    /// `warped = true` if non-token, and clears the cast-time
+    /// `warp_exile_pending` marker. No-op if the source has left the
+    /// battlefield between the schedule (cast) and the resolve (end-
+    /// step) — countered / died / bounced / already-exiled (CR 603.6c).
+    ///
+    /// **Unit variant — no payload.** The schedule-time obligation is
+    /// carried by the `DelayedTrigger` entry (`source_id`,
+    /// `fire_at_turn`, `controller_id`). At push time
+    /// (`push_triggered_ability`), the `source_obj_id` flows onto the
+    /// `StackItem::TriggeredAbility` and is read by the resolver to
+    /// locate the bf object to exile. Same shape as
+    /// `PutPlusOneCounterOnSelf` — the resolver uses
+    /// `source_obj_id` rather than a target picked at push time.
+    WarpExileSelf,
+}
+
+/// **G7 Class-C delayed-trigger port (round-78).** Single entry on
+/// `GameState.delayed_triggers`. Mirrors Python's dict entry shape at
+/// `src/mtg_bot/actions.py:1554-1559` /
+/// `src/mtg_bot/turn.py:773-820`. Scheduled at warp-cast time;
+/// scanned at the start of every END step by
+/// `state_ops_steps.rs::run_delayed_end_step_triggers`; matching
+/// entries (`fire_at_turn == state.turn_number &&
+/// controller_id == state.active_player`) are pushed onto the stack
+/// as real triggered abilities via `push_triggered_ability` and
+/// removed from the Vec. Non-matching entries (e.g. an opponent's-
+/// turn warp where `fire_at_turn = turn + 1`) ride to the next end
+/// step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DelayedTrigger {
+    /// The turn whose end step the trigger fires on. Mirrors Python's
+    /// `"fire_at_turn": state.turn_number + offset` where `offset = 0`
+    /// when the caster is the active player (sorcery-speed warp on
+    /// own turn) and `1` otherwise (instant-speed warp on opponent's
+    /// turn — defer to the caster's next end step). For warp, Phase-1
+    /// admitted cards are sorcery-speed Artifact Creatures only, so
+    /// `offset = 0` is the common case, but the Vec is generalized to
+    /// the 2-offset shape for future instant-speed warps.
+    pub fire_at_turn: u32,
+    /// The player whose END step pushes the trigger. Same player as
+    /// the warp caster (the creature's controller at cast time).
+    /// Mirrors Python's `"controller_id": player_id` (`actions.py:
+    /// 1556`).
+    pub controller_id: u8,
+    /// The warp creature's object id. Survives even after the
+    /// permanent leaves the battlefield (the resolver re-looks up the
+    /// bf and no-ops if the object is gone; CR 603.6c — the trigger
+    /// "fires" but has no permanent to act on).
+    pub source_id: u32,
+    /// The effect to push as a `StackItem::TriggeredAbility`. For G7
+    /// Class-C this is exclusively `Effect::WarpExileSelf`; the field
+    /// is a full `Effect` to match Python's
+    /// `"effect": WarpExileSelf()` dict shape and to leave room for
+    /// the other Python delayed-trigger effects
+    /// (`SacrificeSourceDelayed`,
+    /// `RemoveChargeCountersFromSourceDelayed`,
+    /// `ReturnExiledPermanentToOwnerTapped`) when their producers
+    /// land in Rust.
+    pub effect: Effect,
 }
 
 // --- ETB trigger substrate (Slice 1) -----------------------------
@@ -8558,6 +8630,16 @@ pub(crate) fn effect_to_pydict<'py>(
         }
         Effect::DrawCardsEqualToResolvingCombatDamage => {
             d.set_item("kind", "draw_cards_equal_to_resolving_combat_damage")?;
+        }
+        Effect::WarpExileSelf => {
+            // G7 Class-C delayed-trigger port: unit variant; the only
+            // bridge content is the `kind` discriminator. The Python
+            // bridge arm (`cross_engine.py::_ta_dict_to_python_effect`)
+            // maps this back to `WarpExileSelf()`. The effect is
+            // scheduled in `state.delayed_triggers` at warp-cast time
+            // and pushed onto the stack at the start of the END step
+            // by `state_ops_steps.rs::run_delayed_end_step_triggers`.
+            d.set_item("kind", "warp_exile_self")?;
         }
     }
     Ok(d)

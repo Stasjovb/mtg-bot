@@ -1787,7 +1787,35 @@ gameplay surface. Perf neutral.
 
 ---
 
-## Rust port — warp end-step exile is a PHASE_END_STEP-entry sweep, NOT a CR-603.7 delayed trigger (Phase 1, round-63; Phase 1.5, round-65; Phase 2 — Timeline Culler)
+## Rust port — warp end-step exile CR-603.7 delayed-trigger port LANDED (G7 Class-C, round-78; was deterministic PHASE_END_STEP-entry sweep through Phase 1 / 1.5 / 2)
+
+> **STATUS — G7 Class-C CLOSED (`feature/g7-classc-warp-delayed-trigger`,
+> round-78).** Rust now mirrors Python's CR 603.7 delayed-trigger
+> semantics: `cast_creature_warp` schedules a
+> `DelayedTrigger { ..., effect: WarpExileSelf }` into the new
+> `state.delayed_triggers` Vec at cast time (mirroring Python's
+> `actions.py:1550-1559`); at PHASE_END_STEP entry the new
+> `state_ops_steps.rs::run_delayed_end_step_triggers` pushes
+> matching entries as real `StackItem::TriggeredAbility` slots via
+> `push_triggered_ability` and removes them from the Vec
+> (mirroring Python's `turn.run_delayed_end_step_triggers`); on
+> resolve the new `Effect::WarpExileSelf` arm exiles the bf object
+> with the CR-400.7 reset + `warped=true` stamp on non-tokens. The
+> deterministic phase-entry sweep `warp_exile_sweep_on_end_step`
+> has been **DELETED**. The harness mirror
+> `advance_phase_python` (cross_engine.py) now directly delegates
+> to `turn.run_delayed_end_step_triggers` instead of inlining a
+> custom sweep — both engines share the same production-Python
+> primitive at the harness boundary. The G7 S6 Class-C bake-in
+> axis is CLOSED (pinned by
+> `tests/test_rust_shadow_bakein.py::
+> test_g7_classc_warpexile_delayed_trigger_root_cause_closed_then_
+> next_frontier_surfaced` — arch1/s1 progresses from former trip
+> step 169 → ~step 351 and surfaces the next frontier, the
+> Class-B priority-port lane). The Failure mode below is no
+> longer reachable; the "Fix scope" item is RESOLVED.
+
+## (Historical — pre-r78) Rust port — warp end-step exile is a PHASE_END_STEP-entry sweep, NOT a CR-603.7 delayed trigger (Phase 1, round-63; Phase 1.5, round-65; Phase 2 — Timeline Culler)
 
 **Phase 2 (Timeline Culler) — the graveyard-warp-cast permanent is
 exiled by the SAME deterministic sweep.** Phase 2 admits Timeline
