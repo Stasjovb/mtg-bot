@@ -1169,6 +1169,50 @@ second:
    >     autonomous.** Flip NO-GO until all hold.
    >   - Carry-forward: SL doc-wide "Headline counts" lag
    >     (resync/refresh-cadence owned).
+   > - **⚠ Continuous-pipeline orchestrator fold (cycle 20 —
+   >   G7 Slice S1 LANDED; @ `5803aea7`, counts UNCHANGED,
+   >   parity 307/475 / PROBED 106 UNCHANGED).**
+   >   - **S1 merged `5803aea7`:** `cast_creature` now pushes a
+   >     `StackItem` and does NOT atomic-resolve (mirrors the
+   >     already-working `cast_spell_noncreature`); hand→bf +
+   >     summoning-sickness + ETB deferred to the already-present
+   >     `resolve_top_of_stack`/`move_source_post_resolve`
+   >     (resolve-time), byte-matching Python's `_cast_spell` /
+   >     `put_into_battlefield` cast-time/resolve-time split.
+   >     `from_exile_warped` normalized exile→hand at cast-time
+   >     (byte-mirrors Python's cast-time exile-clear);
+   >     `cast_creature_warp` deferred to S4.
+   >   - **S1 parity proof:** 4-file core gate **1532 UNMOVED**
+   >     — CE5 still bridges `step_both` (Python stack→CE5-resolve
+   >     == Rust now-stack→CE5-resolve); S1 only makes Rust match
+   >     the stack-then-resolve shape CE5 already expects (28
+   >     tests_rust no-stack pins + 2 warp-recast pins
+   >     closure-flipped, verified NOT genuine byte-divergence;
+   >     +1 S1 pin). Verified UNMOVED on the **rebuilt shared
+   >     .pyd on main** (not just in-lane `.venv-wt`), cron
+   >     exit-0.
+   >   - Touched `rust/src/state_ops_cast.rs` ONLY —
+   >     state_ops-only, residue cadence did NOT fire (CFI-1
+   >     precedent, git-log+cron verified); NO count drift;
+   >     POOL_PARITY/PROBED UNCHANGED; 8 genuinely_missing
+   >     residue stamps stay bb29df8d. Did NOT touch CE5 / the
+   >     pop-only G3 composer. Shared .pyd rebuilt via the
+   >     interpreter-explicit canonical pattern (`maturin build
+   >     -i .venv-py313` → force-install cp313 wheel; `maturin
+   >     develop` implicit-interp had grabbed a 3.11 — noted for
+   >     future Rust-lane resyncs).
+   >   - **Flip endgame: S1 DONE → NEXT S2** (resolver
+   >     permanent-spell byte-eq: `resolve_top_of_stack`/
+   >     `move_source_post_resolve` vs Python
+   >     `put_into_battlefield` — ETB-timestamp monotonicity,
+   >     ENTERS push-ordering, aura attach; mostly verify +
+   >     targeted-fix, machinery already exercised by S1) →
+   >     (B1=C1 S2/3 ∥, co-evolve w/ S3) → S3 → S4 → S5 → S6 →
+   >     **S7 CE5 removal LAST** → CE5-FREE re-proof + fresh C4
+   >     clean → ORCHESTRATOR+USER go/no-go on the atomic
+   >     SoT-flip (B3-S5). Flip NO-GO until all hold.
+   >   - Carry-forward: SL doc-wide "Headline counts" lag
+   >     (resync/refresh-cadence owned).
 
 4. **BECOMES_TAPPED — contained, but only 2 cards and both
    multi-gated** (Hemosymbic Mite, Swarm Culler — each also

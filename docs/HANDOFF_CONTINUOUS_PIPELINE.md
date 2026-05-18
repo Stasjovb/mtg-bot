@@ -138,16 +138,16 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 
 ## 2. The CONTINUOUS-PIPELINE operating model (unchanged)
 
-> **⚠ SoT-FLIP PATH — cycle 19, @ `2a0867bf` — READ FIRST.**
-> **C4 re-sweep DIVERGED 0/300 (cycle 18). The G3 thesis-fork is
-> RESOLVED: user decided Rust MUST implement real
-> stack-and-priority CastSpell resolution (ops mode = fully
-> autonomous). G7 design landed (`docs/RUST_STACK_RESOLUTION_
-> DESIGN.md`, `2a0867bf`) with a DE-RISKING diagnosis: atomic
-> resolution is a NARROW REMOVABLE SHORT-CIRCUIT (cast_creature/
-> _warp skips the already-working stack), NOT an architectural
-> rebuild. Flip NO-GO until G7 S1..S7 + B1 close + CE5-FREE C4
-> runs clean. Slice plan + S1 = next Rust lane — see below.**
+> **⚠ SoT-FLIP PATH — cycle 20, @ `5803aea7` — READ FIRST.**
+> **G7 build-out STARTED — Slice S1 LANDED (`5803aea7`):
+> `cast_creature` now pushes a StackItem (no atomic resolve),
+> shared .pyd rebuilt on main, 4-file gate 1532 UNMOVED verified
+> on the shared venv, cron exit-0, state_ops-only (no residue
+> cadence). NEXT = dispatch S2 (resolver permanent-spell
+> byte-eq). G3 thesis-fork RESOLVED (Rust implements the stack;
+> ops mode fully autonomous); design `docs/RUST_STACK_
+> RESOLUTION_DESIGN.md` is the canonical G7 owner. Flip NO-GO
+> until G7 S1..S7 + B1 close + a CE5-FREE C4 runs clean.**
 > The cycle-11 phase-transition decision is RESOLVED: the user chose
 > **pivot to the SoT-flip path** (deliberate sequenced flip-execution,
 > NOT continuous cheap-refill). The continuous cheap-parallel-refill
@@ -289,8 +289,15 @@ cycle-6 leverage fold — §3 mirrors it, does not contradict it).
 >   AUDIT.md` sentinel + `docs/RUST_STACK_RESOLUTION_DESIGN.md`
 >   (G7 owner) are the canonical current pointers; the §4 ledger
 >   ROWS (incl. G4/G5/G6/G7) ARE current at HEAD.
-> - **NEXT: dispatch S1 (`cast_creature`→stack-push, first Rust
->   lane).** Flip remains **NO-GO** until G7 S1..S7 + B1 close +
+> - **S1 LANDED (`5803aea7`)** — `cast_creature`→StackItem (no
+>   atomic resolve), state_ops-only, 4-file 1532 UNMOVED on the
+>   rebuilt shared .pyd (CE5 still bridges), `from_exile_warped`
+>   normalized exile→hand at cast-time (`_warp` deferred to S4).
+>   **NEXT: dispatch S2** (resolver permanent-spell byte-eq —
+>   `resolve_top_of_stack`/`move_source_post_resolve` vs Python
+>   `put_into_battlefield`: ETB-timestamp monotonicity, ENTERS
+>   push-ordering, aura attach; mostly verify + targeted-fix).
+>   Flip remains **NO-GO** until G7 S1..S7 + B1 close +
 >   the CE5-FREE C4 runs divergence-clean. The atomic SoT-flip
 >   (B3-S5) remains an ORCHESTRATOR+USER go/no-go — explicitly NOT
 >   autonomous (the single least-reversible action). (G2

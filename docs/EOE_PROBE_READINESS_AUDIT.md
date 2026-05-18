@@ -304,62 +304,65 @@ narrative); the cron then re-baselines automatically on the next
      `key = value`, ints only, `#`/`<!--` lines ignored. Update these
      whenever the live inventory moves (a refresh edits this block);
      the cron reports drift until they match the working tree again.
-     Measured at main 2a0867bf (continuous-pipeline cycle 19 —
-     the G3 thesis-fork is RESOLVED (user: **Rust MUST implement
-     real stack-and-priority CastSpell resolution**, ops mode =
-     fully autonomous) and the G7 design landed with a
-     materially DE-RISKING verify-first diagnosis). Flip remains
-     **NO-GO** until G7 (S1..S7) + B1 (C1 Slices 2/3) close and
-     a fresh CE5-FREE C4 runs clean — but the path is now
-     well-scoped, not open-ended. **G7 design merged 2a0867bf**
-     (`docs/RUST_STACK_RESOLUTION_DESIGN.md` — the canonical
-     owner doc for G7, in the C1/B3 design-spec lineage;
-     docs-only, no rust/src/.pyd/count touch, cron exit-0,
-     residue cadence did NOT fire — cross-refs went to SL/
-     SOT_FLIP, not cross_engine.py). **KEY DIAGNOSIS (the
-     single most decision-relevant output): atomic CastSpell
-     resolution is a NARROW, REMOVABLE SHORT-CIRCUIT — NOT a
-     deep architectural absence.** `cast_spell_noncreature`
-     ALREADY pushes a StackItem and does NOT auto-resolve
-     (state_ops_cast.rs:952-957 — stack-then-resolve works
-     end-to-end for instants/sorceries TODAY). The ONE hole:
-     `cast_creature`/`cast_creature_warp` move the permanent
-     hand->battlefield INSIDE the cast primitive
-     (state_ops_cast.rs:540), skipping the stack — that is the
-     entire G7 root cause. Rust ALREADY has: a real
-     `stack: Vec<StackItem>`, a full effect-dispatching
-     `resolve_top_of_stack` (state_ops_resolve.rs:12011-12247),
-     a permanent-aware `move_source_post_resolve`
-     (:285-332), instant-speed CastSpell legal emission incl.
-     flash (I46), and a real effect-dispatching priority loop in
-     `RustGameStateAdapter._run_priority_action` the bake-in
-     already runs. Documented trap: the G3 composer
-     `complete_step_via_priority_round` (state_ops_priority.rs:
-     260-296) is POP-ONLY (NOT the resolution path; the adapter
-     loop is) — wiring resolution through it would reintroduce a
-     no-effect bug. **Slice plan:** S1 cast_creature->stack-push
-     -> S2 resolver permanent-spell byte-eq -> (C1 S2/3 in
-     parallel; co-evolves w/ S3) -> S3 priority/response windows
-     -> S4 cast_creature_warp + riders -> S5 triggers-on-stack
-     (mostly verify) -> S6 bake-in scale verify -> **S7 CE5
-     removal LAST**. S1..S5 each a single serialized Rust .pyd
-     lane; S7 a cross_engine.py Python lane. **CRITICAL PROOF:**
-     CE5 (cross_engine.py:10367-10375) is removed at S7 only;
-     the ENTIRE prior evidence base (307/475 byte-equal + PROBED
-     106 + the parity-smoke/trajectory gate — ALL generated WITH
-     CE5) must then be re-proven **CE5-FREE**, and a fresh C4
-     `--driver rust_shadow` 300-game re-sweep must run
-     divergence-clean CE5-FREE = the final flip gate. "green
-     WITH CE5", any CE5-equivalent in rust_shadow.py, or any
-     _DOCUMENTED_ACCEPTED_FIELDS carve-out for the stack/
-     battlefield axis are explicitly NON-acceptance. **Magnitude
-     (honest, accepted): ~6-11 cycles, multi-cycle build-out —
-     materially resets the flip timeline.** Biggest risk: nested
-     response windows are brand-new cross-engine surface (no
-     spell ever sat on the Rust stack across a priority round
-     before). B1 (C1 Slices 2/3) co-evolves with S3 and is a
-     confirmed co-blocker (the two C4 divergence shapes). NEXT =
-     dispatch S1 (cast_creature->stack-push, first Rust lane).
+     Measured at main 5803aea7 (continuous-pipeline cycle 20 —
+     G7 build-out STARTED: **Slice S1 LANDED** (`5803aea7`);
+     shared .pyd rebuilt on main + 4-file gate **1532
+     verified UNMOVED on the shared venv**, cron exit-0). Flip
+     remains **NO-GO** until G7 S1..S7 + B1 (C1 Slices 2/3)
+     close and a fresh CE5-FREE C4 runs clean; the path is
+     well-scoped per `docs/RUST_STACK_RESOLUTION_DESIGN.md` (the
+     canonical G7 owner; the full diagnosis + slice plan +
+     CE5-removal proof live there and in the cycle-19 PRIOR
+     below). **S1 (`5803aea7`): `cast_creature` now pushes a
+     `StackItem` and does NOT atomic-resolve** — mirrors the
+     already-working `cast_spell_noncreature` pattern; the
+     hand->battlefield move + summoning-sickness + ETB are
+     deferred to the already-present `resolve_top_of_stack`/
+     `move_source_post_resolve` (resolve-time), byte-matching
+     Python's `_cast_spell` (cast-time = source-zone removal +
+     STACK + StackItem) / `put_into_battlefield` (resolve-time
+     summoning_sick) split. ONE honest boundary nuance: the
+     `from_exile_warped` recast is normalized exile->hand at
+     cast time (byte-mirrors Python's cast-time exile-clear;
+     `cast_creature_warp` itself deferred to S4). **S1 parity
+     proof:** 4-file core gate **1532 UNMOVED** — CE5 still
+     bridges `step_both` (Python stack->CE5-resolve == Rust
+     now-stack->CE5-resolve); S1 only makes Rust match the
+     stack-then-resolve shape CE5 already expects (28 tests_rust
+     no-stack pins + 2 warp-recast pins closure-flipped to the
+     stack shape, verified NOT genuine byte-divergence; +1 S1
+     pin). Touched `rust/src/state_ops_cast.rs` ONLY —
+     state_ops-only, residue cadence did NOT fire (CFI-1
+     precedent, git-log+cron verified); NO count drift;
+     POOL_PARITY/PROBED UNCHANGED 307/475 / 106; 8
+     genuinely_missing residue stamps stay bb29df8d. Shared .pyd
+     rebuilt on main via the interpreter-explicit canonical
+     pattern (`maturin build -i .venv-py313` -> force-install
+     the cp313 wheel; `maturin develop`'s implicit interp
+     resolution had grabbed a 3.11 — recorded for future
+     resyncs); isolation self-check had PASSED in-lane (.venv-wt
+     contained). **Slice plan (per the design doc):** S1 DONE ->
+     **S2 next** (resolver permanent-spell byte-eq:
+     `resolve_top_of_stack`/`move_source_post_resolve` vs Python
+     `put_into_battlefield` — ETB-timestamp monotonicity, ENTERS
+     push-ordering, aura attach; mostly verify + targeted-fix,
+     machinery already exercised by S1) -> (B1=C1 S2/3 parallel,
+     co-evolve w/ S3) -> S3 priority/response windows -> S4
+     cast_creature_warp + riders -> S5 triggers-on-stack -> S6
+     bake-in scale verify -> **S7 CE5 removal LAST** (then the
+     ENTIRE prior evidence base re-proven CE5-FREE + fresh
+     CE5-FREE C4 clean = the final flip gate; green-WITH-CE5 /
+     CE5-equivalent / stack-axis carve-out are NON-acceptance).
+     Magnitude unchanged (~6-11 cycles; biggest risk = the
+     brand-new nested-response-window surface at S3, B1
+     co-blocker). NEXT = dispatch S2. PRIOR cycle 19 (@ 2a0867bf
+     — G3 thesis-fork RESOLVED (Rust implements the stack; ops
+     mode fully autonomous) + G7 design merged
+     `docs/RUST_STACK_RESOLUTION_DESIGN.md`: atomic resolution
+     is a NARROW REMOVABLE SHORT-CIRCUIT (cast_creature/_warp
+     skip the already-present stack/resolver/priority-loop), NOT
+     an architectural rebuild; full slice plan + CE5-removal
+     proof recorded there; counts unchanged, cron exit-0).
      PRIOR cycle 18 (@ 4876bf08 — C4 scaled re-sweep RAN +
      DIVERGED 0/300 through the role-swapped bake-in at
      flip-candidate e87a6ebe; cycle-17 "chain converged" claim
