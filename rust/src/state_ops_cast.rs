@@ -90,9 +90,81 @@ use std::sync::Arc;
 const ZONE_BATTLEFIELD: u8 = 2;
 /// Local mirror of `crate::state_ops_zones::ZONE_HAND` (= 0),
 /// matching the existing `ZONE_BATTLEFIELD` local-const pattern in
-/// this module. Used by the G7-S1 exile-recast zone normalization in
-/// `cast_creature` (exile -> hand at cast time).
+/// this module. Pre-S5a this was used by the exile-recast zone
+/// normalization (exile -> hand); S5a re-homes that to the stack
+/// store, but the const stays (kept for symmetry with the local
+/// zone-const pattern; the re-home helper reads `ZONE_STACK`).
+#[allow(dead_code)]
 const ZONE_HAND: u8 = 0;
+/// Local mirror of `crate::state_ops_zones::ZONE_STACK` (= 4).
+/// **G7 S5a (Option β):** the cast moves the spell's owned
+/// `GameObject` hand/gy/exile → `GameState.stack_objects` and stamps
+/// `obj.zone = ZONE_STACK` (byte-mirroring Python's
+/// `card.zone = Zone.STACK`, `actions.py:1751`). Same local-const
+/// pattern as `ZONE_BATTLEFIELD`/`ZONE_HAND` above.
+const ZONE_STACK: u8 = 4;
+
+/// **G7 S5a (Option β) — re-home the cast spell into the
+/// spell-stack-source-zone store.**
+///
+/// Removes the object with id `obj_id` from `player[idx]`'s `hand`
+/// (the common case), else `exile` (warp exile-recast), else
+/// `graveyard` (warp-from-graveyard), and pushes the owned
+/// `GameObject` into `state.stack_objects` with `obj.zone =
+/// ZONE_STACK` and `obj.controller = player_id`. This is the exact
+/// byte-mirror of Python's cast-time
+/// `p.hand.remove(card)` / `p.exile.remove(card)` /
+/// `p.graveyard.remove(card)` (`actions.py:1403`/`:1501`/`:1450`)
+/// then `card.zone = Zone.STACK` + `card.controller_id = player_id`
+/// (`:1751`/`:1752`) — the card leaves every per-player zone and is
+/// owned by the stack until resolution.
+///
+/// Idempotent-safe: if the id is not in any of the three source
+/// zones (already moved, or a synthetic-state edge), it is a no-op
+/// returning `false` (the caller's `Ok(false)` bail / honest
+/// no-mutation contract still holds — `feedback_no_fallback_hybrids`).
+/// Returns `true` iff an object was moved.
+fn rehome_spell_to_stack_store(
+    state: &mut GameState,
+    idx: usize,
+    obj_id: u32,
+    player_id: u8,
+) -> bool {
+    // hand → stack store (the common cast-from-hand path).
+    if let Some(pos) =
+        state.players[idx].hand.iter().position(|o| o.id == obj_id)
+    {
+        let hand = Arc::make_mut(&mut state.players[idx].hand);
+        let mut obj = hand.remove(pos);
+        obj.zone = ZONE_STACK;
+        obj.controller = player_id;
+        state.stack_objects.push(obj);
+        return true;
+    }
+    // exile → stack store (warp exile-recast — Timeline Culler etc.).
+    if let Some(pos) =
+        state.players[idx].exile.iter().position(|o| o.id == obj_id)
+    {
+        let exile = Arc::make_mut(&mut state.players[idx].exile);
+        let mut obj = exile.remove(pos);
+        obj.zone = ZONE_STACK;
+        obj.controller = player_id;
+        state.stack_objects.push(obj);
+        return true;
+    }
+    // graveyard → stack store (warp-from-graveyard).
+    if let Some(pos) =
+        state.players[idx].graveyard.iter().position(|o| o.id == obj_id)
+    {
+        let gy = Arc::make_mut(&mut state.players[idx].graveyard);
+        let mut obj = gy.remove(pos);
+        obj.zone = ZONE_STACK;
+        obj.controller = player_id;
+        state.stack_objects.push(obj);
+        return true;
+    }
+    false
+}
 
 fn check_player_id(player_id: u8) -> PyResult<usize> {
     let idx = player_id as usize;
@@ -806,70 +878,61 @@ impl GameState {
         if !auto_tap_pay_for_cost(self, idx, &cost)? {
             return Ok(false);
         }
-        // **G7 S1 exile-recast zone normalization.** Python's
-        // exile-recast (`actions.py:1501-1502`) does
-        // `p.exile.remove(card)` then `card.warped = False` AT CAST
-        // TIME, and `card.zone = Zone.STACK` (`:1751`) — the recast
-        // card leaves exile and sits on the STACK until resolution
-        // (byte-identical to the hand path; nothing on the
-        // battlefield yet). Rust's spell-stack model keeps the
-        // stack-resident source IN a tracked zone, and
-        // `find_source_printing_id` / `take_source`
-        // (`state_ops_resolve.rs:205-246`) search hand / library /
-        // battlefield / graveyard but **NOT exile**. So move the
-        // exile-recast object exile -> hand here (the zone the
-        // spell-stack model uses for its stack-resident source,
-        // exactly as `cast_spell_noncreature` leaves its source in
-        // hand) and clear the warp markers at cast time, mirroring
-        // Python's cast-time `card.warped = False`. At resolution
-        // `move_source_post_resolve` takes it hand -> battlefield
-        // (creature -> bf + summoning_sick), byte-equal to Python's
-        // `put_into_battlefield`. The recast is a fresh permanent
-        // (CR 400.7) — clearing `warp_exile_pending` too matches the
-        // prior no-stack primitive's clear.
+        // **G7 S5a (Option β): re-home the spell hand/exile → the
+        // spell-stack-source-zone store.** Python's `_cast_spell`
+        // does `p.hand.remove(card)` (`:1403`) / `p.exile.remove(
+        // card)` (`:1501`) then `card.zone = Zone.STACK` (`:1751`) +
+        // `card.controller_id = player_id` (`:1752`) — the card
+        // leaves every per-player zone and is owned by the stack
+        // until resolution. `rehome_spell_to_stack_store` is that
+        // exact byte-mirror; `move_source_post_resolve` takes it from
+        // the store at resolve (creature → bf + summoning_sick),
+        // byte-equal to Python's `put_into_battlefield`. The
+        // exile-recast is a fresh permanent (CR 400.7) — clear the
+        // warp markers AT CAST TIME on the now-stack-resident object
+        // (Python's cast-time `card.warped = False`), found by id in
+        // the store (it is no longer in any per-player zone).
+        if !rehome_spell_to_stack_store(self, idx, obj_id, player_id) {
+            return Ok(false);
+        }
         if from_exile_warped {
-            if let Some(pos) = self.players[idx]
-                .exile
-                .iter()
-                .position(|o| o.id == obj_id)
+            if let Some(obj) = self
+                .stack_objects
+                .iter_mut()
+                .find(|o| o.id == obj_id)
             {
-                let exile = Arc::make_mut(&mut self.players[idx].exile);
-                let mut obj = exile.remove(pos);
-                obj.zone = ZONE_HAND;
                 obj.warped = false;
                 obj.warp_exile_pending = false;
-                let hand = Arc::make_mut(&mut self.players[idx].hand);
-                hand.push(obj);
             }
         }
-        // Dispatch Event::Cast NOW — after mana payment commits but
-        // before the StackItem push, the SAME ordering as
-        // `cast_spell_noncreature` (Delta 6, `:842-850`) /
-        // `cast_creature_warp`. CR 601.2 — a spell is "cast" the
-        // moment its cost is paid. The subject is the card-being-cast
-        // still in the hand zone (the push leaves it there);
-        // predicate matchers walk all four zones so the hand-zone
-        // lookup finds it.
+        // Dispatch Event::Cast NOW — after the spell is stack-
+        // resident (S5a) but before the StackItem push. CR 601.2 — a
+        // spell is "cast" the moment its cost is paid. The subject is
+        // the card-being-cast, now in `stack_objects`; the
+        // `dispatch_event` observer walk's 6th-zone `stack_objects`
+        // sweep finds it (mirrors Python firing IS_CAST with
+        // `card.zone == Zone.STACK`, `actions.py:1751`/`:1795`).
         crate::state_ops_resolve::dispatch_event(
             self,
             crate::cards::Event::Cast,
             obj_id,
         )?;
-        // **G7 S1: push the spell StackItem, do NOT move to
-        // battlefield, do NOT auto-resolve.** Mirrors
-        // `cast_spell_noncreature`'s Delta-4 push (`:943-957`). A
-        // vanilla creature spell carries NO cast-time target (Python
-        // `_select_spell_targets` returns `()` for a bare permanent
-        // spell), so the bare untargeted `new_spell` constructor is
-        // used. `resolve_top_of_stack` later applies any
-        // `printing.effects` (none for a vanilla creature) and
-        // `move_source_post_resolve` sends the creature hand ->
-        // battlefield (CR 608.2m via the ALREADY-PRESENT
-        // `post_resolve_destination` permanent -> ZONE_BATTLEFIELD
-        // route, stamping `summoning_sick` + the ETB timestamp), then
-        // `dispatch_event(Event::Enters)` fires the ETB triggers —
-        // all at resolution time, byte-mirroring Python's
-        // `put_into_battlefield`.
+        // **G7 S1/S5a: push the spell StackItem, do NOT move to
+        // battlefield, do NOT auto-resolve.** The spell's owned
+        // GameObject is already in `stack_objects` (S5a); the
+        // StackItem stays id-only (Option β — no `state.rs` StackItem
+        // shape / fingerprint-slot churn). A vanilla creature spell
+        // carries NO cast-time target (Python `_select_spell_targets`
+        // returns `()` for a bare permanent spell), so the bare
+        // untargeted `new_spell` constructor is used.
+        // `resolve_top_of_stack` later applies any `printing.effects`
+        // (none for a vanilla creature) and `move_source_post_resolve`
+        // sends the creature stack-store → battlefield (CR 608.2m via
+        // the ALREADY-PRESENT `post_resolve_destination` permanent ->
+        // ZONE_BATTLEFIELD route, stamping `summoning_sick` + the ETB
+        // timestamp), then `dispatch_event(Event::Enters)` fires the
+        // ETB triggers — all at resolution time, byte-mirroring
+        // Python's `put_into_battlefield`.
         self.stack
             .push(crate::state::StackItem::new_spell(obj_id, player_id));
         // CR 117.1c — the active player gets priority after a spell
@@ -1051,78 +1114,52 @@ impl GameState {
         if life_cost > 0 {
             self.players[idx].life -= life_cost as i32;
         }
-        // **G7 S4 Delta 4: graveyard-source zone normalization.**
-        // Python's graveyard-warp branch (`actions.py:1450`) does
-        // `p.graveyard.remove(card)` then `card.zone = Zone.STACK`
-        // (`:1751`) AT CAST TIME — the source leaves the graveyard
-        // and sits on the STACK until resolution (byte-identical to
-        // the hand arm; nothing on the battlefield yet). Rust's
-        // spell-stack model keeps the stack-resident source IN a
-        // tracked zone; to byte-match Python's "card left the
-        // graveyard at cast time" AND keep the spell-stack source
-        // model uniform with the hand arm, normalize the
-        // graveyard-warp source graveyard -> hand here (the same zone
-        // the hand arm leaves its source in; the EXACT shape of S1's
-        // exile-recast exile -> hand normalization in `cast_creature`
-        // `:576-590`). `find_source_printing_id` / `take_source`
-        // (`state_ops_resolve.rs:205-245`) then find it in the hand
-        // at resolve and `move_source_post_resolve` lands it on the
-        // battlefield (creature -> bf + summoning_sick), byte-equal
-        // to Python's `put_into_battlefield`. The
-        // `move_from_graveyard_to_battlefield` helper is now S4-dead
-        // for this path (retained `#[allow(dead_code)]`, same
-        // treatment S1 gave `move_from_exile_to_battlefield`).
-        if from_graveyard {
-            if let Some(pos) = self.players[idx]
-                .graveyard
-                .iter()
-                .position(|o| o.id == obj_id)
-            {
-                let gy =
-                    Arc::make_mut(&mut self.players[idx].graveyard);
-                let mut obj = gy.remove(pos);
-                obj.zone = ZONE_HAND;
-                let hand =
-                    Arc::make_mut(&mut self.players[idx].hand);
-                hand.push(obj);
-            }
+        // **G7 S5a (Option β): re-home the warp spell hand/graveyard
+        // → the spell-stack-source-zone store.** Python's warp arms
+        // do `p.hand.remove(card)` (`:1403`) / `p.graveyard.remove(
+        // card)` (`:1450`) then `card.zone = Zone.STACK` (`:1751`) +
+        // `card.controller_id = player_id` (`:1752`) — the source
+        // leaves every per-player zone and is owned by the stack
+        // until resolution (byte-identical hand and graveyard arms;
+        // nothing on the battlefield yet). `rehome_spell_to_stack_
+        // store` is that exact byte-mirror for BOTH arms (it tries
+        // hand then exile then graveyard), so the from-graveyard warp
+        // (Timeline Culler) and from-hand warp converge on one
+        // stack-resident shape. The `move_from_graveyard_to_
+        // battlefield` helper stays S4-dead (`#[allow(dead_code)]`).
+        if !rehome_spell_to_stack_store(self, idx, obj_id, player_id) {
+            return Ok(false);
         }
-        // **G7 S4 Delta 3: stamp `warp_exile_pending` on the
-        // STACK-RESIDENT SOURCE object (NOT a bf object — there is no
-        // bf object yet).** `take_source` moves the WHOLE owned
-        // GameObject (fields intact, nothing reset —
-        // `state_ops_resolve.rs:230-245`) and
-        // `move_source_post_resolve` pushes it to the battlefield
-        // (`:285-332`), so this cast-time flag rides through
+        let _ = from_graveyard;
+        // **G7 S4/S5a Delta 3: stamp `warp_exile_pending` on the
+        // STACK-RESIDENT SOURCE object (now in `stack_objects`, NOT a
+        // bf object — there is none yet).** `take_source` moves the
+        // WHOLE owned GameObject from the store (fields intact,
+        // nothing reset) and `move_source_post_resolve` pushes it to
+        // the battlefield, so this cast-time flag rides through
         // resolution onto the post-resolution bf object — exactly
         // where the end-step sweep
         // (`state_ops_steps.rs::warp_exile_sweep_on_end_step`) keys
-        // off it. Set IDENTICALLY for the hand AND (now
-        // hand-normalized) graveyard arm — Python schedules the SAME
-        // `WarpExileSelf` for both (`actions.py:1550-1559` runs for
-        // any `use_warp`). This is the design's "key risk" resolved
-        // structurally: no new field, no StackItem rider slot, no
-        // `state.rs` serialization touch — the direct mirror of S1's
-        // exile-recast object-field-on-the-stack-resident-source
-        // pattern. (After the graveyard normalization above, the
-        // source for BOTH arms is in this player's HAND.)
-        if let Some(pos) = self.players[idx]
-            .hand
-            .iter()
-            .position(|o| o.id == obj_id)
+        // off it (the sweep reads bf only, so WHERE the spell sits
+        // pre-resolve is irrelevant — the flag rides the owned
+        // object). Set IDENTICALLY for the hand AND graveyard arm —
+        // Python schedules the SAME `WarpExileSelf` for both
+        // (`actions.py:1550-1559` runs for any `use_warp`). The
+        // design's "key risk" stays resolved structurally: no new
+        // field, no StackItem rider slot — S5a only changes the Vec
+        // the source lives in pre-resolve.
+        if let Some(obj) = self
+            .stack_objects
+            .iter_mut()
+            .find(|o| o.id == obj_id)
         {
-            let hand = Arc::make_mut(&mut self.players[idx].hand);
-            hand[pos].warp_exile_pending = true;
+            obj.warp_exile_pending = true;
         }
-        // Dispatch Event::Cast NOW — after mana payment + the
-        // cast-time riders commit but before the StackItem push, the
-        // SAME ordering as `cast_creature` (S1, `:599-603`) /
-        // `cast_spell_noncreature`. CR 601.2 — a spell is "cast" the
-        // moment its cost is paid. The subject is the card-being-cast
-        // still in the hand zone (the push leaves it there; the
-        // graveyard arm was normalized into the hand above); predicate
-        // matchers walk all four zones so the hand-zone lookup finds
-        // it.
+        // Dispatch Event::Cast NOW — after the spell is stack-
+        // resident (S5a) + the cast-time riders commit, before the
+        // StackItem push. The subject is in `stack_objects`; the
+        // `dispatch_event` observer walk's 6th-zone sweep finds it
+        // (mirrors Python firing IS_CAST with `card.zone == STACK`).
         crate::state_ops_resolve::dispatch_event(
             self,
             crate::cards::Event::Cast,
@@ -1251,10 +1288,25 @@ impl GameState {
         if !auto_tap_pay_for_cost(self, idx, &cost)? {
             return Ok(false);
         }
-        // Delta 6: CAST event before the stack push, same ordering as
-        // `cast_creature` / `cast_creature_warp`. The subject is the
-        // card still in hand (the push leaves it there); predicate
-        // matchers walk all zones so the hand-zone lookup finds it.
+        // **G7 S5a (Option β): re-home the spell hand → the
+        // spell-stack-source-zone store.** A noncreature spell is
+        // cast from hand only (the Delta-1 lookup gated on hand);
+        // Python does `p.hand.remove(card)` (`:1403`) + `card.zone =
+        // Zone.STACK` (`:1751`) + `card.controller_id = player_id`
+        // (`:1752`). `rehome_spell_to_stack_store` is that exact
+        // byte-mirror. At resolve `move_source_post_resolve` sends
+        // the instant/sorcery stack-store → graveyard (CR 608.2m via
+        // `post_resolve_destination`'s Instant/Sorcery → GY route),
+        // byte-equal to Python's resolve cleanup.
+        if !rehome_spell_to_stack_store(self, idx, obj_id, player_id) {
+            return Ok(false);
+        }
+        // Delta 6: CAST event after the spell is stack-resident (S5a)
+        // and before the stack push, same ordering as `cast_creature`
+        // / `cast_creature_warp`. The subject is in `stack_objects`;
+        // the `dispatch_event` observer walk's 6th-zone sweep finds
+        // it (mirrors Python firing IS_CAST with `card.zone ==
+        // Zone.STACK`).
         crate::state_ops_resolve::dispatch_event(
             self,
             crate::cards::Event::Cast,

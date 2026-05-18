@@ -1,5 +1,41 @@
 # G7 S5 — Rust spell-stack source-zone re-homing: verify-first sub-design (the CE5-removal linchpin)
 
+> **STATUS UPDATE — S5a LANDED (engine, Option β) on branch
+> `feature/g7-s5a-spellstack-zone`.** Implemented exactly as the
+> §6 recommendation: Option β `GameState.stack_objects: Vec<GameObject>`
+> store (`ZONE_STACK=4` now live), `StackItem` kept id-only, the 3
+> source-resolution walks (`find_source_printing_id` / `take_source` /
+> the `dispatch_event` CAST observer walk) extended with a 5th/6th
+> stack-store zone, cast moves the spell hand→store / resolve takes it
+> back. **One verify-first ADDITION beyond the surface map:** the
+> §5.2-risk-3 silent-CAST-trigger regression *did* materialize — the
+> `cards.rs` predicate subject/controller helpers (`object_has_card_
+> type` / `subject_has_subtype` / `find_object_controller`, used by
+> `SubjectIsCreature`/`SubjectIsLand`/`SubjectIsArtifact`/
+> `SubjectHasSubtype`/`ControlledByYou`) walked only the 4 per-player
+> zones and silently stopped resolving an on-stack cast-spell subject,
+> so CAST-event triggers stopped firing. Fixed IN S5a (NOT deferred,
+> per §5.2-risk-3 + `feedback_silent_noop_pipelines`) by extending
+> those 3 `cards.rs` helpers with the same 5th stack-store zone —
+> new-code-is-right: Python's CAST dispatch passes the live `card`
+> reference (`actions.py:1795`, off-hand on the stack) as the subject,
+> so the Rust subject lookup must reach the stack store. **§5.3
+> baseline-rebase executed & audited:** parent `c2c9c624` →
+> `eb0fd0ca`+fix delta is EXACTLY +0 net after re-pin — 8 `tests_rust`
+> S1/S4 pins closure-flipped `find_object_zone==ZONE_HAND`→`ZONE_STACK`
+> (byte-Python `actions.py:1403`/`:1751`), the cycle-25 honest-stop
+> bake-in pin flipped surfaced→closure (`hand_p0` CLOSED; the
+> predicted-next C1-class combat-blocker `LEGAL_SET_EQ` surfaced at the
+> new boundary arch2/s1 step 312 / arch5/s0 step 344, `('blocker',
+> 9/12, None)` Rust-extra). **4-file core gate 1534 UNMOVED** (the
+> doc's "1532" was stale main-drift +2 pre-resync;
+> `decision_source="python"` dormant w.r.t. Rust cast internals,
+> verified — NOT 1532). 30 pre-existing `tests_rust` reds (factored-
+> combat / observer drift, NOT spell-stack) untouched. S5b/S5c +
+> the unmasked blocker-LEGAL_SET axis are follow-ups (ledger). The
+> remaining text below is the original verify-first design (kept as
+> the as-built record; "Status: DESIGN/SCOPING" superseded by this).
+
 > **Status: DESIGN / SCOPING (verify-first). Docs-only.** This is the
 > canonical owner doc for the **S5 spell-stack-source-zone
 > re-homing** — the single residual `hand_p0` divergence the

@@ -6587,6 +6587,59 @@ gate signal (correctly loud). The proper closure is parity-positive
 > the single owner for the implementation lane;
 > `RUST_STACK_RESOLUTION_DESIGN.md` S5 points to it. A `.pyd` rebuild
 > on `main` is owed (orchestrator's).
+>
+> **[G7 S5a CLOSED — `feature/g7-s5a-spellstack-zone`, engine,
+> Option β.]** The `hand_p0` spell-stack-source-zone divergence is
+> **CLOSED**. `GameState.stack_objects: Vec<GameObject>` added (the
+> dead `ZONE_STACK=4` constant is now live); the 3 stack-push cast
+> primitives move the spell hand/gy/exile → the store with
+> `obj.zone=ZONE_STACK` + `obj.controller=caster` (byte-mirrors Python
+> `p.hand.remove(card)` `actions.py:1403` + `card.zone=Zone.STACK`
+> `:1751` + `card.controller_id=player_id` `:1752`); `StackItem` kept
+> id-only. The 3 source-resolution walks (`find_source_printing_id` /
+> `take_source` / the `dispatch_event` CAST observer walk) + the
+> counterspell graveyard route extended with the stack-store zone;
+> resolve takes the object back from the store. **Hand-derived
+> projections (hand_snapshot / fingerprint hand slot / determinizer
+> pool / the 3 legal-emit loops / `parity_smoke.py` `hand_pX`)
+> deliberately do NOT search the store, so the on-stack spell vanishes
+> from all of them exactly as Python's `p.hand.remove(card)` — one
+> hand-membership correction closes the 7 surfaces.** **Verify-first
+> ADDITION beyond the design surface map (deliberate divergence
+> documented per the doc-divergence rule):** the §5.2-risk-3 silent
+> CAST-trigger regression materialized — `cards.rs`
+> `object_has_card_type` / `subject_has_subtype` /
+> `find_object_controller` (predicate subject/controller lookups for
+> `SubjectIsCreature`/`SubjectIsLand`/`SubjectIsArtifact`/
+> `SubjectHasSubtype`/`ControlledByYou`) walked only the 4 per-player
+> zones, so an on-stack cast-spell subject became unresolvable and
+> CAST triggers silently stopped firing. **Fixed in S5a** (NOT
+> deferred — `feedback_silent_noop_pipelines` + design §5.2-risk-3) by
+> extending those 3 helpers with the same 5th stack-store zone;
+> new-code-is-right (Python passes the live off-hand `card` reference
+> as the CAST subject, `actions.py:1795`). §5.3 baseline-rebase
+> executed & audited: 8 `tests_rust` S1/S4 pins closure-flipped
+> `find_object_zone==ZONE_HAND`→`ZONE_STACK`; **4-file core 1534
+> UNMOVED** (doc "1532" was stale main-drift; `decision_source=
+> "python"` dormant). The honest-stop pin
+> `test_g7_midgame_cast_autotap_closed_then_s1_spellstack_zone_
+> surfaced` flipped surfaced→closure as
+> `test_g7_s5a_spellstack_zone_closed_then_blocker_legalset_surfaced`.
+>
+> **[SEPARATE unmasked follow-up — distinct C1-class combat-blocker
+> LEGAL_SET asymmetry, NOT S5a's scope.]** Closing `hand_p0` lets the
+> bake-in run PAST the old cast-step boundary (arch2/s1 273→**312**,
+> arch5/s0 322→**344**) where it now trips a **LEGAL_SET_EQ**: Rust
+> emits an extra `('blocker', N, None)` (arch2/s1 N=9, arch5/s0 N=12)
+> the Python declare-blockers set lacks (`py\rust` empty). This is
+> exactly the next divergence `G7_MIDGAME_STATEEQ_VERIFY_FINDING.md`
+> §5 predicted (a combat-blocker emission, C1/S3-region). Distinct,
+> pre-existing, surfaced — not introduced — by the `hand_p0` closure;
+> pinned LOUD (both repros, characterized step + blocker id +
+> direction) by the flipped closure pin; filed as a G7 follow-up in
+> `SOT_FLIP_CUTOVER_PLAN.md` §4. NOT force-fixed in this lane
+> (`feedback_no_fallback_hybrids` honest-stop). A `.pyd` rebuild on
+> `main` is owed (orchestrator's — the campaign's riskiest merge).
 
 **Where.** `src/mtg_bot/search/rust_shadow.py`
 `ShadowCheckedRustAdapter.apply()` (applies the decision to both

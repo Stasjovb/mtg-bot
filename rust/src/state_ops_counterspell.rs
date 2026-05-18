@@ -75,7 +75,23 @@ fn take_from_zone(zone: &mut Zone, obj_id: u32) -> Option<GameObject> {
 /// the per-slice file-isolation rule.
 fn move_to_graveyard(state: &mut GameState, obj_id: u32, target_player: u8) -> bool {
     let mut taken: Option<GameObject> = None;
+    // G7 S5a (Option β): a spell on the stack has its owned
+    // GameObject in `state.stack_objects`, NOT a per-player zone.
+    // Counter targets a stack spell, so for the common case the
+    // source lives in the store — check it FIRST (pre-S5a the spell
+    // was hand-resident and the per-player sweep found it; this is
+    // the byte-equivalent for the re-homed model; without it a
+    // countered spell's GameObject orphans in the store and never
+    // reaches the graveyard).
+    if let Some(pos) =
+        state.stack_objects.iter().position(|o| o.id == obj_id)
+    {
+        taken = Some(state.stack_objects.remove(pos));
+    }
     for player in state.players.iter_mut() {
+        if taken.is_some() {
+            break;
+        }
         if let Some(obj) = take_from_zone(&mut player.hand, obj_id) {
             taken = Some(obj);
             break;

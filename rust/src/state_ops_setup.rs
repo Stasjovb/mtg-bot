@@ -396,6 +396,10 @@ pub fn make_state(
         attackers: Vec::new(),
         blockers: Vec::new(),
         stack: Vec::new(),
+        // G7 S5a: empty spell-stack-source-zone store at game start
+        // (Option β). Same lifecycle as `stack`: filled by a cast,
+        // drained by `move_source_post_resolve` at resolution.
+        stack_objects: Vec::new(),
         consecutive_passes: 0,
         permanent_left_battlefield_this_turn: false,
         spell_warped_this_turn: false,
