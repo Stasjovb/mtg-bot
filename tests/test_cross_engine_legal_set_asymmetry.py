@@ -459,3 +459,143 @@ def test_cross_engine_legal_set_closed_negative_control_both_emit_when_affordabl
         f"collapse here (negative control). py={py_base} rs={rs_base} "
         f"(py_casts={py_casts!r} rs_casts={rs_casts!r})"
     )
+
+
+# ---------------------------------------------------------------------------
+# C4 re-sweep `cast_spell 76` LEGAL_SET_EQ shape — the END-TO-END
+# real-deck closure anchor (B1 keystone closed at scale).
+# ---------------------------------------------------------------------------
+#
+# The synthetic per-axis pins above (Slice 1 mana here, Slice 2 target
+# in test_cross_engine_legal_set_target_satisf.py, Slice 3
+# additional-cost in test_cross_engine_legal_set_addcost.py) pin each
+# C1 prune axis on a minimal side-channel state. This pin anchors the
+# EXACT shape the C4 scaled re-sweep surfaced on the live real-deck
+# admit surface — the verbatim B1 LEGAL_SET_EQ divergence
+# `docs/C4_RESWEEP_EVIDENCE.md:126-147` records:
+#
+#   [LEGAL_SET_EQ] rust\py=["('cast_spell', 76, False, False, False,
+#   False, None)"] py\rust=[] (active_player=1)
+#
+# 22/300 games in the C4 re-sweep (`c4_resweep.json` @ `e87a6ebe`)
+# FAIL_DIVERGENCEd here; archetype 7 / seeds 0 & 3 carried the
+# verbatim `cast_spell 76` shape (archetype 8 → `75`, archetype 16 →
+# `79` — the SAME C1 over-emission axis, different bridged card id).
+# Pre-Slices-2/3 the `rust_shadow` bake-in's LEGAL_SET_EQ assertion
+# (`src/mtg_bot/search/rust_shadow.py:_assert_legal_set_eq`) tripped
+# on the FIRST priority point where Rust `legal_decisions` offered a
+# `cast_spell` Python's `legal_actions` pruned (mana / target /
+# additional-cost). Post-Slices-1/2/3 that over-emission is GONE: the
+# C1 axis is CLOSED end-to-end on the admitted real-deck surface.
+#
+# SCOPE (honest, per the B1 brief + `C4_RESWEEP_EVIDENCE.md:142-147`):
+# this pin asserts ONLY that the **LEGAL_SET_EQ `cast_spell` C1 axis**
+# is closed. The C4 re-sweep ALSO surfaced a SEPARATE, already-tracked
+# STATE_EQ divergence — **G7** (`SOT_FLIP_CUTOVER_PLAN.md` §4 ledger
+# row G7: Rust resolves `CastSpell` atomically vs Python's
+# stack-pending model; the `rust_shadow` STATE_EQ has no post-cast
+# stack-drain). G7 is OUT OF SCOPE of B1 (it is the G7-S3+ lane's
+# response-window machinery). This pin therefore tolerates a G7
+# STATE_EQ trip but FAILS LOUDLY on any LEGAL_SET_EQ trip whose
+# divergence carries a `cast_spell` over-emission — i.e. it is the
+# permanent regression sentinel for the B1 LEGAL_SET_EQ axis
+# specifically, not a "C4 fully clean" claim (the brief explicitly
+# states B1 is not expected to make C4/rust_shadow fully clean).
+
+
+# The exact (archetype, seed) pairs the committed C4 re-sweep recorded
+# as FAIL_DIVERGENCE @ LEGAL_SET_EQ with the verbatim `cast_spell N`
+# C1 over-emission shape (`c4_resweep.json` @ `e87a6ebe`).
+_C4_LEGAL_SET_EQ_CAST_SPELL_REPROS = [
+    (7, 0),   # rust\py=["('cast_spell', 76, ...)"] py\rust=[]
+    (7, 3),   # rust\py=["('cast_spell', 76, ...)"] py\rust=[]
+    (8, 3),   # rust\py=["('cast_spell', 75, ...)"] py\rust=[]
+    (16, 3),  # rust\py=["('cast_spell', 79, ...)"] py\rust=[]
+]
+
+
+def test_c4_resweep_cast_spell_legal_set_eq_axis_is_closed_end_to_end():
+    """B1 KEYSTONE CLOSURE PIN (end-to-end, real-deck, the C4
+    `cast_spell 76` shape).
+
+    Drives the EXACT (archetype, seed) games the C4 scaled re-sweep
+    (`docs/C4_RESWEEP_EVIDENCE.md`, `c4_resweep.json` @ `e87a6ebe`)
+    recorded as FAIL_DIVERGENCE at LEGAL_SET_EQ with the verbatim
+    ``rust\\py=["('cast_spell', 76, False, False, False, False,
+    None)"] py\\rust=[]`` C1 over-emission shape, THROUGH the
+    role-swapped ``rust_shadow`` bake-in (the SAME loader +
+    drive-to-terminal idiom `scripts/bench_trajectory_parity.py`'s
+    ``drive_one_game_rust_shadow`` C4 driver uses).
+
+    Post legal_decisions mana-awareness Slices 1+2+3 (mana / target /
+    additional-cost — ALL merged to main), Rust ``legal_decisions``
+    no longer offers a ``cast_spell`` Python's ``legal_actions``
+    prunes. This pin PROVES the B1 LEGAL_SET_EQ C1 axis is CLOSED on
+    the admitted real-deck surface: NO ``ShadowDivergenceError`` whose
+    tripwire is ``LEGAL_SET_EQ`` and whose detail carries a
+    ``cast_spell`` over-emission is raised driving these games.
+
+    HONEST SCOPE (per the B1 brief + C4_RESWEEP_EVIDENCE §142-147): a
+    SEPARATE, already-tracked **G7** STATE_EQ divergence (Rust resolves
+    ``CastSpell`` atomically vs Python's stack-pending model — owned by
+    the G7-S3+ lane, OUT OF SCOPE of B1) may still trip on a game that
+    actually casts a spell. This pin TOLERATES a non-LEGAL_SET_EQ trip
+    (it is not a "C4 fully clean" assertion — the brief explicitly
+    states B1 is not expected to make C4/rust_shadow fully clean) but
+    FAILS LOUDLY if the B1 LEGAL_SET_EQ ``cast_spell`` axis ever
+    regresses to an over-emission divergence.
+    """
+    pytest.importorskip("mtg_bot_engine")
+    from mtg_bot.parity import trajectory
+    from mtg_bot.search.rust_shadow import (
+        ShadowDivergenceError,
+        drive_shadow_game_to_terminal,
+    )
+
+    drove_any = False
+    for archetype, seed in _C4_LEGAL_SET_EQ_CAST_SPELL_REPROS:
+        try:
+            deck_names = trajectory.load_production_deck(
+                archetype=archetype
+            )
+            spec = trajectory.production_deck_to_deckspec(
+                deck_names, shared_rng_seed=seed
+            )
+        except (FileNotFoundError, IndexError, ValueError) as e:
+            # The 17lands pool / a bridge-filtered empty library is an
+            # environment precondition, not a B1 regression — skip this
+            # repro (never silently pass the whole pin).
+            pytest.skip(
+                f"C4 repro (arch={archetype}, seed={seed}) loader "
+                f"precondition unmet ({type(e).__name__}: {e}); the "
+                f"B1 LEGAL_SET_EQ axis is unprovable from this env."
+            )
+        drove_any = True
+        try:
+            drive_shadow_game_to_terminal(
+                spec, seed=seed, max_steps=120
+            )
+            # Clean run (or a degenerate FAIL_TIMEOUT land-walk that
+            # never casts) — the C1 over-emission did NOT trip. Good.
+        except ShadowDivergenceError as e:
+            # A G7 STATE_EQ (or any non-LEGAL_SET_EQ) trip is the
+            # SEPARATE, out-of-B1-scope axis — tolerated here.
+            if e.tripwire == "LEGAL_SET_EQ" and "cast_spell" in str(e):
+                raise AssertionError(
+                    f"B1 REGRESSION: the C4 LEGAL_SET_EQ `cast_spell` "
+                    f"C1 over-emission axis re-opened on real-deck "
+                    f"(archetype={archetype}, seed={seed}). Rust "
+                    f"`legal_decisions` is offering a `cast_spell` "
+                    f"Python's `legal_actions` prunes — the exact "
+                    f"docs/C4_RESWEEP_EVIDENCE.md:126-147 shape "
+                    f"legal_decisions mana-awareness Slices 1/2/3 "
+                    f"CLOSED. Tripwire detail: {e}"
+                ) from e
+            # else: G7 / non-C1 axis — out of B1 scope (the brief's
+            # explicit "NOT expected to make C4 fully clean" note).
+
+    assert drove_any, (
+        "No C4 `cast_spell` LEGAL_SET_EQ repro was driven — the "
+        "real-deck pool was entirely unavailable; the B1 axis is "
+        "unprovable from this environment."
+    )
