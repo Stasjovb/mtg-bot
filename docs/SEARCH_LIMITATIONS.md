@@ -6301,6 +6301,89 @@ is unchanged). Under `rust_shadow` it is the load-bearing pre-flip
 gate signal (correctly loud). The proper closure is parity-positive
 (it aligns the bake-in to the CR-correct Rust model the flip targets).
 
+---
+
+## G7 — `rust_shadow` STATE_EQ does NOT reconcile the G3 "Rust resolves `CastSpell` atomically" axis at scale (OPEN — surfaced by the C4 scaled re-sweep; flip NO-GO-until-closed)
+
+> **Status: OPEN.** Distinct, pre-existing, NOT G4 (the I20 mana
+> axis), NOT G5 (`_next_alive` priority), NOT G6 (post-deck-out
+> SBA-timing). The G4→G5→G6 chain was convergent **only on the tiny
+> 3-card `tiny_synthetic_deckspec`** (which never casts a spell — it
+> is Forest/Bears land-drops + passes). The Step-0 C4 scaled re-sweep
+> through `--driver rust_shadow` on the flip-candidate commit
+> `e87a6ebe` (real 17lands production decks) surfaces a NEW distinct
+> divergence on the **first `CastSpell`** of essentially every
+> real-deck game. This is the **G7** successor the smoke could never
+> see; the prior "Closing G6 unmasked NO G7 / chain fully convergent"
+> claim is **TRUE-ON-THE-SYNTHETIC-DECK-ONLY** and does NOT hold at
+> scale on the admitted real-deck surface.
+
+**Where.** `src/mtg_bot/search/rust_shadow.py`
+`ShadowCheckedRustAdapter.apply()` (applies the decision to both
+engines then immediately calls `_assert_state_eq()`), against
+`_assert_state_eq` / `_DOCUMENTED_ACCEPTED_FIELDS` (empty post-G4).
+Root engine asymmetry: Rust's `apply(CastSpell)` resolves the spell
+**atomically** (spell → battlefield, stack emptied, mana spent) while
+Python's `apply(CastSpell)` puts the spell **on the stack** pending
+the priority-pass / resolution step the Python rules engine requires
+(the locked-in full stack-and-priority model). This is the **G3
+"Rust resolves atomically — accepted C6-fenced caveat"** the
+`rust_shadow` module docstring + `canon_decision` already acknowledge
+for the *LEGAL_SET_EQ* contract — but **STATE_EQ does not reconcile
+it**. The Python-drives/Rust-mirrors `cross_engine.step_both`
+comparator DOES reconcile it via its **CE5 cast-vs-resolve mirror**
+(`cross_engine.py:10313` — "when `action_dict`'s kind is
+`cast_spell`, the harness drains BOTH engines' stacks via
+`resolve_top_of_stack_python` + `resolve_top_of_stack_rust` AFTER
+both engines apply the action"). The role-swapped bake-in has no
+equivalent post-`CastSpell` stack-drain before its `_assert_state_eq`
+field compare.
+
+**What it is.** On the first `CastSpell` decision in a real-deck
+bake-in game, `_assert_state_eq` compares while Rust has already
+resolved (`battlefield` carries the new permanent, `stack` empty,
+caster's `hand_pX`/`mana_pool_pX` reduced) and Python still has the
+spell on the `stack` (not yet on `battlefield`). STATE_EQ raises
+loudly — `[STATE_EQ] compare_fields divergences ...: [('battlefield',
+...), ('stack', ...)]` — exactly as designed (the bake-in working as
+the bad-flip tripwire; `feedback_no_fallback_hybrids` honest-stop).
+The C4 scaled re-sweep result: **0 PASS**, every real-deck game
+FAIL_DIVERGENCE at STATE_EQ on this single shape (the residual
+FAIL_TIMEOUTs are degenerate land-only random-walk games that never
+cast a spell and never reach terminal within the step cap — NOT
+clean PASSes). Mid-game live-play region (both players alive, full
+libraries), NOT the post-deck-out degenerate tail G4/G5/G6 lived in.
+
+**Failure mode.** A flip on the current bake-in evidence would be a
+flip whose pre-flip equivalence gate has **never validated a single
+spell cast** on a real deck (the smoke deck casts none). The honest
+C4 disposition is **flip NO-GO-until-G7-closed**.
+
+**Fix scope estimate.** Port the `step_both` CE5 cast-vs-resolve
+mirror into the role-swapped bake-in: after
+`ShadowCheckedRustAdapter.apply()` applies a stack-using decision to
+both engines, drain BOTH stacks to the pre-apply floor (the existing
+`resolve_top_of_stack_python` / `resolve_top_of_stack_rust`
+primitives) BEFORE `_assert_state_eq`, mirroring the proven
+`step_both` reconciliation exactly (same primitives, role-swapped
+driver). Pure-Python, `rust_shadow.py`-only, `decision_source=
+"python"` byte-unchanged, no Rust/`.pyd` — the same shape + discipline
+as the G4/G5/G6 closures. It is the next single deliberate
+orchestrator-sequenced flip lane (the G4→G5→G6→**G7** chain was not
+yet exhausted at scale). Owner: a dedicated `feature/g7-*` lane (NOT
+this measurement lane — this lane only generates + characterizes the
+C4 evidence per the brief's HARD STOP).
+
+**Impact estimate.** Zero on `decision_source="python"` (the SoT
+path is untouched). Under `rust_shadow` it is the load-bearing
+pre-flip gate signal (correctly loud — the bake-in caught the gap
+BEFORE the irreversible flip, exactly what C4 exists for). The
+proper closure is parity-positive (it aligns the bake-in's STATE_EQ
+to the same cast-resolve reconciliation `step_both` already proves
+byte-equal, just role-swapped). Cross-ref: `docs/C4_RESWEEP_
+EVIDENCE.md` (the full C4 evidence + the `c4_resweep.json` artifact);
+`SOT_FLIP_CUTOVER_PLAN.md` §4 ledger row **G7 (OPEN)**.
+
 When you take a deliberate shortcut (heuristic, approximation,
 incomplete CR conformance), add a section here with:
 - Where in the code (file:line)
