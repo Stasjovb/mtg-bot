@@ -6152,16 +6152,7 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # semantic (UEOT), but the SINGULAR variant carries one keyword
         # in a String rather than a list. Rust keeps the variants
         # separate to optimize for the single-keyword case (no Vec
-        # allocation, no list-iteration); the bridge folds the singular
-        # variant into the same Python primitive used by the plural
-        # arm -- ``PumpTargetCreatureUntilEOT(power_bonus=0,
-        # toughness_bonus=0, granted_keywords=frozenset({keyword}),
-        # you_control_only=True, exclude_self=False)`` -- because
-        # Python's PumpTargetCreatureUntilEOT already accepts a
-        # frozenset of keywords (1-element when this arm fires; N-
-        # element when the plural arm fires). The Python class is the
-        # unified pump-with-keyword-grant primitive; both bridge arms
-        # construct it with different keyword cardinalities.
+        # allocation, no list-iteration).
         #
         # **Required-fields contract.** Rust's parse_effect arm at
         # cards.rs:4012-4026 requires ``keyword`` field present AND
@@ -6179,21 +6170,31 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # ``exclude_self=False`` to mirror Rust's coverage. Singular-
         # with-exclude-source would need a Rust schema bump first.
         #
-        # **Real EoE consumers** unblocked: 2+ EoE oracle hits via
-        # scan -- Dual-Sun Technique ("target creature gains <keyword>
-        # until end of turn") and other single-keyword UEOT-grant
-        # cards. The plural arm's Blooming Stinger uses
-        # exclude_source=True so it stays on the plural arm; the
-        # singular variant is the bare-keyword-grant lane. Cross-
-        # engine end-to-end probe deferred per round-17/18/19
-        # synthetic-only-when-riders-cascade precedent (the
-        # PumpTargetCreatureUntilEOT layer-6 grant + the cleanup-step
-        # revert path are their own surfaces beyond the bare bridge-
-        # arm slice).
-        from mtg_bot.effects.generic.pump import (
-            PumpTargetCreatureUntilEOT,
-        )
-
+        # **Class-dispatch by keyword (fixed in bridge-grant-keyword-fix).**
+        # "Unblockable" (i.e. "can't be blocked") is NOT a keyword in
+        # MTG (CR 509.1b) -- it is a layer-6 continuous effect with
+        # registry kind ``cant_be_blocked``.  ``PumpTargetCreatureUntilEOT``
+        # with ``granted_keywords={"unblockable"}`` calls
+        # ``GrantKeywords(keywords={"unblockable"})`` which writes a
+        # ``grant_keyword`` registry entry -- structurally distinct from
+        # ``cant_be_blocked``.  ``is_cant_be_blocked`` checks for
+        # ``kind == "cant_be_blocked"`` and therefore returns False for
+        # the ``grant_keyword`` path.  The correct Python class for the
+        # unblockable case is ``GrantUnblockableUEOT``, which writes
+        # a ``cant_be_blocked`` registry entry via ``GrantUnblockable.resolve``.
+        #
+        # For genuine MTG keywords (haste, lifelink, deathtouch, flying,
+        # trample, reach, first_strike, vigilance, etc.) the
+        # ``PumpTargetCreatureUntilEOT`` path is correct -- those ARE
+        # ``grant_keyword`` registry entries consumed by
+        # ``effective_keywords``.
+        #
+        # **Real EoE consumers** unblocked: Enter the Enigma
+        # ("target creature can't be blocked this turn") and any other
+        # singular-keyword UEOT-grant card with keyword="unblockable".
+        # Other single-keyword UEOT-grant cards (Dual-Sun Technique
+        # style, keyword=haste/lifelink/etc.) fall through to the
+        # PumpTargetCreatureUntilEOT path as before.
         if "keyword" not in eff_dict:
             raise KeyError(
                 "grant_keyword_to_target_creature_until_eot bridge "
@@ -6207,6 +6208,18 @@ def _ta_dict_to_python_effect(eff_dict: dict):
                 f"{keyword!r} (mirroring Rust parser at cards.rs:"
                 f"4022-4026)"
             )
+        # "unblockable" is not a keyword -- dispatch to the correct
+        # Python class that writes a ``cant_be_blocked`` registry entry.
+        if keyword == "unblockable":
+            from mtg_bot.effects.generic.grant_keywords import (
+                GrantUnblockableUEOT,
+            )
+            return GrantUnblockableUEOT()
+        # Genuine MTG keywords: use PumpTargetCreatureUntilEOT which
+        # routes through GrantKeywords → grant_keyword registry entries.
+        from mtg_bot.effects.generic.pump import (
+            PumpTargetCreatureUntilEOT,
+        )
         return PumpTargetCreatureUntilEOT(
             power_bonus=0,
             toughness_bonus=0,
