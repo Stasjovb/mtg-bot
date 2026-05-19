@@ -332,31 +332,58 @@ class StructuredDataset(Dataset):
         policy_targets: np.ndarray,
         action_masks: np.ndarray,
     ) -> None:
-        # Enforce contiguous, correct-dtype storage at construction
-        # so ``torch.from_numpy`` in ``__getitem__`` is zero-copy.
-        self._token_type_flat = np.ascontiguousarray(
-            token_type_flat, dtype=np.int64,
+        # Convert flat storage to ``torch.Tensor`` with
+        # ``share_memory_()`` so DataLoader workers can attach to the
+        # same memory blocks via handles instead of bulk-pickling each
+        # worker's copy through a Windows multiprocessing pipe (~30 GB
+        # of pickle data per worker fails with [Errno 22] / pickle
+        # truncated). Shared-memory tensors get pickled as a handle +
+        # offset (a few bytes) which the worker re-attaches to.
+        #
+        # ``torch.from_numpy`` is zero-copy when the numpy array is
+        # C-contiguous and the right dtype. ``np.ascontiguousarray``
+        # guarantees both at the cost of one upfront copy if the
+        # input doesn't already satisfy them.
+        self._token_type_flat = torch.from_numpy(
+            np.ascontiguousarray(token_type_flat, dtype=np.int64),
         )
-        self._token_emb_ids_flat = np.ascontiguousarray(
-            token_emb_ids_flat, dtype=np.int64,
+        self._token_emb_ids_flat = torch.from_numpy(
+            np.ascontiguousarray(token_emb_ids_flat, dtype=np.int64),
         )
-        self._token_scalars_flat = np.ascontiguousarray(
-            token_scalars_flat, dtype=np.float32,
+        self._token_scalars_flat = torch.from_numpy(
+            np.ascontiguousarray(token_scalars_flat, dtype=np.float32),
         )
-        self._row_offsets = np.ascontiguousarray(row_offsets, dtype=np.int64)
-        self._outcomes = np.ascontiguousarray(outcomes, dtype=np.float32)
-        self._policy_targets = np.ascontiguousarray(
-            policy_targets, dtype=np.float32,
+        self._row_offsets = torch.from_numpy(
+            np.ascontiguousarray(row_offsets, dtype=np.int64),
         )
-        self._action_masks = np.ascontiguousarray(action_masks, dtype=np.bool_)
+        self._outcomes = torch.from_numpy(
+            np.ascontiguousarray(outcomes, dtype=np.float32),
+        )
+        self._policy_targets = torch.from_numpy(
+            np.ascontiguousarray(policy_targets, dtype=np.float32),
+        )
+        self._action_masks = torch.from_numpy(
+            np.ascontiguousarray(action_masks, dtype=np.bool_),
+        )
         self._n_total = int(self._row_offsets.shape[0]) - 1
         # Pre-compute has_policy (sum > 0.5) once at load time so each
         # __getitem__ avoids a per-row .sum() over the 517-wide policy
         # vector. policy_targets are visit-count distributions so
         # ``sum > 0.5`` is the "row carries supervision" signal.
-        self._has_policy = (
-            self._policy_targets.sum(axis=1) > 0.5
-        ).astype(np.bool_)
+        self._has_policy = self._policy_targets.sum(dim=1) > 0.5
+        # Move every storage tensor into shared memory so each
+        # DataLoader worker attaches via a small handle rather than
+        # re-pickling the bulk data. ``share_memory_()`` is a no-op
+        # if the tensor's storage is already shared, so calling it
+        # unconditionally is safe.
+        self._token_type_flat.share_memory_()
+        self._token_emb_ids_flat.share_memory_()
+        self._token_scalars_flat.share_memory_()
+        self._row_offsets.share_memory_()
+        self._outcomes.share_memory_()
+        self._policy_targets.share_memory_()
+        self._action_masks.share_memory_()
+        self._has_policy.share_memory_()
 
     def __len__(self) -> int:
         return self._n_total
@@ -367,25 +394,20 @@ class StructuredDataset(Dataset):
                 f"index {idx} out of range for dataset of length "
                 f"{self._n_total}"
             )
-        start = int(self._row_offsets[idx])
-        end = int(self._row_offsets[idx + 1])
+        start = int(self._row_offsets[idx].item())
+        end = int(self._row_offsets[idx + 1].item())
         seq_len = end - start
-        # ``torch.from_numpy`` on a contiguous slice of a C-order
-        # array is zero-copy. The slice is contiguous because the
-        # parent array is C-contiguous (enforced in _init_flat) and
-        # the slice is along axis 0.
-        tt = torch.from_numpy(self._token_type_flat[start:end])
-        emb = torch.from_numpy(self._token_emb_ids_flat[start:end])
-        sca = torch.from_numpy(self._token_scalars_flat[start:end])
+        # Torch tensor slicing is a view (no copy). Storage is
+        # shared-memory-backed (set up in _init_flat), so workers
+        # attach via cheap handles.
+        tt = self._token_type_flat[start:end]
+        emb = self._token_emb_ids_flat[start:end]
+        sca = self._token_scalars_flat[start:end]
         am = torch.ones(seq_len, dtype=torch.bool)
-        outcome = torch.tensor(
-            float(self._outcomes[idx]), dtype=torch.float32,
-        )
-        policy_target = torch.from_numpy(self._policy_targets[idx])
-        action_mask = torch.from_numpy(self._action_masks[idx])
-        has_policy = torch.tensor(
-            bool(self._has_policy[idx]), dtype=torch.bool,
-        )
+        outcome = self._outcomes[idx].clone()  # 0-d tensor copy
+        policy_target = self._policy_targets[idx]
+        action_mask = self._action_masks[idx]
+        has_policy = self._has_policy[idx].clone()
         return {
             "token_type": tt,
             "token_emb_ids": emb,
