@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **310 / 475 EoE cards (65.3%) are byte-equal at the Effect+bridge level**; of those, **171 (36.0% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 139 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **310 / 475 EoE cards (65.3%) are byte-equal at the Effect+bridge level**; of those, **176 (37.1% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 134 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **165 (34.7%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 171 | 36.0% |
-| Effect+bridge covered (not individually probed) | 139 | 29.3% |
+| PROBED byte-equal | 176 | 37.1% |
+| Effect+bridge covered (not individually probed) | 134 | 28.2% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -66,6 +66,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Bonders' Enclave
 - Cerebral Download
 - Chrome Companion
+- Come Back Wrong
 - Commune with Evil
 - Cryogen Relic
 - Dashing Bloodsucker
@@ -93,8 +94,10 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Faller's Faithful
 - Famished Worldsire
 - Fear of Lost Teeth
+- Fear of Surveillance
 - Fell Gravship
 - Final Vengeance
+- Flight-Deck Coordinator
 - Focus Fire
 - Found Footage
 - Friendly Ghost
@@ -104,6 +107,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Get Out
 - Glacier Godmaw
 - Glimmerburst
+- Glimmerlight
 - Grasping Longneck
 - Gravkill
 - Gravpack Monoist
@@ -175,6 +179,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Seedship Agrarian
 - Seedship Broodtender
 - Seedship Impact
+- Seized from Slumber
 - Selfcraft Mechan
 - Shroudstomper
 - Sinister Cryologist
