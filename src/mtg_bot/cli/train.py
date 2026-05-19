@@ -316,6 +316,18 @@ def main(argv=None) -> None:
         ),
     )
     parser.add_argument(
+        "--num-workers", type=int, default=0,
+        help=(
+            "DataLoader worker process count. Default 0 (main thread) "
+            "is fine for smoke tests but starves the GPU on real iter "
+            "data (~9%% GPU util at 7M+ samples). Production callers "
+            "should pass >= 4 so DataLoader prefetches batches in "
+            "parallel; persistent_workers=True is enabled automatically "
+            "when num_workers > 0 so the dataset is pickled once at "
+            "epoch 0 instead of every epoch."
+        ),
+    )
+    parser.add_argument(
         "--window-recent", type=int, default=None,
         help=(
             "If set, load only the N most-recent (by mtime) .npz "
@@ -1042,6 +1054,7 @@ def _main_structured(args, parser) -> None:
             # (lines 549, 646 above); structured was the outlier.
             compile_model=args.compile_model,
             early_stop_patience=args.early_stop_patience,
+            num_workers=args.num_workers,
         )
         elapsed = time.perf_counter() - started
 

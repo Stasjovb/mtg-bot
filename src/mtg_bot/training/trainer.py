@@ -706,6 +706,7 @@ def train_structured_model(
     autocast_dtype: Any = "auto",
     compile_model: Optional[bool] = None,
     early_stop_patience: Optional[int] = None,
+    num_workers: int = 0,
 ) -> TrainingHistory:
     """Train a :class:`StructuredModel` over a
     :class:`StructuredDataset`.
@@ -797,15 +798,23 @@ def train_structured_model(
     val_idx = perm[:n_val].tolist()
     train_idx = perm[n_val:].tolist()
     train_subset = Subset(dataset, train_idx) if train_idx else dataset
+    # ``num_workers=0`` keeps DataLoader on the main thread — fine for
+    # smoke tests + tiny datasets but starves the GPU on real iter
+    # data (7M+ samples ran at ~9% GPU util with single-process
+    # loading, ~22 min/epoch instead of the expected ~30s). Production
+    # callers pass ``num_workers >= 1`` to spawn worker processes that
+    # prefetch batches; ``persistent_workers=True`` keeps them alive
+    # across epochs so the dataset's flat-storage isn't re-pickled
+    # every epoch.
+    _pw = num_workers > 0
     train_loader = DataLoader(
         train_subset,
         batch_size=batch_size,
         shuffle=True,
         collate_fn=structured_collate,
-        # Pin to single-process workers — multiprocessing fork on
-        # Windows is finicky for ad-hoc test datasets and the smoke
-        # training set is small.
-        num_workers=0,
+        num_workers=num_workers,
+        persistent_workers=_pw,
+        pin_memory=device_obj.type == "cuda",
     )
     val_loader: Optional[DataLoader] = None
     if n_val > 0:
@@ -815,7 +824,9 @@ def train_structured_model(
             batch_size=batch_size,
             shuffle=False,
             collate_fn=structured_collate,
-            num_workers=0,
+            num_workers=num_workers,
+            persistent_workers=_pw,
+            pin_memory=device_obj.type == "cuda",
         )
 
     model = StructuredModel(config).to(device_obj)

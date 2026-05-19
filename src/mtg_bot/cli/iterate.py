@@ -810,6 +810,7 @@ def _train_next(
     structured_n_layers: int | None = None,
     structured_hidden_dim: int | None = None,
     structured_action_history_n: int | None = None,
+    num_workers: int = 0,
 ) -> str:
     """Run train_nn.py via subprocess so its progress JSON / hub
     UI / registry plumbing all behave the same as a manual train.
@@ -878,6 +879,8 @@ def _train_next(
         cmd.extend([
             "--early-stop-patience", str(early_stop_patience),
         ])
+    if num_workers > 0:
+        cmd.extend(["--num-workers", str(num_workers)])
     # Structured-architecture hyperparams (Slice G). Only emitted when
     # the architecture is "structured" — the flat-feature trainer
     # ignores them, and emitting them unconditionally would surface as
@@ -1176,6 +1179,17 @@ def main(argv=None) -> None:  # pragma: no cover
             "state tokenizer emits per row. Default 32 matches "
             "StructuredModelConfig.action_history_n and the §3 "
             "default in the NN-representation roadmap."
+        ),
+    )
+    parser.add_argument(
+        "--train-num-workers", type=int, default=4,
+        help=(
+            "Train-phase DataLoader worker process count. Default 4 — "
+            "single-process loading (num_workers=0) starves the GPU "
+            "at production-scale (~7M samples) because every batch's "
+            "__getitem__ + collate runs on the main thread between "
+            "GPU forward/backward calls. Set to 0 for smoke tests "
+            "where multiprocessing fork is finicky."
         ),
     )
     parser.add_argument(
@@ -2204,6 +2218,7 @@ def main(argv=None) -> None:  # pragma: no cover
                 structured_n_layers=args.n_layers,
                 structured_hidden_dim=args.hidden_dim,
                 structured_action_history_n=args.action_history_n,
+                num_workers=args.train_num_workers,
             )
         new_weights = registry.weights_path(new_version)
         # Register the produced weights file as an artifact on the
