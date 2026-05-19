@@ -225,6 +225,9 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_j.py",
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_k.py",
     REPO_ROOT / "tests" / "test_probe_covered_unprobed_l.py",
+    REPO_ROOT / "tests" / "test_probe_covered_unprobed_m.py",
+    REPO_ROOT / "tests" / "test_probe_covered_unprobed_n.py",
+    REPO_ROOT / "tests" / "test_probe_activated_abilities_o2.py",
     REPO_ROOT
     / "tests"
     / "test_probe_idiom_unlocked_optional_cost_mirror.py",

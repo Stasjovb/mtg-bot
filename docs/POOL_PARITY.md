@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **125 (26.3% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 182 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **133 (28.0% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 174 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **168 (35.4%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 125 | 26.3% |
-| Effect+bridge covered (not individually probed) | 182 | 38.3% |
+| PROBED byte-equal | 133 | 28.0% |
+| Effect+bridge covered (not individually probed) | 174 | 36.6% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -70,6 +70,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Divert Disaster
 - Dockworker Drone
 - Drix Fatemaker
+- Dual-Sun Adepts
 - Dubious Delicacy
 - Edge Rover
 - Embrace Oblivion
@@ -102,11 +103,13 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Icetill Explorer
 - Impossible Inferno
 - Interceptor Mechan
+- Intrepid Tenderfoot
 - Kav Landseeker
 - Kavaron Harrier
 - Knight Luminary
 - Lost in Space
 - Luxknight Breacher
+- Malevolent Chandelier
 - Mechan Assembler
 - Mechan Navigator
 - Mechanozoa
@@ -141,6 +144,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Rescue Skiff
 - Roaring Furnace // Steaming Sauna
 - Sami's Curiosity
+- Scorching Dragonfire
 - Scrounge for Eternity
 - Seam Rip
 - Seedship Agrarian
@@ -152,6 +156,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Space-Time Anomaly
 - Spineseeker Centipede
 - Starbreach Whale
+- Starfield Shepherd
 - Starfighter Pilot
 - Sunset Saboteur
 - Sunstar Expansionist
@@ -162,7 +167,10 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Thawbringer
 - Tragic Trajectory
 - Tunnel Surveyor
+- Turn Inside Out
 - Unravel
+- Unsettling Twins
+- Untimely Malfunction
 - Uthros Scanship
 - Virus Beetle
 - Vote Out
