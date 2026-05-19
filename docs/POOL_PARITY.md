@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **133 (28.0% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 174 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **141 (29.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 166 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **168 (35.4%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 133 | 28.0% |
-| Effect+bridge covered (not individually probed) | 174 | 36.6% |
+| PROBED byte-equal | 141 | 29.7% |
+| Effect+bridge covered (not individually probed) | 166 | 34.9% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -62,6 +62,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Blooming Stinger
 - Bombard
 - Chrome Companion
+- Commune with Evil
 - Cryogen Relic
 - Debris Field Crusher
 - Decode Transmissions
@@ -69,6 +70,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Desculpting Blast
 - Divert Disaster
 - Dockworker Drone
+- Don't Make a Sound
 - Drix Fatemaker
 - Dual-Sun Adepts
 - Dubious Delicacy
@@ -88,6 +90,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Full Bore
 - Galactic Wayfarer
 - Germinating Wurm
+- Get Out
 - Glacier Godmaw
 - Grasping Longneck
 - Gravkill
@@ -107,6 +110,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Kav Landseeker
 - Kavaron Harrier
 - Knight Luminary
+- Live or Die
 - Lost in Space
 - Luxknight Breacher
 - Malevolent Chandelier
@@ -139,6 +143,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Pyroclasm
 - Quantum Riddler
 - Radiant Strike
+- Ragged Playmate
 - Rayblade Trooper
 - Remnant Elemental
 - Rescue Skiff
@@ -166,6 +171,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Tapestry Warden
 - Thawbringer
 - Tragic Trajectory
+- Trial of Agony
 - Tunnel Surveyor
 - Turn Inside Out
 - Unravel
@@ -181,7 +187,9 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Weftstalker Ardent
 - Winter's Intervention
 - Wurmwall Sweeper
+- Xu-Ifit, Osteoharmonist
 - Zealous Display
+- Zookeeper Mechan
 
 ## BLOCKED — genuinely_missing (new-Rust-Effect ask) (7)
 
