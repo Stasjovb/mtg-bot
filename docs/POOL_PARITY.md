@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **141 (29.7% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 166 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **148 (31.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 159 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **168 (35.4%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 141 | 29.7% |
-| Effect+bridge covered (not individually probed) | 166 | 34.9% |
+| PROBED byte-equal | 148 | 31.2% |
+| Effect+bridge covered (not individually probed) | 159 | 33.5% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -71,11 +71,13 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Divert Disaster
 - Dockworker Drone
 - Don't Make a Sound
+- Drag to the Roots
 - Drix Fatemaker
 - Dual-Sun Adepts
 - Dubious Delicacy
 - Edge Rover
 - Embrace Oblivion
+- Emerge from the Cocoon
 - Eumidian Terrabotanist
 - Eusocial Engineering
 - Exosuit Savior
@@ -92,6 +94,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Germinating Wurm
 - Get Out
 - Glacier Godmaw
+- Glimmerburst
 - Grasping Longneck
 - Gravkill
 - Gravpack Monoist
@@ -104,6 +107,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Hymn of the Faller
 - Icecave Crasher
 - Icetill Explorer
+- Illvoi Galeblade
 - Impossible Inferno
 - Interceptor Mechan
 - Intrepid Tenderfoot
@@ -169,15 +173,18 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Susurian Voidborn
 - Tannuk, Memorial Ensign
 - Tapestry Warden
+- Thaumaton Torpedo
 - Thawbringer
 - Tragic Trajectory
 - Trial of Agony
 - Tunnel Surveyor
 - Turn Inside Out
+- Twist Reality
 - Unravel
 - Unsettling Twins
 - Untimely Malfunction
 - Uthros Scanship
+- Valgavoth's Faithful
 - Virus Beetle
 - Vote Out
 - Warmaker Gunship
