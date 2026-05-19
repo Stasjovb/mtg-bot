@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **309 / 475 EoE cards (65.1%) are byte-equal at the Effect+bridge level**; of those, **159 (33.5% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 150 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **309 / 475 EoE cards (65.1%) are byte-equal at the Effect+bridge level**; of those, **161 (33.9% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 148 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **166 (34.9%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 159 | 33.5% |
-| Effect+bridge covered (not individually probed) | 150 | 31.6% |
+| PROBED byte-equal | 161 | 33.9% |
+| Effect+bridge covered (not individually probed) | 148 | 31.2% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -60,6 +60,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Biomechan Engineer
 - Biosynthic Burst
 - Biotech Specialist
+- Blinkmoth Nexus
 - Blooming Stinger
 - Bombard
 - Bonders' Enclave
@@ -81,6 +82,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Edge Rover
 - Embrace Oblivion
 - Emerge from the Cocoon
+- Endless Sands
 - Eumidian Terrabotanist
 - Eusocial Engineering
 - Exosuit Savior
