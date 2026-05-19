@@ -260,7 +260,7 @@ def _ramp_to_main_with_mana(card_name, py, rs, adv, color, need):
     the battlefield, all driven byte-equal via ``step_both``. Returns
     the active player index.
     """
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
 
     adv(3)  # turn 1 PRECOMBAT_MAIN
     p0 = py.active_player_idx
@@ -320,7 +320,7 @@ def _tap_for(card_name, py, rs, ai, total):
     """Tap exactly ``total`` untapped non-summoning-sick lands p0
     controls, byte-equal via ``step_both``.
     """
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
 
     taps = 0
     for o in list(py.battlefield):
@@ -399,7 +399,7 @@ def test_warp_admitted_full_warp_lifecycle_real_deck_byte_equal(
     not give these five.
     """
     from mtg_bot.parity import trajectory
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
     from mtg_bot.legal import legal_actions
 
     real = _verify_warp_admitted(card_name, warp_str, normal_str)
@@ -459,7 +459,7 @@ def test_warp_admitted_full_warp_lifecycle_real_deck_byte_equal(
     )
 
     # (2) The warp cast — FULL compare_fields byte-equal post-cast.
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(card_obj.id),
          "use_warp": True})
@@ -473,9 +473,15 @@ def test_warp_admitted_full_warp_lifecycle_real_deck_byte_equal(
         card_name, etb_kind, py, rs, ai, life_before,
         "under the warp-cast path")
 
-    # (3) The following end step — the warp-exile sweep fires; the
-    # permanent is in exile (warp marker) on BOTH, byte-equal at END.
-    adv(7)  # MAIN1 -> END
+    # (3) The following end step — the warp-exile delayed trigger
+    # fires + resolves; the permanent is in exile (warp marker) on
+    # BOTH, byte-equal at END. S7-A2: drain the stack via the
+    # explicit primitive (post-G7 closure both engines push the
+    # CR-603.7 delayed trigger onto the stack at END_STEP entry; the
+    # drain resolves it via real stack-and-priority resolution).
+    from mtg_bot.parity.cross_engine import drain_stack_both
+    adv(7)  # MAIN1 -> END (WarpExileSelf delayed trigger on stack)
+    drain_stack_both(py, rs)  # resolve the delayed trigger
     py_ex = sorted(
         o.printing.name for o in py.players[ai].exile)
     rs_ex = sorted(
@@ -521,7 +527,7 @@ def test_warp_admitted_full_warp_lifecycle_real_deck_byte_equal(
     exiled = next(
         o for o in py.players[ai].exile
         if o.printing.name == card_name)
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(exiled.id),
          "use_warp": False})
@@ -565,7 +571,7 @@ def test_warp_admitted_normal_nonwarp_play_real_deck_byte_equal(
     path.
     """
     from mtg_bot.parity import trajectory
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
     from mtg_bot.legal import legal_actions
 
     real = _verify_warp_admitted(card_name, warp_str, normal_str)
@@ -603,7 +609,7 @@ def test_warp_admitted_normal_nonwarp_play_real_deck_byte_equal(
     )
 
     # Normal cast (use_warp:False) — FULL compare_fields byte-equal.
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(card_obj.id),
          "use_warp": False})

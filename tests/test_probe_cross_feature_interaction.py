@@ -570,7 +570,7 @@ def _make_adv(label, py, rs):
 def _tap_color(py, rs, ai, color, n, label):
     """Tap exactly ``n`` of p``ai``'s untapped non-sick lands that
     produce ``color``, byte-equal on BOTH engines."""
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
 
     t = 0
     for o in list(py.battlefield):
@@ -608,7 +608,7 @@ def _warp_then_bridged_spell_setup(
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        CardDef, DeckSpec, step_both,
+        CardDef, DeckSpec, step_both, step_both_drained,
     )
     from test_trajectory_parity import _step_views
     from tests.parity._picker_shims import _PickFirstLegalTargetAgent
@@ -740,7 +740,7 @@ def _warp_then_bridged_spell_setup(
     wobj = next(
         o for o in py.players[ai].hand
         if o.printing.name == warp_card)
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(wobj.id),
          "use_warp": True})
@@ -788,7 +788,7 @@ def test_radiant_strike_destroys_warp_creature_before_its_exile_sweep():
     own exile sweep) and the isolated Radiant Strike real-EoE probe
     (Grizzly Bears, no warp marker, no delayed-trigger ordering).
     """
-    from mtg_bot.parity.cross_engine import compare_fields, step_both
+    from mtg_bot.parity.cross_engine import compare_fields, step_both, step_both_drained
     from mtg_bot.legal import legal_actions
     from test_trajectory_parity import _step_views
 
@@ -817,7 +817,7 @@ def test_radiant_strike_destroys_warp_creature_before_its_exile_sweep():
     rsk = next(
         o for o in py.players[ai].hand
         if o.printing.name == "Radiant Strike")
-    s = step_both(
+    s = step_both_drained(
         py, rs, {"kind": "cast_spell", "card_id": int(rsk.id)})
     assert not s.divergences, (
         f"Bygone+Radiant: Radiant Strike cast→resolve through the "
@@ -906,7 +906,7 @@ def test_depressurize_debuffs_surviving_warp_creature_then_sweep_exiles_it():
     ordering). Pins that a non-lethal UEOT debuff is transparent to the
     warp-exile sweep cross-engine.
     """
-    from mtg_bot.parity.cross_engine import compare_fields, step_both
+    from mtg_bot.parity.cross_engine import compare_fields, step_both, step_both_drained
     from test_trajectory_parity import _step_views
 
     py, rs, adv, ai, wurm = _warp_then_bridged_spell_setup(
@@ -920,7 +920,7 @@ def test_depressurize_debuffs_surviving_warp_creature_then_sweep_exiles_it():
     dpc = next(
         o for o in py.players[ai].hand
         if o.printing.name == "Depressurize")
-    s = step_both(
+    s = step_both_drained(
         py, rs, {"kind": "cast_spell", "card_id": int(dpc.id)})
     assert not s.divergences, (
         f"Wurm+Depressurize: Depressurize cast→resolve through the "
@@ -941,7 +941,11 @@ def test_depressurize_debuffs_surviving_warp_creature_then_sweep_exiles_it():
     # End step: the warp marker is untouched by the non-lethal debuff,
     # so WarpExileSelf STILL fires → the Wurm goes to EXILE (the warp
     # destination), NOT the graveyard. FULL byte-equal at the boundary.
+    # S7-A2: drain the stack via the explicit primitive so the
+    # CR-603.7 delayed trigger resolves into exile on BOTH engines.
+    from mtg_bot.parity.cross_engine import drain_stack_both
     adv(7)
+    drain_stack_both(py, rs)
     py_ex = sorted(o.printing.name for o in py.players[ai].exile)
     rs_ex = sorted(e["printing_name"]
                    for e in rs.exile_snapshot(ai))

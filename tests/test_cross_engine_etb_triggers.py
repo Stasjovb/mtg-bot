@@ -20095,7 +20095,7 @@ def test_r63_warp_bridge_both_engines_same_castspell_pair():
     base variant's gating consistency)."""
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        advance_phase_python, step_both,
+        advance_phase_python, step_both, step_both_drained,
     )
     from mtg_bot.legal import legal_actions
 
@@ -20157,7 +20157,7 @@ def test_r63_warp_bridge_cast_byte_equal_via_step_both():
     spell_warped_this_turn) is byte-equal across engines (zero
     field-view divergences)."""
     from mtg_bot.parity import trajectory
-    from mtg_bot.parity.cross_engine import step_both, advance_phase_python
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained, advance_phase_python
 
     py, rs = trajectory.setup_matched_game(_r63_warp_synth_deckspec())
 
@@ -20192,7 +20192,7 @@ def test_r63_warp_bridge_cast_byte_equal_via_step_both():
     ai = py.active_player_idx
     sw = next(o for o in py.players[ai].hand
               if o.printing.name == "SynthWarp")
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(sw.id), "use_warp": True},
     )
@@ -20210,7 +20210,7 @@ def test_r63_warp_bridge_end_step_exile_and_recast_byte_equal():
     byte-equal."""
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        step_both, advance_phase_python, compare_fields,
+        step_both, step_both_drained, advance_phase_python, compare_fields,
     )
     from tests.test_trajectory_parity import _step_views
 
@@ -20253,7 +20253,7 @@ def test_r63_warp_bridge_end_step_exile_and_recast_byte_equal():
     ai = py.active_player_idx
     sw = next(o for o in py.players[ai].hand
               if o.printing.name == "SynthWarp")
-    assert not step_both(
+    assert not step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(sw.id),
          "use_warp": True}).divergences
@@ -20299,7 +20299,7 @@ def test_r63_warp_bridge_end_step_exile_and_recast_byte_equal():
             taps += 1
     rtm_ex = next(o for o in py.players[ai].exile
                   if o.printing.name == "SynthWarp")
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(rtm_ex.id),
          "use_warp": False},
@@ -20341,7 +20341,7 @@ def test_r65_warp_p15_trio_etb_fires_byte_equal_under_warp_cast(
     no-observable-side library/graveyard reorder of Surveil)."""
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        CardDef, DeckSpec, step_both, advance_phase_python,
+        CardDef, DeckSpec, step_both, step_both_drained, advance_phase_python,
     )
 
     from mtg_bot.cards.source import get_active_source
@@ -20421,7 +20421,7 @@ def test_r65_warp_p15_trio_etb_fires_byte_equal_under_warp_cast(
     # move_from_hand_to_battlefield → drain_pending_etb_dispatches
     # (the SAME ENTERS dispatch as cast_creature). Zero divergence is
     # the byte-equal proof.
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(obj.id),
          "use_warp": True},
@@ -20472,7 +20472,7 @@ def test_r65_warp_p15_trio_bridge_offers_same_base_warp_castspell_pair():
     Phase-1 substrate established."""
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        CardDef, DeckSpec, step_both, advance_phase_python,
+        CardDef, DeckSpec, step_both, step_both_drained, advance_phase_python,
     )
     from mtg_bot.legal import legal_actions
 
@@ -20956,7 +20956,7 @@ def test_bridge_spell_card_lever_phase1_real_eoe_cast_resolve_parity():
     observably resolved (the targeted Bear destroyed)."""
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        CardDef, DeckSpec, step_both, advance_phase_python,
+        CardDef, DeckSpec, step_both, step_both_drained, advance_phase_python,
         compare_fields,
     )
     from tests.test_trajectory_parity import _step_views
@@ -21042,7 +21042,7 @@ def test_bridge_spell_card_lever_phase1_real_eoe_cast_resolve_parity():
     tap_n(2)
     bear_obj = next(o for o in py.players[ai].hand
                     if o.printing.name == "Grizzly Bears")
-    assert not step_both(
+    assert not step_both_drained(
         py, rs,
         {"kind": "cast_spell",
          "card_id": int(bear_obj.id)}).divergences
@@ -21058,7 +21058,7 @@ def test_bridge_spell_card_lever_phase1_real_eoe_cast_resolve_parity():
     tap_n(2)
     spell = next(o for o in py.players[ai].hand
                  if o.printing.name == "Depressurize")
-    s = step_both(
+    s = step_both_drained(
         py, rs, {"kind": "cast_spell", "card_id": int(spell.id)})
     # Pin #8: post-cast AND post-resolve byte-equal (the CE5
     # cast-vs-resolve mirror drains both stacks before the compare).
@@ -21833,7 +21833,7 @@ def test_r72_warp_phase2_bridge_both_engines_same_hand_pair():
     caveat as the Phase-1 pin — mana made payable first."""
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        advance_phase_python, step_both,
+        advance_phase_python, step_both, step_both_drained,
     )
     from mtg_bot.legal import legal_actions
 
@@ -21909,7 +21909,7 @@ def test_r72_warp_phase2_bridge_hand_cast_byte_equal():
     engines."""
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        advance_phase_python, step_both,
+        advance_phase_python, step_both, step_both_drained,
     )
 
     py, rs = trajectory.setup_matched_game(_r72_tlc_synth_deckspec())
@@ -21945,7 +21945,7 @@ def test_r72_warp_phase2_bridge_hand_cast_byte_equal():
     ai = py.active_player_idx
     tlc = next(o for o in py.players[ai].hand
                if o.printing.name == "SynthTLC")
-    res = step_both(
+    res = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(tlc.id),
          "use_warp": True})
@@ -21967,7 +21967,7 @@ def test_r72_warp_phase2_bridge_graveyard_cast_lifecycle_byte_equal():
     the object is in exile, not the graveyard)."""
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        advance_phase_python, compare_fields, step_both,
+        advance_phase_python, compare_fields, step_both, step_both_drained,
     )
     from mtg_bot.game import Zone
     from mtg_bot.legal import legal_actions
@@ -22414,7 +22414,7 @@ def test_bridge_spell_card_lever_phase2_diplomatic_relations_real_eoe_cast_resol
     """
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        CardDef, DeckSpec, step_both, advance_phase_python,
+        CardDef, DeckSpec, step_both, step_both_drained, advance_phase_python,
         compare_fields,
     )
     from tests.test_trajectory_parity import _step_views
@@ -22525,7 +22525,7 @@ def test_bridge_spell_card_lever_phase2_diplomatic_relations_real_eoe_cast_resol
                       if o.printing.name == "Ally Beast"]
             if ally_h and len(lands) >= 2:
                 tap_n(2)
-                assert not step_both(
+                assert not step_both_drained(
                     py, rs,
                     {"kind": "cast_spell",
                      "card_id": int(ally_h[0].id)}).divergences
@@ -22534,7 +22534,7 @@ def test_bridge_spell_card_lever_phase2_diplomatic_relations_real_eoe_cast_resol
                  if o.printing.name == "Foe Beast"]
         if not cast_foe and foe_h and len(lands) >= 2:
             tap_n(2)
-            assert not step_both(
+            assert not step_both_drained(
                 py, rs,
                 {"kind": "cast_spell",
                  "card_id": int(foe_h[0].id)}).divergences
@@ -22575,7 +22575,7 @@ def test_bridge_spell_card_lever_phase2_diplomatic_relations_real_eoe_cast_resol
             gy_before = len(py.players[ai].graveyard)
             # Cast Diplomatic Relations. {2}{G} = tap 3 lands.
             tap_n(3)
-            s = step_both(
+            s = step_both_drained(
                 py, rs,
                 {"kind": "cast_spell",
                  "card_id": int(spell_h[0].id)})

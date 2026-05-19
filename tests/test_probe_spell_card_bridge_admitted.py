@@ -255,7 +255,7 @@ def _drive_phase1_carrier(card_name, *, target_tapped, deck_variant):
         DeckSpec,
         advance_phase_python,
         compare_fields,
-        step_both,
+        step_both, step_both_drained,
     )
     from tests.parity._picker_shims import _PickFirstLegalTargetAgent
     from tests.test_trajectory_parity import _step_views
@@ -450,7 +450,7 @@ def _drive_phase1_carrier(card_name, *, target_tapped, deck_variant):
         f"[{card_name} variant={deck_variant}] Grizzly Bears must be in hand to "
         f"cast the target"
     )
-    assert not step_both(
+    assert not step_both_drained(
         py,
         rs,
         {"kind": "cast_spell", "card_id": int(bear_obj.id)},
@@ -515,7 +515,7 @@ def _drive_phase1_carrier(card_name, *, target_tapped, deck_variant):
         f"[{card_name} variant={deck_variant}] the spell must be in hand to cast "
         f"through the carrier"
     )
-    s = step_both(
+    s = step_both_drained(
         py, rs, {"kind": "cast_spell", "card_id": int(spell_obj.id)}
     )
     # FULL byte-equality post-cast AND post-resolve (the CE5
