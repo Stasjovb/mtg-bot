@@ -806,6 +806,43 @@ fn first_legal_trigger_target(
             }
             None
         }
+        // **G7 follow-up f8e3a2b1.** DepressurizeEffect as a TRIGGER
+        // payload — the synthetic test pin shape at
+        // `tests/test_parity_smoke.py::_build_rust_depressurize_state`
+        // (no real EoE card emits DepressurizeEffect from a trigger
+        // today; the lone EoE consumer Depressurize is an Instant
+        // cast through `cast_spell_noncreature`, which seats
+        // `bound_target` at Delta-5). When DepressurizeEffect IS
+        // pushed as a triggered-ability payload (the
+        // `_build_rust_depressurize_state` ETB shape), there is no
+        // cast-time binder — without a seat here the resolve arm's
+        // `current_resolve_payload_target_id`-driven CR 608.2b gate
+        // would fizzle, regressing the 4 pre-existing synthetic
+        // pins. Seat the SAME deterministic-first ANY-creature pick
+        // the prior `Effect::DepressurizeEffect` resolve scan used
+        // (`bf_iter_etb_sorted` find first Creature on EITHER bf —
+        // the verified-non-controller-restricted shape pinned by
+        // `test_rust_depressurize_targets_opponents_creature_too`).
+        // Byte-equal to the pre-fix observable for every existing
+        // test, and forward-correct for the (currently-non-existent)
+        // future card that hypothetically triggers DepressurizeEffect.
+        Effect::DepressurizeEffect { .. } => {
+            crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing =
+                        state.registry.lookup(obj.printing_id)?;
+                    if printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Creature")
+                    {
+                        Some(obj.id)
+                    } else {
+                        None
+                    }
+                })
+        }
         // Every other effect (all existing untargeted safe triggers,
         // and any non-lever targeted trigger the engine handles
         // elsewhere): NOT a target-seating consumer — the helper is
@@ -6180,15 +6217,55 @@ fn apply_effect(
         }
         // DepressurizeEffect (Effect-uncovered Tier-A — Depressurize).
         // Mirrors Python's `DepressurizeEffect.resolve`
-        // (`effects/bespoke.py:1554`): target = first creature
-        // (Python's `legal_targets` is ANY creature — NOT controller-
-        // restricted, the verified deviation from the bare pump arm;
-        // scan BOTH bfs in ETB-timestamp order, Python's centralized
-        // `state.battlefield` walk + the deterministic-first
-        // convention); push a `−power_penalty/−0` UEOT
-        // `PowerToughnessBonus`; then read POST-UEOT EFFECTIVE power
-        // and `if eff_power <= 0` destroy it (respecting
+        // (`effects/bespoke.py:1554`): target = the CAST-TIME-BOUND
+        // creature target (`targets[0]`); push a `−power_penalty/−0`
+        // UEOT `PowerToughnessBonus`; then read POST-UEOT EFFECTIVE
+        // power and `if eff_power <= 0` destroy it (respecting
         // indestructible — CR 702.12; Python's `turn.destroy` gate).
+        //
+        // **G7 follow-up f8e3a2b1 (arch=9/seed=4 Robot residual).**
+        // Pre-fix this arm SCANNED for the first creature in ETB
+        // order at RESOLVE time — a deterministic-first re-pick
+        // (`bf_iter_etb_sorted` find_map). Under the
+        // `s6_scale_verify_v3.json` arch=9 seed=4 step 1724 repro:
+        // both Depressurize copies were cast targeting Gravpack
+        // Monoist (id 63). The first Depressurize resolved and
+        // killed GM; the GM dies-trigger then resolved and created
+        // the Robot token (id 120). Now Depressurize #2 resolves:
+        // Python's `resolve` (`effects/bespoke.py:1554`) reads
+        // `targets[0]` (the cast-time-bound `(creature, 63)`), looks
+        // up id 63 on `state.battlefield`, finds None (GM is in
+        // graveyard), and FIZZLES (CR 608.2b — illegal target →
+        // spell does nothing). Pre-fix Rust re-scanned bf for "first
+        // creature", silently re-routed the destroy to the Robot,
+        // and destroyed it. The STATE_EQ tripwire surfaced this as a
+        // Python-has-Robot vs Rust-bf-empty divergence one step
+        // after Depressurize #2 resolved.
+        //
+        // **Fix mirror.** Read the CAST-TIME-BOUND target id off
+        // `state.current_resolve_payload_target_id` (the same value
+        // `resolve_top_of_stack` swaps in from
+        // `StackItem.target_obj_id` at every resolve entry — the
+        // already-established payload-target convention used by the
+        // Tier-C target-seated arms at e.g. line 8714 / 10052; see
+        // the per-arm comment block at `:6649-6653`). Locate it on
+        // EITHER battlefield (Depressurize's `legal_targets` is NOT
+        // controller-restricted — Python's `next(o for o in
+        // state.battlefield if o.id == target_id)` walks the
+        // centralized list across both players). Fizzle on every
+        // illegal-target shape: `None` payload, target left bf,
+        // target type-changed off Creature (the three CR 608.2b
+        // cases Python's `obj is None` early-return naturally
+        // covers since the SBA destroy of a creature already moved
+        // it off bf before this resolve fires). The bound target
+        // itself is computed at cast time by
+        // `cast_spell_noncreature` Delta-5
+        // (`state_ops_cast.rs:~1439-1530`, `first-creature on either
+        // bf in bf_iter_etb_sorted order`) — byte-equal to Python's
+        // `_select_spell_targets` Phase-1 single-target pick — so on
+        // the happy path (target still on bf at resolve, no
+        // intervening SBA destroy) we land on the SAME creature the
+        // pre-fix scan would have picked, byte-equal.
         //
         // **§2 counters-asymmetry (load-bearing, the mini-spec
         // risk).** Python's `effective_power`
@@ -6204,11 +6281,65 @@ fn apply_effect(
         // silently diverge on a counter'd target — pinned.
         Effect::DepressurizeEffect { power_penalty } => {
             let pp: i32 = *power_penalty;
-            // Target = first creature in ETB-timestamp order across
-            // BOTH bfs (any creature — Depressurize's legal_targets
-            // is NOT controller-restricted).
-            let target: Option<(usize, u32)> =
-                crate::bf_iter::bf_iter_etb_sorted(state)
+            // Cast-time-bound target id, swapped in by
+            // `resolve_top_of_stack` from `StackItem.target_obj_id`
+            // (set by `cast_spell_noncreature` Delta-5 at cast time,
+            // or by `push_triggered_ability` via the trigger-push
+            // seat in `first_legal_trigger_target`).
+            //
+            // **f8e3a2b1 bug scenario:** Some → a cast-time bind
+            // succeeded but the target may have since left bf.
+            // Locate the bound target on EITHER bf; not-found ⇒ CR
+            // 608.2b fizzle, byte-equal to Python's `obj is None`
+            // early-return at `effects/bespoke.py:1567`. NOT a
+            // fallback-to-scan — that re-pick is exactly the pre-fix
+            // bug that destroyed the Robot at arch=9/seed=4.
+            //
+            // **None payload:** no target ever bound. The only
+            // production path that pushes DepressurizeEffect is
+            // either `cast_spell_noncreature` (always binds) or a
+            // future trigger via `push_triggered_ability` (binds via
+            // `first_legal_trigger_target`'s DepressurizeEffect arm,
+            // also added in this slice). The remaining caller is the
+            // low-level synthetic-test `push_to_stack(obj, ctrl)`
+            // API at `state_ops_stack.rs:56`, documented to seat NO
+            // targets ("First-slice StackItem shape:
+            // `{source_obj_id, controller}` only"). For that path —
+            // and ONLY that path — fall back to the pre-fix
+            // deterministic-first ANY-creature scan: identical
+            // observable to the prior behavior on every synthetic
+            // pin, with no risk of re-introducing the bug because the
+            // bug requires a NON-None bound target whose target left
+            // bf. Documented in `docs/SEARCH_LIMITATIONS.md` under
+            // the G7 follow-up f8e3a2b1 closure.
+            let target: Option<(usize, u32)> = match state
+                .current_resolve_payload_target_id
+            {
+                Some(payload_target) => state
+                    .players
+                    .iter()
+                    .enumerate()
+                    .find_map(|(pidx, player)| {
+                        player
+                            .battlefield
+                            .iter()
+                            .find(|o| o.id == payload_target)
+                            .and_then(|o| {
+                                let printing = state
+                                    .registry
+                                    .lookup(o.printing_id)?;
+                                if printing
+                                    .card_types
+                                    .iter()
+                                    .any(|t| t == "Creature")
+                                {
+                                    Some((pidx, o.id))
+                                } else {
+                                    None
+                                }
+                            })
+                    }),
+                None => crate::bf_iter::bf_iter_etb_sorted(state)
                     .into_iter()
                     .find_map(|obj| {
                         let printing =
@@ -6222,7 +6353,8 @@ fn apply_effect(
                         } else {
                             None
                         }
-                    });
+                    }),
+            };
             if let Some((pidx, target_id)) = target {
                 // Push the −pp/−0 UEOT modifier (verbatim from the
                 // PumpTargetCreatureUntilEOT push shape).

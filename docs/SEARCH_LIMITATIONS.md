@@ -7113,6 +7113,71 @@ gate signal (correctly loud). The proper closure is parity-positive
 > pre-COMBAT_DAMAGE case by extending the same gate to the outer
 > entry point.**]**
 
+> **[G7 follow-up `f8e3a2b1` (Class-C residual from cycle-39 scope-
+> correction) — CLOSED by `Effect::DepressurizeEffect` reading the
+> cast-time-bound target id from
+> `state.current_resolve_payload_target_id` (was a deterministic-
+> first scan at resolve)
+> (`feature/g7-token-creation-robot-missing` off main `fa79f673`).**
+> Surfaced as one of the 5 S6 scale-verify v3 residuals
+> (`s6_scale_verify_v3.json` arch=9 seed=4 step 1724,
+> `STATE_EQ::fields:Forest,Plains,Robot,Swamp,battlefield`). The
+> cycle-39 Class-C scope-correction labelled it a token-creation
+> parity slice (the brief expected "Robot token created on Python
+> but missing on Rust"). **Verify-first INVERTED the brief:** token
+> creation works fine on BOTH engines (at step 1722 Gravpack
+> Monoist's DIES trigger fires byte-equal on both sides and BOTH
+> engines push the Robot onto p1's bf with id 120 / tapped=1 /
+> summoning_sick=1 / controller=1, byte-identical). The actual
+> divergence fires at step 1724 when a Depressurize (id 60, cast
+> at step 1717 targeting Gravpack Monoist at id 63) resolves AFTER
+> its original target died: Python correctly fizzles per CR 608.2b
+> (target left bf → illegal target → spell does nothing), Rust
+> silently re-routes the destroy to the newly-created Robot.
+> **Root cause** in `rust/src/state_ops_resolve.rs::Effect::
+> DepressurizeEffect`: pre-fix the resolve arm scanned the
+> battlefield for the first creature in `bf_iter_etb_sorted` order
+> at RESOLVE time (the comment block called this "deterministic-
+> first" and aligned it with the orthogonal observation that
+> Python's `legal_targets` is non-controller-restricted). When the
+> original cast-time-bound target had left the bf between cast and
+> resolve, the re-pick silently picked a DIFFERENT creature.
+> Diverged from Python's `effects/bespoke.py::DepressurizeEffect.
+> resolve:1554` which reads `targets[0]` (the cast-time-bound
+> chosen target via `next(o for o in state.battlefield if o.id ==
+> target_id)`) and returns early on `obj is None` (the CR 608.2b
+> fizzle). **Fix** (`rust/src/state_ops_resolve.rs`, comment-heavy
+> arm-body edit): the resolve arm now reads
+> `state.current_resolve_payload_target_id` (the cast-time-bound
+> target id, swapped in by `resolve_top_of_stack` from
+> `StackItem.target_obj_id` — the established payload-target
+> convention used by the Tier-C target-seated arms at e.g. line
+> ~8714 / ~10052). Locates the bound target on EITHER bf;
+> not-found ⇒ CR 608.2b fizzle, byte-equal to Python's `obj is
+> None` early-return. The arm `Effect::DepressurizeEffect` was
+> also added to `first_legal_trigger_target` (Tier-C target-
+> seating helper at `:759-833`) so a future trigger that pushes
+> DepressurizeEffect (no real EoE card does this today — the lone
+> consumer Depressurize is an Instant cast through
+> `cast_spell_noncreature`, which seats `bound_target` at Delta-5)
+> seats a deterministic-first ANY-creature pick at push time and
+> resolves byte-equal to the prior shape. **A `None` payload at
+> resolve time** (the synthetic-test `push_to_stack` API path
+> documented at `state_ops_stack.rs:56` as `{source_obj_id,
+> controller}`-only) falls back to the pre-fix deterministic-first
+> scan — this preserves byte-identical behavior for the 6 pre-
+> existing `test_rust_depressurize_*` + 2 `test_cross_engine_real_
+> eoe_depressurize_*` pins in `test_parity_smoke.py` (each of
+> which seats no cast-time target). The fallback cannot re-open
+> the bug because the bug requires a NON-None bound target whose
+> target left bf — exactly the scenario the synthetic tests do
+> not exercise. arch=9 seed=4 now reaches terminal cleanly at
+> ~step 4923 (was tripping at step 1724 pre-fix). Pinned RED-
+> before/GREEN-after by `tests/test_g7_s6_scale_verify.py::
+> test_s6_classc_depressurize_payload_target_arch9_seed4_closed`
+> (the +1 closure pin); the prior 8 depressurize pins stay green
+> via the `None`-payload fallback.]**
+
 > **[Pre-fix RE-CHARACTERIZATION framing (verify-first @ `main` @
 > `430f3b39`; superseded above):]** The S6 evidence
 > (`docs/G7_S6_SCALE_VERIFY_EVIDENCE.md` + `s6_scale_verify.json`)

@@ -368,6 +368,86 @@ def test_s6_unclassified_life_p1_arch9s1_runs_clean_through_4000():
     )
 
 
+def test_s6_classc_depressurize_payload_target_arch9_seed4_closed():
+    """S6 scale-verify v3 Class-C residual — Depressurize cast-time-
+    bound target lookup at resolve (arch=9 / seed=4) is CLOSED. The
+    follow-up todo `f8e3a2b1...` from the cycle-39 Class-C scope-
+    correction.
+
+    **The v3 residual.** ``s6_scale_verify_v3.json`` (post-cycle-39
+    merge main `139cf275`) listed arch=9 / seed=4 with the divergence
+    shape ``STATE_EQ::fields:Forest,Plains,Robot,Swamp,battlefield``.
+    The cycle-39 Class-C scope-correction read this as "Robot token
+    is created on Python but not on Rust" — a missing-on-Rust
+    token-creation parity slice.
+
+    **Verify-first INVERTED the brief.** Step-by-step trace through
+    the rust_shadow bake-in proves token creation works fine on
+    BOTH engines: at step 1722 Gravpack Monoist's DIES trigger
+    resolves and BOTH engines push the Robot (id 120) onto p1's bf
+    byte-equal. The actual divergence fires at step 1724, when a
+    Depressurize (id 60, cast at step 1717 targeting the Gravpack
+    Monoist at id 63) resolves AFTER its original target died — and
+    Rust silently re-routes the destroy to a different creature
+    (the Robot), while Python correctly fizzles per CR 608.2b.
+
+    **Root cause** at ``rust/src/state_ops_resolve.rs::Effect::
+    DepressurizeEffect``: pre-fix the resolve arm IGNORED the cast-
+    time-bound target id (set by ``cast_spell_noncreature`` Delta-5
+    at cast time on ``StackItem.target_obj_id``) and re-scanned the
+    battlefield for the first creature in ETB-timestamp order at
+    RESOLVE time. When the original target had left bf between cast
+    and resolve (here: killed by an earlier Depressurize, then a
+    NEW creature — the Robot — entered before this resolution), the
+    re-pick silently destroyed the new creature.
+
+    **Fix mirror.** Python's ``DepressurizeEffect.resolve``
+    (``effects/bespoke.py:1554``) reads ``targets[0]`` (the cast-
+    time-bound chosen target), looks up that id on
+    ``state.battlefield``, and returns early on ``obj is None``
+    (CR 608.2b fizzle). The Rust resolve arm now reads
+    ``state.current_resolve_payload_target_id`` (the same value
+    ``resolve_top_of_stack`` swaps in from ``StackItem.target_obj_id``
+    — the established payload-target convention used by the Tier-C
+    target-seated arms), locates the bound target on either
+    battlefield, and fizzles on not-found / non-creature. A
+    fallback to the prior deterministic-first scan is retained for
+    the ``None`` payload case (no cast-time bind — the synthetic
+    ``push_to_stack`` test path documented at
+    ``state_ops_stack.rs:56`` as ``{source_obj_id, controller}``-
+    only) so the 6 pre-existing ``test_rust_depressurize_*`` pins
+    in ``test_parity_smoke.py`` retain byte-equal behavior. The
+    ``Effect::DepressurizeEffect`` arm of
+    ``first_legal_trigger_target`` (also added in this slice)
+    deterministic-first-seats a target if DepressurizeEffect is
+    ever pushed as a triggered-ability payload (no real EoE card
+    does this today — Depressurize is the only consumer, an
+    Instant).
+
+    Post-fix, arch=9/seed=4 reaches terminal cleanly at ~step 4923
+    (vs the prior trip at step 1724).
+    """
+    pytest.importorskip("mtg_bot_engine")
+    steps, raised, raw_exc = _drive_to_trip(9, 4)
+    assert raised is None, (
+        f"arch9/s4 (Class-C Depressurize payload-target lookup): "
+        f"expected CLEAN run to terminal post DepressurizeEffect "
+        f"cast-time-bound-target fix. Tripwire fired at step "
+        f"{steps}: {str(raised)[:400]!r}."
+    )
+    assert raw_exc is None, (
+        f"arch9/s4 (Class-C Depressurize payload-target lookup): "
+        f"expected CLEAN run to terminal. Raw exception at step "
+        f"{steps}: {raw_exc!r}."
+    )
+    # The trip was at step 1724; we must drive PAST that boundary.
+    assert steps >= 1725, (
+        f"arch9/s4 (Class-C Depressurize payload-target lookup): "
+        f"expected to drive PAST step 1724 (the v3 trip boundary). "
+        f"Driver stopped at step {steps} — re-characterize."
+    )
+
+
 def test_s6_no_new_masking_negative_controls_intact():
     """NO-NEW-MASKING (the load-bearing S6 verdict). The bake-in's
     ``_DOCUMENTED_ACCEPTED_FIELDS`` is EMPTY (no field carve-out), and
