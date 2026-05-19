@@ -125,7 +125,34 @@ def test_runtime_parser_yields_defaults():
     args = p.parse_args([])
     assert args.deck_pool == _common.DEFAULT_DECK_POOL
     assert args.progress_dir == _common.DEFAULT_PROGRESS_DIR
-    assert args.per_game_timeout_sec == _common.DEFAULT_PER_GAME_TIMEOUT_SEC
+    # per_game_timeout_sec defaults to None at parse time; callers
+    # invoke ``resolve_per_game_timeout(args)`` post-parse to fill
+    # in ``3 * args.nodes`` (see eval.py / capture.py).
+    assert args.per_game_timeout_sec is None
+
+
+def test_resolve_per_game_timeout_uses_3x_nodes():
+    """When unset at parse, ``resolve_per_game_timeout`` fills the
+    timeout with ``3 * args.nodes``."""
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument("--nodes", type=int, default=400)
+    p = argparse.ArgumentParser(parents=[_common.runtime_parser(), parent])
+    args = p.parse_args([])
+    assert args.per_game_timeout_sec is None
+    _common.resolve_per_game_timeout(args)
+    assert args.per_game_timeout_sec == 1200.0
+
+
+def test_resolve_per_game_timeout_respects_explicit_value():
+    """An explicit ``--per-game-timeout-sec`` survives the resolve
+    step unchanged."""
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument("--nodes", type=int, default=400)
+    p = argparse.ArgumentParser(parents=[_common.runtime_parser(), parent])
+    args = p.parse_args(["--per-game-timeout-sec", "60"])
+    assert args.per_game_timeout_sec == 60.0
+    _common.resolve_per_game_timeout(args)
+    assert args.per_game_timeout_sec == 60.0
 
 
 def test_runtime_parser_accepts_overrides():

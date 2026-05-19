@@ -141,13 +141,28 @@ def runtime_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--per-game-timeout-sec", type=float,
-        default=DEFAULT_PER_GAME_TIMEOUT_SEC,
+        default=None,
         help=(
-            "Wall-clock budget per game before the worker abandons it "
-            f"(default {DEFAULT_PER_GAME_TIMEOUT_SEC}s)."
+            "Wall-clock budget per game before the worker abandons "
+            "it. Default is ``3 * --nodes`` seconds (resolved by the "
+            "caller after parse, see ``resolve_per_game_timeout``). "
+            "Per-game wall scales ~linearly with MCTS budget so a "
+            "node-relative timeout auto-tracks --nodes; 3x gives "
+            "comfortable headroom over the p99 completed-game wall."
         ),
     )
     return p
+
+
+def resolve_per_game_timeout(args) -> None:
+    """Mutate ``args.per_game_timeout_sec`` to ``3 * args.nodes`` if
+    it wasn't explicitly set. Called by subcommands after parse so
+    the formula picks up the user's actual --nodes value.
+
+    Subcommands using :func:`runtime_parser` must call this exactly
+    once at the top of their ``main``."""
+    if getattr(args, "per_game_timeout_sec", None) is None:
+        args.per_game_timeout_sec = 3.0 * args.nodes
 
 
 def load_shards_config(path: Path):

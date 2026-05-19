@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 
 from mtg_bot import distributed_rest_orchestrator as _rest_orch
+from mtg_bot.cli import _common
 from mtg_bot.cli._common import (
     cluster_parser,
     depth_parser,
@@ -95,6 +96,7 @@ def main(argv=None) -> None:
         ),
     )
     args = parser.parse_args(argv)
+    _common.resolve_per_game_timeout(args)
 
     label = args.label or f"{args.new}_vs_{args.old}_{args.games}g"
 

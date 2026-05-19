@@ -24,6 +24,7 @@ import argparse
 import time
 from pathlib import Path
 
+from mtg_bot.cli import _common
 from mtg_bot.cli._common import depth_parser, runtime_parser
 from mtg_bot.decks import decks_from_json
 from mtg_bot.training.config import NNPimcConfig
@@ -59,6 +60,7 @@ def main(argv=None) -> None:  # pragma: no cover
     )
     p.add_argument("--replay-prefix", default="game")
     args = p.parse_args(argv)
+    _common.resolve_per_game_timeout(args)
 
     registry = Registry(args.registry_root)
     weights_path = registry.weights_path(args.bootstrap_version)

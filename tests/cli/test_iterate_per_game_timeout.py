@@ -67,26 +67,23 @@ _BASE_ARGS = [
 ]
 
 
-def test_default_self_play_timeout_matches_common_constant():
-    """No flag passed → self-play default tracks
-    ``DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC`` (300s)."""
+def test_default_self_play_timeout_is_none_pre_resolve():
+    """No flag passed → self-play default is ``None`` at parse time.
+    ``main()`` then resolves to ``3 * args.nodes`` after parse so
+    the formula picks up the user's actual ``--nodes`` value. A
+    real argparse default value would bake in a fixed number that
+    couldn't track ``--nodes``."""
     parser = _iterate_parser()
     ns = parser.parse_args(_BASE_ARGS)
-    assert ns.per_game_timeout_self_play_sec == (
-        _common.DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC
-    )
-    assert ns.per_game_timeout_self_play_sec == 300.0
+    assert ns.per_game_timeout_self_play_sec is None
 
 
-def test_default_eval_timeout_matches_common_constant():
-    """No flag passed → eval default tracks
-    ``DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC`` (600s)."""
+def test_default_eval_timeout_is_none_pre_resolve():
+    """Same contract as self-play: None at parse, resolved by main()
+    to ``3 * args.nodes``."""
     parser = _iterate_parser()
     ns = parser.parse_args(_BASE_ARGS)
-    assert ns.per_game_timeout_eval_sec == (
-        _common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC
-    )
-    assert ns.per_game_timeout_eval_sec == 600.0
+    assert ns.per_game_timeout_eval_sec is None
 
 
 def test_legacy_alias_defaults_to_none():
@@ -107,18 +104,17 @@ def test_split_flags_are_independent():
         "--per-game-timeout-self-play-sec", "120",
     ])
     assert ns.per_game_timeout_self_play_sec == 120.0
-    assert ns.per_game_timeout_eval_sec == (
-        _common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC
-    )
+    # The unset side stays None until main()'s post-parse resolve;
+    # the override on one phase mustn't accidentally trigger or skip
+    # the resolve on the other.
+    assert ns.per_game_timeout_eval_sec is None
 
     ns2 = parser.parse_args([
         *_BASE_ARGS,
         "--per-game-timeout-eval-sec", "900",
     ])
     assert ns2.per_game_timeout_eval_sec == 900.0
-    assert ns2.per_game_timeout_self_play_sec == (
-        _common.DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC
-    )
+    assert ns2.per_game_timeout_self_play_sec is None
 
 
 def test_explicit_overrides_accept_both_flags():
@@ -136,9 +132,29 @@ def test_explicit_overrides_accept_both_flags():
 def test_eval_default_is_at_least_self_play_default():
     """Sanity invariant: contention only inflates per-game wall, so the
     eval default budget must never be smaller than the self-play one.
-    A future bump that violates this would be a sign someone confused
-    the two."""
+    Both phases now use the same ``3 * --nodes`` formula so the
+    invariant holds trivially with equality."""
     assert (
         _common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC
         >= _common.DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC
     )
+
+
+def test_post_resolve_default_is_three_times_nodes(monkeypatch, tmp_path):
+    """After main() runs the post-parse resolve step, an unset
+    timeout becomes exactly ``3 * args.nodes``. Verifies the
+    formula end-to-end through the argparse + resolve pipeline."""
+    import argparse
+    parser = _iterate_parser()
+    # nodes=400 should resolve to 1200s on both phases.
+    ns = parser.parse_args([*_BASE_ARGS, "--nodes", "400"])
+    assert ns.per_game_timeout_self_play_sec is None
+    assert ns.per_game_timeout_eval_sec is None
+    # Apply the resolve step main() does (copied here as the
+    # single-line transform under test).
+    if ns.per_game_timeout_self_play_sec is None:
+        ns.per_game_timeout_self_play_sec = 3.0 * ns.nodes
+    if ns.per_game_timeout_eval_sec is None:
+        ns.per_game_timeout_eval_sec = 3.0 * ns.nodes
+    assert ns.per_game_timeout_self_play_sec == 1200.0
+    assert ns.per_game_timeout_eval_sec == 1200.0

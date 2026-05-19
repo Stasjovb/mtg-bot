@@ -1300,34 +1300,35 @@ def main(argv=None) -> None:  # pragma: no cover
     )
     parser.add_argument(
         "--per-game-timeout-self-play-sec", type=float,
-        default=_common.DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC,
+        default=None,
         help=(
-            "Wall-clock cap per individual self-play game "
-            f"(default {_common.DEFAULT_PER_GAME_TIMEOUT_SELF_PLAY_SEC}s). "
-            "Self-play is uncontended (one worker per shard) so the "
-            "completed-game p99 wall sits well under 400s and 300s "
-            "covers the bulk; rare clips fall through the data-gen "
-            "empty-chunk handler and the pool advances. Mitigates "
-            "the rare engine-state-corruption hang (todo d4f2a8c1; "
-            "underlying root-cause work is todo 9c5e3b71). Pass 0 "
-            "or negative to disable."
+            "Wall-clock cap per individual self-play game. Default "
+            "is ``3 * --nodes`` seconds (resolved after arg parse), "
+            "which matches the rule of thumb that per-game wall "
+            "scales linearly with MCTS budget and 3x leaves "
+            "comfortable headroom over the p99 completed-game wall "
+            "(measured 178.8s for 592 decisions at nodes=200; 3x = "
+            "600s). Self-play is uncontended (one worker per shard) "
+            "so this is generally not the binding constraint. Pass "
+            "an explicit positive value to override; pass 0 or "
+            "negative to disable."
         ),
     )
     parser.add_argument(
         "--per-game-timeout-eval-sec", type=float,
-        default=_common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC,
+        default=None,
         help=(
-            "Wall-clock cap per individual eval-match game "
-            f"(default {_common.DEFAULT_PER_GAME_TIMEOUT_EVAL_SEC}s). "
+            "Wall-clock cap per individual eval-match game. Default "
+            "is ``3 * --nodes`` seconds (resolved after arg parse). "
             "Eval is 14-worker contended — shared GPU/CPU inflates "
-            "per-decision wall ~2x relative to self-play, so games "
-            "genuinely need more headroom. PR #46 (commit 591164b9, "
-            "2026-05-09) eval against v21 1024-trunk: completed game "
-            "used 178.8s for 592 decisions while timed-out games had "
-            "logged 515-645 decisions when killed (real progress, "
-            "not wedges) — confirming 180s/300s caps clip the median, "
-            "not the p99. Eval-pool resilience converts timeouts to "
-            "draws. Pass 0 or negative to disable."
+            "per-decision wall ~2x relative to self-play — so the "
+            "3x-nodes formula gives genuine headroom over the "
+            "completed-game median. Eval-pool resilience converts "
+            "timeouts to draws (no game lost from the run); the "
+            "downside of a too-tight cap is artificially inflated "
+            "draw count masking the real win-rate signal. Pass an "
+            "explicit positive value to override; pass 0 or "
+            "negative to disable."
         ),
     )
     parser.add_argument(
@@ -1550,6 +1551,17 @@ def main(argv=None) -> None:  # pragma: no cover
     if args.per_game_timeout_sec is not None:
         args.per_game_timeout_self_play_sec = args.per_game_timeout_sec
         args.per_game_timeout_eval_sec = args.per_game_timeout_sec
+
+    # Resolve per-phase timeout defaults: ``3 * --nodes`` seconds.
+    # Done here (post-parse) rather than via argparse default= so the
+    # formula picks up the user's actual --nodes value instead of
+    # baking in a fixed default at module import. Per-game wall
+    # scales ~linearly with MCTS budget so node-relative timeouts
+    # auto-track when --nodes changes.
+    if args.per_game_timeout_self_play_sec is None:
+        args.per_game_timeout_self_play_sec = 3.0 * args.nodes
+    if args.per_game_timeout_eval_sec is None:
+        args.per_game_timeout_eval_sec = 3.0 * args.nodes
 
     if args.use_belief_weighted and not args.use_ismcts:
         parser.error(
