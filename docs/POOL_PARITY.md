@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **308 / 475 EoE cards (64.8%) are byte-equal at the Effect+bridge level**; of those, **153 (32.2% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 155 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **308 / 475 EoE cards (64.8%) are byte-equal at the Effect+bridge level**; of those, **155 (32.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 153 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **167 (35.2%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 153 | 32.2% |
-| Effect+bridge covered (not individually probed) | 155 | 32.6% |
+| PROBED byte-equal | 155 | 32.6% |
+| Effect+bridge covered (not individually probed) | 153 | 32.2% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -90,6 +90,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Fell Gravship
 - Final Vengeance
 - Focus Fire
+- Found Footage
 - Friendly Ghost
 - Full Bore
 - Galactic Wayfarer
@@ -143,6 +144,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Overlord of the Mistmoors
 - Perigee Beckoner
 - Piggy Bank
+- Pinnacle Emissary
 - Pinnacle Kill-Ship
 - Plasma Bolt
 - Pulsar Squadron Ace
