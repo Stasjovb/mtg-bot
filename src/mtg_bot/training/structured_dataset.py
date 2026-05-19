@@ -1,38 +1,50 @@
 """Dataset + collate_fn for ``StructuredModel`` training.
 
 The structured-token npz files written by ``data_gen.save_dataset`` are
-already padded *per file* to the file's max sequence length. This
-module wraps each file's arrays at their native (per-file) padding —
-``__getitem__`` slices each row down to its true length via the
-attention mask, and ``structured_collate`` then pads each batch to the
-batch's max sequence length.
+padded *per file* to the file's max sequence length. At train time
+we don't want to pay for any of that padding: the trainer's
+``DataLoader`` calls ``__getitem__`` millions of times per epoch and
+the per-row Python overhead dominates GPU compute on a small NN
+trunk.
 
-Per-batch padding (rather than global padding to the dataset max) keeps
-wasted padding bounded — the seq_len distribution in EoE self-play is
-15..86 with median ~53, so a 20%-sample batch sees ~63 padded slots on
-average instead of the worst-case 86.
+This module flattens every npz's padded tokens into a single packed
+"flat" storage indexed by per-row ``row_offsets``:
 
-History note: an earlier implementation eagerly concatenated every
-file's arrays into a single contiguous numpy array padded to the
-GLOBAL max_seq_len at load time. That allocation is
-``O(n_total * GLOBAL_max_len * emb_width * 8 bytes)`` for the int64
-``token_emb_ids`` slab alone; with ~7M accumulated samples (eight
-iterate cycles' worth) this OOM'd at ~42 GiB on a 64 GiB box because
-the global max_len inflated padding ~1.6x over the per-file max.
-Keeping each file's array at its native per-file padding eliminates
-that inflation entirely.
+- ``_token_type_flat``      shape (total_real_tokens,) int64
+- ``_token_emb_ids_flat``   shape (total_real_tokens, N_EMB_FIELDS) int64
+- ``_token_scalars_flat``   shape (total_real_tokens, N_SCALAR_FIELDS) float32
+- ``_row_offsets``          shape (n_total + 1,) int64 — cumulative
+                            real-token count; ``_row_offsets[i+1] -
+                            _row_offsets[i]`` is row i's sequence
+                            length, ``_token_type_flat[start:end]``
+                            is row i's real tokens with NO padding.
+
+``__getitem__(idx)`` becomes a single numpy slice + ``torch.from_numpy``
+per array — no ``.astype()`` copies, no per-row ``.sum()`` to recompute
+the sequence length, no Python-level list indexing.
+
+History note: an earlier eager-concat-with-global-max-padding loader
+OOM'd at ~42 GiB on the iter_016 dataset (1701 files, 7M samples).
+A first refactor switched to per-file ragged storage (one ndarray per
+source npz, padded to that file's local max_len) which fit in memory
+but introduced enough Python overhead per ``__getitem__`` —
+``np.searchsorted`` to map global idx -> file_idx, list indexing into
+the per-file arrays, ``.astype`` casts on every row — that an RTX 5090
+ran at <10% utilization waiting on the dataloader. The current flat
+storage is BOTH smaller (no per-file padding) AND faster (single
+contiguous slice per array).
 
 Public API
 ==========
 
-- :func:`load_structured_dataset` — discover and wrap every ``*.npz``
-  under a directory into a :class:`StructuredDataset` whose internal
-  storage is ragged across files.
-- :class:`StructuredDataset` — wraps either a single concat'd array
-  set (the back-compat positional constructor, used by tests and
-  direct callers) or a list of per-file array sets built by
-  :meth:`StructuredDataset.from_per_file_arrays` for the
-  memory-efficient path.
+- :func:`load_structured_dataset` — discover every ``*.npz`` under a
+  directory, flatten each file's real tokens, and return a
+  :class:`StructuredDataset` ready for the trainer's ``DataLoader``.
+- :class:`StructuredDataset` — wraps the packed-flat storage. The
+  legacy single-array constructor (used by tests + direct callers)
+  still accepts file-padded inputs and flattens them at construction
+  time. The :meth:`from_per_file_arrays` and
+  :meth:`from_flat_arrays` classmethods cover the other ingest paths.
 - :func:`structured_collate` — pads variable-length per-row tensors
   to the batch's max ``seq_len`` and stacks them into the dict
   :meth:`StructuredModel.forward` expects.
@@ -73,7 +85,7 @@ class StructuredDataset(Dataset):
     - ``token_emb_ids``   ``LongTensor(seq_len, N_EMB_FIELDS)``
     - ``token_scalars``   ``FloatTensor(seq_len, N_SCALAR_FIELDS)``
     - ``attention_mask``  ``BoolTensor(seq_len,)`` — all True
-      (padding is dropped at __getitem__ time so the collate_fn only
+      (padding is dropped at file-load time so the collate_fn only
       sees real tokens; this keeps the per-batch max accurate.)
     - ``outcome``         ``FloatTensor(scalar)`` — in ``{-1, 0, +1}``
     - ``policy_target``   ``FloatTensor(action_vocab_size,)`` — visit
@@ -84,18 +96,15 @@ class StructuredDataset(Dataset):
       ``policy_target.sum() > 0.5``.
 
     The arrays are kept on CPU; the trainer is responsible for moving
-    each batch to its target device after collation. Per-row slicing
-    via the attention mask happens at ``__getitem__`` time so the
-    collate's per-batch max is the tightest possible bound.
+    each batch to its target device after collation.
 
-    **Internal storage.** The dataset holds a *list of per-file
-    arrays* — one entry per source npz file — so files with very
-    different max sequence lengths don't pay the global-max padding
-    tax. The legacy positional constructor (which takes seven single
-    arrays) stores its arrays as a one-file list; the
-    :meth:`from_per_file_arrays` classmethod accepts pre-split lists
-    directly. ``__getitem__`` binary-searches the cumulative row-count
-    offsets to map a global index to (file_idx, local_row_idx).
+    **Internal storage.** Token arrays are stored "flat" — every
+    npz's real-token rows packed into a single contiguous numpy
+    array, with per-row slice bounds given by ``_row_offsets``. This
+    eliminates BOTH the per-file padding overhead (saves ~50% memory
+    vs file-padded layouts) AND the per-row Python overhead in
+    ``__getitem__`` (a single ``arr[start:end]`` + ``torch.from_numpy``
+    per array, no ``.astype`` copies, no list indexing).
     """
 
     def __init__(
@@ -124,9 +133,19 @@ class StructuredDataset(Dataset):
                 f"/ {outcomes.shape[0]} / {policy_targets.shape[0]} "
                 f"/ {action_masks.shape[0]}"
             )
-        self._init_per_file(
-            [token_type], [token_emb_ids], [token_scalars],
-            [attention_mask], [outcomes], [policy_targets], [action_masks],
+        # Flatten the file-padded inputs at construction time so the
+        # internal storage matches the ``from_flat_arrays`` shape.
+        tt_flat, emb_flat, sca_flat, row_offsets = _flatten_file_padded(
+            token_type, token_emb_ids, token_scalars, attention_mask,
+        )
+        self._init_flat(
+            token_type_flat=tt_flat,
+            token_emb_ids_flat=emb_flat,
+            token_scalars_flat=sca_flat,
+            row_offsets=row_offsets,
+            outcomes=np.asarray(outcomes, dtype=np.float32),
+            policy_targets=np.asarray(policy_targets, dtype=np.float32),
+            action_masks=np.asarray(action_masks, dtype=np.bool_),
         )
 
     @classmethod
@@ -141,11 +160,11 @@ class StructuredDataset(Dataset):
         policy_targets_per_file: list[np.ndarray],
         action_masks_per_file: list[np.ndarray],
     ) -> "StructuredDataset":
-        """Build a dataset over a list of per-file arrays without
-        global-max re-padding. Each list entry holds one source file's
-        arrays at the file's native ``max_seq_len`` padding; files may
-        have different ``max_seq_len`` values. Rows are sliced down to
-        their real length at ``__getitem__`` time."""
+        """Build from a list of per-file padded arrays. Each list
+        entry holds one source npz's arrays at the file's native
+        ``max_seq_len`` padding. Files may have different
+        ``max_seq_len`` values; rows are flattened to their real
+        length at construction time."""
         n_files = len(token_type_per_file)
         if (
             len(token_emb_ids_per_file) != n_files
@@ -185,97 +204,187 @@ class StructuredDataset(Dataset):
                     f"{policy_targets_per_file[fi].shape[0]} / "
                     f"{action_masks_per_file[fi].shape[0]}"
                 )
+        # Flatten each file's tokens, then concatenate the flat
+        # arrays + the per-file row arrays.
+        tt_parts: list[np.ndarray] = []
+        emb_parts: list[np.ndarray] = []
+        sca_parts: list[np.ndarray] = []
+        row_len_parts: list[np.ndarray] = []
+        for fi in range(n_files):
+            tt_f, emb_f, sca_f, row_lens_f = _flatten_one_file(
+                token_type_per_file[fi],
+                token_emb_ids_per_file[fi],
+                token_scalars_per_file[fi],
+                attention_mask_per_file[fi],
+            )
+            tt_parts.append(tt_f)
+            emb_parts.append(emb_f)
+            sca_parts.append(sca_f)
+            row_len_parts.append(row_lens_f)
+        if tt_parts:
+            tt_flat = np.concatenate(tt_parts)
+            emb_flat = np.concatenate(emb_parts)
+            sca_flat = np.concatenate(sca_parts)
+            row_lens_all = np.concatenate(row_len_parts).astype(np.int64)
+            outcomes = np.concatenate(outcomes_per_file).astype(np.float32)
+            policy_targets = np.concatenate(
+                policy_targets_per_file
+            ).astype(np.float32)
+            action_masks = np.concatenate(
+                action_masks_per_file
+            ).astype(np.bool_)
+        else:
+            # Empty input lists: produce a zero-row dataset.
+            tt_flat = np.zeros((0,), dtype=np.int64)
+            emb_flat = np.zeros((0, 0), dtype=np.int64)
+            sca_flat = np.zeros((0, 0), dtype=np.float32)
+            row_lens_all = np.zeros((0,), dtype=np.int64)
+            outcomes = np.zeros((0,), dtype=np.float32)
+            policy_targets = np.zeros(
+                (0, ACTION_VOCAB_SIZE), dtype=np.float32,
+            )
+            action_masks = np.zeros(
+                (0, ACTION_VOCAB_SIZE), dtype=np.bool_,
+            )
+        row_offsets = np.concatenate(
+            ([0], np.cumsum(row_lens_all)),
+        ).astype(np.int64)
         obj = cls.__new__(cls)
-        obj._init_per_file(
-            token_type_per_file,
-            token_emb_ids_per_file,
-            token_scalars_per_file,
-            attention_mask_per_file,
-            outcomes_per_file,
-            policy_targets_per_file,
-            action_masks_per_file,
+        obj._init_flat(
+            token_type_flat=tt_flat,
+            token_emb_ids_flat=emb_flat,
+            token_scalars_flat=sca_flat,
+            row_offsets=row_offsets,
+            outcomes=outcomes,
+            policy_targets=policy_targets,
+            action_masks=action_masks,
         )
         return obj
 
-    def _init_per_file(
+    @classmethod
+    def from_flat_arrays(
+        cls,
+        *,
+        token_type_flat: np.ndarray,
+        token_emb_ids_flat: np.ndarray,
+        token_scalars_flat: np.ndarray,
+        row_offsets: np.ndarray,
+        outcomes: np.ndarray,
+        policy_targets: np.ndarray,
+        action_masks: np.ndarray,
+    ) -> "StructuredDataset":
+        """Build directly from pre-flattened arrays. The caller is
+        responsible for ensuring ``row_offsets`` is monotone
+        non-decreasing, starts at 0, and ends at
+        ``token_type_flat.shape[0]``."""
+        n_total = int(row_offsets.shape[0]) - 1
+        if n_total < 0:
+            raise ValueError("row_offsets must have length >= 1")
+        if int(row_offsets[0]) != 0:
+            raise ValueError(
+                f"row_offsets must start at 0; got {int(row_offsets[0])}"
+            )
+        if int(row_offsets[-1]) != int(token_type_flat.shape[0]):
+            raise ValueError(
+                f"row_offsets[-1] must equal token_type_flat.shape[0]; "
+                f"got {int(row_offsets[-1])} vs {int(token_type_flat.shape[0])}"
+            )
+        if (
+            token_emb_ids_flat.shape[0] != token_type_flat.shape[0]
+            or token_scalars_flat.shape[0] != token_type_flat.shape[0]
+        ):
+            raise ValueError(
+                "Flat token arrays must share first dimension; got "
+                f"{token_type_flat.shape[0]} / "
+                f"{token_emb_ids_flat.shape[0]} / "
+                f"{token_scalars_flat.shape[0]}"
+            )
+        if (
+            outcomes.shape[0] != n_total
+            or policy_targets.shape[0] != n_total
+            or action_masks.shape[0] != n_total
+        ):
+            raise ValueError(
+                f"Per-row arrays must share row count {n_total}; got "
+                f"{outcomes.shape[0]} / {policy_targets.shape[0]} / "
+                f"{action_masks.shape[0]}"
+            )
+        obj = cls.__new__(cls)
+        obj._init_flat(
+            token_type_flat=token_type_flat,
+            token_emb_ids_flat=token_emb_ids_flat,
+            token_scalars_flat=token_scalars_flat,
+            row_offsets=row_offsets,
+            outcomes=outcomes,
+            policy_targets=policy_targets,
+            action_masks=action_masks,
+        )
+        return obj
+
+    def _init_flat(
         self,
-        token_type_per_file: list[np.ndarray],
-        token_emb_ids_per_file: list[np.ndarray],
-        token_scalars_per_file: list[np.ndarray],
-        attention_mask_per_file: list[np.ndarray],
-        outcomes_per_file: list[np.ndarray],
-        policy_targets_per_file: list[np.ndarray],
-        action_masks_per_file: list[np.ndarray],
+        *,
+        token_type_flat: np.ndarray,
+        token_emb_ids_flat: np.ndarray,
+        token_scalars_flat: np.ndarray,
+        row_offsets: np.ndarray,
+        outcomes: np.ndarray,
+        policy_targets: np.ndarray,
+        action_masks: np.ndarray,
     ) -> None:
-        self._token_type = token_type_per_file
-        self._token_emb_ids = token_emb_ids_per_file
-        self._token_scalars = token_scalars_per_file
-        self._attention_mask = attention_mask_per_file
-        self._outcomes = outcomes_per_file
-        self._policy_targets = policy_targets_per_file
-        self._action_masks = action_masks_per_file
-        # ``_file_offsets[i]`` = cumulative row count BEFORE file i;
-        # ``_file_offsets[-1]`` = total row count.
-        # ``__getitem__`` uses
-        # ``np.searchsorted(_file_offsets, idx, side='right') - 1`` to
-        # map a global row index to its file index. ``side='right'``
-        # naturally walks past zero-row files (whose offsets equal the
-        # previous file's offset), so no extra empty-file handling is
-        # needed.
-        row_counts = [int(a.shape[0]) for a in token_type_per_file]
-        self._file_offsets = np.concatenate(
-            ([0], np.cumsum(row_counts)),
-        ).astype(np.int64)
-        self._n_total = int(self._file_offsets[-1])
+        # Enforce contiguous, correct-dtype storage at construction
+        # so ``torch.from_numpy`` in ``__getitem__`` is zero-copy.
+        self._token_type_flat = np.ascontiguousarray(
+            token_type_flat, dtype=np.int64,
+        )
+        self._token_emb_ids_flat = np.ascontiguousarray(
+            token_emb_ids_flat, dtype=np.int64,
+        )
+        self._token_scalars_flat = np.ascontiguousarray(
+            token_scalars_flat, dtype=np.float32,
+        )
+        self._row_offsets = np.ascontiguousarray(row_offsets, dtype=np.int64)
+        self._outcomes = np.ascontiguousarray(outcomes, dtype=np.float32)
+        self._policy_targets = np.ascontiguousarray(
+            policy_targets, dtype=np.float32,
+        )
+        self._action_masks = np.ascontiguousarray(action_masks, dtype=np.bool_)
+        self._n_total = int(self._row_offsets.shape[0]) - 1
+        # Pre-compute has_policy (sum > 0.5) once at load time so each
+        # __getitem__ avoids a per-row .sum() over the 517-wide policy
+        # vector. policy_targets are visit-count distributions so
+        # ``sum > 0.5`` is the "row carries supervision" signal.
+        self._has_policy = (
+            self._policy_targets.sum(axis=1) > 0.5
+        ).astype(np.bool_)
 
     def __len__(self) -> int:
         return self._n_total
 
-    def _locate(self, idx: int) -> tuple[int, int]:
-        """Map a global row index to ``(file_idx, local_row_idx)``."""
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         if idx < 0 or idx >= self._n_total:
             raise IndexError(
                 f"index {idx} out of range for dataset of length "
                 f"{self._n_total}"
             )
-        file_idx = int(
-            np.searchsorted(self._file_offsets, idx, side="right") - 1
-        )
-        local_idx = idx - int(self._file_offsets[file_idx])
-        return file_idx, local_idx
-
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        # Slice down to the actual valid sequence length for this row
-        # so the collate_fn's per-batch max is computed against real
-        # tokens — file-level padding is dropped here.
-        file_idx, local = self._locate(idx)
-        mask = self._attention_mask[file_idx][local]
-        # ``mask`` is a 1-D bool array. The valid prefix is contiguous
-        # (the data writer right-pads), so ``mask.sum()`` is the row's
-        # true length.
-        seq_len = int(mask.sum())
-        tt = torch.from_numpy(
-            self._token_type[file_idx][local, :seq_len].astype(np.int64)
-        )
-        emb = torch.from_numpy(
-            self._token_emb_ids[file_idx][local, :seq_len, :].astype(np.int64)
-        )
-        sca = torch.from_numpy(
-            self._token_scalars[file_idx][local, :seq_len, :].astype(np.float32)
-        )
-        # Real-token-only mask: all True post-slice.
+        start = int(self._row_offsets[idx])
+        end = int(self._row_offsets[idx + 1])
+        seq_len = end - start
+        # ``torch.from_numpy`` on a contiguous slice of a C-order
+        # array is zero-copy. The slice is contiguous because the
+        # parent array is C-contiguous (enforced in _init_flat) and
+        # the slice is along axis 0.
+        tt = torch.from_numpy(self._token_type_flat[start:end])
+        emb = torch.from_numpy(self._token_emb_ids_flat[start:end])
+        sca = torch.from_numpy(self._token_scalars_flat[start:end])
         am = torch.ones(seq_len, dtype=torch.bool)
         outcome = torch.tensor(
-            float(self._outcomes[file_idx][local]), dtype=torch.float32,
+            float(self._outcomes[idx]), dtype=torch.float32,
         )
-        policy_target = torch.from_numpy(
-            self._policy_targets[file_idx][local].astype(np.float32)
-        )
-        action_mask = torch.from_numpy(
-            self._action_masks[file_idx][local].astype(np.bool_)
-        )
+        policy_target = torch.from_numpy(self._policy_targets[idx])
+        action_mask = torch.from_numpy(self._action_masks[idx])
         has_policy = torch.tensor(
-            bool(policy_target.sum().item() > 0.5), dtype=torch.bool,
+            bool(self._has_policy[idx]), dtype=torch.bool,
         )
         return {
             "token_type": tt,
@@ -287,6 +396,67 @@ class StructuredDataset(Dataset):
             "action_mask": action_mask,
             "has_policy": has_policy,
         }
+
+
+def _flatten_one_file(
+    token_type: np.ndarray,
+    token_emb_ids: np.ndarray,
+    token_scalars: np.ndarray,
+    attention_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Flatten one file's padded token arrays into packed real-token
+    arrays + a row-length vector.
+
+    Inputs are file-padded:
+    - ``token_type`` shape ``(n_rows, file_max_len)``
+    - ``token_emb_ids`` shape ``(n_rows, file_max_len, emb_width)``
+    - ``token_scalars`` shape ``(n_rows, file_max_len, scalar_width)``
+    - ``attention_mask`` shape ``(n_rows, file_max_len)`` (bool)
+
+    Outputs are packed:
+    - ``token_type_flat`` shape ``(total_real,)``
+    - ``token_emb_ids_flat`` shape ``(total_real, emb_width)``
+    - ``token_scalars_flat`` shape ``(total_real, scalar_width)``
+    - ``row_lengths`` shape ``(n_rows,)``
+
+    Uses numpy boolean-indexing (``arr[mask]``) for the gather, which
+    is the vectorized way to extract real tokens from a 2-D padded
+    layout. C-order memory layout guarantees the output rows appear
+    in row-major (i.e., file-row) order.
+    """
+    if attention_mask.dtype != np.bool_:
+        attention_mask = attention_mask.astype(np.bool_)
+    # ``token_type[mask]`` produces a 1-D array of real tokens in
+    # row-major order (numpy boolean-indexing on a 2-D array).
+    tt_flat = token_type[attention_mask]
+    # For the 3-D arrays, numpy broadcasts the mask across the last
+    # axis: ``emb_ids[mask]`` returns shape ``(total_real, emb_width)``.
+    emb_flat = token_emb_ids[attention_mask]
+    sca_flat = token_scalars[attention_mask]
+    # Per-row real length = mask sum along axis 1.
+    row_lengths = attention_mask.sum(axis=1).astype(np.int64)
+    return tt_flat, emb_flat, sca_flat, row_lengths
+
+
+def _flatten_file_padded(
+    token_type: np.ndarray,
+    token_emb_ids: np.ndarray,
+    token_scalars: np.ndarray,
+    attention_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Single-file flatten helper that also computes ``row_offsets``.
+
+    Returned tuple is
+    ``(token_type_flat, token_emb_ids_flat, token_scalars_flat,
+    row_offsets)`` — same shapes as the dataset's internal storage.
+    """
+    tt_flat, emb_flat, sca_flat, row_lengths = _flatten_one_file(
+        token_type, token_emb_ids, token_scalars, attention_mask,
+    )
+    row_offsets = np.concatenate(
+        ([0], np.cumsum(row_lengths)),
+    ).astype(np.int64)
+    return tt_flat, emb_flat, sca_flat, row_offsets
 
 
 def structured_collate(
@@ -320,9 +490,6 @@ def structured_collate(
     batch_size = len(items)
     seq_lens = [int(it["token_type"].shape[0]) for it in items]
     max_len = max(seq_lens) if seq_lens else 0
-    # Bump max_len up to 1 even when every row has zero real tokens so
-    # the model sees at least one slot (its [CLS] gets prepended on top
-    # anyway, but the empty-key edge case is still cheaper to avoid).
     if max_len == 0:
         max_len = 1
     emb_width = items[0]["token_emb_ids"].shape[-1]
@@ -380,11 +547,12 @@ def load_structured_dataset(
     files by mtime. Same semantics as
     :func:`data_gen.load_all_datasets`.
 
-    The returned dataset stores each file's arrays at the file's
-    native per-file ``max_seq_len`` — no global-max re-padding, no
-    giant single concatenated allocation. ``__getitem__`` re-slices
-    each row to its real length via ``attention_mask.sum()`` (same
-    contract as before).
+    Each file's padded tokens are flattened into a packed real-token
+    layout at load time — the returned dataset's ``__getitem__`` is a
+    single contiguous slice per array, no per-row ``.astype`` copies,
+    no ``np.searchsorted`` lookup, no per-row ``mask.sum()``
+    recomputation. See module docstring for the storage layout and
+    the history note on why this matters.
     """
     if max_files is not None and max_files <= 0:
         raise ValueError(
@@ -401,16 +569,18 @@ def load_structured_dataset(
         raise FileNotFoundError(
             f"No .npz files in {directory}"
         )
-    token_type_pf: list[np.ndarray] = []
-    token_emb_ids_pf: list[np.ndarray] = []
-    token_scalars_pf: list[np.ndarray] = []
-    attention_mask_pf: list[np.ndarray] = []
-    outcomes_pf: list[np.ndarray] = []
-    policy_targets_pf: list[np.ndarray] = []
-    action_masks_pf: list[np.ndarray] = []
-    # Pull every file, complaining loudly about ones missing the
-    # structured-token block — the trainer can't operate on those, so
-    # silent skipping would mask data-pipeline bugs.
+    # Accumulate one file at a time. The per-file padded arrays go
+    # out of scope after _flatten_one_file extracts their real
+    # tokens, so peak memory tracks (current file's padded + sum of
+    # flat parts already emitted) rather than (all files' padded
+    # + flat output).
+    tt_parts: list[np.ndarray] = []
+    emb_parts: list[np.ndarray] = []
+    sca_parts: list[np.ndarray] = []
+    row_len_parts: list[np.ndarray] = []
+    outcomes_parts: list[np.ndarray] = []
+    policy_parts: list[np.ndarray] = []
+    am_parts: list[np.ndarray] = []
     for path in paths:
         (
             features, outcomes, policy_targets, action_masks,
@@ -427,10 +597,9 @@ def load_structured_dataset(
             )
         n_rows = int(tt.shape[0])
         # Synthesize per-file policy / action arrays when the file
-        # carries no policy supervision so the dataset's per-file
-        # shape contract stays uniform. Old value-only data falls
-        # back to all-zero policy_targets + action_masks, identical
-        # to the legacy global-array zero-fill semantics.
+        # carries no policy supervision so old value-only data falls
+        # back to all-zero policy_targets + action_masks (same
+        # behavior as the legacy global-array zero-fill).
         if policy_targets is None:
             policy_targets = np.zeros(
                 (n_rows, ACTION_VOCAB_SIZE), dtype=np.float32,
@@ -439,21 +608,34 @@ def load_structured_dataset(
             action_masks = np.zeros(
                 (n_rows, ACTION_VOCAB_SIZE), dtype=np.bool_,
             )
-        token_type_pf.append(tt)
-        token_emb_ids_pf.append(emb_ids)
-        token_scalars_pf.append(scalars)
-        attention_mask_pf.append(mask)
-        outcomes_pf.append(outcomes)
-        policy_targets_pf.append(policy_targets)
-        action_masks_pf.append(action_masks)
-    return StructuredDataset.from_per_file_arrays(
-        token_type_per_file=token_type_pf,
-        token_emb_ids_per_file=token_emb_ids_pf,
-        token_scalars_per_file=token_scalars_pf,
-        attention_mask_per_file=attention_mask_pf,
-        outcomes_per_file=outcomes_pf,
-        policy_targets_per_file=policy_targets_pf,
-        action_masks_per_file=action_masks_pf,
+        tt_f, emb_f, sca_f, rows_f = _flatten_one_file(
+            tt, emb_ids, scalars, mask,
+        )
+        tt_parts.append(tt_f)
+        emb_parts.append(emb_f)
+        sca_parts.append(sca_f)
+        row_len_parts.append(rows_f)
+        outcomes_parts.append(outcomes)
+        policy_parts.append(policy_targets)
+        am_parts.append(action_masks)
+    tt_flat = np.concatenate(tt_parts)
+    emb_flat = np.concatenate(emb_parts)
+    sca_flat = np.concatenate(sca_parts)
+    row_lengths_all = np.concatenate(row_len_parts).astype(np.int64)
+    row_offsets = np.concatenate(
+        ([0], np.cumsum(row_lengths_all)),
+    ).astype(np.int64)
+    outcomes_all = np.concatenate(outcomes_parts).astype(np.float32)
+    policy_all = np.concatenate(policy_parts).astype(np.float32)
+    am_all = np.concatenate(am_parts).astype(np.bool_)
+    return StructuredDataset.from_flat_arrays(
+        token_type_flat=tt_flat,
+        token_emb_ids_flat=emb_flat,
+        token_scalars_flat=sca_flat,
+        row_offsets=row_offsets,
+        outcomes=outcomes_all,
+        policy_targets=policy_all,
+        action_masks=am_all,
     )
 
 
