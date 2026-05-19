@@ -446,7 +446,10 @@ pub(crate) fn dispatch_event(
     // BLOCKS + LEAVES_BATTLEFIELD; round-58 adds BECOMES_TAPPED;
     // round-13 adds DEALS_DAMAGE (fired by
     // ``dispatch_combat_damage_to_player`` for player-targeted
-    // combat-damage entries). Other events declared in the enum stay
+    // combat-damage entries); round-14 adds the three PHASE_STEP
+    // events (BEGINNING_OF_END_STEP, BEGINNING_OF_UPKEEP,
+    // BEGINNING_OF_COMBAT) fired by ``advance_phase`` in
+    // ``state_ops_steps.rs``. Other events declared in the enum stay
     // raise-on-dispatch so a future caller who skipped the fan-out
     // plan surfaces it loudly rather than silently no-op.
     if event != Event::Enters
@@ -457,13 +460,18 @@ pub(crate) fn dispatch_event(
         && event != Event::LeavesBattlefield
         && event != Event::BecomesTapped
         && event != Event::DealsDamage
+        && event != Event::BeginningOfEndStep
+        && event != Event::BeginningOfUpkeep
+        && event != Event::BeginningOfCombat
     {
         return Err(PyValueError::new_err(format!(
             "dispatch_event: event {event:?} is not yet wired; \
              valid: Event::Enters, Event::Dies, Event::Cast, \
              Event::Attacks, Event::Blocks, Event::LeavesBattlefield, \
-             Event::BecomesTapped, Event::DealsDamage \
-             (Slice 9 + r58 + r13)"
+             Event::BecomesTapped, Event::DealsDamage, \
+             Event::BeginningOfEndStep, Event::BeginningOfUpkeep, \
+             Event::BeginningOfCombat \
+             (Slice 9 + r58 + r13 + r14)"
         )));
     }
 

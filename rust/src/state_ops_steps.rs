@@ -79,7 +79,9 @@
 //! exercise the first-turn skip explicitly drop `turn_number` to 1
 //! before walking through the draw step.
 
+use crate::cards::{Event, PLAYER_SUBJECT_OFFSET};
 use crate::state::{GameObject, GameState, ManaPool};
+use crate::state_ops_resolve::dispatch_event;
 use crate::state_ops_zones::{ZONE_GRAVEYARD, ZONE_HAND};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -560,6 +562,19 @@ impl GameState {
             // Same CoW shape as the untap sweep — see the helper.
             clear_summoning_sick_for_player_inline(self, self.active_player);
         }
+        if self.phase == PHASE_UPKEEP {
+            // **Round-14 BEGINNING_OF_UPKEEP dispatch.** Mirror of
+            // Python's `run_beginning_of_upkeep_triggers` which calls
+            // ``dispatch_event(state, Event.BEGINNING_OF_UPKEEP,
+            // player=state.active_player())``. The player subject uses
+            // the PLAYER_SUBJECT_OFFSET sentinel so `ControlledByYou`
+            // can resolve the active player without colliding with
+            // game-object IDs (see `cards.rs::PLAYER_SUBJECT_OFFSET`
+            // doc-comment).
+            let player_subject =
+                PLAYER_SUBJECT_OFFSET + self.active_player as u32;
+            dispatch_event(self, Event::BeginningOfUpkeep, player_subject)?;
+        }
         if self.phase == PHASE_DRAW && self.turn_number != 1 {
             // CR 504.1 — active player draws one card during their
             // draw step. CR 103.7c first-turn skip: the player who
@@ -573,7 +588,31 @@ impl GameState {
             // module docstring for the cross-slice friction note.
             draw_card_inline(self, self.active_player);
         }
+        if self.phase == PHASE_BEGIN_COMBAT {
+            // **Round-14 BEGINNING_OF_COMBAT dispatch.** Mirror of
+            // Python's `run_beginning_of_combat_triggers` which calls
+            // ``dispatch_event(state, Event.BEGINNING_OF_COMBAT,
+            // player=state.active_player())``. Same PLAYER_SUBJECT_OFFSET
+            // sentinel convention as the UPKEEP dispatch above.
+            let player_subject =
+                PLAYER_SUBJECT_OFFSET + self.active_player as u32;
+            dispatch_event(self, Event::BeginningOfCombat, player_subject)?;
+        }
         if self.phase == PHASE_END_STEP {
+            // **Round-14 BEGINNING_OF_END_STEP dispatch.** Mirror of
+            // Python's `run_beginning_of_end_step_triggers` which calls
+            // ``dispatch_event(state, Event.BEGINNING_OF_END_STEP,
+            // player=state.active_player())``. Fires BEFORE
+            // `run_delayed_end_step_triggers` — predicate-style end-step
+            // triggers (the standard "at the beginning of your end step,
+            // ..." family) land on the stack first; delayed triggers
+            // (warp-exile obligations) land second. Mirrors Python's
+            // ordering in ``simulate.py`` where
+            // ``run_beginning_of_end_step_triggers`` is called before
+            // ``run_delayed_end_step_triggers``.
+            let player_subject =
+                PLAYER_SUBJECT_OFFSET + self.active_player as u32;
+            dispatch_event(self, Event::BeginningOfEndStep, player_subject)?;
             // **G7 Class-C delayed-trigger port (round-78).** At the
             // beginning of the END step, drain matching delayed
             // triggers from `state.delayed_triggers` onto the stack

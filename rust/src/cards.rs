@@ -4042,7 +4042,68 @@ pub enum Event {
     /// emission set matches this exactly; the entering-tapped /
     /// regeneration-tap Rust sites stay raw `obj.tapped = true`.
     BecomesTapped,
+    /// "At the beginning of your end step" / "At the beginning of
+    /// each end step" — round-14 PHASE_STEP event bridge. Fired by
+    /// `advance_phase` when the new phase is `PHASE_END_STEP`.
+    ///
+    /// **Player subject convention.** Phase-step events use a player
+    /// as the subject rather than a game object. The dispatch site
+    /// passes `PLAYER_SUBJECT_OFFSET + active_player as u32` as the
+    /// `subject_id` so `ControlledByYou` can distinguish player
+    /// subjects (id ≥ `PLAYER_SUBJECT_OFFSET`) from game-object
+    /// subjects (id < `PLAYER_SUBJECT_OFFSET`). Mirrors Python's
+    /// `dispatch_event(state, Event.BEGINNING_OF_END_STEP,
+    /// player=state.active_player())` shape — the `player` kwarg IS
+    /// the `"player"` subject slot in `EVENT_SUBJECTS`.
+    ///
+    /// **Predicate shapes.** Most end-step triggers parse to
+    /// `Controlled(YOU)` ("at the beginning of YOUR end step") which
+    /// maps to `Predicate::ControlledByYou` — fires only for sources
+    /// whose controller IS the active player. The "each end step"
+    /// variant parses to `Always()` — fires for all sources on every
+    /// end step. Both are handled by the existing predicate arms; no
+    /// new predicate variants are needed.
+    ///
+    /// Mirrors Python's `Event.BEGINNING_OF_END_STEP` enum member
+    /// (string value `"beginning_of_end_step"`,
+    /// `src/mtg_bot/effects/predicates.py:126`).
+    BeginningOfEndStep,
+    /// "At the beginning of your upkeep" — round-14 PHASE_STEP event
+    /// bridge. Fired by `advance_phase` when the new phase is
+    /// `PHASE_UPKEEP`. Same player-subject convention as
+    /// `BeginningOfEndStep`; same `ControlledByYou` / `Always`
+    /// predicate shapes. Mirrors Python's
+    /// `Event.BEGINNING_OF_UPKEEP` (string value
+    /// `"beginning_of_upkeep"`).
+    BeginningOfUpkeep,
+    /// "At the beginning of combat on your turn" — round-14
+    /// PHASE_STEP event bridge. Fired by `advance_phase` when the
+    /// new phase is `PHASE_BEGIN_COMBAT`. Same player-subject
+    /// convention and predicate shapes. Mirrors Python's
+    /// `Event.BEGINNING_OF_COMBAT` (string value
+    /// `"beginning_of_combat"`).
+    BeginningOfCombat,
 }
+
+/// Sentinel offset used by phase-step dispatch to pass a **player
+/// subject** through the `subject_id: u32` API without colliding with
+/// real game-object IDs.
+///
+/// Phase-step events (`BeginningOfEndStep`, `BeginningOfUpkeep`,
+/// `BeginningOfCombat`) carry a player as their subject (the active
+/// player whose phase it is), mirroring Python's `dispatch_event(state,
+/// Event.BEGINNING_OF_END_STEP, player=state.active_player())` call.
+/// Game-object IDs start from zero and climb monotonically, so we
+/// reserve the top of the u32 range as a player-ID namespace:
+/// `subject_id = PLAYER_SUBJECT_OFFSET + player_index` (where
+/// `player_index` is 0 or 1 for the two-player engine). Object IDs
+/// never approach 2^31 in any realistic game, so the namespaces are
+/// effectively disjoint.
+///
+/// `ControlledByYou` in `Predicate::matches` detects the sentinel
+/// range and resolves the player index directly rather than walking
+/// the game-object zones.
+pub(crate) const PLAYER_SUBJECT_OFFSET: u32 = 0x8000_0000;
 
 /// Predicate algebra over the trigger subject (the GameObject the
 /// event happened to) and source (the GameObject carrying the
@@ -4185,16 +4246,47 @@ impl Predicate {
                 // on both players; the helper returns `None` when the
                 // id isn't present (the same loud-but-safe shape as
                 // `find_source_printing_id`).
+                //
+                // **Player-subject path (round-14 phase-step events).**
+                // Phase-step dispatch passes `PLAYER_SUBJECT_OFFSET +
+                // active_player as u32` as the subject_id so we can
+                // distinguish player subjects from game-object subjects
+                // without a separate predicate variant. When subject_id
+                // is in the sentinel range we resolve the player index
+                // directly rather than walking game-object zones —
+                // mirrors Python's `Controlled(YOU)` on a `Player`
+                // subject: ``player.id == source.controller_id``.
                 let source_controller =
                     find_object_controller(state, source_id);
-                let subject_controller =
-                    find_object_controller(state, subject_id);
-                match (source_controller, subject_controller) {
-                    (Some(sc), Some(jc)) => sc == jc,
-                    // Either id missing — never match (e.g. the
-                    // subject has already left the battlefield, or
-                    // the source was evicted mid-dispatch).
-                    _ => false,
+                let subject_player_index: Option<u8> =
+                    if subject_id >= PLAYER_SUBJECT_OFFSET {
+                        let idx = subject_id - PLAYER_SUBJECT_OFFSET;
+                        // Bounds-guard: only two players in this engine.
+                        if (idx as usize) < state.players.len() {
+                            Some(idx as u8)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                if let Some(player_idx) = subject_player_index {
+                    // Player-subject path: source.controller == active_player.
+                    match source_controller {
+                        Some(sc) => sc == player_idx,
+                        None => false,
+                    }
+                } else {
+                    // Game-object subject path (normal case).
+                    let subject_controller =
+                        find_object_controller(state, subject_id);
+                    match (source_controller, subject_controller) {
+                        (Some(sc), Some(jc)) => sc == jc,
+                        // Either id missing — never match (e.g. the
+                        // subject has already left the battlefield, or
+                        // the source was evicted mid-dispatch).
+                        _ => false,
+                    }
                 }
             }
             Predicate::SubjectHasSubtype(subtype) => {
@@ -7744,12 +7836,38 @@ fn parse_triggered_ability(
         // source subject — deferred, see SEARCH_LIMITATIONS.md entry
         // for the single-subject-only Rust predicate API.
         "deals_damage" => Event::DealsDamage,
+        // Round-14 PHASE_STEP event bridge: the three phase-boundary
+        // events for "At the beginning of your/each end step / upkeep /
+        // combat" triggered abilities. Fired by ``advance_phase`` at
+        // entry to the corresponding phase constant (``PHASE_END_STEP``,
+        // ``PHASE_UPKEEP``, ``PHASE_BEGIN_COMBAT``).
+        //
+        // Subject shape (single player subject):
+        //   subject = ``PLAYER_SUBJECT_OFFSET + active_player as u32``
+        //   (state_ops_resolve.rs constant). ``ControlledByYou`` in the
+        //   predicate arm recognises subject_ids ≥ PLAYER_SUBJECT_OFFSET
+        //   and resolves the player index directly, bypassing the normal
+        //   game-object lookup. ``Always`` predicates fire unconditionally
+        //   (subject_id is irrelevant). No multi-subject complexity —
+        //   phase-step events carry exactly one subject slot.
+        //
+        // Bridge translation (cross_engine.py):
+        //   "beginning_of_end_step"  → Event.BEGINNING_OF_END_STEP
+        //   "beginning_of_upkeep"    → Event.BEGINNING_OF_UPKEEP
+        //   "beginning_of_combat"    → Event.BEGINNING_OF_COMBAT
+        // (string values are identical between Rust and Python — no
+        // spelling skew like DealsDamage/DEALS_COMBAT_DAMAGE.)
+        "beginning_of_end_step" => Event::BeginningOfEndStep,
+        "beginning_of_upkeep" => Event::BeginningOfUpkeep,
+        "beginning_of_combat" => Event::BeginningOfCombat,
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown triggered_ability.event {other:?}; \
                  valid: enters, dies, cast, attacks, blocks, \
-                 leaves_battlefield, becomes_tapped, deals_damage \
-                 (Slice 9 + r58 + r13)"
+                 leaves_battlefield, becomes_tapped, deals_damage, \
+                 beginning_of_end_step, beginning_of_upkeep, \
+                 beginning_of_combat \
+                 (Slice 9 + r58 + r13 + r14)"
             )));
         }
     };
