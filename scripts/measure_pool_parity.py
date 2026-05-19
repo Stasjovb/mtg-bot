@@ -240,6 +240,7 @@ PROBE_MODULES: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "test_probe_activated_abilities_y.py",
     REPO_ROOT / "tests" / "test_probe_attacks_round2_z.py",
     REPO_ROOT / "tests" / "test_probe_cast_spell_aa.py",
+    REPO_ROOT / "tests" / "test_probe_activated_abilities_bb.py",
     REPO_ROOT
     / "tests"
     / "test_probe_idiom_unlocked_optional_cost_mirror.py",
