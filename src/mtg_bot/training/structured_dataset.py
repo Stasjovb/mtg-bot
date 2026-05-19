@@ -56,6 +56,7 @@ function (in ``trainer.py``) wires this loader to the new model.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -332,58 +333,141 @@ class StructuredDataset(Dataset):
         policy_targets: np.ndarray,
         action_masks: np.ndarray,
     ) -> None:
-        # Convert flat storage to ``torch.Tensor`` with
-        # ``share_memory_()`` so DataLoader workers can attach to the
-        # same memory blocks via handles instead of bulk-pickling each
-        # worker's copy through a Windows multiprocessing pipe (~30 GB
-        # of pickle data per worker fails with [Errno 22] / pickle
-        # truncated). Shared-memory tensors get pickled as a handle +
-        # offset (a few bytes) which the worker re-attaches to.
+        # **Memmap-backed storage.** Write each flat array to a
+        # ``.npy`` file in a temp directory, then ``mmap_mode='r'``
+        # reopens them so the dataset object itself holds only file
+        # paths + tiny header bytes. This is the storage layout that
+        # works with DataLoader workers on Windows: pickling the
+        # dataset to a worker sends just the directory path; the
+        # worker re-opens the memmaps and the OS page cache shares
+        # the data across all readers. (``torch.Tensor.share_memory_()``
+        # was tried first but doesn't shrink the raw pickle —
+        # see commit history.)
         #
-        # ``torch.from_numpy`` is zero-copy when the numpy array is
-        # C-contiguous and the right dtype. ``np.ascontiguousarray``
-        # guarantees both at the cost of one upfront copy if the
-        # input doesn't already satisfy them.
-        self._token_type_flat = torch.from_numpy(
+        # Memory ceiling: tracks only what's actively page-cached,
+        # not the full 30 GiB flat storage. The 7M-sample dataset
+        # works with ``num_workers=4`` because each worker mmaps the
+        # same files (no per-worker copy in the pipe).
+        # Pre-compute has_policy once so each ``__getitem__`` avoids
+        # a per-row ``.sum()`` over the 517-wide policy vector.
+        has_policy = (
+            np.ascontiguousarray(policy_targets, dtype=np.float32).sum(
+                axis=1
+            )
+            > 0.5
+        ).astype(np.bool_)
+
+        # Owned temp directory: cleaned up automatically when the
+        # ``StructuredDataset`` (in the parent process) is garbage-
+        # collected. ``__setstate__`` (in DataLoader workers) does
+        # NOT own the directory — workers just re-open the memmaps.
+        # ``ignore_cleanup_errors=True`` is required on Windows
+        # because numpy memmap file handles are released lazily on
+        # GC; a stray PermissionError at temp-dir teardown is a
+        # cleanup nuisance, not a real failure (the OS reclaims the
+        # files on process exit even if cleanup fails).
+        self._tempdir: Optional[tempfile.TemporaryDirectory] = (
+            tempfile.TemporaryDirectory(
+                prefix="mtg_bot_structured_dataset_",
+                ignore_cleanup_errors=True,
+            )
+        )
+        memmap_dir = Path(self._tempdir.name)
+        # Save each array as a separate ``.npy`` file. ``.npy`` is
+        # the simplest format that supports ``mmap_mode='r'`` — it
+        # writes a small header followed by the contiguous data
+        # block.
+        np.save(
+            memmap_dir / "token_type_flat.npy",
             np.ascontiguousarray(token_type_flat, dtype=np.int64),
         )
-        self._token_emb_ids_flat = torch.from_numpy(
+        np.save(
+            memmap_dir / "token_emb_ids_flat.npy",
             np.ascontiguousarray(token_emb_ids_flat, dtype=np.int64),
         )
-        self._token_scalars_flat = torch.from_numpy(
+        np.save(
+            memmap_dir / "token_scalars_flat.npy",
             np.ascontiguousarray(token_scalars_flat, dtype=np.float32),
         )
-        self._row_offsets = torch.from_numpy(
+        np.save(
+            memmap_dir / "row_offsets.npy",
             np.ascontiguousarray(row_offsets, dtype=np.int64),
         )
-        self._outcomes = torch.from_numpy(
+        np.save(
+            memmap_dir / "outcomes.npy",
             np.ascontiguousarray(outcomes, dtype=np.float32),
         )
-        self._policy_targets = torch.from_numpy(
+        np.save(
+            memmap_dir / "policy_targets.npy",
             np.ascontiguousarray(policy_targets, dtype=np.float32),
         )
-        self._action_masks = torch.from_numpy(
+        np.save(
+            memmap_dir / "action_masks.npy",
             np.ascontiguousarray(action_masks, dtype=np.bool_),
         )
+        np.save(
+            memmap_dir / "has_policy.npy",
+            has_policy,
+        )
+        self._memmap_dir = str(memmap_dir)
+        self._open_memmaps()
+
+    def _open_memmaps(self) -> None:
+        """Open the on-disk ``.npy`` files as read-only memmaps.
+
+        Called from ``_init_flat`` in the parent process and from
+        ``__setstate__`` in each DataLoader worker. Each call opens
+        new file handles in the calling process; the underlying file
+        pages are shared via the OS page cache.
+        """
+        d = Path(self._memmap_dir)
+        self._token_type_flat = np.load(
+            d / "token_type_flat.npy", mmap_mode="r",
+        )
+        self._token_emb_ids_flat = np.load(
+            d / "token_emb_ids_flat.npy", mmap_mode="r",
+        )
+        self._token_scalars_flat = np.load(
+            d / "token_scalars_flat.npy", mmap_mode="r",
+        )
+        self._row_offsets = np.load(
+            d / "row_offsets.npy", mmap_mode="r",
+        )
+        self._outcomes = np.load(
+            d / "outcomes.npy", mmap_mode="r",
+        )
+        self._policy_targets = np.load(
+            d / "policy_targets.npy", mmap_mode="r",
+        )
+        self._action_masks = np.load(
+            d / "action_masks.npy", mmap_mode="r",
+        )
+        self._has_policy = np.load(
+            d / "has_policy.npy", mmap_mode="r",
+        )
         self._n_total = int(self._row_offsets.shape[0]) - 1
-        # Pre-compute has_policy (sum > 0.5) once at load time so each
-        # __getitem__ avoids a per-row .sum() over the 517-wide policy
-        # vector. policy_targets are visit-count distributions so
-        # ``sum > 0.5`` is the "row carries supervision" signal.
-        self._has_policy = self._policy_targets.sum(dim=1) > 0.5
-        # Move every storage tensor into shared memory so each
-        # DataLoader worker attaches via a small handle rather than
-        # re-pickling the bulk data. ``share_memory_()`` is a no-op
-        # if the tensor's storage is already shared, so calling it
-        # unconditionally is safe.
-        self._token_type_flat.share_memory_()
-        self._token_emb_ids_flat.share_memory_()
-        self._token_scalars_flat.share_memory_()
-        self._row_offsets.share_memory_()
-        self._outcomes.share_memory_()
-        self._policy_targets.share_memory_()
-        self._action_masks.share_memory_()
-        self._has_policy.share_memory_()
+
+    def __getstate__(self) -> dict:
+        # Pickle a minimal state — just the memmap directory path
+        # and the row count. The actual data is on disk; workers
+        # re-open the memmaps in ``__setstate__``.
+        return {
+            "_memmap_dir": self._memmap_dir,
+            "_n_total": self._n_total,
+        }
+
+    def __setstate__(self, state: dict) -> None:
+        self._memmap_dir = state["_memmap_dir"]
+        # Workers do NOT own the temp directory — only the parent
+        # process cleans it up. Setting ``_tempdir`` to None makes
+        # this explicit and prevents ``__del__`` from trying to
+        # remove files still in use by other processes.
+        self._tempdir = None
+        self._open_memmaps()
+        # ``_n_total`` is also restored by ``_open_memmaps`` (from
+        # row_offsets.shape), but assigning from state is a touch
+        # cheaper and pins the contract.
+        self._n_total = int(state["_n_total"])
 
     def __len__(self) -> int:
         return self._n_total
@@ -394,20 +478,33 @@ class StructuredDataset(Dataset):
                 f"index {idx} out of range for dataset of length "
                 f"{self._n_total}"
             )
-        start = int(self._row_offsets[idx].item())
-        end = int(self._row_offsets[idx + 1].item())
+        start = int(self._row_offsets[idx])
+        end = int(self._row_offsets[idx + 1])
         seq_len = end - start
-        # Torch tensor slicing is a view (no copy). Storage is
-        # shared-memory-backed (set up in _init_flat), so workers
-        # attach via cheap handles.
-        tt = self._token_type_flat[start:end]
-        emb = self._token_emb_ids_flat[start:end]
-        sca = self._token_scalars_flat[start:end]
+        # ``np.array(memmap_slice)`` materializes a writable copy of
+        # the slice in the worker process — small (one row's worth
+        # of tokens, ~50 entries on average). ``torch.from_numpy``
+        # then wraps that copy as a tensor with zero further copy.
+        # We can't pass a memmap directly to ``torch.from_numpy``
+        # because that would produce a tensor pointing into a
+        # read-only mapping, which collate_fn's ``in-place`` writes
+        # would fail on.
+        tt = torch.from_numpy(np.array(self._token_type_flat[start:end]))
+        emb = torch.from_numpy(np.array(self._token_emb_ids_flat[start:end]))
+        sca = torch.from_numpy(np.array(self._token_scalars_flat[start:end]))
         am = torch.ones(seq_len, dtype=torch.bool)
-        outcome = self._outcomes[idx].clone()  # 0-d tensor copy
-        policy_target = self._policy_targets[idx]
-        action_mask = self._action_masks[idx]
-        has_policy = self._has_policy[idx].clone()
+        outcome = torch.tensor(
+            float(self._outcomes[idx]), dtype=torch.float32,
+        )
+        policy_target = torch.from_numpy(
+            np.array(self._policy_targets[idx]),
+        )
+        action_mask = torch.from_numpy(
+            np.array(self._action_masks[idx]),
+        )
+        has_policy = torch.tensor(
+            bool(self._has_policy[idx]), dtype=torch.bool,
+        )
         return {
             "token_type": tt,
             "token_emb_ids": emb,
