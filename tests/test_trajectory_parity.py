@@ -306,7 +306,7 @@ def test_play_land_turn_1_parity():
     from mtg_bot.parity.cross_engine import (
         advance_phase_python,
         build_matched_states,
-        step_both,
+        step_both, step_both_drained,
     )
 
     spec = _vanilla_60_deckspec(seed=42)
@@ -386,7 +386,7 @@ def test_play_land_each_turn_through_turn_2_parity():
         advance_phase_python,
         build_matched_states,
         compare_fields,
-        step_both,
+        step_both, step_both_drained,
     )
 
     spec = _vanilla_60_deckspec(seed=42)
@@ -677,7 +677,7 @@ def _advance_n_phases(py_state, rust_state, n: int) -> None:
 def _play_active_player_forest(py_state, rust_state):
     """Helper: play a Forest from the active player's hand. Returns the
     :class:`CrossEngineStep` so the caller can assert on divergences."""
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
 
     active = py_state.active_player_idx
     forest = next(
@@ -775,7 +775,7 @@ def test_cast_creature_at_turn_5_parity():
     creatures).
     """
     from mtg_bot.parity import trajectory
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
 
     spec = _vanilla_60_deckspec(seed=42)
     py_state, rust_state = trajectory.setup_matched_game(spec)
@@ -823,7 +823,7 @@ def test_cast_creature_at_turn_5_parity():
         o for o in py_state.players[0].hand
         if o.printing.name == "Grizzly Bears"
     )
-    s = step_both(
+    s = step_both_drained(
         py_state, rust_state,
         {"kind": "cast_spell", "card_id": int(bears.id)},
     )
@@ -870,7 +870,7 @@ def test_attack_at_turn_7_parity():
     parity-equivalent state on both sides.
     """
     from mtg_bot.parity import trajectory
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
 
     spec = _vanilla_60_deckspec(seed=42)
     py_state, rust_state = trajectory.setup_matched_game(spec)
@@ -893,7 +893,7 @@ def test_attack_at_turn_7_parity():
         )
         assert s.divergences == []
     bears = next(o for o in py_state.players[0].hand if o.printing.name == "Grizzly Bears")
-    s = step_both(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
+    s = step_both_drained(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
     assert s.divergences == []
 
     # Walk turn 5 MAIN1 -> turn 7 MAIN1 (24 advances). Each per-step
@@ -966,7 +966,7 @@ def test_combat_damage_at_turn_7_parity():
         compare_fields,
         deal_combat_damage_rust,
         resolve_combat_damage_python,
-        step_both,
+        step_both, step_both_drained,
     )
 
     spec = _vanilla_60_deckspec(seed=42)
@@ -989,7 +989,7 @@ def test_combat_damage_at_turn_7_parity():
         )
         assert s.divergences == []
     bears = next(o for o in py_state.players[0].hand if o.printing.name == "Grizzly Bears")
-    s = step_both(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
+    s = step_both_drained(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
     assert s.divergences == []
 
     _advance_n_phases(py_state, rust_state, 12 * 2)
@@ -1073,7 +1073,7 @@ def test_activate_ability_trajectory_via_canonical_builder():
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
         _canonical_action_dict,
-        step_both,
+        step_both, step_both_drained,
     )
 
     spec = _vanilla_60_deckspec(seed=42)
@@ -1153,7 +1153,10 @@ def test_activate_ability_trajectory_via_canonical_builder():
     assert "card_id" in cast_dict
     assert "source_id" not in cast_dict
     assert cast_dict["card_id"] == int(bears.id)
-    s = step_both(py_state, rust_state, cast_dict)
+    # S7-A2: step_both_drained applies the cast then drains both
+    # engines' stacks via real stack-and-priority resolution (the
+    # explicit byte-equal replacement for the removed CE5 mirror).
+    s = step_both_drained(py_state, rust_state, cast_dict)
     assert s.divergences == [], (
         f"cast_spell via canonical builder surfaced divergences: "
         f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
@@ -1185,7 +1188,7 @@ def test_activate_ability_trajectory_alias_dict_python_only():
         _canonical_action_dict,
         _dict_to_python_action,
         advance_phase_python,
-        step_both,
+        step_both, step_both_drained,
     )
 
     spec = _vanilla_60_deckspec(seed=42)
@@ -1275,7 +1278,7 @@ def _setup_p0_bears_at_turn_5(py_state, rust_state):
     Post-condition: turn 5 PRECOMBAT_MAIN ends with cast Bears on bf
     (sick); p0 has 3 Forests (2 tapped from cast, 1 sick from turn-5).
     """
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
 
     _advance_n_phases(py_state, rust_state, 3)
     s = _play_active_player_forest(py_state, rust_state)
@@ -1303,7 +1306,7 @@ def _setup_p0_bears_at_turn_5(py_state, rust_state):
     bears = next(
         o for o in py_state.players[0].hand if o.printing.name == "Grizzly Bears"
     )
-    s = step_both(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
+    s = step_both_drained(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
     assert s.divergences == []
 
 
@@ -1330,7 +1333,7 @@ def _setup_both_bears_by_turn_6(py_state, rust_state):
     turn-2 / turn-4 land plays (only the active player plays a land
     per turn in `_play_active_player_forest`).
     """
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
 
     _advance_n_phases(py_state, rust_state, 3)  # → turn 1 MAIN1, p0 active
     # Turn 1: p0 land.
@@ -1366,7 +1369,7 @@ def _setup_both_bears_by_turn_6(py_state, rust_state):
     bears = next(
         o for o in py_state.players[0].hand if o.printing.name == "Grizzly Bears"
     )
-    s = step_both(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
+    s = step_both_drained(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
     assert s.divergences == []
     _advance_n_phases(py_state, rust_state, 12)  # → turn 6 MAIN1, p1 active
     # Turn 6: p1 land + cast Bears.
@@ -1388,7 +1391,7 @@ def _setup_both_bears_by_turn_6(py_state, rust_state):
     bears = next(
         o for o in py_state.players[1].hand if o.printing.name == "Grizzly Bears"
     )
-    s = step_both(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
+    s = step_both_drained(py_state, rust_state, {"kind": "cast_spell", "card_id": int(bears.id)})
     assert s.divergences == []
 
 
@@ -1754,7 +1757,7 @@ def test_real_eoe_deck_play_basic_land_turn_1_parity():
     the play_land action round-trips cleanly cross-engine on the
     production-shape registry.
     """
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
     from mtg_bot.parity import trajectory
 
     cards = trajectory.load_production_deck(0)

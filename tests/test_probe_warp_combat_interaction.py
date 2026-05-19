@@ -217,7 +217,7 @@ def _warp_cast_into_play(card_name, color, warp_str, real_archetype):
     creature. Returns ``(py, rs, adv, p0)`` with the creature on p0's
     battlefield, warped, FULL byte-equal throughout.
     """
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
     from test_trajectory_parity import _step_views
 
     py, rs = _build_real_deck_context(
@@ -289,7 +289,7 @@ def _warp_cast_into_play(card_name, color, warp_str, real_archetype):
     card_obj = next(
         o for o in py.players[p0].hand
         if o.printing.name == card_name)
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(card_obj.id),
          "use_warp": True})
@@ -312,7 +312,7 @@ def test_warp_haste_creature_attacks_same_turn_then_post_combat_exile():
     (FULL byte-equal). The attack-declaration + post-combat warp-exile
     code path no other module pins individually.
     """
-    from mtg_bot.parity.cross_engine import step_both
+    from mtg_bot.parity.cross_engine import step_both, step_both_drained
     from mtg_bot.legal import legal_actions
     from test_trajectory_parity import _step_views
 
@@ -367,13 +367,19 @@ def test_warp_haste_creature_attacks_same_turn_then_post_combat_exile():
         f"{card_name}: a (non-vigilance) attacker taps on attack"
     )
 
-    # Through combat to this turn's end step — the warp-exile sweep
-    # fires AFTER combat; FULL byte-equal at every phase.
+    # Through combat to this turn's end step — the warp-exile delayed
+    # trigger fires AFTER combat (CR-603.7); FULL byte-equal at every
+    # phase. S7-A2: drain the stack via the explicit primitive at the
+    # END step so the delayed WarpExileSelf trigger resolves into
+    # exile on BOTH engines.
+    from mtg_bot.parity.cross_engine import drain_stack_both
     for _ in range(14):
         pv, _rv = _step_views(py, rs)
         if pv["step"] == "END" and pv["turn"] == pv["turn"]:
-            # advance one more so the end-step sweep has run.
+            # advance one more so the end-step trigger has run +
+            # drain the stack so the trigger resolves.
             adv(1)
+            drain_stack_both(py, rs)
             break
         adv(1)
     py_ex = [
@@ -483,12 +489,15 @@ def test_warp_nonhaste_creature_cannot_attack_then_exiled_before_combat(
     )
 
     # Continue to this turn's end step + one phase past it so the
-    # warp-exile sweep has run; FULL byte-equal at every phase.
+    # warp-exile delayed trigger has fired AND resolved; FULL
+    # byte-equal at every phase. S7-A2: explicit drain after END.
+    from mtg_bot.parity.cross_engine import drain_stack_both
     cast_turn = pv["turn"]
     for _ in range(16):
         pv, _rv = _step_views(py, rs)
         if pv["step"] == "END" and pv["turn"] == cast_turn:
-            adv(1)  # END -> CLEANUP, sweep has fired
+            adv(1)  # END -> CLEANUP, trigger has fired onto the stack
+            drain_stack_both(py, rs)  # resolve the trigger
             break
         adv(1)
 
