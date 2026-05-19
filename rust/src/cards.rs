@@ -4083,6 +4083,36 @@ pub enum Event {
     /// `Event.BEGINNING_OF_COMBAT` (string value
     /// `"beginning_of_combat"`).
     BeginningOfCombat,
+    /// "Whenever you attack" — round-15 YOU_ATTACK event bridge. Fired
+    /// once per combat phase when the active player has declared at
+    /// least one legal attacker, AFTER all individual `Event::Attacks`
+    /// dispatches complete.
+    ///
+    /// **Distinct from `Event::Attacks`.** `Attacks` fires PER
+    /// ATTACKER (subject = the attacking creature); `YouAttack` fires
+    /// ONCE PER COMBAT (subject = the attacking player). The MTG oracle
+    /// text "whenever [creature X] attacks" → `Event::Attacks`; the
+    /// oracle text "whenever you attack" → `Event::YouAttack`.
+    ///
+    /// **Player subject convention.** Reuses the same
+    /// `PLAYER_SUBJECT_OFFSET` sentinel as the phase-step events:
+    /// dispatch passes `PLAYER_SUBJECT_OFFSET + active_player as u32`
+    /// as the `subject_id`. `ControlledByYou` resolves the player index
+    /// directly from the sentinel range; `Always` ignores the subject_id
+    /// entirely. No new predicate arms are needed.
+    ///
+    /// **Dispatch site.** Fired in the `DeclareAttackers` arm of
+    /// `apply_action` (state_ops_actions.rs) after the per-attacker
+    /// loop, when `state.attackers` is non-empty (i.e. at least one
+    /// legal attacker was registered). Mirrors Python's
+    /// `_fire_you_attack_triggers(state, declared)` in `combat.py`
+    /// which skips the dispatch when `declared` is empty.
+    ///
+    /// Mirrors Python's `Event.YOU_ATTACK` (string value `"you_attack"`,
+    /// `src/mtg_bot/effects/predicates.py`).
+    ///
+    /// 8 EoE cards unlocked by this event (OO Pin 3 closure).
+    YouAttack,
 }
 
 /// Sentinel offset used by phase-step dispatch to pass a **player
@@ -7860,14 +7890,21 @@ fn parse_triggered_ability(
         "beginning_of_end_step" => Event::BeginningOfEndStep,
         "beginning_of_upkeep" => Event::BeginningOfUpkeep,
         "beginning_of_combat" => Event::BeginningOfCombat,
+        // Round-15 YOU_ATTACK event bridge: "whenever you attack" triggered
+        // abilities. Fires ONCE per combat when the active player declares
+        // at least one legal attacker — distinct from ``"attacks"`` which
+        // fires per-attacker. Subject = PLAYER_SUBJECT_OFFSET + active_player.
+        // Mirrors Python's ``Event.YOU_ATTACK`` (value ``"you_attack"``).
+        // 8 EoE cards unlocked (OO Pin 3 closure).
+        "you_attack" => Event::YouAttack,
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown triggered_ability.event {other:?}; \
                  valid: enters, dies, cast, attacks, blocks, \
                  leaves_battlefield, becomes_tapped, deals_damage, \
                  beginning_of_end_step, beginning_of_upkeep, \
-                 beginning_of_combat \
-                 (Slice 9 + r58 + r13 + r14)"
+                 beginning_of_combat, you_attack \
+                 (Slice 9 + r58 + r13 + r14 + r15)"
             )));
         }
     };

@@ -449,9 +449,11 @@ pub(crate) fn dispatch_event(
     // combat-damage entries); round-14 adds the three PHASE_STEP
     // events (BEGINNING_OF_END_STEP, BEGINNING_OF_UPKEEP,
     // BEGINNING_OF_COMBAT) fired by ``advance_phase`` in
-    // ``state_ops_steps.rs``. Other events declared in the enum stay
-    // raise-on-dispatch so a future caller who skipped the fan-out
-    // plan surfaces it loudly rather than silently no-op.
+    // ``state_ops_steps.rs``; round-15 adds YOU_ATTACK fired by the
+    // ``DeclareAttackers`` arm in ``state_ops_actions.rs``. Other
+    // events declared in the enum stay raise-on-dispatch so a future
+    // caller who skipped the fan-out plan surfaces it loudly rather
+    // than silently no-op.
     if event != Event::Enters
         && event != Event::Dies
         && event != Event::Cast
@@ -463,6 +465,7 @@ pub(crate) fn dispatch_event(
         && event != Event::BeginningOfEndStep
         && event != Event::BeginningOfUpkeep
         && event != Event::BeginningOfCombat
+        && event != Event::YouAttack
     {
         return Err(PyValueError::new_err(format!(
             "dispatch_event: event {event:?} is not yet wired; \
@@ -470,8 +473,8 @@ pub(crate) fn dispatch_event(
              Event::Attacks, Event::Blocks, Event::LeavesBattlefield, \
              Event::BecomesTapped, Event::DealsDamage, \
              Event::BeginningOfEndStep, Event::BeginningOfUpkeep, \
-             Event::BeginningOfCombat \
-             (Slice 9 + r58 + r13 + r14)"
+             Event::BeginningOfCombat, Event::YouAttack \
+             (Slice 9 + r58 + r13 + r14 + r15)"
         )));
     }
 
