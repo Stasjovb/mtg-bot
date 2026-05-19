@@ -1,11 +1,11 @@
 """Divergence-pin tests: batch XX (probe-batch-xx).
 
-Each test is named ``test_cross_engine_real_eoe_<slug>_*_divergence_pin``
-and ASSERTS the CURRENT divergent behavior rather than parity.  The
-PROBED-tier detector excludes ``*_divergence_pin`` functions, so these
-tests grow the test surface without touching the PROBED metric.
+Pins 1, 2, and 3 are CLOSED by the bridge-conditional-and-state-predicates
+slice.  Tests have been renamed from ``*_divergence_pin`` to ``*_FIXED_parity``
+and the assertions inverted to verify the bridge now correctly constructs the
+expected Python objects rather than raising ``ValueError``.
 
-Pinned bugs
+Closed pins
 -----------
 
 Pin 1 -- ``ConditionalIfYouGainedLifeAtLeast`` effect NOT wired in the
@@ -55,13 +55,6 @@ blocked: Haliya, Guided by Light).
         (e.g. ``DrawCards(1)``).
       * ``resolve`` reads ``state.player_by_id(controller_id).life_gained_this_turn``
         and silently no-ops when the gained count is below ``threshold``.
-
-    Observable divergence (bridge sentinel):
-      ``_ta_dict_to_python_effect({"kind":
-      "conditional_if_you_gained_life_at_least", "threshold": 3,
-      "inner": {"kind": "draw_cards", "count": 1}})`` raises ``ValueError``
-      with message containing ``"conditional_if_you_gained_life_at_least"``
-      and ``"unsupported effect kind"``.
 
     Closure path:
       Add a ``kind == "conditional_if_you_gained_life_at_least"`` arm to
@@ -123,13 +116,6 @@ Frontline War-Rager).
         ``effective_power(state, source)``; silently no-ops when power
         is below threshold or source is None.
 
-    Observable divergence (bridge sentinel):
-      ``_ta_dict_to_python_effect({"kind":
-      "conditional_if_source_power_at_least", "threshold": 4,
-      "inner": {"kind": "draw_cards", "count": 1}})`` raises ``ValueError``
-      with message containing ``"conditional_if_source_power_at_least"``
-      and ``"unsupported effect kind"``.
-
     Naming skew note (bridge arm requirement):
       Python's class stores the inner effect as ``self.effect``, not
       ``self.inner`` (unlike ``ConditionalIfYouGainedLifeAtLeast``).
@@ -161,7 +147,7 @@ Kavaron Skywarden; Hylderblade; Alpharael Stonechosen; + others).
     ``inner.test(state, source.controller_id)`` for every trigger
     dispatch.  ``StateBound`` is the standard combinator for the
     "intervening-if gate that reads from the source controller's
-    perspective" family — Void (``StateBound(VoidActive())``), Delirium
+    perspective" family -- Void (``StateBound(VoidActive())``), Delirium
     (``StateBound(Delirium())``), opponent-controls-no-creatures
     (``StateBound(AnyPlayerControlsNoCreatures())``), etc.
 
@@ -179,18 +165,8 @@ Kavaron Skywarden; Hylderblade; Alpharael Stonechosen; + others).
             "predicate kind <kind!r>"
         )
 
-    Observable divergences (three sentinels):
-      (a) ``_ta_dict_to_python_predicate({"kind": "void_active"})``
-          raises ``ValueError`` containing ``"void_active"``.
-      (b) ``_ta_dict_to_python_predicate({"kind": "state_bound",
-          "inner": {"kind": "void_active"}})`` raises ``ValueError``
-          containing ``"state_bound"``.
-      (c) ``_ta_dict_to_python_predicate({"kind":
-          "any_player_controls_no_creatures"})`` raises ``ValueError``
-          containing ``"any_player_controls_no_creatures"``.
-
     Scale (EoE cards blocked by the StateBound predicate gap):
-      * ``StateBound(VoidActive())`` -- Void — gated triggers on
+      * ``StateBound(VoidActive())`` -- Void -- gated triggers on
         Voidforged Titan, Insatiable Skittermaw, Kavaron Skywarden,
         Hylderblade, Alpharael Stonechosen, Roving Actuator (6+ cards).
         (Note: the Rust engine represents these via ``requires_void=True``
@@ -255,64 +231,27 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Pin 1 -- ConditionalIfYouGainedLifeAtLeast effect NOT wired in bridge
-#          (VV phase-step substrate gap; 1 EoE card blocked: Haliya)
+# Pin 1 -- CLOSED: ConditionalIfYouGainedLifeAtLeast effect bridge arm added
+#          bridge-conditional-and-state-predicates slice; 1 EoE card
+#          unblocked: Haliya, Guided by Light
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_conditional_if_you_gained_life_at_least_effect_bridge_gap_sentinel_divergence_pin():
-    """Pin the bridge gap for the ``ConditionalIfYouGainedLifeAtLeast``
-    effect kind in ``_ta_dict_to_python_effect``.
+def test_cross_engine_real_eoe_conditional_if_you_gained_life_at_least_effect_bridge_gap_sentinel_FIXED_parity():
+    """Pin 1 CLOSED -- bridge arm for ``ConditionalIfYouGainedLifeAtLeast``
+    now wired in ``_ta_dict_to_python_effect``.
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py:525-8702`` -- the
-      ``_ta_dict_to_python_effect`` dispatcher has no arm for
-      ``kind="conditional_if_you_gained_life_at_least"``.  All
-      unrecognised kinds fall through to the terminal:
+    The bridge slice ``bridge-conditional-and-state-predicates`` added
+    the ``kind == "conditional_if_you_gained_life_at_least"`` arm that
+    extracts ``threshold: int`` and recursively translates the ``inner``
+    effect dict, constructing
+    ``ConditionalIfYouGainedLifeAtLeast(threshold=N, inner=inner_effect)``.
 
-          raise ValueError(
-              "cross_engine triggered_abilities bridge: unsupported "
-              "effect kind 'conditional_if_you_gained_life_at_least' ..."
-          )
+    Inverted assertions verify correct round-trip rather than ValueError.
 
-    VV gap relationship:
-      The VV batch wired the BEGINNING_OF_END_STEP event arm, unblocking
-      Haliya's trigger event.  But the ``ConditionalIfYouGainedLifeAtLeast``
-      wrapper around ``DrawCards(1)`` in Haliya's parser output still has
-      no bridge arm -- Haliya remains blocked at the effect layer after VV.
-
-    Class structure:
-      ``ConditionalIfYouGainedLifeAtLeast(threshold: int, inner: Effect)``
-      from ``effects/combinators.py:966-1002``.  Reads
-      ``Player.life_gained_this_turn``; silently no-ops when count is
-      below ``threshold``.
-
-    Scale:
-      1 EoE card carries a ``ConditionalIfYouGainedLifeAtLeast`` trigger
-      effect: Haliya, Guided by Light ("At the beginning of your end
-      step, draw a card if you've gained 3 or more life this turn.").
-
-    Probe shape:
-      1. Assert ``ConditionalIfYouGainedLifeAtLeast`` exists in
-         ``effects.combinators`` and has ``threshold`` + ``inner`` fields.
-      2. Assert the bridge raises ``ValueError`` for the unwired effect kind.
-      3. Assert the error message contains ``"conditional_if_you_gained_life_at_least"``
-         and ``"unsupported effect kind"``.
-      4. Assert a wired effect kind (``"draw_cards"``) does NOT raise.
-      5. Assert that ``ConditionalIfYouGainedLifeAtLeast`` is DISTINCT from
-         ``ConditionalIfSourcePowerAtLeast`` (Pin 2) -- different gates,
-         different field names (``inner`` vs ``effect``), different closure
-         paths.
-      6. Enumerate the 1 EoE card blocked by this gap.
-
-    Closure path:
-      Add a ``kind == "conditional_if_you_gained_life_at_least"`` arm that
-      reads ``threshold`` (int) and recursively translates the ``inner``
-      effect dict, constructing
-      ``ConditionalIfYouGainedLifeAtLeast(threshold=N, inner=inner_effect)``.
-
-    This pin is pure Python (no Rust extension required).
+    EoE card unlocked: Haliya, Guided by Light.
     """
+    import dataclasses
     from mtg_bot.effects.combinators import (
         ConditionalIfYouGainedLifeAtLeast,
         ConditionalIfSourcePowerAtLeast,
@@ -327,7 +266,6 @@ def test_cross_engine_real_eoe_conditional_if_you_gained_life_at_least_effect_br
         "(effects/combinators.py:966-1002).  If this fails the class was renamed "
         "-- update this pin and the bridge arm."
     )
-    import dataclasses
     fields = {f.name for f in dataclasses.fields(ConditionalIfYouGainedLifeAtLeast)}
     assert "threshold" in fields, (
         "ConditionalIfYouGainedLifeAtLeast should have a 'threshold' field (int). "
@@ -339,37 +277,36 @@ def test_cross_engine_real_eoe_conditional_if_you_gained_life_at_least_effect_br
         f"Got fields: {fields!r}"
     )
 
-    # 2-3. Bridge raises ValueError for the unwired effect kind -- pin the gap.
-    unwired_eff_dict = {
+    # 2-3. Bridge NOW returns a ConditionalIfYouGainedLifeAtLeast -- no longer raises.
+    eff_dict = {
         "kind": "conditional_if_you_gained_life_at_least",
         "threshold": 3,
         "inner": {"kind": "draw_cards", "count": 1},
     }
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_effect(unwired_eff_dict)
-
-    err_msg = str(exc_info.value)
-    assert "conditional_if_you_gained_life_at_least" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'conditional_if_you_gained_life_at_least' so the gap is "
-        "immediately identifiable.  "
-        f"Got message: {err_msg!r}"
+    result = _ta_dict_to_python_effect(eff_dict)
+    assert isinstance(result, ConditionalIfYouGainedLifeAtLeast), (
+        "Bridge should now return a ConditionalIfYouGainedLifeAtLeast instance "
+        "for kind='conditional_if_you_gained_life_at_least'. "
+        f"Got: {type(result).__name__!r}"
     )
-    assert "unsupported effect kind" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain "
-        "'unsupported effect kind' confirming the _ta_dict_to_python_effect "
-        "dispatcher produced this error.  "
-        f"Got message: {err_msg!r}"
+    assert result.threshold == 3, (
+        "Bridge should extract threshold=3 from the dict. "
+        f"Got threshold={result.threshold!r}"
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    assert isinstance(result.inner, DrawCards), (
+        "Bridge should recursively translate the inner 'draw_cards' dict to a "
+        f"DrawCards instance. Got: {type(result.inner).__name__!r}"
     )
 
     # 4. Sanity: a WIRED effect kind ("draw_cards") round-trips without error.
     from mtg_bot.effects.base import Effect
     wired_eff_dict = {"kind": "draw_cards", "count": 1}
     try:
-        result = _ta_dict_to_python_effect(wired_eff_dict)
-        assert isinstance(result, Effect), (
+        r2 = _ta_dict_to_python_effect(wired_eff_dict)
+        assert isinstance(r2, Effect), (
             "Wired effect 'draw_cards' should produce an Effect instance; "
-            f"got {type(result).__name__}."
+            f"got {type(r2).__name__}."
         )
     except ValueError as e:
         raise AssertionError(
@@ -403,90 +340,46 @@ def test_cross_engine_real_eoe_conditional_if_you_gained_life_at_least_effect_br
         f"Pin 2 fields: {pin2_fields!r}"
     )
 
-    # 6. Enumerate the 1 EoE card blocked by this gap.
-    blocked_eoe_cards = [
+    # 6. Enumerate the 1 EoE card now unblocked by this fix.
+    unblocked_eoe_cards = [
         "Haliya, Guided by Light",  # "At the beginning of your end step,
                                     #  draw a card if you've gained 3 or more
                                     #  life this turn."
                                     # Parser: DrawCards(1) wrapped in
                                     # ConditionalIfYouGainedLifeAtLeast(threshold=3)
     ]
-    assert len(blocked_eoe_cards) == 1, (
-        "The 'conditional_if_you_gained_life_at_least' effect gap blocks "
+    assert len(unblocked_eoe_cards) == 1, (
+        "The 'conditional_if_you_gained_life_at_least' bridge fix unblocks "
         "1 EoE card (Haliya, Guided by Light); "
-        f"enumerated list has {len(blocked_eoe_cards)} entries."
+        f"enumerated list has {len(unblocked_eoe_cards)} entries."
     )
 
 
 # ---------------------------------------------------------------------------
-# Pin 2 -- ConditionalIfSourcePowerAtLeast effect NOT wired in bridge
-#          (leaves-battlefield / attack-trigger substrate gap; EoE cards
-#          blocked: Syr Vondam, Sunstar Exemplar + others)
+# Pin 2 -- CLOSED: ConditionalIfSourcePowerAtLeast effect bridge arm added
+#          bridge-conditional-and-state-predicates slice; 3+ EoE cards
+#          unblocked: Syr Vondam, Sunstar Exemplar; Dawnstrike Vanguard;
+#          Frontline War-Rager
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_conditional_if_source_power_at_least_effect_bridge_gap_sentinel_divergence_pin():
-    """Pin the bridge gap for the ``ConditionalIfSourcePowerAtLeast``
-    effect kind in ``_ta_dict_to_python_effect``.
+def test_cross_engine_real_eoe_conditional_if_source_power_at_least_effect_bridge_gap_sentinel_FIXED_parity():
+    """Pin 2 CLOSED -- bridge arm for ``ConditionalIfSourcePowerAtLeast``
+    now wired in ``_ta_dict_to_python_effect``.
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py:525-8702`` -- the
-      ``_ta_dict_to_python_effect`` dispatcher has no arm for
-      ``kind="conditional_if_source_power_at_least"``.  Passing such a
-      dict causes the bridge to raise:
+    The bridge slice ``bridge-conditional-and-state-predicates`` added
+    the ``kind == "conditional_if_source_power_at_least"`` arm that
+    reads ``threshold`` (int, default 4) and recursively translates the
+    nested effect (accepting both ``"inner"`` and ``"effect"`` keys for
+    forward-compat), constructing
+    ``ConditionalIfSourcePowerAtLeast(effect=inner_translated,
+    threshold=threshold)``.
 
-          raise ValueError(
-              "cross_engine triggered_abilities bridge: unsupported "
-              "effect kind 'conditional_if_source_power_at_least' ..."
-          )
+    FIELD-NAME SKEW handled: Python class uses ``effect=`` (not ``inner=``).
+    Bridge arm accepts both ``"inner"`` and ``"effect"`` dict keys.
 
-    Class structure and field-name skew:
-      ``ConditionalIfSourcePowerAtLeast(effect: Effect, threshold: int = 4)``
-      from ``effects/combinators.py:1055-1107``.  Reads
-      ``state.resolving_source`` at resolve time and calls
-      ``effective_power(state, source)``; silently no-ops when power is
-      below ``threshold`` or when ``resolving_source`` is None.
-
-      IMPORTANT NAMING SKEW: the inner effect is stored as ``self.effect``
-      (not ``self.inner`` as in ``ConditionalIfYouGainedLifeAtLeast`` Pin 1).
-      The bridge arm must construct with ``effect=<inner_effect>``; the
-      serialization key in the dict (``"inner"`` or ``"effect"``) must be
-      accounted for when the Rust side eventually emits this shape.
-
-    Scale:
-      EoE cards blocked by this gap:
-        * Syr Vondam, Sunstar Exemplar -- "When this creature dies or is
-          put into exile while its power is 4 or greater, destroy up to
-          one target nonland permanent."  (DIES / LEAVES trigger; parser
-          uses ``_INTERVENING_WHILE_EFFECT_WRAPPERS``.)
-        * Dawnstrike Vanguard / Frontline War-Rager -- attack-or-combat
-          triggers gated on "while its power is 4 or greater"
-          (same ``_INTERVENING_WHILE_EFFECT_WRAPPERS`` entry at
-          ``parser/triggers.py:1424``).
-
-    Probe shape:
-      1. Assert ``ConditionalIfSourcePowerAtLeast`` exists in
-         ``effects.combinators`` and has ``effect`` + ``threshold`` fields
-         (NOT ``inner`` -- the naming skew from Pin 1).
-      2. Assert the bridge raises ``ValueError`` for the unwired kind.
-      3. Assert the error message contains
-         ``"conditional_if_source_power_at_least"`` and
-         ``"unsupported effect kind"``.
-      4. Assert a wired effect kind (``"draw_cards"``) does NOT raise.
-      5. Assert ``ConditionalIfSourcePowerAtLeast.threshold`` default is 4
-         (matching every EoE card today).
-      6. Assert the field-name skew: ``effect`` field present, ``inner``
-         field absent (contrasting with Pin 1's ``inner`` field).
-
-    Closure path:
-      Add a ``kind == "conditional_if_source_power_at_least"`` arm that
-      reads ``threshold`` (int, default 4) and recursively translates the
-      nested effect (accepting both ``"inner"`` and ``"effect"`` keys for
-      forward-compat), constructing
-      ``ConditionalIfSourcePowerAtLeast(effect=inner_translated,
-      threshold=threshold)``.
-
-    This pin is pure Python (no Rust extension required).
+    EoE cards unblocked: Syr Vondam Sunstar Exemplar, Dawnstrike Vanguard,
+    Frontline War-Rager.
     """
     import dataclasses
     from mtg_bot.effects.combinators import ConditionalIfSourcePowerAtLeast
@@ -511,36 +404,49 @@ def test_cross_engine_real_eoe_conditional_if_source_power_at_least_effect_bridg
         f"Got fields: {fields!r}"
     )
 
-    # 2-3. Bridge raises ValueError for the unwired effect kind -- pin the gap.
-    unwired_eff_dict = {
+    # 2-3. Bridge NOW returns a ConditionalIfSourcePowerAtLeast -- no longer raises.
+    eff_dict = {
         "kind": "conditional_if_source_power_at_least",
         "threshold": 4,
         "inner": {"kind": "draw_cards", "count": 1},
     }
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_effect(unwired_eff_dict)
-
-    err_msg = str(exc_info.value)
-    assert "conditional_if_source_power_at_least" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'conditional_if_source_power_at_least' so the gap is immediately "
-        "identifiable.  "
-        f"Got message: {err_msg!r}"
+    result = _ta_dict_to_python_effect(eff_dict)
+    assert isinstance(result, ConditionalIfSourcePowerAtLeast), (
+        "Bridge should now return a ConditionalIfSourcePowerAtLeast instance "
+        "for kind='conditional_if_source_power_at_least'. "
+        f"Got: {type(result).__name__!r}"
     )
-    assert "unsupported effect kind" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain "
-        "'unsupported effect kind' confirming the _ta_dict_to_python_effect "
-        "dispatcher produced this error.  "
-        f"Got message: {err_msg!r}"
+    assert result.threshold == 4, (
+        "Bridge should extract threshold=4 from the dict. "
+        f"Got threshold={result.threshold!r}"
+    )
+    from mtg_bot.effects.generic.draw_mill import DrawCards
+    assert isinstance(result.effect, DrawCards), (
+        "Bridge should recursively translate the inner 'draw_cards' dict to a "
+        "DrawCards instance stored in the 'effect' field. "
+        f"Got: {type(result.effect).__name__!r}"
+    )
+
+    # 2b. Also verify the bridge accepts the "effect" key (not just "inner").
+    eff_dict_effect_key = {
+        "kind": "conditional_if_source_power_at_least",
+        "threshold": 4,
+        "effect": {"kind": "draw_cards", "count": 1},
+    }
+    result2 = _ta_dict_to_python_effect(eff_dict_effect_key)
+    assert isinstance(result2, ConditionalIfSourcePowerAtLeast), (
+        "Bridge should accept 'effect' as the dict key for the nested effect "
+        "(forward-compat for when Rust standardizes the serialization key). "
+        f"Got: {type(result2).__name__!r}"
     )
 
     # 4. Sanity: a WIRED effect kind ("draw_cards") round-trips cleanly.
     from mtg_bot.effects.base import Effect
     try:
-        result = _ta_dict_to_python_effect({"kind": "draw_cards", "count": 1})
-        assert isinstance(result, Effect), (
+        r3 = _ta_dict_to_python_effect({"kind": "draw_cards", "count": 1})
+        assert isinstance(r3, Effect), (
             "Wired effect 'draw_cards' should produce an Effect instance; "
-            f"got {type(result).__name__}."
+            f"got {type(r3).__name__}."
         )
     except ValueError as e:
         raise AssertionError(
@@ -549,8 +455,7 @@ def test_cross_engine_real_eoe_conditional_if_source_power_at_least_effect_bridg
         ) from e
 
     # 5. The default threshold is 4 -- matching every EoE card that uses this
-    #    wrapper today.  This is a structural invariant: if the default changes,
-    #    the bridge arm's default must change too.
+    #    wrapper today.
     threshold_field = next(
         f for f in dataclasses.fields(ConditionalIfSourcePowerAtLeast)
         if f.name == "threshold"
@@ -563,121 +468,45 @@ def test_cross_engine_real_eoe_conditional_if_source_power_at_least_effect_bridg
     )
 
     # 6. Field-name skew vs Pin 1: 'effect' present, 'inner' absent.
-    #    The bridge arm for this class must use ``effect=`` in the
-    #    constructor call, not ``inner=`` (which would cause a TypeError).
     assert "effect" in fields and "inner" not in fields, (
         "ConditionalIfSourcePowerAtLeast field layout: 'effect' present, "
         "'inner' absent -- contrasting with ConditionalIfYouGainedLifeAtLeast "
         "(Pin 1) which has 'inner' present, 'effect' absent. "
-        "The bridge arm must use the correct field name for each class. "
+        "The bridge arm uses the correct field name for each class. "
         f"Got fields: {sorted(fields)!r}"
     )
 
 
 # ---------------------------------------------------------------------------
-# Pin 3 -- StateBound predicate family NOT wired in cross-engine predicate
-#          bridge: VoidActive + AnyPlayerControlsNoCreatures StatePredicate
-#          kinds missing; requires a new StatePredicate dispatcher.
+# Pin 3 -- CLOSED: StateBound predicate family bridge arms added
+#          bridge-conditional-and-state-predicates slice; 7+ EoE cards
+#          unblocked (substrate): Sothera, the Supervoid; Voidforged Titan;
+#          Insatiable Skittermaw; Kavaron Skywarden; Hylderblade;
+#          Alpharael Stonechosen; Roving Actuator
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_state_bound_predicate_family_bridge_gap_sentinel_divergence_pin():
-    """Pin the bridge gap for the ``StateBound`` predicate family in
-    ``_ta_dict_to_python_predicate``, covering both ``VoidActive`` and
-    ``AnyPlayerControlsNoCreatures`` inner ``StatePredicate`` kinds.
+def test_cross_engine_real_eoe_state_bound_predicate_family_bridge_gap_sentinel_FIXED_parity():
+    """Pin 3 CLOSED -- bridge arms for the ``StateBound`` predicate family
+    now wired in ``_ta_dict_to_python_predicate`` + new helper
+    ``_ta_dict_to_python_state_predicate``.
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py:8705-8836`` -- the
-      ``_ta_dict_to_python_predicate`` dispatcher has no arms for:
-        * ``kind="void_active"`` (the ``VoidActive`` StatePredicate).
-        * ``kind="state_bound"`` (the ``StateBound`` wrapper that converts
-          a ``StatePredicate`` into a ``TriggerPredicate``).
-        * ``kind="any_player_controls_no_creatures"`` (the
-          ``AnyPlayerControlsNoCreatures`` StatePredicate).
-
-      All three unsupported dict kinds fall through to the terminal:
-
-          raise ValueError(
-              "cross_engine triggered_abilities bridge: unsupported "
-              "predicate kind <kind!r>"
-          )
-
-    Two-tier predicate architecture:
-      Python uses a TWO-TIER predicate stack:
-
-      Tier 1: ``TriggerPredicate`` (``effects/predicates.py``) -- carries
-        ``matches(state, subjects, source)`` with the event's subject map
-        and firing source.  This is what ``TriggeredAbility`` stores and
-        what the dispatcher evaluates.  Examples: ``Always``, ``IsSelf``,
-        ``Subject``, ``Controlled``, ``And``, ``Or``, ``Not``,
-        ``StateBound``.
-
-      Tier 2: ``StatePredicate`` (``effects/state_predicates.py``) --
-        carries ``test(state, viewer_id)`` with only the state and a
-        player id.  Examples: ``VoidActive``, ``AnyPlayerControlsNoCreatures``,
-        ``Delirium``, ``SpellsCastThisTurn``, ``LoneAttackerForYou``.
-
-      ``StateBound(inner: StatePredicate)`` bridges the two tiers:
-      it is a ``TriggerPredicate`` that evaluates by calling
-      ``inner.test(state, source.controller_id)``.
-
-      The bridge's current ``_ta_dict_to_python_predicate`` only knows
-      about ``TriggerPredicate`` kinds.  There is no second dispatcher
-      ``_ta_dict_to_python_state_predicate`` yet, so ``StatePredicate``
-      inner kinds (``void_active``, ``any_player_controls_no_creatures``,
-      ``delirium``, ...) have no translation path.
-
-    Three distinct bridge sentinels:
-      (a) ``{"kind": "void_active"}`` -- raises for the ``VoidActive``
-          inner kind being used directly as a ``TriggerPredicate`` dict;
-          this is how the serialization would represent the inner payload.
-      (b) ``{"kind": "state_bound", "inner": {"kind": "void_active"}}``
-          -- raises for the ``StateBound`` wrapper kind itself.  Even
-          if the inner kind were somehow known, the outer wrapper is also
-          not wired.
-      (c) ``{"kind": "any_player_controls_no_creatures"}`` -- raises for
-          the ``AnyPlayerControlsNoCreatures`` inner kind.
-
-    Scale (EoE cards blocked by this predicate bridge gap):
-      ``StateBound(VoidActive())`` -- Void — gated "at beginning of"
-        triggers on Voidforged Titan, Insatiable Skittermaw, Kavaron
-        Skywarden, Hylderblade, Alpharael Stonechosen, Roving Actuator
-        (6+ EoE cards).  NOTE: the Rust engine gates these via
-        ``requires_void=True`` on ``TriggeredAbility``; the Python
-        predicate-bridge gap blocks Python-side reconstruction from a
-        serialized dict, not Rust's native dispatch.
-      ``StateBound(AnyPlayerControlsNoCreatures())`` -- Sothera, the
-        Supervoid's end-step intervening-if gate "if a player controls
-        no creatures" (1 EoE card; ``_INTERVENING_IF_PHRASES`` entry at
-        ``parser/triggers.py:1332-1333``).
-
-    Probe shape:
-      1. Assert ``StateBound``, ``VoidActive``, and
-         ``AnyPlayerControlsNoCreatures`` exist in their modules and are
-         the expected types (TriggerPredicate for StateBound, StatePredicate
-         for the others).
-      2. Assert ``StateBound`` wraps a ``StatePredicate`` (confirm the
-         two-tier relationship by inspecting the ``inner`` field annotation).
-      3. Assert (a): bridge raises ``ValueError`` for ``kind="void_active"``.
-      4. Assert (b): bridge raises ``ValueError`` for ``kind="state_bound"``.
-      5. Assert (c): bridge raises ``ValueError`` for
-         ``kind="any_player_controls_no_creatures"``.
-      6. Assert a wired predicate kind (``"always"``) does NOT raise.
-      7. Document the EoE cards blocked by this gap.
-
-    Closure path (three-step):
-      Step A: Create ``_ta_dict_to_python_state_predicate(pred_dict)`` helper
-        that dispatches ``StatePredicate`` sub-kinds.
-      Step B: Add ``kind == "state_bound"`` arm in
-        ``_ta_dict_to_python_predicate`` that calls
-        ``_ta_dict_to_python_state_predicate(pred_dict["inner"])``
+    The bridge slice ``bridge-conditional-and-state-predicates`` added:
+      * ``kind == "state_bound"`` arm in ``_ta_dict_to_python_predicate``
+        that calls ``_ta_dict_to_python_state_predicate(pred_dict["inner"])``
         and wraps the result: ``StateBound(inner_state_pred)``.
-      Step C: Add ``"void_active"`` and ``"any_player_controls_no_creatures"``
-        (and ``"delirium"``, ``"spells_cast_this_turn"``, etc.) arms to the
-        new ``_ta_dict_to_python_state_predicate`` helper.
+      * New helper ``_ta_dict_to_python_state_predicate`` that dispatches
+        ``StatePredicate`` sub-kinds (``void_active``,
+        ``any_player_controls_no_creatures``).
 
-    This pin is pure Python (no Rust extension required for the bridge
-    gap; Rust natively gates Void triggers via ``requires_void``).
+    Two-tier predicate architecture respected:
+      Tier 1 ``TriggerPredicate`` (``StateBound``) wraps
+      Tier 2 ``StatePredicate`` (``VoidActive``, ``AnyPlayerControlsNoCreatures``).
+
+    EoE cards now having predicate substrate: Voidforged Titan, Insatiable
+    Skittermaw, Kavaron Skywarden, Hylderblade, Alpharael Stonechosen,
+    Roving Actuator (Void family) + Sothera, the Supervoid
+    (AnyPlayerControlsNoCreatures).
     """
     from mtg_bot.effects.predicates import StateBound, TriggerPredicate
     from mtg_bot.effects.state_predicates import (
@@ -685,7 +514,10 @@ def test_cross_engine_real_eoe_state_bound_predicate_family_bridge_gap_sentinel_
         VoidActive,
         AnyPlayerControlsNoCreatures,
     )
-    from mtg_bot.parity.cross_engine import _ta_dict_to_python_predicate
+    from mtg_bot.parity.cross_engine import (
+        _ta_dict_to_python_predicate,
+        _ta_dict_to_python_state_predicate,
+    )
 
     # 1. StateBound, VoidActive, AnyPlayerControlsNoCreatures exist
     #    and are the correct types.
@@ -726,52 +558,58 @@ def test_cross_engine_real_eoe_state_bound_predicate_family_bridge_gap_sentinel_
         "VoidActive above."
     )
 
-    # 3. (a) Bridge raises ValueError for ``kind="void_active"``.
-    #    This is the inner StatePredicate kind used inside StateBound.
-    #    Neither the inner kind alone nor wrapped is wired.
-    with pytest.raises(ValueError) as exc_info_a:
-        _ta_dict_to_python_predicate({"kind": "void_active"})
-    err_a = str(exc_info_a.value)
-    assert "void_active" in err_a, (
-        "Bridge gap sentinel (a): ValueError message should mention "
-        "'void_active'.  "
-        f"Got: {err_a!r}"
+    # 3. (a) state_bound + void_active: bridge now returns StateBound(VoidActive()).
+    result_sb_va = _ta_dict_to_python_predicate(
+        {"kind": "state_bound", "inner": {"kind": "void_active"}}
+    )
+    assert isinstance(result_sb_va, StateBound), (
+        "Bridge should return a StateBound instance for kind='state_bound'. "
+        f"Got: {type(result_sb_va).__name__!r}"
+    )
+    assert isinstance(result_sb_va.inner, VoidActive), (
+        "StateBound.inner should be a VoidActive instance for "
+        "inner kind='void_active'. "
+        f"Got: {type(result_sb_va.inner).__name__!r}"
     )
 
-    # 4. (b) Bridge raises ValueError for ``kind="state_bound"``.
-    #    The StateBound wrapper kind itself is not wired either;
-    #    even if the inner kind were known, the outer wrapper still fails.
-    with pytest.raises(ValueError) as exc_info_b:
-        _ta_dict_to_python_predicate(
-            {"kind": "state_bound", "inner": {"kind": "void_active"}}
-        )
-    err_b = str(exc_info_b.value)
-    assert "state_bound" in err_b, (
-        "Bridge gap sentinel (b): ValueError message should mention "
-        "'state_bound'.  "
-        f"Got: {err_b!r}"
+    # 3b. state_bound + any_player_controls_no_creatures.
+    result_sb_ap = _ta_dict_to_python_predicate(
+        {
+            "kind": "state_bound",
+            "inner": {"kind": "any_player_controls_no_creatures"},
+        }
+    )
+    assert isinstance(result_sb_ap, StateBound), (
+        "Bridge should return a StateBound instance for kind='state_bound' "
+        "with inner='any_player_controls_no_creatures'. "
+        f"Got: {type(result_sb_ap).__name__!r}"
+    )
+    assert isinstance(result_sb_ap.inner, AnyPlayerControlsNoCreatures), (
+        "StateBound.inner should be an AnyPlayerControlsNoCreatures instance. "
+        f"Got: {type(result_sb_ap.inner).__name__!r}"
     )
 
-    # 5. (c) Bridge raises ValueError for
-    #    ``kind="any_player_controls_no_creatures"``.
-    with pytest.raises(ValueError) as exc_info_c:
-        _ta_dict_to_python_predicate(
-            {"kind": "any_player_controls_no_creatures"}
-        )
-    err_c = str(exc_info_c.value)
-    assert "any_player_controls_no_creatures" in err_c, (
-        "Bridge gap sentinel (c): ValueError message should mention "
-        "'any_player_controls_no_creatures'.  "
-        f"Got: {err_c!r}"
+    # 4. _ta_dict_to_python_state_predicate dispatches correctly.
+    va = _ta_dict_to_python_state_predicate({"kind": "void_active"})
+    assert isinstance(va, VoidActive), (
+        "State predicate dispatcher should return VoidActive() for "
+        "kind='void_active'. "
+        f"Got: {type(va).__name__!r}"
+    )
+    ap = _ta_dict_to_python_state_predicate({"kind": "any_player_controls_no_creatures"})
+    assert isinstance(ap, AnyPlayerControlsNoCreatures), (
+        "State predicate dispatcher should return AnyPlayerControlsNoCreatures() "
+        "for kind='any_player_controls_no_creatures'. "
+        f"Got: {type(ap).__name__!r}"
     )
 
-    # 6. Sanity: a WIRED predicate kind (``"always"``) round-trips cleanly.
+    # 5. Sanity: a WIRED predicate kind (``"always"``) round-trips cleanly.
     try:
-        result = _ta_dict_to_python_predicate({"kind": "always"})
+        r_always = _ta_dict_to_python_predicate({"kind": "always"})
         from mtg_bot.effects.predicates import Always
-        assert isinstance(result, Always), (
+        assert isinstance(r_always, Always), (
             "Wired predicate 'always' should produce an Always instance; "
-            f"got {type(result).__name__}."
+            f"got {type(r_always).__name__}."
         )
     except ValueError as e:
         raise AssertionError(
@@ -779,28 +617,36 @@ def test_cross_engine_real_eoe_state_bound_predicate_family_bridge_gap_sentinel_
             f"ValueError -- got: {e}"
         ) from e
 
-    # 7. Document EoE cards blocked by this predicate bridge gap.
-    #    StateBound(VoidActive()) family:
-    void_blocked = [
-        "Voidforged Titan",       # Void — at beginning of end step trigger
-        "Insatiable Skittermaw",  # Void — at beginning of end step trigger
-        "Kavaron Skywarden",      # Void — at beginning of upkeep trigger
-        "Hylderblade",            # Void — at beginning of end step trigger
-        "Alpharael Stonechosen",  # Void — whenever Alpharael attacks
-        "Roving Actuator",        # Void — at beginning of end step trigger
+    # 6. Unknown StatePredicate kind raises ValueError from the state-predicate
+    #    dispatcher (not a silent failure).
+    with pytest.raises(ValueError) as exc_info_unk:
+        _ta_dict_to_python_state_predicate({"kind": "totally_unknown_state_pred"})
+    assert "totally_unknown_state_pred" in str(exc_info_unk.value), (
+        "Unknown StatePredicate kind should raise ValueError mentioning the "
+        "unknown kind name for easy debugging. "
+        f"Got: {exc_info_unk.value!r}"
+    )
+
+    # 7. Document EoE cards now having predicate substrate via this fix.
+    void_unblocked = [
+        "Voidforged Titan",       # Void -- at beginning of end step trigger
+        "Insatiable Skittermaw",  # Void -- at beginning of end step trigger
+        "Kavaron Skywarden",      # Void -- at beginning of upkeep trigger
+        "Hylderblade",            # Void -- at beginning of end step trigger
+        "Alpharael Stonechosen",  # Void -- whenever Alpharael attacks
+        "Roving Actuator",        # Void -- at beginning of end step trigger
     ]
-    #    StateBound(AnyPlayerControlsNoCreatures()) family:
-    any_player_blocked = [
+    any_player_unblocked = [
         "Sothera, the Supervoid",  # end-step gate: "if a player controls
                                    # no creatures" (StateBound(
                                    # AnyPlayerControlsNoCreatures()))
     ]
-    assert len(void_blocked) >= 5, (
-        "The StateBound(VoidActive()) predicate gap blocks at least 5 EoE "
-        f"cards; enumerated list has only {len(void_blocked)} entries."
+    assert len(void_unblocked) >= 5, (
+        "The StateBound(VoidActive()) predicate fix unblocks at least 5 EoE "
+        f"cards; enumerated list has only {len(void_unblocked)} entries."
     )
-    assert len(any_player_blocked) == 1, (
-        "The StateBound(AnyPlayerControlsNoCreatures()) predicate gap blocks "
+    assert len(any_player_unblocked) == 1, (
+        "The StateBound(AnyPlayerControlsNoCreatures()) predicate fix unblocks "
         "1 EoE card (Sothera, the Supervoid); "
-        f"enumerated list has {len(any_player_blocked)} entries."
+        f"enumerated list has {len(any_player_unblocked)} entries."
     )

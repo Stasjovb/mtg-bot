@@ -8691,6 +8691,55 @@ def _ta_dict_to_python_effect(eff_dict: dict):
         # the exact shape.
         from mtg_bot.effects.generic.exile import WarpExileSelf
         return WarpExileSelf()
+    if kind == "conditional_if_you_gained_life_at_least":
+        # **XX Pin 1 — life-gained-this-turn conditional gate.**
+        # Python's ``ConditionalIfYouGainedLifeAtLeast(threshold, inner)``
+        # (``effects/combinators.py:966-1002``) gates ``inner`` on whether
+        # the controller gained at least ``threshold`` life this turn.
+        # Reads ``Player.life_gained_this_turn``; silently no-ops when the
+        # count is below ``threshold``.
+        #
+        # EoE card unlocked: Haliya, Guided by Light — "At the beginning
+        # of your end step, draw a card if you've gained 3 or more life
+        # this turn."  Parser wraps ``DrawCards(1)`` in
+        # ``ConditionalIfYouGainedLifeAtLeast(threshold=3, inner=...)``.
+        #
+        # Dict shape: ``{"kind": "conditional_if_you_gained_life_at_least",
+        # "threshold": N, "inner": <effect_dict>}``.
+        # Field name for the nested effect is ``"inner"`` (matching the
+        # Python class's ``inner`` field — distinct from Pin 2's ``effect``
+        # field on ``ConditionalIfSourcePowerAtLeast``).
+        from mtg_bot.effects.combinators import ConditionalIfYouGainedLifeAtLeast
+        threshold = int(eff_dict["threshold"])
+        inner_effect = _ta_dict_to_python_effect(eff_dict["inner"])
+        return ConditionalIfYouGainedLifeAtLeast(threshold=threshold, inner=inner_effect)
+    if kind == "conditional_if_source_power_at_least":
+        # **XX Pin 2 — source-power-at-least conditional gate.**
+        # Python's ``ConditionalIfSourcePowerAtLeast(effect, threshold)``
+        # (``effects/combinators.py:1055-1107``) gates ``effect`` on
+        # whether the triggering source's effective power is at least
+        # ``threshold`` at resolution.  Reads ``state.resolving_source``
+        # and calls ``effective_power(state, source)``; silently no-ops
+        # when power is below ``threshold`` or source is ``None``.
+        #
+        # FIELD-NAME SKEW vs Pin 1: this class uses ``effect=`` (not
+        # ``inner=``) for the wrapped effect.  The bridge must construct
+        # with ``effect=<inner_translated>``.  The dict may carry the
+        # nested effect under either ``"inner"`` or ``"effect"`` as
+        # the serialization key — accept both for forward-compat.
+        #
+        # EoE cards unlocked: Syr Vondam, Sunstar Exemplar (dies/exile
+        # trigger while power ≥ 4); Dawnstrike Vanguard; Frontline
+        # War-Rager (attack/combat triggers with "while its power is 4
+        # or greater" intervening-while clause).
+        #
+        # Dict shape: ``{"kind": "conditional_if_source_power_at_least",
+        # "threshold": N, "inner": <effect_dict>}`` (or ``"effect"`` key).
+        from mtg_bot.effects.combinators import ConditionalIfSourcePowerAtLeast
+        threshold = int(eff_dict.get("threshold", 4))
+        nested_key = "effect" if "effect" in eff_dict else "inner"
+        inner_effect = _ta_dict_to_python_effect(eff_dict[nested_key])
+        return ConditionalIfSourcePowerAtLeast(effect=inner_effect, threshold=threshold)
     # === PHASE5_BRIDGE_ARMS_INSERT_ABOVE_THIS_LINE ===
     # New `kind` arms go IMMEDIATELY ABOVE this marker. Do NOT delete the marker.
     # Append-only convention prevents merge collisions when multiple agents add arms in parallel.
@@ -8830,9 +8879,67 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
             _ta_dict_to_python_predicate(pred_dict["left"]),
             _ta_dict_to_python_predicate(pred_dict["right"]),
         )
+    if kind == "state_bound":
+        # **XX Pin 3 — StateBound wrapper: TriggerPredicate bridge to
+        # the StatePredicate tier.**
+        # Python's ``StateBound(inner: StatePredicate)``
+        # (``effects/predicates.py:392-406``) wraps a ``StatePredicate``
+        # and binds it to the firing source's controller:
+        # ``inner.test(state, source.controller_id)``.
+        #
+        # This is the two-tier bridge: ``StateBound`` is a
+        # ``TriggerPredicate`` (Tier 1) that delegates to a
+        # ``StatePredicate`` (Tier 2).  The inner kind-space is
+        # dispatched by ``_ta_dict_to_python_state_predicate`` below.
+        #
+        # EoE cards unlocked: all Void-gated triggers (VoidActive inner)
+        # and Sothera, the Supervoid (AnyPlayerControlsNoCreatures inner).
+        from mtg_bot.effects.predicates import StateBound
+        inner_state_pred = _ta_dict_to_python_state_predicate(pred_dict["inner"])
+        return StateBound(inner=inner_state_pred)
     raise ValueError(
         f"cross_engine triggered_abilities bridge: unsupported "
         f"predicate kind {kind!r}"
+    )
+
+
+def _ta_dict_to_python_state_predicate(pred_dict: dict):
+    """Translate a StatePredicate dict into a Python ``StatePredicate`` instance.
+
+    This is the Tier-2 predicate dispatcher — the inner kind-space for
+    ``StateBound`` wrappers.  ``StatePredicate`` carries
+    ``test(state, viewer_id)`` rather than ``matches(state, subjects,
+    source)`` (the ``TriggerPredicate`` tier).
+
+    Wired StatePredicate kinds (XX Pin 3):
+      * ``void_active`` → ``VoidActive()``
+      * ``any_player_controls_no_creatures`` → ``AnyPlayerControlsNoCreatures()``
+
+    Future StatePredicate kinds (Delirium, SpellsCastThisTurn,
+    LoneAttackerForYou, OpponentControlsMoreLandsThanYou, etc.) land
+    here in lockstep with the bridge extension that needs them.
+    """
+    from mtg_bot.effects.state_predicates import VoidActive, AnyPlayerControlsNoCreatures
+
+    kind = pred_dict["kind"]
+    if kind == "void_active":
+        # ``VoidActive()`` — Void is active (a nonland permanent left
+        # the battlefield this turn or a spell was warped this turn).
+        # Viewer-independent (Void state is global).
+        # EoE cards: Voidforged Titan, Insatiable Skittermaw, Kavaron
+        # Skywarden, Hylderblade, Alpharael Stonechosen, Roving Actuator.
+        return VoidActive()
+    if kind == "any_player_controls_no_creatures":
+        # ``AnyPlayerControlsNoCreatures()`` — at least one player
+        # controls no creatures.  Viewer-independent (scans all players).
+        # EoE card: Sothera, the Supervoid — "At the beginning of your
+        # end step, if a player controls no creatures, draw a card."
+        return AnyPlayerControlsNoCreatures()
+    raise ValueError(
+        f"cross_engine triggered_abilities bridge: unsupported "
+        f"StatePredicate kind {kind!r} (extend "
+        f"`_ta_dict_to_python_state_predicate` in "
+        f"src/mtg_bot/parity/cross_engine.py)"
     )
 
 
