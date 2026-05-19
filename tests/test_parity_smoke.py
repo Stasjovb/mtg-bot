@@ -65572,7 +65572,16 @@ def test_cross_engine_real_eoe_seedship_impact_destroy_then_conditional_lander_p
                           "token_printing_id": lander_pid}]},
             0, 0,  # controller p0, ZONE_HAND
         )
-        rs.push_to_stack(rs_spell_id, 0)
+        # G7 lander-controller-mismatch closure: seed the cast-time-
+        # bound target on the StackItem so the resolve arm reads it
+        # via `current_resolve_payload_target_id`. The production
+        # cast-spell path (`cast_spell_noncreature`) does this binding
+        # at cast time; this synthetic test pushes directly via
+        # `push_to_stack_with_target` (the sibling of the
+        # zero-arg `push_to_stack` added in this slice). Mirrors the
+        # Python `StackItem(..., targets=(("permanent", py_vic.id),))`
+        # binding above byte-equal.
+        rs.push_to_stack_with_target(rs_spell_id, 0, rs_vic_id)
         rs.resolve_top_of_stack()
         rs.apply_sbas()
         assert rs.stack_size() == 0

@@ -62,6 +62,38 @@ impl GameState {
         self.stack.push(StackItem::new_spell(source_obj_id, controller));
     }
 
+    /// G7 lander-controller-mismatch closure — synthetic-test stack
+    /// push that carries the cast-time-bound target. The production
+    /// cast-spell path (`cast_spell_noncreature`) sets target via the
+    /// cast-time binding (read at resolve via the
+    /// `current_resolve_payload_target_id` swap); the production
+    /// triggered-ability path (`push_triggered_ability`) sets target
+    /// via `first_legal_trigger_target`. Synthetic tests that bypass
+    /// both (push directly + `resolve_top_of_stack` for a Tier-A
+    /// targeted spell like Seedship Impact) previously relied on the
+    /// arm self-scanning the bf at resolve time — now removed (the
+    /// self-scan was the SoT-divergence root cause: when the bound
+    /// target ceases between cast and resolve, the arm picked a
+    /// stale-pool replacement). This sibling exposes the existing
+    /// `new_spell_with_targets` constructor so the synthetic push-
+    /// and-resolve idiom can seed the StackItem's target field
+    /// directly. `target_obj_id_2` is `None`-defaulted (Phase-1
+    /// single-target — Diplomatic Relations is the only 2-slot card
+    /// and is cast through `cast_spell_noncreature`).
+    fn push_to_stack_with_target(
+        &mut self,
+        source_obj_id: u32,
+        controller: u8,
+        target_obj_id: u32,
+    ) {
+        self.stack.push(StackItem::new_spell_with_targets(
+            source_obj_id,
+            controller,
+            Some(target_obj_id),
+            None,
+        ));
+    }
+
     /// Return the top stack item as a Python dict
     /// `{"source_obj_id", "controller"}`, or `None` if the stack is
     /// empty. Read-only — does not mutate the stack.

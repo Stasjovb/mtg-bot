@@ -1479,6 +1479,39 @@ impl GameState {
                 )
             })
             .unwrap_or(false);
+        // G7 lander-controller-mismatch (token-creation parity): the
+        // first-effect SHAPE drives which target-kind to bind at cast
+        // time. Most Phase-1 single-target spells take a creature, so
+        // the default scans for a Creature. But `SeedshipImpactEffect`
+        // takes an artifact-OR-enchantment (Python
+        // `SeedshipImpactEffect.legal_targets` filters on
+        // `is_artifact OR "Enchantment" in card_types`, non-
+        // indestructible — `effects/bespoke.py:1227-1235`). Without
+        // this dedicated arm, `bound_target` is `None` and the
+        // resolve arm's self-scan picks a STALE first-artifact when
+        // the bound target ceases between cast and resolve — exactly
+        // the G7 S6 arch=10/11/12 seed=2 divergence shape. The
+        // verify-first repro: P0 casts Orbital Plunge (Lander-rider
+        // creates Lander0 under P0), P0 casts Seedship Impact
+        // targeting Lander0, P1 casts Seedship Impact targeting
+        // Lander0. P1's resolves first (LIFO), destroys Lander0, mv≤2
+        // → P1 mints Lander1 (correct). P0's resolves: Python
+        // fizzles (bound target Lander0 is gone); Rust pre-fix
+        // self-scans, picks Lander1, destroys it and mints Lander2
+        // under P0 — diverges from Python by both controller AND id.
+        // The fix binds the artifact-or-enchantment target at cast
+        // time on the StackItem; the resolve arm reads
+        // `current_resolve_payload_target_id` and fizzles on stale.
+        let is_seedship_impact = self
+            .registry
+            .lookup(printing_id)
+            .map(|p| {
+                matches!(
+                    p.effects.first(),
+                    Some(crate::cards::Effect::SeedshipImpactEffect { .. })
+                )
+            })
+            .unwrap_or(false);
         let (bound_target, bound_target_2): (Option<u32>, Option<u32>) =
             if is_two_slot {
                 // 2-slot: slot 0 = first caster-controlled creature,
@@ -1509,6 +1542,40 @@ impl GameState {
                     }
                 }
                 (slot0, slot1)
+            } else if is_seedship_impact {
+                // Seedship Impact: first artifact-OR-enchantment on
+                // EITHER bf in `bf_iter_etb_sorted` order, non-
+                // indestructible (matches the resolve arm's scan
+                // filter + Python `legal_targets` filter exactly).
+                // The deterministic-first pick mirrors the
+                // `_PickFirstLegalTargetAgent` bake-in convention the
+                // Python SoT uses for `choose_target`.
+                let t = crate::bf_iter::bf_iter_etb_sorted(self)
+                    .into_iter()
+                    .find_map(|o| {
+                        let printing =
+                            self.registry.lookup(o.printing_id)?;
+                        let is_artifact = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Artifact");
+                        let is_enchantment = printing
+                            .card_types
+                            .iter()
+                            .any(|t| t == "Enchantment");
+                        if !(is_artifact || is_enchantment) {
+                            return None;
+                        }
+                        if printing
+                            .keywords
+                            .iter()
+                            .any(|k| k == "indestructible")
+                        {
+                            return None;
+                        }
+                        Some(o.id)
+                    });
+                (t, None)
             } else {
                 // Phase-1 single-target: first creature on EITHER bf.
                 let t = crate::bf_iter::bf_iter_etb_sorted(self)

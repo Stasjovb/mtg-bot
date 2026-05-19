@@ -843,6 +843,53 @@ fn first_legal_trigger_target(
                     }
                 })
         }
+        // G7 lander-controller-mismatch closure (token-creation parity
+        // 3x). Seed the SeedshipImpactEffect target at push time when
+        // fired as an ETB trigger so the resolve arm reads the same
+        // `current_resolve_payload_target_id` regardless of cast-spell
+        // or ETB-trigger entry. Slot filter `IsArtifact() |
+        // IsEnchantment()`, non-indestructible — mirrors
+        // `state_ops_legal.rs::Effect::SeedshipImpactEffect.legal_targets`
+        // exactly + Python's `legal_targets` at
+        // `effects/bespoke.py:1227-1235`. Scan in
+        // `bf_iter_etb_sorted` order across both bfs (the same
+        // first-legal convention the cast-time bind uses + the
+        // `_PickFirstLegalTargetAgent` bake-in convention). `count_min
+        // >=1` (Seedship Impact requires a target) — so an empty
+        // legal set fizzles the ETB trigger entirely (the matching
+        // `lever_trigger_requires_target` entry below). Same
+        // deterministic-first idiom the cast-time
+        // `cast_spell_noncreature` Seedship Impact bind uses, so the
+        // two paths agree byte-equal.
+        Effect::SeedshipImpactEffect { .. } => {
+            crate::bf_iter::bf_iter_etb_sorted(state)
+                .into_iter()
+                .find_map(|obj| {
+                    let printing = state
+                        .registry
+                        .printings
+                        .get(obj.printing_id as usize)?;
+                    let is_artifact = printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Artifact");
+                    let is_enchantment = printing
+                        .card_types
+                        .iter()
+                        .any(|t| t == "Enchantment");
+                    if !(is_artifact || is_enchantment) {
+                        return None;
+                    }
+                    if printing
+                        .keywords
+                        .iter()
+                        .any(|k| k == "indestructible")
+                    {
+                        return None;
+                    }
+                    Some(obj.id)
+                })
+        }
         // Every other effect (all existing untargeted safe triggers,
         // and any non-lever targeted trigger the engine handles
         // elsewhere): NOT a target-seating consumer — the helper is
@@ -866,7 +913,17 @@ fn first_legal_trigger_target(
 /// (byte-equal with Python's `targets=()` `Bounce.resolve`
 /// early-return — the optional was simply declined, not fizzled).
 fn lever_trigger_requires_target(effect: &Effect) -> bool {
-    matches!(effect, Effect::PutPlusOneCounterOnOpponentsCreature { .. })
+    // SeedshipImpactEffect's Python `requires_target()` returns True;
+    // an ETB trigger with no legal artifact/enchantment target must
+    // fizzle (CR 603.3c) — byte-equal with Python's _put_triggered_
+    // ability_on_stack's "no legal targets" return-False path. Added
+    // alongside the cast-time bind so the ETB-trigger path and the
+    // cast-spell path agree.
+    matches!(
+        effect,
+        Effect::PutPlusOneCounterOnOpponentsCreature { .. }
+            | Effect::SeedshipImpactEffect { .. }
+    )
 }
 
 pub(crate) fn push_triggered_ability(
@@ -5881,16 +5938,57 @@ fn apply_effect(
                      {lander_pid} not in registry"
                 )));
             }
-            // Target scan: first Artifact OR Enchantment in
-            // ETB-timestamp order across BOTH bfs, non-indestructible.
-            // Capture the PRINTED mana value at scan time (read BEFORE
-            // destroy — Python reads `obj.printing.mana_cost.total`
-            // before `destroy(...)`; the printing is immutable so
-            // scan-time == pre-destroy).
+            // G7 lander-controller-mismatch closure (token-creation
+            // parity 3x — arch=10/11/12 seed=2). Read the cast-time-
+            // bound target via `current_resolve_payload_target_id`
+            // (set by the stack resolver around the apply_effect loop
+            // at `state_ops_resolve.rs:12416-12417`; the spell-card-
+            // bridge lever from round-70). The pre-fix self-scan
+            // picked the first artifact-or-enchantment on the bf at
+            // RESOLVE time, which diverges from Python whenever the
+            // bound target ceases between cast and resolve (Python
+            // fizzles per the `obj is None` early-return at
+            // `effects/bespoke.py:1251-1259`). The S6 verify-first
+            // repro: P0 casts Orbital Plunge (Lander rider creates
+            // Lander0 under P0), P0 casts Seedship Impact targeting
+            // Lander0, P1 casts Seedship Impact targeting Lander0.
+            // LIFO resolves P1's first: destroys Lander0, mv≤2 → P1
+            // mints Lander1 under P1 (correct). Then P0's resolves:
+            // Python fizzles (bound Lander0 is gone); Rust pre-fix
+            // self-scanned, picked Lander1, destroyed it and minted
+            // Lander2 under P0 — diverges from Python by both
+            // controller AND id. CR 608.2b: a targeted spell whose
+            // only target has become illegal is removed from the
+            // stack without effect; cast-time bind is the SoT.
+            // `cast_spell_noncreature` now binds the
+            // artifact-or-enchantment target at cast time so the
+            // payload reaches this arm filled.
+            let payload_target = match state.current_resolve_payload_target_id {
+                Some(t) => t,
+                None => return Ok(()),
+            };
+            // Resolve-time re-legality: find the target on EITHER bf
+            // and re-check the (Artifact OR Enchantment) +
+            // non-indestructible filter. Same find_map shape as the
+            // pre-fix self-scan; only the candidate pool narrows from
+            // "all bf" to "the bound id". Mirrors Python's
+            // `obj = next((o for o in state.battlefield if o.id ==
+            // target_id), None)` + the post-find filter check at
+            // `effects/bespoke.py:1251-1259`. If the target left the
+            // bf or no longer matches the filter (e.g. became
+            // indestructible via a UEOT modifier — defense-in-depth
+            // since the printing is immutable), silent fizzle —
+            // byte-equal with Python's `obj is None` / filter-fail
+            // early-returns. Capture the PRINTED mana value at scan
+            // time (read BEFORE destroy — Python reads
+            // `obj.printing.mana_cost.total` before `destroy(...)`).
             let target: Option<(usize, u32, u32)> =
                 crate::bf_iter::bf_iter_etb_sorted(state)
                     .into_iter()
                     .find_map(|obj| {
+                        if obj.id != payload_target {
+                            return None;
+                        }
                         let printing =
                             state.registry.lookup(obj.printing_id)?;
                         let is_artifact = printing
