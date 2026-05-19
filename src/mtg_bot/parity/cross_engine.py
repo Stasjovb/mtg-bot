@@ -10253,11 +10253,31 @@ def resolve_top_of_stack_python(py_state, *, floor: int = 0) -> int:
 
 # Action kinds whose Rust-side semantics fuse cast+resolve into a
 # single mutation — the harness drains Python's stack after these to
-# match Rust's empty-stack observable. Today this is exactly
-# ``cast_spell``; if a future Rust primitive grows similar no-stack
-# semantics (e.g. an ``activate_non_mana_ability`` arm that bypasses
-# the stack), append its kind here.
-_RUST_AUTO_RESOLVE_ACTION_KINDS: frozenset[str] = frozenset({"cast_spell"})
+# match Rust's empty-stack observable.
+#
+# **S7 — CE5 REMOVED (2026-05-18).** Empty per the locked-in plan in
+# ``docs/RUST_STACK_RESOLUTION_DESIGN.md`` (§S7) and
+# ``docs/RUST_SPELL_STACK_SOURCE_ZONE_DESIGN.md`` (§2). CE5 was the
+# cast-vs-resolve atomic-reconciliation mirror that auto-resolved
+# Python's stack on the harness side after every ``cast_spell``
+# decision, to mask the historical Rust atomic-cast-resolve hole.
+# The G7 closure chain (G1..G7-token-creation) has since shipped
+# real stack-and-priority resolution for ``cast_spell`` in the Rust
+# engine — Rust now actually pushes the StackItem, runs the priority
+# loop, and resolves through the same Effect-fan-out path Python
+# uses. The CE5 mirror is therefore obsolete; emptying the
+# frozenset turns the consumer in :func:`step_both` into a runtime
+# no-op while keeping the call site intact for the S7 closure-pin
+# window (a future cleanup slice can delete the dead branch + the
+# two ``resolve_top_of_stack_*`` helpers cleanly once S7 evidence
+# has fully landed and the source-of-truth cutover has occurred).
+#
+# Historical context (pre-S7): the frozenset previously contained
+# ``{"cast_spell"}``. If a future Rust primitive ever grows similar
+# no-stack semantics (e.g. an ``activate_non_mana_ability`` arm that
+# bypasses the stack), the right answer is to fix the Rust engine
+# rather than re-populate this set.
+_RUST_AUTO_RESOLVE_ACTION_KINDS: frozenset[str] = frozenset()
 
 
 def resolve_top_of_stack_rust(rust_state, *, floor: int = 0) -> int:
