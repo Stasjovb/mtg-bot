@@ -4118,6 +4118,18 @@ pub enum Predicate {
     /// subtype-granting effects today, so the direct read is
     /// observably equivalent.
     SubjectHasSubtype(String),
+    /// Matches when the **subject's** effective power is ≤ ``n``.
+    /// Mirrors Python's ``HasPowerAtMost(n)`` from
+    /// ``src/mtg_bot/effects/object_predicates.py:427``.
+    /// Used in Vicious Clown / Irreverent Gremlin's ETB trigger:
+    /// "Whenever another creature you control with power 2 or less
+    /// enters, …" — predicate shape
+    /// ``And(And(SubjectIsCreature, HasPowerAtMost{n:2}), ControlledByYou) AND NOT SourceIsSelf``.
+    ///
+    /// Non-creature subjects (no printed power and no UEOT creature
+    /// animation) return ``false`` — mirrors Python's
+    /// ``effective_power`` exception-catch → false path.
+    HasPowerAtMost { n: i32 },
     /// Logical negation.
     Not(Box<Predicate>),
     /// Logical AND (short-circuits on the left operand's `false`).
@@ -4187,6 +4199,21 @@ impl Predicate {
             }
             Predicate::SubjectHasSubtype(subtype) => {
                 subject_has_subtype(state, subject_id, subtype)
+            }
+            Predicate::HasPowerAtMost { n } => {
+                // Mirrors Python's HasPowerAtMost.test: read effective
+                // power via the crate-visible helper (which replicates
+                // the creature-check + UEOT-animation logic of the public
+                // `effective_power` getter). Returns false for
+                // non-creature subjects and absent ids — identical to
+                // Python's exception-catch → false path.
+                match crate::state_ops_combat::predicate_subject_effective_power(
+                    state,
+                    subject_id,
+                ) {
+                    Some(power) => power <= *n,
+                    None => false,
+                }
             }
             Predicate::Not(inner) => !inner.matches(state, source_id, subject_id),
             Predicate::And(a, b) => {
@@ -7777,6 +7804,21 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
         // `src/mtg_bot/effects/object_predicates.py:142`.
         "subject_is_enchantment" => Ok(Predicate::SubjectIsEnchantment),
         "controlled_by_you" => Ok(Predicate::ControlledByYou),
+        // HasPowerAtMost substrate slice — "with power N or less"
+        // qualifier for Vicious Clown / Irreverent Gremlin ETB triggers
+        // (EoE batch K/N). Dict shape: `{"kind": "has_power_at_most",
+        // "n": 2}`. Mirrors Python's `HasPowerAtMost(n)` from
+        // `src/mtg_bot/effects/object_predicates.py:427`.
+        "has_power_at_most" => {
+            let n: i32 = require(dict, "n")?
+                .extract()
+                .map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "predicate.has_power_at_most.n must be an int (got: {e})"
+                    ))
+                })?;
+            Ok(Predicate::HasPowerAtMost { n })
+        }
         // Subtypes substrate Slice 2 — subject-anchored HasSubtype.
         // Dict shape: `{"kind": "subject_has_subtype", "subtype": "Kavu"}`.
         // The `subtype` payload is the canonical Title Case string
@@ -7835,7 +7877,7 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
             "unknown predicate kind {other:?}; \
              valid: always, source_is_self, source_is_creature, \
              subject_is_land, subject_is_artifact, subject_is_creature, \
-             subject_is_enchantment, \
+             subject_is_enchantment, has_power_at_most, \
              controlled_by_you, subject_has_subtype, not, and, or"
         ))),
     }
