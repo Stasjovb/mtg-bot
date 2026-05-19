@@ -257,31 +257,24 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_would_draw_cards_event_bridge_gap_sentinel_divergence_pin():
-    """Pin the bridge gap for the ``would_draw_cards`` event string in
-    ``_ta_dict_to_python_triggered_ability``.
+def test_cross_engine_real_eoe_would_draw_cards_event_bridge_gap_sentinel_FIXED_parity():
+    """Bridge arm for ``would_draw_cards`` event is now wired.
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py:8902-8974`` -- the elif chain
-      in ``_ta_dict_to_python_triggered_ability`` does not include an arm
-      for ``"would_draw_cards"``.  All unrecognised strings fall through to:
+    UU Pin 1 -- CLOSED.  The bridge arm for ``event_str == "would_draw_cards"``
+    was added to the elif chain in ``_ta_dict_to_python_triggered_ability``
+    in ``src/mtg_bot/parity/cross_engine.py``.
 
-          raise ValueError(
-              "cross_engine triggered_abilities bridge: event "
-              "'would_draw_cards' is not yet wired"
-          )
-
-      Python's ``Event`` enum has ``Event.WOULD_DRAW_CARDS`` (value
-      ``"would_draw_cards"``); the enum member exists, but there is no
-      bridge arm to wire it.
+    This test verifies the wired behavior (no ValueError raised, correct
+    TriggeredAbility returned) and asserts the structural invariants the
+    pin originally documented.
 
     WOULD_* family note:
       ``Event.WOULD_DRAW_CARDS`` is the first member of the WOULD_*
-      replacement-event family to be pinned.  All four WOULD_* events
+      replacement-event family to be wired.  All four WOULD_* events
       (``would_draw_cards``, ``would_create_token``, ``would_place_counter``,
-      ``would_go_to_graveyard``) share the same absence from the bridge elif
-      chain.  Pin 2 (WOULD_CREATE_TOKEN) documents the additional multi-subject
-      hazard for the two-subject WOULD_* events.
+      ``would_go_to_graveyard``) previously shared the same missing-elif-arm
+      bridge gap.  Pin 2 (WOULD_CREATE_TOKEN) documents the additional
+      multi-subject hazard for the two-subject WOULD_* events.
 
     Scale:
       1 EoE card carries a replacement effect on the ``would_draw_cards``
@@ -291,35 +284,9 @@ def test_cross_engine_real_eoe_would_draw_cards_event_bridge_gap_sentinel_diverg
 
     Subject structure note:
       ``Event.WOULD_DRAW_CARDS`` carries a single subject ``("player",)``
-      (the player who would draw).  Unlike the IS_CAST two-subject trap
-      (batch LL Pin 2) or WOULD_CREATE_TOKEN's two-subject shape (Pin 2
-      below), ``Subject(slot=None, ...)`` WILL resolve correctly on
-      WOULD_DRAW_CARDS dispatch because ``_resolve_subject`` returns the
-      lone subject when ``len(subjects) == 1``.  The bridge gap is purely
-      the missing elif arm -- no predicate-slot fix is needed alongside it.
-
-    Closure path:
-      Add ``elif event_str == "would_draw_cards":
-          event = Event.WOULD_DRAW_CARDS``
-      in the event-string elif chain.  When that arm lands, the ValueError
-      will no longer be raised and this sentinel will flip to FAIL -- the
-      signal to promote to a parity probe for Quantum Riddler.
-      Quantum Riddler's "one or fewer cards in hand" condition also requires
-      a ``hand_size_at_most`` predicate bridge arm (a separate closure step).
-
-    Probe shape:
-      1. Assert ``Event.WOULD_DRAW_CARDS`` exists and has the correct string
-         value ``"would_draw_cards"``.
-      2. Assert ``EVENT_SUBJECTS[Event.WOULD_DRAW_CARDS]`` is ``("player",)``
-         (documenting the single-subject shape and absence of multi-subject
-         slot trap -- unlike WOULD_CREATE_TOKEN in Pin 2).
-      3. Assert that ALL four WOULD_* events are present in the Event enum,
-         establishing the family baseline.
-      4. Assert the bridge raises ``ValueError`` for the unwired event.
-      5. Assert the message mentions ``"would_draw_cards"`` and
-         ``"not yet wired"``.
-      6. Sanity: assert a wired event (``"becomes_tapped"``) does NOT raise.
-      7. Assert the 1 EoE card blocked by this gap.
+      (the player who would draw).  Single-subject shape means
+      ``Subject(slot=None, ...)`` WILL resolve correctly on
+      WOULD_DRAW_CARDS dispatch -- no predicate-slot rewrite needed.
 
     This pin is pure Python (no Rust extension required).
     """
@@ -355,9 +322,6 @@ def test_cross_engine_real_eoe_would_draw_cards_event_bridge_gap_sentinel_diverg
     )
 
     # 3. Assert the full WOULD_* family exists in the Event enum.
-    #    This establishes the category baseline and ensures the enum wasn't
-    #    partially pruned.  All four WOULD_* events share the same missing-
-    #    elif-arm bridge gap; this pin focuses on WOULD_DRAW_CARDS.
     for would_event_name, expected_val in (
         ("WOULD_DRAW_CARDS", "would_draw_cards"),
         ("WOULD_CREATE_TOKEN", "would_create_token"),
@@ -375,8 +339,9 @@ def test_cross_engine_real_eoe_would_draw_cards_event_bridge_gap_sentinel_diverg
             f"got {getattr(Event, would_event_name).value!r}"
         )
 
-    # 4-5. Bridge raises ValueError for the unwired event -- pin the gap.
-    unwired_ta_dict = {
+    # 4. Bridge NO LONGER raises ValueError -- the arm is wired.
+    from mtg_bot.effects.base import TriggeredAbility
+    wired_ta_dict = {
         "event": "would_draw_cards",
         "predicate": {"kind": "always"},
         "effect": {
@@ -384,24 +349,18 @@ def test_cross_engine_real_eoe_would_draw_cards_event_bridge_gap_sentinel_diverg
             "count": 1,
         },
     }
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_triggered_ability(unwired_ta_dict)
-
-    err_msg = str(exc_info.value)
-    assert "would_draw_cards" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'would_draw_cards' so the gap is immediately identifiable.  "
-        f"Got message: {err_msg!r}"
+    result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
+    assert isinstance(result, TriggeredAbility), (
+        "Bridge arm for 'would_draw_cards' should return a TriggeredAbility; "
+        f"got {type(result).__name__!r}."
     )
-    assert "not yet wired" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain 'not yet wired' "
-        "confirming the event-elif chain produced this error, not some "
-        "other ValueError.  "
-        f"Got message: {err_msg!r}"
+    assert result.event == Event.WOULD_DRAW_CARDS, (
+        "Bridge arm for 'would_draw_cards' should set event=Event.WOULD_DRAW_CARDS; "
+        f"got {result.event!r}."
     )
 
-    # 6. Sanity: a WIRED event ("becomes_tapped") round-trips without error.
-    wired_ta_dict = {
+    # 5. Sanity: a WIRED event ("becomes_tapped") still round-trips.
+    wired_tapped_dict = {
         "event": "becomes_tapped",
         "predicate": {"kind": "always"},
         "effect": {
@@ -410,15 +369,14 @@ def test_cross_engine_real_eoe_would_draw_cards_event_bridge_gap_sentinel_diverg
         },
     }
     try:
-        result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
-        from mtg_bot.effects.base import TriggeredAbility
-        assert isinstance(result, TriggeredAbility), (
+        tapped_result = _ta_dict_to_python_triggered_ability(wired_tapped_dict)
+        assert isinstance(tapped_result, TriggeredAbility), (
             "Wired event 'becomes_tapped' should produce a TriggeredAbility; "
-            f"got {type(result).__name__}."
+            f"got {type(tapped_result).__name__}."
         )
-        assert result.event == Event.BECOMES_TAPPED, (
+        assert tapped_result.event == Event.BECOMES_TAPPED, (
             "Wired event 'becomes_tapped' should translate to "
-            f"Event.BECOMES_TAPPED; got {result.event!r}."
+            f"Event.BECOMES_TAPPED; got {tapped_result.event!r}."
         )
     except ValueError as e:
         raise AssertionError(
@@ -426,15 +384,18 @@ def test_cross_engine_real_eoe_would_draw_cards_event_bridge_gap_sentinel_diverg
             f"ValueError -- got: {e}"
         ) from e
 
-    # 7. Document the 1 EoE card blocked by this gap.
-    blocked_eoe_cards = [
+    # 6. Document the 1 EoE card unblocked by this fix.
+    unblocked_eoe_cards = [
         "Quantum Riddler",   # "As long as you have one or fewer cards in hand,
                              #  if you would draw one or more cards, you draw
                              #  that many cards plus one instead."
+                             # Note: the "one or fewer cards in hand" condition
+                             # also requires a hand_size_at_most predicate bridge
+                             # arm -- a separate closure step.
     ]
-    assert len(blocked_eoe_cards) == 1, (
-        "The 'would_draw_cards' event gap blocks 1 EoE card (Quantum Riddler); "
-        f"enumerated list has {len(blocked_eoe_cards)} entries."
+    assert len(unblocked_eoe_cards) == 1, (
+        "The 'would_draw_cards' event arm unblocks 1 EoE card (Quantum Riddler); "
+        f"enumerated list has {len(unblocked_eoe_cards)} entries."
     )
 
 
@@ -643,20 +604,17 @@ def test_cross_engine_real_eoe_would_create_token_event_bridge_gap_sentinel_dive
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_plays_land_event_bridge_gap_sentinel_divergence_pin():
-    """Pin the bridge gap for the ``plays_land`` event string in
-    ``_ta_dict_to_python_triggered_ability``, and document its two-subject
-    slot-rewrite hazard and its distinction from the ENTERS (Landfall) event.
+def test_cross_engine_real_eoe_plays_land_event_bridge_gap_sentinel_FIXED_parity():
+    """Bridge arm for ``plays_land`` event is now wired (with slot-rewrite).
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py:8902-8974`` -- the elif chain
-      in ``_ta_dict_to_python_triggered_ability`` does not include an arm
-      for ``"plays_land"``.  All unrecognised strings fall through to:
+    UU Pin 3 -- CLOSED.  The bridge arm for ``event_str == "plays_land"``
+    was added to the elif chain in ``_ta_dict_to_python_triggered_ability``,
+    AND ``_rewrite_predicate_for_plays_land`` was added to handle the
+    two-subject slot-rewrite hazard (slot=None -> slot="land").
 
-          raise ValueError(
-              "cross_engine triggered_abilities bridge: event "
-              "'plays_land' is not yet wired"
-          )
+    This test verifies the wired behavior (no ValueError raised, correct
+    TriggeredAbility with PLAYS_LAND event returned, slot-rewrite applied)
+    and asserts the structural invariants the pin originally documented.
 
     PLAYS_LAND vs ENTERS (Landfall) distinction:
       ``Event.PLAYS_LAND`` fires when a player PLAYS a land (the CR 305
@@ -666,52 +624,25 @@ def test_cross_engine_real_eoe_plays_land_event_bridge_gap_sentinel_divergence_p
       play-land action).  Landfall triggers use ENTERS; The Endstone uses
       PLAYS_LAND.  Wiring ENTERS does NOT wire PLAYS_LAND.
 
-    Two-subject structure and multi-subject slot trap:
+    Two-subject structure and slot-rewrite fix:
       ``Event.PLAYS_LAND`` carries TWO named subjects:
-      ``("land", "controller")`` per ``EVENT_SUBJECTS``
-      (``effects/predicates.py``).
-
-        * ``"land"`` -- the land card being played.
-        * ``"controller"`` -- the player who plays the land.
-
-      This two-subject shape triggers the LL Pin 2 / OO Pin 2
-      multi-subject hazard: ``Subject(slot=None, ...)`` evaluates ALWAYS
-      FALSE on PLAYS_LAND dispatches.  A predicate-slot companion fix
-      is needed alongside the elif arm (which explicit slot -- ``"land"``
-      or ``"controller"`` -- depends on the card's oracle text).
+      ``("land", "controller")`` per ``EVENT_SUBJECTS``.
+      The companion ``_rewrite_predicate_for_plays_land`` fixes
+      slot=None predicates to slot="land" — matching the parser's output
+      of ``IsSelf(subject="land")`` for "whenever you play a land" triggers.
 
     Compound-disjunction issue (The Endstone) is a SEPARATE follow-on:
       The Endstone says "Whenever you play a land OR cast a spell, draw a
-      card."  This requires the bridge to model a logical disjunction of two
-      events (PLAYS_LAND and IS_CAST) in a single triggered ability.  The
-      bridge currently has no disjunction support.  This compound issue was
-      documented and DROPPED in batch RR; it is independent of the standalone
-      PLAYS_LAND bridge gap pinned here.  Wiring the ``plays_land`` elif arm
-      is a PREREQUISITE for the disjunction closure, but not sufficient alone.
+      card."  The disjunction between PLAYS_LAND and IS_CAST requires a
+      multi-event TriggeredAbility representation not yet in the bridge.
+      This pin closes only the standalone PLAYS_LAND bridge gap; the
+      disjunction is a separate follow-on closure item.
 
     Scale:
       1 EoE card carries a triggered ability on the ``plays_land`` event:
         * The Endstone -- "Whenever you play a land or cast a spell, draw a
           card."  (Also affected by the compound-disjunction gap; the
           standalone bridge gap pinned here must be closed first.)
-
-    Observable divergence (bridge sentinel):
-      ``_ta_dict_to_python_triggered_ability({"event": "plays_land", ...})``
-      raises ``ValueError`` with message containing ``"plays_land"`` and
-      ``"not yet wired"``.
-
-    Probe shape:
-      1. Assert ``Event.PLAYS_LAND`` exists and has the correct string value
-         ``"plays_land"``.
-      2. Assert ``Event.ENTERS`` is a DISTINCT wired event (documenting the
-         Landfall-vs-plays-land distinction).
-      3. Assert ``EVENT_SUBJECTS[Event.PLAYS_LAND]`` is ``("land", "controller")``
-         (two-subject shape -- documents the multi-subject slot trap).
-      4. Assert the bridge raises ``ValueError`` for ``"plays_land"``.
-      5. Assert the message mentions ``"plays_land"`` and ``"not yet wired"``.
-      6. Assert ``Event.ENTERS`` (wired) does NOT raise (confirming the
-         distinction: wiring ENTERS did not wire PLAYS_LAND).
-      7. Document the 1 EoE card blocked by this gap.
 
     This pin is pure Python (no Rust extension required).
     """
@@ -733,10 +664,6 @@ def test_cross_engine_real_eoe_plays_land_event_bridge_gap_sentinel_divergence_p
     )
 
     # 2. PLAYS_LAND is distinct from ENTERS (Landfall).
-    #    Wiring ENTERS (which covers Landfall cards) did NOT wire PLAYS_LAND.
-    #    The two events model different game actions:
-    #      ENTERS  = any permanent enters battlefield (via any means)
-    #      PLAYS_LAND = specifically the play-land action (CR 305)
     assert Event.PLAYS_LAND is not Event.ENTERS, (
         "Event.PLAYS_LAND must be a distinct enum member from Event.ENTERS. "
         "Landfall cards use ENTERS ('whenever a land you control enters'); "
@@ -749,20 +676,12 @@ def test_cross_engine_real_eoe_plays_land_event_bridge_gap_sentinel_divergence_p
         f"Got {Event.ENTERS.value!r}"
     )
 
-    # 3. PLAYS_LAND has TWO subjects ("land", "controller") -- the two-subject
-    #    shape that creates the LL Pin 2 / OO Pin 2 multi-subject slot trap.
-    #    Subject(slot=None, ...) resolves to None on PLAYS_LAND dispatch
-    #    (len(subjects)==2 branch in _resolve_subject), causing any slot=None
-    #    predicate to ALWAYS FAIL.
+    # 3. PLAYS_LAND has TWO subjects ("land", "controller").
     plays_subjects = EVENT_SUBJECTS.get(Event.PLAYS_LAND)
     enters_subjects = EVENT_SUBJECTS.get(Event.ENTERS)
     assert plays_subjects == ("land", "controller"), (
         "Event.PLAYS_LAND should carry two subjects: ('land', 'controller') per "
-        "EVENT_SUBJECTS (effects/predicates.py).  This two-subject shape means "
-        "Subject(slot=None, ...) resolves to None on PLAYS_LAND dispatch "
-        "(the LL Pin 2 multi-subject hazard).  A predicate-slot rewrite "
-        "(slot=None -> 'land' or 'controller' per the card's oracle text) "
-        "must accompany the elif arm when this gap is closed.  "
+        "EVENT_SUBJECTS (effects/predicates.py).  "
         f"Got plays_subjects={plays_subjects!r}"
     )
     # ENTERS is single-subject ("obj",) -- safe for slot=None.
@@ -773,8 +692,9 @@ def test_cross_engine_real_eoe_plays_land_event_bridge_gap_sentinel_divergence_p
         f"Got enters_subjects={enters_subjects!r}"
     )
 
-    # 4-5. Bridge raises ValueError for "plays_land" -- pin the gap.
-    unwired_ta_dict = {
+    # 4. Bridge NO LONGER raises ValueError -- the arm is wired.
+    from mtg_bot.effects.base import TriggeredAbility
+    wired_ta_dict = {
         "event": "plays_land",
         "predicate": {"kind": "always"},
         "effect": {
@@ -782,26 +702,54 @@ def test_cross_engine_real_eoe_plays_land_event_bridge_gap_sentinel_divergence_p
             "count": 1,
         },
     }
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_triggered_ability(unwired_ta_dict)
-
-    err_msg = str(exc_info.value)
-    assert "plays_land" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'plays_land' so the gap is immediately identifiable.  "
-        f"Got message: {err_msg!r}"
+    result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
+    assert isinstance(result, TriggeredAbility), (
+        "Bridge arm for 'plays_land' should return a TriggeredAbility; "
+        f"got {type(result).__name__!r}."
     )
-    assert "not yet wired" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain 'not yet wired' "
-        "confirming the event-elif chain produced this error, not some "
-        "other ValueError.  "
-        f"Got message: {err_msg!r}"
+    assert result.event == Event.PLAYS_LAND, (
+        "Bridge arm for 'plays_land' should set event=Event.PLAYS_LAND; "
+        f"got {result.event!r}."
     )
 
-    # 6. Sanity: "enters" (wired since Slice 1) round-trips without error.
-    #    This confirms that wiring ENTERS did NOT accidentally wire PLAYS_LAND:
-    #    the two are genuinely independent bridge arms.
-    wired_ta_dict = {
+    # 5. Slot-rewrite verification: IsSelf(subject=None) should be rewritten
+    #    to IsSelf(subject="land") by _rewrite_predicate_for_plays_land.
+    from mtg_bot.parity.cross_engine import _rewrite_predicate_for_plays_land
+    from mtg_bot.effects.predicates import IsSelf, Subject
+    from mtg_bot.effects.object_predicates import IsLand
+
+    # IsSelf(subject=None) -> IsSelf(subject="land")
+    rewritten_isself = _rewrite_predicate_for_plays_land(IsSelf(subject=None))
+    assert isinstance(rewritten_isself, IsSelf), (
+        "_rewrite_predicate_for_plays_land should return an IsSelf instance "
+        f"for IsSelf input; got {type(rewritten_isself).__name__!r}."
+    )
+    assert rewritten_isself.subject == "land", (
+        "_rewrite_predicate_for_plays_land should rewrite IsSelf(subject=None) "
+        f"to IsSelf(subject='land'); got subject={rewritten_isself.subject!r}."
+    )
+
+    # IsSelf with explicit slot passes through unchanged.
+    explicit_isself = IsSelf(subject="controller")
+    rewritten_explicit = _rewrite_predicate_for_plays_land(explicit_isself)
+    assert rewritten_explicit.subject == "controller", (
+        "IsSelf with explicit slot 'controller' should pass through unchanged; "
+        f"got subject={rewritten_explicit.subject!r}."
+    )
+
+    # Subject(slot=None, ...) -> Subject(slot="land", ...)
+    rewritten_subject = _rewrite_predicate_for_plays_land(Subject(slot=None, inner=IsLand()))
+    assert isinstance(rewritten_subject, Subject), (
+        "_rewrite_predicate_for_plays_land should return a Subject instance; "
+        f"got {type(rewritten_subject).__name__!r}."
+    )
+    assert rewritten_subject.slot == "land", (
+        "_rewrite_predicate_for_plays_land should rewrite Subject(slot=None) "
+        f"to Subject(slot='land'); got slot={rewritten_subject.slot!r}."
+    )
+
+    # 6. Sanity: "enters" (wired since Slice 1) still round-trips.
+    wired_enters_dict = {
         "event": "enters",
         "predicate": {"kind": "always"},
         "effect": {
@@ -810,15 +758,14 @@ def test_cross_engine_real_eoe_plays_land_event_bridge_gap_sentinel_divergence_p
         },
     }
     try:
-        result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
-        from mtg_bot.effects.base import TriggeredAbility
-        assert isinstance(result, TriggeredAbility), (
+        enters_result = _ta_dict_to_python_triggered_ability(wired_enters_dict)
+        assert isinstance(enters_result, TriggeredAbility), (
             "Wired event 'enters' should produce a TriggeredAbility; "
-            f"got {type(result).__name__}."
+            f"got {type(enters_result).__name__}."
         )
-        assert result.event == Event.ENTERS, (
+        assert enters_result.event == Event.ENTERS, (
             "Wired event 'enters' should translate to Event.ENTERS; "
-            f"got {result.event!r}."
+            f"got {enters_result.event!r}."
         )
     except ValueError as e:
         raise AssertionError(
@@ -826,15 +773,15 @@ def test_cross_engine_real_eoe_plays_land_event_bridge_gap_sentinel_divergence_p
             f"ValueError -- got: {e}"
         ) from e
 
-    # 7. Document the 1 EoE card blocked by this gap.
-    blocked_eoe_cards = [
+    # 7. Document the 1 EoE card unblocked (prerequisite step) by this fix.
+    unblocked_eoe_cards = [
         "The Endstone",    # "Whenever you play a land or cast a spell, draw a
                            #  card."  (Also needs compound-disjunction support
                            #  for the 'or cast a spell' half -- a separate
                            #  closure item beyond this bridge gap.)
     ]
-    assert len(blocked_eoe_cards) == 1, (
-        "The 'plays_land' event bridge gap (standalone) blocks 1 EoE card "
+    assert len(unblocked_eoe_cards) == 1, (
+        "The 'plays_land' event bridge arm (standalone) unblocks 1 EoE card "
         "(The Endstone -- compound-disjunction gap is a separate issue); "
-        f"enumerated list has {len(blocked_eoe_cards)} entries."
+        f"enumerated list has {len(unblocked_eoe_cards)} entries."
     )
