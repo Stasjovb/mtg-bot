@@ -8969,6 +8969,47 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         # Rust engine omits the target subject but constrains callers
         # to player-targeted dispatch only.
         event = Event.DEALS_COMBAT_DAMAGE
+    elif event_str == "beginning_of_end_step":
+        # Round-14 PHASE_STEP event bridge. Rust's
+        # ``Event::BeginningOfEndStep`` (string value
+        # ``"beginning_of_end_step"``) and Python's
+        # ``Event.BEGINNING_OF_END_STEP`` share the SAME string value
+        # — no spelling skew (unlike deals_damage/deals_combat_damage).
+        #
+        # **Single player subject.** Python fires
+        # ``dispatch_event(state, Event.BEGINNING_OF_END_STEP,
+        # player=state.active_player())``; the ``"player"`` subject slot
+        # is a ``Player`` object. Rust uses the PLAYER_SUBJECT_OFFSET
+        # sentinel (``0x8000_0000 + active_player``) as subject_id;
+        # ``ControlledByYou`` in Rust recognises the sentinel and
+        # resolves the player index directly. No bridge-side subject
+        # rewrite is needed — predicate shapes (``Always``,
+        # ``ControlledByYou``) are event-agnostic and translate
+        # identically to ENTERS / ATTACKS.
+        #
+        # 51 EoE cards unlocked by this arm (LL Pin 3 closure). The
+        # most common shape is ``Controlled(YOU)`` (``"your end step"``)
+        # → ``ControlledByYou``; the rarer shape is ``Always()``
+        # (``"each end step"``) → ``Always``.
+        event = Event.BEGINNING_OF_END_STEP
+    elif event_str == "beginning_of_upkeep":
+        # Round-14 PHASE_STEP event bridge — upkeep variant. Same
+        # single-subject / PLAYER_SUBJECT_OFFSET convention as
+        # BEGINNING_OF_END_STEP. Python's ``Event.BEGINNING_OF_UPKEEP``
+        # (string value ``"beginning_of_upkeep"``) ↔ Rust's
+        # ``Event::BeginningOfUpkeep``. Fired by ``advance_phase`` at
+        # entry to ``PHASE_UPKEEP``; mirrors Python's
+        # ``run_beginning_of_upkeep_triggers``.
+        event = Event.BEGINNING_OF_UPKEEP
+    elif event_str == "beginning_of_combat":
+        # Round-14 PHASE_STEP event bridge — combat variant. Same
+        # single-subject / PLAYER_SUBJECT_OFFSET convention. Python's
+        # ``Event.BEGINNING_OF_COMBAT`` (string value
+        # ``"beginning_of_combat"``) ↔ Rust's
+        # ``Event::BeginningOfCombat``. Fired by ``advance_phase`` at
+        # entry to ``PHASE_BEGIN_COMBAT``; mirrors Python's
+        # ``run_beginning_of_combat_triggers``.
+        event = Event.BEGINNING_OF_COMBAT
     else:
         raise ValueError(
             f"cross_engine triggered_abilities bridge: event "

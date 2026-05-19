@@ -439,151 +439,93 @@ def test_cross_engine_real_eoe_is_cast_subject_is_artifact_slot_none_predicate_f
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_beginning_of_end_step_event_bridge_gap_sentinel_divergence_pin():
-    """Pin the bridge gap for the ``beginning_of_end_step`` event string in
-    ``_ta_dict_to_python_triggered_ability``.
+def test_cross_engine_real_eoe_beginning_of_end_step_event_bridge_gap_sentinel_FIXED_parity():
+    """**LL Pin 3 CLOSED (round-14 phase-step bridge slice).**
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py:8818-8854`` -- the elif chain
-      in ``_ta_dict_to_python_triggered_ability`` recognises only the event
-      strings ``"enters"``, ``"dies"``, ``"cast"``, ``"attacks"``,
-      ``"blocks"``, ``"leaves_battlefield"``, ``"becomes_tapped"``.  All
-      other strings fall through to:
+    The bridge gap for ``"beginning_of_end_step"``,
+    ``"beginning_of_upkeep"``, and ``"beginning_of_combat"`` in
+    ``_ta_dict_to_python_triggered_ability`` is now FIXED.
 
-          raise ValueError(
-              "cross_engine triggered_abilities bridge: event "
-              "'beginning_of_end_step' is not yet wired"
-          )
+    **What was broken (pre-round-14):**
+      ``_ta_dict_to_python_triggered_ability`` raised ``ValueError:
+      event 'beginning_of_end_step' is not yet wired`` for all three
+      phase-step event strings.  51 EoE end-step-trigger cards were
+      blocked from cross-engine probing.
 
-      Python's ``Event`` enum has ``Event.BEGINNING_OF_END_STEP`` (and
-      ``Event.BEGINNING_OF_UPKEEP``, ``Event.BEGINNING_OF_COMBAT``, etc.)
-      with no bridge arm.
+    **What was fixed (round-14 Rust + bridge slice):**
+      1. ``Event::BeginningOfEndStep``, ``Event::BeginningOfUpkeep``,
+         ``Event::BeginningOfCombat`` added to Rust ``Event`` enum.
+      2. Parse arms added to ``parse_triggered_ability`` in ``cards.rs``.
+      3. Dispatch sites added in ``advance_phase`` (``state_ops_steps.rs``)
+         for ``PHASE_UPKEEP``, ``PHASE_BEGIN_COMBAT``, ``PHASE_END_STEP``.
+      4. ``PLAYER_SUBJECT_OFFSET = 0x8000_0000`` sentinel added to safely
+         encode player subjects through the ``subject_id: u32`` API.
+      5. ``Predicate::ControlledByYou`` extended to resolve player-index
+         subjects from the sentinel range.
+      6. Three bridge arms added to ``_ta_dict_to_python_triggered_ability``
+         in ``cross_engine.py``.
 
-    Scale:
-      51 EoE cards carry "At the beginning of [the/your] end step, ..."
-      triggered abilities.  None of those cards can be exercised via a
-      Rust-sourced token/carrier that emits
-      ``"event": "beginning_of_end_step"`` in its triggered-ability dict --
-      the bridge crashes before any effect routing.
+    **Companion probe:** ``tests/test_probe_phase_step_unlock.py`` —
+    Flight-Deck Coordinator end-step GainLife(2) byte-equal probe.
 
-    Observable consequence:
-      Any cross-engine probe whose Rust-sourced card emits
-      ``{"event": "beginning_of_end_step", ...}`` in a triggered-ability
-      dict triggers the ValueError during bridge translation, aborting the
-      probe rather than producing a meaningful diff.
-
-    Closure path:
-      Add the following arms to the event-string elif chain:
-        ``elif event_str == "beginning_of_end_step":
-            event = Event.BEGINNING_OF_END_STEP``
-      (And similarly for ``"beginning_of_upkeep"`` → ``Event.BEGINNING_OF_UPKEEP``
-      and ``"beginning_of_combat"`` → ``Event.BEGINNING_OF_COMBAT`` in the same
-      pass.)  When those arms land, the ValueError will no longer be raised
-      by this sentinel -- that flip signals the pin should be promoted to a
-      real parity probe for one of the 51 end-step-trigger EoE cards.
-
-    Probe shape:
-      1. Assert ``Event.BEGINNING_OF_END_STEP`` is importable and is a
-         member of the ``Event`` enum (confirming the Python side exists).
-      2. Assert that ``_ta_dict_to_python_triggered_ability`` with
-         ``event="beginning_of_end_step"`` raises ``ValueError`` (bridge gap
-         active).
-      3. Assert the error message mentions ``"beginning_of_end_step"``.
-      4. Assert that the same call with ``event="becomes_tapped"`` (a WIRED
-         event) does NOT raise, confirming the gap is event-specific.
-      5. Assert that ``Event.BEGINNING_OF_UPKEEP`` and
-         ``Event.BEGINNING_OF_COMBAT`` are also members of the enum
-         (documenting the wider family of unwired phase-step events).
-
-    This pin is pure Python (no Rust extension required).
+    This pin is pure Python (no Rust extension required for the assertion
+    inversions, though the Rust changes must be built for the full probe).
     """
     from mtg_bot.effects.predicates import Event
+    from mtg_bot.effects.base import TriggeredAbility
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_triggered_ability
 
-    # The Python Event enum has BEGINNING_OF_END_STEP.
+    # Confirm the Python Event enum members exist (unchanged from the gap era).
     assert hasattr(Event, "BEGINNING_OF_END_STEP"), (
-        "Event.BEGINNING_OF_END_STEP should be a member of the Event enum "
-        "(effects/predicates.py). If this fails the enum member was renamed "
-        "-- update both this pin and the bridge arm."
+        "Event.BEGINNING_OF_END_STEP must be a member of the Event enum."
     )
-    assert isinstance(Event.BEGINNING_OF_END_STEP, Event), (
-        "Event.BEGINNING_OF_END_STEP should be an Event enum instance."
-    )
-
-    # Same for sibling phase-step events (documenting the gap width).
     assert hasattr(Event, "BEGINNING_OF_UPKEEP"), (
-        "Event.BEGINNING_OF_UPKEEP should be a member of the Event enum."
+        "Event.BEGINNING_OF_UPKEEP must be a member of the Event enum."
     )
     assert hasattr(Event, "BEGINNING_OF_COMBAT"), (
-        "Event.BEGINNING_OF_COMBAT should be a member of the Event enum."
+        "Event.BEGINNING_OF_COMBAT must be a member of the Event enum."
     )
 
-    # A minimal triggered-ability dict using the unwired event.
-    unwired_ta_dict = {
-        "event": "beginning_of_end_step",
-        "predicate": {"kind": "always"},
-        "effect": {
-            "kind": "draw_cards",
-            "count": 1,
-        },
-    }
+    # **INVERTED from the gap-era pin**: all three event strings now
+    # translate WITHOUT raising ValueError.
+    for event_str, expected_event in [
+        ("beginning_of_end_step", Event.BEGINNING_OF_END_STEP),
+        ("beginning_of_upkeep", Event.BEGINNING_OF_UPKEEP),
+        ("beginning_of_combat", Event.BEGINNING_OF_COMBAT),
+    ]:
+        ta_dict = {
+            "event": event_str,
+            "predicate": {"kind": "always"},
+            "effect": {"kind": "draw_cards", "count": 1},
+        }
+        try:
+            result = _ta_dict_to_python_triggered_ability(ta_dict)
+        except ValueError as e:
+            raise AssertionError(
+                f"LL Pin 3 regression: bridge arm for '{event_str}' is "
+                f"missing — _ta_dict_to_python_triggered_ability raised "
+                f"ValueError: {e}"
+            ) from e
 
-    # Bridge raises ValueError for the unwired event -- pin the gap.
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_triggered_ability(unwired_ta_dict)
-
-    err_msg = str(exc_info.value)
-    assert "beginning_of_end_step" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'beginning_of_end_step' so the gap is immediately identifiable. "
-        f"Got message: {err_msg!r}"
-    )
-    assert "not yet wired" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain 'not yet wired' "
-        "(from cross_engine.py:8852-8854) confirming the event-elif chain "
-        "produced this error, not some other ValueError. "
-        f"Got message: {err_msg!r}"
-    )
-
-    # Sanity: a WIRED event ("becomes_tapped") round-trips without error.
-    wired_ta_dict = {
-        "event": "becomes_tapped",
-        "predicate": {"kind": "source_is_self"},
-        "effect": {
-            "kind": "draw_cards",
-            "count": 1,
-        },
-    }
-    try:
-        result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
-        # Verify the event was translated correctly.
-        from mtg_bot.effects.base import TriggeredAbility
         assert isinstance(result, TriggeredAbility), (
-            "Wired event 'becomes_tapped' should produce a TriggeredAbility; "
+            f"Bridge for '{event_str}' must produce a TriggeredAbility; "
             f"got {type(result).__name__}."
         )
-        assert result.event == Event.BECOMES_TAPPED, (
-            "Wired event 'becomes_tapped' should translate to "
-            f"Event.BECOMES_TAPPED; got {result.event!r}."
+        assert result.event == expected_event, (
+            f"Bridge must translate '{event_str}' to {expected_event!r}; "
+            f"got {result.event!r}."
         )
-    except ValueError as e:
-        raise AssertionError(
-            "Sanity: 'becomes_tapped' is a wired event and should NOT raise "
-            f"ValueError -- got: {e}"
-        ) from e
 
-    # Also verify that beginning_of_upkeep and beginning_of_combat are ALSO
-    # unwired (documenting the width of the gap).
-    for unwired_event_str in ("beginning_of_upkeep", "beginning_of_combat"):
-        with pytest.raises(ValueError) as exc_info2:
-            _ta_dict_to_python_triggered_ability(
-                {
-                    "event": unwired_event_str,
-                    "predicate": {"kind": "always"},
-                    "effect": {"kind": "draw_cards", "count": 1},
-                }
-            )
-        assert unwired_event_str in str(exc_info2.value), (
-            f"Bridge gap: '{unwired_event_str}' should also raise ValueError "
-            f"mentioning the event string. Got: {exc_info2.value!r}"
-        )
+    # Sanity: 'becomes_tapped' (pre-existing wired event) still works.
+    bt_result = _ta_dict_to_python_triggered_ability({
+        "event": "becomes_tapped",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    })
+    assert isinstance(bt_result, TriggeredAbility), (
+        "Sanity: 'becomes_tapped' must still produce a TriggeredAbility."
+    )
+    assert bt_result.event == Event.BECOMES_TAPPED, (
+        f"Sanity: 'becomes_tapped' must translate to BECOMES_TAPPED; "
+        f"got {bt_result.event!r}."
+    )
