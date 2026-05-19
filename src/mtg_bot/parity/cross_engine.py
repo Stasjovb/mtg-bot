@@ -8701,6 +8701,16 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
     ``subject_is_creature``) and ``controlled_by_you`` — unlocking
     the landfall / artifact-enters / Panharmonicon-shape trigger
     predicates from ``src/mtg_bot/cards/parser/triggers.py:603-1266``.
+
+    Slice 5 adds ``subject_is_enchantment`` — the Duskmourn / EoE
+    "Eerie" ability-word predicate ("Whenever an enchantment you
+    control enters"). Unlocks Balemurk Leech, Cult Healer, Dashing
+    Bloodsucker, Entity Tracker, Erratic Apparition, Optimistic
+    Scavenger, Scrabbling Skullcrab, Gremlin Tamer, Infernal
+    Phantom, and Skullsnap Nuisance (10 cards, all carrying
+    ``And(Subject(None, IsEnchantment()), Controlled(YOU))``
+    as their ENTERS predicate).
+
     Future predicate variants land in lockstep with the Rust side.
     """
     from mtg_bot.effects.predicates import (
@@ -8716,6 +8726,7 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
     )
     from mtg_bot.effects.object_predicates import (
         IsCreature,
+        IsEnchantment,
         IsLand,
         IsArtifact,
         HasSubtype,
@@ -8741,6 +8752,15 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
         return Subject(slot=None, inner=IsArtifact())
     if kind == "subject_is_creature":
         return Subject(slot=None, inner=IsCreature())
+    if kind == "subject_is_enchantment":
+        # IsEnchantment substrate slice — Duskmourn / EoE "Eerie"
+        # ability-word shape ("Whenever an enchantment you control
+        # enters"). Mirrors `subject_is_artifact` / `subject_is_creature`
+        # arm shape exactly. Python's `Subject(None, IsEnchantment())` —
+        # the default-subject path uses the event's only declared slot
+        # (``"obj"`` for ENTERS). Rust's ``SubjectIsEnchantment`` likewise
+        # reads the event's subject id directly.
+        return Subject(slot=None, inner=IsEnchantment())
     if kind == "controlled_by_you":
         # Python's ``Controlled(by=YOU, subject=None)`` — defaults to
         # the event's only declared subject slot. Rust's
