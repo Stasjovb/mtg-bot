@@ -361,7 +361,14 @@ def _try_cast_one_creature(py_state, rust_state) -> Optional[dict]:
             if s.divergences:
                 raise _DivergenceError(tap_action, s.divergences)
         cast_action = {"kind": "cast_spell", "card_id": int(cre.id)}
-        s = step_both(py_state, rust_state, cast_action)
+        # S7-A2: step_both_drained applies the cast then drains both
+        # engines' stacks via real stack-and-priority resolution —
+        # the explicit byte-equal replacement for CE5's atomic-
+        # reconcile mirror (removed in S7-1). The bench previously
+        # relied on CE5's implicit post-cast drain to land the
+        # creature on bf; now the drain is explicit at the call site.
+        from mtg_bot.parity.cross_engine import step_both_drained
+        s = step_both_drained(py_state, rust_state, cast_action)
         if s.divergences:
             raise _DivergenceError(cast_action, s.divergences)
         return cast_action

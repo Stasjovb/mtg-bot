@@ -2130,8 +2130,7 @@ def test_cross_engine_combat_selector_first_declare_attackers_at_step_136(
     result = walk_both(
         slightly_bigger_deckspec(),
         n_decisions=140,
-        decision_selector=combat_selector,
-    )
+        decision_selector=combat_selector, auto_drain_after_step=True)
     assert result.error is None
     declare_steps = [
         s for s in result.steps
@@ -2183,8 +2182,7 @@ def test_cross_engine_combat_selector_damage_drops_p1_life_in_2s(
     result = walk_both(
         slightly_bigger_deckspec(),
         n_decisions=200,
-        decision_selector=combat_selector,
-    )
+        decision_selector=combat_selector, auto_drain_after_step=True)
     assert result.error is None
     # Walk the per-step compare and track life_p1 evolution. Every
     # life-drop boundary should agree across engines.
@@ -2262,8 +2260,7 @@ def test_cross_engine_combat_selector_summoning_sick_bears_skips_attack(
     result = walk_both(
         slightly_bigger_deckspec(),
         n_decisions=130,
-        decision_selector=combat_selector,
-    )
+        decision_selector=combat_selector, auto_drain_after_step=True)
     assert result.error is None
     # Walk every step and confirm: at turn 9 DECLARE_ATTACKERS with
     # p0 active, the action emitted is NOT declare_attackers.
@@ -2321,8 +2318,7 @@ def test_cross_engine_combat_selector_declare_blockers_empty_assignments(
     result = walk_both(
         slightly_bigger_deckspec(),
         n_decisions=200,
-        decision_selector=combat_selector,
-    )
+        decision_selector=combat_selector, auto_drain_after_step=True)
     assert result.error is None
     declare_blockers_steps = [
         s for s in result.steps
@@ -2804,8 +2800,7 @@ def test_cross_engine_multi_block_combat_selector_pre_combat_walks_clean(
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=196,
-        decision_selector=multi_block_combat_selector,
-    )
+        decision_selector=multi_block_combat_selector, auto_drain_after_step=True)
     assert result.error is None
     for step in result.steps:
         assert step.divergences == [], (
@@ -2932,8 +2927,7 @@ def test_cross_engine_step_both_routes_declare_blockers_actor_to_defender(
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=196,
-        decision_selector=multi_block_combat_selector,
-    )
+        decision_selector=multi_block_combat_selector, auto_drain_after_step=True)
     assert result.error is None
     # After step 195 (declare_blockers), Python's attacker (Bears
     # id=5) should have blocked_by set to both blockers â€” populated
@@ -2941,8 +2935,8 @@ def test_cross_engine_step_both_routes_declare_blockers_actor_to_defender(
     py_state, _ = build_matched_states(multi_blocker_deckspec())
     for i in range(196):
         action = multi_block_combat_selector(py_state, _, i)
-        from mtg_bot.parity.cross_engine import step_both
-        step_both(py_state, _, action)
+        from mtg_bot.parity.cross_engine import step_both_drained
+        step_both_drained(py_state, _, action)
     attacker = next(
         (o for o in py_state.battlefield if int(o.id) == 5),
         None,
@@ -3056,8 +3050,7 @@ def test_cross_engine_retaliation_selector_pre_ce12_walks_clean(
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=226,
-        decision_selector=retaliation_selector,
-    )
+        decision_selector=retaliation_selector, auto_drain_after_step=True)
     assert result.error is None
     for step in result.steps[:226]:
         assert step.divergences == [], (
@@ -3176,12 +3169,13 @@ def test_cross_engine_mass_removal_selector_post_wrath_bf_state(
         multi_blocker_deckspec,
         build_matched_states,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(169):
         action = mass_removal_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Python side: bf has only lands, p0 graveyard has [Bears, Wrath],
     # p1 graveyard has [Bears, Bears].
@@ -3389,6 +3383,7 @@ def test_cross_engine_first_strike_selector_post_combat_state(parity_smoke):
         first_strike_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
@@ -3397,7 +3392,7 @@ def test_cross_engine_first_strike_selector_post_combat_state(parity_smoke):
     # FS combat is fully resolved on both engines.
     for i in range(180):
         action = first_strike_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # ---- Python side ----
     py_creatures = sorted(
@@ -3483,14 +3478,14 @@ def test_cross_engine_first_strike_selector_pre_injection_walks_clean(
         first_strike_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
         walk_both,
     )
 
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=168,
-        decision_selector=first_strike_selector,
-    )
+        decision_selector=first_strike_selector, auto_drain_after_step=True)
     assert result.error is None
     for step in result.steps:
         assert step.divergences == [], (
@@ -3504,7 +3499,7 @@ def test_cross_engine_first_strike_selector_pre_injection_walks_clean(
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(168):
         action = first_strike_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     creatures = [
         o for o in py_state.battlefield
@@ -3621,14 +3616,14 @@ def test_cross_engine_deathtouch_selector_pre_injection_walks_clean(
         deathtouch_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
         walk_both,
     )
 
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=168,
-        decision_selector=deathtouch_selector,
-    )
+        decision_selector=deathtouch_selector, auto_drain_after_step=True)
     assert result.error is None
     for step in result.steps:
         assert step.divergences == [], (
@@ -3642,7 +3637,7 @@ def test_cross_engine_deathtouch_selector_pre_injection_walks_clean(
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(168):
         action = deathtouch_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     creatures = [
         o for o in py_state.battlefield
@@ -3789,12 +3784,13 @@ def test_cross_engine_lifelink_selector_post_combat_state(parity_smoke):
         lifelink_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(180):
         action = lifelink_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # ---- Life totals (the load-bearing lifelink composition surface) ----
     assert py_state.players[0].life == 14, (
@@ -3887,14 +3883,14 @@ def test_cross_engine_lifelink_selector_pre_injection_walks_clean(
         lifelink_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
         walk_both,
     )
 
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=168,
-        decision_selector=lifelink_selector,
-    )
+        decision_selector=lifelink_selector, auto_drain_after_step=True)
     assert result.error is None
     for step in result.steps:
         assert step.divergences == [], (
@@ -3908,7 +3904,7 @@ def test_cross_engine_lifelink_selector_pre_injection_walks_clean(
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(168):
         action = lifelink_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     creatures = [
         o for o in py_state.battlefield
@@ -4055,6 +4051,7 @@ def test_cross_engine_vigilance_selector_post_declare_attacker_untapped(
         build_matched_states,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
         vigilance_selector,
     )
 
@@ -4062,7 +4059,7 @@ def test_cross_engine_vigilance_selector_post_declare_attacker_untapped(
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(172):
         action = vigilance_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # The vigilance attacker (id 14, "Bear Watcher") should be on bf
     # with attacking=True, tapped=False.
@@ -4105,7 +4102,7 @@ def test_cross_engine_vigilance_selector_post_declare_attacker_untapped(
     #      past COMBAT_DAMAGE and SBA cleanup) ----
     for i in range(172, 180):
         action = vigilance_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Life totals: no lifelink â†’ no life gain â†’ p0 unchanged at 12
     # (was 12 entering combat after turn-12 retaliation), p1 at 20.
@@ -4200,6 +4197,7 @@ def test_cross_engine_vigilance_selector_pre_injection_walks_clean(
         build_matched_states,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
         vigilance_selector,
         walk_both,
     )
@@ -4207,8 +4205,7 @@ def test_cross_engine_vigilance_selector_pre_injection_walks_clean(
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=168,
-        decision_selector=vigilance_selector,
-    )
+        decision_selector=vigilance_selector, auto_drain_after_step=True)
     assert result.error is None
     for step in result.steps:
         assert step.divergences == [], (
@@ -4222,7 +4219,7 @@ def test_cross_engine_vigilance_selector_pre_injection_walks_clean(
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(168):
         action = vigilance_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     creatures = [
         o for o in py_state.battlefield
@@ -4399,13 +4396,14 @@ def test_cross_engine_haste_selector_post_declare_attacker_state(
         haste_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
     )
 
     # ---- Phase 1: post-DECLARE_ATTACKERS attacker state ----
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(172):
         action = haste_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # The haste attacker (id 14, "Bear Sprinter") should be on bf
     # with attacking=True, tapped=True, summoning_sick=True.
@@ -4461,7 +4459,7 @@ def test_cross_engine_haste_selector_post_declare_attacker_state(
     #      past COMBAT_DAMAGE and SBA cleanup) ----
     for i in range(172, 180):
         action = haste_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Life totals: no lifelink â†’ no life gain â†’ p0 unchanged at 12
     # (was 12 entering combat after turn-12 retaliation), p1 at 20.
@@ -4557,14 +4555,14 @@ def test_cross_engine_haste_selector_pre_injection_walks_clean(
         haste_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
         walk_both,
     )
 
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=168,
-        decision_selector=haste_selector,
-    )
+        decision_selector=haste_selector, auto_drain_after_step=True)
     assert result.error is None
     for step in result.steps:
         assert step.divergences == [], (
@@ -4578,7 +4576,7 @@ def test_cross_engine_haste_selector_pre_injection_walks_clean(
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(168):
         action = haste_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     creatures = [
         o for o in py_state.battlefield
@@ -4806,6 +4804,7 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
         make_menace_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
         walk_both,
     )
 
@@ -4813,8 +4812,7 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=168,
-        decision_selector=selector,
-    )
+        decision_selector=selector, auto_drain_after_step=True)
     assert result.error is None
     for step in result.steps:
         assert step.divergences == [], (
@@ -4828,7 +4826,7 @@ def test_cross_engine_menace_selector_pre_injection_walks_clean(parity_smoke):
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(168):
         action = selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     creatures = [
         o for o in py_state.battlefield
@@ -5058,6 +5056,7 @@ def test_cross_engine_defender_selector_normal_only_walks_clean(parity_smoke):
         make_defender_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
         walk_both,
     )
 
@@ -5065,8 +5064,7 @@ def test_cross_engine_defender_selector_normal_only_walks_clean(parity_smoke):
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=200,
-        decision_selector=selector,
-    )
+        decision_selector=selector, auto_drain_after_step=True)
     assert result.error is None, (
         f"walk aborted at step {result.aborted_at}: {result.error}"
     )
@@ -5084,7 +5082,7 @@ def test_cross_engine_defender_selector_normal_only_walks_clean(parity_smoke):
         action = make_defender_selector("normal_only")(
             py_state, rust_state, i,
         )
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     py_defender = next(
         (o for o in py_state.battlefield
@@ -5175,6 +5173,7 @@ def test_cross_engine_defender_selector_legal_decisions_excludes_defender(
         make_defender_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
@@ -5206,7 +5205,7 @@ def test_cross_engine_defender_selector_legal_decisions_excludes_defender(
             and is_p0_da
         ):
             break
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Sanity: we should be in DECLARE_ATTACKERS active=0 with the
     # defender on bf and no attackers declared yet.
@@ -5278,6 +5277,7 @@ def test_cross_engine_defender_selector_pre_injection_walks_clean(parity_smoke):
         make_defender_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
         walk_both,
     )
 
@@ -5289,8 +5289,7 @@ def test_cross_engine_defender_selector_pre_injection_walks_clean(parity_smoke):
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=165,
-        decision_selector=selector,
-    )
+        decision_selector=selector, auto_drain_after_step=True)
     assert result.error is None
     for step in result.steps:
         assert step.divergences == [], (
@@ -5305,7 +5304,7 @@ def test_cross_engine_defender_selector_pre_injection_walks_clean(parity_smoke):
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(165):
         action = selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     creatures = [
         o for o in py_state.battlefield
@@ -5436,6 +5435,7 @@ def test_cross_engine_indestructible_post_combat_state(parity_smoke):
         indestructible_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
@@ -5444,7 +5444,7 @@ def test_cross_engine_indestructible_post_combat_state(parity_smoke):
     # marks (CR 514.2 â€” damage clears at end of turn).
     for i in range(175):
         action = indestructible_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Bear Idol should be on p1's bf, with damage=2 on both engines.
     py_idol = next(
@@ -5513,6 +5513,7 @@ def test_cross_engine_indestructible_excess_damage_sba(parity_smoke):
         indestructible_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
@@ -5523,7 +5524,7 @@ def test_cross_engine_indestructible_excess_damage_sba(parity_smoke):
     # on top.
     for i in range(175):
         action = indestructible_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Locate Bear Idol on both engines and side-channel-mark
     # additional damage. Python: direct field write. Rust:
@@ -5871,6 +5872,7 @@ def test_cross_engine_hexproof_opponent_destroy_unenforced(parity_smoke):
         hexproof_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
@@ -5879,7 +5881,7 @@ def test_cross_engine_hexproof_opponent_destroy_unenforced(parity_smoke):
     # sits on both engines' p1 bf.
     for i in range(170):
         action = hexproof_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Locate the Bear Sage on both engines and confirm it's on p1.
     py_sage = next(
@@ -6445,12 +6447,13 @@ def test_cross_engine_double_strike_post_combat_structural_state(parity_smoke):
         double_strike_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(180):
         action = double_strike_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # ---- Python: bf creatures ----
     py_creatures = sorted(
@@ -6789,14 +6792,14 @@ def test_cross_engine_double_strike_selector_pre_injection_walks_clean(
         double_strike_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
         walk_both,
     )
 
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=168,
-        decision_selector=double_strike_selector,
-    )
+        decision_selector=double_strike_selector, auto_drain_after_step=True)
     assert result.error is None
     for step in result.steps:
         assert step.divergences == [], (
@@ -6809,7 +6812,7 @@ def test_cross_engine_double_strike_selector_pre_injection_walks_clean(
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(168):
         action = double_strike_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     creatures = [
         o for o in py_state.battlefield
@@ -6926,6 +6929,7 @@ def test_cross_engine_flying_post_combat_state(parity_smoke):
         flying_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
@@ -6935,7 +6939,7 @@ def test_cross_engine_flying_post_combat_state(parity_smoke):
     # damage marks (CR 514.2).
     for i in range(175):
         action = flying_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Bear Soarer should still be on p0's bf with damage=0.
     py_soarer = next(
@@ -7452,14 +7456,14 @@ def test_cross_engine_flying_selector_pre_injection_walks_clean(
         flying_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
         walk_both,
     )
 
     result = walk_both(
         multi_blocker_deckspec(),
         n_decisions=168,
-        decision_selector=flying_selector,
-    )
+        decision_selector=flying_selector, auto_drain_after_step=True)
     assert result.error is None
     for step in result.steps:
         assert step.divergences == [], (
@@ -7471,7 +7475,7 @@ def test_cross_engine_flying_selector_pre_injection_walks_clean(
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(168):
         action = flying_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     creatures = [
         o for o in py_state.battlefield
@@ -7575,12 +7579,13 @@ def test_cross_engine_counterspell_post_resolve_structural_state(parity_smoke):
         counterspell_selector,
         multi_blocker_deckspec,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(169):
         action = counterspell_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Both stacks empty post-drain.
     assert len(py_state.stack) == 0, (
@@ -8016,12 +8021,13 @@ def test_cross_engine_flash_test_b_own_turn_main_phase_parity(parity_smoke):
         multi_blocker_deckspec,
         retaliation_selector,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(167):
         action = retaliation_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Sanity: we should be at turn 13 PRECOMBAT_MAIN active=p0 (the
     # retaliation walk's setpoint matching the prior 11 keyword probes).
@@ -8298,13 +8304,14 @@ def test_cross_engine_activated_mid_combat_test_a_no_emission_off_main(parity_sm
         multi_blocker_deckspec,
         retaliation_selector,
         step_both,
+        step_both_drained,
     )
     from mtg_bot.turn import Step
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(167):
         action = retaliation_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Sanity: turn 13 PRECOMBAT_MAIN active=p0 priority=p0.
     assert py_state.step == Step.PRECOMBAT_MAIN
@@ -8413,13 +8420,14 @@ def test_cross_engine_activated_mid_combat_test_b_apply_dispatch_parity(parity_s
         multi_blocker_deckspec,
         retaliation_selector,
         step_both,
+        step_both_drained,
     )
     from mtg_bot.turn import Step
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(167):
         action = retaliation_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     advance_phase_python(py_state)
     rust_state.advance_phase()
@@ -8569,6 +8577,7 @@ def test_cross_engine_activated_mid_combat_test_c_phase_advance_empties_pool(par
         multi_blocker_deckspec,
         retaliation_selector,
         step_both,
+        step_both_drained,
     )
     from mtg_bot.actions import apply_action as py_apply_action
     from mtg_bot.turn import Step
@@ -8576,7 +8585,7 @@ def test_cross_engine_activated_mid_combat_test_c_phase_advance_empties_pool(par
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(167):
         action = retaliation_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     advance_phase_python(py_state)
     rust_state.advance_phase()
@@ -8754,13 +8763,14 @@ def test_cross_engine_activated_cost_test_a_emission_parity_post_ce20_closure(pa
         multi_blocker_deckspec,
         retaliation_selector,
         step_both,
+        step_both_drained,
     )
     from mtg_bot.turn import Step
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(167):
         action = retaliation_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     # Sanity: at PRECOMBAT_MAIN with p0 priority, sorcery timing holds.
     assert py_state.step == Step.PRECOMBAT_MAIN
@@ -8935,12 +8945,13 @@ def test_cross_engine_activated_cost_test_c_apply_dispatch_parity_post_ce20_clos
         multi_blocker_deckspec,
         retaliation_selector,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(167):
         action = retaliation_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     py_bear_id, rust_bear_id = activated_cost_side_channel(
         py_state, rust_state,
@@ -9031,12 +9042,13 @@ def test_cross_engine_activated_cost_test_d_python_underpays_silently(parity_smo
         multi_blocker_deckspec,
         retaliation_selector,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(167):
         action = retaliation_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     py_bear_id, rust_bear_id = activated_cost_side_channel(
         py_state, rust_state,
@@ -9114,13 +9126,14 @@ def test_cross_engine_activated_cost_test_e_auto_tap_headroom_emission_parity(pa
         multi_blocker_deckspec,
         retaliation_selector,
         step_both,
+        step_both_drained,
     )
     from mtg_bot.turn import Step
 
     py_state, rust_state = build_matched_states(multi_blocker_deckspec())
     for i in range(167):
         action = retaliation_selector(py_state, rust_state, i)
-        step_both(py_state, rust_state, action)
+        step_both_drained(py_state, rust_state, action)
 
     assert py_state.step == Step.PRECOMBAT_MAIN
     assert py_state.active_player_idx == 0
@@ -64556,7 +64569,8 @@ def test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
     from mtg_bot.cards.source import get_active_source
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        CardDef, DeckSpec, step_both, advance_phase_python,
+        CardDef, DeckSpec, step_both,
+        step_both_drained, advance_phase_python,
         compare_fields,
     )
     from mtg_bot.legal import legal_actions
@@ -64614,7 +64628,7 @@ def test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
             if o.printing.name == "Forest"
         ]
         if hand_forest:
-            assert not step_both(
+            assert not step_both_drained(
                 py, rs,
                 {"kind": "play_land",
                  "card_id": int(hand_forest[0].id)}).divergences
@@ -64632,7 +64646,7 @@ def test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
         if (o.controller_id == ai and o.printing.is_land
                 and not o.tapped and not o.summoning_sick
                 and taps < warp_total):
-            assert not step_both(
+            assert not step_both_drained(
                 py, rs,
                 {"kind": "activate_ability",
                  "source_id": int(o.id), "ability_index": 0},
@@ -64658,7 +64672,7 @@ def test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
         f"py={py_pair} rs={rs_pair}")
 
     # (2) The warp cast — byte-equal post-cast.
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(card_obj.id),
          "use_warp": True},
@@ -64706,7 +64720,7 @@ def test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
     fhand = [o for o in py.players[ai].hand
              if o.printing.name == "Forest"]
     if fhand:
-        assert not step_both(
+        assert not step_both_drained(
             py, rs,
             {"kind": "play_land",
              "card_id": int(fhand[0].id)}).divergences
@@ -64719,7 +64733,7 @@ def test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
         if (o.controller_id == ai and o.printing.is_land
                 and not o.tapped and not o.summoning_sick
                 and taps < normal_total):
-            assert not step_both(
+            assert not step_both_drained(
                 py, rs,
                 {"kind": "activate_ability",
                  "source_id": int(o.id), "ability_index": 0},
@@ -64730,7 +64744,7 @@ def test_cross_engine_real_eoe_warp_phase1_full_lifecycle_byte_equal(
         f"tapped {taps}")
     exiled = next(o for o in py.players[ai].exile
                   if o.printing.name == card_name)
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(exiled.id),
          "use_warp": False},
@@ -64795,7 +64809,8 @@ def test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal(
     """
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        CardDef, DeckSpec, step_both, advance_phase_python,
+        CardDef, DeckSpec, step_both,
+        step_both_drained, advance_phase_python,
         compare_fields,
     )
     from mtg_bot.legal import legal_actions
@@ -64850,7 +64865,7 @@ def test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal(
             if o.printing.name == "Forest"
         ]
         if hand_forest:
-            assert not step_both(
+            assert not step_both_drained(
                 py, rs,
                 {"kind": "play_land",
                  "card_id": int(hand_forest[0].id)}).divergences
@@ -64866,7 +64881,7 @@ def test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal(
         if (o.controller_id == ai and o.printing.is_land
                 and not o.tapped and not o.summoning_sick
                 and taps < warp_total):
-            assert not step_both(
+            assert not step_both_drained(
                 py, rs,
                 {"kind": "activate_ability",
                  "source_id": int(o.id), "ability_index": 0},
@@ -64895,7 +64910,7 @@ def test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal(
 
     # (2) The warp cast — byte-equal post-cast AND the ETB fired
     # byte-equal under the warp-cast path (the load-bearing new pin).
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(card_obj.id),
          "use_warp": True},
@@ -64952,7 +64967,7 @@ def test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal(
     fhand = [o for o in py.players[ai].hand
              if o.printing.name == "Forest"]
     if fhand:
-        assert not step_both(
+        assert not step_both_drained(
             py, rs,
             {"kind": "play_land",
              "card_id": int(fhand[0].id)}).divergences
@@ -64965,7 +64980,7 @@ def test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal(
         if (o.controller_id == ai and o.printing.is_land
                 and not o.tapped and not o.summoning_sick
                 and taps < normal_total):
-            assert not step_both(
+            assert not step_both_drained(
                 py, rs,
                 {"kind": "activate_ability",
                  "source_id": int(o.id), "ability_index": 0},
@@ -64978,7 +64993,7 @@ def test_cross_engine_real_eoe_warp_phase15_trio_lifecycle_byte_equal(
     assert rs.get_life(ai) == life_before_recast
     exiled = next(o for o in py.players[ai].exile
                   if o.printing.name == card_name)
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(exiled.id),
          "use_warp": False},
@@ -67475,7 +67490,8 @@ def _lander_spell_loader_admit_and_cast_resolve(
 
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        CardDef, DeckSpec, step_both, advance_phase_python, compare_fields,
+        CardDef, DeckSpec, step_both, step_both_drained,
+        advance_phase_python, compare_fields,
     )
     from tests.test_trajectory_parity import _step_views
     from tests.parity._picker_shims import _PickFirstLegalTargetAgent
@@ -67600,10 +67616,14 @@ def _lander_spell_loader_admit_and_cast_resolve(
             adv(24)
     ai = py.active_player_idx
     # Cast the target victim. Its mana cost = {1}{R} (2 lands).
+    # S7-A2: use step_both_drained so the cast resolves into bf via
+    # real stack-and-priority resolution on BOTH engines (the CE5
+    # implicit drain was removed in S7-1; the explicit composer is
+    # the byte-equal replacement).
     tap_n(2)
     vic_obj = next(o for o in py.players[ai].hand
                    if o.printing.name == "TGT_VICTIM")
-    assert not step_both(
+    assert not step_both_drained(
         py, rs,
         {"kind": "cast_spell",
          "card_id": int(vic_obj.id)}).divergences
@@ -67631,10 +67651,14 @@ def _lander_spell_loader_admit_and_cast_resolve(
     tap_n(need)
     spell = next(o for o in py.players[ai].hand
                  if o.printing.name == spell_name)
-    s = step_both(
+    # S7-A2: step_both_drained applies the cast then drains both
+    # engines' stacks via real resolve_top_of_stack + apply_sbas
+    # loops — the explicit byte-equal replacement for CE5's
+    # atomic-reconcile mirror (removed in S7-1).
+    s = step_both_drained(
         py, rs, {"kind": "cast_spell", "card_id": int(spell.id)})
-    # Post-cast AND post-resolve byte-equal (the CE5 cast-vs-resolve
-    # mirror drains both stacks before the compare — this is the
+    # Post-cast AND post-resolve byte-equal (step_both_drained
+    # drains both stacks before the compare — this is the
     # bidirectional proof: the Lander Rust seats via the loader pid is
     # byte-equal to Python's intrinsic TOKEN_PRINTINGS["Lander"]).
     assert not s.divergences, (
@@ -68074,6 +68098,7 @@ def test_cross_engine_real_eoe_focus_fire_drives_combat_then_casts_parity(
     from mtg_bot.parity.cross_engine import (
         build_matched_states, multi_block_combat_selector,
         multi_blocker_deckspec, step_both,
+        step_both_drained,
         build_python_field_view, compare_fields,
         parity_smoke as ce_parity_smoke,
     )
@@ -68099,7 +68124,7 @@ def test_cross_engine_real_eoe_focus_fire_drives_combat_then_casts_parity(
     # ids 9/11 (step 195). step_both surfaces ANY divergence.
     py, rs = build_matched_states(multi_blocker_deckspec())
     for i in range(196):
-        s = step_both(py, rs, multi_block_combat_selector(py, rs, i))
+        s = step_both_drained(py, rs, multi_block_combat_selector(py, rs, i))
         assert s.divergences == [], (
             f"combat-drive step {i} surfaced divergences: "
             f"{[(d.field, d.py_value, d.rust_value) for d in s.divergences]}"
@@ -68216,7 +68241,8 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
     from mtg_bot.game import Zone
     from mtg_bot.parity import trajectory
     from mtg_bot.parity.cross_engine import (
-        CardDef, DeckSpec, step_both, advance_phase_python,
+        CardDef, DeckSpec, step_both,
+        step_both_drained, advance_phase_python,
         compare_fields,
     )
     from mtg_bot.legal import legal_actions
@@ -68280,7 +68306,7 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
             if o.printing.name == "Swamp"
         ]
         if hand_sw:
-            assert not step_both(
+            assert not step_both_drained(
                 py, rs,
                 {"kind": "play_land",
                  "card_id": int(hand_sw[0].id)}).divergences
@@ -68292,7 +68318,7 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
     for o in list(py.battlefield):
         if (o.controller_id == ai and o.printing.is_land
                 and not o.tapped and not o.summoning_sick):
-            assert not step_both(
+            assert not step_both_drained(
                 py, rs,
                 {"kind": "activate_ability",
                  "source_id": int(o.id), "ability_index": 0},
@@ -68312,7 +68338,7 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
     assert py_pair == rs_pair == [False, True], (
         f"hand base+warp pair mismatch — py={py_pair} rs={rs_pair}")
     life_before = py.players[ai].life
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(tlc_h.id),
          "use_warp": True})
@@ -68352,7 +68378,7 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
     fhand = [o for o in py.players[ai].hand
              if o.printing.name == "Swamp"]
     if fhand:
-        assert not step_both(
+        assert not step_both_drained(
             py, rs,
             {"kind": "play_land",
              "card_id": int(fhand[0].id)}).divergences
@@ -68361,7 +68387,7 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
         if (o.controller_id == ai and o.printing.is_land
                 and not o.tapped and not o.summoning_sick
                 and taps < 2):
-            assert not step_both(
+            assert not step_both_drained(
                 py, rs,
                 {"kind": "activate_ability",
                  "source_id": int(o.id), "ability_index": 0},
@@ -68371,7 +68397,7 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
     exiled = next(o for o in py.players[ai].exile
                   if o.printing.name == "Timeline Culler")
     life_before2 = py.players[ai].life
-    s = step_both(
+    s = step_both_drained(
         py, rs,
         {"kind": "cast_spell", "card_id": int(exiled.id),
          "use_warp": False})
@@ -68428,7 +68454,7 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
     for o in list(py.battlefield):
         if (o.controller_id == ai and o.printing.is_land
                 and not o.tapped and not o.summoning_sick):
-            assert not step_both(
+            assert not step_both_drained(
                 py, rs,
                 {"kind": "activate_ability",
                  "source_id": int(o.id), "ability_index": 0},
@@ -68454,7 +68480,7 @@ def test_cross_engine_real_eoe_warp_phase2_timeline_culler_hand_then_graveyard_b
         resolve_top_of_stack_python, resolve_top_of_stack_rust,
     )
     # The two engines hold the graveyard TLC under DIFFERENT obj ids
-    # (Python's own factory vs Rust's injected), so step_both (which
+    # (Python's own factory vs Rust's injected), so step_both_drained(which
     # routes ONE action dict to both) can't drive it — apply each with
     # its own id, then replicate step_both's CE5 cast-vs-resolve mirror
     # by hand: snapshot the pre-cast stack floors, apply, then drain
@@ -68551,6 +68577,7 @@ def test_cross_engine_counter_attacker_combat_damage_folds_plus_one(
         combat_selector,
         slightly_bigger_deckspec,
         step_both,
+        step_both_drained,
     )
 
     py_state, rust_state = build_matched_states(slightly_bigger_deckspec())
@@ -68588,7 +68615,7 @@ def test_cross_engine_counter_attacker_combat_damage_folds_plus_one(
     prev_life_p1 = 20
     for i in range(200):
         action = counter_attacker_selector(py_state, rust_state, i)
-        step = step_both(py_state, rust_state, action)
+        step = step_both_drained(py_state, rust_state, action)
         cur_py = step.py_view["life_p1"]
         cur_rust = step.rust_view["life_p1"]
         assert cur_py == cur_rust, (
