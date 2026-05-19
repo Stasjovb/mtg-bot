@@ -640,6 +640,23 @@ def main(argv=None) -> None:
                 "val_value_loss": payload["val_value_loss"],
                 "train_policy_loss": payload["train_policy_loss"],
                 "val_policy_loss": payload["val_policy_loss"],
+                # Full per-epoch arrays for the UI's loss chart (see
+                # the structured _on_epoch below for the long version
+                # of why this matters now that the UI is runs.db-only).
+                "train_losses": list(payload.get("train_losses", [])),
+                "val_losses": list(payload.get("val_losses", [])),
+                "train_value_losses": list(
+                    payload.get("train_value_losses", []),
+                ),
+                "val_value_losses": list(
+                    payload.get("val_value_losses", []),
+                ),
+                "train_policy_losses": list(
+                    payload.get("train_policy_losses", []),
+                ),
+                "val_policy_losses": list(
+                    payload.get("val_policy_losses", []),
+                ),
                 "status": payload["status"],
             },
         )
@@ -1001,6 +1018,26 @@ def _main_structured(args, parser) -> None:
                 "val_value_loss": payload["val_value_loss"],
                 "train_policy_loss": payload["train_policy_loss"],
                 "val_policy_loss": payload["val_policy_loss"],
+                # Full per-epoch arrays so the UI's per-loss-component
+                # chart has data points across the whole run, not just
+                # the latest scalar. Older trainer payloads (pre-
+                # 2026-05-19) omitted these; ``.get(..., [])`` keeps
+                # the structured path back-compat with the flat-
+                # feature trainer's callback shape.
+                "train_losses": list(payload.get("train_losses", [])),
+                "val_losses": list(payload.get("val_losses", [])),
+                "train_value_losses": list(
+                    payload.get("train_value_losses", []),
+                ),
+                "val_value_losses": list(
+                    payload.get("val_value_losses", []),
+                ),
+                "train_policy_losses": list(
+                    payload.get("train_policy_losses", []),
+                ),
+                "val_policy_losses": list(
+                    payload.get("val_policy_losses", []),
+                ),
                 "status": payload["status"],
                 "architecture": ARCHITECTURE_STRUCTURED,
             },

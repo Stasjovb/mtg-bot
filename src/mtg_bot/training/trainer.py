@@ -602,6 +602,25 @@ def train_value_network(
                         "val_policy_loss": (
                             history.val_policy_losses[-1]
                         ),
+                        # Full per-epoch history. The UI is runs.db-only
+                        # post-Phase 3 (no JSON-side backfill); the
+                        # callback is the sole path that lands the
+                        # arrays into the DB extra_json so the UI's
+                        # loss chart has data points.
+                        "train_losses": list(history.train_losses),
+                        "val_losses": list(history.val_losses),
+                        "train_value_losses": list(
+                            history.train_value_losses,
+                        ),
+                        "val_value_losses": list(
+                            history.val_value_losses,
+                        ),
+                        "train_policy_losses": list(
+                            history.train_policy_losses,
+                        ),
+                        "val_policy_losses": list(
+                            history.val_policy_losses,
+                        ),
                         "status": "running",
                     })
                 except Exception:  # noqa: BLE001
@@ -1063,6 +1082,25 @@ def train_structured_model(
                         ),
                         "val_policy_loss": (
                             history.val_policy_losses[-1]
+                        ),
+                        # Full per-epoch history. The UI is runs.db-only
+                        # post-Phase 3 (no JSON-side backfill); the
+                        # callback is the sole path that lands the
+                        # arrays into the DB extra_json so the UI's
+                        # loss chart has data points.
+                        "train_losses": list(history.train_losses),
+                        "val_losses": list(history.val_losses),
+                        "train_value_losses": list(
+                            history.train_value_losses,
+                        ),
+                        "val_value_losses": list(
+                            history.val_value_losses,
+                        ),
+                        "train_policy_losses": list(
+                            history.train_policy_losses,
+                        ),
+                        "val_policy_losses": list(
+                            history.val_policy_losses,
                         ),
                         "status": "running",
                     })
