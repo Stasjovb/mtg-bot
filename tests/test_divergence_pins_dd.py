@@ -39,43 +39,22 @@ search (state_ops_resolve.rs:9584-9604).
       * Rust:   p1 life unchanged (amount = 0; early return).
 
 Pin 2 — ``grant_keyword_to_target_creature_until_eot`` bridge class-mismatch
-(``parity/cross_engine.py:6140-6216``).
+(FIXED in feature/bridge-grant-keyword-fix; now a ``_parity`` probe).
 
     The cross-engine bridge arm for the Rust dict kind
-    ``grant_keyword_to_target_creature_until_eot`` constructs Python's
-    ``PumpTargetCreatureUntilEOT(power_bonus=0, toughness_bonus=0,
-    granted_keywords=frozenset({keyword}), you_control_only=True,
-    exclude_self=False)`` for ALL keyword values, including
-    ``keyword="unblockable"``.
+    ``grant_keyword_to_target_creature_until_eot`` previously constructed
+    ``PumpTargetCreatureUntilEOT`` for ALL keyword values, including
+    ``keyword="unblockable"``, causing ``is_cant_be_blocked`` to return False
+    for bridge-routed resolves because the wrong registry kind was written
+    (``grant_keyword`` instead of ``cant_be_blocked``).
 
-    ``PumpTargetCreatureUntilEOT.resolve`` (with ``granted_keywords``)
-    calls ``GrantKeywords(keywords={"unblockable"})`` which writes a
-    layer-6 ``grant_keyword`` registry entry with
-    ``params=("unblockable",)``.  This is structurally distinct from a
-    layer-6 ``cant_be_blocked`` registry entry.  ``is_cant_be_blocked``
-    (``game.py:1231-1271``) looks for ``kind == "cant_be_blocked"``, not
-    ``kind == "grant_keyword"``, so after the bridge-routed resolve the
-    target is NOT recognized as unblockable.
+    Fixed: the bridge arm now detects ``keyword == "unblockable"`` and returns
+    ``GrantUnblockableUEOT()``.  For genuine MTG keywords (haste, lifelink,
+    etc.) the ``PumpTargetCreatureUntilEOT`` path is retained.
 
-    The correct Python class for "target creature can't be blocked this
-    turn" is ``GrantUnblockableUEOT`` (``effects/generic/grant_keywords.py:
-    129-186``), which calls ``GrantUnblockable.resolve`` → writes
-    ``kind="cant_be_blocked"`` → ``is_cant_be_blocked`` returns True.
-
-    CR reference: CR 509.1b (blocking restrictions; "can't be blocked" is a
-    layer-6 continuous effect, not a keyword).
-
-    Verified observable divergence (bridge-route vs. direct-Python resolve
-    on the same target creature):
-      * Python direct (``GrantUnblockableUEOT``):
-          ``is_cant_be_blocked(state, target)`` → True.
-      * Python via bridge (``PumpTargetCreatureUntilEOT``):
-          ``is_cant_be_blocked(state, target)`` → False.
-
-    Note: this pin does not require the Rust PyO3 extension; it exercises
-    the Python bridge translation layer only.  The ``PumpTargetCreature
-    UntilEOT`` path is what Rust-source cards exercise whenever the bridge
-    arm translates the dict emitted by Rust's ``to_dict``.
+    The test ``test_cross_engine_real_eoe_enter_the_enigma_unblockable_bridge_
+    class_mismatch_FIXED_parity`` (below) now asserts the CORRECT behavior
+    (both paths return True from ``is_cant_be_blocked``).
 """
 
 from __future__ import annotations
@@ -419,81 +398,50 @@ def test_cross_engine_real_eoe_infernal_phantom_dies_damage_source_power_battlef
 
 # ---------------------------------------------------------------------------
 # Pin 2 — grant_keyword_to_target_creature_until_eot bridge class-mismatch
+# (FIXED in feature/bridge-grant-keyword-fix; converted to _parity probe)
 # ---------------------------------------------------------------------------
 
-def test_cross_engine_real_eoe_enter_the_enigma_unblockable_bridge_class_mismatch_divergence_pin():
-    """Pin the Python bridge class-mismatch for ``grant_keyword_to_target_
-    creature_until_eot`` with ``keyword="unblockable"``.
+def test_cross_engine_real_eoe_enter_the_enigma_unblockable_bridge_class_mismatch_FIXED_parity():
+    """Parity probe: the bridge arm for ``grant_keyword_to_target_creature_until_eot``
+    with ``keyword="unblockable"`` now returns ``GrantUnblockableUEOT`` (not
+    ``PumpTargetCreatureUntilEOT``), and both the direct-Python and bridge-routed
+    resolve paths produce a layer-6 ``cant_be_blocked`` registry entry that
+    ``is_cant_be_blocked`` recognizes.
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py:6193-6216`` — the bridge arm for
-      Rust dict kind ``grant_keyword_to_target_creature_until_eot`` always
-      constructs ``PumpTargetCreatureUntilEOT(power_bonus=0, toughness_bonus=0,
+    Bug that was fixed (branch: feature/bridge-grant-keyword-fix):
+      ``src/mtg_bot/parity/cross_engine.py`` — the bridge arm for Rust dict kind
+      ``grant_keyword_to_target_creature_until_eot`` previously always constructed
+      ``PumpTargetCreatureUntilEOT(power_bonus=0, toughness_bonus=0,
       granted_keywords=frozenset({keyword}), you_control_only=True,
       exclude_self=False)`` for ANY keyword value, including ``"unblockable"``.
 
-    What's wrong:
       ``PumpTargetCreatureUntilEOT.resolve`` (with granted_keywords) calls
       ``GrantKeywords(keywords={"unblockable"})`` which writes a layer-6
       ``grant_keyword`` continuous-effect registry entry with
-      ``params=("unblockable",)``.  ``is_cant_be_blocked`` (``game.py:1256``)
+      ``params=("unblockable",)``.  ``is_cant_be_blocked`` (``game.py``)
       checks for ``kind == "cant_be_blocked"`` — a structurally distinct
       registry kind.  After the bridge-routed resolve, the target creature
-      does NOT test as unblockable.
+      did NOT test as unblockable.
 
-    What's right:
-      The correct Python class for "target creature can't be blocked this turn"
-      is ``GrantUnblockableUEOT`` (``effects/generic/grant_keywords.py:129``),
-      which resolves via ``ApplyEffect(GrantUnblockable(...), EndOfTurn())``.
+    The fix:
+      The bridge arm now detects ``keyword == "unblockable"`` and returns
+      ``GrantUnblockableUEOT()`` instead of ``PumpTargetCreatureUntilEOT``.
       ``GrantUnblockable.resolve`` writes a layer-6 ``cant_be_blocked`` entry
-      (``grant_keywords.py:110``) that ``is_cant_be_blocked`` recognizes.
+      that ``is_cant_be_blocked`` recognizes.  For genuine MTG keywords (haste,
+      lifelink, deathtouch, flying, trample, reach, first_strike, etc.) the
+      ``PumpTargetCreatureUntilEOT`` path is retained — those ARE ``grant_keyword``
+      registry entries consumed by ``effective_keywords``.
 
-    CR reference: CR 509.1b — "can't be blocked" is a gameplay-action
-    restriction (layer 6 continuous effect), NOT an MTG keyword.  Granting it
-    via the ``grant_keyword`` registry kind (used for flying, deathtouch, etc.)
-    is structurally incorrect — the combat check reads a different registry kind.
+    CR reference: CR 509.1b — "can't be blocked" is a gameplay-action restriction
+    (layer 6 continuous effect), NOT an MTG keyword.
 
-    Verified divergence (resolving on the same target creature via two paths):
-      * Python direct (``GrantUnblockableUEOT().resolve``):
-          ``is_cant_be_blocked(state, target)`` → True
-          Layer-6 entry kind = "cant_be_blocked".
-      * Python via bridge (``_ta_dict_to_python_effect`` →
-          ``PumpTargetCreatureUntilEOT(granted_keywords={"unblockable"})``.resolve):
-          ``is_cant_be_blocked(state, target)`` → False
-          Layer-6 entry kind = "grant_keyword" (not "cant_be_blocked").
-
-    This pin does not require the Rust PyO3 extension: it exercises the
-    Python-bridge translation layer (``_ta_dict_to_python_effect``) and
-    the Python engine's continuous-effect registry, demonstrating the class-
-    mismatch and its observable consequence.
-
-    Probe shape:
-      1. Create a minimal Python state with one creature on p0's bf
-         ("Bait Creature" 1/1).
-      2. Path A — correct Python path:
-         a. Instantiate ``GrantUnblockableUEOT()`` directly.
-         b. Resolve it targeting the Bait Creature.
-         c. Assert ``is_cant_be_blocked(state_a, bait_a)`` is True.
-      3. Path B — bridge-routed path:
-         a. Translate the effect dict
-            ``{"kind": "grant_keyword_to_target_creature_until_eot",
-               "keyword": "unblockable"}``
-            via ``_ta_dict_to_python_effect``.
-         b. Assert the returned class is ``PumpTargetCreatureUntilEOT``
-            (not ``GrantUnblockableUEOT``).
-         c. Resolve the bridge-returned effect targeting the Bait Creature.
-         d. Assert ``is_cant_be_blocked(state_b, bait_b)`` is False.
-      4. Assert the two paths diverge: True != False.
-
-    Closure path: fix the bridge arm at ``cross_engine.py:6193`` to detect
-    ``keyword == "unblockable"`` (or the canonical "can't be blocked" aliases)
-    and return ``GrantUnblockableUEOT()`` instead of ``PumpTargetCreatureUntilEOT``.
-    When the fix lands, step 3b's class assertion fails, signaling this pin
-    should be updated to verify parity (both paths produce ``cant_be_blocked``).
+    Parity assertions:
+      * Bridge returns ``GrantUnblockableUEOT`` (not ``PumpTargetCreatureUntilEOT``).
+      * Both paths write a layer-6 ``cant_be_blocked`` entry on the target.
+      * Both paths make ``is_cant_be_blocked(state, target)`` return True.
     """
     from mtg_bot.cards.base import CardPrinting, ManaCost
     from mtg_bot.effects.generic.grant_keywords import GrantUnblockableUEOT
-    from mtg_bot.effects.generic.pump import PumpTargetCreatureUntilEOT
     from mtg_bot.game import GameState, Player, Zone, is_cant_be_blocked
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_effect
     from mtg_bot.turn import Step
@@ -569,21 +517,13 @@ def test_cross_engine_real_eoe_enter_the_enigma_unblockable_bridge_class_mismatc
     }
     bridge_effect = _ta_dict_to_python_effect(effect_dict)
 
-    # Pin the class divergence: the bridge arm returns PumpTargetCreatureUntilEOT,
-    # NOT GrantUnblockableUEOT.  When the bridge is fixed, this assertion will
-    # fail — that's the signal to update this pin to the correct class check.
-    assert isinstance(bridge_effect, PumpTargetCreatureUntilEOT), (
-        "Bridge class pin: _ta_dict_to_python_effect for "
+    # Post-fix: the bridge must return GrantUnblockableUEOT, not PumpTargetCreatureUntilEOT.
+    assert isinstance(bridge_effect, GrantUnblockableUEOT), (
+        "Bridge class parity: _ta_dict_to_python_effect for "
         "grant_keyword_to_target_creature_until_eot with keyword='unblockable' "
-        "should return PumpTargetCreatureUntilEOT (the current WRONG class). "
+        "must return GrantUnblockableUEOT (the correct class after the fix). "
         f"Got: {type(bridge_effect).__name__}. "
-        "If this assertion now fails, the bridge was fixed — update this pin "
-        "to assert isinstance(..., GrantUnblockableUEOT) and verify "
-        "is_cant_be_blocked returns True on Path B too."
-    )
-    assert not isinstance(bridge_effect, GrantUnblockableUEOT), (
-        "Bridge class pin: bridge should NOT return GrantUnblockableUEOT "
-        "(that would mean the bug is fixed); update this pin when fixed."
+        "If this assertion fails, the bridge fix was reverted."
     )
 
     # Resolve the bridge-returned effect on bait_b.
@@ -595,32 +535,30 @@ def test_cross_engine_real_eoe_enter_the_enigma_unblockable_bridge_class_mismatc
 
     is_unblockable_b = is_cant_be_blocked(state_b, bait_b)
 
-    # Verify the wrong registry shape for the bridge path.
+    # Verify the correct registry shape for the bridge path.
     cant_be_blocked_entries_b = [
         ce for ce in state_b.continuous_effects
         if ce.layer == 6 and ce.kind == "cant_be_blocked" and ce.target_id == bait_b.id
     ]
-    assert not cant_be_blocked_entries_b, (
-        "Path B (PumpTargetCreatureUntilEOT via bridge): expected NO "
-        "'cant_be_blocked' layer-6 entry — the wrong class writes "
-        "'grant_keyword' instead. "
-        f"Got {cant_be_blocked_entries_b}"
+    assert cant_be_blocked_entries_b, (
+        "Path B (GrantUnblockableUEOT via bridge): expected a layer-6 "
+        "'cant_be_blocked' registry entry on bait_b after resolve; got none. "
+        f"continuous_effects={state_b.continuous_effects}"
     )
-    assert is_unblockable_b is False, (
-        "Path B (bridge route): is_cant_be_blocked should return False after "
-        "PumpTargetCreatureUntilEOT.resolve with granted_keywords={'unblockable'} "
-        "— the bridge-returned class writes 'grant_keyword' (not 'cant_be_blocked') "
-        "so is_cant_be_blocked, which checks kind=='cant_be_blocked', returns False. "
+    assert is_unblockable_b is True, (
+        "Path B (bridge route): is_cant_be_blocked should return True after "
+        "GrantUnblockableUEOT.resolve via the fixed bridge — the bridge now "
+        "returns GrantUnblockableUEOT which writes 'cant_be_blocked' (not "
+        "'grant_keyword'), so is_cant_be_blocked returns True. "
         f"Got: {is_unblockable_b}"
     )
 
     # ------------------------------------------------------------------
-    # Cross-path non-parity: document the observable divergence.
+    # Cross-path parity: both paths now agree.
     # ------------------------------------------------------------------
-    assert is_unblockable_a != is_unblockable_b, (
-        "Cross-path divergence: GrantUnblockableUEOT (True) vs. bridge-route "
-        "PumpTargetCreatureUntilEOT (False) must differ until the bridge arm "
-        "is fixed to return GrantUnblockableUEOT for keyword='unblockable'. "
+    assert is_unblockable_a == is_unblockable_b == True, (
+        "Cross-path parity: GrantUnblockableUEOT (direct) and bridge-route "
+        "GrantUnblockableUEOT should both make is_cant_be_blocked return True. "
         f"is_unblockable_a={is_unblockable_a}, "
         f"is_unblockable_b={is_unblockable_b}"
     )
