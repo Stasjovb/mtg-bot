@@ -321,143 +321,84 @@ def test_cross_engine_real_eoe_room_fully_unlocked_event_bridge_gap_sentinel_div
 # ---------------------------------------------------------------------------
 
 
-def test_cross_engine_real_eoe_deals_combat_damage_event_bridge_gap_sentinel_divergence_pin():
-    """Pin the bridge gap for the ``deals_combat_damage`` event string in
-    ``_ta_dict_to_python_triggered_ability``.
+def test_cross_engine_real_eoe_deals_combat_damage_event_bridge_FIXED_parity():
+    """Verify the ``deals_combat_damage`` bridge arm is NOW wired correctly.
 
-    Bug location:
-      ``src/mtg_bot/parity/cross_engine.py:8838-8874`` -- the elif chain
-      in ``_ta_dict_to_python_triggered_ability`` does not include an arm
-      for ``"deals_combat_damage"``.  All unrecognised strings fall
-      through to the final ``raise ValueError``.
+    Round-13 wired the ``"deals_combat_damage"`` / ``"deals_damage"``
+    event string in ``_ta_dict_to_python_triggered_ability``.  This test
+    was previously a ``_divergence_pin`` sentinel asserting the ValueError
+    (the gap was real); after the fix it asserts the CORRECT behavior:
 
-    Python side:
-      ``Event.DEALS_COMBAT_DAMAGE`` (``"deals_combat_damage"``) exists in
-      the ``Event`` enum (``effects/predicates.py:63``).  The event carries
-      TWO named subjects: ``("source", "target")`` per ``EVENT_SUBJECTS``
-      (``effects/predicates.py:212``).  This two-subject shape makes
-      ``DEALS_COMBAT_DAMAGE`` structurally more complex than single-subject
-      events (ENTERS, DIES, ATTACKS); predicates that use ``Subject(
-      slot=None, ...)`` would resolve to ``None`` on this event (same gap
-      as the IS_CAST / subject_is_artifact divergence pinned in batch LL
-      Pin 2).
+    1. ``Event.DEALS_COMBAT_DAMAGE`` exists with the right string value.
+    2. ``EVENT_SUBJECTS[Event.DEALS_COMBAT_DAMAGE]`` is
+       ``("source", "target")`` — two-subject shape, still intact.
+    3. ``_ta_dict_to_python_triggered_ability({"event":
+       "deals_combat_damage", ...})`` now produces a ``TriggeredAbility``
+       with ``event == Event.DEALS_COMBAT_DAMAGE`` (no ValueError).
+    4. The ``"deals_damage"`` spelling (Rust TA dict key) also round-trips
+       to ``Event.DEALS_COMBAT_DAMAGE`` — bridge accepts both spellings.
+    5. A ``source_is_self`` predicate on a deals_combat_damage TA gets
+       rewritten to ``IsSelf(subject="source")`` by
+       ``_rewrite_predicate_for_deals_combat_damage`` — the LL Pin 2
+       multi-subject hazard fix.
 
-    Scale:
-      9 EoE cards carry "whenever ~ deals combat damage" triggered
-      abilities.  Representative cards: Illvoi Infiltrator, Starwinder,
-      Elegy Acolyte, Entropic Battlecruiser.  None of those cards can be
-      exercised via a Rust-sourced cross-engine probe.
-
-    Observable divergence (bridge sentinel):
-      ``_ta_dict_to_python_triggered_ability({"event":
-      "deals_combat_damage", ...})`` raises ``ValueError`` with message
-      containing ``"deals_combat_damage"`` and ``"not yet wired"``.
-
-    Closure path:
-      Add ``elif event_str == "deals_combat_damage":
-          event = Event.DEALS_COMBAT_DAMAGE``
-      to the event-string elif chain.  A companion fix is needed for
-      predicate translation: any predicate that reads the subject on a
-      DEALS_COMBAT_DAMAGE event must use explicit slot names (``"source"``
-      or ``"target"``), not the default ``slot=None`` shortcut (which only
-      works for single-subject events).  When the bridge arm lands, this
-      sentinel will flip to a failure, signaling the pin should be promoted
-      to a parity probe for one of the 9 combat-damage-trigger EoE cards.
-
-    Probe shape:
-      1. Assert ``Event.DEALS_COMBAT_DAMAGE`` exists and has the correct
-         string value ``"deals_combat_damage"``.
-      2. Assert ``EVENT_SUBJECTS[Event.DEALS_COMBAT_DAMAGE]`` is
-         ``("source", "target")`` (documenting the two-subject shape).
-      3. Assert the bridge raises ``ValueError`` for the unwired event.
-      4. Assert the message mentions ``"deals_combat_damage"`` and
-         ``"not yet wired"``.
-      5. Assert a wired event does NOT raise (sanity check).
-
-    This pin is pure Python (no Rust extension required).
+    Renamed from ``_divergence_pin`` to ``_FIXED_parity`` following the
+    pattern established in batch DD (grant_keyword bridge fix).
     """
-    from mtg_bot.effects.predicates import Event, EVENT_SUBJECTS
+    from mtg_bot.effects.predicates import Event, EVENT_SUBJECTS, IsSelf
     from mtg_bot.parity.cross_engine import _ta_dict_to_python_triggered_ability
+    from mtg_bot.effects.base import TriggeredAbility
 
-    # 1. The Python Event enum has DEALS_COMBAT_DAMAGE.
+    # 1. The Python Event enum still has DEALS_COMBAT_DAMAGE.
     assert hasattr(Event, "DEALS_COMBAT_DAMAGE"), (
-        "Event.DEALS_COMBAT_DAMAGE should be a member of the Event enum "
-        "(effects/predicates.py:63). If this fails the enum member was "
-        "renamed -- update both this pin and the bridge arm."
+        "Event.DEALS_COMBAT_DAMAGE should be a member of the Event enum."
     )
-    assert isinstance(Event.DEALS_COMBAT_DAMAGE, Event), (
-        "Event.DEALS_COMBAT_DAMAGE should be an Event enum instance."
-    )
-    assert Event.DEALS_COMBAT_DAMAGE.value == "deals_combat_damage", (
-        "Event.DEALS_COMBAT_DAMAGE.value should be 'deals_combat_damage'; "
-        f"got {Event.DEALS_COMBAT_DAMAGE.value!r}"
-    )
+    assert Event.DEALS_COMBAT_DAMAGE.value == "deals_combat_damage"
 
-    # 2. Document the two-subject structure (source + target) -- distinct
-    #    from single-subject events. This is the same multi-subject issue
-    #    that causes the IS_CAST / subject_is_artifact predicate-slot bug
-    #    (pinned in batch LL Pin 2): Subject(slot=None) resolves to None
-    #    when len(subjects) != 1.
+    # 2. Two-subject shape documented: ("source", "target").
     subjects = EVENT_SUBJECTS.get(Event.DEALS_COMBAT_DAMAGE)
     assert subjects == ("source", "target"), (
-        "Event.DEALS_COMBAT_DAMAGE should carry two subjects: "
-        "('source', 'target') per EVENT_SUBJECTS (effects/predicates.py:212). "
-        "This two-subject shape requires explicit slot names in bridge "
-        "predicate arms -- Subject(slot=None) would resolve to None here "
-        "(the same gap as IS_CAST/subject_is_artifact, batch LL Pin 2). "
-        f"Got subjects={subjects!r}"
+        f"Expected ('source', 'target'); got {subjects!r}"
     )
 
-    # 3-4. Bridge raises ValueError for the unwired event -- pin the gap.
-    unwired_ta_dict = {
+    # 3. Bridge now wires "deals_combat_damage" -- no ValueError.
+    ta_dict_python_key = {
         "event": "deals_combat_damage",
         "predicate": {"kind": "always"},
-        "effect": {
-            "kind": "draw_cards",
-            "count": 1,
-        },
+        "effect": {"kind": "draw_cards", "count": 1},
     }
-    with pytest.raises(ValueError) as exc_info:
-        _ta_dict_to_python_triggered_ability(unwired_ta_dict)
-
-    err_msg = str(exc_info.value)
-    assert "deals_combat_damage" in err_msg, (
-        "Bridge gap sentinel: the ValueError message should mention "
-        "'deals_combat_damage' so the gap is immediately identifiable. "
-        f"Got message: {err_msg!r}"
+    result = _ta_dict_to_python_triggered_ability(ta_dict_python_key)
+    assert isinstance(result, TriggeredAbility), (
+        f"Expected TriggeredAbility; got {type(result).__name__}"
     )
-    assert "not yet wired" in err_msg, (
-        "Bridge gap sentinel: the ValueError should contain 'not yet wired' "
-        "(from cross_engine.py:8871-8874) confirming the event-elif chain "
-        "produced this error, not some other ValueError. "
-        f"Got message: {err_msg!r}"
+    assert result.event == Event.DEALS_COMBAT_DAMAGE, (
+        f"Expected DEALS_COMBAT_DAMAGE; got {result.event!r}"
     )
 
-    # 5. Sanity: a WIRED event ("enters") round-trips without error.
-    wired_ta_dict = {
-        "event": "enters",
+    # 4. Rust spelling "deals_damage" also accepted.
+    ta_dict_rust_key = {
+        "event": "deals_damage",
         "predicate": {"kind": "always"},
-        "effect": {
-            "kind": "draw_cards",
-            "count": 1,
-        },
+        "effect": {"kind": "draw_cards", "count": 1},
     }
-    try:
-        result = _ta_dict_to_python_triggered_ability(wired_ta_dict)
-        from mtg_bot.effects.base import TriggeredAbility
-        assert isinstance(result, TriggeredAbility), (
-            "Wired event 'enters' should produce a TriggeredAbility; "
-            f"got {type(result).__name__}."
-        )
-        assert result.event == Event.ENTERS, (
-            "Wired event 'enters' should translate to Event.ENTERS; "
-            f"got {result.event!r}."
-        )
-    except ValueError as e:
-        raise AssertionError(
-            "Sanity: 'enters' is a wired event and should NOT raise "
-            f"ValueError -- got: {e}"
-        ) from e
+    result2 = _ta_dict_to_python_triggered_ability(ta_dict_rust_key)
+    assert isinstance(result2, TriggeredAbility)
+    assert result2.event == Event.DEALS_COMBAT_DAMAGE
+
+    # 5. source_is_self predicate gets slot-rewritten to IsSelf(subject="source")
+    #    so the two-subject event resolves correctly (LL Pin 2 fix).
+    ta_dict_self = {
+        "event": "deals_combat_damage",
+        "predicate": {"kind": "source_is_self"},
+        "effect": {"kind": "draw_cards", "count": 1},
+    }
+    result3 = _ta_dict_to_python_triggered_ability(ta_dict_self)
+    assert isinstance(result3.predicate, IsSelf), (
+        f"Expected IsSelf predicate; got {type(result3.predicate).__name__}"
+    )
+    assert result3.predicate.subject == "source", (
+        f"Expected IsSelf(subject='source'); got subject={result3.predicate.subject!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

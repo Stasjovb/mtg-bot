@@ -7687,11 +7687,11 @@ fn parse_activation_cost(
 ///
 /// Slice 1 wired `"enters"`; Slice 5 added `"dies"`; Slice 6 added
 /// `"cast"`; Slice 7 added `"attacks"`; Slice 8 added
-/// `"leaves_battlefield"`; Slice 9 adds `"blocks"`. Remaining
-/// variants (`deals_damage`) still raise because their dispatch
-/// sites don't exist yet — allowing them through would let
-/// registry-dict callers stamp triggers that never fire, masking
-/// the missing-fanout bug.
+/// `"leaves_battlefield"`; Slice 9 adds `"blocks"`; round-58 adds
+/// `"becomes_tapped"`; round-13 adds `"deals_damage"` alongside the
+/// ``dispatch_combat_damage_to_player`` dispatch site in
+/// ``state_ops_combat.rs``. No further events are stub-raised —
+/// unrecognised strings fall through to the `other` error arm.
 fn parse_triggered_ability(
     dict: &Bound<'_, PyDict>,
 ) -> PyResult<TriggeredAbility> {
@@ -7713,21 +7713,43 @@ fn parse_triggered_ability(
         // tap site emit it in lockstep with Python's `tap_permanent`
         // chokepoint.
         "becomes_tapped" => Event::BecomesTapped,
-        // Out-of-scope events stay raise-on-register. Each lands
-        // alongside its dispatch fan-out so the parser surface stays
-        // consistent with the dispatcher's coverage.
-        "deals_damage" => {
-            return Err(PyValueError::new_err(format!(
-                "triggered_ability.event {event_str:?} is not yet wired in Slice 9; \
-                 only \"enters\", \"dies\", \"cast\", \"attacks\", \"blocks\", \
-                 \"leaves_battlefield\", and \"becomes_tapped\" dispatch today"
-            )));
-        }
+        // Round-13 DEALS_DAMAGE event bridge: "deals_damage" now
+        // round-trips through the parse + dispatch pipeline. Rust's
+        // ``Event::DealsDamage`` is fired by
+        // ``state_ops_combat::dispatch_combat_damage_to_player`` for
+        // each (attacker, defending_player) damage pair where the
+        // attacker dealt positive damage directly to the player (not
+        // to a blocker). Python's ``Event.DEALS_COMBAT_DAMAGE``
+        // (string value ``"deals_combat_damage"``) is the counterpart;
+        // the string values differ (``"deals_damage"`` in Rust vs
+        // ``"deals_combat_damage"`` in Python) but both carry the same
+        // semantic — the bridge translates in
+        // ``_ta_dict_to_python_triggered_ability``.
+        //
+        // Subject shape (two-subject event):
+        //   subject = source_id (the damage-dealing creature) — used by
+        //   ``Predicate::SourceIsSelf`` which checks
+        //   ``source_id == subject_id``. The ``target`` (defending
+        //   player) is implicit in the dispatch context (we only call
+        //   dispatch for player-targeted damage entries) — Rust's
+        //   predicate system does not yet carry a secondary subject_id.
+        //   This is equivalent to Python's ``IsSelf(subject="source")``
+        //   because the dispatch loop already ensures the target is a
+        //   player; an explicit ``SubjectIsPlayer`` predicate is
+        //   deferred until a second-subject predicate API lands.
+        //
+        // Wires: Illvoi Infiltrator (``source_is_self`` -> ``DrawCards(1)``)
+        // and the broader controller-based shapes (Starwinder) at the
+        // predicate level once ``ControlledByYou`` is available on the
+        // source subject — deferred, see SEARCH_LIMITATIONS.md entry
+        // for the single-subject-only Rust predicate API.
+        "deals_damage" => Event::DealsDamage,
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown triggered_ability.event {other:?}; \
                  valid: enters, dies, cast, attacks, blocks, \
-                 leaves_battlefield, becomes_tapped (Slice 9 + r58)"
+                 leaves_battlefield, becomes_tapped, deals_damage \
+                 (Slice 9 + r58 + r13)"
             )));
         }
     };

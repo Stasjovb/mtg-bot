@@ -8836,6 +8836,57 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
     )
 
 
+def _rewrite_predicate_for_deals_combat_damage(predicate):
+    """Recursively rewrite slot=None predicates to slot="source" for
+    the ``DEALS_COMBAT_DAMAGE`` two-subject event.
+
+    ``Event.DEALS_COMBAT_DAMAGE`` carries subjects
+    ``{"source": <attacker>, "target": <player>}``.  Python's
+    ``_resolve_subject(subjects, None)`` returns ``None`` when
+    ``len(subjects) == 2`` (LL Pin 2 multi-subject hazard), so any
+    ``IsSelf(subject=None)`` or ``Subject(slot=None, ...)`` would
+    silently evaluate False rather than binding to the source creature.
+
+    This function fixes slot=None to slot="source" in the predicate
+    tree, matching what the parser produces directly
+    (``IsSelf(subject="source")`` — see
+    ``src/mtg_bot/cards/parser/triggers.py:787-789``).
+
+    Only rewrite ``IsSelf`` and ``Subject`` with ``slot=None``.  Leave
+    ``And``, ``Not``, ``Or``, ``Source``, ``Always``, and other
+    predicates unchanged (``Source`` already anchors on the firing
+    source object directly; ``Always`` has no slot).
+
+    Predicates that already carry an explicit slot (e.g.
+    ``IsSelf(subject="source")`` produced by the static card registry)
+    pass through unmodified.
+    """
+    from mtg_bot.effects.predicates import IsSelf, And, Not, Or, Subject, Always
+
+    if isinstance(predicate, IsSelf):
+        if predicate.subject is None:
+            return IsSelf(subject="source")
+        return predicate
+    if isinstance(predicate, Subject):
+        if predicate.slot is None:
+            return Subject(slot="source", inner=predicate.inner)
+        return predicate
+    if isinstance(predicate, And):
+        return And(
+            _rewrite_predicate_for_deals_combat_damage(predicate.left),
+            _rewrite_predicate_for_deals_combat_damage(predicate.right),
+        )
+    if isinstance(predicate, Not):
+        return Not(_rewrite_predicate_for_deals_combat_damage(predicate.inner))
+    if isinstance(predicate, Or):
+        return Or(
+            _rewrite_predicate_for_deals_combat_damage(predicate.left),
+            _rewrite_predicate_for_deals_combat_damage(predicate.right),
+        )
+    # Always, Source, Controlled, StateBound, IsHost, etc. — pass through
+    return predicate
+
+
 def _ta_dict_to_python_triggered_ability(ta_dict: dict):
     """Translate one triggered-ability-dict into a Python
     ``TriggeredAbility`` instance carrying the matching Event,
@@ -8880,12 +8931,58 @@ def _ta_dict_to_python_triggered_ability(ta_dict: dict):
         # Rust's `tap_permanent_and_dispatch` chokepoint + the inline
         # mana/tap_self dispatches — see the round-58 commits).
         event = Event.BECOMES_TAPPED
+    elif event_str in ("deals_combat_damage", "deals_damage"):
+        # Round-13 DEALS_COMBAT_DAMAGE event bridge. Rust stores the
+        # event string as ``"deals_damage"`` (``Event::DealsDamage``);
+        # Python's enum value is ``"deals_combat_damage"``
+        # (``Event.DEALS_COMBAT_DAMAGE``). The bridge accepts BOTH
+        # spellings: ``"deals_damage"`` from Rust-sourced TA dicts and
+        # ``"deals_combat_damage"`` from Python-sourced TA dicts (e.g.
+        # the OO Pin 2 sentinel and direct Python card construction).
+        #
+        # **Two-subject predicate rewrite.** Python's
+        # ``Event.DEALS_COMBAT_DAMAGE`` carries TWO named subjects:
+        # ``("source", "target")`` per ``EVENT_SUBJECTS``
+        # (``effects/predicates.py:212``). Predicates that use
+        # ``Subject(slot=None)`` or ``IsSelf(subject=None)`` resolve
+        # ``_resolve_subject`` against the single default slot, which
+        # returns ``None`` when ``len(subjects) == 2`` — the LL Pin 2
+        # multi-subject hazard. We apply
+        # ``_rewrite_predicate_for_deals_combat_damage`` after the
+        # normal predicate translation to fix up any slot=None
+        # bindings to explicit ``"source"`` slot bindings (matching
+        # Python's parser output of ``IsSelf(subject="source")`` for
+        # the "this creature deals combat damage to a player" trigger
+        # family).
+        #
+        # **Implicit IsPlayer filtering.** Rust's dispatch
+        # ``dispatch_combat_damage_to_player`` is called only for
+        # player-targeted damage entries; a ``Subject("target",
+        # IsPlayer())`` half of the predicate is therefore always true
+        # in the Rust dispatch context and does not need to be emitted
+        # by the bridge for parity. The Python engine fires
+        # ``dispatch_event(state, Event.DEALS_COMBAT_DAMAGE,
+        # source=source, target=target_player_obj)`` with the full
+        # two-subject subjects map; the predicate's
+        # ``Subject("target", IsPlayer())`` evaluates against the
+        # player object and passes. Both paths are equivalent: the
+        # Rust engine omits the target subject but constrains callers
+        # to player-targeted dispatch only.
+        event = Event.DEALS_COMBAT_DAMAGE
     else:
         raise ValueError(
             f"cross_engine triggered_abilities bridge: event "
             f"{event_str!r} is not yet wired"
         )
     predicate = _ta_dict_to_python_predicate(ta_dict.get("predicate"))
+    # For two-subject events (DEALS_COMBAT_DAMAGE), apply a slot-rewrite
+    # pass to convert slot=None predicates to explicit slot="source"
+    # bindings. This avoids the LL Pin 2 multi-subject hazard where
+    # ``_resolve_subject(subjects, None)`` returns ``None`` when
+    # ``len(subjects) == 2`` (IsSelf(slot=None) would always evaluate
+    # False on DEALS_COMBAT_DAMAGE without this fix).
+    if event == Event.DEALS_COMBAT_DAMAGE:
+        predicate = _rewrite_predicate_for_deals_combat_damage(predicate)
     effect = _ta_dict_to_python_effect(ta_dict["effect"])
     once_per_turn = ta_dict.get("once_per_turn", False)
     return TriggeredAbility(
