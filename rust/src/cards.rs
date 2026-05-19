@@ -4083,6 +4083,16 @@ pub enum Predicate {
     /// Panharmonicon-shape triggers. Subject-anchored sibling of
     /// `SourceIsCreature`.
     SubjectIsCreature,
+    /// Matches when the **subject's** printing has "Enchantment" in its
+    /// card_types. Mirrors Python's `Subject(None, IsEnchantment())` —
+    /// the canonical "an enchantment enters" filter for Duskmourn /
+    /// EoE "Eerie" ability-word triggers ("Eerie — Whenever an
+    /// enchantment you control enters…"). Rooms (which print as
+    /// `Enchantment — Room`) carry `"Enchantment"` in their
+    /// `card_types` so a Room entering ALSO satisfies this predicate —
+    /// matching Python's `IsEnchantment.test` semantics and the
+    /// printed Eerie wording.
+    SubjectIsEnchantment,
     /// Matches when the **subject** is controlled by the source's
     /// controller. Mirrors Python's `Controlled(YOU)` — the
     /// canonical "under your control" qualifier on ETB triggers
@@ -4151,6 +4161,9 @@ impl Predicate {
             }
             Predicate::SubjectIsCreature => {
                 subject_has_card_type(state, subject_id, "Creature")
+            }
+            Predicate::SubjectIsEnchantment => {
+                subject_has_card_type(state, subject_id, "Enchantment")
             }
             Predicate::ControlledByYou => {
                 // Subject's controller == source's controller. Mirrors
@@ -7758,6 +7771,11 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
         "subject_is_land" => Ok(Predicate::SubjectIsLand),
         "subject_is_artifact" => Ok(Predicate::SubjectIsArtifact),
         "subject_is_creature" => Ok(Predicate::SubjectIsCreature),
+        // IsEnchantment substrate slice — "an enchantment you control
+        // enters" (Duskmourn / EoE Eerie ability-word shape). Mirrors
+        // Python's `Subject(None, IsEnchantment())` from
+        // `src/mtg_bot/effects/object_predicates.py:142`.
+        "subject_is_enchantment" => Ok(Predicate::SubjectIsEnchantment),
         "controlled_by_you" => Ok(Predicate::ControlledByYou),
         // Subtypes substrate Slice 2 — subject-anchored HasSubtype.
         // Dict shape: `{"kind": "subject_has_subtype", "subtype": "Kavu"}`.
@@ -7817,6 +7835,7 @@ fn parse_predicate(dict: &Bound<'_, PyDict>) -> PyResult<Predicate> {
             "unknown predicate kind {other:?}; \
              valid: always, source_is_self, source_is_creature, \
              subject_is_land, subject_is_artifact, subject_is_creature, \
+             subject_is_enchantment, \
              controlled_by_you, subject_has_subtype, not, and, or"
         ))),
     }
