@@ -578,7 +578,10 @@ def test_make_runs_db_progress_writer_pushes_aggregate_and_per_shard():
     master_extra = master["extra"]
     assert master_extra["n_samples"] == 300
     assert master_extra["n_in_flight"] == 16
-    assert master_extra["n_workers"] == 1  # 1 machine per row
+    # Per-shard n_workers now reflects per-machine pool size (proxied
+    # by n_in_flight) — see
+    # ``test_per_shard_n_workers_reports_machine_concurrency_not_hardcoded_1``.
+    assert master_extra["n_workers"] == 16
 
     mac = next(c for c in fake.calls if c.get("shard_label") == "mac")
     assert mac["n_games_done"] == 12
@@ -631,6 +634,111 @@ def test_make_runs_db_progress_writer_eval_carries_wins():
     master = next(c for c in fake.calls if c.get("shard_label") == "master")
     assert master["wins_new"] == 6
     assert master["wins_old"] == 4
+
+
+def test_per_shard_n_workers_reports_machine_concurrency_not_hardcoded_1():
+    # Regression: per-shard ``n_workers`` used to be hardcoded ``1``
+    # (a "this row contributes 1 to the machine count" hack), which
+    # made the UI's per-machine sub-card always say "workers: 1"
+    # regardless of how many parallel slots each machine was actually
+    # running. The fix uses ``n_in_flight`` as the live proxy — it
+    # equals pool_size while the pool is saturated (the normal
+    # running state of a self-play / eval stage).
+    fake = _FakeRunsClient()
+    writer = orch.make_runs_db_progress_writer(
+        "iter_n_workers_self_play_v5",
+        started_perf=0.0,
+        client_module=fake,
+    )
+    status = {
+        "kind": "self_play",
+        "n_games_done": 30,
+        "n_games_total": 1000,
+        "crashed": 0,
+        "timed_out": 0,
+        "n_samples": 1000,
+        "n_workers": 2,  # aggregate row: 2 machines
+        "machines": [
+            {
+                "label": "DESKTOP-J05412I",
+                "n_games_done": 20,
+                "n_in_flight": 16,
+                "n_samples": 600,
+                "crashed": 0,
+                "timed_out": 0,
+                "total_duration_s": 600.0,
+            },
+            {
+                "label": "Greggs-MacBook-Pro.local",
+                "n_games_done": 10,
+                "n_in_flight": 6,
+                "n_samples": 400,
+                "crashed": 0,
+                "timed_out": 0,
+                "total_duration_s": 400.0,
+            },
+        ],
+    }
+    writer(status)
+
+    # Aggregate row: n_workers = 2 (machine count, unchanged).
+    agg = next(c for c in fake.calls if c.get("shard_label") is None)
+    agg_extra = agg["extra"]
+    assert agg_extra["n_workers"] == 2
+
+    # Per-shard rows: n_workers now reflects per-machine pool size
+    # (proxied by n_in_flight), not hardcoded 1.
+    master_call = next(
+        c for c in fake.calls
+        if c.get("shard_label") == "DESKTOP-J05412I"
+    )
+    assert master_call["extra"]["n_workers"] == 16
+    assert master_call["extra"]["n_in_flight"] == 16
+
+    mac_call = next(
+        c for c in fake.calls
+        if c.get("shard_label") == "Greggs-MacBook-Pro.local"
+    )
+    assert mac_call["extra"]["n_workers"] == 6
+    assert mac_call["extra"]["n_in_flight"] == 6
+
+
+def test_per_shard_n_workers_falls_back_to_one_when_pool_idle():
+    # Edge: between stages the pool may be drained (n_in_flight=0).
+    # Old hardcoded behavior was always 1; we keep a floor of 1 so
+    # the row records "machine still exists" rather than 0 workers.
+    fake = _FakeRunsClient()
+    writer = orch.make_runs_db_progress_writer(
+        "iter_drained",
+        started_perf=0.0,
+        client_module=fake,
+    )
+    status = {
+        "kind": "self_play",
+        "n_games_done": 1000,
+        "n_games_total": 1000,
+        "crashed": 0,
+        "timed_out": 0,
+        "n_samples": 1000,
+        "n_workers": 1,
+        "machines": [
+            {
+                "label": "DESKTOP-J05412I",
+                "n_games_done": 1000,
+                "n_in_flight": 0,  # pool drained at end of stage
+                "n_samples": 1000,
+                "crashed": 0,
+                "timed_out": 0,
+                "total_duration_s": 30000.0,
+            },
+        ],
+    }
+    writer(status)
+    master_call = next(
+        c for c in fake.calls
+        if c.get("shard_label") == "DESKTOP-J05412I"
+    )
+    assert master_call["extra"]["n_workers"] == 1  # floor of 1
 
 
 def test_make_runs_db_progress_writer_self_play_passes_none_for_eval_only_fields():

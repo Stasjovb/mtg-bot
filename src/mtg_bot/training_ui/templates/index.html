@@ -1316,7 +1316,14 @@ function renderMachines(el, run) {
       + '<div class="machine-stat">'
         + '<div class="machine-stat-label">workers</div>'
         + '<div class="machine-stat-value">'
-        + String(m.n_workers || 0) + '</div>'
+        // Prefer n_in_flight when present (live parallel concurrency).
+        // Old orchestrators hardcoded n_workers=1 on per-shard rows
+        // (it was a machine-count contribution, not the per-machine
+        // pool size); the orchestrator-side fix in
+        // distributed_rest_orchestrator.py:_push uses m_inflight too
+        // going forward. Falling back to n_workers covers historical
+        // rows + any consumer that pre-dated n_in_flight.
+        + String(m.n_in_flight || m.n_workers || 0) + '</div>'
       + '</div>'
       + '</div>'
       + '</div>';
