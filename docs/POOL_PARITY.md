@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **106 (22.3% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 201 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **307 / 475 EoE cards (64.6%) are byte-equal at the Effect+bridge level**; of those, **117 (24.6% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 190 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **168 (35.4%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 106 | 22.3% |
-| Effect+bridge covered (not individually probed) | 201 | 42.3% |
+| PROBED byte-equal | 117 | 24.6% |
+| Effect+bridge covered (not individually probed) | 190 | 40.0% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -79,12 +79,16 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Extinguisher Battleship
 - Faller's Faithful
 - Famished Worldsire
+- Fear of Lost Teeth
 - Fell Gravship
+- Final Vengeance
 - Focus Fire
+- Friendly Ghost
 - Full Bore
 - Galactic Wayfarer
 - Germinating Wurm
 - Glacier Godmaw
+- Grasping Longneck
 - Gravkill
 - Gravpack Monoist
 - Haliya, Ascendant Cadet
@@ -118,10 +122,14 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Nova Hellkite
 - Orbital Plunge
 - Oreplate Pangolin
+- Overlord of the Floodpits
+- Overlord of the Mistmoors
 - Perigee Beckoner
+- Piggy Bank
 - Pinnacle Kill-Ship
 - Plasma Bolt
 - Pulsar Squadron Ace
+- Pyroclasm
 - Quantum Riddler
 - Radiant Strike
 - Rayblade Trooper
@@ -129,6 +137,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Rescue Skiff
 - Roaring Furnace // Steaming Sauna
 - Sami's Curiosity
+- Scrounge for Eternity
 - Seam Rip
 - Seedship Agrarian
 - Seedship Broodtender
@@ -145,11 +154,13 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Tapestry Warden
 - Thawbringer
 - Tragic Trajectory
+- Tunnel Surveyor
 - Unravel
 - Uthros Scanship
 - Virus Beetle
 - Vote Out
 - Warmaker Gunship
+- Wary Watchdog
 - Wedgelight Rammer
 - Weftblade Enhancer
 - Weftstalker Ardent
