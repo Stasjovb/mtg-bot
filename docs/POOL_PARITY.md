@@ -6,7 +6,7 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 ## Headline
 
-- **310 / 475 EoE cards (65.3%) are byte-equal at the Effect+bridge level**; of those, **168 (35.4% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 142 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
+- **310 / 475 EoE cards (65.3%) are byte-equal at the Effect+bridge level**; of those, **171 (36.0% of the pool) are individually pinned by a genuine real-EoE cross-engine byte-equality probe** (the strongest evidence), the remaining 139 are covered-by-construction (every Effect they emit has a live Rust variant + bridge arm, but no genuine probe pins THAT card).
 - A further **0 (0.0%)** are bridge-admitted & bench-exercised 0-divergence at scale (empirical, but bounded — see the caveat).
 - **165 (34.7%)** are BLOCKED, broken out below.
 
@@ -16,8 +16,8 @@ The authoritative, measured, regenerable answer to *"what fraction of the EoE ca
 
 | Tier | Count | % of pool |
 |---|---:|---:|
-| PROBED byte-equal | 168 | 35.4% |
-| Effect+bridge covered (not individually probed) | 142 | 29.9% |
+| PROBED byte-equal | 171 | 36.0% |
+| Effect+bridge covered (not individually probed) | 139 | 29.3% |
 | bridge-admitted & bench-exercised | 0 | 0.0% |
 | BLOCKED — genuinely_missing (new-Rust-Effect ask) | 7 | 1.5% |
 | BLOCKED — blocked_non_effect (non-Effect gate) | 2 | 0.4% |
@@ -68,6 +68,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Chrome Companion
 - Commune with Evil
 - Cryogen Relic
+- Dashing Bloodsucker
 - Debris Field Crusher
 - Decode Transmissions
 - Depressurize
@@ -116,6 +117,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Icecave Crasher
 - Icetill Explorer
 - Illvoi Galeblade
+- Illvoi Infiltrator
 - Impossible Inferno
 - Infernal Phantom
 - Interceptor Mechan
@@ -188,6 +190,7 @@ _Context (NOT drift): 2 `blocked_non_effect` card(s) have covered/probed Effects
 - Sunstar Expansionist
 - Susurian Dirgecraft
 - Susurian Voidborn
+- Syr Vondam, the Lucent
 - Tannuk, Memorial Ensign
 - Tapestry Warden
 - Terramorphic Expanse
