@@ -318,6 +318,32 @@ fn battlefield_creature_power(state: &GameState, obj_id: u32) -> i16 {
     effective.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 
+/// Crate-visible wrapper used by `cards.rs::Predicate::HasPowerAtMost`.
+/// Returns the subject's effective power as `Some(i32)` when the object
+/// is a battlefield creature (printed power present or UEOT-animated
+/// land-creature), or `None` for non-creature subjects and absent ids.
+/// Mirrors the public `effective_power` getter semantics but is
+/// accessible from sibling modules.
+pub(crate) fn predicate_subject_effective_power(
+    state: &GameState,
+    obj_id: u32,
+) -> Option<i32> {
+    let (player_idx, printing_id) = locate_battlefield_obj(state, obj_id)?;
+    let printing = state.registry.lookup(printing_id)?;
+    if printing.power.is_none() {
+        let is_animated = state.players[player_idx]
+            .battlefield
+            .iter()
+            .find(|o| o.id == obj_id)
+            .map(|o| o.ueot_is_creature_via_become())
+            .unwrap_or(false);
+        if !is_animated {
+            return None;
+        }
+    }
+    Some(battlefield_creature_power(state, obj_id) as i32)
+}
+
 /// Does this battlefield permanent's printing carry the
 /// `"vigilance"` keyword? Returns false for unknown ids and for
 /// printings whose `keywords` Vec doesn't contain the lowercase

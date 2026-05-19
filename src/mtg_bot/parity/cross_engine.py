@@ -8711,6 +8711,12 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
     ``And(Subject(None, IsEnchantment()), Controlled(YOU))``
     as their ENTERS predicate).
 
+    Slice 6 adds ``has_power_at_most`` — the "with power N or less"
+    qualifier from Vicious Clown / Irreverent Gremlin (EoE batch K/N).
+    Dict shape: ``{"kind": "has_power_at_most", "n": 2}``. Maps to
+    ``Subject(slot=None, inner=HasPowerAtMost(n=N))`` so the ENTERS
+    dispatcher binds it to the entering creature subject.
+
     Future predicate variants land in lockstep with the Rust side.
     """
     from mtg_bot.effects.predicates import (
@@ -8730,6 +8736,7 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
         IsLand,
         IsArtifact,
         HasSubtype,
+        HasPowerAtMost,
     )
 
     if pred_dict is None:
@@ -8781,6 +8788,18 @@ def _ta_dict_to_python_predicate(pred_dict: dict | None):
         return Subject(
             slot=None, inner=HasSubtype(name=pred_dict["subtype"])
         )
+    if kind == "has_power_at_most":
+        # HasPowerAtMost substrate — Slice 6: "with power N or less"
+        # qualifier from Vicious Clown / Irreverent Gremlin (EoE batch
+        # K/N). Dict shape: ``{"kind": "has_power_at_most", "n": 2}``.
+        # Rust's ``HasPowerAtMost { n }`` calls ``state.effective_power``
+        # on the subject and checks ``<= n``; Python's
+        # ``HasPowerAtMost(n)`` calls ``effective_power(state, obj)``
+        # and checks ``<= n`` — same semantics.
+        # Wrapped in ``Subject(slot=None)`` so the trigger dispatcher
+        # binds it to the event's object subject (ENTERS → the entering
+        # creature). Mirrors the ``subject_is_creature`` arm shape.
+        return Subject(slot=None, inner=HasPowerAtMost(n=pred_dict["n"]))
     if kind == "not":
         return Not(_ta_dict_to_python_predicate(pred_dict["inner"]))
     if kind == "and":
